@@ -14,6 +14,7 @@ import {
 } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
 import { getSession, type Session } from '@kutup/session/store'
+import { masterKeysBytes } from '@kutup/crypto/masterKeys'
 import { openKept, resealKeptKey, type KeptKey, type VaultHandle } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
 
@@ -109,7 +110,7 @@ async function openRow(session: Session, rows: SecretRow[] | undefined, fileId: 
   const row = rows?.find((r) => r.fileId === fileId)
   if (!row) return null
   try {
-    const kept = await openKept(row.envelope, session.masterKey, session.envelopeBinding, fileId)
+    const kept = await openKept(row.envelope, masterKeysBytes(session.masterKeys), session.envelopeBinding, fileId)
     // Not the one the account head vouches for: rolled back, or brought back.
     if (row.vouched !== undefined && kept.revision !== row.vouched) return null
     // Older than one this browser has seen: the server replaying an old key.
@@ -196,7 +197,7 @@ export async function keepCopiedKey(session: Session, rows: SecretRow[] | undefi
   if (!(await openRow(session, rows, from))) return false
   const row = rows!.find((r) => r.fileId === from)!
   const revision = await revisionGuard(session).next(KEPT_SCOPE, to, 0)
-  const envelope = await resealKeptKey(row.envelope, session.masterKey, session.envelopeBinding, from, to, revision)
+  const envelope = await resealKeptKey(row.envelope, masterKeysBytes(session.masterKeys), session.envelopeBinding, from, to, revision)
   await putKeptKey(session, to, { envelope, revision, base: 0 })
   return true
 }
@@ -204,7 +205,7 @@ export async function keepCopiedKey(session: Session, rows: SecretRow[] | undefi
 /** Seals the key of the vault open in `vault` to replace the kept one at `base`. */
 export async function sealVaultKey(session: Session, fileId: string, vault: VaultHandle, base: number, generated = false): Promise<SealedKey> {
   const revision = await revisionGuard(session).next(KEPT_SCOPE, fileId, base)
-  const envelope = await vault.keepKey(session.masterKey, session.envelopeBinding, fileId, revision, generated)
+  const envelope = await vault.keepKey(masterKeysBytes(session.masterKeys), session.envelopeBinding, fileId, revision, generated)
   return { envelope, revision, base }
 }
 
@@ -220,7 +221,7 @@ export async function keepVaultKey(session: Session, fileId: string, vault: Vaul
   let kept: number | null = null
   await (await headFor(session)).listedWrite(HEAD_SCOPE, async (index, attempt) => {
     const now = (await api.get<SecretRow[]>('/pass/vault-secrets')).data.find((r) => r.fileId === fileId)
-    if (attempt > 1 && now && (await vault.keptKeyIsMine(now.envelope, session.masterKey, session.envelopeBinding, fileId))) {
+    if (attempt > 1 && now && (await vault.keptKeyIsMine(now.envelope, masterKeysBytes(session.masterKeys), session.envelopeBinding, fileId))) {
       // Another device kept this same key first: nothing to do.
       kept = now.revision
       return null

@@ -304,7 +304,8 @@
           "securityKeyRemoved": "Security key “{{oldName}}” removed",
           "securityKeyCompromised": "Security key “{{oldName}}” may have been copied (no longer used)",
           "authenticatorOn": "Authenticator app turned on",
-          "authenticatorOff": "Authenticator app turned off"
+          "authenticatorOff": "Authenticator app turned off",
+          "masterKeyRotated": "New account key and recovery phrase"
         }
       },
       "recovery": "Recovery phrase",

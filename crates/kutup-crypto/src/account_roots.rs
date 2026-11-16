@@ -25,6 +25,7 @@ use zeroize::Zeroizing;
 
 use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 use crate::error::{CryptoError, Result};
+use crate::master_keys::MasterKeys;
 
 /// Every root is 32 bytes.
 pub const ROOT_LEN: usize = 32;
@@ -215,11 +216,21 @@ impl AccountRoots {
         }
     }
 
+    /// Whether `other` holds the same roots at the same generations: for
+    /// tests across crates only.
+    #[doc(hidden)]
+    pub fn same_for_tests_as(&self, other: &Self) -> bool {
+        self.parts() == other.parts()
+    }
+
     /// The generations the account head records of these roots.
     pub fn head_generations(&self) -> crate::account_head::RootGenerations {
         crate::account_head::RootGenerations {
             identity: self.identity_generation.get(),
             drive: self.drive_generation.get(),
+            object_id: self.object_id_generation.get(),
+            pseudonym: self.pseudonym_generation.get(),
+            call_link: self.call_link_generation.get(),
         }
     }
 
@@ -260,17 +271,18 @@ impl AccountRoots {
 
     /// Opens the account's roots from its root records (any order, every
     /// kept generation): each root at least once, no generation twice, the
-    /// newest of each the current one. The newest identity root must derive
+    /// newest of each the current one, each opened under the master key of
+    /// the generation it names. The newest identity root must derive
     /// `registered_authority` (the account's authority public key), or the
     /// error starts with [`IDENTITY_MISMATCH`]: an older generation never
     /// stands in.
     pub fn open<E: AsRef<[u8]>>(
         envelopes: &[E],
-        master_key: &[u8; 32],
+        master_keys: &MasterKeys,
         binding: &str,
         registered_authority: &[u8; 32],
     ) -> Result<Self> {
-        let roots = Self::open_unchecked(envelopes, master_key, binding)?;
+        let roots = Self::open_unchecked(envelopes, master_keys, binding)?;
         let identity = crate::identity::AccountIdentityKeysV1::derive(&roots.identity)?;
         if identity.authority_public_key() != *registered_authority {
             return Err(CryptoError::InvalidInput(IDENTITY_MISMATCH.into()));
@@ -282,7 +294,7 @@ impl AccountRoots {
     /// tests, where the authority is what the roots give.
     pub fn open_unchecked<E: AsRef<[u8]>>(
         envelopes: &[E],
-        master_key: &[u8; 32],
+        master_keys: &MasterKeys,
         binding: &str,
     ) -> Result<Self> {
         let mut found: [Vec<(RootGeneration, &[u8])>; 5] = Default::default();
@@ -300,7 +312,7 @@ impl AccountRoots {
             let (generation, envelope) = newest(records)?;
             let plain = account_record::open_object(
                 envelope,
-                master_key,
+                master_keys.key_for(envelope)?,
                 *purpose,
                 binding,
                 &generation.object(),
@@ -426,7 +438,13 @@ mod tests {
         // Any order.
         let mut shuffled = sealed.clone();
         shuffled.reverse();
-        let opened = AccountRoots::open(&shuffled, &MK, BINDING, &authority(&roots)).unwrap();
+        let opened = AccountRoots::open(
+            &shuffled,
+            &MasterKeys::first(&MK),
+            BINDING,
+            &authority(&roots),
+        )
+        .unwrap();
         assert_eq!(opened.identity.as_bytes(), roots.identity.as_bytes());
         assert_eq!(opened.drive.as_bytes(), roots.drive.as_bytes());
         assert_eq!(opened.pseudonym.as_bytes(), roots.pseudonym.as_bytes());
@@ -442,10 +460,13 @@ mod tests {
             .seal(&MK, MasterKeyGeneration::FIRST, BINDING)
             .unwrap();
         let authority = authority(&roots);
-        assert!(AccountRoots::open(&sealed, &[8u8; 32], BINDING, &authority).is_err());
+        assert!(
+            AccountRoots::open(&sealed, &MasterKeys::first(&[8u8; 32]), BINDING, &authority)
+                .is_err()
+        );
         assert!(AccountRoots::open(
             &sealed,
-            &MK,
+            &MasterKeys::first(&MK),
             "5c1b4d63-0b2f-4e2d-8b66-1e4f5a7f2c3b",
             &authority
         )
@@ -462,12 +483,16 @@ mod tests {
         for missing in 0..5 {
             let mut fewer = sealed.clone();
             fewer.remove(missing);
-            assert!(AccountRoots::open(&fewer, &MK, BINDING, &authority).is_err());
+            assert!(
+                AccountRoots::open(&fewer, &MasterKeys::first(&MK), BINDING, &authority).is_err()
+            );
         }
         for doubled in 0..5 {
             let mut more = sealed.clone();
             more.push(sealed[doubled].clone());
-            assert!(AccountRoots::open(&more, &MK, BINDING, &authority).is_err());
+            assert!(
+                AccountRoots::open(&more, &MasterKeys::first(&MK), BINDING, &authority).is_err()
+            );
         }
         // Not a root at all.
         let other = account_record::seal(
@@ -480,7 +505,9 @@ mod tests {
         .unwrap();
         let mut with_other = sealed.clone();
         with_other.push(other);
-        assert!(AccountRoots::open(&with_other, &MK, BINDING, &authority).is_err());
+        assert!(
+            AccountRoots::open(&with_other, &MasterKeys::first(&MK), BINDING, &authority).is_err()
+        );
     }
 
     #[test]
@@ -504,10 +531,22 @@ mod tests {
         );
         // Registered: the first. The newest is the second: refused, and the
         // first does not stand in.
-        let error = AccountRoots::open(&sealed, &MK, BINDING, &authority(&first)).unwrap_err();
+        let error = AccountRoots::open(
+            &sealed,
+            &MasterKeys::first(&MK),
+            BINDING,
+            &authority(&first),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains(IDENTITY_MISMATCH), "{error}");
         // Registered: the second: it opens as the current one.
-        let opened = AccountRoots::open(&sealed, &MK, BINDING, &authority(&second)).unwrap();
+        let opened = AccountRoots::open(
+            &sealed,
+            &MasterKeys::first(&MK),
+            BINDING,
+            &authority(&second),
+        )
+        .unwrap();
         assert_eq!(opened.identity_generation.get(), 2);
         assert_eq!(opened.identity.as_bytes(), second.identity.as_bytes());
         // Two records of one generation.
@@ -523,7 +562,13 @@ mod tests {
             )
             .unwrap(),
         );
-        assert!(AccountRoots::open(&doubled, &MK, BINDING, &authority(&second)).is_err());
+        assert!(AccountRoots::open(
+            &doubled,
+            &MasterKeys::first(&MK),
+            BINDING,
+            &authority(&second)
+        )
+        .is_err());
     }
 
     #[test]
@@ -532,7 +577,13 @@ mod tests {
         let authority = authority(&roots);
         let generation = MasterKeyGeneration::new(2).unwrap();
         let resealed = roots.seal(&[9u8; 32], generation, BINDING).unwrap();
-        let opened = AccountRoots::open(&resealed, &[9u8; 32], BINDING, &authority).unwrap();
+        let opened = AccountRoots::open(
+            &resealed,
+            &MasterKeys::first(&[1u8; 32]).rotated(&[9u8; 32]).unwrap(),
+            BINDING,
+            &authority,
+        )
+        .unwrap();
         assert_eq!(
             crate::identity::AccountIdentityKeysV1::derive(&opened.identity)
                 .unwrap()

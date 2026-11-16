@@ -162,14 +162,16 @@ pub fn seal_local_state(
 #[wasm_bindgen(js_name = sealManifestPins)]
 pub fn seal_manifest_pins(
     pins: JsValue,
-    master_key_base64: &str,
+    master_keys_base64: &str,
     profile: &str,
 ) -> Result<String, JsValue> {
     let pins: Vec<kutup_chat_proto::AccountManifestPinV1> = serde_wasm_bindgen::from_value(pins)
         .map_err(|error| js_error(&format!("manifest pins: {error}")))?;
     let plaintext = serde_json::to_vec(&pins)
         .map_err(|error| js_error(&format!("encode manifest pins: {error}")))?;
-    let key = manifest_pins_key_of(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let key = local_state::manifest_pins_key(keys.current())
+        .map_err(|error| js_error(&error.to_string()))?;
     let envelope = local_state::seal(
         &plaintext,
         key.as_slice(),
@@ -181,35 +183,34 @@ pub fn seal_manifest_pins(
 }
 
 /// The pins `sealManifestPins` sealed; fails closed on another account's
-/// master key, another profile, or a changed envelope.
+/// master key, another profile, or a changed envelope. Their format names no
+/// master-key generation: each of the account's keys is tried, newest first
+/// (after a rotation the page seals them again under the current one).
 #[wasm_bindgen(js_name = openManifestPins)]
 pub fn open_manifest_pins(
     envelope_base64: &str,
-    master_key_base64: &str,
+    master_keys_base64: &str,
     profile: &str,
 ) -> Result<JsValue, JsValue> {
     let envelope = decode_canonical_base64(envelope_base64, "manifest pins")?;
-    let key = manifest_pins_key_of(master_key_base64)?;
-    let plaintext = local_state::open(
-        &envelope,
-        key.as_slice(),
-        LocalStatePurpose::ManifestPins,
-        profile,
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let plaintext = keys
+        .newest_first()
+        .find_map(|(_, master)| {
+            let key = local_state::manifest_pins_key(master).ok()?;
+            local_state::open(
+                &envelope,
+                key.as_slice(),
+                LocalStatePurpose::ManifestPins,
+                profile,
+            )
+            .ok()
+        })
+        .ok_or_else(|| js_error("the manifest pins do not open with this account's keys"))?;
     let pins: Vec<kutup_chat_proto::AccountManifestPinV1> = serde_json::from_slice(&plaintext)
         .map_err(|error| js_error(&format!("manifest pins: {error}")))?;
     serde_wasm_bindgen::to_value(&pins)
         .map_err(|error| js_error(&format!("encode manifest pins: {error}")))
-}
-
-fn manifest_pins_key_of(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
-    let master_key: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
-        decode_canonical_base64(master_key_base64, "master key")?
-            .try_into()
-            .map_err(|_| js_error("master key must be 32 bytes"))?,
-    );
-    local_state::manifest_pins_key(&master_key).map_err(|error| js_error(&error.to_string()))
 }
 
 /// Open an envelope sealed by `sealLocalState` (or the Rust equivalent);
@@ -602,15 +603,15 @@ fn roots_error(error: kutup_crypto::error::CryptoError) -> JsValue {
     js_error(&error.to_string())
 }
 
-/// The account's roots (docs/plans/identity-root.md) sealed under its master
-/// key (of `generation`) for the key `binding`, with the roots: `roots` as
+/// The account's roots (docs/plans/identity-root.md) sealed under its
+/// current master key (`master_keys_base64`, the set) for the key `binding`,
+/// with the roots: `roots` as
 /// `openAccountRoots` gave them (a sign-up whose binding was drawn again, a
 /// master-key rotation re-wrapping every root at once), or `null` for a new
 /// account's, made now.
 #[wasm_bindgen(js_name = sealAccountRoots)]
 pub fn seal_account_roots(
-    master_key_base64: &str,
-    generation: u32,
+    master_keys_base64: &str,
     binding: &str,
     roots: JsValue,
 ) -> Result<JsValue, JsValue> {
@@ -622,9 +623,9 @@ pub fn seal_account_roots(
             .map_err(|_| js_error("account roots malformed"))?;
         AccountRoots::try_from(&json).map_err(roots_error)?
     };
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let envelopes = roots
-        .seal(&master_key, master_key_generation(generation)?, binding)
+        .seal(keys.current(), keys.generation(), binding)
         .map_err(roots_error)?;
     serde_wasm_bindgen::to_value(&SealedAccountRoots {
         roots: (&roots).into(),
@@ -640,12 +641,12 @@ pub fn seal_account_roots(
 /// stands in.
 #[wasm_bindgen(js_name = openAccountRoots)]
 pub fn open_account_roots(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     envelopes: Vec<String>,
     registered_authority_base64: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let authority: [u8; 32] = decode_canonical_base64(registered_authority_base64, "authority")?
         .try_into()
         .map_err(|_| js_error("authority length"))?;
@@ -653,13 +654,9 @@ pub fn open_account_roots(
         .iter()
         .map(|e| decode_canonical_base64(e, "account root"))
         .collect::<Result<Vec<_>, _>>()?;
-    let roots = kutup_crypto::account_roots::AccountRoots::open(
-        &envelopes,
-        &master_key,
-        binding,
-        &authority,
-    )
-    .map_err(roots_error)?;
+    let roots =
+        kutup_crypto::account_roots::AccountRoots::open(&envelopes, &keys, binding, &authority)
+            .map_err(roots_error)?;
     serde_wasm_bindgen::to_value(&kutup_crypto::account_roots::AccountRootsJson::from(&roots))
         .map_err(|error| js_error(&error.to_string()))
 }
@@ -729,6 +726,55 @@ pub fn open_account_record(
     Ok(STANDARD.encode(plaintext))
 }
 
+/// Open one account record sealed under the account's master key (of the
+/// generation its header names; `master_keys_base64` is the account's set),
+/// only when its purpose and key binding match.
+#[wasm_bindgen(js_name = openAccountRecordWithMasterKeys)]
+pub fn open_account_record_with_master_keys(
+    envelope_base64: &str,
+    master_keys_base64: &str,
+    expected_purpose: u16,
+    binding: &str,
+) -> Result<String, JsValue> {
+    let keys = master_keys_of(master_keys_base64)?;
+    let purpose = generic_account_purpose(expected_purpose)?;
+    let envelope = account_record::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let key = keys
+        .key_for(&envelope)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let plaintext = account_record::open(&envelope, key, purpose, binding)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(plaintext))
+}
+
+/// The account's master keys after a sign-in: the key the password (or
+/// the recovery phrase) opened, of the generation its envelope names, and
+/// every older one through the keyring records (`masterKeyring`). Returns
+/// the set (base64 of `MasterKeys::encode`, for `session.masterKeys`).
+#[wasm_bindgen(js_name = openMasterKeys)]
+pub fn open_master_keys(
+    master_key_base64: &str,
+    envelope_base64: &str,
+    binding: &str,
+    keyring: Vec<String>,
+) -> Result<String, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let envelope = account_record::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let generation = account_record::inspect(&envelope)
+        .map_err(|error| js_error(&error.to_string()))?
+        .generation;
+    let keyring = keyring
+        .iter()
+        .map(|record| decode_canonical_base64(record, "keyring record"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let keys =
+        kutup_crypto::master_keys::MasterKeys::open(&master_key, generation, binding, &keyring)
+            .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(keys.encode()))
+}
+
 /// What `inspectAccountRecord` reads from a header.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -780,13 +826,16 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::RevisionSeen
         | AccountRecordPurpose::MailSearchStoreKey
         | AccountRecordPurpose::LocalChainPin
-        // The account's roots: `generateAccountRoots`, `openAccountRoots`,
-        // `sealAccountRoots` (docs/plans/identity-root.md).
+        // The account's roots: `openAccountRoots`, `sealAccountRoots`
+        // (docs/plans/identity-root.md); the keyring: `openMasterKeys`; the
+        // Chat store key: Chat core's own store.
         | AccountRecordPurpose::IdentityRoot
         | AccountRecordPurpose::DriveRoot
         | AccountRecordPurpose::GroupPseudonymRoot
         | AccountRecordPurpose::CallLinkRoot
-        | AccountRecordPurpose::ObjectIdKey => Err(js_error(
+        | AccountRecordPurpose::ObjectIdKey
+        | AccountRecordPurpose::MasterKeyKeyring
+        | AccountRecordPurpose::ChatStoreKey => Err(js_error(
             "this account-record purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -1043,13 +1092,11 @@ pub fn open_chat_media_object_header(
 }
 
 /// Seal one ledger entity's record as an account record of the account bound
-/// by `binding`, under its master key at `generation` (docs/chat-media.md).
+/// by `binding`, under its current master key (docs/chat-media.md).
 #[wasm_bindgen(js_name = sealChatAttachmentLedger)]
-#[allow(clippy::too_many_arguments)]
 pub fn seal_chat_attachment_ledger(
     plaintext_base64: &str,
-    master_key_base64: &str,
-    generation: u32,
+    master_keys_base64: &str,
     binding: &str,
     account_incarnation_id: &str,
     entity_id: &str,
@@ -1057,7 +1104,7 @@ pub fn seal_chat_attachment_ledger(
     previous_envelope_digest: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "ledger plaintext")?;
-    let master = account_master_key(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let context = ChatAttachmentLedgerContextV1::new(
         account_incarnation_id,
         entity_id,
@@ -1067,8 +1114,8 @@ pub fn seal_chat_attachment_ledger(
     .map_err(|error| js_error(&error.to_string()))?;
     chat_attachment_ledger::seal_b64(
         &plaintext,
-        &master,
-        master_key_generation(generation)?,
+        keys.current(),
+        keys.generation(),
         binding,
         context,
     )
@@ -1081,7 +1128,7 @@ pub fn seal_chat_attachment_ledger(
 #[allow(clippy::too_many_arguments)]
 pub fn open_chat_attachment_ledger(
     envelope_base64: &str,
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     expected_account_incarnation_id: &str,
     expected_entity_id: &str,
@@ -1090,7 +1137,10 @@ pub fn open_chat_attachment_ledger(
 ) -> Result<String, JsValue> {
     let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
         .map_err(|error| js_error(&error.to_string()))?;
-    let master = account_master_key(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let master = keys
+        .key_for(&envelope)
+        .map_err(|error| js_error(&error.to_string()))?;
     let expected = ChatAttachmentLedgerContextV1::new(
         expected_account_incarnation_id,
         expected_entity_id,
@@ -1099,7 +1149,7 @@ pub fn open_chat_attachment_ledger(
             .then_some(expected_previous_envelope_digest),
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    let plaintext = chat_attachment_ledger::open(&envelope, &master, binding, expected)
+    let plaintext = chat_attachment_ledger::open(&envelope, master, binding, expected)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
 }
@@ -1305,7 +1355,7 @@ fn head_manifest(head: JsValue) -> Result<Option<kutup_chat_proto::AccountManife
 
 /// The account's next manifest: `head` (as the server gave it; null when the
 /// account has none yet) with `entry` listed in place of any entry of its id,
-/// signed with the authority the master key derives
+/// signed with the authority the identity root derives
 /// (docs/plans/one-device-list.md). The head must name that authority; an
 /// account's first manifest names `account` and no Chat identity.
 #[wasm_bindgen(js_name = listDeviceInManifest)]
@@ -1313,13 +1363,13 @@ pub fn list_device_in_manifest(
     head: JsValue,
     entry: JsValue,
     issued_at: &str,
-    master_key_base64: &str,
+    identity_root_base64: &str,
     account: &str,
 ) -> Result<JsValue, JsValue> {
     let entry: kutup_chat_proto::AccountManifestDeviceV3 = serde_wasm_bindgen::from_value(entry)
         .map_err(|error| js_error(&format!("manifest entry: {error}")))?;
     entry.validate().map_err(|error| js_error(&error))?;
-    let keys = account_keys(master_key_base64)?;
+    let keys = account_keys(identity_root_base64)?;
     let head = head_manifest(head)?;
     let next = match &head {
         Some(head) => {
@@ -1344,7 +1394,7 @@ pub fn list_device_in_manifest(
 /// Checks `head`, the account's head as its server gave it (null: it has
 /// none), against `pin`, the newest manifest of its own account this client
 /// saw (null: none), for the account `account` names and the incarnation
-/// the master key derives; returns the pin to keep (null while there is
+/// the identity root derives; returns the pin to keep (null while there is
 /// none). Throws on a head that doesn't verify, names another account or
 /// incarnation, or is older than the pin, and on no head once there is a
 /// pin ([`kutup_chat_proto::AccountManifestPinV1::check`]).
@@ -1352,10 +1402,10 @@ pub fn list_device_in_manifest(
 pub fn check_own_manifest_head(
     pin: JsValue,
     head: JsValue,
-    master_key_base64: &str,
+    identity_root_base64: &str,
     account: &str,
 ) -> Result<JsValue, JsValue> {
-    let keys = account_keys(master_key_base64)?;
+    let keys = account_keys(identity_root_base64)?;
     let account: kutup_crypto::account_ref::AccountRef = account
         .parse()
         .map_err(|_| js_error("an account reference is malformed"))?;
@@ -1397,9 +1447,9 @@ pub fn remove_devices_from_manifest(
     head: JsValue,
     device_ids: Vec<u32>,
     issued_at: &str,
-    master_key_base64: &str,
+    identity_root_base64: &str,
 ) -> Result<JsValue, JsValue> {
-    let keys = account_keys(master_key_base64)?;
+    let keys = account_keys(identity_root_base64)?;
     let head = head_manifest(head)?.ok_or_else(|| js_error("the account has no manifest"))?;
     let mut devices = head.devices.clone();
     devices.retain(|device| !device_ids.contains(&device.device_id));
@@ -2124,17 +2174,6 @@ pub fn drive_canonical_name(name: &str) -> String {
     kutup_crypto::drive_names::canonical_name(name)
 }
 
-/// The account master key (standard base64) that the Photos library and the
-/// Chat attachment ledger records are sealed under.
-fn account_master_key(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
-    let master = zeroize::Zeroizing::new(decode_canonical_base64(master_key_base64, "master key")?);
-    let key: [u8; 32] = master
-        .as_slice()
-        .try_into()
-        .map_err(|_| js_error("the account master key is 32 bytes"))?;
-    Ok(zeroize::Zeroizing::new(key))
-}
-
 fn photos_library_context(
     account_incarnation_id: &str,
     revision: f64,
@@ -2156,13 +2195,12 @@ struct SealedPhotosLibrary {
 
 /// Seal the library (JSON `{favourites, archived, hidden}`, put in canonical
 /// order here) as an account record of the account bound by `binding`, under
-/// its master key at `generation`, as `revision`, after the record whose
-/// digest is given (none for revision 1). Returns `{ envelope, digest }`.
+/// its current master key, as `revision`, after the record whose digest is
+/// given (none for revision 1). Returns `{ envelope, digest }`.
 #[wasm_bindgen(js_name = sealPhotosLibrary)]
 pub fn seal_photos_library(
     library_json: &str,
-    master_key_base64: &str,
-    generation: u32,
+    master_keys_base64: &str,
     binding: &str,
     account_incarnation_id: &str,
     revision: f64,
@@ -2176,12 +2214,12 @@ pub fn seal_photos_library(
         .map_err(|error| js_error(&error.to_string()))?;
     let plaintext =
         photos_library::encode_library(&library).map_err(|error| js_error(&error.to_string()))?;
-    let master = account_master_key(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
     let envelope = photos_library::seal(
         &plaintext,
-        &master,
-        master_key_generation(generation)?,
+        keys.current(),
+        keys.generation(),
         binding,
         context,
     )
@@ -2200,7 +2238,7 @@ pub fn seal_photos_library(
 #[wasm_bindgen(js_name = openPhotosLibrary)]
 pub fn open_photos_library(
     envelope_base64: &str,
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     account_incarnation_id: &str,
     revision: f64,
@@ -2209,9 +2247,12 @@ pub fn open_photos_library(
     use kutup_crypto::photos_library;
     let envelope = photos_library::decode_canonical_b64(envelope_base64)
         .map_err(|error| js_error(&error.to_string()))?;
-    let master = account_master_key(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let master = keys
+        .key_for(&envelope)
+        .map_err(|error| js_error(&error.to_string()))?;
     let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
-    let plaintext = photos_library::open(&envelope, &master, binding, context)
+    let plaintext = photos_library::open(&envelope, master, binding, context)
         .map_err(|error| js_error(&error.to_string()))?;
     let library =
         photos_library::decode_library(&plaintext).map_err(|error| js_error(&error.to_string()))?;
@@ -2297,6 +2338,19 @@ fn identity_root_of(bytes: &[u8]) -> Result<kutup_crypto::account_roots::Identit
         .map_err(|error| js_error(&error.to_string()))
 }
 
+/// The account's master keys as a page passes them: base64 of
+/// `MasterKeys::encode` (`session.masterKeys`), the current key and every
+/// older one (docs/plans/mk-rotation-exercise.md). Records are sealed under
+/// the current one and opened under the one their header names.
+fn master_keys_of(
+    master_keys_base64: &str,
+) -> Result<kutup_crypto::master_keys::MasterKeys, JsValue> {
+    let decoded =
+        zeroize::Zeroizing::new(decode_canonical_base64(master_keys_base64, "master keys")?);
+    kutup_crypto::master_keys::MasterKeys::decode(&decoded)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 fn master_key_32(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
     let decoded =
         zeroize::Zeroizing::new(decode_canonical_base64(master_key_base64, "master key")?);
@@ -2307,21 +2361,21 @@ fn master_key_32(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>
     Ok(zeroize::Zeroizing::new(key))
 }
 
-/// Generates an address key and seals its secret part under the master key.
+/// Generates an address key and seals its secret part under the account's
+/// current master key.
 #[wasm_bindgen(js_name = generateMailAddressKey)]
 pub fn generate_mail_address_key(
-    master_key_base64: &str,
-    generation: u32,
+    master_keys_base64: &str,
     binding: &str,
     address: &str,
     created_at_secs: u32,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let key = kutup_crypto::mail_key::generate_address_key(address, created_at_secs)
         .map_err(|error| js_error(&error.to_string()))?;
     let envelope = kutup_crypto::mail_key::seal_address_key(
-        &master_key[..],
-        master_key_generation(generation)?,
+        keys.current(),
+        keys.generation(),
         binding,
         address,
         &key.secret_key,
@@ -2364,22 +2418,21 @@ pub fn export_mail_address_key(
 /// with `wrong passphrase` when the passphrase does not open it.
 #[wasm_bindgen(js_name = importMailAddressKey)]
 pub fn import_mail_address_key(
-    master_key_base64: &str,
-    generation: u32,
+    master_keys_base64: &str,
     binding: &str,
     address: &str,
     file: &[u8],
     passphrase: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let key = kutup_crypto::mail_key::import_address_secret_key(file, passphrase, address)
         .map_err(|error| match error {
             kutup_crypto::CryptoError::AuthFailed => js_error("wrong passphrase"),
             error => js_error(&error.to_string()),
         })?;
     let envelope = kutup_crypto::mail_key::seal_address_key(
-        &master_key[..],
-        master_key_generation(generation)?,
+        keys.current(),
+        keys.generation(),
         binding,
         address,
         &key.secret_key,
@@ -2419,27 +2472,26 @@ pub fn inspect_mail_address_public_key(
     .map_err(|error| js_error(&format!("encode public key: {error}")))
 }
 
+/// An address key's secret, opened under the master key of the generation
+/// its envelope names (`master_keys_base64`: the account's set).
 pub(crate) fn open_mail_secret(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
 ) -> Result<zeroize::Zeroizing<Vec<u8>>, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let envelope = decode_canonical_base64(envelope_base64, "envelope")?;
     let fingerprint: [u8; 20] = hex::decode(fingerprint_hex)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| js_error("fingerprint must be 40 hex digits"))?;
-    kutup_crypto::mail_key::open_address_key(
-        &envelope,
-        &master_key[..],
-        binding,
-        address,
-        &fingerprint,
-    )
-    .map_err(|error| js_error(&error.to_string()))
+    let master_key = keys
+        .key_for(&envelope)
+        .map_err(|error| js_error(&error.to_string()))?;
+    kutup_crypto::mail_key::open_address_key(&envelope, master_key, binding, address, &fingerprint)
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 /// A message opened with an address key (docs/plans/mail.md).
@@ -3563,18 +3615,17 @@ fn revision_arg(revision: f64) -> Result<u64, JsValue> {
 /// bound to the account's key binding.
 #[wasm_bindgen(js_name = sealIdentityPins)]
 pub fn seal_identity_pins(
-    master_key_base64: &str,
-    generation: u32,
+    master_keys_base64: &str,
     binding: &str,
     revision: f64,
     pins_json: &str,
 ) -> Result<String, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let list: kutup_crypto::identity_pins::IdentityPinsV2 = serde_json::from_str(pins_json)
         .map_err(|error| js_error(&format!("identity pins: {error}")))?;
     let sealed = kutup_crypto::identity_pins::seal(
-        &master_key,
-        master_key_generation(generation)?,
+        keys.current(),
+        keys.generation(),
         binding,
         revision_arg(revision)?,
         &list,
@@ -3607,13 +3658,16 @@ fn revisioned<T: Serialize>(value: T, revision: u64) -> Result<JsValue, JsValue>
 /// `binding`: `{ value: its JSON, revision }`.
 #[wasm_bindgen(js_name = openIdentityPins)]
 pub fn open_identity_pins(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     sealed_base64: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let sealed = decode_canonical_base64(sealed_base64, "identity pins")?;
-    let (list, revision) = kutup_crypto::identity_pins::open(&master_key, binding, &sealed)
+    let master_key = keys
+        .key_for(&sealed)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let (list, revision) = kutup_crypto::identity_pins::open(master_key, binding, &sealed)
         .map_err(|error| js_error(&error.to_string()))?;
     let json = String::from_utf8(
         kutup_crypto::identity_pins::encode(&list).map_err(|error| js_error(&error.to_string()))?,
@@ -3908,17 +3962,16 @@ pub fn verify_contact_summary(
 /// key, bound to its UID.
 #[wasm_bindgen(js_name = sealContactCard)]
 pub fn seal_contact_card(
-    master_key_base64: &str,
-    generation: u32,
+    master_keys_base64: &str,
     binding: &str,
     uid: &str,
     revision: f64,
     vcard: &str,
 ) -> Result<String, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let sealed = kutup_crypto::contact_card::seal_card(
-        &master_key,
-        master_key_generation(generation)?,
+        keys.current(),
+        keys.generation(),
         binding,
         uid,
         revision_arg(revision)?,
@@ -3929,17 +3982,17 @@ pub fn seal_contact_card(
 }
 
 type MailNameParts = (
-    zeroize::Zeroizing<[u8; 32]>,
+    kutup_crypto::master_keys::MasterKeys,
     kutup_crypto::mail_names::MailNameKind,
     [u8; 16],
 );
 
 fn mail_name_parts(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     kind: &str,
     id: &str,
 ) -> Result<MailNameParts, JsValue> {
-    let key = master_key_32(master_key_base64)?;
+    let key = master_keys_of(master_keys_base64)?;
     let kind = kutup_crypto::mail_names::MailNameKind::parse(kind)
         .map_err(|error| js_error(&error.to_string()))?;
     let id = Uuid::parse_str(id).map_err(|_| js_error("mail name id is not a UUID"))?;
@@ -3951,18 +4004,17 @@ fn mail_name_parts(
 /// (docs/plans/mail-filters.md).
 #[wasm_bindgen(js_name = sealMailName)]
 pub fn seal_mail_name(
-    master_key_base64: &str,
-    generation: u32,
+    master_keys_base64: &str,
     binding: &str,
     kind: &str,
     id: &str,
     revision: f64,
     name: &str,
 ) -> Result<String, JsValue> {
-    let (key, kind, id) = mail_name_parts(master_key_base64, kind, id)?;
+    let (keys, kind, id) = mail_name_parts(master_keys_base64, kind, id)?;
     let sealed = kutup_crypto::mail_names::seal_name(
-        &key,
-        master_key_generation(generation)?,
+        keys.current(),
+        keys.generation(),
         binding,
         kind,
         &id,
@@ -3977,15 +4029,18 @@ pub fn seal_mail_name(
 /// revision }`.
 #[wasm_bindgen(js_name = openMailName)]
 pub fn open_mail_name(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     kind: &str,
     id: &str,
     sealed_base64: &str,
 ) -> Result<JsValue, JsValue> {
-    let (key, kind, id) = mail_name_parts(master_key_base64, kind, id)?;
+    let (keys, kind, id) = mail_name_parts(master_keys_base64, kind, id)?;
     let sealed = decode_canonical_base64(sealed_base64, "name")?;
-    let (name, revision) = kutup_crypto::mail_names::open_name(&key, binding, kind, &id, &sealed)
+    let key = keys
+        .key_for(&sealed)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let (name, revision) = kutup_crypto::mail_names::open_name(key, binding, kind, &id, &sealed)
         .map_err(|error| js_error(&error.to_string()))?;
     revisioned(name, revision)
 }
@@ -3993,15 +4048,18 @@ pub fn open_mail_name(
 /// Opens a sealed contact card: `{ value: its vCard text, revision }`.
 #[wasm_bindgen(js_name = openContactCard)]
 pub fn open_contact_card(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     uid: &str,
     sealed_base64: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let sealed = decode_canonical_base64(sealed_base64, "card")?;
+    let master_key = keys
+        .key_for(&sealed)
+        .map_err(|error| js_error(&error.to_string()))?;
     let (vcard, revision) =
-        kutup_crypto::contact_card::open_card(&master_key, binding, uid, &sealed)
+        kutup_crypto::contact_card::open_card(master_key, binding, uid, &sealed)
             .map_err(|error| js_error(&error.to_string()))?;
     let text =
         String::from_utf8(vcard.to_vec()).map_err(|_| js_error("contact card is not UTF-8"))?;
@@ -4018,19 +4076,20 @@ pub struct RevisionGuardKeys {
 #[wasm_bindgen]
 impl RevisionGuardKeys {
     /// The keys of the account bound by `binding` (`session.envelopeBinding`):
-    /// records sealed under its master key, named under its object-id key
-    /// (a stored root, `session.roots.objectIdKey`).
+    /// records sealed under its current master key (opened under the one
+    /// they name; `session.masterKeys`), named under its object-id key (a
+    /// stored root, `session.roots.objectIdKey`).
     #[wasm_bindgen(constructor)]
     pub fn new(
-        master_key_base64: &str,
+        master_keys_base64: &str,
         object_id_key_base64: &str,
         binding: &str,
     ) -> Result<RevisionGuardKeys, JsValue> {
-        let master_key = master_key_32(master_key_base64)?;
+        let master_keys = master_keys_of(master_keys_base64)?;
         let object_id_key = object_id_key_of(object_id_key_base64)?;
         Ok(Self {
             keys: kutup_crypto::revision_guard::GuardKeys::derive(
-                &master_key,
+                &master_keys,
                 &object_id_key,
                 binding,
             )
@@ -4090,19 +4149,20 @@ struct OpenedChainPin {
 #[wasm_bindgen]
 impl LocalChainPins {
     /// The keys of the account bound by `binding` (`session.envelopeBinding`):
-    /// records sealed under its master key, named under its object-id key
-    /// (a stored root, `session.roots.objectIdKey`).
+    /// records sealed under its current master key (opened under the one
+    /// they name; `session.masterKeys`), named under its object-id key (a
+    /// stored root, `session.roots.objectIdKey`).
     #[wasm_bindgen(constructor)]
     pub fn new(
-        master_key_base64: &str,
+        master_keys_base64: &str,
         object_id_key_base64: &str,
         binding: &str,
     ) -> Result<LocalChainPins, JsValue> {
-        let master_key = master_key_32(master_key_base64)?;
+        let master_keys = master_keys_of(master_keys_base64)?;
         let object_id_key = object_id_key_of(object_id_key_base64)?;
         Ok(Self {
             keys: kutup_crypto::local_chain_pin::PinKeys::derive(
-                &master_key,
+                &master_keys,
                 &object_id_key,
                 binding,
             )
@@ -4669,8 +4729,8 @@ impl AccountHeadReanchored {
     }
 }
 
-/// The account's head keys, for one account (master key, key binding,
-/// incarnation), made once per session. The keys never leave WASM. Heads are
+/// The account's head keys, for one account (master keys, object-id root, key
+/// binding, incarnation), made once per session. The keys never leave WASM. Heads are
 /// verified into [`VerifiedAccountHead`]s the caller holds: an index is
 /// checked, and a next head written, only against one of those.
 #[wasm_bindgen]
@@ -4685,24 +4745,39 @@ pub struct AccountHeadKeys {
 #[wasm_bindgen]
 impl AccountHeadKeys {
     #[wasm_bindgen(constructor)]
-    /// `identity_generation`, `drive_generation`: the generations of the
-    /// account's roots in use (`roots.identityGeneration`,
-    /// `roots.driveGeneration`), which a head must record.
+    /// `master_keys_base64`: the account's master-key set (heads are sealed
+    /// under the current key and opened under the one they name);
+    /// `object_id_key_base64`: its object-id root (`roots.objectIdKey`), which
+    /// keys value ids, writers and local names. The generations are those of
+    /// the account's roots in use (`roots.identityGeneration`,
+    /// `roots.driveGeneration`, `roots.objectIdGeneration`,
+    /// `roots.pseudonymGeneration`, `roots.callLinkGeneration`), which a head
+    /// must record with the current master key's.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        master_key_base64: &str,
+        master_keys_base64: &str,
+        object_id_key_base64: &str,
         binding: &str,
         incarnation_id: &str,
         identity_generation: u32,
         drive_generation: u32,
+        object_id_generation: u32,
+        pseudonym_generation: u32,
+        call_link_generation: u32,
     ) -> Result<AccountHeadKeys, JsValue> {
-        let master_key = master_key_32(master_key_base64)?;
+        let master_keys = master_keys_of(master_keys_base64)?;
+        let object_id_key = object_id_key_of(object_id_key_base64)?;
         Ok(Self {
-            keys: kutup_crypto::account_head::HeadKeys::derive(&master_key).map_err(head_err)?,
+            keys: kutup_crypto::account_head::HeadKeys::derive(&master_keys, &object_id_key)
+                .map_err(head_err)?,
             binding: binding.to_owned(),
             incarnation_id: incarnation_id.to_owned(),
             generations: kutup_crypto::account_head::RootGenerations {
                 identity: identity_generation,
                 drive: drive_generation,
+                object_id: object_id_generation,
+                pseudonym: pseudonym_generation,
+                call_link: call_link_generation,
             },
         })
     }
@@ -5180,8 +5255,7 @@ struct AcceptedMailForwardingView {
 #[wasm_bindgen(js_name = acceptMailForwarding)]
 #[allow(clippy::too_many_arguments)]
 pub fn accept_mail_forwarding(
-    master_key_base64: &str,
-    generation: u32,
+    master_keys_base64: &str,
     binding: &str,
     forwardee_address: &str,
     envelope_base64: &str,
@@ -5194,7 +5268,7 @@ pub fn accept_mail_forwarding(
 ) -> Result<JsValue, JsValue> {
     use kutup_crypto::mail_forwarding::{self as forwarding, ActivationTerms};
     let secret = open_mail_secret(
-        master_key_base64,
+        master_keys_base64,
         binding,
         forwardee_address,
         envelope_base64,
@@ -5217,10 +5291,10 @@ pub fn accept_mail_forwarding(
     .map_err(|error| js_error(&error.to_string()))?;
     let public_key =
         forwarding::forwarding_public_key(&key).map_err(|error| js_error(&error.to_string()))?;
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let envelope = kutup_crypto::mail_key::seal_address_key(
-        &master_key[..],
-        master_key_generation(generation)?,
+        keys.current(),
+        keys.generation(),
         binding,
         forwardee_address,
         &key,

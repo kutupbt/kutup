@@ -6,7 +6,6 @@ import {
   generateMailAddressKey,
   importMailAddressKey,
   MAIL_KEY_FLAGS,
-  toBase64,
   type GeneratedMailAddressKey,
   type MailKeyEntry,
   type SignedMailKeyList,
@@ -166,7 +165,7 @@ async function addKey(session: Session, address: CheckedMailAddress, key: Genera
 /** A new key for new mail (rotation). */
 export function useNewKey() {
   return useKeyMutation(async (address: CheckedMailAddress, session) => {
-    const key = await generateMailAddressKey(toBase64(session.masterKey), session.envelopeBinding, address.address)
+    const key = await generateMailAddressKey(session.masterKeys, session.envelopeBinding, address.address)
     await addKey(session, address, key, true)
   })
 }
@@ -174,7 +173,7 @@ export function useNewKey() {
 /** Imports a key from an OpenPGP secret key file. `WrongKeyPassphrase` when the passphrase does not open it. */
 export function useImportKey() {
   return useKeyMutation(async (input: { address: CheckedMailAddress; file: Uint8Array; passphrase: string; primary: boolean }, session) => {
-    const key = await importMailAddressKey(toBase64(session.masterKey), session.envelopeBinding, input.address.address, input.file, input.passphrase)
+    const key = await importMailAddressKey(session.masterKeys, session.envelopeBinding, input.address.address, input.file, input.passphrase)
     if (input.address.keys.some((k) => k.fingerprint === key.fingerprint)) throw new KeyAlreadyThere()
     await addKey(session, input.address, key, input.primary)
   })
@@ -207,7 +206,7 @@ export class KeyAlreadyThere extends Error {
 /** An address key as an armored file locked with `passphrase`. */
 export async function exportKey(session: Session, address: string, key: MailKey, passphrase: string): Promise<string> {
   return exportMailAddressKey(
-    { masterKeyBase64: toBase64(session.masterKey), binding: session.envelopeBinding, address, envelope: key.privateKeyEnvelope, fingerprint: key.fingerprint },
+    { masterKeys: session.masterKeys, binding: session.envelopeBinding, address, envelope: key.privateKeyEnvelope, fingerprint: key.fingerprint },
     passphrase,
   )
 }

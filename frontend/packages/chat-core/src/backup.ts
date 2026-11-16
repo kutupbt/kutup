@@ -1,6 +1,7 @@
+import { currentMasterKey, masterKeyGeneration, type MasterKeys } from '@kutup/crypto/masterKeys'
 import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import api from '@kutup/session/client'
-import { ACCOUNT_RECORD_PURPOSE, openAccountRecord, sealAccountRecord } from '@kutup/crypto/accountRecord'
+import { ACCOUNT_RECORD_PURPOSE, openMasterKeyRecord, sealAccountRecord } from '@kutup/crypto/accountRecord'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'
 import { exactBytes } from '@kutup/crypto/bytes'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
@@ -163,7 +164,8 @@ export interface ChatBackupOptions {
   databaseName: string
   /** What the account's sealed keys are bound to (`session.envelopeBinding`). */
   envelopeBinding: string
-  masterKey: Uint8Array
+  /** The account's master keys: the backup root is an account record under them. */
+  masterKeys: MasterKeys
   /** The account's roots: the backup's signer is its identity (`roots.identityRoot`). */
   roots: AccountRoots
   deviceId: number
@@ -465,9 +467,9 @@ export class ChatBackupCoordinator {
       if (!status.rootEnvelope || !status.signerAuthorization) {
         throw new Error('Chat backup status is incomplete')
       }
-      root = await openAccountRecord(
+      root = await openMasterKeyRecord(
         status.rootEnvelope,
-        options.masterKey,
+        options.masterKeys,
         ACCOUNT_RECORD_PURPOSE.chatBackupRoot,
         options.envelopeBinding,
       )
@@ -483,8 +485,9 @@ export class ChatBackupCoordinator {
       ) as BackupAuthorization
       const rootEnvelope = await sealAccountRecord(
         root,
-        options.masterKey,
+        currentMasterKey(options.masterKeys),
         ACCOUNT_RECORD_PURPOSE.chatBackupRoot,
+        masterKeyGeneration(options.masterKeys),
         options.envelopeBinding,
       )
       status = await runtime.transport.provision({

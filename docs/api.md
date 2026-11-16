@@ -59,6 +59,9 @@ Specific codes, where an app does something particular (a test in
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
 | `accountRootsInvalid` | 400 | `register`, `complete-setup`: `accountRoots` is not one record of each root, at generation 1, bound to the key binding (docs/plans/identity-root.md) |
+| `masterKeyStale` | 409 | a write sealed under an older master key than the account's (another device rotated it, docs/plans/mk-rotation-exercise.md): sign in again |
+| `rotationInvalid` | 400 | `account/master-key/rotate`: a record is not this rotation's (`field` names it) |
+| `organizationKeys` | 409 | `account/master-key/rotate`: the account holds an organization escrow or key copy, which a rotation can't carry yet |
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
 | `revisionTaken` | 409 | A Drive upload or version naming a `revisionId` the file, another file or an open upload already has (a revision names one content: choose a new one) |
 | `securityKeysOff` | 503 | This server can't offer security keys (its account app isn't on https) |
@@ -465,6 +468,8 @@ malformed finalization is a `400`.
   "masterKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "accountRoots": ["<canonical base64 AccountRecordV1>", "…"],
   "accountAuthorityPublicKey": "<base64 32 bytes>",
+  "masterKeyGeneration": 1,
+  "masterKeyring": [],
   "publicKey": "<base64>",
   "keyBinding": "<the account's key binding (a UUID v4)>",
   "isAdmin": false,
@@ -477,8 +482,14 @@ The export key the client got from the exchange opens `masterKeyEnvelope`
 (`kutup_crypto::opaque::ExportKey::open_master_key`), and the master key the
 `accountRoots` (every kept generation): the newest identity root must derive
 `accountAuthorityPublicKey`, or the client refuses the keys
-(`identityRootMismatch`) and uses no older root. Only a session answer
-carries them; nothing before the password is proved does. For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
+(`identityRootMismatch`) and uses no older root. `masterKeyGeneration` is the
+generation the envelope holds (its authenticated header names it too), and
+`masterKeyring` every older master key's keyring record, newest first (purpose
+27: generation n−1 sealed under generation n; empty before a first rotation,
+docs/plans/mk-rotation-exercise.md): the client opens the chain down to
+generation 1 and opens every record under the key of the generation its header
+names. Only a session answer carries them; nothing before the password is
+proved does. For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
 
 When the account's record is under a setup that is no longer the server's
 current one (`OPAQUE_SETUP_KEYS` rotated), the session also carries
@@ -546,7 +557,11 @@ The second step with a security key (docs/plans/security-keys.md).
 
 ### GET /api/auth/recover/preflight
 
-Fetch the encrypted recovery key bundle so the client can decrypt the master key with the mnemonic-derived recovery key. Rate-limited (5/hr/IP). Returns deterministic fake data for names that are no account, to prevent user enumeration.
+The key binding a recovery proof is derived with. Rate-limited (5/hr/IP). An
+unknown name gets a stable fake binding, so a name's existence is not shown.
+The recovery envelope comes only with the grant, after the proof: its header
+names the master key's generation, which would tell a rotated account from an
+unknown name.
 
 **Auth:** None
 **Query:** `?name=alice` (the username, or the Kutup address `alice@<domain>`)
@@ -554,7 +569,6 @@ Fetch the encrypted recovery key bundle so the client can decrypt the master key
 **Response:**
 ```json
 {
-  "recoveryKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "envelopeBinding": "<the account's key binding>"
 }
 ```
@@ -581,7 +595,11 @@ off and drops the recovery codes, as Proton's lost-2FA path does, and records
 `twoFactorOff` in the security log: someone who lost the authenticator signs
 in with the new password alone.
 
-**Response:** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>" }`.
+**Response:** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>",
+"recoveryKeyEnvelope": "<canonical base64 AccountRecordV1>" }`: the master key
+under the recovery phrase (purpose 2). The new password's envelope is sealed at
+the generation its header names; `register/finish` refuses another
+(`409 masterKeyStale`).
 
 ---
 
@@ -1336,9 +1354,40 @@ JWT.
 The caller's own root records (docs/plans/identity-root.md), every kept
 generation, and the authority the newest identity root must derive:
 `{ "accountRoots": ["<base64 AccountRecordV1>", …],
-"accountAuthorityPublicKey": "<base64>" }`. For a client that holds the
-master key but not the roots. **Auth:** Bearer JWT; only the session's own
-account's.
+"accountAuthorityPublicKey": "<base64>", "masterKeyGeneration": 1,
+"masterKeyring": ["<base64 AccountRecordV1>", …] }` (the keyring as at
+sign-in). For a client that holds the master key but not the roots. **Auth:**
+Bearer JWT; only the session's own account's.
+
+### POST /api/account/master-key/rotate
+
+A new master key (docs/plans/mk-rotation-exercise.md), in one transaction.
+**Auth:** Bearer JWT, and a grant `for: masterKeyRotation` from this session's
+reauth, which `opaque/register/start` also takes.
+
+```json
+{
+  "grant": "kg1_…",
+  "opaqueRecord": "<base64>", "opaqueServerKeyId": 1,
+  "masterKeyEnvelope": "<purpose 1, generation n+1>",
+  "recoveryKeyEnvelope": "<purpose 2, generation n+1, under a new phrase>",
+  "recoveryProof": "<base64 32 bytes, the new phrase's>",
+  "accountRoots": ["<the five roots, each at its newest generation, sealed at n+1>", "…"],
+  "masterKeyring": "<purpose 27, generation n+1, object n: the previous key>",
+  "head": "<the next account head, sealed at n+1>"
+}
+```
+
+The server checks every header (purpose, key binding, object, generation n+1),
+replaces the password and recovery wraps and verifier and the roots' records,
+keeps the keyring record, stores the head after the newest one, sets the
+account's generation to n+1, ends every other sign-in and records
+`masterKeyRotated` → `204`. `400 rotationInvalid` (`field` names the record),
+`403 grantInvalid`, `409 head_conflict` (read the head again),
+`409 opaqueKeyStale`, `409 organizationKeys` (the account holds an
+organization escrow or key copy, which a rotation can't carry until the
+organization routes do). After it, a listed write whose head is sealed under
+an older key is `409 masterKeyStale`: that device signs in again.
 
 ### GET /api/account/heads?from=n
 

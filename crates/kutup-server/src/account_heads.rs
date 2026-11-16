@@ -41,6 +41,32 @@ pub struct Locked {
     incarnation_id: String,
     /// The account's key binding, which every head it keeps names.
     binding: String,
+    /// The account's current master-key generation: every new head is
+    /// sealed under it (docs/plans/mk-rotation-exercise.md).
+    master_key_generation: u32,
+}
+
+impl Locked {
+    pub fn binding(&self) -> &str {
+        &self.binding
+    }
+
+    pub fn master_key_generation(&self) -> u32 {
+        self.master_key_generation
+    }
+
+    /// The generation a rotation moves the account to, in its transaction:
+    /// the rotation's head is sealed under it.
+    pub fn rotated_to(&mut self, generation: u32) {
+        self.master_key_generation = generation;
+    }
+}
+
+/// The answer to a write sealed under an older master key than the
+/// account's (another device rotated it): sign in again.
+pub fn master_key_stale() -> AppError {
+    AppError::conflict("the account's master key was rotated: sign in again")
+        .with_details(json!({ "code": kutup_crypto::master_keys::MASTER_KEY_STALE }))
 }
 
 /// Takes the account row for update and checks, under it, that `session` is
@@ -51,14 +77,14 @@ pub async fn lock(
     user_id: Uuid,
     session: Uuid,
 ) -> AppResult<Locked> {
-    let account: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT account_incarnation_id, key_binding FROM users
+    let account: Option<(String, Option<String>, i32)> = sqlx::query_as(
+        "SELECT account_incarnation_id, key_binding, master_key_generation FROM users
           WHERE id = $1 AND is_active FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut **tx)
     .await?;
-    let Some((incarnation_id, binding)) = account else {
+    let Some((incarnation_id, binding, master_key_generation)) = account else {
         return Err(AppError::unauthorized("unauthorized"));
     };
     let live: bool = sqlx::query_scalar(
@@ -85,6 +111,8 @@ pub async fn lock(
         user_id,
         incarnation_id,
         binding,
+        master_key_generation: u32::try_from(master_key_generation)
+            .map_err(|_| AppError::internal("master_key_generation out of range"))?,
     })
 }
 
@@ -122,11 +150,20 @@ impl NextHead {
         }))
     }
 
-    /// This account's head (its key binding): another account's is refused.
-    fn check(&self, locked: &Locked) -> AppResult<()> {
+    /// This account's head (its key binding), sealed under its current
+    /// master key: another account's is refused, and one of an older key is
+    /// `masterKeyStale` (a device that missed a rotation signs in again).
+    pub(crate) fn check(&self, locked: &Locked) -> AppResult<()> {
         kutup_crypto::account_head::validate(&self.sealed, &locked.binding)
-            .map(|_| ())
-            .map_err(|_| AppError::bad_request("head is not this account's"))
+            .map_err(|_| AppError::bad_request("head is not this account's"))?;
+        let generation = kutup_crypto::account_record::inspect(&self.sealed)
+            .map_err(|_| AppError::bad_request("head is not this account's"))?
+            .generation
+            .get();
+        if generation != locked.master_key_generation {
+            return Err(master_key_stale());
+        }
+        Ok(())
     }
 
     /// [`NextHead::parse`] for a write that may or may not change a listed
@@ -531,16 +568,25 @@ mod tests {
             user_id,
             incarnation_id: incarnation.clone(),
             binding: BINDING.into(),
+            master_key_generation: 1,
         };
-        let keys = HeadKeys::derive(&[9; 32]).unwrap();
+        let keys = HeadKeys::derive(
+            &kutup_crypto::master_keys::MasterKeys::first(&[9; 32]),
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([9; 32]),
+        )
+        .unwrap();
         let writer = keys.writer("window").unwrap();
         let total = RETENTION + 5;
         let mut sealed: Vec<Vec<u8>> = Vec::new();
         let mut head = AccountHeadV1::first(
             &incarnation,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             kutup_crypto::account_head::RootGenerations {
                 identity: 1,
                 drive: 1,
+                object_id: 1,
+                pseudonym: 1,
+                call_link: 1,
             },
             &writer,
             vec![],
@@ -579,6 +625,9 @@ mod tests {
                 kutup_crypto::account_head::RootGenerations {
                     identity: 1,
                     drive: 1,
+                    object_id: 1,
+                    pseudonym: 1,
+                    call_link: 1,
                 },
                 None,
                 &sealed[sequence as usize - 1],
@@ -601,6 +650,9 @@ mod tests {
             kutup_crypto::account_head::RootGenerations {
                 identity: 1,
                 drive: 1,
+                object_id: 1,
+                pseudonym: 1,
+                call_link: 1,
             },
             Some(&anchored_at(at)),
             current,
@@ -618,6 +670,9 @@ mod tests {
             kutup_crypto::account_head::RootGenerations {
                 identity: 1,
                 drive: 1,
+                object_id: 1,
+                pseudonym: 1,
+                call_link: 1,
             },
             Some(&anchored_at(at)),
             current,

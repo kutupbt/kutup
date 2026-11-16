@@ -1,6 +1,6 @@
+import type { MasterKeys } from './masterKeys'
 import type { IdentityRoot } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
-import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 
 // Contacts (docs/plans/contacts.md): the readable summary signed by the
 // account authority, and the vCard sealed as an account record under the master key, both bound
@@ -45,13 +45,13 @@ export async function verifyContactSummary(
   return (await getCryptoWasm()).verifyContactSummary(summary, signature, binding, revision, authorityPublicKeyBase64)
 }
 
-export async function sealContactCard(masterKeyBase64: string, binding: string, uid: string, revision: number, vcard: string): Promise<string> {
-  return (await getCryptoWasm()).sealContactCard(masterKeyBase64, MASTER_KEY_GENERATION, binding, uid, revision, vcard)
+export async function sealContactCard(masterKeys: MasterKeys, binding: string, uid: string, revision: number, vcard: string): Promise<string> {
+  return (await getCryptoWasm()).sealContactCard(masterKeys, binding, uid, revision, vcard)
 }
 
 /** The vCard text and the revision the card was sealed at. */
-export async function openContactCard(masterKeyBase64: string, binding: string, uid: string, sealed: string): Promise<Revisioned<string>> {
-  return (await getCryptoWasm()).openContactCard(masterKeyBase64, binding, uid, sealed)
+export async function openContactCard(masterKeys: MasterKeys, binding: string, uid: string, sealed: string): Promise<Revisioned<string>> {
+  return (await getCryptoWasm()).openContactCard(masterKeys, binding, uid, sealed)
 }
 
 /** What a sealed mail name names (docs/plans/mail-filters.md). */
@@ -59,17 +59,17 @@ export type MailNameKind = 'folder' | 'label' | 'filter'
 
 /** Seals revision `revision` of a mail folder, label or filter name, bound to the binding, its kind and its id (a UUID). */
 export async function sealMailName(
-  masterKeyBase64: string,
+  masterKeys: MasterKeys,
   binding: string,
   kind: MailNameKind,
   id: string,
   revision: number,
   name: string,
 ): Promise<string> {
-  return (await getCryptoWasm()).sealMailName(masterKeyBase64, MASTER_KEY_GENERATION, binding, kind, id, revision, name)
+  return (await getCryptoWasm()).sealMailName(masterKeys, binding, kind, id, revision, name)
 }
 
 /** The name and the revision it was sealed at. */
-export async function openMailName(masterKeyBase64: string, binding: string, kind: MailNameKind, id: string, sealed: string): Promise<Revisioned<string>> {
-  return (await getCryptoWasm()).openMailName(masterKeyBase64, binding, kind, id, sealed)
+export async function openMailName(masterKeys: MasterKeys, binding: string, kind: MailNameKind, id: string, sealed: string): Promise<Revisioned<string>> {
+  return (await getCryptoWasm()).openMailName(masterKeys, binding, kind, id, sealed)
 }

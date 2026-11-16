@@ -274,7 +274,7 @@ export function openChat(session: Session, install?: ChatInstall): void {
         envelopeBinding: session.envelopeBinding,
         account,
         displayName: session.username,
-        masterKey: session.masterKey,
+        masterKeys: session.masterKeys,
         roots: session.roots,
         capabilities,
         install,

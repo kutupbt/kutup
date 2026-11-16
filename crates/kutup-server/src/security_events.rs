@@ -54,6 +54,9 @@ pub enum Kind {
     /// The authenticator app turned off; security keys keep two-step
     /// sign-in on.
     AuthenticatorOff,
+    /// A new master key and recovery phrase (docs/plans/mk-rotation-exercise.md);
+    /// the account's other sign-ins end.
+    MasterKeyRotated,
 }
 
 impl Kind {
@@ -78,6 +81,7 @@ impl Kind {
             Kind::SecurityKeyCompromised => "securityKeyCompromised",
             Kind::AuthenticatorOn => "authenticatorOn",
             Kind::AuthenticatorOff => "authenticatorOff",
+            Kind::MasterKeyRotated => "masterKeyRotated",
         }
     }
 }

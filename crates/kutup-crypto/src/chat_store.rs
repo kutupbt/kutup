@@ -1,7 +1,7 @@
 //! Encryption at rest for the browser chat store
 //! (`docs/research/16-browser-storage-architecture.md`).
 //!
-//! A random 256-bit store key, wrapped under a key derived from the account
+//! A random 256-bit store key, kept as an account record under the account
 //! master key and bound to the store's name, gives two subkeys: one hashes
 //! record keys (the suite's MAC), so no address or id is readable from the
 //! database, and one seals record values (the suite's AEAD). A sealed value
@@ -15,11 +15,13 @@
 use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroizing;
 
+use crate::account_record::{self, AccountRecordPurpose};
 use crate::error::{CryptoError, Result};
-use crate::primitives::{mac, Aead, Kdf, Suite};
+use crate::master_keys::MasterKeys;
+use crate::primitives::{hash, mac, Aead, Kdf, Suite};
 
 const KEY_SALT: &[u8] = crate::labels::CHAT_STORE_V1;
-const WRAP_INFO: &[u8] = crate::labels::CHAT_STORE_WRAP_V1;
+const WRAP_PURPOSE: AccountRecordPurpose = AccountRecordPurpose::ChatStoreKey;
 const VALUE_INFO: &[u8] = crate::labels::CHAT_STORE_VALUE_V1;
 const INDEX_INFO: &[u8] = crate::labels::CHAT_STORE_INDEX_V1;
 const RECORD_AAD: &[u8] = crate::labels::CHAT_STORE_RECORD_V1;
@@ -39,45 +41,71 @@ pub struct StoreCipher {
 }
 
 impl StoreCipher {
-    /// A new store key, and its wrapped form to keep beside the data:
-    /// `version (1) || nonce (24) || AEAD(store key)`, bound to `binding`.
+    /// A new store key, and its wrapped form to keep beside the data: an
+    /// account record ([`AccountRecordPurpose::ChatStoreKey`]) under the
+    /// account's current master key, bound to its key binding and, through
+    /// its object, to the store's name.
     pub fn create<R: RngCore + CryptoRng>(
-        master_key: &[u8; 32],
+        master: &MasterKeys,
         binding: &str,
+        store_name: &str,
         rng: &mut R,
     ) -> Result<(Self, Vec<u8>)> {
         let mut store_key = Zeroizing::new([0u8; 32]);
         rng.fill_bytes(store_key.as_mut());
         let mut nonce = [0u8; NONCE_BYTES];
         rng.fill_bytes(&mut nonce);
-        let sealed = wrap_cipher(master_key)?
-            .seal_with_nonce(&nonce, &wrap_aad(binding), store_key.as_ref())
-            .map_err(|_| failed("cannot wrap the chat store key"))?;
-        let mut wrapped = Vec::with_capacity(1 + NONCE_BYTES + sealed.len());
-        wrapped.push(WRAPPED_VERSION);
-        wrapped.extend_from_slice(&nonce);
-        wrapped.extend_from_slice(&sealed);
+        let wrapped = account_record::seal_suite(
+            account_record::AccountRecordSuiteId::V1,
+            store_key.as_ref(),
+            master.current(),
+            WRAP_PURPOSE,
+            master.generation(),
+            binding,
+            &store_object(store_name)?,
+            None,
+            &nonce,
+        )?;
         Ok((Self::from_store_key(&store_key)?, wrapped))
     }
 
-    /// Open a wrapped store key. Fails, and must not be taken for an empty
-    /// store, when the key belongs to another account or store.
-    pub fn unwrap(master_key: &[u8; 32], binding: &str, wrapped: &[u8]) -> Result<Self> {
-        if wrapped.len() != 1 + NONCE_BYTES + 32 + TAG_BYTES || wrapped[0] != WRAPPED_VERSION {
-            return Err(failed("the chat store key is malformed"));
-        }
-        let store_key = wrap_cipher(master_key)?
-            .open_with_nonce(
-                &wrapped[1..=NONCE_BYTES],
-                &wrap_aad(binding),
-                &wrapped[1 + NONCE_BYTES..],
+    /// Open a wrapped store key, under the master key of the generation it
+    /// names. Fails, and must not be taken for an empty store, when the key
+    /// belongs to another account or store. [`Self::rewrapped`] moves it to
+    /// the current master key.
+    pub fn unwrap(
+        master: &MasterKeys,
+        binding: &str,
+        store_name: &str,
+        wrapped: &[u8],
+    ) -> Result<Self> {
+        let key = master.key_for(wrapped)?;
+        let store_key = Zeroizing::new(
+            account_record::open_object(
+                wrapped,
+                key,
+                WRAP_PURPOSE,
+                binding,
+                &store_object(store_name)?,
             )
-            .map_err(|_| failed("the chat store key does not open with this account's key"))?;
+            .map_err(|_| failed("the chat store key does not open with this account's key"))?,
+        );
         let store_key: &[u8; 32] = store_key
             .as_slice()
             .try_into()
             .map_err(|_| failed("the chat store key is malformed"))?;
         Self::from_store_key(store_key)
+    }
+
+    /// The wrapped store key sealed again under the current master key, when
+    /// an older one sealed it (after a rotation); `None` when it is current.
+    pub fn rewrapped(
+        master: &MasterKeys,
+        binding: &str,
+        store_name: &str,
+        wrapped: &[u8],
+    ) -> Result<Option<Vec<u8>>> {
+        master.reseal_if_older(wrapped, WRAP_PURPOSE, binding, &store_object(store_name)?)
     }
 
     fn from_store_key(store_key: &[u8; 32]) -> Result<Self> {
@@ -232,16 +260,12 @@ fn local_aad(scope: &str, purpose: &str) -> Vec<u8> {
     aad
 }
 
-fn wrap_cipher(master_key: &[u8; 32]) -> Result<Aead> {
-    let key = expand(master_key, WRAP_INFO)?;
-    Aead::new(Suite::V1, key.as_ref())
-}
-
-fn wrap_aad(binding: &str) -> Vec<u8> {
-    let mut aad = WRAP_INFO.to_vec();
-    aad.push(0);
-    aad.extend_from_slice(binding.as_bytes());
-    aad
+/// A store's wrapped key names the store: the SHA-256 of its name.
+fn store_object(store_name: &str) -> Result<[u8; 32]> {
+    if store_name.is_empty() {
+        return Err(failed("a chat store has a name"));
+    }
+    Ok(hash(Suite::V1, store_name.as_bytes()).to_array())
 }
 
 fn record_aad(store: &str, hashed_key: &str) -> Vec<u8> {

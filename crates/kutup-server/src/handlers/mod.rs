@@ -48,6 +48,7 @@ pub mod mail_send;
 pub mod mail_sender_rules;
 pub mod mail_sending;
 pub mod mail_settings;
+pub mod master_key;
 pub mod name_hashes;
 pub mod opaque;
 pub mod pass;

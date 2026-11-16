@@ -463,12 +463,12 @@ impl World {
         // The account's master key (its authority's, as above) and key
         // binding, as the app hands them over.
         let binding = format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}");
-        let profile_owner =
-            crate::profile::profile_owner_key(&[authority_seed; 32], &binding).unwrap();
+        let master_keys = kutup_crypto::master_keys::MasterKeys::first(&[authority_seed; 32]);
+        let profile_owner = crate::profile::profile_owner_key(&master_keys, &binding).unwrap();
         block_on(engine.initialize_profile(&profile_owner, "Someone", &mut rng)).unwrap();
         engine
             .enable_group_list(
-                &[authority_seed; 32],
+                &master_keys,
                 &kutup_crypto::account_roots::AccountRoots::same_for_tests([authority_seed; 32]),
                 &binding,
             )
@@ -476,7 +476,7 @@ impl World {
         // Timed as the web is: a block is written at once.
         engine
             .enable_contact_list(
-                &[authority_seed; 32],
+                &master_keys,
                 &kutup_crypto::account_roots::ObjectIdKey::from_bytes([authority_seed; 32]),
                 &binding,
                 crate::contact_list::ContactListTiming {

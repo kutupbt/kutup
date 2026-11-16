@@ -1,3 +1,4 @@
+import { firstMasterKeys, masterKeysBytes } from '@kutup/crypto/masterKeys'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetRevisionGuardsForTesting } from '@kutup/crypto/revisionGuard'
 import type { Session } from '@kutup/session/store'
@@ -57,7 +58,7 @@ import { forgetVaultKey, keepCopiedKey, keepVaultKey, keptGeneratedPassword, kep
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const BINDING = '5f0c2f6e-1d2b-4c3a-8e9f-0a1b2c3d4e5f'
-const session = { userId: 'u1', masterKey: new Uint8Array(32), roots: testRoots(0), envelopeBinding: BINDING } as unknown as Session
+const session = { userId: 'u1', masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)), roots: testRoots(0), envelopeBinding: BINDING } as unknown as Session
 const row = (kind: string, binding: string, revision = T) => ({ fileId: 'v', envelope: `${kind}:${binding}:v:${revision}`, state: 'open' as const, revision, updatedAt: '' })
 const conflict = (revision: number) => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict', revision } } })
 
@@ -111,7 +112,7 @@ describe('kept vault keys', () => {
     await keepVaultKey(session, 'v', vault, true)
     const revision = keepKey.mock.calls[0][3]
     expect(revision).toBeGreaterThan(T)
-    expect(keepKey).toHaveBeenCalledWith(session.masterKey, BINDING, 'v', revision, true)
+    expect(keepKey).toHaveBeenCalledWith(masterKeysBytes(session.masterKeys), BINDING, 'v', revision, true)
     expect(put.mock.calls).toEqual([['/pass/vault-secrets/v', { envelope: `generated:${BINDING}:v:${revision}`, baseRevision: T, head: 'head-1' }]])
   })
 

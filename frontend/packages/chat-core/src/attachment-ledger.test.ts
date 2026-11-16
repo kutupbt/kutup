@@ -1,3 +1,4 @@
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
@@ -17,7 +18,7 @@ const BINDING = 'binding-1'
 const INCARNATION = 'aa'.repeat(32)
 const OLD_KEY = 'kutup.chat.attachment-ledger.pin.v1.' + INCARNATION
 const empty = () => ({ data: { entities: [], nextCursor: '0', more: false } })
-const pins = () => localChainPins({ masterKey, roots: testRoots(masterKey), envelopeBinding: BINDING })
+const pins = () => localChainPins({ masterKeys: firstMasterKeys(masterKey), roots: testRoots(masterKey), envelopeBinding: BINDING })
 
 describe('the attachment ledger rollback pin', () => {
   beforeEach(() => {
@@ -32,7 +33,7 @@ describe('the attachment ledger rollback pin', () => {
     localStorage.setItem(OLD_KEY, JSON.stringify({ version: 1, cursor: '9', chainDigest: 'ab'.repeat(32) }))
     localStorage.setItem('kutup.other', 'kept')
     get.mockResolvedValueOnce(empty())
-    await ChatAttachmentLedger.open({ masterKey, roots: testRoots(masterKey) }, BINDING)
+    await ChatAttachmentLedger.open({ masterKeys: firstMasterKeys(masterKey), roots: testRoots(masterKey) }, BINDING)
     expect(localStorage.getItem(OLD_KEY)).toBeNull()
     expect(localStorage.getItem('kutup.other')).toBe('kept')
     expect(await pins().loadPin('chat-attachment-ledger', INCARNATION)).toEqual({ revision: 0n, digest: '00'.repeat(32) })
@@ -41,16 +42,16 @@ describe('the attachment ledger rollback pin', () => {
   it('refuses a ledger that stops before the pinned cursor', async () => {
     await pins().storePin('chat-attachment-ledger', INCARNATION, 5n, 'ab'.repeat(32))
     get.mockResolvedValueOnce(empty())
-    await expect(ChatAttachmentLedger.open({ masterKey, roots: testRoots(masterKey) }, BINDING)).rejects.toThrow(/stopped before the local rollback pin/)
+    await expect(ChatAttachmentLedger.open({ masterKeys: firstMasterKeys(masterKey), roots: testRoots(masterKey) }, BINDING)).rejects.toThrow(/stopped before the local rollback pin/)
     // The pin did not move back.
     expect((await pins().loadPin('chat-attachment-ledger', INCARNATION))?.revision).toBe(5n)
   })
 
   it('takes another account\'s pin as unseen', async () => {
-    await localChainPins({ masterKey, roots: testRoots(masterKey), envelopeBinding: 'binding-2' })
+    await localChainPins({ masterKeys: firstMasterKeys(masterKey), roots: testRoots(masterKey), envelopeBinding: 'binding-2' })
       .storePin('chat-attachment-ledger', INCARNATION, 5n, 'ab'.repeat(32))
     get.mockResolvedValueOnce(empty())
-    await ChatAttachmentLedger.open({ masterKey, roots: testRoots(masterKey) }, BINDING)
+    await ChatAttachmentLedger.open({ masterKeys: firstMasterKeys(masterKey), roots: testRoots(masterKey) }, BINDING)
     expect((await pins().loadPin('chat-attachment-ledger', INCARNATION))?.revision).toBe(0n)
   })
 })

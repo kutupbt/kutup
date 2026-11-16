@@ -13,33 +13,30 @@
 //! first revision read is trusted), or put back an older copy of one; it can
 //! no longer read them or set one to a revision it chooses.
 
-use zeroize::Zeroizing;
-
-use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
+use crate::account_record::{self, AccountRecordPurpose};
 use crate::error::{CryptoError, Result};
+use crate::master_keys::MasterKeys;
 
 const PURPOSE: AccountRecordPurpose = AccountRecordPurpose::RevisionSeen;
 const MAX_PART_LEN: usize = 1024;
 
 /// The account's keys for its revision store: its master key and key binding.
 pub struct GuardKeys {
-    master: Zeroizing<[u8; 32]>,
-    generation: MasterKeyGeneration,
+    master: MasterKeys,
     object_id_key: crate::account_roots::ObjectIdKey,
     binding: String,
 }
 
 impl GuardKeys {
-    /// The keys of the account bound by `binding`, under its master key's
-    /// first generation (every account's, until master-key rotation exists).
+    /// The keys of the account bound by `binding`: it seals under its
+    /// current master key and opens under the one a record names.
     pub fn derive(
-        master_key: &[u8; 32],
+        master: &MasterKeys,
         object_id_key: &crate::account_roots::ObjectIdKey,
         binding: &str,
     ) -> Result<Self> {
         Ok(Self {
-            master: Zeroizing::new(*master_key),
-            generation: MasterKeyGeneration::FIRST,
+            master: master.clone(),
             object_id_key: object_id_key.clone(),
             binding: account_record::canonical_binding(binding)?,
         })
@@ -81,9 +78,9 @@ impl GuardKeys {
     pub fn seal_seen(&self, entry_id: &str, revision: u64) -> Result<Vec<u8>> {
         account_record::seal_object(
             &revision.to_be_bytes(),
-            self.master.as_slice(),
+            self.master.current().as_slice(),
             PURPOSE,
-            self.generation,
+            self.master.generation(),
             &self.binding,
             &Self::object(entry_id)?,
         )
@@ -94,7 +91,9 @@ impl GuardKeys {
     pub fn open_seen(&self, entry_id: &str, sealed: &[u8]) -> Result<u64> {
         let plain = account_record::open_object(
             sealed,
-            self.master.as_slice(),
+            // A record of a newer key than this client's is that error (sign
+            // in again), never taken for an unseen one.
+            self.master.key_for(sealed)?,
             PURPOSE,
             &self.binding,
             &Self::object(entry_id).map_err(|_| CryptoError::AuthFailed)?,
@@ -115,7 +114,7 @@ mod tests {
     #[test]
     fn entries_hide_what_they_are_about_and_open_only_where_sealed() {
         let keys = GuardKeys::derive(
-            &[1; 32],
+            &MasterKeys::first(&[1; 32]),
             &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
             BINDING,
         )
@@ -126,7 +125,7 @@ mod tests {
         // Stable for the account; another account's differs.
         assert_eq!(entry, keys.entry_id("contact", "ayse@example.com").unwrap());
         let other = GuardKeys::derive(
-            &[2; 32],
+            &MasterKeys::first(&[2; 32]),
             &crate::account_roots::ObjectIdKey::from_bytes([2; 32]),
             BINDING,
         )
@@ -149,7 +148,7 @@ mod tests {
         assert!(keys.open_seen(&elsewhere, &sealed).is_err());
         assert!(other.open_seen(&entry, &sealed).is_err());
         let rebound = GuardKeys::derive(
-            &[1; 32],
+            &MasterKeys::first(&[1; 32]),
             &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
             "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
         )
@@ -160,7 +159,7 @@ mod tests {
         assert!(keys.open_seen(&entry, &altered).is_err());
         assert!(keys.entry_id("", "x").is_err());
         assert!(GuardKeys::derive(
-            &[1; 32],
+            &MasterKeys::first(&[1; 32]),
             &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
             "aci:x@example.com"
         )

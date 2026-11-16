@@ -226,7 +226,11 @@ fn the_account_head_covers_the_group_list() {
     // Start the chain on the basis the index gives.
     let index = list.index();
     assert_eq!(index["values"], json!([[one, 1]]));
-    let keys = HeadKeys::derive(&user.master_key).unwrap();
+    let keys = HeadKeys::derive(
+        &kutup_crypto::master_keys::MasterKeys::first(&user.master_key),
+        &user.roots.object_id,
+    )
+    .unwrap();
     let writer = keys.writer("group-list-live").unwrap();
     let scope = |revision: u64| {
         keys.scope_digest("chatGroups", &[(one.clone(), revision)])
@@ -234,10 +238,8 @@ fn the_account_head_covers_the_group_list() {
     };
     let first = AccountHeadV1::first(
         &user.identity.incarnation_id(),
-        kutup_crypto::account_head::RootGenerations {
-            identity: 1,
-            drive: 1,
-        },
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        user.roots.head_generations(),
         &writer,
         vec![scope(1)],
     )

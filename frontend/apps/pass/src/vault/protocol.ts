@@ -1,5 +1,6 @@
 // Messages between the page and the Kutup Pass worker (./worker.ts).
 
+import type { MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import type { Op } from './types'
 
 type Calls =
@@ -25,13 +26,13 @@ type Calls =
   | { call: 'keyParts'; handle: number }
   | { call: 'generateKeyFile' }
   | { call: 'close'; handle: number }
-  | { call: 'keepKey'; handle: number; masterKey: Uint8Array; binding: string; fileId: string; revision: number; generated: boolean }
-  | { call: 'openKept'; envelope: string; masterKey: Uint8Array; binding: string; fileId: string }
-  | { call: 'keptKeyIsMine'; handle: number; envelope: string; masterKey: Uint8Array; binding: string; fileId: string }
+  | { call: 'keepKey'; handle: number; masterKeys: MasterKeysBytes; binding: string; fileId: string; revision: number; generated: boolean }
+  | { call: 'openKept'; envelope: string; masterKeys: MasterKeysBytes; binding: string; fileId: string }
+  | { call: 'keptKeyIsMine'; handle: number; envelope: string; masterKeys: MasterKeysBytes; binding: string; fileId: string }
   | { call: 'importPreview'; contents: Uint8Array; provider: string | null }
   | { call: 'importFormats' }
   | { call: 'probeVault'; contents: Uint8Array }
-  | { call: 'resealKeptKey'; envelope: string; masterKey: Uint8Array; binding: string; from: string; to: string; revision: number }
+  | { call: 'resealKeptKey'; envelope: string; masterKeys: MasterKeysBytes; binding: string; from: string; to: string; revision: number }
 
 export type Request = Calls & { id: number }
 export type Call = Calls

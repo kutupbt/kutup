@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { describe, it, expect, beforeEach } from 'vitest'
 import api, { configureClient, setUnauthenticatedHandler } from './client'
 import { clearSession, getAccessToken, getSession, setSession } from './store'
@@ -63,7 +64,7 @@ const seedAuth = (token: string | null) => {
     userId: 'u',
     address: 'a@b.c', envelopeBinding: 'a@b.c',
     username: null,
-    masterKey: new Uint8Array(0),
+    masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)),
     roots: testRoots(0),
     privateKey: new Uint8Array(0),
     publicKey: '',

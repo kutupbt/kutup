@@ -65,16 +65,16 @@ describe('registerWith', () => {
   it('sends a grant in the body, a setup token as the bearer, nothing for a new account; the registrar stays open', async () => {
     post.mockResolvedValue({ data: { registrationResponse: 'resp', serverKeyId: 3 } })
     const key = new Uint8Array(32)
-    expect(await registerWith(registrar, 'kb', key, { grant: 'g' })).toEqual({
+    expect(await registerWith(registrar, 'kb', { key, generation: 1 }, { grant: 'g' })).toEqual({
       opaqueRecord: 'record-for-resp',
       opaqueServerKeyId: 3,
       masterKeyEnvelope: 'envelope',
     })
     expect(post.mock.calls[0]).toEqual(['/auth/opaque/register/start', { keyBinding: 'kb', registrationRequest: 'reg-request', grant: 'g' }, undefined])
-    await registerWith(registrar, 'kb', key, { setupToken: 'setup' })
+    await registerWith(registrar, 'kb', { key, generation: 1 }, { setupToken: 'setup' })
     expect(post.mock.calls[1][2]).toEqual({ headers: { Authorization: 'Bearer setup' } })
     expect(post.mock.calls[1][1]).not.toHaveProperty('grant')
-    await registerWith(registrar, 'kb', key, null)
+    await registerWith(registrar, 'kb', { key, generation: 1 }, null)
     expect(post.mock.calls[2][1]).toEqual({ keyBinding: 'kb', registrationRequest: 'reg-request' })
     expect(registrar.register).toHaveBeenCalledTimes(3)
     expect(registrar.close).not.toHaveBeenCalled()
@@ -91,7 +91,7 @@ describe('registerWith', () => {
 describe('reregisterWith', () => {
   it('re-registers with the grant at finish', async () => {
     post.mockResolvedValue({ data: { registrationResponse: 'resp', serverKeyId: 2 } })
-    await opaqueReregister('new', 'kb', new Uint8Array(32), 'g')
+    await opaqueReregister('new', 'kb', { key: new Uint8Array(32), generation: 1 }, 'g')
     expect(post.mock.calls[1]).toEqual([
       '/auth/opaque/register/finish',
       { grant: 'g', keyBinding: 'kb', opaqueRecord: 'record-for-resp', opaqueServerKeyId: 2, masterKeyEnvelope: 'envelope' },
@@ -105,7 +105,7 @@ describe('reregisterWith', () => {
       if (path === '/auth/opaque/register/finish' && finishes++ === 0) return Promise.reject(refused(409, 'opaqueKeyStale'))
       return Promise.resolve({ data: { registrationResponse: 'resp', serverKeyId: 4 } })
     })
-    await reregisterWith(registrar, 'kb', new Uint8Array(32), 'g')
+    await reregisterWith(registrar, 'kb', { key: new Uint8Array(32), generation: 1 }, 'g')
     expect(post.mock.calls.map(([path]) => path as string)).toEqual([
       '/auth/opaque/register/start',
       '/auth/opaque/register/finish',
@@ -121,7 +121,7 @@ describe('reregisterWith', () => {
         ? Promise.reject(refused(409, 'opaqueKeyStale'))
         : Promise.resolve({ data: { registrationResponse: 'resp', serverKeyId: 4 } }),
     )
-    await expect(reregisterWith(registrar, 'kb', new Uint8Array(32), 'g')).rejects.toBeInstanceOf(AxiosError)
+    await expect(reregisterWith(registrar, 'kb', { key: new Uint8Array(32), generation: 1 }, 'g')).rejects.toBeInstanceOf(AxiosError)
     expect(registrar.register).toHaveBeenCalledTimes(2)
     registrar.register.mockClear()
     post.mockImplementation((path: string) =>
@@ -129,7 +129,7 @@ describe('reregisterWith', () => {
         ? Promise.reject(refused(401))
         : Promise.resolve({ data: { registrationResponse: 'resp', serverKeyId: 4 } }),
     )
-    await expect(reregisterWith(registrar, 'kb', new Uint8Array(32), 'g')).rejects.toBeInstanceOf(AxiosError)
+    await expect(reregisterWith(registrar, 'kb', { key: new Uint8Array(32), generation: 1 }, 'g')).rejects.toBeInstanceOf(AxiosError)
     expect(registrar.register).toHaveBeenCalledTimes(1)
   })
 })

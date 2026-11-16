@@ -4,6 +4,7 @@
 // unlocked calendar key stays in WASM inside an `UnlockedCalendar`; this
 // module never sees it or the passphrase.
 
+import type { MasterKeys } from './masterKeys'
 import type { SealedMailKey } from './mailKey'
 import { getCryptoWasm } from './rustWasm'
 
@@ -77,7 +78,7 @@ export interface NewCalendar {
   metadata: SealedMetadata
 }
 
-type KeyArgs = [masterKeyBase64: string, binding: string, address: string, envelope: string, fingerprint: string]
+type KeyArgs = [masterKeys: MasterKeys, binding: string, address: string, envelope: string, fingerprint: string]
 
 /**
  * A calendar's key in WASM memory; `free()` it when the calendar closes. It
@@ -113,7 +114,7 @@ async function wasm(): Promise<CalendarWasm> {
 }
 
 function keyArgs(key: SealedMailKey): KeyArgs {
-  return [key.masterKeyBase64, key.binding, key.address, key.envelope, key.fingerprint]
+  return [key.masterKeys, key.binding, key.address, key.envelope, key.fingerprint]
 }
 
 /**

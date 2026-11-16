@@ -70,7 +70,9 @@ openNativeChatClient(
   databaseKey,
   account,            // aci:<uuid>@<server>
   NativeAccountKeys(
-    masterKey,          // the account master key, 32 bytes
+    masterKey,          // the account's current master key, 32 bytes
+    masterKeyGeneration,// its generation (1 until the first rotation)
+    masterKeyring,      // the sign-in's masterKeyring records, base64-decoded
     rootRecords,        // the sign-in's accountRoots, base64-decoded
     authorityPublicKey, // the sign-in's accountAuthorityPublicKey, decoded
     keyBinding

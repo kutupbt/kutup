@@ -4,6 +4,7 @@
 // the master key derives. Rust (kutup-chat-proto) builds, signs and checks
 // the chain; this is its typed browser face.
 
+import type { MasterKeys } from './masterKeys'
 import type { IdentityRoot } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
 
@@ -115,14 +116,14 @@ export async function deliveredFrameSender(delivered: Uint8Array): Promise<strin
   return (await getCryptoWasm()).deliveredFrameSender(delivered)
 }
 
-/** `pins` sealed under the key `masterKeyBase64` derives, for `profile` (`<client type>:<user id>`). */
-export async function sealManifestPins(pins: AccountManifestPin[], masterKeyBase64: string, profile: string): Promise<string> {
-  return (await getCryptoWasm()).sealManifestPins(pins, masterKeyBase64, profile)
+/** `pins` sealed under the key `masterKeys` derives, for `profile` (`<client type>:<user id>`). */
+export async function sealManifestPins(pins: AccountManifestPin[], masterKeys: MasterKeys, profile: string): Promise<string> {
+  return (await getCryptoWasm()).sealManifestPins(pins, masterKeys, profile)
 }
 
 /** The pins {@link sealManifestPins} sealed; throws on another key, profile, or a changed envelope. */
-export async function openManifestPins(envelope: string, masterKeyBase64: string, profile: string): Promise<AccountManifestPin[]> {
-  return (await getCryptoWasm()).openManifestPins(envelope, masterKeyBase64, profile) as AccountManifestPin[]
+export async function openManifestPins(envelope: string, masterKeys: MasterKeys, profile: string): Promise<AccountManifestPin[]> {
+  return (await getCryptoWasm()).openManifestPins(envelope, masterKeys, profile) as AccountManifestPin[]
 }
 
 /** The next manifest after `head` without `deviceIds`. Throws when it would list no device. */

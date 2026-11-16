@@ -1,3 +1,4 @@
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { useQuery } from '@tanstack/react-query'
 import { deriveAccountIdentityKeys, type AccountRoots } from '@kutup/crypto'
 import type { AccountRef } from '@kutup/crypto/accountRef'
@@ -13,7 +14,10 @@ export interface DriveIdentity {
   /** The account's key binding (`session.envelopeBinding`), which its own seals bind. */
   binding: string
   incarnationId: string
+  /** The account's current master key (its own Drive keys are sealed under it). */
   masterKey: Uint8Array
+  /** The account's master keys, which its account records are sealed and opened through. */
+  masterKeys: MasterKeys
   /** The account's stored roots: its identity (and so its signatures) comes from `roots.identityRoot`. */
   roots: AccountRoots
   privateKey: Uint8Array
@@ -42,6 +46,7 @@ export async function driveIdentityOf(session: Session): Promise<DriveIdentity> 
     binding: session.envelopeBinding,
     incarnationId: identity.incarnationId,
     masterKey: session.masterKey,
+    masterKeys: session.masterKeys,
     roots: session.roots,
     privateKey: session.privateKey,
     authorityPublicKey: identity.authorityPublicKey,

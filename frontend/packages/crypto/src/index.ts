@@ -1,4 +1,5 @@
 // High-level crypto operations for registration and login flows.
+import { FIRST_MASTER_KEY_GENERATION } from './masterKeys'
 import { getSodium } from './sodium'
 import { deriveRecoveryAuthProof } from './kdf'
 import { fromBase64, toBase64 } from './base64'
@@ -249,6 +250,7 @@ async function sealAccountKeySet(
     masterKey,
     recoveryKeyEntropy,
     ACCOUNT_RECORD_PURPOSE.recoveryMasterKey,
+    FIRST_MASTER_KEY_GENERATION,
     binding,
   )
   return {

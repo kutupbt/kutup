@@ -38,7 +38,7 @@ import {
   type PinUpdate,
   type Recorded,
 } from '@kutup/crypto/identityPins'
-import { OlderThanSeenError, revisionGuard, toBase64 } from '@kutup/crypto'
+import { OlderThanSeenError, revisionGuard } from '@kutup/crypto'
 import {
   accountHead,
   HeadBlockedError,
@@ -238,7 +238,7 @@ const HEAD_SCOPE = 'pins'
 const HEAD_ID = 'pins'
 
 function headFor(me: DriveIdentity) {
-  return accountHead({ userId: me.userId, masterKey: me.masterKey, roots: me.roots, envelopeBinding: me.binding })
+  return accountHead({ userId: me.userId, masterKeys: me.masterKeys, roots: me.roots, envelopeBinding: me.binding })
 }
 
 /**
@@ -296,7 +296,7 @@ async function openPins(
     return { revision: 0, pins: EMPTY_PINS }
   }
   // The revision is the one sealed in the list's header, not the server's word.
-  const { pins, revision } = await openIdentityPins(toBase64(me.masterKey), me.binding, data.envelope)
+  const { pins, revision } = await openIdentityPins(me.masterKeys, me.binding, data.envelope)
   index?.expect(HEAD_ID, revision)
   try {
     await guard.accept(PINS_SCOPE, PINS_ID, revision)
@@ -335,7 +335,7 @@ function updatePins(me: DriveIdentity, change: (pins: PinsText) => Promise<PinsT
       if (!list) return null
       const guard = revisionGuard({ ...me, envelopeBinding: me.binding })
       const revision = await guard.next(PINS_SCOPE, PINS_ID, current.revision)
-      const envelope = await sealIdentityPins(toBase64(me.masterKey), me.binding, revision, list)
+      const envelope = await sealIdentityPins(me.masterKeys, me.binding, revision, list)
       return {
         changes: [[HEAD_ID, revision]],
         send: async (sealedHead) => {

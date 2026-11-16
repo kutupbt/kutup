@@ -7,6 +7,18 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
+/** The account's master keys as a page passes them (Rust `MasterKeys::encode`): `KUTPMKS1`, a count, then each generation and key, newest first. */
+function masterKeySet(...keys) {
+  const out = [Buffer.from('KUTPMKS1'), Buffer.from([keys.length >> 8, keys.length & 0xff])]
+  keys.forEach((key, i) => {
+    const generation = Buffer.alloc(4)
+    generation.writeUInt32BE(keys.length - i)
+    out.push(generation, Buffer.from(key))
+  })
+  return new Uint8Array(Buffer.concat(out))
+}
+
+
 const root = fileURLToPath(new URL('..', import.meta.url))
 const wasm = await import(new URL('../frontend/wasm/mail-search-wasm/kutup_mail_search_wasm.js', import.meta.url))
 await wasm.default({ module_or_path: await readFile(`${root}/frontend/wasm/mail-search-wasm/kutup_mail_search_wasm_bg.wasm`) })
@@ -20,7 +32,7 @@ const keep = (sealed) => sealed.forEach(({ id, sealed }) => store.set(id, sealed
 const BINDING = '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b'
 const day = 24 * 60 * 60 * 1000
 const t0 = Date.UTC(2026, 9, 1)
-const index = new wasm.MailSearch(masterKey, BINDING, undefined)
+const index = new wasm.MailSearch(masterKeySet(masterKey), BINDING, undefined)
 const wrapped = index.wrappedStoreKey()
 // An account record (KUTPAR1, purpose MailSearchStoreKey) of one length.
 assert.equal(wrapped.length, 163)
@@ -52,7 +64,7 @@ assert.deepEqual(search(index, 'yok'), [])
 assert.deepEqual(hits(index, 'istanbul')[0].meta, row('m3', 'archive'))
 
 // Reopened from the wrapped store key and the stored directory alone.
-const again = new wasm.MailSearch(masterKey, BINDING, wrapped)
+const again = new wasm.MailSearch(masterKeySet(masterKey), BINDING, wrapped)
 assert.equal(again.openDirectory(store.get(again.directoryId())), true)
 assert.deepEqual(search(again, 'fatura ekim'), ['m1'])
 
@@ -75,21 +87,21 @@ assert.deepEqual(search(again, 'fatura'), ['m2'])
 const otherKey = new Uint8Array(32).fill(0x5b)
 assert.notEqual(wasm.MailSearch.storeName(otherKey), wasm.MailSearch.storeName(masterKey))
 assert.match(wasm.MailSearch.storeName(masterKey), /^[0-9a-f]{32}$/)
-assert.throws(() => new wasm.MailSearch(otherKey, BINDING, wrapped))
+assert.throws(() => new wasm.MailSearch(masterKeySet(otherKey), BINDING, wrapped))
 // Nor can another account's key binding under the same master key.
-assert.throws(() => new wasm.MailSearch(masterKey, '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', wrapped))
+assert.throws(() => new wasm.MailSearch(masterKeySet(masterKey), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', wrapped))
 
 // A new store key (the index deleted and made again) opens nothing of the old
 // one: the directory reads as empty, and records that do not open mark it damaged.
 // one: its directory does not open, so the index is damaged and writes nothing.
-const fresh = new wasm.MailSearch(masterKey, BINDING, undefined)
+const fresh = new wasm.MailSearch(masterKeySet(masterKey), BINDING, undefined)
 assert.equal(fresh.openDirectory(undefined), false)
 assert.equal(fresh.damaged(), false)
 assert.equal(fresh.openDirectory(store.get(index.directoryId())), false)
 assert.equal(fresh.damaged(), true)
 assert.throws(() => fresh.add(docs, []), /damaged/)
 // A record that does not open marks it too.
-const other2 = new wasm.MailSearch(masterKey, BINDING, undefined)
+const other2 = new wasm.MailSearch(masterKeySet(masterKey), BINDING, undefined)
 const stale = [...store].map(([, sealed]) => ({ name: 'shard/0/fat', sealed }))
 other2.search('fatura', [0], stale.slice(0, 1))
 assert.equal(other2.damaged(), true)
@@ -97,7 +109,7 @@ assert.equal(other2.damaged(), true)
 // A directory of a newer version: this page writes nothing, and it is not damage to wipe.
 const enc = new TextEncoder()
 const cbor = new Uint8Array([0xa2, 0x67, ...enc.encode('version'), 0x04, 0x67, ...enc.encode('periods'), 0xa0])
-const ahead = new wasm.MailSearch(masterKey, BINDING, wrapped)
+const ahead = new wasm.MailSearch(masterKeySet(masterKey), BINDING, wrapped)
 assert.equal(ahead.openDirectory(ahead.sealRecord('dir', cbor).sealed), false)
 assert.equal(ahead.newer(), true)
 assert.throws(() => ahead.add(docs, []), /damaged/)

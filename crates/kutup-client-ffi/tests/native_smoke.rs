@@ -155,6 +155,8 @@ fn encrypted_install_registers_once_and_reopens() {
         ALICE.into(),
         NativeAccountKeys {
             master_key: vec![9; 32],
+            master_key_generation: 1,
+            master_keyring: Vec::new(),
             root_records: roots.0.clone(),
             authority_public_key: roots.1.clone(),
             binding: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
@@ -197,6 +199,8 @@ fn encrypted_install_registers_once_and_reopens() {
         ALICE.into(),
         NativeAccountKeys {
             master_key: vec![9; 32],
+            master_key_generation: 1,
+            master_keyring: Vec::new(),
             root_records: roots.0.clone(),
             authority_public_key: roots.1.clone(),
             binding: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
@@ -211,6 +215,8 @@ fn encrypted_install_registers_once_and_reopens() {
         ALICE.into(),
         NativeAccountKeys {
             master_key: vec![9; 32],
+            master_key_generation: 1,
+            master_keyring: Vec::new(),
             root_records: roots.0.clone(),
             authority_public_key: roots.1.clone(),
             binding: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
@@ -226,4 +232,57 @@ fn encrypted_install_registers_once_and_reopens() {
         futures_executor::block_on(second.history()),
         Err(KutupChatError::Closed)
     ));
+}
+
+/// After a master-key rotation the app holds the new key and its generation,
+/// and the keyring reaches the old one: roots sealed before the rotation still
+/// open. A keyring that reaches past the key held is refused (another device
+/// rotated it), before any database is touched.
+#[test]
+fn the_keyring_opens_roots_sealed_before_a_rotation() {
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
+    let roots = kutup_crypto::account_roots::AccountRoots::generate();
+    let records = roots.seal(&[9; 32], first, BINDING).unwrap();
+    let authority = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
+        .unwrap()
+        .authority_public_key()
+        .to_vec();
+    let keyring =
+        kutup_crypto::master_keys::MasterKeys::seal_keyring(&[10; 32], &[9; 32], first, BINDING)
+            .unwrap();
+    let open = |master_key: Vec<u8>, generation: u32, keyring: Vec<Vec<u8>>| {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("chat.sqlite");
+        futures_executor::block_on(open_native_chat_client(
+            database.to_string_lossy().into_owned(),
+            vec![3; 32],
+            ALICE.into(),
+            NativeAccountKeys {
+                master_key,
+                master_key_generation: generation,
+                master_keyring: keyring,
+                root_records: records.clone(),
+                authority_public_key: authority.clone(),
+                binding: BINDING.into(),
+            },
+            Arc::new(MockHttp::new()),
+        ))
+    };
+    let client = open(vec![10; 32], 2, vec![keyring.clone()]).unwrap();
+    futures_executor::block_on(client.shutdown()).unwrap();
+    // Without the keyring the old key is out of reach.
+    assert!(matches!(
+        open(vec![10; 32], 2, Vec::new()),
+        Err(KutupChatError::InvalidInput { .. })
+    ));
+    // The old key with the newer keyring: stale.
+    match open(vec![9; 32], 1, vec![keyring]) {
+        Err(KutupChatError::InvalidInput { message }) => assert!(
+            message.contains(kutup_crypto::master_keys::MASTER_KEY_STALE),
+            "{message}"
+        ),
+        Err(other) => panic!("expected a stale key, got {other:?}"),
+        Ok(_) => panic!("expected a stale key, got a client"),
+    }
 }

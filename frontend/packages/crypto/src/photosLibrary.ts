@@ -2,13 +2,13 @@
 // on photos, an account record under its master key, bound to its key
 // binding (docs/plans/w1-account-record.md). Rust owns the format; this
 // module only moves text and bytes.
-import { toBase64 } from './base64'
-import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
+import type { MasterKeys } from './masterKeys'
 import { getCryptoWasm } from './rustWasm'
 
 /** Whose record: the account's master key and its key binding (`session.envelopeBinding`). */
 export interface PhotosLibraryOwner {
-  masterKey: Uint8Array
+  /** The account's master keys (`session.masterKeys`). */
+  masterKeys: MasterKeys
   binding: string
 }
 
@@ -39,8 +39,7 @@ export async function sealPhotosLibrary(
 ): Promise<SealedPhotosLibrary> {
   return (await getCryptoWasm()).sealPhotosLibrary(
     JSON.stringify(marks),
-    toBase64(owner.masterKey),
-    MASTER_KEY_GENERATION,
+    owner.masterKeys,
     owner.binding,
     incarnationId,
     revision,
@@ -66,6 +65,6 @@ export async function openPhotosLibrary(
   const module = await getCryptoWasm()
   const header = module.inspectPhotosLibrary(envelope)
   if (header.accountIncarnationId !== incarnationId) throw new Error('library record of another account')
-  const text = module.openPhotosLibrary(envelope, toBase64(owner.masterKey), owner.binding, incarnationId, header.revision, header.previousDigest)
+  const text = module.openPhotosLibrary(envelope, owner.masterKeys, owner.binding, incarnationId, header.revision, header.previousDigest)
   return { marks: JSON.parse(text) as PhotosLibraryMarks, header }
 }

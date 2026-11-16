@@ -44,6 +44,8 @@ The Argon2id account-protection derivation (`kdf::derive_account_protection_keys
 
 ## Rotation checklist
 
+**Done** (docs/plans/mk-rotation-exercise.md, 2026-11-16): every seal below takes the generation from the account's `MasterKeys` (Rust) or `session.masterKeys` (web), every open picks the key by the generation the record names, and `MASTER_KEY_GENERATION` is gone. The list stays as the record of what that covered.
+
 When master-key rotation is built, every place that writes `MasterKeyGeneration::FIRST` (Rust) or `MASTER_KEY_GENERATION` (TypeScript) outside tests must take the account's current generation instead. Find them with `grep -rn 'MasterKeyGeneration::FIRST\|MASTER_KEY_GENERATION' crates frontend/packages frontend/apps`; as of W6 they are:
 
 - **Master-key wraps (purposes 1 and 2):**

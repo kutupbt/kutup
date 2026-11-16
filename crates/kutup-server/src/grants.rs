@@ -36,6 +36,9 @@ pub enum Purpose {
     Rotate,
     /// A new username, or dropping a held one (docs/plans/username-renames.md).
     Rename,
+    /// A new master key (docs/plans/mk-rotation-exercise.md): the password
+    /// registered again with it, all in one transaction.
+    MasterKeyRotation,
 }
 
 impl Purpose {
@@ -48,6 +51,7 @@ impl Purpose {
             Purpose::Recovery => "recovery",
             Purpose::Rotate => "rotate",
             Purpose::Rename => "rename",
+            Purpose::MasterKeyRotation => "masterKeyRotation",
         }
     }
 
@@ -59,6 +63,7 @@ impl Purpose {
             "totp" => Purpose::Totp,
             "adminReset" => Purpose::AdminReset,
             "rename" => Purpose::Rename,
+            "masterKeyRotation" => Purpose::MasterKeyRotation,
             _ => return None,
         })
     }

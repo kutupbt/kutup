@@ -78,6 +78,7 @@ fn manifest(devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
         issued_at: "2026-10-22T12:00:00Z".into(),
         authority_key_id: hex::encode(Sha256::digest(public)),
         self_authority_key: b64(&public),
+        successions: Vec::new(),
         signature: String::new(),
     };
     sign(&mut manifest);
@@ -954,4 +955,165 @@ fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_id
     assert!(other.verify().is_err());
     other.identity_binding = Some(b64(&[0x5c; 63]));
     assert!(other.signing_bytes().is_err());
+}
+
+// --- successions (docs/plans/identity-rotation.md §4) ------------------------
+
+const SUCCESSION_VECTORS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/vectors/account-succession-v1.json"
+);
+
+fn authority_at(seed: u8) -> kutup_crypto::primitives::SigningKey {
+    kutup_crypto::primitives::SigningKey::from_seed(
+        kutup_crypto::primitives::Suite::V1,
+        &[seed; 32],
+    )
+}
+
+/// The manifest of an account rotated twice: authority 0x61 (generation 1)
+/// to 0x62 (2) to the manifest's own, [`authority`] (3).
+fn rotated_twice() -> AccountManifestV3 {
+    let mut manifest = two_devices();
+    let id = manifest.account.account_id.clone();
+    let first = AccountSuccessionV1::sign(
+        &id,
+        &authority_at(0x61),
+        1,
+        &authority_at(0x62),
+        &"aa".repeat(32),
+    )
+    .unwrap();
+    let second = AccountSuccessionV1::sign(
+        &id,
+        &authority_at(0x62),
+        2,
+        &authority_at(7),
+        &"bb".repeat(32),
+    )
+    .unwrap();
+    manifest.successions = vec![first, second];
+    sign(&mut manifest);
+    manifest
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuccessionVectors {
+    /// A manifest with no successions: its signed bytes are those of a
+    /// manifest from before the field existed.
+    absent: AccountManifestV3,
+    /// Two rotations, both valid.
+    present: AccountManifestV3,
+    /// The same with the newest succession's previous-authority signature
+    /// swapped for another statement's (the manifest itself signed again).
+    wrong_signature: AccountManifestV3,
+}
+
+fn succession_vectors() -> SuccessionVectors {
+    let present = rotated_twice();
+    let mut wrong_signature = present.clone();
+    wrong_signature.successions[1].signed_by_previous =
+        wrong_signature.successions[0].signed_by_previous.clone();
+    sign(&mut wrong_signature);
+    SuccessionVectors {
+        absent: two_devices(),
+        present,
+        wrong_signature,
+    }
+}
+
+#[test]
+#[ignore = "writes the vectors file"]
+fn write_succession_vectors() {
+    if std::env::var("KUTUP_WRITE_SUCCESSION_VECTORS").as_deref() != Ok("1") {
+        return;
+    }
+    std::fs::write(
+        SUCCESSION_VECTORS,
+        serde_json::to_string_pretty(&succession_vectors()).unwrap() + "\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn successions_verify_when_present_and_are_refused_when_wrong() {
+    let v: SuccessionVectors =
+        serde_json::from_str(&std::fs::read_to_string(SUCCESSION_VECTORS).unwrap()).unwrap();
+    let made = succession_vectors();
+    // Ed25519 is deterministic: the vectors are exactly what this code makes.
+    assert_eq!(
+        serde_json::to_value(&v.present).unwrap(),
+        serde_json::to_value(&made.present).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&v.absent).unwrap(),
+        serde_json::to_value(&made.absent).unwrap()
+    );
+    v.absent.verify().unwrap();
+    assert!(serde_json::to_value(&v.absent)
+        .unwrap()
+        .get("successions")
+        .is_none());
+    v.present.verify().unwrap();
+    let error = v.wrong_signature.verify().unwrap_err();
+    assert!(error.contains("signedByPrevious is invalid"), "{error}");
+
+    // A chain with a gap, one to another authority, another account's, or
+    // too long: refused even when the manifest signs it.
+    let mut gap = made.present.clone();
+    gap.successions.remove(0);
+    gap.successions[0] = AccountSuccessionV1::sign(
+        &gap.account.account_id,
+        &authority_at(0x63),
+        2,
+        &authority_at(7),
+        &"bb".repeat(32),
+    )
+    .unwrap();
+    gap.successions
+        .insert(0, made.present.successions[0].clone());
+    sign(&mut gap);
+    assert!(gap.verify().unwrap_err().contains("do not chain"));
+    let mut elsewhere = made.present.clone();
+    elsewhere.successions.pop();
+    sign(&mut elsewhere);
+    assert!(elsewhere
+        .verify()
+        .unwrap_err()
+        .contains("not to this manifest's authority"));
+    let mut other_account = made.present.clone();
+    other_account.successions = vec![AccountSuccessionV1::sign(
+        "1c7c6f1d-5d2f-4c9f-8d3e-7b2f4e6d8c0a",
+        &authority_at(0x62),
+        2,
+        &authority_at(7),
+        &"bb".repeat(32),
+    )
+    .unwrap()];
+    sign(&mut other_account);
+    assert!(other_account
+        .verify()
+        .unwrap_err()
+        .contains("another account"));
+    let mut too_many = made.present.clone();
+    too_many.successions = vec![made.present.successions[0].clone(); MAX_SUCCESSIONS + 1];
+    sign(&mut too_many);
+    assert!(too_many.verify().unwrap_err().contains("too many"));
+    // The manifest signature covers them: changing one without signing again fails.
+    let mut unsigned = made.present.clone();
+    unsigned.successions[0].previous_manifest_hash = "cc".repeat(32);
+    assert!(unsigned.verify().is_err());
+    // A generation that doesn't follow, or the same authority twice: refused.
+    let mut same = made.present.successions[0].clone();
+    same.new_id_gen = 3;
+    assert!(same.verify().is_err());
+    assert!(AccountSuccessionV1::sign(
+        &made.present.account.account_id,
+        &authority_at(7),
+        1,
+        &authority_at(7),
+        &"aa".repeat(32),
+    )
+    .is_err());
 }

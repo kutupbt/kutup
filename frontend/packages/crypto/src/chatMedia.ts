@@ -2,8 +2,8 @@
 // ledger envelopes. The existing bounded libsodium secretstream adapter owns
 // only incremental I/O; it does not select suites or construct persistent AAD.
 
+import type { MasterKeys } from './masterKeys'
 import { fromBase64, toBase64 } from './base64'
-import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 import { getCryptoWasm } from './rustWasm'
 import {
   ABYTES,
@@ -149,7 +149,8 @@ export async function decryptChatMediaV1(
  * account (docs/chat-media.md).
  */
 export interface ChatAttachmentLedgerOwner {
-  masterKey: Uint8Array
+  /** The account's master keys (`session.masterKeys`). */
+  masterKeys: MasterKeys
   binding: string
 }
 
@@ -167,8 +168,7 @@ export async function sealChatAttachmentLedger(
 ): Promise<string> {
   return (await getCryptoWasm()).sealChatAttachmentLedger(
     toBase64(plaintext),
-    toBase64(owner.masterKey),
-    MASTER_KEY_GENERATION,
+    owner.masterKeys,
     owner.binding,
     context.accountIncarnationId,
     context.entityId,
@@ -184,7 +184,7 @@ export async function openChatAttachmentLedger(
 ): Promise<Uint8Array> {
   return fromBase64((await getCryptoWasm()).openChatAttachmentLedger(
     envelope,
-    toBase64(owner.masterKey),
+    owner.masterKeys,
     owner.binding,
     expected.accountIncarnationId,
     expected.entityId,

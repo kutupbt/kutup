@@ -134,7 +134,8 @@ export interface OpaqueRegistration {
   /** The record to upload, from the server's `registrationResponse`. Runs Argon2id. */
   finish(registrationResponse: string): Promise<string>
   /** The password envelope of `masterKey` for this password (after `finish`). */
-  sealMasterKey(masterKey: Uint8Array, keyBinding: string): Promise<string>
+  /** `masterKey`, the account's at `generation` (its current one), sealed under this password. */
+  sealMasterKey(masterKey: Uint8Array, generation: number, keyBinding: string): Promise<string>
 }
 
 /** Something holding a password in its worker, that can register it (again). */
@@ -149,8 +150,8 @@ function registrationOn(worker: OpaqueWorker, request: string): OpaqueRegistrati
   return {
     request,
     finish: async (response) => expect(await worker.call({ type: 'registrationFinish', response }), 'finished').message,
-    sealMasterKey: async (masterKey, keyBinding) =>
-      expect(await worker.call({ type: 'sealMasterKey', masterKey: toBase64(masterKey), keyBinding }), 'sealed').envelope,
+    sealMasterKey: async (masterKey, generation, keyBinding) =>
+      expect(await worker.call({ type: 'sealMasterKey', masterKey: toBase64(masterKey), generation, keyBinding }), 'sealed').envelope,
   }
 }
 

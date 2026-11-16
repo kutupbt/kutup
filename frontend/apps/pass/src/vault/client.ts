@@ -1,6 +1,7 @@
 // The page's side of the Kutup Pass worker: one worker for the tab, a
 // promise per call, and a handle per open vault.
 
+import type { MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import type { Call, Request, Response } from './protocol'
 import type { Applied, EntryView, ImportFailure, ImportFormat, ImportPreview, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
 
@@ -32,8 +33,8 @@ export function probeVault(contents: Uint8Array): Promise<VaultProbe> {
 }
 
 /** The account's kept key of vault `from` (its envelope), sealed for its copy `to` at `revision`. */
-export function resealKeptKey(envelope: string, masterKey: Uint8Array, binding: string, from: string, to: string, revision: number): Promise<string> {
-  return call({ call: 'resealKeptKey', envelope, masterKey, binding, from, to, revision })
+export function resealKeptKey(envelope: string, masterKeys: MasterKeysBytes, binding: string, from: string, to: string, revision: number): Promise<string> {
+  return call({ call: 'resealKeptKey', envelope, masterKeys, binding, from, to, revision })
 }
 
 let worker: Worker | null = null
@@ -91,13 +92,13 @@ export class VaultHandle {
    * `binding` and `fileId` at `revision`: the key this vault was opened or
    * made with. `generated`: its password is one Kutup Pass made. Base64.
    */
-  keepKey(masterKey: Uint8Array, binding: string, fileId: string, revision: number, generated: boolean): Promise<string> {
-    return call({ call: 'keepKey', handle: this.handle, masterKey, binding, fileId, revision, generated })
+  keepKey(masterKeys: MasterKeysBytes, binding: string, fileId: string, revision: number, generated: boolean): Promise<string> {
+    return call({ call: 'keepKey', handle: this.handle, masterKeys, binding, fileId, revision, generated })
   }
 
   /** Whether the kept key `envelope` is the key this vault is open with (checked in the worker). */
-  keptKeyIsMine(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): Promise<boolean> {
-    return call({ call: 'keptKeyIsMine', handle: this.handle, envelope, masterKey, binding, fileId })
+  keptKeyIsMine(envelope: string, masterKeys: MasterKeysBytes, binding: string, fileId: string): Promise<boolean> {
+    return call({ call: 'keptKeyIsMine', handle: this.handle, envelope, masterKeys, binding, fileId })
   }
 
   view(): Promise<VaultView> {
@@ -215,8 +216,8 @@ export interface KeptKey {
 }
 
 /** Opens what the account keeps for vault `fileId`; throws when it does not open. */
-export function openKept(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): Promise<KeptKey> {
-  return call({ call: 'openKept', envelope, masterKey, binding, fileId })
+export function openKept(envelope: string, masterKeys: MasterKeysBytes, binding: string, fileId: string): Promise<KeptKey> {
+  return call({ call: 'openKept', envelope, masterKeys, binding, fileId })
 }
 
 /** Reads another password manager's export, changing nothing. */

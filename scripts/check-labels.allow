@@ -6,6 +6,7 @@
 
 crates/kutup-chat-core/src/db/indexed_db.rs	"kutup-chat-test-	test database name
 crates/kutup-chat-core/src/db/indexed_db.rs	"kutup-chat-test-unkeyed-	test database name
+crates/kutup-chat-core/src/db/indexed_db.rs	"kutup-chat-test-rotation-	test database name
 crates/kutup-chat-core/src/db/sqlite.rs	"kutup-chat-	test database path
 crates/kutup-chat-core/src/db/sqlite.rs	"kutup-chat-no-sqlcipher-	test database path
 crates/kutup-chat-core/src/db/sqlite.rs	"kutup-chat-sqlcipher-	test database path

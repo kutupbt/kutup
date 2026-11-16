@@ -1,7 +1,7 @@
+import type { MasterKeys } from './masterKeys'
 import type { IdentityRoot } from './accountRoots'
 import type { AccountRef } from './accountRef'
 import { getCryptoWasm } from './rustWasm'
-import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 
 // Mail address keys (docs/plans/mail-address-keys.md): OpenPGP keys per
 // address, generated and sealed in Rust (kutup-crypto `mail_key`); the secret
@@ -47,13 +47,13 @@ export interface SignedMailKeyList extends MailKeyListInput {
 }
 
 export async function generateMailAddressKey(
-  masterKeyBase64: string,
+  masterKeys: MasterKeys,
   binding: string,
   address: string,
   createdAt: Date = new Date(),
 ): Promise<GeneratedMailAddressKey> {
   const seconds = Math.floor(createdAt.getTime() / 1000)
-  return (await getCryptoWasm()).generateMailAddressKey(masterKeyBase64, MASTER_KEY_GENERATION, binding, address, seconds)
+  return (await getCryptoWasm()).generateMailAddressKey(masterKeys, binding, address, seconds)
 }
 
 /** Shortest passphrase an exported key may be locked with (kutup-crypto `MIN_EXPORT_PASSPHRASE_CHARS`). */
@@ -61,7 +61,7 @@ export const MIN_MAIL_KEY_PASSPHRASE = 8
 
 /** An address key as an armored OpenPGP secret key file locked with `passphrase`. */
 export async function exportMailAddressKey(key: SealedMailKey, passphrase: string): Promise<string> {
-  return (await getCryptoWasm()).exportMailAddressKey(key.masterKeyBase64, key.binding, key.address, key.envelope, key.fingerprint, passphrase)
+  return (await getCryptoWasm()).exportMailAddressKey(key.masterKeys, key.binding, key.address, key.envelope, key.fingerprint, passphrase)
 }
 
 /** The passphrase does not open the key file. */
@@ -76,14 +76,14 @@ export class WrongKeyPassphrase extends Error {
  * Proton's or GnuPG's) for `address`, sealed under the master key.
  */
 export async function importMailAddressKey(
-  masterKeyBase64: string,
+  masterKeys: MasterKeys,
   binding: string,
   address: string,
   file: Uint8Array,
   passphrase: string,
 ): Promise<GeneratedMailAddressKey> {
   try {
-    return (await getCryptoWasm()).importMailAddressKey(masterKeyBase64, MASTER_KEY_GENERATION, binding, address, file, passphrase)
+    return (await getCryptoWasm()).importMailAddressKey(masterKeys, binding, address, file, passphrase)
   } catch (error) {
     // WASM throws its messages as strings.
     if (error === 'wrong passphrase' || (error instanceof Error && error.message === 'wrong passphrase')) throw new WrongKeyPassphrase()
@@ -210,7 +210,7 @@ export async function verifyMailKeyList(
 
 /** An address key as its owner holds it: sealed, opened only inside WASM. */
 export interface SealedMailKey {
-  masterKeyBase64: string
+  masterKeys: MasterKeys
   binding: string
   address: string
   envelope: string
@@ -232,7 +232,7 @@ export interface OpenedMail {
  */
 export async function openMailMessage(key: SealedMailKey, message: Uint8Array, senderPublicKey?: string): Promise<OpenedMail> {
   const opened = (await getCryptoWasm()).openMailMessage(
-    key.masterKeyBase64,
+    key.masterKeys,
     key.binding,
     key.address,
     key.envelope,
@@ -254,7 +254,7 @@ export async function openMailMessage(key: SealedMailKey, message: Uint8Array, s
  */
 export async function openForwardedMailMessage(key: SealedMailKey, message: Uint8Array, senderPublicKey?: string): Promise<OpenedMail> {
   const opened = (await getCryptoWasm()).openForwardedMailMessage(
-    key.masterKeyBase64,
+    key.masterKeys,
     key.binding,
     key.address,
     key.envelope,
@@ -292,7 +292,7 @@ export async function makeMailForwarding(
   expiresAt: Date,
 ): Promise<MailForwardingMaterial> {
   return (await getCryptoWasm()).makeMailForwarding(
-    key.masterKeyBase64,
+    key.masterKeys,
     key.binding,
     key.address,
     key.envelope,
@@ -325,8 +325,7 @@ export async function acceptMailForwarding(
   activation: string,
 ): Promise<AcceptedMailForwarding> {
   return (await getCryptoWasm()).acceptMailForwarding(
-    key.masterKeyBase64,
-    MASTER_KEY_GENERATION,
+    key.masterKeys,
     key.binding,
     key.address,
     key.envelope,
@@ -352,7 +351,7 @@ export interface SealedMail {
  */
 export async function encryptMailMessage(key: SealedMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<SealedMail> {
   const sealed = (await getCryptoWasm()).encryptMailMessage(
-    key.masterKeyBase64,
+    key.masterKeys,
     key.binding,
     key.address,
     key.envelope,
@@ -408,7 +407,7 @@ export async function describeExternalMailKeyDetails(publicKey: Uint8Array, addr
  */
 export async function encryptMailPgp(key: SealedMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<string> {
   return (await getCryptoWasm()).encryptMailPgp(
-    key.masterKeyBase64,
+    key.masterKeys,
     key.binding,
     key.address,
     key.envelope,
@@ -533,12 +532,12 @@ export async function encryptMailPgpUnsigned(recipientPublicKeys: string[], plai
 
 /** A detached, armored signature over a MIME part, for `multipart/signed`. */
 export async function signMailDetached(key: SealedMailKey, content: Uint8Array): Promise<string> {
-  return (await getCryptoWasm()).signMailDetached(key.masterKeyBase64, key.binding, key.address, key.envelope, key.fingerprint, content)
+  return (await getCryptoWasm()).signMailDetached(key.masterKeys, key.binding, key.address, key.envelope, key.fingerprint, content)
 }
 
 /** A cleartext signature of `text` (`-----BEGIN PGP SIGNED MESSAGE-----`): an Inline PGP body that is signed, not encrypted. */
 export async function signMailCleartext(key: SealedMailKey, text: string): Promise<string> {
-  return (await getCryptoWasm()).signMailCleartext(key.masterKeyBase64, key.binding, key.address, key.envelope, key.fingerprint, text)
+  return (await getCryptoWasm()).signMailCleartext(key.masterKeys, key.binding, key.address, key.envelope, key.fingerprint, text)
 }
 
 /** {@link signMailCleartext} with a shared mailbox's key. */

@@ -304,7 +304,8 @@
           "securityKeyRemoved": "“{{oldName}}” güvenlik anahtarı kaldırıldı",
           "securityKeyCompromised": "“{{oldName}}” güvenlik anahtarı kopyalanmış olabilir (artık kullanılmıyor)",
           "authenticatorOn": "Doğrulama uygulaması açıldı",
-          "authenticatorOff": "Doğrulama uygulaması kapatıldı"
+          "authenticatorOff": "Doğrulama uygulaması kapatıldı",
+          "masterKeyRotated": "Yeni hesap anahtarı ve kurtarma ifadesi"
         }
       },
       "recovery": "Kurtarma ifadesi",

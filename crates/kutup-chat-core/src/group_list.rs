@@ -103,12 +103,12 @@ impl Engine {
     }
 
     /// Keeps this account's groups in its group list, sealed under its
-    /// `master_key` and named under its object-id key, bound to its key
+    /// current master key (of `master_keys`) and named under its object-id key, bound to its key
     /// `binding`; and takes the account's group keys (its self-authority, its
     /// pseudonyms) from its `roots`.
     pub fn enable_group_list(
         &mut self,
-        master_key: &[u8; 32],
+        master_keys: &kutup_crypto::master_keys::MasterKeys,
         roots: &kutup_crypto::account_roots::AccountRoots,
         binding: &str,
     ) -> Result<()> {
@@ -119,13 +119,7 @@ impl Engine {
             &roots.pseudonym,
         )?);
         self.group_list = Some(GroupListSync {
-            // Rotation (docs/plans/w6-key-hierarchy.md) seals at the
-            // account's current generation; until it exists, the first.
-            key: GroupListKey::new(
-                master_key,
-                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
-                &roots.object_id,
-            ),
+            key: GroupListKey::from_keys(master_keys, &roots.object_id),
             binding: binding.to_string(),
             listed: BTreeMap::new(),
             read_at_ms: 0,

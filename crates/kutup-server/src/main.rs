@@ -827,6 +827,10 @@ fn build_router(state: AppState) -> Router {
         .route("/api/account/heads", get(handlers::account_heads::heads))
         .route("/api/account/roots", get(account_roots::get))
         .route(
+            "/api/account/master-key/rotate",
+            post(handlers::master_key::rotate).route_layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
             "/api/account/index/:scope",
             get(handlers::account_heads::index),
         )

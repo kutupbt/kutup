@@ -21,6 +21,7 @@ use zeroize::Zeroizing;
 use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result as CryptoResult};
+use crate::master_keys::MasterKeys;
 use crate::primitives::{hash, Aead, Kdf, Suite};
 
 const MAGIC: &[u8; 8] = b"KUTPPE1\0";
@@ -302,25 +303,30 @@ fn expand<const N: usize>(ikm: &[u8], info: &[u8]) -> CryptoResult<[u8; N]> {
 }
 
 /// What the account's own copy of its profile key is sealed under: the
-/// master key, its generation and the account's key binding.
+/// account's master keys (sealed under the current one, opened under the one
+/// of the generation the copy names) and its key binding.
 #[derive(Clone)]
 pub struct ProfileOwnerKey {
-    master_key: Zeroizing<[u8; 32]>,
-    generation: MasterKeyGeneration,
+    keys: MasterKeys,
     binding: String,
 }
 
 impl ProfileOwnerKey {
+    /// `master_key` at `generation` alone, no older key reachable.
     pub fn new(
         master_key: &[u8; 32],
         generation: MasterKeyGeneration,
         binding: &str,
     ) -> CryptoResult<Self> {
+        Self::from_keys(&MasterKeys::only(master_key, generation), binding)
+    }
+
+    /// The account's whole master-key set.
+    pub fn from_keys(keys: &MasterKeys, binding: &str) -> CryptoResult<Self> {
         let binding = account_record::canonical_binding(binding)
             .map_err(|_| invalid("the profile key's copy needs the account's key binding"))?;
         Ok(Self {
-            master_key: Zeroizing::new(*master_key),
-            generation,
+            keys: keys.clone(),
             binding,
         })
     }
@@ -333,7 +339,7 @@ impl ProfileOwnerKey {
 impl std::fmt::Debug for ProfileOwnerKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProfileOwnerKey")
-            .field("generation", &self.generation)
+            .field("generation", &self.keys.generation())
             .field("binding", &self.binding)
             .finish_non_exhaustive()
     }
@@ -363,9 +369,9 @@ pub fn wrap_profile_key(
     let version = version_object(&profile_version(key)?)?;
     let sealed = account_record::seal_revision(
         key,
-        owner.master_key.as_slice(),
+        owner.keys.current(),
         WRAP_PURPOSE,
-        owner.generation,
+        owner.keys.generation(),
         &owner.binding,
         &version,
         revision,
@@ -384,7 +390,7 @@ pub fn unwrap_profile_key(
     let bytes = account_record::decode_record_b64(wrapped, WRAP_PURPOSE)?;
     let (plain, sealed_at) = account_record::open_revision(
         &bytes,
-        owner.master_key.as_slice(),
+        owner.keys.key_for(&bytes)?,
         WRAP_PURPOSE,
         &owner.binding,
         &version_object(version)?,

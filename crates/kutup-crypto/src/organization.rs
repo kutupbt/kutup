@@ -50,8 +50,53 @@ const PUBLIC_KEY_LEN: usize = crate::hpke_xwing::PUBLIC_KEY_LEN;
 const ENCAPSULATED_LEN: usize = crate::hpke_xwing::ENCAPSULATED_KEY_LEN;
 /// A 32-byte secret sealed with ChaCha20-Poly1305.
 const SEALED_SECRET_LEN: usize = 32 + 16;
-/// An escrow's sealed master key and identity root, with the AEAD tag.
-const ESCROW_SECRET_LEN: usize = 32 + 32 + 16;
+/// An escrow's plaintext version (docs/plans/mk-rotation-exercise.md): a
+/// version byte, then length-prefixed parts (u16 each), so a third value
+/// (the master-key keyring) needs a version, not a new organization suite.
+/// Version 1: the master key, then the identity root.
+const ESCROW_PLAIN_VERSION: u8 = 1;
+/// An escrow's sealed plaintext of version 1, with the AEAD tag.
+const ESCROW_SECRET_LEN: usize = 1 + (2 + 32) + (2 + 32) + 16;
+
+/// Version 1's plaintext: the master key and the identity root, each
+/// length-prefixed, after the version byte.
+fn escrow_plaintext(
+    master_key: &[u8; 32],
+    identity_root: &crate::account_roots::IdentityRoot,
+) -> Zeroizing<Vec<u8>> {
+    let mut out = Zeroizing::new(Vec::with_capacity(ESCROW_SECRET_LEN - 16));
+    out.push(ESCROW_PLAIN_VERSION);
+    for part in [&master_key[..], &identity_root.as_bytes()[..]] {
+        out.extend_from_slice(&(part.len() as u16).to_be_bytes());
+        out.extend_from_slice(part);
+    }
+    out
+}
+
+/// [`escrow_plaintext`] read back: version 1 and exactly its two parts.
+fn escrow_parts(plain: &[u8]) -> Result<(Zeroizing<[u8; 32]>, crate::account_roots::IdentityRoot)> {
+    let refused = || CryptoError::AuthFailed;
+    let (&version, mut rest) = plain.split_first().ok_or_else(refused)?;
+    if version != ESCROW_PLAIN_VERSION {
+        return Err(refused());
+    }
+    let mut part = || -> Result<&[u8]> {
+        if rest.len() < 2 {
+            return Err(refused());
+        }
+        let len = u16::from_be_bytes([rest[0], rest[1]]) as usize;
+        let (value, tail) = rest[2..].split_at_checked(len).ok_or_else(refused)?;
+        rest = tail;
+        Ok(value)
+    };
+    let master: [u8; 32] = part()?.try_into().map_err(|_| refused())?;
+    let identity_root =
+        crate::account_roots::IdentityRoot::from_slice(part()?).map_err(|_| refused())?;
+    if !rest.is_empty() {
+        return Err(refused());
+    }
+    Ok((Zeroizing::new(master), identity_root))
+}
 
 /// An organization key's id: a hash of its public key.
 pub type KeyId = [u8; 32];
@@ -614,7 +659,7 @@ impl EscrowV1 {
             &certificate.public_key,
             labels::ORG_MEMBER_ESCROW_V1,
             &out,
-            &Zeroizing::new([&master_key[..], &identity_root.as_bytes()[..]].concat()),
+            &escrow_plaintext(master_key, identity_root),
         )?;
         out.extend_from_slice(&sealed.encapsulated);
         put(&mut out, &sealed.ciphertext)?;
@@ -668,12 +713,7 @@ impl EscrowV1 {
             &bytes[..header_len],
             ciphertext,
         )?;
-        if opened.len() != 64 {
-            return Err(CryptoError::AuthFailed);
-        }
-        let mut master_key = Zeroizing::new([0u8; 32]);
-        master_key.copy_from_slice(&opened[..32]);
-        let identity_root = crate::account_roots::IdentityRoot::from_slice(&opened[32..])?;
+        let (master_key, identity_root) = escrow_parts(&opened)?;
         // Nobody can plant an escrow (the organization key is public): the
         // identity root, which only the member holds, must be theirs.
         let keys = AccountIdentityKeysV1::derive(&identity_root)?;

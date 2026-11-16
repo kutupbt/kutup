@@ -72,31 +72,46 @@ pub fn run(
         .context("recovery preflight (rate-limited — a few attempts per hour)")?;
     let binding = pre.envelope_binding.clone();
 
-    // A wrong phrase — or an unknown name, which the server answers with
-    // deterministic fake data — fails to unwrap here, before anything changes.
+    // The phrase's proof, for a recovery grant and the recovery envelope (an
+    // unknown name, which the server answers with a fake binding, and a wrong
+    // phrase are both refused here); then the new password, registered with
+    // it (every sign-in of the account ends).
+    let recovery_proof = kdf::derive_recovery_auth_proof(&entropy, &binding)
+        .context("derive recovery authorization proof")?;
+    let granted = client
+        .recover_grant(&name, &b64.encode(recovery_proof.as_slice()))
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "recovery phrase does not match this account (wrong phrase or username): {e:#}"
+            )
+        })?;
     let master_key = account_record::open_b64(
-        &pre.recovery_key_envelope,
+        &granted.recovery_key_envelope,
         &entropy,
         AccountRecordPurpose::RecoveryMasterKey,
         &binding,
     )
-    .map_err(|_| {
-        anyhow::anyhow!("recovery phrase does not match this account (wrong phrase or username)")
-    })?;
-
-    // The phrase's proof, for a recovery grant; then the new password,
-    // registered with it (every sign-in of the account ends).
+    .map_err(|_| anyhow::anyhow!("the recovery envelope does not open with this phrase"))?;
+    // The master key's generation, as the envelope's header names it.
+    let generation = account_record::inspect(
+        &b64.decode(&granted.recovery_key_envelope)
+            .context("the recovery envelope is not base64")?,
+    )
+    .context("the recovery envelope")?
+    .generation;
     eprintln!("Setting the new password…");
-    let recovery_proof = kdf::derive_recovery_auth_proof(&entropy, &binding)
-        .context("derive recovery authorization proof")?;
-    let grant = client
-        .recover_grant(&name, &b64.encode(recovery_proof.as_slice()))
-        .context("recover")?;
     let master_key: [u8; 32] = master_key
         .as_slice()
         .try_into()
         .map_err(|_| anyhow::anyhow!("the master key has the wrong length"))?;
-    super::login::set_password(&client, &grant, &binding, &password, &master_key)?;
+    super::login::set_password(
+        &client,
+        &granted.grant,
+        &binding,
+        &password,
+        &master_key,
+        generation,
+    )?;
 
     // Log straight in with the new password so the user ends up ready to work.
     let sess = super::login::login_with_password(profile, &server, &name, &password)?;

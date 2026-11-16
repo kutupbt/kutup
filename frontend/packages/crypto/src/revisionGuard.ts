@@ -25,8 +25,8 @@
 //   is then a fresh one for that value) or put back an older copy of it, but
 //   can neither read the entries nor set one to a revision of its choosing.
 
+import type { MasterKeys } from './masterKeys'
 import type { ObjectIdKey } from './accountRoots'
-import { toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
 
 /** The account's keys for the store (Rust `revision_guard::GuardKeys`). */
@@ -193,7 +193,7 @@ export function serialized<T>(entry: string, task: () => Promise<T>): Promise<T>
 
 let shared: RevisionStore | null = null
 /** By account: the guard, for the master key it was made with. */
-const guards = new Map<string, { masterKey: string; binding: string; guard: RevisionGuard }>()
+const guards = new Map<string, { masterKeys: MasterKeys; binding: string; guard: RevisionGuard }>()
 /** Set by tests: keys that need no WASM. */
 let testKeys: ((userId: string) => GuardKeys) | null = null
 
@@ -203,23 +203,23 @@ let testKeys: ((userId: string) => GuardKeys) | null = null
  */
 export function revisionGuard(session: {
   userId: string
-  masterKey: Uint8Array
+  masterKeys: MasterKeys
   roots: { objectIdKey: ObjectIdKey }
   envelopeBinding: string
 }): RevisionGuard {
-  const masterKey = toBase64(session.masterKey)
+  const masterKeys = session.masterKeys
   const objectIdKey = session.roots.objectIdKey
   const binding = session.envelopeBinding
   const known = guards.get(session.userId)
   // Made again when the master key or the binding is another (the keys are both).
-  if (known?.masterKey === masterKey && known.binding === binding) return known.guard
+  if (known && known.masterKeys === masterKeys && known.binding === binding) return known.guard
   shared ??= indexedDbRevisionStore()
   let keys: Promise<GuardKeys> | null = null
   const forTests = testKeys
   const load = (): Promise<GuardKeys> => {
     if (forTests) return Promise.resolve(forTests(session.userId))
     keys ??= getCryptoWasm()
-      .then((wasm): GuardKeys => new wasm.RevisionGuardKeys(masterKey, objectIdKey, binding))
+      .then((wasm): GuardKeys => new wasm.RevisionGuardKeys(masterKeys, objectIdKey, binding))
       .catch((error: unknown) => {
         // Not kept: the next call loads again.
         keys = null
@@ -228,7 +228,7 @@ export function revisionGuard(session: {
     return keys
   }
   const guard = new RevisionGuard(shared, load)
-  guards.set(session.userId, { masterKey, binding, guard })
+  guards.set(session.userId, { masterKeys, binding, guard })
   return guard
 }
 

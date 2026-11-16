@@ -6,6 +6,7 @@
 // across reloads is the job of the encrypted per-origin session blob, not of
 // this module.
 
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { useSyncExternalStore } from 'react'
 import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import type { DeviceKeys } from './keys'
@@ -29,6 +30,8 @@ export interface Session {
   color: string | null
   publicKey: string
   masterKey: Uint8Array
+  /** The account's master keys: the current one and every older one (docs/plans/mk-rotation-exercise.md). */
+  masterKeys: MasterKeys
   /** The account's stored roots (docs/plans/identity-root.md), opened at sign-in: its identity derives from `roots.identityRoot`. */
   roots: AccountRoots
   privateKey: Uint8Array

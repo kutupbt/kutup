@@ -1,3 +1,4 @@
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const post = vi.fn()
@@ -27,7 +28,11 @@ import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const keys = {
   userId: 'u1',
-  masterKey: new Uint8Array(32).fill(1),
+  // Fresh each time: a session replaced in the store zeroes its key.
+  get masterKey() {
+    return new Uint8Array(32).fill(1)
+  },
+  masterKeys: firstMasterKeys(new Uint8Array(32).fill(1)),
   roots: testRoots(1),
   privateKey: new Uint8Array(32).fill(2),
   publicKey: 'cHVi',

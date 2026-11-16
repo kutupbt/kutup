@@ -70,11 +70,45 @@ pub struct Session {
     pub account_roots: Vec<String>,
     #[serde(default)]
     pub account_authority_public_key: String,
+    /// The master key's generation (the one `master_key` is), and every
+    /// older key's keyring record (docs/plans/mk-rotation-exercise.md). A
+    /// session from before them is at generation 1, with no keyring.
+    #[serde(default = "first_generation")]
+    pub master_key_generation: u32,
+    #[serde(default)]
+    pub master_keyring: Vec<String>,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
 }
 
+fn first_generation() -> u32 {
+    1
+}
+
 impl Session {
+    /// The account's master keys: the current one, which seals, and every
+    /// older one through the keyring, which still opens what was sealed
+    /// before a rotation.
+    pub fn master_keys(&self) -> Result<kutup_crypto::master_keys::MasterKeys> {
+        let master: [u8; 32] = self
+            .master_key_bytes()?
+            .try_into()
+            .map_err(|_| anyhow!("master key must be 32 bytes"))?;
+        let master = zeroize::Zeroizing::new(master);
+        let generation =
+            kutup_crypto::account_record::MasterKeyGeneration::new(self.master_key_generation)
+                .map_err(|_| {
+                    anyhow!("this session's master-key generation is 0: run 'kutup login' again")
+                })?;
+        let keyring = self
+            .master_keyring
+            .iter()
+            .map(|record| b64(record))
+            .collect::<Result<Vec<_>>>()?;
+        kutup_crypto::master_keys::MasterKeys::open(&master, generation, self.binding(), &keyring)
+            .context("open the account's master-key keyring")
+    }
+
     /// The string every seal and open uses (docs/plans/account-identity.md).
     pub fn binding(&self) -> &str {
         &self.envelope_binding
@@ -104,11 +138,7 @@ impl Session {
                 "this session has no account roots: run 'kutup login' again"
             ));
         }
-        let master: [u8; 32] = self
-            .master_key_bytes()?
-            .try_into()
-            .map_err(|_| anyhow!("master key must be 32 bytes"))?;
-        let master = zeroize::Zeroizing::new(master);
+        let master = self.master_keys()?;
         let authority: [u8; 32] = b64(&self.account_authority_public_key)?
             .try_into()
             .map_err(|_| anyhow!("the account authority must be 32 bytes"))?;
@@ -139,6 +169,7 @@ impl Session {
         Session {
             envelope_binding: binding.into(),
             master_key: b64.encode(master_key),
+            master_key_generation: 1,
             account_roots: roots
                 .seal(
                     &master_key,

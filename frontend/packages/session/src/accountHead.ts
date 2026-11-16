@@ -15,7 +15,8 @@
 // account and incarnation, so two accounts in one browser, or an account
 // before and after a reset, never share or compare anchors.
 
-import type { IdentityRoot } from '@kutup/crypto/accountRoots'
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { isAxiosError } from 'axios'
 import {
   AccountHead,
@@ -27,7 +28,7 @@ import {
   type LocalHeadState,
   type Reanchored,
 } from '@kutup/crypto/accountHead'
-import { fromBase64, toBase64 } from '@kutup/crypto/base64'
+import { fromBase64 } from '@kutup/crypto/base64'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import { indexedDbRevisionStore, type RevisionStore } from '@kutup/crypto/revisionGuard'
 import api from './client'
@@ -573,20 +574,16 @@ export class AccountHeadClient {
   }
 }
 
-/** An engine that opens the Rust head on first use (the master key crosses once). */
-function lazyEngine(
-  masterKey: Uint8Array,
-  roots: { identityRoot: IdentityRoot; identityGeneration: number; driveGeneration: number },
-  binding: string,
-): Promise<HeadEngine> {
+/** An engine that opens the Rust head on first use. */
+function lazyEngine(masterKeys: MasterKeys, roots: AccountRoots, binding: string): Promise<HeadEngine> {
   return (async () => {
     const { incarnationId } = await deriveAccountIdentityKeys(roots.identityRoot)
-    return AccountHead.open(masterKey, binding, incarnationId, roots)
+    return AccountHead.open(masterKeys, binding, incarnationId, roots)
   })()
 }
 
 let shared: RevisionStore | null = null
-const clients = new Map<string, { masterKey: string; client: Promise<AccountHeadClient> }>()
+const clients = new Map<string, { masterKeys: MasterKeys; client: Promise<AccountHeadClient> }>()
 
 /**
  * The account's head client for this page: one per signed-in account (made
@@ -594,23 +591,23 @@ const clients = new Map<string, { masterKey: string; client: Promise<AccountHead
  */
 export function accountHead(session: {
   userId: string
-  masterKey: Uint8Array
-  roots: { identityRoot: IdentityRoot; identityGeneration: number; driveGeneration: number }
+  masterKeys: MasterKeys
+  roots: AccountRoots
   envelopeBinding: string
 }): Promise<AccountHeadClient> {
-  const masterKey = toBase64(session.masterKey)
+  const masterKeys = session.masterKeys
   const known = clients.get(session.userId)
-  if (known?.masterKey === masterKey) return known.client
+  if (known?.masterKeys === masterKeys) return known.client
   if (known) void known.client.then((client) => client.close(), () => undefined)
   watchSignOut()
   shared ??= indexedDbRevisionStore()
   const store = shared
-  const client = lazyEngine(session.masterKey, session.roots, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store))
+  const client = lazyEngine(masterKeys, session.roots, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store))
   // Not kept when it failed: the next call tries again.
   client.catch(() => {
     if (clients.get(session.userId)?.client === client) clients.delete(session.userId)
   })
-  clients.set(session.userId, { masterKey, client })
+  clients.set(session.userId, { masterKeys, client })
   return client
 }
 

@@ -1,3 +1,5 @@
+import type { ObjectIdKey } from '@kutup/crypto/accountRoots'
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import api from '@kutup/session/client'
@@ -231,7 +233,7 @@ export class ContentSearch {
   private readonly channel: BroadcastChannel | null
 
   private constructor(
-    private readonly masterKey: Uint8Array,
+    private readonly masterKeys: MasterKeys,
     private readonly binding: string,
     private account: MailAccount,
     private readonly dbName: string,
@@ -249,10 +251,10 @@ export class ContentSearch {
     }
   }
 
-  /** Named by an HMAC under a key from the master key: bound to no name. */
-  static async open(masterKey: Uint8Array, binding: string, account: MailAccount): Promise<ContentSearch> {
-    const dbName = `kutup-mail-search:${await mailSearchStoreName(masterKey)}`
-    const search = new ContentSearch(masterKey, binding, account, dbName, await mailSearchMatcher())
+  /** Named by an HMAC under a key from the object-id root: bound to no name, kept across a rotation. */
+  static async open(masterKeys: MasterKeys, objectIdKey: ObjectIdKey, binding: string, account: MailAccount): Promise<ContentSearch> {
+    const dbName = `kutup-mail-search:${await mailSearchStoreName(objectIdKey)}`
+    const search = new ContentSearch(masterKeys, binding, account, dbName, await mailSearchMatcher())
     await search.exclusive(() => Promise.resolve())
     return search
   }
@@ -327,7 +329,7 @@ export class ContentSearch {
     const wrapped = (await store.get([KEY_ID])).get(KEY_ID)
     let index: MailSearchIndex
     try {
-      index = await createMailSearch(this.masterKey, this.binding, wrapped)
+      index = await createMailSearch(this.masterKeys, this.binding, wrapped)
     } catch (error) {
       store.close()
       if (!wrapped) throw error
@@ -335,7 +337,10 @@ export class ContentSearch {
       await SealedStore.remove(this.dbName)
       return this.attach()
     }
-    if (!wrapped) await store.put([{ id: KEY_ID, sealed: index.wrappedStoreKey() }])
+    // A new key, or one wrapped again under the current master key after a
+    // rotation: kept, so the older key is needed no more.
+    const current = index.wrappedStoreKey()
+    if (!wrapped || !sameBytes(wrapped, current)) await store.put([{ id: KEY_ID, sealed: current }])
     this.store = store
     this.index = index
   }
@@ -840,7 +845,7 @@ export function useContentSearch(): ContentSearch | null {
     const data = account.data
     let promise = opened.get(session.userId)
     if (!promise) {
-      promise = ContentSearch.open(session.masterKey, session.envelopeBinding, data)
+      promise = ContentSearch.open(session.masterKeys, session.roots.objectIdKey, session.envelopeBinding, data)
       opened.set(session.userId, promise)
       promise.catch(() => opened.delete(session.userId))
     }
@@ -853,7 +858,7 @@ export function useContentSearch(): ContentSearch | null {
     return () => {
       live = false
     }
-  }, [account.data, session.userId, session.masterKey, session.envelopeBinding])
+  }, [account.data, session.userId, session.masterKeys, session.roots.objectIdKey, session.envelopeBinding])
   return search
 }
 
@@ -883,4 +888,8 @@ export function useContentSearchList(search: ContentSearch | null, folder: Place
       return { pages: [contentPage(rows, folder, view, search!.address)], pageParams: [page] }
     },
   })
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i])
 }

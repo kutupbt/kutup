@@ -13,6 +13,7 @@ const KNOWN = new Set([
   'recoveryCodesRenewed',
   'authenticatorOn',
   'authenticatorOff',
+  'masterKeyRotated',
 ])
 /**
  * Events about a name, or a named security key: their text names it

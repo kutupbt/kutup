@@ -77,12 +77,12 @@ export class ChatAttachmentLedger {
     this.pinVerified = localPin === null || localPin.revision === 0n
   }
 
-  static async open(account: AccountSecrets, binding: string): Promise<ChatAttachmentLedger> {
-    const masterKey = account.masterKey
+  static async open(account: Pick<AccountSecrets, 'masterKeys' | 'roots'>, binding: string): Promise<ChatAttachmentLedger> {
+    const masterKeys = account.masterKeys
     const identity = await deriveAccountIdentityKeys(account.roots.identityRoot)
-    const pins = localChainPins({ masterKey, roots: account.roots, envelopeBinding: binding })
+    const pins = localChainPins({ masterKeys, roots: account.roots, envelopeBinding: binding })
     const ledger = new ChatAttachmentLedger(
-      { masterKey: masterKey.slice(), binding },
+      { masterKeys, binding },
       identity.incarnationId,
       pins,
       await pins.loadPin(PIN_SCOPE, identity.incarnationId),
@@ -244,7 +244,6 @@ export class ChatAttachmentLedger {
   }
 
   dispose(): void {
-    this.owner.masterKey.fill(0)
     this.chainDigest.fill(0)
     this.current.clear()
     this.cursor = 0n

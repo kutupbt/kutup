@@ -1,3 +1,4 @@
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { AxiosError, AxiosHeaders } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -38,7 +39,7 @@ function httpError(status: number) {
 const networkError = new AxiosError('Network Error', 'ERR_NETWORK')
 const keys = {
   userId: 'u1',
-  masterKey: new Uint8Array(32),
+  masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)),
   roots: testRoots(0),
   privateKey: new Uint8Array(32),
   publicKey: 'p',

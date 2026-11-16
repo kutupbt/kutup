@@ -80,7 +80,7 @@ export async function activateSession(
   // the shell's banner, which offers to continue with the server's data;
   // anything else ends the sign-in.
   try {
-    await (await accountHead({ userId: keys.userId, masterKey: keys.masterKey, roots: keys.roots, envelopeBinding: keys.keyBinding })).atSignIn()
+    await (await accountHead({ userId: keys.userId, masterKeys: keys.masterKeys, roots: keys.roots, envelopeBinding: keys.keyBinding })).atSignIn()
   } catch (error) {
     if (!(error instanceof HeadBlockedError)) {
       await api.post('/auth/logout').catch(() => undefined)
@@ -104,6 +104,7 @@ export async function activateSession(
       color: me.color || null,
       publicKey: keys.publicKey,
       masterKey: keys.masterKey,
+      masterKeys: keys.masterKeys,
       roots: keys.roots,
       privateKey: keys.privateKey,
       currentDeviceId: keys.device?.id ?? null,

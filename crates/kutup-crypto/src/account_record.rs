@@ -257,6 +257,14 @@ pub enum AccountRecordPurpose {
     /// The key of [`hashed_object`] ids: its own, so record ids survive a
     /// master-key rotation. Its object is its generation (u32 big-endian).
     ObjectIdKey = 26,
+    /// The account's previous master key, sealed under the current one
+    /// (docs/plans/mk-rotation-exercise.md): its object is the previous
+    /// key's generation (u32 big-endian), and the record's own generation is
+    /// the one after it, so one chain reaches every older key.
+    MasterKeyKeyring = 27,
+    /// A device's Chat store key (`chat_store`), never sent to a server: the
+    /// key its SQLCipher or IndexedDB store's records are sealed under.
+    ChatStoreKey = 28,
 }
 
 /// The object of a record whose id the server must not see (a group id, the
@@ -336,7 +344,8 @@ impl AccountRecordPurpose {
             | Self::DriveRoot
             | Self::GroupPseudonymRoot
             | Self::CallLinkRoot
-            | Self::ObjectIdKey => PurposePolicy {
+            | Self::ObjectIdKey
+            | Self::MasterKeyKeyring => PurposePolicy {
                 object: ObjectPolicy::Required(4),
                 ..KEY
             },
@@ -462,6 +471,12 @@ impl AccountRecordPurpose {
                 max_len: 32,
                 chained: false,
             },
+            // The store's own key; its object is the SHA-256 of the store's
+            // name.
+            Self::ChatStoreKey => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                ..KEY
+            },
             // The revision (u64, big-endian) and the chain's 32-byte digest.
             Self::LocalChainPin => PurposePolicy {
                 object: ObjectPolicy::Required(32),
@@ -474,7 +489,7 @@ impl AccountRecordPurpose {
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 27] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -500,6 +515,8 @@ impl AccountRecordPurpose {
         Self::GroupPseudonymRoot,
         Self::CallLinkRoot,
         Self::ObjectIdKey,
+        Self::MasterKeyKeyring,
+        Self::ChatStoreKey,
     ];
 }
 
@@ -533,6 +550,8 @@ impl TryFrom<u16> for AccountRecordPurpose {
             24 => Ok(Self::GroupPseudonymRoot),
             25 => Ok(Self::CallLinkRoot),
             26 => Ok(Self::ObjectIdKey),
+            27 => Ok(Self::MasterKeyKeyring),
+            28 => Ok(Self::ChatStoreKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),

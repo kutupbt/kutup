@@ -207,6 +207,16 @@ fn a_recovery_sets_a_new_password_and_ends_every_sign_in() {
         .as_str()
         .unwrap_or_else(|| panic!("recovery grant: {granted}"))
         .to_owned();
+    // The recovery envelope comes with the grant, after the proof, and the
+    // phrase opens it to the account's master key.
+    let opened = kutup_crypto::account_record::open_b64(
+        granted["recoveryKeyEnvelope"].as_str().unwrap(),
+        &user.recovery_entropy,
+        kutup_crypto::account_record::AccountRecordPurpose::RecoveryMasterKey,
+        &user.binding,
+    )
+    .unwrap();
+    assert_eq!(opened.as_slice(), user.master_key.as_slice());
     let new_password = "recovered-password-112233";
     let (record, key_id, export_key) =
         opaque_register(&c, &base, new_password, &user.binding, Some(&grant), None);

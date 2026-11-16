@@ -101,6 +101,12 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test account_roots_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server account_roots::tests::live_ -- --nocapture
+# A master-key rotation (docs/plans/mk-rotation-exercise.md): the server's
+# transaction, then the CLI on two devices (sign-out, history across the
+# rotation, the old and new recovery phrases).
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  cargo test -p kutup-server --test master_key_live -- --nocapture
+KUTUP_SERVER="http://127.0.0.1:$port" scripts/verify-mk-rotation.sh
 # Permanent account ids (docs/plans/account-ids.md): minted at sign-up,
 # retired on delete, found by id, kept through a rename.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \

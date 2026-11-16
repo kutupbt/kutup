@@ -154,8 +154,9 @@ fn unknown_names_look_like_accounts() {
     assert_eq!(keys(&start(&at_domain)), keys(&fake));
     let (status, _, _) = opaque_login(&c, &base, &name, "any password", "session", None, None);
     assert_eq!(status, 401);
-    // A recovery's preflight: a key binding's shape and an envelope, the same
-    // each time, and for the address as for the name.
+    // A recovery's preflight: a key binding's shape, the same each time, and
+    // for the address as for the name; the envelope comes only after a proof
+    // (its header names the master key's generation).
     let preflight = |name: &str| -> Value {
         c.get(format!("{base}/api/auth/recover/preflight"))
             .query(&[("name", name)])
@@ -167,6 +168,7 @@ fn unknown_names_look_like_accounts() {
     let recovery = preflight(&name);
     assert_eq!(recovery, preflight(&name));
     assert_eq!(preflight(&at_domain), recovery);
+    assert!(recovery.get("recoveryKeyEnvelope").is_none());
     let binding = recovery["envelopeBinding"].as_str().unwrap();
     assert!(uuid::Uuid::parse_str(binding).is_ok_and(|id| id.get_version_num() == 4));
     // A recovery grant for it is refused as a wrong phrase is.

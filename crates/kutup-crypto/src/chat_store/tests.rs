@@ -36,6 +36,9 @@ impl RngCore for CountingRng {
 
 impl CryptoRng for CountingRng {}
 
+const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+const OTHER_BINDING: &str = "1c7c6f1d-5d2f-4c9f-8d3e-7b2f4e6d8c0a";
+
 fn b64(value: &serde_json::Value) -> Vec<u8> {
     STANDARD.decode(value.as_str().unwrap()).unwrap()
 }
@@ -48,9 +51,11 @@ fn the_moved_code_reproduces_the_vectors() {
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(VECTORS).unwrap()).unwrap();
     let master: [u8; 32] = b64(&v["masterKey"]).try_into().unwrap();
+    let keys = MasterKeys::first(&master);
     let binding = v["binding"].as_str().unwrap();
+    let store_name = v["storeName"].as_str().unwrap();
     let mut rng = CountingRng(0);
-    let (store, wrapped) = StoreCipher::create(&master, binding, &mut rng).unwrap();
+    let (store, wrapped) = StoreCipher::create(&keys, binding, store_name, &mut rng).unwrap();
     assert_eq!(STANDARD.encode(&wrapped), v["wrappedStoreKey"]);
 
     let record = &v["record"];
@@ -72,7 +77,7 @@ fn the_moved_code_reproduces_the_vectors() {
     assert_eq!(STANDARD.encode(&sealed_local), local["sealed"]);
 
     // And it opens them.
-    let reopened = StoreCipher::unwrap(&master, binding, &wrapped).unwrap();
+    let reopened = StoreCipher::unwrap(&keys, binding, store_name, &wrapped).unwrap();
     let (opened_key, value) = reopened.open(name, &hashed, &sealed).unwrap();
     assert_eq!((opened_key, value.to_vec()), (key, b64(&record["value"])));
     assert_eq!(
@@ -84,11 +89,15 @@ fn the_moved_code_reproduces_the_vectors() {
 #[test]
 fn a_record_opens_only_where_it_was_sealed() {
     let master = [7u8; 32];
+    let keys = MasterKeys::first(&master);
     let mut rng = CountingRng(9);
-    let (store, wrapped) = StoreCipher::create(&master, "chat:a", &mut rng).unwrap();
-    // Another account's key, or another store's binding: refused.
-    assert!(StoreCipher::unwrap(&[8; 32], "chat:a", &wrapped).is_err());
-    assert!(StoreCipher::unwrap(&master, "chat:b", &wrapped).is_err());
+    let (store, wrapped) = StoreCipher::create(&keys, BINDING, "chat:a", &mut rng).unwrap();
+    // Another account's key or binding, or another store's name: refused.
+    assert!(
+        StoreCipher::unwrap(&MasterKeys::first(&[8; 32]), BINDING, "chat:a", &wrapped).is_err()
+    );
+    assert!(StoreCipher::unwrap(&keys, OTHER_BINDING, "chat:a", &wrapped).is_err());
+    assert!(StoreCipher::unwrap(&keys, BINDING, "chat:b", &wrapped).is_err());
     let hashed = store.hashed_key("contacts", b"k");
     let sealed = store
         .seal("contacts", &hashed, b"k", b"v", &mut rng)
@@ -106,4 +115,24 @@ fn a_record_opens_only_where_it_was_sealed() {
         .unwrap()
         .open("draft", &draft)
         .is_err());
+}
+
+/// After a master-key rotation the store key still opens (under the key of
+/// the generation it names) and is sealed again under the current one.
+#[test]
+fn the_store_key_follows_a_rotation() {
+    let before = MasterKeys::first(&[7; 32]);
+    let mut rng = CountingRng(3);
+    let (_, wrapped) = StoreCipher::create(&before, BINDING, "chat:a", &mut rng).unwrap();
+    let after = before.rotated(&[9; 32]).unwrap();
+    StoreCipher::unwrap(&after, BINDING, "chat:a", &wrapped).unwrap();
+    let moved = StoreCipher::rewrapped(&after, BINDING, "chat:a", &wrapped)
+        .unwrap()
+        .unwrap();
+    assert_eq!(account_record::inspect(&moved).unwrap().generation.get(), 2);
+    assert!(StoreCipher::rewrapped(&after, BINDING, "chat:a", &moved)
+        .unwrap()
+        .is_none());
+    // The old key alone can't open the moved one: sign in again.
+    assert!(StoreCipher::unwrap(&before, BINDING, "chat:a", &moved).is_err());
 }

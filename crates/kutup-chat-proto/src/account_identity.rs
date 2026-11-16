@@ -417,7 +417,203 @@ pub struct AccountManifestV3 {
     pub issued_at: String,
     pub authority_key_id: String,
     pub self_authority_key: String,
+    /// The account's identity rotations (docs/plans/identity-rotation.md
+    /// §4), newest last, at most [`MAX_SUCCESSIONS`]: each the previous
+    /// authority and the next vouching for each other, so a device whose pin
+    /// is several rotations old follows the chain to this authority. Kept in
+    /// every later manifest. No writer adds one until the identity rotation
+    /// flow exists (after the wipe); readers verify them when present and
+    /// never trust more because of them (contacts still see a safety-number
+    /// change). Covered by `signature`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub successions: Vec<AccountSuccessionV1>,
     pub signature: String,
+}
+
+/// The most identity rotations a manifest lists.
+pub const MAX_SUCCESSIONS: usize = 16;
+
+/// One identity rotation: the previous authority (and its identity-root
+/// generation), the new one (and its), the hash of the last manifest the
+/// previous authority signed, and the account, signed by both authorities,
+/// each under its own label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountSuccessionV1 {
+    /// The account's permanent id (lowercase hyphenated UUID), never its
+    /// server's name.
+    pub account_id: String,
+    /// Public keys, canonical base64 of 32 bytes, and identity-root
+    /// generations: the new one is the previous one's next.
+    pub previous_authority: String,
+    pub previous_id_gen: u32,
+    pub new_authority: String,
+    pub new_id_gen: u32,
+    /// [`AccountManifestV3::manifest_hash`] of the last manifest the
+    /// previous authority signed (lowercase hex).
+    pub previous_manifest_hash: String,
+    /// Ed25519 (canonical base64 of 64 bytes): the previous authority over
+    /// [`AccountSuccessionV1::statement`] under its label, and the new one
+    /// under its own.
+    pub signed_by_previous: String,
+    pub signed_by_new: String,
+}
+
+impl AccountSuccessionV1 {
+    /// The fields both authorities sign, after each one's own label.
+    pub fn statement(&self) -> Result<Vec<u8>, String> {
+        let id = uuid::Uuid::parse_str(&self.account_id)
+            .ok()
+            .filter(|id| id.hyphenated().to_string() == self.account_id)
+            .ok_or("succession.accountId is not a lowercase hyphenated UUID")?;
+        if self.previous_id_gen == 0 || self.previous_id_gen.checked_add(1) != Some(self.new_id_gen)
+        {
+            return Err("succession: newIdGen follows previousIdGen".into());
+        }
+        let previous = authority_key("succession.previousAuthority", &self.previous_authority)?;
+        let new = authority_key("succession.newAuthority", &self.new_authority)?;
+        if previous == new {
+            return Err("succession: the new authority is the previous one".into());
+        }
+        let mut out = Vec::with_capacity(16 + 32 + 4 + 32 + 4 + 32);
+        out.extend_from_slice(id.as_bytes());
+        out.extend_from_slice(&previous);
+        out.extend_from_slice(&self.previous_id_gen.to_be_bytes());
+        out.extend_from_slice(&new);
+        out.extend_from_slice(&self.new_id_gen.to_be_bytes());
+        out.extend_from_slice(&decode_lower_hex_32(
+            "succession.previousManifestHash",
+            &self.previous_manifest_hash,
+        )?);
+        Ok(out)
+    }
+
+    /// A rotation from `previous` (at `previous_id_gen`) to `new`, after the
+    /// manifest whose hash is `previous_manifest_hash`, signed by both (for
+    /// the identity rotation flow, and tests).
+    pub fn sign(
+        account_id: &str,
+        previous: &kutup_crypto::primitives::SigningKey,
+        previous_id_gen: u32,
+        new: &kutup_crypto::primitives::SigningKey,
+        previous_manifest_hash: &str,
+    ) -> Result<Self, String> {
+        use base64::Engine as _;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let mut out = Self {
+            account_id: account_id.to_owned(),
+            previous_authority: b64(&previous.verifying_key().to_array::<32>()),
+            previous_id_gen,
+            new_authority: b64(&new.verifying_key().to_array::<32>()),
+            new_id_gen: previous_id_gen
+                .checked_add(1)
+                .ok_or("succession: no generation after this")?,
+            previous_manifest_hash: previous_manifest_hash.to_owned(),
+            signed_by_previous: String::new(),
+            signed_by_new: String::new(),
+        };
+        let statement = out.statement()?;
+        out.signed_by_previous = b64(&previous.sign(&labelled(BY_PREVIOUS, &statement)));
+        out.signed_by_new = b64(&new.sign(&labelled(BY_NEW, &statement)));
+        Ok(out)
+    }
+
+    /// Both signatures hold.
+    pub fn verify(&self) -> Result<(), String> {
+        use ed25519_dalek::{Signature, VerifyingKey};
+        let statement = self.statement()?;
+        for (name, key, label, signature) in [
+            (
+                "signedByPrevious",
+                &self.previous_authority,
+                BY_PREVIOUS,
+                &self.signed_by_previous,
+            ),
+            (
+                "signedByNew",
+                &self.new_authority,
+                BY_NEW,
+                &self.signed_by_new,
+            ),
+        ] {
+            let key = authority_key("succession authority", key)?;
+            let signature = Signature::from_slice(&decode_canonical_base64_exact(
+                &format!("succession.{name}"),
+                signature,
+                64,
+            )?)
+            .map_err(|_| format!("succession.{name} must be 64 bytes"))?;
+            VerifyingKey::from_bytes(&key)
+                .map_err(|_| format!("succession: the key of {name} is not valid Ed25519"))?
+                .verify_strict(&labelled(label, &statement), &signature)
+                .map_err(|_| format!("succession.{name} is invalid"))?;
+        }
+        Ok(())
+    }
+
+    fn signing_bytes(&self, out: &mut Vec<u8>) -> Result<(), String> {
+        out.extend_from_slice(&self.statement()?);
+        out.extend_from_slice(&decode_canonical_base64_exact(
+            "succession.signedByPrevious",
+            &self.signed_by_previous,
+            64,
+        )?);
+        out.extend_from_slice(&decode_canonical_base64_exact(
+            "succession.signedByNew",
+            &self.signed_by_new,
+            64,
+        )?);
+        Ok(())
+    }
+}
+
+const BY_PREVIOUS: &[u8] = kutup_crypto::labels::ACCOUNT_SUCCESSION_BY_PREVIOUS_V1;
+const BY_NEW: &[u8] = kutup_crypto::labels::ACCOUNT_SUCCESSION_BY_NEW_V1;
+
+fn labelled(label: &[u8], statement: &[u8]) -> Vec<u8> {
+    [label, statement].concat()
+}
+
+fn authority_key(field: &str, value: &str) -> Result<[u8; 32], String> {
+    decode_canonical_base64_exact(field, value, 32)?
+        .try_into()
+        .map_err(|_| format!("{field} must be 32 bytes"))
+}
+
+/// The successions of a manifest of `account` whose authority is
+/// `authority`: at most [`MAX_SUCCESSIONS`], each signed by both, each the
+/// next generation of the one before, chained authority to authority, the
+/// newest ending at `authority`.
+fn verify_successions(
+    successions: &[AccountSuccessionV1],
+    account: &AccountRef,
+    authority: &[u8; 32],
+) -> Result<(), String> {
+    if successions.len() > MAX_SUCCESSIONS {
+        return Err("too many successions".into());
+    }
+    let mut prior: Option<&AccountSuccessionV1> = None;
+    for succession in successions {
+        succession.verify()?;
+        if succession.account_id != account.account_id {
+            return Err("a succession names another account".into());
+        }
+        if let Some(prior) = prior {
+            if prior.new_authority != succession.previous_authority
+                || prior.new_id_gen != succession.previous_id_gen
+            {
+                return Err("successions do not chain".into());
+            }
+        }
+        prior = Some(succession);
+    }
+    if let Some(newest) = prior {
+        if authority_key("succession.newAuthority", &newest.new_authority)? != *authority {
+            return Err("the newest succession is not to this manifest's authority".into());
+        }
+    }
+    Ok(())
 }
 
 impl AccountManifestV3 {
@@ -494,6 +690,15 @@ impl AccountManifestV3 {
             }
             out.extend_from_slice(&decode_lower_hex_32("session", &device.session)?);
         }
+        // Last, and only when there are any: a manifest without one signs
+        // the same bytes as before the field existed.
+        if !self.successions.is_empty() {
+            let count = u8::try_from(self.successions.len()).map_err(|_| "too many successions")?;
+            out.push(count);
+            for succession in &self.successions {
+                succession.signing_bytes(&mut out)?;
+            }
+        }
         Ok(out)
     }
 
@@ -568,6 +773,7 @@ impl AccountManifestV3 {
             issued_at: issued_at.into(),
             authority_key_id: hex::encode(Sha256::digest(public)),
             self_authority_key: b64(&public),
+            successions: Vec::new(),
             signature: String::new(),
         }
     }
@@ -685,7 +891,9 @@ impl AccountManifestV3 {
         // device and their order.
         verifying
             .verify_strict(&self.signing_bytes()?, &signature)
-            .map_err(|_| "manifest signature is invalid".to_string())
+            .map_err(|_| "manifest signature is invalid".to_string())?;
+        // Successions, when present, hold and chain to this authority.
+        verify_successions(&self.successions, &self.account, &public)
     }
 
     /// Whether this manifest may follow `head`, the account's current one

@@ -49,6 +49,7 @@ pub fn run(profile: &str, json: bool) -> Result<()> {
         ctx.session.binding(),
         &new,
         &master_key,
+        ctx.session.master_keys()?.generation(),
     )?;
     ctx.session.master_key_envelope = envelope;
     ctx.store
