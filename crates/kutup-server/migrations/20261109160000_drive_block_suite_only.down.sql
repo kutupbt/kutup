@@ -3,7 +3,8 @@
 ALTER TABLE uploads
     DROP CONSTRAINT uploads_metadata_at_commit,
     DROP CONSTRAINT uploads_blob_suite_check,
-    ALTER COLUMN blob_suite SET DEFAULT 1;
+    ALTER COLUMN blob_suite SET DEFAULT 1,
+    ALTER COLUMN metadata_revision SET DEFAULT 1;
 ALTER TABLE uploads
     ADD CONSTRAINT uploads_blob_suite_check CHECK (blob_suite IN (1, 2)),
     ADD CONSTRAINT uploads_metadata_by_suite CHECK (

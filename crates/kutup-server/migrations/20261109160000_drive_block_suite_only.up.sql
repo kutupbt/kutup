@@ -27,7 +27,9 @@ ALTER TABLE file_versions
 ALTER TABLE uploads
     DROP CONSTRAINT uploads_metadata_by_suite,
     DROP CONSTRAINT uploads_blob_suite_check,
-    ALTER COLUMN blob_suite SET DEFAULT 2;
+    ALTER COLUMN blob_suite SET DEFAULT 2,
+    -- metadata arrives at the commit; no default may fill it in
+    ALTER COLUMN metadata_revision DROP DEFAULT;
 ALTER TABLE uploads
     ADD CONSTRAINT uploads_blob_suite_check CHECK (blob_suite = 2) NOT VALID,
     ADD CONSTRAINT uploads_metadata_at_commit CHECK (
