@@ -5028,10 +5028,12 @@ fn group_recover_a_home_of_a_former_members_is_another_group() {
     let bobs = derived_pseudonym(&bob, &group_id, 0);
     let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
     // Mallory, removed long ago, kept the key and saw Bob's binding; she
-    // names a home of her own for the real group id. The id binds the home,
-    // so that is another group: refused before anything is asked.
+    // names a home of her own for the real group id. The id binds the home's
+    // identity (its document hash and sequence; the server's name is only
+    // routing, identity-rotation.md §6), so another identity is another
+    // group: refused before anything is asked.
     let mut context = context_of(&alice, &group_id);
-    context.home.server = "mallory.test".into();
+    context.home.identity_document_hash = "6d".repeat(32);
     let probes = world.state_requests.get();
     assert!(!recover(&mut bob2, &context, &alice, &bobs));
     let mut context = context_of(&alice, &group_id);
