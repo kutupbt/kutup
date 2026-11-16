@@ -382,7 +382,7 @@ fn group_share_aad(
     member: &AccountRef,
     incarnation: &[u8; 32],
 ) -> Vec<u8> {
-    let account = member.bytes();
+    let account = member.id_bytes();
     let mut aad = Vec::with_capacity(domain.len() + 16 + bound.len() + account.len() + 32);
     aad.extend_from_slice(domain);
     aad.extend_from_slice(group_id);

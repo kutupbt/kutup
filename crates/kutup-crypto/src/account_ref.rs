@@ -4,9 +4,22 @@
 //! The account id is the server's `users.id`, a random UUID minted once,
 //! kept through renames and resets; names are lookup handles only. In JSON it
 //! is `{ "server", "accountId" }`, two fields. Where one string is needed
-//! (a libsignal `ProtocolAddress` name, an MLS credential identity, a local
-//! store key) it is `aci:<uuid>@<server>`, prefixed so that no address parser
-//! takes it for a `username@server`.
+//! (a libsignal `ProtocolAddress` name, a local store key) it is
+//! `aci:<uuid>@<server>`, prefixed so that no address parser takes it for a
+//! `username@server`.
+//!
+//! The server is a routing attribute, not identity
+//! (docs/plans/identity-rotation.md §6): everything signed, sealed, hashed or
+//! derived about an account binds its [`AccountId`] alone, 16 bytes
+//! ([`AccountRef::id_bytes`]); statements between two people bind both ids
+//! and both incarnations. The `(server, account id)` pair is the address
+//! things are looked up by (JSON, federation requests, local stores, pins,
+//! the libsignal address name), never signed bytes, so a server rename is a
+//! re-keying of local rows. A hostile server can mint an id equal to a
+//! victim's; it gains nothing, because every statement is checked under the
+//! authority pinned for the routing address, and the incarnation (the
+//! authority's hash) is bound too. The rule that keeps this safe: nothing is
+//! ever looked up by account id alone.
 
 use std::fmt;
 use std::str::FromStr;
@@ -61,22 +74,40 @@ impl AccountRef {
         })
     }
 
-    /// The bytes signed or bound for this person: length-prefixed server,
-    /// then the 16 bytes of the account id.
-    pub fn bytes(&self) -> Vec<u8> {
-        let id = hex::decode(self.account_id.replace('-', "")).expect("checked when made");
-        let mut out = Vec::with_capacity(2 + self.server.len() + 16);
+    /// The account at `server` with `id`.
+    pub fn with_id(server: &str, id: AccountId) -> Result<Self> {
+        Self::new(server, &id.to_string())
+    }
+
+    /// The permanent account id: what statements about this person bind.
+    pub fn id(&self) -> AccountId {
+        self.account_id.parse().expect("checked when made")
+    }
+
+    /// The 16 bytes every signed, sealed, hashed or derived statement binds
+    /// for this person: the account id alone, never the server's name
+    /// (docs/plans/identity-rotation.md §6).
+    pub fn id_bytes(&self) -> [u8; ACCOUNT_ID_LEN] {
+        self.id().0
+    }
+
+    /// The routing form in binary: length-prefixed server, then the 16 bytes
+    /// of the account id. Only for a server naming an account to a client
+    /// next to a payload (a delivered collaboration frame); never signed or
+    /// bound, since the server is a routing attribute.
+    pub fn routing_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + self.server.len() + ACCOUNT_ID_LEN);
         out.extend_from_slice(&(self.server.len() as u16).to_be_bytes());
         out.extend_from_slice(self.server.as_bytes());
-        out.extend_from_slice(&id);
+        out.extend_from_slice(&self.id_bytes());
         out
     }
 }
 
 impl AccountRef {
-    /// Reads [`Self::bytes`] at the start of `bytes`: the person and how many
-    /// bytes they took.
-    pub fn read(bytes: &[u8]) -> Result<(Self, usize)> {
+    /// Reads [`Self::routing_bytes`] at the start of `bytes`: the person and
+    /// how many bytes they took.
+    pub fn read_routing(bytes: &[u8]) -> Result<(Self, usize)> {
         let len = bytes
             .get(..2)
             .map(|b| u16::from_be_bytes([b[0], b[1]]) as usize)
@@ -86,16 +117,71 @@ impl AccountRef {
             .get(2 + len..2 + len + 16)
             .ok_or_else(|| invalid("too short"))?;
         let server = std::str::from_utf8(server).map_err(|_| invalid("server is not text"))?;
-        let hex = hex::encode(id);
-        let account_id = format!(
+        let id = AccountId::from_bytes(id.try_into().expect("sixteen bytes"));
+        Ok((Self::with_id(server, id)?, 2 + len + ACCOUNT_ID_LEN))
+    }
+}
+
+/// An account id's length in bytes.
+pub const ACCOUNT_ID_LEN: usize = 16;
+
+/// A permanent account id, the 16 bytes of the server's `users.id`: what a
+/// statement binds for a person (docs/plans/identity-rotation.md §6). It names
+/// no one by itself: a hostile server can mint any id, so it is always read
+/// against the routing address it came with ([`AccountRef`]) and the
+/// authority pinned for that address. Its text form is the lowercase
+/// hyphenated UUID.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AccountId([u8; ACCOUNT_ID_LEN]);
+
+impl AccountId {
+    pub const fn from_bytes(bytes: [u8; ACCOUNT_ID_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; ACCOUNT_ID_LEN] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for AccountId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AccountId({self})")
+    }
+}
+
+impl fmt::Display for AccountId {
+    /// The lowercase hyphenated UUID.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let hex = hex::encode(self.0);
+        write!(
+            f,
             "{}-{}-{}-{}-{}",
             &hex[..8],
             &hex[8..12],
             &hex[12..16],
             &hex[16..20],
             &hex[20..]
-        );
-        Ok((Self::new(server, &account_id)?, 2 + len + 16))
+        )
+    }
+}
+
+impl FromStr for AccountId {
+    type Err = CryptoError;
+
+    /// Exactly a lowercase hyphenated UUID.
+    fn from_str(value: &str) -> Result<Self> {
+        if !valid_account_id(value) {
+            return Err(invalid("account id is not a lowercase hyphenated UUID"));
+        }
+        let bytes = hex::decode(value.replace('-', "")).expect("checked hex");
+        Ok(Self(bytes.try_into().expect("sixteen bytes")))
+    }
+}
+
+impl From<&AccountRef> for AccountId {
+    fn from(account: &AccountRef) -> Self {
+        account.id()
     }
 }
 
@@ -199,15 +285,29 @@ mod tests {
     }
 
     #[test]
-    fn its_bytes_are_the_server_and_the_ids_sixteen_bytes() {
+    fn its_signed_bytes_are_the_id_alone() {
+        let here = AccountRef::new("a.test", ID).unwrap();
+        let there = AccountRef::new("b.test", ID).unwrap();
+        assert_eq!(hex::encode(here.id_bytes()), ID.replace('-', ""));
+        assert_eq!(here.id_bytes(), there.id_bytes());
+        assert_eq!(here.id(), there.id());
+        assert_eq!(here.id().to_string(), ID);
+        assert_eq!(ID.parse::<AccountId>().unwrap(), here.id());
+        assert_eq!(AccountRef::with_id("a.test", here.id()).unwrap(), here);
+        assert!(ID.to_uppercase().parse::<AccountId>().is_err());
+        assert!(ID.replace('-', "").parse::<AccountId>().is_err());
+    }
+
+    #[test]
+    fn its_routing_bytes_are_the_server_and_the_ids_sixteen_bytes() {
         let person = AccountRef::new("a.test", ID).unwrap();
-        let bytes = person.bytes();
+        let bytes = person.routing_bytes();
         assert_eq!(&bytes[..2], &[0, 6]);
         assert_eq!(&bytes[2..8], b"a.test");
         assert_eq!(bytes[8..].len(), 16);
         assert_eq!(hex::encode(&bytes[8..]), ID.replace('-', ""));
-        let (back, used) = AccountRef::read(&[bytes.as_slice(), b"rest"].concat()).unwrap();
+        let (back, used) = AccountRef::read_routing(&[bytes.as_slice(), b"rest"].concat()).unwrap();
         assert_eq!((back, used), (person, bytes.len()));
-        assert!(AccountRef::read(&bytes[..bytes.len() - 1]).is_err());
+        assert!(AccountRef::read_routing(&bytes[..bytes.len() - 1]).is_err());
     }
 }

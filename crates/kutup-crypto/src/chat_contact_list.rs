@@ -4,7 +4,9 @@
 //!
 //! Each entry is an account record (`account_record`, purpose
 //! `ChatContactListEntry`) under the master key. Its object, the entry id, is
-//! [`account_record::hashed_object`] of the contact's [`AccountRef`], so the
+//! [`account_record::hashed_object`] of the contact's [`AccountRef`] in its
+//! routing form ([`AccountRef::routing_bytes`]: a store key, so two accounts
+//! that share an id on two servers never share an entry), so the
 //! server never sees whom an entry is about and can't match two accounts'
 //! entries; the plaintext is padded to one size; and the server reads the
 //! revision from the record's header to order writes.
@@ -65,7 +67,7 @@ impl ContactListKey {
 
     /// The entry id of `contact` in this account's list.
     pub fn entry_id(&self, contact: &AccountRef) -> [u8; ENTRY_ID_LEN] {
-        account_record::hashed_object(&self.object_id_key, PURPOSE, &contact.bytes())
+        account_record::hashed_object(&self.object_id_key, PURPOSE, &contact.routing_bytes())
     }
 
     /// Seals an entry's plaintext for `entry_id` at `revision`, bound to the

@@ -52,7 +52,8 @@ pub fn identity_binding_bytes(
     out.extend_from_slice(kutup_crypto::labels::ACCOUNT_IDENTITY_BINDING_V1);
     out.extend_from_slice(&decode_lower_hex_32("authorityKeyId", authority_key_id)?);
     out.extend_from_slice(&decode_lower_hex_32("incarnationId", incarnation_id)?);
-    out.extend_from_slice(&account.bytes());
+    // The account id alone: the server is routing (identity-rotation.md §6).
+    out.extend_from_slice(&account.id_bytes());
     out.extend_from_slice(&decode_identity_key("identityKey", identity_key)?);
     Ok(out)
 }
@@ -428,7 +429,10 @@ impl AccountManifestV3 {
         let mut out = Vec::with_capacity(320 + self.devices.len() * 80);
         out.extend_from_slice(DOMAIN);
         out.extend_from_slice(&self.manifest_version.to_be_bytes());
-        out.extend_from_slice(&self.account.bytes());
+        // The account id alone, never the server's name: `account.server` is
+        // where the manifest is fetched from, not what it says
+        // (docs/plans/identity-rotation.md §6).
+        out.extend_from_slice(&self.account.id_bytes());
         out.extend_from_slice(&decode_lower_hex_32("incarnationId", &self.incarnation_id)?);
         out.extend_from_slice(&self.sequence.to_be_bytes());
         push_optional(&mut out, self.previous_hash.as_deref())?;

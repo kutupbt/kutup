@@ -429,7 +429,7 @@ mod tests {
                     plaintext: &[u8],
                     nonce: u8| {
             let context =
-                ProfileEnvelopeContextV1::new(purpose, &RECIPIENT, &version, 4, 3).unwrap();
+                ProfileEnvelopeContextV1::new(purpose, &*RECIPIENT, &version, 4, 3).unwrap();
             json!({
                 "purpose": format!("{purpose:?}"),
                 "rootKey": STANDARD.encode(root),
@@ -578,7 +578,7 @@ mod tests {
     fn profile_envelope_has_a_stable_canonical_vector() {
         let context = ProfileEnvelopeContextV1::new(
             ProfileEnvelopePurpose::DisplayName,
-            &RECIPIENT,
+            &*RECIPIENT,
             &"11".repeat(32),
             7,
             3,

@@ -33,7 +33,7 @@ struct Vectors {
     /// The account's object-id key (a stored root): entry ids are hashed under it.
     object_id_key: String,
     key_binding: String,
-    /// The contact, as `AccountRef::bytes()` (base64).
+    /// The contact, as `AccountRef::routing_bytes()` (base64).
     contact: String,
     entry_id: String,
     revision: u64,
@@ -82,7 +82,7 @@ fn computed() -> Vectors {
         account_master_key: STANDARD.encode(master),
         object_id_key: STANDARD.encode(OBJECT_ID_KEY),
         key_binding: "6f1c2a3b-4d5e-4f60-8a71-b2c3d4e5f607".into(),
-        contact: STANDARD.encode(contact().bytes()),
+        contact: STANDARD.encode(contact().routing_bytes()),
         entry_id: chat_contact_list::encode_entry_id(&entry_id),
         revision: 5,
         plain: STANDARD.encode(PLAIN),

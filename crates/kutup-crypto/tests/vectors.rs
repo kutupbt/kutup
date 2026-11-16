@@ -1383,7 +1383,14 @@ fn account_ref_vector() {
         assert_eq!(person.server, case["server"].as_str().unwrap());
         assert_eq!(person.account_id, case["accountId"].as_str().unwrap());
         assert_eq!(person.to_string(), string);
-        assert_eq!(hex::encode(person.bytes()), case["bytes"].as_str().unwrap());
+        assert_eq!(
+            hex::encode(person.id_bytes()),
+            case["idBytes"].as_str().unwrap()
+        );
+        assert_eq!(
+            hex::encode(person.routing_bytes()),
+            case["routingBytes"].as_str().unwrap()
+        );
         let json = serde_json::json!({ "server": case["server"], "accountId": case["accountId"] });
         assert_eq!(serde_json::from_value::<AccountRef>(json).unwrap(), person);
     }

@@ -7,14 +7,15 @@
 //! Drive public key and signed with the sender's Drive signing key, like a
 //! named share (`named_share.rs`), so a server can neither read it nor swap
 //! in a key for a profile of its own making. It is bound to both people,
-//! as (server, account id) and incarnation, never their names
-//! (docs/plans/account-ids.md), and not to a folder: the same key reaches the same person
+//! as account id and incarnation, never their names or their servers' names
+//! (docs/plans/account-ids.md, identity-rotation.md §6), and not to a
+//! folder: the same key reaches the same person
 //! for every share, in both directions (owner to member, member to owner).
 
 use crate::primitives::{SigningKey, Suite, VerifyingKey};
 use base64::Engine as _;
 
-use crate::account_ref::AccountRef;
+use crate::account_ref::{AccountId, AccountRef, ACCOUNT_ID_LEN};
 use crate::error::{CryptoError, Result};
 use crate::named_share::{parse_hex_32, read_person, take};
 
@@ -29,13 +30,15 @@ const CIPHERTEXT_LEN: usize = PROFILE_KEY_LEN + 16;
 const SIGNATURE_LEN: usize = 64;
 /// Magic, suite, reserved, two incarnations.
 const FIXED_HEADER_LEN: usize = 8 + 2 + 2 + 32 + 32;
+/// With the two account ids.
+const HEADER_LEN: usize = FIXED_HEADER_LEN + 2 * ACCOUNT_ID_LEN;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileKeyEnvelopeV1 {
     pub sender_incarnation_id: [u8; 32],
     pub recipient_incarnation_id: [u8; 32],
-    pub sender: AccountRef,
-    pub recipient: AccountRef,
+    pub sender: AccountId,
+    pub recipient: AccountId,
     pub encapsulated_key: [u8; ENCAPSULATED_KEY_LEN],
     pub ciphertext: [u8; CIPHERTEXT_LEN],
     pub signature: [u8; SIGNATURE_LEN],
@@ -72,8 +75,8 @@ impl ProfileKeyEnvelopeV1 {
                 parties.recipient_incarnation_id,
                 "recipient incarnation",
             )?,
-            sender: parties.sender.clone(),
-            recipient: parties.recipient.clone(),
+            sender: parties.sender.id(),
+            recipient: parties.recipient.id(),
             encapsulated_key: [0u8; ENCAPSULATED_KEY_LEN],
             ciphertext: [0u8; CIPHERTEXT_LEN],
             signature: [0u8; SIGNATURE_LEN],
@@ -112,15 +115,14 @@ impl ProfileKeyEnvelopeV1 {
     }
 
     fn header_bytes(&self) -> Result<Vec<u8>> {
-        let (sender, recipient) = (self.sender.bytes(), self.recipient.bytes());
-        let mut bytes = Vec::with_capacity(FIXED_HEADER_LEN + sender.len() + recipient.len());
+        let mut bytes = Vec::with_capacity(HEADER_LEN);
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&SUITE.to_be_bytes());
         bytes.extend_from_slice(&0u16.to_be_bytes());
         bytes.extend_from_slice(&self.sender_incarnation_id);
         bytes.extend_from_slice(&self.recipient_incarnation_id);
-        bytes.extend_from_slice(&sender);
-        bytes.extend_from_slice(&recipient);
+        bytes.extend_from_slice(self.sender.as_bytes());
+        bytes.extend_from_slice(self.recipient.as_bytes());
         Ok(bytes)
     }
 
@@ -144,7 +146,7 @@ impl ProfileKeyEnvelopeV1 {
                 "profile-key envelope must use canonical base64".into(),
             ));
         }
-        if bytes.len() < FIXED_HEADER_LEN || bytes.get(..MAGIC.len()) != Some(MAGIC) {
+        if bytes.len() < HEADER_LEN || bytes.get(..MAGIC.len()) != Some(MAGIC) {
             return Err(CryptoError::TooShort);
         }
         if u16::from_be_bytes([bytes[8], bytes[9]]) != SUITE || bytes[10] != 0 || bytes[11] != 0 {
@@ -189,8 +191,8 @@ impl ProfileKeyEnvelopeV1 {
         expected: &ProfileKeyParties<'_>,
         sender_signing_public_key: &[u8],
     ) -> Result<()> {
-        if &self.sender != expected.sender
-            || &self.recipient != expected.recipient
+        if self.sender != expected.sender.id()
+            || self.recipient != expected.recipient.id()
             || self.sender_incarnation_id
                 != parse_hex_32(expected.sender_incarnation_id, "sender incarnation")?
             || self.recipient_incarnation_id
@@ -309,13 +311,15 @@ mod tests {
             ..parties
         };
         assert!(decoded.verify(&other, &alice_signing).is_err());
-        // The same id on another server is someone else.
+        // The server is routing, not identity (identity-rotation.md §6): the
+        // same id under another server name verifies; whose authority signs
+        // is the routing address's pin.
         let elsewhere = person("c.test", &bob_ref.account_id);
         let moved = ProfileKeyParties {
             recipient: &elsewhere,
             ..parties
         };
-        assert!(decoded.verify(&moved, &alice_signing).is_err());
+        assert!(decoded.verify(&moved, &alice_signing).is_ok());
         // A profile key goes to someone else.
         assert!(ProfileKeyEnvelopeV1::seal(
             &key,

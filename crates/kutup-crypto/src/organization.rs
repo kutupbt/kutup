@@ -93,15 +93,18 @@ impl Party {
         })
     }
 
+    // Still the routing form, server and id: these documents (the escrow
+    // among them) move to the id alone with the escrow's next format change
+    // (docs/plans/identity-rotation.md §6), not in the AccountRef split.
     fn put(&self, out: &mut Vec<u8>) -> Result<()> {
-        put(out, &self.account.bytes())?;
+        put(out, &self.account.routing_bytes())?;
         out.extend_from_slice(&self.incarnation_id);
         Ok(())
     }
 
     fn take(reader: &mut Reader<'_>) -> Result<Self> {
         let bytes = reader.prefixed()?;
-        let (account, used) = AccountRef::read(bytes)
+        let (account, used) = AccountRef::read_routing(bytes)
             .map_err(|_| CryptoError::InvalidInput("organization document: account".into()))?;
         if used != bytes.len() {
             return Err(CryptoError::InvalidInput(

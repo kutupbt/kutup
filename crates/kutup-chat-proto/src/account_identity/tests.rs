@@ -929,10 +929,7 @@ fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_id
     let manifest = two_devices();
     let bytes = manifest.identity_binding_bytes().unwrap();
     assert!(bytes.starts_with(kutup_crypto::labels::ACCOUNT_IDENTITY_BINDING_V1));
-    assert_eq!(
-        bytes.len(),
-        34 + 32 + 32 + manifest.account.bytes().len() + 33
-    );
+    assert_eq!(bytes.len(), 34 + 32 + 32 + 16 + 33);
     assert_eq!(
         bytes,
         identity_binding_bytes(

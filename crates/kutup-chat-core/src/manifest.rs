@@ -151,8 +151,12 @@ pub fn derive_safety_number(
         .ok()
         .and_then(|bytes| libsignal_protocol::IdentityKey::decode(&bytes).ok())
         .ok_or_else(|| ChatError::Trust("the peer has no account identity pinned".into()))?;
-    let (fingerprint, scannable) =
-        fingerprint(&local.bytes(), local_identity_key, &peer.bytes(), &peer_key)?;
+    let (fingerprint, scannable) = fingerprint(
+        &local.id_bytes(),
+        local_identity_key,
+        &peer.id_bytes(),
+        &peer_key,
+    )?;
     let qr_payload = format!(
         "{SAFETY_QR_PREFIX}{}",
         URL_SAFE_NO_PAD.encode(

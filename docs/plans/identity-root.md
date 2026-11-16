@@ -156,7 +156,9 @@ The purpose and the suite version it; a key record has no JSON and no `"v"`.
   registration.
 - **After the wipe:** the identity rotation flow (UI, safety numbers,
   succession statement).
-- **The `AccountRef` split:** the slice after the rotation exercise.
+- **The `AccountRef` split:** the slice after the rotation exercise. Built
+  on `wipe/account-ref-split` (identity-rotation.md §6, §8 step 2): signed
+  bytes bind `AccountRef::id_bytes`, the server is routing only.
 
 ## Choices to confirm
 

@@ -1228,7 +1228,8 @@ pub async fn put_profile(
         ));
     }
 
-    let current = load_own_profile_in(&mut tx, user_id, true).await?;
+    let current =
+        load_own_profile_in(&mut tx, &state.config.chat_server_name, user_id, true).await?;
     if let Some(current) = current {
         let incoming_order = (profile.revision, profile.source_device_id);
         let current_order = (current.revision, current.source_device_id);
@@ -1322,7 +1323,7 @@ pub async fn put_profile(
 pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
     let mut tx = state.pool.begin().await?;
-    let profile = load_own_profile_in(&mut tx, user_id, false)
+    let profile = load_own_profile_in(&mut tx, &state.config.chat_server_name, user_id, false)
         .await?
         .ok_or_else(|| AppError::not_found("chat profile not found"))?;
     tx.commit().await?;
@@ -1418,7 +1419,7 @@ pub(crate) async fn load_public_profile(
     }
     // Sealed for the account's permanent id: a rename leaves it valid.
     let account = crate::account_ids::local(&state.config.chat_server_name, user_id)?;
-    if sealed_profile_account(&name)? != account {
+    if sealed_profile_account(&name)? != account.id() {
         return Err(AppError::internal(
             "a stored profile is sealed for another account",
         ));
@@ -1438,8 +1439,8 @@ pub(crate) async fn load_public_profile(
     Ok(Some(response))
 }
 
-/// The account a stored profile was sealed for (its envelopes' context).
-fn sealed_profile_account(name_envelope: &str) -> AppResult<AccountRef> {
+/// The account id a stored profile was sealed for (its envelopes' context).
+fn sealed_profile_account(name_envelope: &str) -> AppResult<kutup_crypto::account_ref::AccountId> {
     Ok(kutup_chat_proto::decode_profile_envelope(name_envelope)
         .map_err(AppError::bad_request)?
         .context
@@ -1449,9 +1450,11 @@ fn sealed_profile_account(name_envelope: &str) -> AppResult<AccountRef> {
 /// The account's current profile, as it was published.
 async fn load_own_profile_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    server_name: &str,
     user_id: Uuid,
     lock: bool,
 ) -> AppResult<Option<OwnChatProfileResponse>> {
+    let account = crate::account_ids::local(server_name, user_id)?;
     let suffix = if lock { " FOR UPDATE" } else { "" };
     let sql = format!(
         "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
@@ -1483,9 +1486,14 @@ async fn load_own_profile_in(
             verifier,
             delivery_verifier,
         )| {
+            if sealed_profile_account(&name)? != account.id() {
+                return Err(AppError::internal(
+                    "a stored profile is sealed for another account",
+                ));
+            }
             let profile = PutChatProfileRequest {
                 suite: profile_suite_from_db(suite, "chat_profiles")?,
-                account: sealed_profile_account(&name)?,
+                account: account.clone(),
                 version,
                 revision: revision as u64,
                 source_device_id: source_device_id as u32,

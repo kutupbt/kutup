@@ -412,6 +412,21 @@ explicitly accepts a safety-number-style reset. The server can relay manifest
 history but cannot promote trust. V1 has no global transparency log, sparse
 map, checkpoint/proof policy, monitor, witness or auditor.
 
+### The server name is routing, not identity
+
+An account is its permanent account id; its server is where it is reached
+(docs/plans/identity-rotation.md §6). `AccountRef` `(server, account id)`
+stays the address in JSON, federation requests, local store keys, identity
+pins and the libsignal address name, but no signature, AEAD binding, hash or
+key derivation covers the server's name. The manifest and identity binding,
+safety numbers, profile envelopes, the Drive key binding and group pseudonym
+bindings bind the account id alone; shares between two people bind both ids
+and both incarnations; a group id binds its home's identity document. A
+hostile server can mint an id equal to a victim's and gains nothing: every
+statement is checked under the authority pinned for the routing address, the
+incarnation is bound, and a client never looks anything up by account id
+alone. A server rename is then a re-keying of local rows, not a new identity.
+
 ### Transport-only federation
 
 Federation uses canonical DNS server names, `.well-known` delegation, and
