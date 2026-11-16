@@ -43,7 +43,7 @@ without another wipe. As built on `wipe/format-evolution`:
 
 | Format | How it grows |
 |---|---|
-| File metadata (`file_metadata`) | `v` (1 blob, 2 block format), `min`, unknown fields kept here and in `media`; `takenFrom` *skip* |
+| File metadata (`file_metadata`) | `v` (2, the block format; 1, a whole-file blob, is refused), `min`, unknown fields kept here and in `media`; `takenFrom` *skip* |
 | Photos library (`photos_library`) | `v`, `min`, unknown fields kept |
 | Contact summary (`contact_card`) | `v`, `min`, unknown fields kept, signed with sorted keys; pinned keys carry `keyVersion` (4 or 6, others kept) |
 | Mail key list (`mail_key`) | per entry a key version and a length-prefixed fingerprint; unknown versions and flags kept; up to 256 entries parsed, the working limit a site setting |
@@ -213,12 +213,13 @@ A file's key is wrapped under its folder's key as a purpose-3 envelope: object
 the file key's generation. It is the only file object that names the folder;
 moving a file re-seals it alone. The metadata (purpose 4) is sealed under the
 file key with object = parent = file, epoch = key generation and revision =
-metadata revision. Its plaintext is `FileMetadataV2` (`kutup-crypto`
-`file_metadata`, vector `fileMetadata`): canonical JSON `{ name, mimeType,
-size, content, originalRevisionId?, stateRevisionId?, sha256?, media? }`,
-where `content` commits to the current revision and its sealed manifest's
-SHA-256, decoded strictly (unknown fields and out-of-range values
-refused) by the browser (WASM) and the CLI alike. `media` holds a photo's or
+metadata revision. Its plaintext is `FileMetadata` (`kutup-crypto`
+`file_metadata`, vector `fileMetadata`): canonical JSON `{ v, min?, name,
+mimeType, size, content, originalRevisionId?, stateRevisionId?, sha256?,
+media? }` (`v` 2), where `content` commits to the current revision and its
+sealed manifest's SHA-256; unknown fields are kept and written back, a
+minimum reader above 2 is newer than me, out-of-range values are refused,
+by the browser (WASM) and the CLI alike. `media` holds a photo's or
 video's details (docs/plans/photos.md): when it was taken (UTC ms, the time
 zone in minutes, and where the date came from), place, size on screen,
 length, camera, a SHA-256 content hash, a caption and, for a live photo's

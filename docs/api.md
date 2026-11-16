@@ -3207,7 +3207,7 @@ across files, versions and open uploads together (each claim takes the
 id's lock, and each table has its unique key).
 
 **Uploaded revisions and the commit** (docs/plans/drive-block-format.md §10
-slice 3, as Proton's draft revisions). The metadata (`FileMetadataV2`)
+slice 3, as Proton's draft revisions). The metadata (`FileMetadata`)
 commits to the content's revision and manifest digest, known only after the
 last block, so a tus upload carries no metadata: its last part leaves an
 *uploaded revision*, stored, checked and reserved in quota, but not current. A new file is then no file yet: it is in
@@ -3546,7 +3546,7 @@ sealed for the file, this revision and the key generation that sealed the
 object (1 for a new file); it is stored with the revision. Missing, or sealed
 for another file, revision or generation: `400`.
 
-`metadataEnvelope` is the file's next metadata (`FileMetadataV2`, its
+`metadataEnvelope` is the file's next metadata (`FileMetadata`, its
 `content` naming this revision and its manifest's SHA-256), sealed for the
 file, its key generation and `metadataRevision`, which must be exactly the
 file's current revision + 1, and `1` for a new file (`409

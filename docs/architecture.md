@@ -192,7 +192,7 @@ For each file upload:
    of the blocks' hashes, the plaintext size and the uploader's Ed25519
    signature, and a trailer. The manifest fixes the size and the end; even an
    empty file is one empty last block.
-4. Client seals `{name, mimeType, size, content}` (`FileMetadataV2`, where
+4. Client seals `{name, mimeType, size, content}` (`FileMetadata`, where
    `content` commits to the revision id and the sealed manifest's SHA-256)
    as a `FileMetadata` `DriveEnvelopeV1` under the file key. Its
    authenticated context binds the file UUID, the key generation and the

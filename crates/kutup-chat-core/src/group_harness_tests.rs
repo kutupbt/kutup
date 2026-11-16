@@ -6841,7 +6841,10 @@ fn a_mirror_of_a_pinned_account_on_another_server_is_refused() {
     let binding = format!("{seed:08x}-0000-4000-8000-{seed:012x}");
     alice
         .engine
-        .enable_identity_pins(&[seed; 32], &binding)
+        .enable_identity_pins(
+            &kutup_crypto::master_keys::MasterKeys::first(&[seed; 32]),
+            &binding,
+        )
         .unwrap();
     befriend(&mut alice, &mut bob);
     block_on(alice.engine.flush_identity_pins(true)).unwrap();

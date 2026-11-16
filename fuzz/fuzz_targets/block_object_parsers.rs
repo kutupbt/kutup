@@ -109,9 +109,7 @@ fuzz_target!(|data: &[u8]| {
     }
 
     if let Ok(metadata) = file_metadata::decode(data) {
-        if let Some(content) = &metadata.content {
-            let _ = content.check(&[0x22; 16], &[0; 32]);
-        }
+        let _ = metadata.content.check(&[0x22; 16], &[0; 32]);
         // What decodes re-encodes (unknown fields kept).
         let _ = file_metadata::encode(&metadata);
     }
