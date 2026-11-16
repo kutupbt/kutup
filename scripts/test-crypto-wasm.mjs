@@ -712,7 +712,11 @@ for (const { input, output } of metadataVector.canonical) {
   assert.equal(crypto.canonicalFileMetadata(output), output)
 }
 for (const bad of metadataVector.invalid) {
-  assert.throws(() => crypto.canonicalFileMetadata(bad))
+  assert.throws(() => crypto.canonicalFileMetadata(bad), (error) => !String(error).startsWith('newer format: '))
+}
+// Newer than this reader: refused as such, not as corrupt (format-evolution, rule 5).
+for (const newer of metadataVector.newer) {
+  assert.throws(() => crypto.canonicalFileMetadata(newer), (error) => String(error).startsWith('newer format: '))
 }
 const contentHasher = new crypto.ContentHasher()
 for (const chunk of metadataVector.contentHash.chunks) contentHasher.update(Buffer.from(chunk, 'base64'))
@@ -965,7 +969,7 @@ const contactVectors = JSON.parse(
 const contactIdentity = crypto.deriveAccountIdentityKeys(contactVectors.masterKey)
 // Signing a reordered summary gives the canonical bytes and the vector signature.
 const reordered = JSON.parse(contactVectors.summary)
-const shuffled = JSON.stringify({ pinnedKeys: reordered.pinnedKeys, groups: reordered.groups, emails: reordered.emails, name: reordered.name, uid: reordered.uid })
+const shuffled = JSON.stringify({ pinnedKeys: reordered.pinnedKeys, groups: reordered.groups, emails: reordered.emails, name: reordered.name, uid: reordered.uid, v: reordered.v })
 const signedContact = crypto.signContactSummary(contactVectors.masterKey, contactVectors.binding, contactVectors.revision, shuffled)
 assert.equal(signedContact.summary, contactVectors.summary)
 assert.equal(signedContact.signature, contactVectors.signature)
@@ -978,6 +982,14 @@ for (const refused of contactVectors.refusedSignatures) {
   assert.throws(() => crypto.verifyContactSummary(contactVectors.summary, refused.signature, refused.binding, contactVectors.revision, contactIdentity.authorityPublicKey), undefined, refused.case)
 }
 assert.throws(() => crypto.signContactSummary(contactVectors.masterKey, 'alice@kutup.dev', contactVectors.revision, shuffled))
+// A newer client's field is kept, signed in its sorted place, and given back
+// (docs/plans/format-evolution.md, rule 3).
+const newerSummary = crypto.signContactSummary(contactVectors.masterKey, contactVectors.binding, contactVectors.revision, JSON.stringify({ ...reordered, birthday: '1990-01-01' }))
+assert.ok(newerSummary.summary.startsWith('{"birthday":"1990-01-01",'))
+assert.equal(
+  crypto.verifyContactSummary(newerSummary.summary, newerSummary.signature, contactVectors.binding, contactVectors.revision, contactIdentity.authorityPublicKey).birthday,
+  '1990-01-01',
+)
 assert.deepEqual(
   crypto.openContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, contactVectors.sealed),
   { value: contactVectors.vcard, revision: contactVectors.revision },

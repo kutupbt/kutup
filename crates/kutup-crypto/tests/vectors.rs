@@ -61,6 +61,7 @@ struct CryptoVectors {
 struct FileMetadataVec {
     canonical: Vec<FileMetadataCase>,
     invalid: Vec<String>,
+    newer: Vec<String>,
     content_hash: ContentHashVec,
 }
 
@@ -956,7 +957,19 @@ fn file_metadata_matches_canonical_vector() {
         );
     }
     for bad in &v.invalid {
-        assert!(file_metadata::decode(bad.as_bytes()).is_err(), "{bad}");
+        assert!(
+            !file_metadata::decode(bad.as_bytes())
+                .unwrap_err()
+                .is_newer(),
+            "{bad}"
+        );
+    }
+    for newer in &v.newer {
+        let error = file_metadata::decode(newer.as_bytes()).unwrap_err();
+        assert!(error.is_newer(), "{newer}");
+        assert!(error
+            .to_string()
+            .starts_with(kutup_crypto::error::NEWER_FORMAT_PREFIX));
     }
     let mut hasher = ContentHasher::new();
     for chunk in &v.content_hash.chunks {
@@ -998,6 +1011,46 @@ fn photos_library_matches_canonical_vector() {
         v.first.digest.clone().unwrap()
     );
     assert_eq!(v.second.previous_digest, v.first.digest);
+}
+
+/// Prints the `photosLibrary` envelopes and digests for the plaintexts and
+/// nonces in `tests/vectors/crypto.json`:
+/// `cargo test -p kutup-crypto --test vectors print_photos_library_vectors -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_photos_library_vectors() {
+    use base64::Engine as _;
+    use kutup_crypto::photos_library::{self, PhotosLibraryContextV1};
+    let v = load_crypto().photos_library;
+    let key: [u8; 32] = b64(&v.master_key).try_into().unwrap();
+    let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
+    let mut previous: Option<String> = None;
+    for record in [&v.first, &v.second] {
+        let context = PhotosLibraryContextV1::new(
+            &v.account_incarnation_id,
+            record.revision,
+            previous.as_deref(),
+        )
+        .unwrap();
+        let sealed = photos_library::seal_with_nonce(
+            record.plaintext.as_bytes(),
+            &key,
+            first,
+            &v.binding,
+            context,
+            &b64(&record.nonce).try_into().unwrap(),
+        )
+        .unwrap();
+        let digest = photos_library::envelope_digest(&sealed).unwrap();
+        println!(
+            "revision {} previous {:?} envelope {} digest {}",
+            record.revision,
+            previous,
+            base64::engine::general_purpose::STANDARD.encode(&sealed),
+            digest
+        );
+        previous = Some(digest);
+    }
 }
 
 /// Prints the `driveNames` vectors for `tests/vectors/crypto.json`:
