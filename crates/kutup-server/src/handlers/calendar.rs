@@ -9,10 +9,13 @@
 //! author's address keys and reads its time columns from the shared signed
 //! part only, never from the request; it can't open the encrypted ones.
 //!
-//! Each account's calendar memberships are listed by the account head
-//! (`calendars` scope: the calendar id and the member row's revision, which
-//! only the member's own writes move), beyond Proton. Events have no head in
-//! E1. Everything is charged to the calendar owner's one storage pool.
+//! A member's own colour and display flag are not here: they are a record
+//! of the account's `calendarSettings` scope (docs/plans/account-records.md),
+//! sealed and under the account head, filed under a hashed id the server
+//! can't tie to the calendar. The member row keeps what the server needs:
+//! permissions, the passphrase share and the default reminders it fires
+//! alarms from. Events have no head in E1. Everything is charged to the
+//! calendar owner's one storage pool.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -28,7 +31,6 @@ use sqlx::{Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::account_heads::{self, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
@@ -83,17 +85,6 @@ fn crypto(error: kutup_crypto::error::CryptoError) -> AppError {
     }
 }
 
-fn color(value: &str) -> AppResult<String> {
-    let value = value.to_ascii_lowercase();
-    let valid = value.len() == 7
-        && value.starts_with('#')
-        && value[1..].bytes().all(|b| b.is_ascii_hexdigit());
-    if !valid {
-        return Err(AppError::bad_request("color is #rrggbb"));
-    }
-    Ok(value)
-}
-
 /// A calendar as one member sees it.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -112,13 +103,9 @@ pub struct CalendarView {
     #[schema(value_type = Object)]
     pub metadata: SealedMetadataV1,
     pub permissions: i32,
-    pub color: String,
-    pub display: bool,
     /// The member's default reminders for the calendar's events (Proton's
     /// DefaultPartDayNotifications and DefaultFullDayNotifications).
     pub default_reminders: DefaultReminders,
-    /// The member row's revision (the account head's `calendars` scope).
-    pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -150,11 +137,8 @@ struct ViewRow {
     metadata_data_packet: Vec<u8>,
     metadata_signature: String,
     permissions: i32,
-    color: String,
-    display: bool,
     default_reminders_timed: serde_json::Value,
     default_reminders_all_day: serde_json::Value,
-    revision: i64,
     created_at: time::OffsetDateTime,
     updated_at: time::OffsetDateTime,
 }
@@ -162,8 +146,8 @@ struct ViewRow {
 const VIEW: &str = "SELECT c.id, c.owner_id, c.public_key, c.fingerprint, c.locked_secret_key,
         c.key_generation, m.passphrase_share,
         c.metadata_key_packet, c.metadata_data_packet, c.metadata_signature,
-        m.permissions, m.color, m.display, m.default_reminders_timed,
-        m.default_reminders_all_day, m.revision, c.created_at, c.updated_at
+        m.permissions, m.default_reminders_timed, m.default_reminders_all_day,
+        c.created_at, c.updated_at
    FROM calendar_members m
    JOIN calendars c ON c.id = m.calendar_id";
 
@@ -182,13 +166,10 @@ fn view(row: ViewRow) -> CalendarView {
             signature: row.metadata_signature,
         },
         permissions: row.permissions,
-        color: row.color,
-        display: row.display,
         default_reminders: DefaultReminders {
             timed: serde_json::from_value(row.default_reminders_timed).unwrap_or_default(),
             all_day: serde_json::from_value(row.default_reminders_all_day).unwrap_or_default(),
         },
-        revision: row.revision,
         created_at: row.created_at,
         updated_at: row.updated_at,
     }
@@ -263,9 +244,8 @@ async fn address_keys(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CalendarCreate {
-    /// The calendar's id, a fresh UUID v4 the client draws: the account
-    /// head's `calendars` scope names it, and the head is made before the
-    /// create (as Contacts' UIDs).
+    /// The calendar's id, a fresh UUID v4 the client draws: its settings
+    /// record (`calendarSettings`) is filed under it before the create.
     pub id: Uuid,
     pub public_key: String,
     pub locked_secret_key: String,
@@ -274,10 +254,6 @@ pub struct CalendarCreate {
     pub passphrase_share: String,
     #[schema(value_type = Object)]
     pub metadata: SealedMetadataV1,
-    pub color: String,
-    /// The account's next head (the `calendars` scope gains this calendar
-    /// at revision 1).
-    pub head: Option<String>,
 }
 
 /// `POST /api/calendar/calendars` — makes a calendar the caller owns.
@@ -290,7 +266,7 @@ pub struct CalendarCreate {
     responses(
         (status = 201, body = CalendarView),
         (status = 400, description = "A key or packet doesn't check"),
-        (status = 409, description = "head_conflict, or the calendar limit"),
+        (status = 409, description = "The calendar limit, or the id is in use"),
         (status = 413, description = "Storage quota exceeded"),
     )
 )]
@@ -301,7 +277,6 @@ pub async fn create(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     limited(user_id)?;
-    let head = NextHead::parse(input.head.as_deref())?;
     if input.id.get_version_num() != 4 {
         return Err(AppError::bad_request("a calendar's id is a UUID v4"));
     }
@@ -315,7 +290,6 @@ pub async fn create(
     let share = cal::CalendarShareEnvelopeV1::decode_b64(&input.passphrase_share)
         .map_err(|_| AppError::bad_request("the passphrase share does not parse"))?;
     let metadata = input.metadata.to_sealed().map_err(crypto)?;
-    let color = color(&input.color)?;
     if metadata.signature.len() > 4096 {
         return Err(AppError::bad_request("a signature is too large"));
     }
@@ -328,7 +302,6 @@ pub async fn create(
         ));
     }
     let mut tx = state.pool.begin().await?;
-    let locked_head = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     // The owner's own copy: from the caller's account, as it is now, to
     // itself, for this calendar's first key, signed by its account key.
     let (incarnation, signing): (String, String) = sqlx::query_as(
@@ -396,37 +369,29 @@ pub async fn create(
         _ => error.into(),
     })?;
     sqlx::query(
-        "INSERT INTO calendar_members (calendar_id, user_id, permissions,
-             passphrase_share, color, revision)
-         VALUES ($1, $2, $3, $4, $5, 1)",
+        "INSERT INTO calendar_members (calendar_id, user_id, permissions, passphrase_share)
+         VALUES ($1, $2, $3, $4)",
     )
     .bind(id)
     .bind(user_id)
     .bind(OWNS)
     .bind(&share)
-    .bind(&color)
     .execute(&mut *tx)
     .await?;
-    account_heads::advance(&mut tx, &locked_head, head.as_ref()).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(fetch(&state, user_id, id).await?)).into_response())
 }
 
 /// A change to a calendar: the owner's new name and description, and the
-/// member's own colour and visibility.
+/// member's own default reminders (its colour and visibility are its
+/// `calendarSettings` record).
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CalendarUpdate {
     #[schema(value_type = Option<Object>)]
     pub metadata: Option<SealedMetadataV1>,
-    pub color: Option<String>,
-    pub display: Option<bool>,
     /// The member's own default reminders.
     pub default_reminders: Option<DefaultReminders>,
-    /// The member row's revision the change started from, and its new one.
-    pub base_revision: i64,
-    pub revision: u64,
-    pub head: Option<String>,
 }
 
 /// `PUT /api/calendar/calendars/{id}`
@@ -440,7 +405,6 @@ pub struct CalendarUpdate {
     responses(
         (status = 200, body = CalendarView),
         (status = 403, description = "Only the owner renames"),
-        (status = 409, description = "revision_conflict or head_conflict"),
     )
 )]
 pub async fn update(
@@ -451,9 +415,6 @@ pub async fn update(
 ) -> AppResult<Json<CalendarView>> {
     let user_id = trusted_uuid(&user.user_id)?;
     limited(user_id)?;
-    let head = NextHead::parse(input.head.as_deref())?;
-    let revision = revisions::check_follows(input.revision, input.base_revision)?;
-    let color = input.color.as_deref().map(color).transpose()?;
     if let Some(defaults) = &input.default_reminders {
         let most =
             usize::try_from(CALENDAR_DEFAULT_REMINDERS.load(&state.pool).await?).unwrap_or(5);
@@ -467,9 +428,8 @@ pub async fn update(
         .map(|metadata| metadata.to_sealed().map_err(crypto))
         .transpose()?;
     let mut tx = state.pool.begin().await?;
-    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
-    let member: Option<(i64, i32, Uuid, Vec<u8>, i64)> = sqlx::query_as(
-        "SELECT m.revision, m.permissions, c.owner_id, c.public_key, c.bytes
+    let member: Option<(i32, Uuid, Vec<u8>, i64)> = sqlx::query_as(
+        "SELECT m.permissions, c.owner_id, c.public_key, c.bytes
            FROM calendar_members m JOIN calendars c ON c.id = m.calendar_id
           WHERE m.calendar_id = $1 AND m.user_id = $2
           FOR UPDATE OF m, c",
@@ -478,15 +438,9 @@ pub async fn update(
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((current, permissions, owner, public_key, old_bytes)) = member else {
+    let Some((permissions, owner, public_key, old_bytes)) = member else {
         return Err(AppError::not_found("not found"));
     };
-    if current != input.base_revision {
-        return Err(revisions::conflict(
-            "this calendar was changed elsewhere",
-            current,
-        ));
-    }
     if let Some(metadata) = &metadata {
         if permissions & OWNER == 0 {
             return Err(AppError::forbidden("only the owner renames a calendar"));
@@ -524,18 +478,6 @@ pub async fn update(
         .execute(&mut *tx)
         .await?;
     }
-    sqlx::query(
-        "UPDATE calendar_members SET color = COALESCE($3, color), display = COALESCE($4, display),
-                revision = $5
-          WHERE calendar_id = $1 AND user_id = $2",
-    )
-    .bind(id)
-    .bind(user_id)
-    .bind(color)
-    .bind(input.display)
-    .bind(revision)
-    .execute(&mut *tx)
-    .await?;
     if let Some(defaults) = &input.default_reminders {
         sqlx::query(
             "UPDATE calendar_members SET default_reminders_timed = $3, default_reminders_all_day = $4
@@ -553,16 +495,8 @@ pub async fn update(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
-    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(Json(fetch(&state, user_id, id).await?))
-}
-
-/// The account's next head, for a write that only removes a listed value.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CalendarDelete {
-    pub head: Option<String>,
 }
 
 /// `DELETE /api/calendar/calendars/{id}` — the owner deletes a calendar and
@@ -573,20 +507,16 @@ pub struct CalendarDelete {
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path)),
-    request_body = CalendarDelete,
     responses((status = 204), (status = 403), (status = 404))
 )]
 pub async fn delete(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
-    Json(input): Json<CalendarDelete>,
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     limited(user_id)?;
-    let head = NextHead::parse(input.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
-    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let found: Option<(i32, Uuid, i64)> = sqlx::query_as(
         "SELECT m.permissions, c.owner_id,
                 (c.bytes + COALESCE((SELECT SUM(bytes) FROM calendar_events e WHERE e.calendar_id = c.id), 0))::bigint
@@ -610,7 +540,6 @@ pub async fn delete(
         .await?;
     crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(owner), -bytes)
         .await?;
-    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

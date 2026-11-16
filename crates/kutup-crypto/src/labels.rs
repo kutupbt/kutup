@@ -95,15 +95,6 @@ pub const CALENDAR_SHARE_HPKE_V1: &[u8] = b"kutup/calendar/share-hpke/v1\0";
 /// `kutup-turn:` hashed with the secret)
 pub const CALLS_TURN_PSEUDONYM_V1: &[u8] = b"kutup/calls/turn-pseudonym/v1\0";
 
-// --- chat-attachment-ledger --------------------------------------------------
-
-/// `frontend/packages/chat-core/src/attachment-ledger.ts` (`LOCAL_PIN_DOMAIN`, TypeScript)
-pub const CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1: &[u8] =
-    b"kutup/chat-attachment-ledger/local-pin/v1\0";
-/// `frontend/packages/chat-core/src/attachment-ledger.ts` (operation ids, TypeScript)
-pub const CHAT_ATTACHMENT_LEDGER_OPERATION_V1: &[u8] =
-    b"kutup/chat-attachment-ledger/operation/v1\0";
-
 // --- chat-backup-media -------------------------------------------------------
 
 /// `kutup-crypto/src/chat_backup_media_blocks.rs`
@@ -445,8 +436,6 @@ pub const PASS_VAULT_SECRET_V1: &[u8] = b"kutup/pass-vault-secret/v1\0";
 /// `kutup-crypto/src/pass_vault.rs` (`DOMAIN`)
 pub const PASS_VAULT_SECRET_V2: &[u8] = b"kutup/pass-vault-secret/v2\0";
 
-// --- photos-library ----------------------------------------------------------
-
 // --- private-ciphertext-cache ------------------------------------------------
 
 /// `frontend/packages/files/src/mediaCache/types.ts` (account scope, TypeScript)
@@ -561,7 +550,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 171] = [
+pub const ALL: [&[u8]; 169] = [
     SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
@@ -574,8 +563,6 @@ pub const ALL: [&[u8]; 171] = [
     MAIL_FORWARDING_CODE_KEY_V1,
     MAIL_FORWARDING_STOP_V1,
     CALLS_TURN_PSEUDONYM_V1,
-    CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1,
-    CHAT_ATTACHMENT_LEDGER_OPERATION_V1,
     CHAT_MEDIA_DELIVERY_OPERATION_V1,
     PRIVATE_CIPHERTEXT_CACHE_ACCOUNT_V1,
     PRIVATE_CIPHERTEXT_CACHE_BINDING_V1,

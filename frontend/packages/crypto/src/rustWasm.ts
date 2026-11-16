@@ -193,6 +193,9 @@ export interface CryptoWasmModule {
   sealMailName(masterKeys: MasterKeys, binding: string, kind: string, id: string, revision: number, name: string): string
   openMailName(masterKeys: MasterKeys, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
   inspectAccountRecord(envelopeBase64: string): { purpose: number; generation: number }
+  scopeRecordId(objectIdKeyBase64: string, scope: string, plainIdBase64: string): string
+  sealScopeRecord(masterKeys: MasterKeys, binding: string, scope: string, id: string, revision: number, json: string): string
+  openScopeRecord(masterKeys: MasterKeys, binding: string, scope: string, id: string, sealedBase64: string): { value: string; revision: number }
   RevisionGuardKeys: new (masterKeys: MasterKeys, objectIdKeyBase64: string, binding: string) => import('./revisionGuard').GuardKeys & { free(): void }
   LocalChainPins: new (masterKeys: MasterKeys, objectIdKeyBase64: string, binding: string) => import('./localChainPins').ChainPinKeys & { free(): void }
   CollabSender: new (account: string, pin: unknown) => import('./accountManifest').CollabSenderHandle
@@ -609,27 +612,15 @@ export interface CryptoWasmModule {
     plaintextBase64: string,
     masterKeys: MasterKeys,
     binding: string,
-    accountIncarnationId: string,
     entityId: string,
-    revision: bigint,
-    previousEnvelopeDigest: string,
+    revision: number,
   ): string
   openChatAttachmentLedger(
     envelopeBase64: string,
     masterKeys: MasterKeys,
     binding: string,
-    expectedAccountIncarnationId: string,
-    expectedEntityId: string,
-    expectedRevision: bigint,
-    expectedPreviousEnvelopeDigest: string,
-  ): string
-  chatAttachmentLedgerEnvelopeDigest(envelopeBase64: string): string
-  inspectChatAttachmentLedgerEnvelope(envelopeBase64: string): {
-    accountIncarnationId: string
-    entityId: string
-    revision: string
-    previousEnvelopeDigest: string
-  }
+    entityId: string,
+  ): { plaintext: string; revision: number }
   encodeChatAttachmentLedgerEntry(entry: unknown): string
   decodeChatAttachmentLedgerEntry(entryBase64: string): unknown
   sealCollabFrame(
@@ -791,20 +782,15 @@ export interface CryptoWasmModule {
     libraryJson: string,
     masterKeys: MasterKeys,
     binding: string,
-    accountIncarnationId: string,
+    recordId: string,
     revision: number,
-    previousDigest: string | undefined,
-  ): { envelope: string; digest: string }
+  ): string
   openPhotosLibrary(
     envelopeBase64: string,
     masterKeys: MasterKeys,
     binding: string,
-    accountIncarnationId: string,
-    revision: number,
-    previousDigest: string | undefined,
-  ): string
-  photosLibraryDigest(envelopeBase64: string): string
-  inspectPhotosLibrary(envelopeBase64: string): { accountIncarnationId: string; revision: number; previousDigest?: string }
+    recordId: string,
+  ): { plaintext: string; revision: number }
   ContentHasher: new () => { update(chunk: Uint8Array): void; finish(): string; free(): void }
   SuiteHasher: new () => { update(chunk: Uint8Array): void; finish(): Uint8Array; free(): void }
   signingKeyGenerate(): Uint8Array

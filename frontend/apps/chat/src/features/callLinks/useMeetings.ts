@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { useRequiredSession } from '@kutup/session/store'
 import { createCallLink, deleteCallLink, listCallLinks, replaceCallLink, setWaitingRoom, updateCallLinkInfo, type MeetingInfo, type OwnedCallLink } from './callLinks'
-import { addJoinedMeeting, clearJoinedMeetings, listJoinedMeetings, removeJoinedMeeting } from './joinedMeetings'
+import { addJoinedMeetings, clearJoinedMeetings, listJoinedMeetings, removeJoinedMeeting } from './joinedMeetings'
 import { forgetJoinedMeetings, joinedMeetings, subscribeJoinedMeetings, type JoinedMeeting } from './meetingHistory'
 
 const QUERY = ['chat-meetings'] as const
@@ -82,7 +82,7 @@ export function useJoinedMeetingsSync(): void {
   const queryClient = useQueryClient()
   const local = useSyncExternalStore(subscribeJoinedMeetings, snapshot)
   const moving = useRef(false)
-  const { userId, masterKeys, envelopeBinding } = session
+  const { userId } = session
 
   useEffect(() => {
     const pending = theirs(local, userId)
@@ -91,11 +91,8 @@ export function useJoinedMeetingsSync(): void {
     void (async () => {
       const moved = new Set<string>()
       try {
-        // Oldest first, so the server's order is the order they happened in.
-        for (const stay of [...pending].reverse()) {
-          await addJoinedMeeting(masterKeys, envelopeBinding, stay)
-          moved.add(stay.id)
-        }
+        await addJoinedMeetings(session, pending)
+        for (const stay of pending) moved.add(stay.id)
       } catch (error) {
         console.warn('chat: a joined meeting did not reach the account yet', error)
       } finally {
@@ -106,7 +103,7 @@ export function useJoinedMeetingsSync(): void {
         }
       }
     })()
-  }, [local, userId, masterKeys, envelopeBinding, queryClient])
+  }, [local, userId, session, queryClient])
 }
 
 /**
@@ -122,7 +119,7 @@ export function useJoinedMeetings() {
   // when this window is looked at, and every half minute while it is open.
   const list = useQuery({
     queryKey: JOINED_QUERY,
-    queryFn: () => listJoinedMeetings(session.masterKeys, session.envelopeBinding, session.userId),
+    queryFn: () => listJoinedMeetings(session),
     refetchOnWindowFocus: true,
     refetchInterval: 30_000,
     staleTime: 0,
@@ -140,7 +137,7 @@ export function useJoinedMeetings() {
     ...settle,
     mutationFn: async (entry: JoinedMeeting) => {
       forgetJoinedMeetings(new Set([entry.id]))
-      await removeJoinedMeeting(entry.id)
+      await removeJoinedMeeting(session, entry.id)
     },
     onSuccess: (_result, entry) =>
       queryClient.setQueryData<JoinedMeeting[]>(JOINED_QUERY, (previous) => (previous ?? []).filter((other) => other.id !== entry.id)),
@@ -149,7 +146,7 @@ export function useJoinedMeetings() {
     ...settle,
     mutationFn: async () => {
       forgetJoinedMeetings(new Set(theirs(joinedMeetings(), session.userId).map((entry) => entry.id)))
-      await clearJoinedMeetings()
+      await clearJoinedMeetings(session)
     },
     onSuccess: () => queryClient.setQueryData<JoinedMeeting[]>(JOINED_QUERY, []),
   })

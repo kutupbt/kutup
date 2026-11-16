@@ -372,6 +372,11 @@ export interface AdminSettings {
   accountRecordsPassSecrets: number
   accountRecordsChatGroups: number
   accountRecordsChatContacts: number
+  accountRecordsPhotosLibrary: number
+  accountRecordsChatAttachments: number
+  accountRecordsContactGroups: number
+  accountRecordsCalendarSettings: number
+  accountRecordsJoinedMeetings: number
   accountRecordsBatchItems: number
   accountRecordsPage: number
   accountRecordsTombstoneDays: number

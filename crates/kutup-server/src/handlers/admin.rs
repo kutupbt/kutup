@@ -838,14 +838,6 @@ pub(crate) async fn purge_chat_media(state: &AppState, target: Uuid) -> AppResul
     )
     .fetch_all(&state.pool)
     .await?;
-    sqlx::query("DELETE FROM chat_attachment_ledger_entities WHERE user_id=$1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
-    sqlx::query("DELETE FROM chat_attachment_ledger_operations WHERE user_id=$1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
     for path in orphan_media_paths {
         if let Err(error) = state.storage.delete(&path).await {
             tracing::warn!(error = %error, "wiped Chat media object requires orphan cleanup");

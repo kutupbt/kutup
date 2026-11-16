@@ -303,12 +303,6 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(
-        ledger_tables,
-        [
-            "chat_attachment_ledger_entities",
-            "chat_attachment_ledger_history",
-            "chat_attachment_ledger_operations"
-        ]
-    );
+    // The ledger moved to the account-records store (W3 slice 6).
+    assert!(ledger_tables.is_empty(), "{ledger_tables:?}");
 }

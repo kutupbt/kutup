@@ -22,6 +22,8 @@ import {
   type VerifiedIndex,
 } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
+import { randomBytes } from '@kutup/crypto/random'
+import { openScopeRecord, scopeRecordId, sealScopeRecord, type ContactGroupRecord } from '@kutup/crypto/scopeRecords'
 import { updateSession, useRequiredSession, type Session } from '@kutup/session/store'
 import { displayName, emptyDraft, pgpFor, newUid, type Contact, type ContactDraft, type ContactGroup, type ContactKey } from './model'
 import { parseVCards, toVCard } from './vcard'
@@ -43,6 +45,9 @@ const CONTACT_SCOPE = 'contact'
  * unique per account, never changed, so a head can be made before a create.
  */
 const HEAD_SCOPE = 'contacts'
+
+/** The account-records scope of the contact groups. */
+const GROUPS_SCOPE = 'contactGroups'
 
 /**
  * The head's index of the address book, or null when it cannot vouch (this
@@ -217,12 +222,16 @@ function summaryOf(uid: string, draft: ContactDraft, rest: Record<string, unknow
  */
 async function prepare(session: Session, uid: string, input: ContactDraft, base = 0, summaryRest?: Record<string, unknown>) {
   const masterKey = session.masterKeys
+  const known = input.groups.length ? await groupIds(session) : new Set<string>()
   // Keys of addresses still among the emails, each once, in order, as many as the summary holds.
   const addresses = new Set(input.emails.map((email) => email.address.trim().toLowerCase()))
   const keys = (await withFingerprints(input.keys))
     .filter((key, i, all) => addresses.has(key.address) && all.findIndex((k) => k.address === key.address && k.fingerprint === key.fingerprint) === i)
     .slice(0, MAX_PINNED_KEYS)
-  const draft = { ...input, keys }
+  // A group deleted since the draft was opened is dropped: the server takes
+  // only groups the account keeps.
+  const groups = input.groups.length ? input.groups.filter((id) => known.has(id)) : input.groups
+  const draft = { ...input, keys, groups }
   const summary = summaryOf(uid, draft, summaryRest)
   const revision = await revisionGuard(session).next(CONTACT_SCOPE, uid, base)
   const signed = await signContactSummary(session.roots.identityRoot, session.envelopeBinding, revision, summary)
@@ -411,29 +420,93 @@ export function useImportContacts() {
   )
 }
 
-export function useContactGroups() {
-  return useQuery({
-    queryKey: contactGroupsKey,
-    queryFn: async () => (await api.get<ContactGroup[]>('/contacts/groups')).data,
-  })
+/**
+ * The account's contact groups: records of its `contactGroups` scope
+ * (docs/plans/account-records.md), each name and colour sealed under the
+ * master key, read with the verified account head. A group this device
+ * can't open (a newer client's, or damaged) is left out.
+ */
+export async function loadGroups(session: Session): Promise<Omit<ContactGroup, 'members'>[]> {
+  const copy = await (await accountHead(session)).records(GROUPS_SCOPE)
+  const groups: Omit<ContactGroup, 'members'>[] = []
+  for (const [id, stored] of copy.records) {
+    try {
+      const { value, revision } = await openScopeRecord<ContactGroupRecord>(session.masterKeys, session.envelopeBinding, GROUPS_SCOPE, id, stored.envelope)
+      if (revision !== stored.revision) continue
+      groups.push({ id, name: value.name, color: value.color, record: value })
+    } catch {
+      // Not shown; it stays on the server for the client that wrote it.
+    }
+  }
+  return groups.sort((a, b) => a.name.localeCompare(b.name) || (a.id < b.id ? -1 : 1))
 }
 
+/** The ids of the groups the account keeps, read at most every few seconds. */
+let knownGroups: { userId: string; at: number; ids: Promise<Set<string>> } | null = null
+async function groupIds(session: Session): Promise<Set<string>> {
+  const now = Date.now()
+  if (!knownGroups || knownGroups.userId !== session.userId || now - knownGroups.at > 5000) {
+    const ids = (async () => new Set((await (await accountHead(session)).records(GROUPS_SCOPE)).records.keys()))()
+    ids.catch(() => (knownGroups = null))
+    knownGroups = { userId: session.userId, at: now, ids }
+  }
+  return knownGroups.ids
+}
+
+/** The groups, each with how many of the loaded contacts are in it. */
+export function useContactGroups() {
+  const session = useRequiredSession()
+  const contacts = useContacts()
+  const groups = useQuery({
+    queryKey: contactGroupsKey,
+    queryFn: () => loadGroups(session),
+  })
+  const data = useMemo(() => {
+    if (!groups.data) return undefined
+    const counts = new Map<string, number>()
+    for (const contact of contacts.data?.contacts ?? []) for (const id of contact.draft.groups) counts.set(id, (counts.get(id) ?? 0) + 1)
+    return groups.data.map((group): ContactGroup => ({ ...group, members: counts.get(group.id) ?? 0 }))
+  }, [groups.data, contacts.data])
+  return { ...groups, data }
+}
+
+/** Creates a group, or renames and recolours one (a newer client's fields kept). */
 export function useSaveGroup() {
   const queryClient = useQueryClient()
+  const session = useRequiredSession()
   return useMutation({
     mutationFn: async (input: { id?: string; name: string; color: string }) => {
-      if (input.id) await api.put(`/contacts/groups/${input.id}`, { name: input.name, color: input.color })
-      else await api.post('/contacts/groups', { name: input.name, color: input.color })
+      const id = input.id ?? (await scopeRecordId(session.roots.objectIdKey, GROUPS_SCOPE, randomBytes(16)))
+      await (await accountHead(session)).recordsWrite(GROUPS_SCOPE, async (copy) => {
+        const stored = copy.records.get(id)
+        if (input.id && !stored) throw new Error('the group was deleted')
+        const kept = stored
+          ? (await openScopeRecord<ContactGroupRecord>(session.masterKeys, session.envelopeBinding, GROUPS_SCOPE, id, stored.envelope)).value
+          : {}
+        const revision = (stored?.revision ?? 0) + 1
+        const envelope = await sealScopeRecord(session.masterKeys, session.envelopeBinding, GROUPS_SCOPE, id, revision, {
+          ...kept,
+          name: input.name.trim(),
+          color: input.color.toLowerCase(),
+        })
+        return { puts: [{ id, revision, envelope }], deletes: [], done: id }
+      })
+      knownGroups = null
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: contactGroupsKey }),
   })
 }
 
+/** Deletes a group; its members stay, and drop it on their next save. */
 export function useDeleteGroup() {
   const queryClient = useQueryClient()
+  const session = useRequiredSession()
   return useMutation({
     mutationFn: async (id: string) => {
-      await api.delete(`/contacts/groups/${id}`)
+      await (await accountHead(session)).recordsWrite(GROUPS_SCOPE, (copy) =>
+        Promise.resolve(copy.records.has(id) ? { puts: [], deletes: [id], done: id } : null),
+      )
+      knownGroups = null
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: contactGroupsKey }),
   })

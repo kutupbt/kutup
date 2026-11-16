@@ -140,7 +140,7 @@ test('someone without an account joins a scheduled meeting through its link', as
   await expect(guest.getByTestId('chat-meeting-message')).toHaveCount(0)
   await guest.getByTestId('chat-link-call-leave').click()
   // The owner's leave button asks which: leave, or end it for everyone.
-  const recorded = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/chat/joined-meetings')
+  const recorded = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/account/records')
   await ownerCall.getByTestId('chat-link-call-leave-menu').click()
   await ownerCall.getByTestId('chat-link-call-leave').click()
   await expect(ownerCall.getByTestId('chat-link-call-left')).toBeVisible({ timeout: 30_000 })

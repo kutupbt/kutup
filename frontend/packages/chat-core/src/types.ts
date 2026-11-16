@@ -815,8 +815,8 @@ export interface CallLinkCrypto {
   /**
    * Seal one stay in a meeting for the account's own list of joined
    * meetings: an account record (purpose JoinedMeeting) under the master key
-   * (base64) of the account bound by `binding`, for the row `id` (32
-   * lowercase hex).
+   * (base64) of the account bound by `binding`, for the record `id` (a
+   * random id: 43 base64url characters, `randomRecordId`).
    */
   callLinkSealJoined(masterKeys: MasterKeys, binding: string, id: string, entry: JoinedMeetingRecord): string
   /** Throws when the record was not sealed by this account for row `id`. */

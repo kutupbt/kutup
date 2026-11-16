@@ -1334,14 +1334,6 @@ fn build_router(state: AppState) -> Router {
         .route("/api/contacts/import", post(handlers::contacts::import))
         .route("/api/contacts/emails", get(handlers::contacts::emails))
         .route(
-            "/api/contacts/groups",
-            get(handlers::contacts::list_groups).post(handlers::contacts::create_group),
-        )
-        .route(
-            "/api/contacts/groups/:id",
-            put(handlers::contacts::update_group).delete(handlers::contacts::delete_group),
-        )
-        .route(
             "/api/contacts/:id",
             put(handlers::contacts::update).delete(handlers::contacts::delete),
         )
@@ -1506,12 +1498,6 @@ fn build_router(state: AppState) -> Router {
         .route("/api/albums/:id/items/remove", post(albums::remove_items))
         .route("/api/albums/:id/keys", get(albums::keys))
         .route("/api/albums/:id/membership", delete(albums::leave))
-        .route(
-            "/api/photos/library",
-            get(photos::get_library)
-                .put(photos::put_library)
-                .route_layer(DefaultBodyLimit::max(photos::LIBRARY_BODY_LIMIT)),
-        )
         // --- Live-location streams (docs/plans/maps.md). ---
         .route(
             "/api/live-locations",
@@ -1755,17 +1741,6 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/chat/joined-meetings",
-            get(chat_calls::call_link_history::list)
-                .post(chat_calls::call_link_history::add)
-                .delete(chat_calls::call_link_history::clear)
-                .route_layer(DefaultBodyLimit::max(4 * 1024)),
-        )
-        .route(
-            "/api/chat/joined-meetings/:id",
-            delete(chat_calls::call_link_history::remove),
-        )
-        .route(
             "/api/chat/call-links/token",
             post(chat_calls::call_links::token)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
@@ -1892,11 +1867,6 @@ fn build_router(state: AppState) -> Router {
             post(chat_media::deliver_local).route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/api/chat/media/storage", get(chat_media::storage_summary))
-        .route("/api/chat/media/ledger", get(chat_media::ledger_diff))
-        .route(
-            "/api/chat/media/ledger/:entityId",
-            put(chat_media::put_ledger_entity),
-        )
         // --- tus.io resumable uploads. The OPTIONS discovery is served by the
         // `tus_options_passthrough` layer (mirroring Fiber, which lets non-preflight
         // OPTIONS reach the handler); the rest authenticate via the AuthUser extractor

@@ -247,3 +247,62 @@ one refuses it with `head_required`). The FFI has no head manager yet, and
 building one is the native-apps work: it is done together with
 `start_client`'s head check (docs/roadmap.md, "Native iOS and Android
 apps"), not as a half head manager here.
+
+## Built: slice 6 (2026-11-16, `wipe/records-photos`)
+
+- **Scopes 5 `photosLibrary` and 6 `chatAttachments`**, purposes 13 and 14
+  as before, both with a new id form `IdForm::Random` (32 random bytes the
+  writing client chooses, 43-character base64url; `RecordScope::random_id`,
+  `randomRecordId` on the web). Purposes 13 and 14 are no longer chained, and
+  their object is the record id (32 bytes; the ledger's was 48).
+- **Counts** are site settings: `account_records_photos_library` (default 1:
+  a first write that raced another device's is refused by the head and redone
+  on the record that landed; a client that ever finds two merges them and
+  deletes the second) and `account_records_chat_attachments` (default
+  100,000).
+- **The ledger keeps each entity's newest revision only** (decision 1).
+- **Gone:** `photos_library`, `chat_attachment_ledger_{entities,history,
+  operations}`, `chat_attachment_ledger_cursor_seq`, `GET`/`PUT
+  /api/photos/library`, `GET /api/chat/media/ledger`, `PUT
+  /api/chat/media/ledger/:entityId`, their wire types in kutup-chat-proto,
+  the WASM digest and inspect calls, and both browser-local chain pins
+  (migration `20261111210000`, reversible). `account_records.envelope` now
+  takes up to 4 MiB + header (the library's bound); each envelope is still
+  checked against its purpose.
+
+## As built: slice 7 (2026-11-16)
+
+- **Scopes** 7 `contactGroups` (purpose 31 `ContactGroup`, hashed ids), 8
+  `calendarSettings` (purpose 32 `CalendarSettings`, `hashed_object` of the
+  calendar id) and 9 `joinedMeetings` (purpose 15, random ids: slice 6's
+  `IdForm::Random`, 32 random bytes as 43-character base64url, drawn by the
+  browser that recorded the stay). Their counts are the site settings
+  `accountRecordsContactGroups` (200), `accountRecordsCalendarSettings` (500)
+  and `accountRecordsJoinedMeetings` (100, the old cap). All three are in the
+  head; the old `calendars` head scope goes.
+- **Immutable records:** a record of an immutable purpose (a joined meeting)
+  has no header revision. The store files it at revision 1 and takes it only
+  at `baseRevision` 0 (`RecordScope::stored_revision`). `scopeFull` names the
+  scope's `max`, and the Chat app removes its oldest stays in the same batch.
+- **Contact groups:** `ContactGroupV1` (`v`, `min`, `name`, `color`, kept
+  extras), padded to one length. A contact's signed summary names its groups
+  by record id, which the server checks against the account's records;
+  `contact_groups` and `contact_group_members` go (the member counts are the
+  apps' own).
+- **Calendar settings:** `CalendarSettingsV1` (`v`, `min`, `color`,
+  `display`, kept extras). The client files the record before it creates the
+  calendar and removes it after a delete; a calendar listed without its
+  record counts as unreadable. `calendar_members` loses `color`, `display` and
+  `revision`, and calendar writes no longer carry a head.
+  **Not moved: the default reminders.** The server computes and fires the
+  alarms (email and push, `calendar_alarms`) from each member's defaults, so
+  they stay on the member row, as Proton's server reads its calendars'
+  notification defaults. Sealing them would leave events without their own
+  reminders silent; that needs a decision (client-computed alarms) first.
+- **Removed:** `GET/POST /api/contacts/groups`, `PUT/DELETE
+  /api/contacts/groups/:id`, `GET/POST/DELETE /api/chat/joined-meetings`,
+  `DELETE /api/chat/joined-meetings/:id`, and the tables `contact_groups`,
+  `contact_group_members`, `chat_joined_meetings` (migration
+  `20261111220000`). The head's index still reads the old stores of slices
+  3 to 5's scopes until those slices land; that last part of "the old index
+  path goes" falls to whichever lands last.

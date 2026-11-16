@@ -231,10 +231,11 @@ envelope purpose 12 (`AlbumFileKey`): object = file, parent = album, epoch =
 the album's key epoch, revision = the file key's generation.
 
 The Photos library record (`kutup-crypto` `photos_library`, vector
-`photosLibrary`) is one chained account record (`KUTPAR1`, purpose
-`PhotosLibrary`) under the master key, bound to the account's key binding;
-its object is the account incarnation, and its header names the revision and
-the previous record's SHA-256, which the server checks for compare-and-swap.
+`photosLibrary`) is one account record (`KUTPAR1`, purpose
+`PhotosLibrary`) under the master key, bound to the account's key binding,
+in the account-records store's `photosLibrary` scope; its object is the
+record's random id, and its header names the revision, which the server
+compares with the stored one and the account head covers.
 The plaintext is padded to 256-byte buckets. The plaintext is
 canonical JSON `{ favourites, archived, hidden }`, each a sorted set of file
 UUIDs, at most 100,000 in all.

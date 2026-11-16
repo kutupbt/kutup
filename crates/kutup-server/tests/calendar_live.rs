@@ -116,7 +116,6 @@ fn new_calendar_with_id(
             "lockedSecretKey": b64(&key.locked_secret_key),
             "passphraseShare": share.encode_b64().unwrap(),
             "metadata": SealedMetadataV1::of(&metadata),
-            "color": "#3E7BFA",
         }),
         passphrase,
         key.unlocked,
@@ -233,8 +232,9 @@ fn calendars_and_events() {
     let created: Value = r.json().unwrap();
     let id = created["id"].as_str().unwrap().to_owned();
     assert_eq!(created["permissions"], 127);
-    assert_eq!(created["color"], "#3e7bfa");
-    assert_eq!(created["revision"], 1);
+    // The member's colour and display are its sealed settings record, not
+    // the server's (docs/plans/account-records.md).
+    assert!(created.get("color").is_none() && created.get("revision").is_none());
     assert_eq!(
         decode(created["publicKey"].as_str().unwrap()),
         key.public_key()
@@ -267,16 +267,15 @@ fn calendars_and_events() {
     let charged = storage(&c, &base, &ada.user);
     assert!(charged > 0);
 
-    // Listed by the account head's calendars scope at revision 1.
-    let index: Value = bearer(
+    // No head scope lists calendars by id any more: the account's settings
+    // records (`calendarSettings`) stand for them, under hashed ids.
+    let r = bearer(
         c.get(format!("{base}/api/account/index/calendars")),
         &ada.user.token,
     )
     .send()
-    .unwrap()
-    .json()
     .unwrap();
-    assert!(index["values"].to_string().contains(&id), "{index}");
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
 
     // A second calendar with the same id (its share bound to that id, so
     // only the id clashes): refused.
@@ -626,24 +625,15 @@ fn calendars_and_events() {
     .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 
-    // The member's own colour, by revision; a stale one conflicts.
+    // The member's own colour is not the server's to keep: refused.
     let r = bearer(
         c.put(format!("{base}/api/calendar/calendars/{id}")),
         &ada.user.token,
     )
-    .json(&json!({ "color": "#00aa55", "baseRevision": 1, "revision": 2 }))
+    .json(&json!({ "color": "#00aa55" }))
     .send()
     .unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
-    assert_eq!(r.json::<Value>().unwrap()["color"], "#00aa55");
-    let r = bearer(
-        c.put(format!("{base}/api/calendar/calendars/{id}")),
-        &ada.user.token,
-    )
-    .json(&json!({ "display": false, "baseRevision": 1, "revision": 2 }))
-    .send()
-    .unwrap();
-    assert_eq!(r.status(), StatusCode::CONFLICT);
+    assert!(r.status().is_client_error(), "{}", r.status());
 
     // A delete from an older revision: refused, the event kept.
     let results = sync(
@@ -1243,8 +1233,6 @@ fn reminders_and_alarms() {
             "timed": [{ "type": "email", "trigger": "-P1D" }],
             "allDay": [{ "type": "device", "trigger": "PT9H" }],
         },
-        "baseRevision": mine["revision"],
-        "revision": mine["revision"].as_i64().unwrap() + 1,
     }))
     .send()
     .unwrap();

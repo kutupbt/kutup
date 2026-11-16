@@ -38,7 +38,6 @@ export type {
 export {
   CHAT_MEDIA_SUITE,
   MAX_CHAT_MEDIA_PLAINTEXT_BYTES,
-  chatAttachmentLedgerEnvelopeDigest,
   chatMediaObjectLength,
   newChatMediaBlockEncryptor,
   openChatAttachmentLedger,
@@ -47,10 +46,7 @@ export {
   sealChatAttachmentLedger,
   sealChatMedia,
 } from './chatMedia'
-export type {
-  ChatAttachmentLedgerContextV1,
-  ChatAttachmentLedgerOwner,
-} from './chatMedia'
+export type { ChatAttachmentLedgerOwner } from './chatMedia'
 // The recovery phrase (bip39 and its wordlists) is @kutup/crypto/mnemonic,
 // kept out of this barrel so only the pages that use it load it.
 export { deriveRecoveryAuthProof } from './kdf'

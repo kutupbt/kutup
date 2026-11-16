@@ -66,7 +66,8 @@ struct FileMetadataVec {
 struct PhotosLibraryVec {
     master_key: String,
     binding: String,
-    account_incarnation_id: String,
+    /// The record's id, unpadded base64url of its 32 bytes.
+    record_id: String,
     first: PhotosLibraryRecordVec,
     second: PhotosLibraryRecordVec,
 }
@@ -75,10 +76,6 @@ struct PhotosLibraryVec {
 #[serde(rename_all = "camelCase")]
 struct PhotosLibraryRecordVec {
     revision: u64,
-    #[serde(default)]
-    previous_digest: Option<String>,
-    #[serde(default)]
-    digest: Option<String>,
     plaintext: String,
     nonce: String,
     envelope: String,
@@ -907,78 +904,74 @@ fn file_metadata_matches_canonical_vector() {
     assert_eq!(hasher.finish(), v.content_hash.hash);
 }
 
+fn photos_library_record_id(v: &PhotosLibraryVec) -> [u8; 32] {
+    use base64::Engine as _;
+    let id = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&v.record_id)
+        .unwrap();
+    assert_eq!(
+        kutup_crypto::account_records::RecordScope::PhotosLibrary
+            .object(&v.record_id)
+            .unwrap(),
+        id
+    );
+    id.try_into().unwrap()
+}
+
 #[test]
 fn photos_library_matches_canonical_vector() {
-    use kutup_crypto::photos_library::{self, PhotosLibraryContextV1};
+    use kutup_crypto::photos_library;
     let v = load_crypto().photos_library;
     let key: [u8; 32] = b64(&v.master_key).try_into().unwrap();
+    let id = photos_library_record_id(&v);
     let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
     for record in [&v.first, &v.second] {
-        let context = PhotosLibraryContextV1::new(
-            &v.account_incarnation_id,
-            record.revision,
-            record.previous_digest.as_deref(),
-        )
-        .unwrap();
         let sealed = photos_library::seal_with_nonce(
             record.plaintext.as_bytes(),
             &key,
             first,
             &v.binding,
-            context,
+            &id,
+            record.revision,
             &b64(&record.nonce).try_into().unwrap(),
         )
         .unwrap();
         assert_eq!(sealed, b64(&record.envelope));
-        assert_eq!(photos_library::inspect(&sealed).unwrap(), context);
-        let opened = photos_library::open(&sealed, &key, &v.binding, context).unwrap();
+        let (opened, revision) = photos_library::open(&sealed, &key, &v.binding, &id).unwrap();
+        assert_eq!(revision, record.revision);
         assert_eq!(opened, record.plaintext.as_bytes());
         photos_library::decode_library(&opened).unwrap();
     }
-    assert_eq!(
-        photos_library::envelope_digest(&b64(&v.first.envelope)).unwrap(),
-        v.first.digest.clone().unwrap()
-    );
-    assert_eq!(v.second.previous_digest, v.first.digest);
 }
 
-/// Prints the `photosLibrary` envelopes and digests for the plaintexts and
-/// nonces in `tests/vectors/crypto.json`:
+/// Prints the `photosLibrary` envelopes for the plaintexts and nonces in
+/// `tests/vectors/crypto.json`:
 /// `cargo test -p kutup-crypto --test vectors print_photos_library_vectors -- --ignored --nocapture`.
 #[test]
 #[ignore]
 fn print_photos_library_vectors() {
     use base64::Engine as _;
-    use kutup_crypto::photos_library::{self, PhotosLibraryContextV1};
+    use kutup_crypto::photos_library;
     let v = load_crypto().photos_library;
     let key: [u8; 32] = b64(&v.master_key).try_into().unwrap();
+    let id = photos_library_record_id(&v);
     let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
-    let mut previous: Option<String> = None;
     for record in [&v.first, &v.second] {
-        let context = PhotosLibraryContextV1::new(
-            &v.account_incarnation_id,
-            record.revision,
-            previous.as_deref(),
-        )
-        .unwrap();
         let sealed = photos_library::seal_with_nonce(
             record.plaintext.as_bytes(),
             &key,
             first,
             &v.binding,
-            context,
+            &id,
+            record.revision,
             &b64(&record.nonce).try_into().unwrap(),
         )
         .unwrap();
-        let digest = photos_library::envelope_digest(&sealed).unwrap();
         println!(
-            "revision {} previous {:?} envelope {} digest {}",
+            "revision {} envelope {}",
             record.revision,
-            previous,
             base64::engine::general_purpose::STANDARD.encode(&sealed),
-            digest
         );
-        previous = Some(digest);
     }
 }
 

@@ -226,23 +226,21 @@
     }
   },
   "photosLibrary": {
-    "description": "The Photos library record (kutup-crypto/src/photos_library.rs): account-private subkey of the master key; a hash-chained revision.",
+    "description": "The Photos library record (kutup-crypto/src/photos_library.rs): an account record under the master key, its object the record's random id (the photosLibrary scope of the account-records store); revisions are covered by the account head.",
     "masterKey": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
     "binding": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
-    "accountIncarnationId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "recordId": "oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE",
     "first": {
       "revision": 1,
       "plaintext": "{\"v\":1,\"favourites\":[\"22222222-2222-4222-8222-222222222222\"],\"archived\":[],\"hidden\":[\"33333333-3333-4333-8333-333333333333\"]}",
       "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH",
-      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABzhCdu4+78eJTo+FG+h4NCIGESJO8T6ac4U7uzCzMvBBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHAAABEEgiSY5QA3BdDegEMt0x1MkcpvzFQTUf2VKrCMXz4dmKV0cNC/mZMJXiCM7QdV9tu0hJp6fRUrleWSkOVBs75i+nrovxL1vxCeB9yXKmT49L3Jipqbmezyf9P79lU4iN6AWngEQ6V3MPrfqnIrob9b5qW8s1MS+TBSbmagoDSOCRRcztSWxqHfdVB/Y2VAsP9tRj3X0b/1KV7o7XoSYafuWHKuU0gPDXpjQj/BVo6gVVua+azlcojcYkCtpfur47be3VlibVdMDbRbxsdrosN9v697LtAVzEMsXWW5bmz81w5/M1FyNA2HyPjp5q80dCW9dZhabjlvQDSJU4NvKPjBv3NUX/uIoqJvcUeP1XSk1R",
-      "digest": "08c20f481af9cf4d394bb60757e0b19c6692f8f85fc911413da6af82fb458d6d"
+      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAE06PNN09e+XhKtMt25kIPc3f5O1+MZkyGH5em/6c+56AcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwAAARCWj1Ww2IzEqj12/tDjNEnkPGpLpRTHXHRL6ULuW05tR2ZqbaasRCVSgZophRc6Gh/HZR397IBFzazug5ccPuO3kNhqckmB0fCi3lfe0sOwHQKpUd8QJLD4VEibk/JpYupLXqhUk7PDigLJYtOav4gT8+CpDwKDrd7SLfonCqEstg4t5KTFJS1nmLx9CYiBkf6FMVKzd4bnEuggu1rqkjbmdWZCjSDn33e3L8JaUhlu6k1TWbmA9TMPCWYhTveWTzbWWwvN3Hq1ke6b+gE4Km2QhPqqX+GffWuopJ/jrnmETrp+NJpupKO9UJlT+hSDgm7svkOjzV3RxQx35vaFGqh9i8J68z1VNFcPpEp2/tSPew=="
     },
     "second": {
       "revision": 2,
-      "previousDigest": "08c20f481af9cf4d394bb60757e0b19c6692f8f85fc911413da6af82fb458d6d",
       "plaintext": "{\"v\":1,\"favourites\":[],\"archived\":[],\"hidden\":[]}",
       "nonce": "CAgICAgICAgICAgICAgICAgICAgICAgI",
-      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAIIwg9IGvnPTTlLtgdX4LGcZpL4+F/JEUE9pq+C+0WNbZchxxiD5hRumLne9fA6dz14WXvrjkf5Rr6UJ57ISmVqCAgICAgICAgICAgICAgICAgICAgICAgIAAABEIEZwPE7lZpQBlsGVNdR4Szit/srphU07toHqgxeR9dQRnopDmMBTVEDBwkVnaI0idz7x8kIzlac6VJ+LjFkGWlbWpasHOf/QMG7bSW8O2lTzyE20pDdwLh6rHjBN2fyoJrY2EMVXQORlxy1g2o27jmYWkZ9zcNX4eKZDOMNyPkjgoRoQ/crecujOi83bMULw8bcC3CBjyFlcraXrbAFgP/khYeep9oqKleR9wNb6htHF2krmL64oDSc3grFfE4E/RzxeDWDJiVZLFtyJ52FsmKcPoDOfCMCy38WHtPUspnLPWuah6g7PEL4HFRhungo7V+OWnCNXNklGdLkPW5manL+2H5IfhnCOAmreDTGjFBX"
+      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAIGvs4tqLJGofbNBzeMlxNmREVEkH6XWgh1IDACuAHA7ggICAgICAgICAgICAgICAgICAgICAgICAAAARC1fnaw+jTdhVTACg9ZcjnXgh6sAj3QbN+bWMVYo+TOQ0BUcVokjjT87usKmff5HAPM/Gu1qS3unJnfoOwnd7xpNM30GtlwGRlCC4sTkw6ZFYmUmIikmzlaMfXcZVlc3r1wICyJpfk897kH2m0okOkEaYJVXhjSGIPKrMp6D3SxWk97XmLROFN85KEmyOKjxPcsxeosPhEdnbilnurYJfLMHNxh/AvedxdcaAFPigMhCh9nBf8+/IkB+qFopF/x1XEGvubNKi2WXCkzSexvFRq6gdOZLMWB5iXBJaDjdGTxAf4cy5l0h0ktg8lF6TMQUItbizxzRFr3aN9bRuVp8NfsgqW5FSgDiVZnu1/9PTVQhA=="
     }
   },
   "driveNames": {

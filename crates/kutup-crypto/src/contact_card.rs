@@ -157,7 +157,9 @@ pub struct ContactSummaryV1 {
     pub name: String,
     #[serde(default)]
     pub emails: Vec<ContactEmailV1>,
-    /// Ids (UUIDs) of the account's contact groups.
+    /// The account's contact groups this contact is in, by record id in the
+    /// `contactGroups` scope (`account_records`, `hashed_object` of a random
+    /// id): the server checks each is a group the account keeps.
     #[serde(default)]
     pub groups: Vec<String>,
     #[serde(default)]
@@ -250,7 +252,11 @@ impl ContactSummaryV1 {
         }
         if self.groups.len() > MAX_GROUPS
             || !self.groups.windows(2).all(|pair| pair[0] < pair[1])
-            || self.groups.iter().any(|id| !is_canonical_uuid(id))
+            || self.groups.iter().any(|id| {
+                crate::account_records::RecordScope::ContactGroups
+                    .object(id)
+                    .is_err()
+            })
         {
             return Err(invalid("groups are invalid"));
         }
@@ -269,14 +275,6 @@ impl ContactSummaryV1 {
         }
         Ok(())
     }
-}
-
-fn is_canonical_uuid(value: &str) -> bool {
-    value.len() == 36
-        && value.bytes().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => b == b'-',
-            _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
-        })
 }
 
 /// The canonical bytes of a summary, after checking it.
@@ -490,7 +488,7 @@ mod tests {
                 ContactEmailV1::new("ayse@example.com", Some("work".into())),
                 ContactEmailV1::new("ayse@kutup.dev", None),
             ],
-            vec!["11111111-1111-4111-8111-111111111111".into()],
+            vec!["ERERERERERERERERERERERERERERERERERERERERERE".into()],
             vec![PinnedKeyV1::v4(
                 "ayse@example.com",
                 "a".repeat(40),
@@ -600,7 +598,7 @@ mod tests {
         assert!(encode_summary(&bad).is_err());
         let mut bad = summary();
         bad.groups
-            .insert(0, "22222222-2222-4222-8222-222222222222".into());
+            .insert(0, "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI".into());
         assert!(encode_summary(&bad).is_err());
         assert!(canonical_contact_address("not an address").is_err());
         assert_eq!(

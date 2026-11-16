@@ -1,30 +1,29 @@
-//! Durable opaque Chat-media storage and account-private attachment ledger.
+//! Durable opaque Chat-media storage. The account-private attachment ledger
+//! is the account-records store's `chatAttachments` scope
+//! (`handlers::account_records`).
 //!
-//! The server validates only public suite framing, lengths, digests, quota and
-//! compare-and-swap metadata. Filenames, MIME types, conversations, messages
-//! and attachment keys remain inside Chat ciphertext and ledger AEAD.
+//! The server validates only public suite framing, lengths, digests and
+//! quota. Filenames, MIME types, conversations, messages and attachment keys
+//! remain inside Chat ciphertext and ledger AEAD.
 
 use kutup_crypto::primitives::{hash, Hasher, Suite};
 use kutup_federation_proto::ContentDigest;
 use std::io::ErrorKind;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, ChatAttachmentLedgerDiffPageV1,
-    ChatAttachmentLedgerPutReceiptV1, ChatAttachmentLedgerPutRequestV1,
-    ChatAttachmentLedgerWireEntityV1, ChatMediaDeliveryOfferV1, ChatMediaDeliveryStatusV1,
-    ChatMediaOfferResponseV1,
+    capability_hash, constant_time_capability_hash_eq, ChatMediaDeliveryOfferV1,
+    ChatMediaDeliveryStatusV1, ChatMediaOfferResponseV1,
 };
-use kutup_crypto::chat_attachment_ledger;
 use kutup_crypto::chat_media::{ChatMediaObjectContextV1, ChatMediaSuiteId};
 use kutup_crypto::chat_media_blocks::{self, CHAT_MEDIA_BLOCKS_HEADER_BYTES};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::io::AsyncReadExt as _;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -135,13 +134,6 @@ pub(crate) async fn match_delivery_capability(
     Ok(direct
         .and_then(|value| <[u8; 32]>::try_from(value).ok())
         .is_some_and(|candidate| constant_time_capability_hash_eq(&candidate, presented)))
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct LedgerDiffQuery {
-    after: Option<String>,
-    limit: Option<i64>,
 }
 
 fn canonical_uuid(value: &str) -> Option<Uuid> {
@@ -1226,228 +1218,6 @@ pub async fn storage_summary(
         drive_bytes: drive,
         chat_media_bytes: chat,
     }))
-}
-
-pub async fn put_ledger_entity(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path(entity_id): Path<String>,
-    Json(request): Json<ChatAttachmentLedgerPutRequestV1>,
-) -> AppResult<Json<ChatAttachmentLedgerPutReceiptV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let entity_id = canonical_uuid(&entity_id)
-        .ok_or_else(|| AppError::bad_request("invalid ledger entity id"))?;
-    let operation_id = canonical_uuid(&request.operation_id)
-        .ok_or_else(|| AppError::bad_request("invalid ledger operation id"))?;
-    let envelope = chat_attachment_ledger::decode_canonical_b64(&request.envelope)
-        .map_err(|_| AppError::bad_request("invalid attachment ledger envelope"))?;
-    let header = chat_attachment_ledger::inspect(&envelope)
-        .map_err(|_| AppError::bad_request("invalid attachment ledger envelope"))?;
-    if Uuid::from_bytes(header.context.entity_id) != entity_id {
-        return Err(AppError::bad_request("ledger entity binding mismatch"));
-    }
-    let account_incarnation: String =
-        sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id=$1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
-    if hex::encode(header.context.account_incarnation_id) != account_incarnation {
-        return Err(AppError::conflict("ledger account incarnation mismatch"));
-    }
-    // This account's record (its key binding), filed under this entity.
-    let binding = crate::revisions::key_binding(&state.pool, user_id).await?;
-    chat_attachment_ledger::validate(
-        &envelope,
-        &binding,
-        &header.context.account_incarnation_id,
-        entity_id.as_bytes(),
-    )
-    .map_err(|_| AppError::bad_request("not this account's attachment ledger record"))?;
-    let revision = i64::try_from(header.context.revision)
-        .map_err(|_| AppError::bad_request("ledger revision is too large"))?;
-    let digest = chat_attachment_ledger::envelope_digest(&envelope)
-        .map_err(|_| AppError::bad_request("invalid attachment ledger envelope"))?;
-
-    let mut transaction = state.pool.begin().await?;
-    type Receipt = (Uuid, i64, String, i64);
-    let receipt: Option<Receipt> = sqlx::query_as(
-        "SELECT entity_id,revision,envelope_digest,cursor
-         FROM chat_attachment_ledger_operations WHERE user_id=$1 AND operation_id=$2",
-    )
-    .bind(user_id)
-    .bind(operation_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if let Some((stored_entity, stored_revision, stored_digest, cursor)) = receipt {
-        if stored_entity != entity_id || stored_revision != revision || stored_digest != digest {
-            return Err(AppError::conflict("ledger operation replay changed"));
-        }
-        return Ok(Json(ChatAttachmentLedgerPutReceiptV1 {
-            entity_id: entity_id.to_string(),
-            revision: header.context.revision.to_string(),
-            envelope_digest: digest,
-            cursor: cursor.to_string(),
-            idempotent: true,
-        }));
-    }
-    let current: Option<(i64, String)> = sqlx::query_as(
-        "SELECT revision,envelope_digest FROM chat_attachment_ledger_entities
-         WHERE user_id=$1 AND entity_id=$2 FOR UPDATE",
-    )
-    .bind(user_id)
-    .bind(entity_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    match &current {
-        None if revision == 1 && header.context.previous_envelope_digest == [0; 32] => {}
-        Some((current_revision, current_digest))
-            if revision == *current_revision + 1
-                && hex::encode(header.context.previous_envelope_digest) == *current_digest => {}
-        _ => {
-            return Err(AppError::conflict(
-                "ledger revision or predecessor mismatch",
-            ))
-        }
-    }
-    let cursor: i64 = sqlx::query_scalar("SELECT nextval('chat_attachment_ledger_cursor_seq')")
-        .fetch_one(&mut *transaction)
-        .await?;
-    if current.is_none() {
-        // With no row there was nothing to lock: two first revisions of one
-        // entity both get here, and the second meets the first's key.
-        let inserted = sqlx::query(
-            "INSERT INTO chat_attachment_ledger_entities
-             (user_id,entity_id,revision,envelope_digest,cursor)
-             VALUES ($1,$2,$3,$4,$5)",
-        )
-        .bind(user_id)
-        .bind(entity_id)
-        .bind(revision)
-        .bind(&digest)
-        .bind(cursor)
-        .execute(&mut *transaction)
-        .await;
-        match inserted {
-            Ok(_) => {}
-            Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => {
-                return Err(AppError::conflict(
-                    "ledger revision or predecessor mismatch",
-                ));
-            }
-            Err(error) => return Err(error.into()),
-        }
-    } else {
-        sqlx::query(
-            "UPDATE chat_attachment_ledger_entities
-             SET revision=$3,envelope_digest=$4,cursor=$5,updated_at=NOW()
-             WHERE user_id=$1 AND entity_id=$2",
-        )
-        .bind(user_id)
-        .bind(entity_id)
-        .bind(revision)
-        .bind(&digest)
-        .bind(cursor)
-        .execute(&mut *transaction)
-        .await?;
-    }
-    sqlx::query(
-        "INSERT INTO chat_attachment_ledger_history
-         (user_id,entity_id,revision,envelope_digest,envelope,cursor)
-         VALUES ($1,$2,$3,$4,$5,$6)",
-    )
-    .bind(user_id)
-    .bind(entity_id)
-    .bind(revision)
-    .bind(&digest)
-    .bind(&request.envelope)
-    .bind(cursor)
-    .execute(&mut *transaction)
-    .await?;
-    // The same operation sent twice at once: the second meets the first's
-    // key (a later retry finds its receipt above).
-    let recorded = sqlx::query(
-        "INSERT INTO chat_attachment_ledger_operations
-         (user_id,operation_id,entity_id,revision,envelope_digest,cursor)
-         VALUES ($1,$2,$3,$4,$5,$6)",
-    )
-    .bind(user_id)
-    .bind(operation_id)
-    .bind(entity_id)
-    .bind(revision)
-    .bind(&digest)
-    .bind(cursor)
-    .execute(&mut *transaction)
-    .await;
-    match recorded {
-        Ok(_) => {}
-        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => {
-            return Err(AppError::conflict("ledger operation replay changed"));
-        }
-        Err(error) => return Err(error.into()),
-    }
-    transaction.commit().await?;
-    Ok(Json(ChatAttachmentLedgerPutReceiptV1 {
-        entity_id: entity_id.to_string(),
-        revision: header.context.revision.to_string(),
-        envelope_digest: digest,
-        cursor: cursor.to_string(),
-        idempotent: false,
-    }))
-}
-
-pub async fn ledger_diff(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Query(query): Query<LedgerDiffQuery>,
-) -> AppResult<Json<ChatAttachmentLedgerDiffPageV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let after_text = query.after.as_deref().unwrap_or("0");
-    let after = after_text
-        .parse::<i64>()
-        .ok()
-        .filter(|value| *value >= 0 && value.to_string() == after_text)
-        .ok_or_else(|| AppError::bad_request("ledger cursor must be canonical non-negative i64"))?;
-    let limit = query.limit.unwrap_or(128);
-    if !(1..=256).contains(&limit) {
-        return Err(AppError::bad_request("ledger page limit must be 1..=256"));
-    }
-    let rows: Vec<(Uuid, i64, String, String, i64)> = sqlx::query_as(
-        "SELECT entity_id,revision,envelope_digest,envelope,cursor
-         FROM chat_attachment_ledger_history
-         WHERE user_id=$1 AND cursor>$2 ORDER BY cursor ASC LIMIT $3",
-    )
-    .bind(user_id)
-    .bind(after)
-    .bind(limit + 1)
-    .fetch_all(&state.pool)
-    .await?;
-    let more = rows.len() as i64 > limit;
-    let entities: Vec<_> = rows
-        .into_iter()
-        .take(limit as usize)
-        .map(|(entity_id, revision, envelope_digest, envelope, cursor)| {
-            Ok(ChatAttachmentLedgerWireEntityV1 {
-                entity_id: entity_id.to_string(),
-                revision: u64::try_from(revision)
-                    .map_err(|_| AppError::internal("stored ledger revision is invalid"))?
-                    .to_string(),
-                envelope_digest,
-                envelope,
-                cursor: cursor.to_string(),
-            })
-        })
-        .collect::<AppResult<_>>()?;
-    let next_cursor = entities
-        .last()
-        .map_or_else(|| after.to_string(), |entity| entity.cursor.clone());
-    let page = ChatAttachmentLedgerDiffPageV1 {
-        entities,
-        next_cursor,
-        more,
-    };
-    page.validate(after_text)
-        .map_err(|_| AppError::internal("stored attachment ledger page is invalid"))?;
-    Ok(Json(page))
 }
 
 #[cfg(test)]

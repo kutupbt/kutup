@@ -204,7 +204,7 @@ mod tests {
     use super::*;
 
     const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
-    const JOINED_ID: &str = "00112233445566778899aabbccddeeff";
+    const JOINED_ID: &str = "ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8";
 
     /// The master-key set of one first-generation key, from its base64.
     fn first(master_b64: &str) -> MasterKeys {

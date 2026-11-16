@@ -132,6 +132,7 @@ fn a_value_opens_only_for_its_purpose_link_and_account() {
     let raw = STANDARD.decode(joined).unwrap();
     validate_joined_meeting(&raw, binding, id).unwrap();
     assert!(validate_joined_meeting(&raw, binding, &"ab".repeat(16)).is_err());
+    assert!(validate_joined_meeting(&raw, binding, &"A".repeat(43)).is_err());
     assert!(validate_joined_meeting(&raw[1..], binding, id).is_err());
     assert!(owner_call_link_secret(&call_link_root(&text("masterKey")), "0123").is_err());
     assert!(owner_call_link_secret(

@@ -52,7 +52,7 @@ contact's PGP preferences).
 | Pass | site icons (through Kutup or off) | `pass_settings` |
 | Pass | PIN | `pass_pins` (bcrypt) |
 | Drive | version retention, folder colours | `users.version_retention_days`, `collections.color` |
-| Photos | upload and library folders; favourites, archived, hidden | `photos_preferences`; `photos_library` (sealed) |
+| Photos | upload and library folders; favourites, archived, hidden | `photos_preferences`; account records `photosLibrary` (sealed) |
 | Maps | on/off, provider, through proxy, save folder | `user_map_preferences` |
 | Contacts | per-contact encrypt, sign, scheme | inside the encrypted contact card |
 

@@ -8,7 +8,10 @@
 //! A record's id is the string the head's index names, and the bytes it
 //! decodes to are the record's sealed object, so a record moved to another
 //! id fails to open. Ids are never a plaintext name or id. Each is either:
-//! - `hashed_object` under the object-id root, or
+//! - `hashed_object` under the object-id root,
+//! - random, chosen by the client that makes the record (a record with no
+//!   plaintext id of its own: the Photos library, a ledger entity, a joined
+//!   meeting), or
 //! - the one fixed id of a single-record scope.
 //!
 //! The one exception is Pass secrets (decision 9): they keep the vault's
@@ -33,6 +36,9 @@ pub enum IdForm {
     /// `hashed_object` under the object-id root: 32 bytes as unpadded
     /// base64url (43 characters).
     Hashed,
+    /// Random bytes the writing client chose ([`RecordScope::random_id`]):
+    /// 32 bytes as unpadded base64url (43 characters), as `Hashed`.
+    Random,
     /// A Drive file id, canonical lowercase UUID text; the object is its 16
     /// bytes. Pass secrets only (see the module doc).
     DriveFileId,
@@ -47,6 +53,11 @@ pub enum RecordScope {
     Pins,
     ChatGroups,
     ChatContacts,
+    PhotosLibrary,
+    ChatAttachments,
+    ContactGroups,
+    CalendarSettings,
+    JoinedMeetings,
 }
 
 /// One registry row.
@@ -62,11 +73,16 @@ pub struct ScopeInfo {
 
 impl RecordScope {
     /// Every scope, in number order.
-    pub const ALL: [RecordScope; 4] = [
+    pub const ALL: [RecordScope; 9] = [
         RecordScope::PassSecrets,
         RecordScope::Pins,
         RecordScope::ChatGroups,
         RecordScope::ChatContacts,
+        RecordScope::PhotosLibrary,
+        RecordScope::ChatAttachments,
+        RecordScope::ContactGroups,
+        RecordScope::CalendarSettings,
+        RecordScope::JoinedMeetings,
     ];
 
     pub const fn info(self) -> ScopeInfo {
@@ -95,6 +111,41 @@ impl RecordScope {
                 purpose: AccountRecordPurpose::ChatContactListEntry,
                 id: IdForm::Hashed,
             },
+            // One record (the client merges any second one a race made).
+            RecordScope::PhotosLibrary => ScopeInfo {
+                number: 5,
+                name: "photosLibrary",
+                purpose: AccountRecordPurpose::PhotosLibrary,
+                id: IdForm::Random,
+            },
+            // One record per ledger entity, its newest revision only.
+            RecordScope::ChatAttachments => ScopeInfo {
+                number: 6,
+                name: "chatAttachments",
+                purpose: AccountRecordPurpose::ChatAttachmentLedger,
+                id: IdForm::Random,
+            },
+            RecordScope::ContactGroups => ScopeInfo {
+                number: 7,
+                name: "contactGroups",
+                purpose: AccountRecordPurpose::ContactGroup,
+                id: IdForm::Hashed,
+            },
+            // Keyed by `hashed_object` of the calendar id.
+            RecordScope::CalendarSettings => ScopeInfo {
+                number: 8,
+                name: "calendarSettings",
+                purpose: AccountRecordPurpose::CalendarSettings,
+                id: IdForm::Hashed,
+            },
+            // Immutable: a stay is added or removed, never changed; the
+            // store files it at revision 1.
+            RecordScope::JoinedMeetings => ScopeInfo {
+                number: 9,
+                name: "joinedMeetings",
+                purpose: AccountRecordPurpose::JoinedMeeting,
+                id: IdForm::Random,
+            },
         }
     }
 
@@ -120,7 +171,7 @@ impl RecordScope {
     pub fn object(self, id: &str) -> Result<Vec<u8>> {
         let bad = || CryptoError::InvalidInput(format!("not a {} record id", self.name()));
         match self.info().id {
-            IdForm::Hashed => {
+            IdForm::Hashed | IdForm::Random => {
                 let bytes = URL_SAFE_NO_PAD.decode(id).map_err(|_| bad())?;
                 if bytes.len() != 32 || URL_SAFE_NO_PAD.encode(&bytes) != id {
                     return Err(bad());
@@ -134,6 +185,21 @@ impl RecordScope {
             }
             IdForm::Single(only) if id == only => Ok(Vec::new()),
             IdForm::Single(_) => Err(bad()),
+        }
+    }
+
+    /// A new record id of a random scope, and its object.
+    pub fn random_id(self) -> Result<(String, [u8; 32])> {
+        match self.info().id {
+            IdForm::Random => {
+                let mut bytes = [0u8; 32];
+                crate::primitives::random(&mut bytes);
+                Ok((URL_SAFE_NO_PAD.encode(bytes), bytes))
+            }
+            _ => Err(CryptoError::InvalidInput(format!(
+                "{} ids are not random",
+                self.name()
+            ))),
         }
     }
 
@@ -154,6 +220,63 @@ impl RecordScope {
                 self.name()
             ))),
         }
+    }
+}
+
+impl RecordScope {
+    /// The revision a record of this scope is filed at in the store and the
+    /// head: its header's for a mutable purpose; 1 for an immutable one,
+    /// which is only ever added or removed.
+    pub fn stored_revision(self, header_revision: Option<u64>) -> Result<u64> {
+        match (self.info().purpose.policy().mutable, header_revision) {
+            (true, Some(revision)) if revision > 0 => Ok(revision),
+            (false, None) => Ok(1),
+            _ => Err(CryptoError::InvalidInput(format!(
+                "not a {} record's revision",
+                self.name()
+            ))),
+        }
+    }
+
+    /// Seals `plain` as revision `revision` of record `id` of this (mutable)
+    /// scope, under the account's current master key, bound to `binding`.
+    pub fn seal(
+        self,
+        keys: &crate::master_keys::MasterKeys,
+        binding: &str,
+        id: &str,
+        revision: u64,
+        plain: &[u8],
+    ) -> Result<Vec<u8>> {
+        crate::account_record::seal_revision(
+            plain,
+            keys.current(),
+            self.info().purpose,
+            keys.generation(),
+            binding,
+            &self.object(id)?,
+            revision,
+        )
+    }
+
+    /// Opens record `id` of this (mutable) scope: its plaintext and the
+    /// revision in its authenticated header. Fails for a record sealed for
+    /// another id, scope or account.
+    pub fn open(
+        self,
+        keys: &crate::master_keys::MasterKeys,
+        binding: &str,
+        id: &str,
+        sealed: &[u8],
+    ) -> Result<(zeroize::Zeroizing<Vec<u8>>, u64)> {
+        let (plain, revision) = crate::account_record::open_revision(
+            sealed,
+            keys.key_for(sealed)?,
+            self.info().purpose,
+            binding,
+            &self.object(id)?,
+        )?;
+        Ok((zeroize::Zeroizing::new(plain), revision))
     }
 }
 
@@ -467,10 +590,11 @@ mod tests {
         for scope in RecordScope::ALL {
             assert_eq!(RecordScope::by_name(scope.name()), Some(scope));
             assert_eq!(RecordScope::by_number(scope.info().number), Some(scope));
-            // Every scope's purpose is mutable: a record is replaced in place.
-            assert!(scope.info().purpose.policy().mutable);
+            // A record is replaced in place, or (random ids only) never.
+            let policy = scope.info().purpose.policy();
+            assert!(policy.mutable || scope.info().id == IdForm::Random);
         }
-        assert_eq!(numbers, vec![1, 2, 3, 4]);
+        assert_eq!(numbers, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
     #[test]
@@ -491,7 +615,25 @@ mod tests {
             .is_err());
         assert!(RecordScope::PassSecrets.object(&hashed).is_err());
         assert_eq!(RecordScope::Pins.object("pins").unwrap(), Vec::<u8>::new());
+        // A random id has the hashed form; the old 32-hex form is refused.
+        let (meeting, object) = RecordScope::JoinedMeetings.random_id().unwrap();
+        assert_eq!(
+            RecordScope::JoinedMeetings.object(&meeting).unwrap(),
+            object.to_vec()
+        );
+        assert!(RecordScope::JoinedMeetings
+            .object("00112233445566778899aabbccddeeff")
+            .is_err());
+        assert!(RecordScope::JoinedMeetings.object(&meeting[..42]).is_err());
         assert!(RecordScope::Pins.object("pin").is_err());
+        let (random, object) = RecordScope::ChatAttachments.random_id().unwrap();
+        assert_eq!(
+            RecordScope::ChatAttachments.object(&random).unwrap(),
+            object.to_vec()
+        );
+        assert_ne!(RecordScope::PhotosLibrary.random_id().unwrap().0, random);
+        assert!(RecordScope::ChatGroups.random_id().is_err());
+        assert!(RecordScope::PhotosLibrary.object("pins").is_err());
     }
 
     fn page(records: &[(u8, u64, i64)], deleted: &[(u8, i64)], next: i64, more: bool) -> Page {
@@ -592,6 +734,57 @@ mod tests {
             .merge(&page(&[(1, 2, 4), (3, 1, 5)], &[(2, 3)], 5, false))
             .unwrap();
         assert_eq!(behind.records, copy.records);
+    }
+
+    #[test]
+    fn a_record_opens_only_under_its_own_id_and_scope() {
+        let keys = crate::master_keys::MasterKeys::first(&[9u8; 32]);
+        let binding = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+        let plain = crate::contact_group::ContactGroupV1::new("Family", "#8080ff")
+            .encode()
+            .unwrap();
+        let sealed = RecordScope::ContactGroups
+            .seal(&keys, binding, &id(1), 3, &plain)
+            .unwrap();
+        let (opened, revision) = RecordScope::ContactGroups
+            .open(&keys, binding, &id(1), &sealed)
+            .unwrap();
+        assert_eq!((opened.as_slice(), revision), (plain.as_slice(), 3));
+        // One length for every group, whatever its name.
+        let longer = crate::contact_group::ContactGroupV1::new("x".repeat(90), "#8080ff")
+            .encode()
+            .unwrap();
+        let other = RecordScope::ContactGroups
+            .seal(&keys, binding, &id(2), 1, &longer)
+            .unwrap();
+        assert_eq!(sealed.len(), other.len());
+        assert!(RecordScope::ContactGroups
+            .open(&keys, binding, &id(2), &sealed)
+            .is_err());
+        assert!(RecordScope::CalendarSettings
+            .open(&keys, binding, &id(1), &sealed)
+            .is_err());
+        assert!(RecordScope::ContactGroups
+            .open(
+                &keys,
+                "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+                &id(1),
+                &sealed
+            )
+            .is_err());
+        // The store's revision: the header's, or 1 for an immutable scope.
+        assert_eq!(
+            RecordScope::ContactGroups.stored_revision(Some(3)).unwrap(),
+            3
+        );
+        assert!(RecordScope::ContactGroups.stored_revision(None).is_err());
+        assert_eq!(
+            RecordScope::JoinedMeetings.stored_revision(None).unwrap(),
+            1
+        );
+        assert!(RecordScope::JoinedMeetings
+            .stored_revision(Some(1))
+            .is_err());
     }
 
     #[test]

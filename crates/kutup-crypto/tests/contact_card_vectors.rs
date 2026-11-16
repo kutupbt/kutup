@@ -132,7 +132,7 @@ fn summary() -> ContactSummaryV1 {
             ContactEmailV1::new("ayse@example.com", Some("work".into())),
             ContactEmailV1::new("ayse@kutup.dev", None),
         ],
-        vec!["11111111-1111-4111-8111-111111111111".into()],
+        vec!["ERERERERERERERERERERERERERERERERERERERERERE".into()],
         vec![PinnedKeyV1::v4(
             "ayse@example.com",
             "0123456789abcdef0123456789abcdef01234567",

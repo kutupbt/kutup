@@ -2,12 +2,14 @@
 // reads and writes them. Every calendar opens from the member's share of its
 // passphrase on the account's own keys (the owner's account signature
 // checked; docs/plans/wipe-unification.md, W4), and its name, description
-// and events through its key, which stays in WASM. The calendars the account
-// holds are the account head's `calendars` scope: the list read is checked
-// against the verified head, and every change of one carries the next head.
+// and events through its key, which stays in WASM. The member's own colour
+// and display flag are a record of the account's `calendarSettings` scope
+// (docs/plans/account-records.md), sealed and filed under a keyed hash of the
+// calendar id, read with the verified head: a calendar listed without its
+// record is not one the head vouches for. The record is written before the
+// calendar is created, and removed after it is deleted.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { isAxiosError } from 'axios'
 import {
   createCalendar as makeCalendar,
   localToUtc,
@@ -23,14 +25,15 @@ import {
 } from '@kutup/crypto/calendar'
 import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
 import { useMailAccount, type MailAccount } from '@kutup/mail-core/api'
-import { accountHead, HeadBlockedError, NotInVerifiedIndexError, type ListedEdit, type VerifiedIndex } from '@kutup/session/accountHead'
+import { openScopeRecord, scopeRecordId, sealScopeRecord, type CalendarSettingsRecord } from '@kutup/crypto/scopeRecords'
+import { accountHead, HeadBlockedError } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
 import { ownAccount } from '@kutup/session/devices'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 
-/** The account head's scope of the calendars the account holds. */
-const HEAD_SCOPE = 'calendars'
-/** This browser's revision guard scope: the highest revision of each calendar seen here. */
+/** The account-records scope of the member's own calendar settings. */
+const SETTINGS_SCOPE = 'calendarSettings'
+/** This browser's revision guard scope: the highest settings revision of each calendar seen here. */
 const GUARD_SCOPE = 'calendar'
 /**
  * What the guard remembers of a deleted calendar: higher than any revision,
@@ -78,11 +81,8 @@ export interface CalendarRow {
   passphraseShare: string
   metadata: SealedMetadata
   permissions: number
-  color: string
-  display: boolean
   /** This member's defaults (Proton's DefaultPartDayNotifications and DefaultFullDayNotifications). */
   defaultReminders: DefaultReminders
-  revision: number
   createdAt: string
   updatedAt: string
 }
@@ -95,7 +95,12 @@ export interface Calendar {
   color: string
   display: boolean
   permissions: number
+  /** The settings record's revision (0 while the app is blocked and can't read it). */
   revision: number
+  /** The settings record's id: a keyed hash of the calendar id. */
+  settingsId: string
+  /** The settings' version and a newer client's fields, sealed again on a change. */
+  settingsRest?: Record<string, unknown>
   defaultReminders: DefaultReminders
   unlocked: UnlockedCalendar
   /** The sealed metadata's version and a newer client's fields, sealed again on a rename. */
@@ -179,72 +184,122 @@ async function unlock(session: Session, row: CalendarRow): Promise<UnlockedCalen
   return found
 }
 
-async function calendarsIndex(session: Session): Promise<VerifiedIndex | null> {
+/** The settings record id of a calendar (its 16 UUID bytes, hashed under the object-id key). */
+async function settingsId(session: Session, calendarId: string): Promise<string> {
+  const hex = calendarId.replace(/-/g, '')
+  const bytes = new Uint8Array(16)
+  for (let i = 0; i < 16; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  return scopeRecordId(session.roots.objectIdKey, SETTINGS_SCOPE, bytes)
+}
+
+interface OpenedSettings {
+  revision: number
+  value: CalendarSettingsRecord
+}
+
+/**
+ * The account's calendar settings, by record id, read with the verified
+ * head; null while the app is blocked on another history (reads go on,
+ * held to this browser's guard, and the banner says why). A record this
+ * device can't open counts as missing.
+ */
+async function loadSettings(session: Session): Promise<Map<string, OpenedSettings | null> | null> {
+  let copy
   try {
-    return await (await accountHead(session)).verifiedIndex(HEAD_SCOPE)
+    copy = await (await accountHead(session)).records(SETTINGS_SCOPE)
   } catch (error) {
     if (error instanceof HeadBlockedError) return null
     throw error
   }
+  const settings = new Map<string, OpenedSettings | null>()
+  for (const [id, stored] of copy.records) {
+    try {
+      const opened = await openScopeRecord<CalendarSettingsRecord>(session.masterKeys, session.envelopeBinding, SETTINGS_SCOPE, id, stored.envelope)
+      settings.set(id, opened.revision === stored.revision ? opened : null)
+    } catch {
+      settings.set(id, null)
+    }
+  }
+  return settings
 }
 
-async function listed<T>(session: Session, edit: (index: VerifiedIndex) => Promise<ListedEdit<T> | null>): Promise<T | undefined> {
-  return (await accountHead(session)).listedWrite(HEAD_SCOPE, edit)
+/** What a settings record holds beyond the fields edited here. */
+function settingsRest(value: CalendarSettingsRecord): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'color' && key !== 'display'))
+}
+
+/** A colour from the palette, by the calendar id: what a calendar shows while its settings can't be read. */
+function fallbackColor(calendarId: string): string {
+  let sum = 0
+  for (const char of calendarId) sum += char.charCodeAt(0)
+  return CALENDAR_COLORS[sum % CALENDAR_COLORS.length]
 }
 
 /**
- * The account's calendars, opened. The list and the head's index are two
- * reads: a write landing between them is read again once before the list
- * counts as one the head does not vouch for (then nothing of it is shown).
- * Every calendar is also held to this browser's revision guard, which is
- * all that holds it while the app is blocked: a calendar rolled back, or
- * brought back after this browser saw it deleted, refuses the list as the
- * head would.
+ * The account's calendars, opened. A calendar shows only with its settings
+ * record from the verified head; one without it (rolled back, or brought
+ * back after its record was removed) counts as unreadable. Every calendar is
+ * also held to this browser's revision guard, which is all that holds it
+ * while the app is blocked: a calendar this browser saw deleted is refused,
+ * as the head would.
  */
 export async function loadCalendars(session: Session, account: MailAccount): Promise<{ calendars: Calendar[]; unreadable: number }> {
-  for (let attempt = 0; ; attempt++) {
-    const index = await calendarsIndex(session)
-    const { data } = await api.get<{ calendars: CalendarRow[] }>('/calendar/calendars')
+  const settings = await loadSettings(session)
+  const { data } = await api.get<{ calendars: CalendarRow[] }>('/calendar/calendars')
+  const guard = revisionGuard(session)
+  let unreadable = 0
+  const calendars: Calendar[] = []
+  for (const row of data.calendars) {
     try {
-      if (index) {
-        index.expectListing(data.calendars.map((row) => row.id))
-        for (const row of data.calendars) index.expect(row.id, row.revision)
-      }
-      let unreadable = 0
-      const calendars: Calendar[] = []
-      for (const row of data.calendars) {
-        try {
-          const key = await unlock(session, row)
-          // The id the metadata must name is the one the verified head lists
-          // (`expectListing` and `expect` above refuse any other listing).
-          const metadata = key.openMetadata(row.metadata, row.id, account.ownPublicKeys)
-          // A name its owner didn't sign is never shown: the calendar counts
-          // as unreadable.
-          if (!metadata.verified) throw new Error('the calendar name is not signed by its owner')
-          await revisionGuard(session).accept(GUARD_SCOPE, row.id, row.revision)
-          calendars.push({
-            id: row.id,
-            name: metadata.name,
-            description: metadata.description,
-            color: row.color,
-            display: row.display,
-            permissions: row.permissions,
-            revision: row.revision,
-            defaultReminders: row.defaultReminders,
-            unlocked: key,
-            metadataRest: metadata.rest,
-          })
-        } catch (error) {
-          if (error instanceof OlderThanSeenError) throw error
-          unreadable++
-        }
-      }
-      return { calendars, unreadable }
+      const id = await settingsId(session, row.id)
+      const own = settings?.get(id)
+      if (settings && !own) throw new Error('the calendar has no settings the head vouches for')
+      if (own) await guard.accept(GUARD_SCOPE, row.id, own.revision)
+      else if ((await guard.seen(GUARD_SCOPE, row.id)) === DELETED) throw new OlderThanSeenError(GUARD_SCOPE, 0, DELETED)
+      const key = await unlock(session, row)
+      const metadata = key.openMetadata(row.metadata, row.id, account.ownPublicKeys)
+      // A name its owner didn't sign is never shown: the calendar counts
+      // as unreadable.
+      if (!metadata.verified) throw new Error('the calendar name is not signed by its owner')
+      calendars.push({
+        id: row.id,
+        name: metadata.name,
+        description: metadata.description,
+        color: own?.value.color ?? fallbackColor(row.id),
+        display: own?.value.display ?? true,
+        permissions: row.permissions,
+        revision: own?.revision ?? 0,
+        settingsId: id,
+        settingsRest: own ? settingsRest(own.value) : undefined,
+        defaultReminders: row.defaultReminders,
+        unlocked: key,
+        metadataRest: metadata.rest,
+      })
     } catch (error) {
-      const refused = error instanceof NotInVerifiedIndexError || error instanceof OlderThanSeenError
-      if (!refused || attempt > 0) throw error
+      if (error instanceof OlderThanSeenError) throw error
+      unreadable++
     }
   }
+  return { calendars, unreadable }
+}
+
+/** Writes a calendar's settings record at the next revision (a newer client's fields kept). */
+async function writeSettings(session: Session, id: string, value: CalendarSettingsRecord, from?: number): Promise<number> {
+  const written = await (await accountHead(session)).recordsWrite(SETTINGS_SCOPE, async (copy) => {
+    const stored = copy.records.get(id)
+    if (from !== undefined && stored?.revision !== from) throw new CalendarChangedError()
+    const revision = (stored?.revision ?? 0) + 1
+    const envelope = await sealScopeRecord(session.masterKeys, session.envelopeBinding, SETTINGS_SCOPE, id, revision, value)
+    return { puts: [{ id, revision, envelope }], deletes: [], done: revision }
+  })
+  return written ?? 0
+}
+
+/** Removes a calendar's settings record, if there is one. */
+async function removeSettings(session: Session, id: string): Promise<void> {
+  await (await accountHead(session)).recordsWrite(SETTINGS_SCOPE, (copy) =>
+    Promise.resolve(copy.records.has(id) ? { puts: [], deletes: [id], done: undefined } : null),
+  )
 }
 
 /** The account's mail address and its row id: the address whose key signs its events. */
@@ -258,25 +313,22 @@ export async function activeAddressId(account: MailAccount): Promise<string> {
 /** Every calendar's colour on the server's palette (`#rrggbb`), Proton's accents first. */
 export const CALENDAR_COLORS = ['#8080ff', '#db60d6', '#415df0', '#179fd9', '#1da583', '#3cbb3a', '#b4a40e', '#936d58', '#f78400', '#ec3e7c'] as const
 
-/** Makes a calendar under a fresh id; the head that lists it is made before the create. */
+/** Makes a calendar under a fresh id; its settings record is written before the create. */
 export async function createCalendar(session: Session, account: MailAccount, name: string, color: string): Promise<string> {
   const id = crypto.randomUUID()
   const made = await makeCalendar(await calendarAccount(session), account.key, id, { name, description: '' })
   // The fingerprint is the server's to read from the key, not to be told.
   const body = { publicKey: made.publicKey, lockedSecretKey: made.lockedSecretKey, passphraseShare: made.passphraseShare, metadata: made.metadata }
-  await listed(session, (index) =>
-    Promise.resolve(
-      index.revision(id) !== undefined
-        ? null
-        : {
-            changes: [[id, 1]] as const,
-            send: async (head: string) => {
-              await api.post('/calendar/calendars', { id, ...body, color, head })
-            },
-          },
-    ),
-  )
-  await revisionGuard(session).accept(GUARD_SCOPE, id, 1)
+  const record = await settingsId(session, id)
+  const revision = await writeSettings(session, record, { color, display: true })
+  try {
+    await api.post('/calendar/calendars', { id, ...body })
+  } catch (error) {
+    // No calendar: its record goes too (one left behind is never shown).
+    await removeSettings(session, record).catch(() => undefined)
+    throw error
+  }
+  await revisionGuard(session).accept(GUARD_SCOPE, id, revision)
   return id
 }
 
@@ -297,7 +349,12 @@ export interface CalendarChange {
   defaultReminders?: DefaultReminders
 }
 
-/** Changes a calendar: the owner's name and description, the member's colour and visibility. */
+/**
+ * Changes a calendar: the owner's name and description and the member's
+ * default reminders on the server, the member's colour and visibility in its
+ * settings record (refused with {@link CalendarChangedError} when another
+ * device changed them first).
+ */
 export async function updateCalendar(session: Session, account: MailAccount, calendar: Calendar, change: CalendarChange): Promise<void> {
   const renamed = change.name !== undefined || change.description !== undefined
   const metadata = renamed
@@ -307,49 +364,25 @@ export async function updateCalendar(session: Session, account: MailAccount, cal
         rest: calendar.metadataRest,
       })
     : undefined
-  const revision = calendar.revision + 1
-  try {
-    await listed(session, (index) => {
-      const listedRevision = index.revision(calendar.id)
-      if (listedRevision === revision) return Promise.resolve(null)
-      if (listedRevision !== undefined && listedRevision !== calendar.revision) throw new CalendarChangedError()
-      return Promise.resolve({
-        changes: [[calendar.id, revision]] as const,
-        send: async (head: string) => {
-          await api.put(`/calendar/calendars/${calendar.id}`, {
-            metadata,
-            color: change.color,
-            display: change.display,
-            defaultReminders: change.defaultReminders,
-            baseRevision: calendar.revision,
-            revision,
-            head,
-          })
-        },
-      })
-    })
-  } catch (error) {
-    if (isAxiosError(error) && (error.response?.data as { code?: string } | undefined)?.code === 'revision_conflict') throw new CalendarChangedError()
-    throw error
+  if (change.color !== undefined || change.display !== undefined) {
+    const revision = await writeSettings(
+      session,
+      calendar.settingsId,
+      { ...calendar.settingsRest, color: change.color ?? calendar.color, display: change.display ?? calendar.display },
+      calendar.revision,
+    )
+    await revisionGuard(session).accept(GUARD_SCOPE, calendar.id, revision)
   }
-  await revisionGuard(session).accept(GUARD_SCOPE, calendar.id, revision)
+  if (metadata || change.defaultReminders) {
+    await api.put(`/calendar/calendars/${calendar.id}`, { metadata, defaultReminders: change.defaultReminders })
+  }
 }
 
-/** Deletes a calendar and its events (owner only). */
+/** Deletes a calendar and its events (owner only), then its settings record. */
 export async function deleteCalendar(session: Session, calendar: Calendar): Promise<void> {
-  await listed(session, (index) =>
-    Promise.resolve(
-      index.revision(calendar.id) === undefined
-        ? null
-        : {
-            changes: [[calendar.id, null]] as const,
-            send: async (head: string) => {
-              await api.delete(`/calendar/calendars/${calendar.id}`, { data: { head } })
-            },
-          },
-    ),
-  )
+  await api.delete(`/calendar/calendars/${calendar.id}`)
   await revisionGuard(session).accept(GUARD_SCOPE, calendar.id, DELETED)
+  await removeSettings(session, calendar.settingsId)
 }
 
 /** The instant a time names, as the server converts it (the same time zone database). */

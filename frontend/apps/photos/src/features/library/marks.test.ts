@@ -1,88 +1,100 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
-// The library record as this browser reads it: what the server says of the
-// record must be what the record says, and an older record than this
-// browser has seen (or none at all) is refused.
+// The library record as this browser reads it: the account-records scope as
+// the verified account head vouches for it (`AccountHead.records` checks the
+// index), each record opened as exactly the revision listed; a second record
+// a race made is merged in, and the next write deletes it.
 
-const get = vi.fn<(url: string) => Promise<{ data: unknown }>>()
-vi.mock('@kutup/session/client', () => ({ default: { get: (url: string) => get(url), put: vi.fn() } }))
+interface Stored { revision: number; envelope: string }
+const scope = { records: new Map<string, Stored>() }
+const writes: unknown[] = []
+const head = {
+  records: vi.fn(() => Promise.resolve(scope)),
+  recordsWrite: vi.fn(async (_name: string, edit: (copy: typeof scope, attempt: number) => Promise<{ puts: unknown[]; deletes: string[]; done: unknown } | null>) => {
+    const change = await edit(scope, 1)
+    if (!change) return undefined
+    writes.push({ puts: change.puts, deletes: change.deletes })
+    return change.done
+  }),
+}
+vi.mock('@kutup/session/accountHead', () => ({ accountHead: vi.fn(() => Promise.resolve(head)) }))
+vi.mock('@kutup/session/accountRecords', () => ({ randomRecordId: () => 'NEW' }))
 
-const header = { accountIncarnationId: 'aa'.repeat(32), revision: 2, previousDigest: '11'.repeat(32) }
+const opened = new Map<string, { marks: { favourites: string[]; archived: string[]; hidden: string[] }; revision: number }>()
 const crypto = {
-  openPhotosLibrary: vi.fn(() => Promise.resolve({ marks: { favourites: ['f'], archived: [], hidden: [] }, header })),
-  photosLibraryDigest: vi.fn(() => Promise.resolve('22'.repeat(32))),
-  sealPhotosLibrary: vi.fn(),
+  openPhotosLibrary: vi.fn((envelope: string) => Promise.resolve(opened.get(envelope)!)),
+  sealPhotosLibrary: vi.fn((_marks: unknown, _me: unknown, id: string, revision: number) => Promise.resolve(`sealed:${id}:${revision}`)),
 }
 vi.mock('@kutup/crypto/photosLibrary', () => crypto)
 vi.mock('@kutup/drive-core/identity', () => ({ useDriveIdentity: vi.fn() }))
 
-const { loadMarks } = await import('./marks')
-const { resetLocalChainPinsForTesting } = await import('@kutup/crypto/localChainPins')
+const { changeMarks, loadMarks, withMark } = await import('./marks')
 
-const me = { userId: 'u', binding: 'b', incarnationId: 'aa'.repeat(32), masterKey: new Uint8Array(32), roots: testRoots(0) } as never
-const stored = (revision: number, envelopeDigest = '22'.repeat(32)) => ({ data: { envelope: 'ZW52', revision, envelopeDigest } })
-const notFound = () => Object.assign(new Error('404'), { isAxiosError: true, response: { status: 404 } })
+const me = { userId: 'u', binding: 'b', masterKeys: 'keys', roots: {} } as never
 
 describe('the Photos library record, as read', () => {
   beforeEach(() => {
-    localStorage.clear()
-    resetLocalChainPinsForTesting()
-    header.revision = 2
-    crypto.photosLibraryDigest.mockResolvedValue('22'.repeat(32))
+    scope.records.clear()
+    opened.clear()
+    writes.length = 0
   })
 
-  // First: the old pins go once per page, on the first pin stored.
-  it('keeps its pin sealed, not in localStorage, and drops the old plain pins', async () => {
-    localStorage.setItem('kutup.photos.library.pin.v1.' + 'aa'.repeat(32), '{"version":1,"revision":9,"digest":"x"}')
-    localStorage.setItem('kutup.other', 'kept')
-    get.mockResolvedValueOnce(stored(2))
-    await loadMarks(me)
-    expect(localStorage.getItem('kutup.photos.library.pin.v1.' + 'aa'.repeat(32))).toBeNull()
-    expect(localStorage.getItem('kutup.other')).toBe('kept')
-    // The pin held: an older record is refused.
-    header.revision = 1
-    get.mockResolvedValueOnce(stored(1))
-    await expect(loadMarks(me)).rejects.toThrow(/older/)
+  it('starts empty when the scope holds no record', async () => {
+    expect(await loadMarks(me)).toEqual({
+      id: null,
+      revision: 0,
+      marks: { favourites: [], archived: [], hidden: [] },
+      others: [],
+    })
   })
 
-  it('opens a record whose header and digest are what the server says', async () => {
-    get.mockResolvedValueOnce(stored(2))
-    expect(await loadMarks(me)).toMatchObject({ revision: 2, digest: '22'.repeat(32) })
+  it('opens the record at the revision the verified index lists', async () => {
+    scope.records.set('A', { revision: 2, envelope: 'a2' })
+    opened.set('a2', { marks: { favourites: ['f'], archived: [], hidden: [] }, revision: 2 })
+    expect(await loadMarks(me)).toMatchObject({ id: 'A', revision: 2, marks: { favourites: ['f'] } })
+    expect(crypto.openPhotosLibrary).toHaveBeenCalledWith('a2', me, 'A')
   })
 
-  it('refuses a record the server describes as another revision or digest', async () => {
-    get.mockResolvedValueOnce(stored(3))
-    await expect(loadMarks(me)).rejects.toThrow(/differs/)
-    get.mockResolvedValueOnce(stored(2, '33'.repeat(32)))
+  it('refuses a record sealed at another revision than the one listed', async () => {
+    scope.records.set('A', { revision: 3, envelope: 'a2' })
+    opened.set('a2', { marks: { favourites: [], archived: [], hidden: [] }, revision: 2 })
     await expect(loadMarks(me)).rejects.toThrow(/differs/)
   })
 
-  it('refuses an older record, another at the same revision, or none, once it has seen one', async () => {
-    get.mockResolvedValueOnce(stored(2))
-    await loadMarks(me)
-
-    header.revision = 1
-    get.mockResolvedValueOnce(stored(1))
-    await expect(loadMarks(me)).rejects.toThrow(/older/)
-
-    header.revision = 2
-    crypto.photosLibraryDigest.mockResolvedValueOnce('44'.repeat(32))
-    get.mockResolvedValueOnce(stored(2, '44'.repeat(32)))
-    await expect(loadMarks(me)).rejects.toThrow(/older/)
-
-    get.mockRejectedValueOnce(notFound())
-    await expect(loadMarks(me)).rejects.toThrow(/no longer/)
-
-    // A newer one moves the pin on.
-    header.revision = 3
-    crypto.photosLibraryDigest.mockResolvedValueOnce('55'.repeat(32))
-    get.mockResolvedValueOnce(stored(3, '55'.repeat(32)))
-    expect(await loadMarks(me)).toMatchObject({ revision: 3 })
+  it('merges a second record a race made into the first', async () => {
+    scope.records.set('B', { revision: 1, envelope: 'b1' })
+    scope.records.set('A', { revision: 4, envelope: 'a4' })
+    opened.set('a4', { marks: { favourites: ['1'], archived: [], hidden: [] }, revision: 4 })
+    opened.set('b1', { marks: { favourites: ['2'], archived: [], hidden: ['3'] }, revision: 1 })
+    expect(await loadMarks(me)).toMatchObject({
+      id: 'A',
+      revision: 4,
+      marks: { favourites: ['1', '2'], hidden: ['3'] },
+      others: ['B'],
+    })
   })
 
-  it('starts empty when there is no record and none was seen', async () => {
-    get.mockRejectedValueOnce(notFound())
-    expect(await loadMarks(me)).toMatchObject({ revision: 0, digest: undefined })
+  it('writes the first record under a new random id, then the next revision of it', async () => {
+    const cache = { setQueryData: vi.fn() }
+    await changeMarks(cache as never, me, (marks) => withMark(marks, 'hidden', ['h'], true))
+    expect(writes).toEqual([{ puts: [{ id: 'NEW', revision: 1, envelope: 'sealed:NEW:1' }], deletes: [] }])
+    expect(cache.setQueryData).toHaveBeenCalledWith(['photos-marks', 'u'], {
+      id: 'NEW',
+      revision: 1,
+      marks: { favourites: [], archived: [], hidden: ['h'] },
+      others: [],
+    })
+  })
+
+  it('folds a raced second record into the first and deletes it', async () => {
+    scope.records.set('A', { revision: 4, envelope: 'a4' })
+    scope.records.set('B', { revision: 1, envelope: 'b1' })
+    opened.set('a4', { marks: { favourites: ['1'], archived: [], hidden: [] }, revision: 4 })
+    opened.set('b1', { marks: { favourites: ['2'], archived: [], hidden: [] }, revision: 1 })
+    await changeMarks({ setQueryData: vi.fn() } as never, me, (marks) => withMark(marks, 'favourites', ['1'], false))
+    expect(writes).toEqual([{ puts: [{ id: 'A', revision: 5, envelope: 'sealed:A:5' }], deletes: ['B'] }])
+    expect(crypto.sealPhotosLibrary).toHaveBeenLastCalledWith(
+      { favourites: ['2'], archived: [], hidden: [] }, me, 'A', 5,
+    )
   })
 })

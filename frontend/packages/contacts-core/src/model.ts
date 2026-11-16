@@ -120,10 +120,14 @@ export interface Contact {
 }
 
 export interface ContactGroup {
+  /** Its record id in the account's `contactGroups` scope. */
   id: string
   name: string
   color: string
+  /** How many of the loaded contacts are in it. */
   members: number
+  /** The opened record, kept so a rename seals a newer client's fields again. */
+  record?: Record<string, unknown>
 }
 
 /** Initials for an avatar without a photo. */

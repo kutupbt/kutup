@@ -1298,6 +1298,57 @@ pub const ACCOUNT_RECORDS_CHAT_CONTACTS: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: true,
 };
+/// The library is one record: a device's first write that raced another's
+/// is refused by the head and redone on the record that landed.
+pub const ACCOUNT_RECORDS_PHOTOS_LIBRARY: NumericSetting = NumericSetting {
+    key: "account_records_photos_library",
+    field: "accountRecordsPhotosLibrary",
+    default: 1,
+    min: 1,
+    max: 16,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+/// One per attachment the account sent or received (its newest state).
+pub const ACCOUNT_RECORDS_CHAT_ATTACHMENTS: NumericSetting = NumericSetting {
+    key: "account_records_chat_attachments",
+    field: "accountRecordsChatAttachments",
+    default: 100_000,
+    min: 1,
+    max: 1_000_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+pub const ACCOUNT_RECORDS_CONTACT_GROUPS: NumericSetting = NumericSetting {
+    key: "account_records_contact_groups",
+    field: "accountRecordsContactGroups",
+    default: 200,
+    min: 1,
+    max: 10_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+/// One record per calendar the account belongs to.
+pub const ACCOUNT_RECORDS_CALENDAR_SETTINGS: NumericSetting = NumericSetting {
+    key: "account_records_calendar_settings",
+    field: "accountRecordsCalendarSettings",
+    default: 500,
+    min: 1,
+    max: 10_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+/// The meetings an account's list keeps; a device adding one past it
+/// removes the oldest in the same batch.
+pub const ACCOUNT_RECORDS_JOINED_MEETINGS: NumericSetting = NumericSetting {
+    key: "account_records_joined_meetings",
+    field: "accountRecordsJoinedMeetings",
+    default: 100,
+    min: 1,
+    max: 10_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
 /// The most puts and deletes one batch carries.
 pub const ACCOUNT_RECORDS_BATCH_ITEMS: NumericSetting = NumericSetting {
     key: "account_records_batch_items",
@@ -1329,10 +1380,15 @@ pub const ACCOUNT_RECORDS_TOMBSTONE_DAYS: NumericSetting = NumericSetting {
     unit: SettingUnit::Days,
     per_account: false,
 };
-pub const ACCOUNT_RECORDS_SETTINGS: [NumericSetting; 6] = [
+pub const ACCOUNT_RECORDS_SETTINGS: [NumericSetting; 11] = [
     ACCOUNT_RECORDS_PASS_SECRETS,
     ACCOUNT_RECORDS_CHAT_GROUPS,
     ACCOUNT_RECORDS_CHAT_CONTACTS,
+    ACCOUNT_RECORDS_PHOTOS_LIBRARY,
+    ACCOUNT_RECORDS_CHAT_ATTACHMENTS,
+    ACCOUNT_RECORDS_CONTACT_GROUPS,
+    ACCOUNT_RECORDS_CALENDAR_SETTINGS,
+    ACCOUNT_RECORDS_JOINED_MEETINGS,
     ACCOUNT_RECORDS_BATCH_ITEMS,
     ACCOUNT_RECORDS_PAGE,
     ACCOUNT_RECORDS_TOMBSTONE_DAYS,

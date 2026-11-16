@@ -16,11 +16,9 @@ vi.mock('./rustWasm', async () => {
 })
 
 import {
-  chatAttachmentLedgerEnvelopeDigest,
   chatMediaObjectLength,
   decodeChatAttachmentLedgerEntry,
   encodeChatAttachmentLedgerEntry,
-  inspectChatAttachmentLedgerEnvelope,
   openChatAttachmentLedger,
   openChatMedia,
   sealChatAttachmentLedger,
@@ -28,8 +26,9 @@ import {
 } from './chatMedia'
 
 const attachmentId = '11111111-1111-4111-8111-111111111111'
-const entityId = '22222222-2222-4222-8222-222222222222'
-const incarnationId = '11'.repeat(32)
+// A random record id of the chatAttachments scope: 32 bytes, base64url.
+const entityId = 'IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI'
+const otherEntityId = 'MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM'
 
 describe('Chat-media block format (suite 2) through Rust/WASM', () => {
   it('round-trips empty, ordinary and multi-block attachments', async () => {
@@ -62,35 +61,17 @@ describe('Chat-media block format (suite 2) through Rust/WASM', () => {
 })
 
 describe('Chat attachment ledger Rust/WASM envelope', () => {
-  it('is an account record of its account, entity and place in the chain', async () => {
-    const key = { masterKey: new Uint8Array(32).fill(0x33), masterKeys: firstMasterKeys(new Uint8Array(32).fill(0x33)), binding: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b' }
+  it('is an account record of its account and entity, at its revision', async () => {
+    const key = { masterKeys: firstMasterKeys(new Uint8Array(32).fill(0x33)), binding: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b' }
     const plaintext = new TextEncoder().encode('canonical entry')
-    const context = {
-      accountIncarnationId: incarnationId,
-      entityId,
-      revision: 1n,
-    }
-    const envelope = await sealChatAttachmentLedger(plaintext, key, context)
-    expect(await inspectChatAttachmentLedgerEnvelope(envelope)).toEqual({
-      accountIncarnationId: incarnationId,
-      entityId,
-      revision: '1',
-      previousEnvelopeDigest: '0'.repeat(64),
-    })
-    expect(await openChatAttachmentLedger(envelope, key, context)).toEqual(plaintext)
-    expect(await chatAttachmentLedgerEnvelopeDigest(envelope)).toMatch(/^[0-9a-f]{64}$/)
-    await expect(openChatAttachmentLedger(envelope, key, {
-      ...context,
-      entityId: '33333333-3333-4333-8333-333333333333',
-    })).rejects.toThrow()
-    await expect(openChatAttachmentLedger(envelope, key, {
-      ...context,
-      revision: 2n,
-      previousEnvelopeDigest: '22'.repeat(32),
-    })).rejects.toThrow()
+    const envelope = await sealChatAttachmentLedger(plaintext, key, entityId, 2)
+    expect(await openChatAttachmentLedger(envelope, key, entityId)).toEqual({ plaintext, revision: 2 })
+    await expect(openChatAttachmentLedger(envelope, key, otherEntityId)).rejects.toThrow()
+    // Not an id of the scope's form.
+    await expect(sealChatAttachmentLedger(plaintext, key, '22222222-2222-4222-8222-222222222222', 1)).rejects.toThrow()
     // Another account's key binding, or another master key: refused.
-    await expect(openChatAttachmentLedger(envelope, { ...key, binding: '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d' }, context)).rejects.toThrow()
-    await expect(openChatAttachmentLedger(envelope, { ...key, masterKeys: firstMasterKeys(new Uint8Array(32).fill(0x34)) }, context)).rejects.toThrow()
+    await expect(openChatAttachmentLedger(envelope, { ...key, binding: '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d' }, entityId)).rejects.toThrow()
+    await expect(openChatAttachmentLedger(envelope, { ...key, masterKeys: firstMasterKeys(new Uint8Array(32).fill(0x34)) }, entityId)).rejects.toThrow()
   })
 
   it('uses the strict Rust canonical codec for private accounting entries', async () => {

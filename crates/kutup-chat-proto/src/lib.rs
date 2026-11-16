@@ -105,14 +105,12 @@ pub use locations::{
     MAX_LOCATION_LABEL_CHARS,
 };
 pub use media::{
-    ChatAttachmentDescriptorV1, ChatAttachmentLedgerDiffPageV1, ChatAttachmentLedgerEntryV1,
-    ChatAttachmentLedgerPutReceiptV1, ChatAttachmentLedgerPutRequestV1,
-    ChatAttachmentLedgerStateV1, ChatAttachmentLedgerWireEntityV1, ChatMediaCapabilitiesV1,
-    ChatMediaClassV1, ChatMediaConversationKindV1, ChatMediaDeliveryOfferV1,
-    ChatMediaDeliveryStatusV1, ChatMediaOfferResponseV1, ChatMediaPreviewV1,
-    FederatedChatMediaTransactionV1, CHAT_ATTACHMENT_LEDGER_ENTRY_VERSION, CHAT_ATTACHMENT_VERSION,
-    CHAT_MEDIA_PROTOCOL_VERSION, MAX_CHAT_ATTACHMENT_LEDGER_PAGE_ENTITIES,
-    MAX_CHAT_MEDIA_CAPTION_BYTES, MAX_CHAT_MEDIA_DISPLAY_NAME_BYTES, MAX_CHAT_MEDIA_PREVIEW_BYTES,
+    ChatAttachmentDescriptorV1, ChatAttachmentLedgerEntryV1, ChatAttachmentLedgerStateV1,
+    ChatMediaCapabilitiesV1, ChatMediaClassV1, ChatMediaConversationKindV1,
+    ChatMediaDeliveryOfferV1, ChatMediaDeliveryStatusV1, ChatMediaOfferResponseV1,
+    ChatMediaPreviewV1, FederatedChatMediaTransactionV1, CHAT_ATTACHMENT_LEDGER_ENTRY_VERSION,
+    CHAT_ATTACHMENT_VERSION, CHAT_MEDIA_PROTOCOL_VERSION, MAX_CHAT_MEDIA_CAPTION_BYTES,
+    MAX_CHAT_MEDIA_DISPLAY_NAME_BYTES, MAX_CHAT_MEDIA_PREVIEW_BYTES,
 };
 pub use polls::{
     PollBody, PollTerminateBody, PollVoteBody, MAX_POLL_OPTIONS, MAX_POLL_OPTION_CHARS,

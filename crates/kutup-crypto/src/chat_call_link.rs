@@ -474,15 +474,11 @@ fn joined_master_key(master_key: &str) -> Result<Zeroizing<[u8; 32]>> {
     Ok(Zeroizing::new(master))
 }
 
-/// A joined meeting's row id (32 lowercase hex characters, chosen by the
-/// browser that recorded it): the record's object.
-fn joined_id(id: &str) -> Result<[u8; 16]> {
-    let invalid = || CryptoError::InvalidInput("a joined meeting id is 32 lowercase hex".into());
-    let bytes = hex::decode(id).map_err(|_| invalid())?;
-    if bytes.len() != 16 || hex::encode(&bytes) != id {
-        return Err(invalid());
-    }
-    bytes.try_into().map_err(|_| invalid())
+/// A joined meeting's record id (a random id of the `joinedMeetings` scope,
+/// chosen by the browser that recorded it: 32 bytes as unpadded base64url):
+/// the record's object.
+fn joined_id(id: &str) -> Result<Vec<u8>> {
+    crate::account_records::RecordScope::JoinedMeetings.object(id)
 }
 
 /// Seal one stay for the account's own list, as the row `id`: an account

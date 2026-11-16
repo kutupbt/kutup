@@ -230,8 +230,10 @@ account, so it is the same on all of its devices:
   header naming the account's key binding and the row's 16-byte id. The
   server checks that header, so a record can't be moved to another row or
   another account.
-- The server stores the records (`/api/chat/joined-meetings`, the newest
-  100 per account) and hands them back. It cannot open them, so it still
+- The server stores the records in the account-records store (scope
+  `joinedMeetings`, docs/plans/account-records.md, under the account head;
+  at most `accountRecordsJoinedMeetings` per account, 100 at first: adding
+  one past it removes the oldest in the same batch) and hands them back. It cannot open them, so it still
   has no readable record of who joined what; it does learn that the account
   recorded a stay and when, which someone watching the server could set
   beside the token requests of that moment.

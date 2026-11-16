@@ -397,33 +397,32 @@ assert.throws(
 )
 
 const attachmentId = '11111111-1111-4111-8111-111111111111'
-// The Chat attachment ledger: one chained account record per entity.
+// The Chat attachment ledger: one account record per entity, its id random
+// (the chatAttachments scope of the account-records store).
 const ledgerMaster = Buffer.alloc(32, 0x33).toString('base64')
 const ledgerBinding = '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b'
-const ledgerIncarnation = '11'.repeat(32)
-const ledgerEntity = '22222222-2222-4222-8222-222222222222'
+const ledgerEntity = Buffer.alloc(32, 0x22).toString('base64url')
 const ledgerPlaintext = Buffer.from('canonical ledger entry').toString('base64')
 const ledgerEnvelope = crypto.sealChatAttachmentLedger(
   ledgerPlaintext,
   masterKeySet(ledgerMaster),
   ledgerBinding,
-  ledgerIncarnation,
   ledgerEntity,
-  1n,
-  '',
+  3,
 )
-assert.equal(
-  crypto.openChatAttachmentLedger(ledgerEnvelope, masterKeySet(ledgerMaster), ledgerBinding, ledgerIncarnation, ledgerEntity, 1n, ''),
-  ledgerPlaintext,
+assert.deepEqual(
+  crypto.openChatAttachmentLedger(ledgerEnvelope, masterKeySet(ledgerMaster), ledgerBinding, ledgerEntity),
+  { plaintext: ledgerPlaintext, revision: 3 },
 )
-assert.match(crypto.chatAttachmentLedgerEnvelopeDigest(ledgerEnvelope), /^[0-9a-f]{64}$/)
 assert.throws(
-  () => crypto.openChatAttachmentLedger(ledgerEnvelope, masterKeySet(ledgerMaster), ledgerBinding, ledgerIncarnation, '33333333-3333-4333-8333-333333333333', 1n, ''),
+  () => crypto.openChatAttachmentLedger(ledgerEnvelope, masterKeySet(ledgerMaster), ledgerBinding, Buffer.alloc(32, 0x33).toString('base64url')),
   /authentication failed/,
 )
 assert.throws(() => crypto.openChatAttachmentLedger(
-  ledgerEnvelope, masterKeySet(ledgerMaster), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', ledgerIncarnation, ledgerEntity, 1n, '',
+  ledgerEnvelope, masterKeySet(ledgerMaster), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', ledgerEntity,
 ))
+// Not an id of the scope's form.
+assert.throws(() => crypto.sealChatAttachmentLedger(ledgerPlaintext, masterKeySet(ledgerMaster), ledgerBinding, '22222222-2222-4222-8222-222222222222', 1))
 // The generic account-record path refuses the purpose.
 assert.throws(() => crypto.openAccountRecord(ledgerEnvelope, ledgerMaster, 14, ledgerBinding))
 
@@ -761,26 +760,26 @@ assert.throws(() => contentHasher.finish())
 
 const libraryVector = vectors.photosLibrary
 const libraryOwner = [masterKeySet(libraryVector.masterKey), libraryVector.binding]
-const firstLibrary = crypto.openPhotosLibrary(libraryVector.first.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 1, undefined)
-assert.equal(firstLibrary, libraryVector.first.plaintext)
-assert.equal(crypto.photosLibraryDigest(libraryVector.first.envelope), libraryVector.first.digest)
-assert.equal(
-  crypto.openPhotosLibrary(libraryVector.second.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 2, libraryVector.first.digest),
-  libraryVector.second.plaintext,
+assert.deepEqual(
+  crypto.openPhotosLibrary(libraryVector.first.envelope, ...libraryOwner, libraryVector.recordId),
+  { plaintext: libraryVector.first.plaintext, revision: 1 },
 )
-assert.throws(() => crypto.openPhotosLibrary(libraryVector.second.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 1, undefined))
-// Another account's key binding opens nothing.
-assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, masterKeySet(libraryVector.masterKey), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', libraryVector.accountIncarnationId, 1, undefined))
+assert.deepEqual(
+  crypto.openPhotosLibrary(libraryVector.second.envelope, ...libraryOwner, libraryVector.recordId),
+  { plaintext: libraryVector.second.plaintext, revision: 2 },
+)
+// Another record's id, or another account's key binding, opens nothing.
+assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, ...libraryOwner, Buffer.alloc(32, 0xa2).toString('base64url')))
+assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, masterKeySet(libraryVector.masterKey), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', libraryVector.recordId))
 // The generic account-record path refuses the purpose.
 assert.throws(() => crypto.openAccountRecord(libraryVector.first.envelope, libraryVector.masterKey, 13, libraryVector.binding))
 const resealed = crypto.sealPhotosLibrary(
   JSON.stringify({ v: 1, favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [], albums: [1] }),
-  masterKeySet(libraryVector.masterKey), libraryVector.binding, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope),
+  masterKeySet(libraryVector.masterKey), libraryVector.binding, libraryVector.recordId, 3,
 )
-assert.equal(crypto.photosLibraryDigest(resealed.envelope), resealed.digest)
-assert.equal(
-  crypto.openPhotosLibrary(resealed.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope)),
-  '{"v":1,"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[],"albums":[1]}',
+assert.deepEqual(
+  crypto.openPhotosLibrary(resealed, ...libraryOwner, libraryVector.recordId),
+  { plaintext: '{"v":1,"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[],"albums":[1]}', revision: 3 },
 )
 
 // What one Drive revision is (docs/plans/drive-block-format.md §2): the
@@ -1073,6 +1072,33 @@ assert.deepEqual(crypto.openMailName(masterKeySet(nameVectors.masterKey), nameVe
 assert.throws(() => crypto.openMailName(masterKeySet(nameVectors.masterKey), nameVectors.binding, 'folder', nameVectors.id, resealedName))
 assert.throws(() => crypto.openMailName(masterKeySet(nameVectors.masterKey), nameVectors.binding, 'label', '00000000-0000-4000-8000-000000000000', resealedName))
 assert.throws(() => crypto.sealMailName(masterKeySet(nameVectors.masterKey), 'alice@kutup.dev', 'label', nameVectors.id, 5, nameVectors.name))
+
+// Records-scope plaintexts (docs/plans/account-records.md, W3): a record id
+// hashed under the object-id key, a record that opens only under its own id
+// and scope, a newer client's fields kept, and a newer version refused as
+// newer, never as corrupt.
+{
+  const keys = masterKeySet(nameVectors.masterKey)
+  const objectIdKey = Buffer.alloc(32, 7).toString('base64')
+  const groupId = crypto.scopeRecordId(objectIdKey, 'contactGroups', Buffer.alloc(16, 1).toString('base64'))
+  assert.match(groupId, /^[A-Za-z0-9_-]{43}$/)
+  assert.notEqual(crypto.scopeRecordId(objectIdKey, 'calendarSettings', Buffer.alloc(16, 1).toString('base64')), groupId)
+  assert.throws(() => crypto.scopeRecordId(objectIdKey, 'pins', Buffer.alloc(16, 1).toString('base64')))
+  const sealed = crypto.sealScopeRecord(keys, nameVectors.binding, 'contactGroups', groupId, 2, '{"v":1,"name":"Aile","color":"#8080ff","icon":"home"}')
+  const opened = crypto.openScopeRecord(keys, nameVectors.binding, 'contactGroups', groupId, sealed)
+  assert.equal(opened.revision, 2)
+  assert.deepEqual(JSON.parse(opened.value), { v: 1, name: 'Aile', color: '#8080ff', icon: 'home' })
+  assert.throws(() => crypto.openScopeRecord(keys, nameVectors.binding, 'calendarSettings', groupId, sealed))
+  const otherId = crypto.scopeRecordId(objectIdKey, 'contactGroups', Buffer.alloc(16, 2).toString('base64'))
+  assert.throws(() => crypto.openScopeRecord(keys, nameVectors.binding, 'contactGroups', otherId, sealed))
+  assert.throws(() => crypto.sealScopeRecord(keys, nameVectors.binding, 'contactGroups', groupId, 1, '{"v":1,"name":"","color":"#8080ff"}'))
+  assert.throws(
+    () => crypto.sealScopeRecord(keys, nameVectors.binding, 'calendarSettings', groupId, 1, '{"v":2,"color":"#8080ff","display":true}'),
+    /newer format/,
+  )
+  const settings = crypto.sealScopeRecord(keys, nameVectors.binding, 'calendarSettings', groupId, 1, '{"v":1,"color":"#1da583","display":false}')
+  assert.deepEqual(JSON.parse(crypto.openScopeRecord(keys, nameVectors.binding, 'calendarSettings', groupId, settings).value), { v: 1, color: '#1da583', display: false })
+}
 
 // Drive identity (docs/plans/drive-identity-pins.md): the Drive key binding
 // names the account, its server and id (a statement to others); the pin

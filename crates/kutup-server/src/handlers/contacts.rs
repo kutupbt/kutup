@@ -2,8 +2,10 @@
 //! Proton's model. Clients send a summary (canonical JSON, readable: uid,
 //! name, emails, groups, pinned keys) signed by the account authority, and a
 //! card (the full vCard) sealed under a key only the account holds. The
-//! server verifies the summary, indexes its emails for autocomplete and its
-//! groups for filtering, and charges both to the storage pool.
+//! server verifies the summary, indexes its emails for autocomplete, checks
+//! that each group it names is a record of the account's `contactGroups`
+//! scope (docs/plans/account-records.md: the groups themselves are sealed
+//! there), and charges both to the storage pool.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -11,6 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::account_records::RecordScope;
 use kutup_crypto::contact_card::{self, ContactSummaryV1};
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
@@ -29,7 +32,6 @@ const MAX_IMPORT: usize = 500;
 const MAX_PAGE: i64 = 1000;
 /// Contacts one account may keep.
 const MAX_CONTACTS: i64 = 50_000;
-const MAX_GROUPS: i64 = 200;
 
 /// A contact as stored: verify `summary` with `signature` against your own
 /// account authority before trusting it; open `card` with the contacts key.
@@ -149,7 +151,7 @@ fn check(input: &ContactInput, binding: &str, authority: &[u8; 32]) -> AppResult
     })
 }
 
-/// Writes the email index and group memberships from a checked summary.
+/// Writes the email index from a checked summary, and checks its groups.
 async fn write_index(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
@@ -157,10 +159,6 @@ async fn write_index(
     summary: &ContactSummaryV1,
 ) -> AppResult<()> {
     sqlx::query("DELETE FROM contact_emails WHERE contact_id = $1")
-        .bind(contact_id)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query("DELETE FROM contact_group_members WHERE contact_id = $1")
         .bind(contact_id)
         .execute(&mut **tx)
         .await?;
@@ -174,19 +172,19 @@ async fn write_index(
             .execute(&mut **tx)
             .await?;
     }
-    for group in &summary.groups {
-        let group =
-            Uuid::parse_str(group).map_err(|_| AppError::bad_request("group id is invalid"))?;
-        let inserted = sqlx::query(
-            "INSERT INTO contact_group_members (contact_id, group_id)
-             SELECT $1, id FROM contact_groups WHERE id = $2 AND user_id = $3",
+    // Each group a record the account keeps (its id already checked as the
+    // scope's form by the summary's own check).
+    if !summary.groups.is_empty() {
+        let kept: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM account_records
+              WHERE user_id = $1 AND scope = $2 AND record_id = ANY($3)",
         )
-        .bind(contact_id)
-        .bind(group)
         .bind(user_id)
-        .execute(&mut **tx)
+        .bind(RecordScope::ContactGroups.info().number)
+        .bind(&summary.groups)
+        .fetch_one(&mut **tx)
         .await?;
-        if inserted.rows_affected() != 1 {
+        if kept != summary.groups.len() as i64 {
             return Err(AppError::bad_request(
                 "a group in the summary does not exist",
             ));
@@ -665,174 +663,4 @@ pub async fn emails(
             })
             .collect(),
     ))
-}
-
-/// A contact group (Proton's contact label).
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ContactGroupRow {
-    pub id: String,
-    pub name: String,
-    pub color: String,
-    pub members: i64,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ContactGroupInput {
-    pub name: String,
-    pub color: String,
-}
-
-fn check_group(input: &ContactGroupInput) -> AppResult<(String, String)> {
-    let name = input.name.trim();
-    if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
-        return Err(AppError::bad_request(
-            "group name must be 1 to 100 characters",
-        ));
-    }
-    let color = input.color.to_lowercase();
-    if color.len() != 7
-        || !color.starts_with('#')
-        || !color[1..].bytes().all(|b| b.is_ascii_hexdigit())
-    {
-        return Err(AppError::bad_request("group colour must be #rrggbb"));
-    }
-    Ok((name.to_owned(), color))
-}
-
-/// `GET /api/contacts/groups`.
-#[utoipa::path(
-    get,
-    path = "/api/contacts/groups",
-    tag = "contacts",
-    security(("BearerAuth" = [])),
-    responses((status = 200, description = "The caller's groups", body = [ContactGroupRow]))
-)]
-pub async fn list_groups(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> AppResult<Json<Vec<ContactGroupRow>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let rows: Vec<(Uuid, String, String, i64)> = sqlx::query_as(
-        "SELECT g.id, g.name, g.color, COUNT(m.contact_id)
-           FROM contact_groups g LEFT JOIN contact_group_members m ON m.group_id = g.id
-          WHERE g.user_id = $1 GROUP BY g.id ORDER BY lower(g.name), g.id",
-    )
-    .bind(user_id)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(
-        rows.into_iter()
-            .map(|(id, name, color, members)| ContactGroupRow {
-                id: id.to_string(),
-                name,
-                color,
-                members,
-            })
-            .collect(),
-    ))
-}
-
-/// `POST /api/contacts/groups`.
-#[utoipa::path(
-    post,
-    path = "/api/contacts/groups",
-    tag = "contacts",
-    security(("BearerAuth" = [])),
-    request_body = ContactGroupInput,
-    responses((status = 201, description = "Created", body = ContactGroupRow))
-)]
-pub async fn create_group(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Json(input): Json<ContactGroupInput>,
-) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let (name, color) = check_group(&input)?;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contact_groups WHERE user_id = $1")
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if count >= MAX_GROUPS {
-        return Err(AppError::bad_request("too many groups"));
-    }
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO contact_groups (user_id, name, color) VALUES ($1, $2, $3) RETURNING id",
-    )
-    .bind(user_id)
-    .bind(&name)
-    .bind(&color)
-    .fetch_one(&state.pool)
-    .await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(ContactGroupRow {
-            id: id.to_string(),
-            name,
-            color,
-            members: 0,
-        }),
-    )
-        .into_response())
-}
-
-/// `PUT /api/contacts/groups/{id}` — rename or recolour.
-#[utoipa::path(
-    put,
-    path = "/api/contacts/groups/{id}",
-    tag = "contacts",
-    security(("BearerAuth" = [])),
-    params(("id" = String, Path, description = "Group id")),
-    request_body = ContactGroupInput,
-    responses((status = 204, description = "Updated"))
-)]
-pub async fn update_group(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path(id): Path<String>,
-    Json(input): Json<ContactGroupInput>,
-) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let (name, color) = check_group(&input)?;
-    let updated = sqlx::query(
-        "UPDATE contact_groups SET name = $3, color = $4 WHERE id = $1 AND user_id = $2",
-    )
-    .bind(id)
-    .bind(user_id)
-    .bind(&name)
-    .bind(&color)
-    .execute(&state.pool)
-    .await?;
-    if updated.rows_affected() == 0 {
-        return Err(AppError::not_found("not found"));
-    }
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// `DELETE /api/contacts/groups/{id}` — the group goes; its members stay.
-/// Their signed summaries still name it until the client re-signs them, and
-/// readers ignore group ids that no longer exist.
-#[utoipa::path(
-    delete,
-    path = "/api/contacts/groups/{id}",
-    tag = "contacts",
-    security(("BearerAuth" = [])),
-    params(("id" = String, Path, description = "Group id")),
-    responses((status = 204, description = "Deleted"))
-)]
-pub async fn delete_group(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path(id): Path<String>,
-) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    sqlx::query("DELETE FROM contact_groups WHERE id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(user_id)
-        .execute(&state.pool)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
 }

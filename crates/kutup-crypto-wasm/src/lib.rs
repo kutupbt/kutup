@@ -14,8 +14,9 @@ use kutup_chat_proto::{
     ChatBackupSegmentPlaintextV1, ChatBackupSignerAuthorizationV1,
 };
 use kutup_crypto::account_record::{self, AccountRecordPurpose};
+use kutup_crypto::account_records::RecordScope;
 use kutup_crypto::account_ref::AccountRef;
-use kutup_crypto::chat_attachment_ledger::{self, ChatAttachmentLedgerContextV1};
+use kutup_crypto::chat_attachment_ledger;
 use kutup_crypto::chat_backup::{
     self, ChatBackupContextV1, ChatBackupObjectContextV1, ChatBackupObjectPurposeV1,
     ChatBackupProtectionDomainV1, ChatBackupSuiteId,
@@ -57,13 +58,21 @@ struct VerifiedChatBackupMetadataView {
     manifest_digest: Option<String>,
 }
 
+/// A record of a random-id scope, opened: its plaintext and the revision
+/// in its header.
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChatAttachmentLedgerHeaderView {
-    account_incarnation_id: String,
-    entity_id: String,
-    revision: String,
-    previous_envelope_digest: String,
+struct OpenedRecordView {
+    plaintext: String,
+    revision: f64,
+}
+
+/// A random-id scope's record id (`IdForm::Random`) as its 32-byte object.
+fn random_record_id(scope: RecordScope, id: &str) -> Result<[u8; 32], JsValue> {
+    scope
+        .object(id)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| js_error("not a record id of its scope"))
 }
 
 #[derive(Serialize)]
@@ -762,7 +771,10 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::CallLinkRoot
         | AccountRecordPurpose::ObjectIdKey
         | AccountRecordPurpose::MasterKeyKeyring
-        | AccountRecordPurpose::ChatStoreKey => Err(js_error(
+        | AccountRecordPurpose::ChatStoreKey
+        // Records-scope plaintexts: `sealScopeRecord`, `openScopeRecord`.
+        | AccountRecordPurpose::ContactGroup
+        | AccountRecordPurpose::CalendarSettings => Err(js_error(
             "this account-record purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -1118,92 +1130,58 @@ pub fn open_revision_content(
     .map_err(|error| js_error(&error.to_string()))
 }
 
-/// Seal one ledger entity's record as an account record of the account bound
-/// by `binding`, under its current master key (docs/chat-media.md).
+/// Seal one ledger entity's record (the `chatAttachments` scope, its random
+/// id) as revision `revision`, an account record of the account bound by
+/// `binding` under its current master key (docs/chat-media.md).
 #[wasm_bindgen(js_name = sealChatAttachmentLedger)]
 pub fn seal_chat_attachment_ledger(
     plaintext_base64: &str,
     master_keys_base64: &str,
     binding: &str,
-    account_incarnation_id: &str,
     entity_id: &str,
-    revision: u64,
-    previous_envelope_digest: &str,
+    revision: f64,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "ledger plaintext")?;
     let keys = master_keys_of(master_keys_base64)?;
-    let context = ChatAttachmentLedgerContextV1::new(
-        account_incarnation_id,
-        entity_id,
-        revision,
-        (!previous_envelope_digest.is_empty()).then_some(previous_envelope_digest),
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
-    chat_attachment_ledger::seal_b64(
+    let entity = random_record_id(RecordScope::ChatAttachments, entity_id)?;
+    let envelope = chat_attachment_ledger::seal(
         &plaintext,
         keys.current(),
         keys.generation(),
         binding,
-        context,
+        &entity,
+        whole_number(revision, "revision")?,
     )
-    .map_err(|error| js_error(&error.to_string()))
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(envelope))
 }
 
-/// Open one ledger entity's record of the account bound by `binding` as
-/// exactly the revision and predecessor expected.
+/// Open one ledger entity's record of the account bound by `binding`:
+/// `{ plaintext (base64), revision }`.
 #[wasm_bindgen(js_name = openChatAttachmentLedger)]
-#[allow(clippy::too_many_arguments)]
 pub fn open_chat_attachment_ledger(
     envelope_base64: &str,
     master_keys_base64: &str,
     binding: &str,
-    expected_account_incarnation_id: &str,
-    expected_entity_id: &str,
-    expected_revision: u64,
-    expected_previous_envelope_digest: &str,
-) -> Result<String, JsValue> {
-    let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
+    entity_id: &str,
+) -> Result<JsValue, JsValue> {
+    let envelope = account_record::decode_record_b64(
+        envelope_base64,
+        AccountRecordPurpose::ChatAttachmentLedger,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
     let keys = master_keys_of(master_keys_base64)?;
     let master = keys
         .key_for(&envelope)
         .map_err(|error| js_error(&error.to_string()))?;
-    let expected = ChatAttachmentLedgerContextV1::new(
-        expected_account_incarnation_id,
-        expected_entity_id,
-        expected_revision,
-        (!expected_previous_envelope_digest.is_empty())
-            .then_some(expected_previous_envelope_digest),
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
-    let plaintext = chat_attachment_ledger::open(&envelope, master, binding, expected)
+    let entity = random_record_id(RecordScope::ChatAttachments, entity_id)?;
+    let (plaintext, revision) = chat_attachment_ledger::open(&envelope, master, binding, &entity)
         .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(plaintext))
-}
-
-#[wasm_bindgen(js_name = chatAttachmentLedgerEnvelopeDigest)]
-pub fn chat_attachment_ledger_envelope_digest(envelope_base64: &str) -> Result<String, JsValue> {
-    let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
-    chat_attachment_ledger::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))
-}
-
-#[wasm_bindgen(js_name = inspectChatAttachmentLedgerEnvelope)]
-pub fn inspect_chat_attachment_ledger_envelope(envelope_base64: &str) -> Result<JsValue, JsValue> {
-    let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let header =
-        chat_attachment_ledger::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
-    let view = ChatAttachmentLedgerHeaderView {
-        account_incarnation_id: hex::encode(header.context.account_incarnation_id),
-        entity_id: uuid::Uuid::from_bytes(header.context.entity_id)
-            .hyphenated()
-            .to_string(),
-        revision: header.context.revision.to_string(),
-        previous_envelope_digest: hex::encode(header.context.previous_envelope_digest),
-    };
-    serde_wasm_bindgen::to_value(&view)
-        .map_err(|error| js_error(&format!("encode Chat attachment ledger header: {error}")))
+    serde_wasm_bindgen::to_value(&OpenedRecordView {
+        plaintext: STANDARD.encode(plaintext),
+        revision: revision as f64,
+    })
+    .map_err(|_| js_error("encode opened ledger record"))
 }
 
 #[wasm_bindgen(js_name = encodeChatAttachmentLedgerEntry)]
@@ -2233,38 +2211,19 @@ pub fn drive_canonical_name(name: &str) -> String {
     kutup_crypto::drive_names::canonical_name(name)
 }
 
-fn photos_library_context(
-    account_incarnation_id: &str,
-    revision: f64,
-    previous_digest: Option<String>,
-) -> Result<kutup_crypto::photos_library::PhotosLibraryContextV1, JsValue> {
-    kutup_crypto::photos_library::PhotosLibraryContextV1::new(
-        account_incarnation_id,
-        whole_number(revision, "revision")?,
-        previous_digest.as_deref(),
-    )
-    .map_err(|error| js_error(&error.to_string()))
-}
-
-#[derive(Serialize)]
-struct SealedPhotosLibrary {
-    envelope: String,
-    digest: String,
-}
-
-/// Seal the library (JSON `{favourites, archived, hidden}`, put in canonical
-/// order here) as an account record of the account bound by `binding`, under
-/// its current master key, as `revision`, after the record whose digest is
-/// given (none for revision 1). Returns `{ envelope, digest }`.
+/// Seal the library (JSON `{v, favourites, archived, hidden, …}`, put in
+/// canonical order here) as revision `revision` of the record `record_id`
+/// (the `photosLibrary` scope, a random id), an account record of the
+/// account bound by `binding` under its current master key. Returns the
+/// envelope (base64).
 #[wasm_bindgen(js_name = sealPhotosLibrary)]
 pub fn seal_photos_library(
     library_json: &str,
     master_keys_base64: &str,
     binding: &str,
-    account_incarnation_id: &str,
+    record_id: &str,
     revision: f64,
-    previous_digest: Option<String>,
-) -> Result<JsValue, JsValue> {
+) -> Result<String, JsValue> {
     use kutup_crypto::photos_library;
     let library: photos_library::PhotosLibraryV1 =
         serde_json::from_str(library_json).map_err(|_| js_error("Photos library is not valid"))?;
@@ -2274,83 +2233,46 @@ pub fn seal_photos_library(
     let plaintext =
         photos_library::encode_library(&library).map_err(|error| js_error(&error.to_string()))?;
     let keys = master_keys_of(master_keys_base64)?;
-    let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
+    let id = random_record_id(RecordScope::PhotosLibrary, record_id)?;
     let envelope = photos_library::seal(
         &plaintext,
         keys.current(),
         keys.generation(),
         binding,
-        context,
+        &id,
+        whole_number(revision, "revision")?,
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    let digest =
-        photos_library::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&SealedPhotosLibrary {
-        envelope: STANDARD.encode(envelope),
-        digest,
-    })
-    .map_err(|_| js_error("encode sealed library"))
+    Ok(STANDARD.encode(envelope))
 }
 
-/// Open a library record of the account bound by `binding` as exactly the
-/// revision expected; its JSON text.
+/// Open the library record `record_id` of the account bound by `binding`:
+/// `{ plaintext (the library's JSON text), revision }`.
 #[wasm_bindgen(js_name = openPhotosLibrary)]
 pub fn open_photos_library(
     envelope_base64: &str,
     master_keys_base64: &str,
     binding: &str,
-    account_incarnation_id: &str,
-    revision: f64,
-    previous_digest: Option<String>,
-) -> Result<String, JsValue> {
+    record_id: &str,
+) -> Result<JsValue, JsValue> {
     use kutup_crypto::photos_library;
-    let envelope = photos_library::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let envelope =
+        account_record::decode_record_b64(envelope_base64, AccountRecordPurpose::PhotosLibrary)
+            .map_err(|error| js_error(&error.to_string()))?;
     let keys = master_keys_of(master_keys_base64)?;
     let master = keys
         .key_for(&envelope)
         .map_err(|error| js_error(&error.to_string()))?;
-    let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
-    let plaintext = photos_library::open(&envelope, master, binding, context)
+    let id = random_record_id(RecordScope::PhotosLibrary, record_id)?;
+    let (plaintext, revision) = photos_library::open(&envelope, master, binding, &id)
         .map_err(|error| js_error(&error.to_string()))?;
     let library =
         photos_library::decode_library(&plaintext).map_err(|error| js_error(&error.to_string()))?;
-    serde_json::to_string(&library).map_err(|_| js_error("encode library"))
-}
-
-/// A record's digest (its successor's predecessor), lowercase hex.
-#[wasm_bindgen(js_name = photosLibraryDigest)]
-pub fn photos_library_digest(envelope_base64: &str) -> Result<String, JsValue> {
-    use kutup_crypto::photos_library;
-    let envelope = photos_library::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
-    photos_library::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PhotosLibraryHeaderJson {
-    account_incarnation_id: String,
-    revision: f64,
-    /// Absent for revision 1.
-    previous_digest: Option<String>,
-}
-
-/// A library record's public header: whose, which revision, after which one.
-#[wasm_bindgen(js_name = inspectPhotosLibrary)]
-pub fn inspect_photos_library(envelope_base64: &str) -> Result<JsValue, JsValue> {
-    use kutup_crypto::photos_library;
-    let envelope = photos_library::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let header =
-        photos_library::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&PhotosLibraryHeaderJson {
-        account_incarnation_id: hex::encode(header.account_incarnation_id),
-        revision: header.revision as f64,
-        previous_digest: (header.revision > 1)
-            .then(|| hex::encode(header.previous_envelope_digest)),
+    serde_wasm_bindgen::to_value(&OpenedRecordView {
+        plaintext: serde_json::to_string(&library).map_err(|_| js_error("encode library"))?,
+        revision: revision as f64,
     })
-    .map_err(|_| js_error("encode header"))
+    .map_err(|_| js_error("encode opened library"))
 }
 
 // --- mail address keys (docs/plans/mail-address-keys.md) ---------------------
@@ -3682,6 +3604,90 @@ fn revision_arg(revision: f64) -> Result<u64, JsValue> {
         return Err(js_error("revision must be a positive safe integer"));
     }
     Ok(revision as u64)
+}
+
+/// A records scope whose plaintext crosses into JavaScript as JSON, checked
+/// by its format (docs/plans/account-records.md, W3).
+fn json_scope(scope: &str) -> Result<kutup_crypto::account_records::RecordScope, JsValue> {
+    use kutup_crypto::account_records::RecordScope;
+    match RecordScope::by_name(scope) {
+        Some(scope @ (RecordScope::ContactGroups | RecordScope::CalendarSettings)) => Ok(scope),
+        _ => Err(js_error("not a records scope with a JSON plaintext")),
+    }
+}
+
+/// The plaintext of `scope` read through its format: checked, unknown fields
+/// kept, and written back in its own order.
+fn scope_plaintext(
+    scope: kutup_crypto::account_records::RecordScope,
+    json: &[u8],
+) -> Result<Vec<u8>, kutup_crypto::error::CryptoError> {
+    use kutup_crypto::account_records::RecordScope;
+    match scope {
+        RecordScope::ContactGroups => {
+            kutup_crypto::contact_group::ContactGroupV1::decode(json)?.encode()
+        }
+        _ => kutup_crypto::calendar_settings::CalendarSettingsV1::decode(json)?.encode(),
+    }
+}
+
+/// The record id in a hashed `scope` (`contactGroups`, `calendarSettings`)
+/// of the plain id `plain_id_base64` (a calendar's 16 UUID bytes, or 16
+/// random bytes for a new contact group), under the account's object-id key
+/// (`session.roots.objectIdKey`).
+#[wasm_bindgen(js_name = scopeRecordId)]
+pub fn scope_record_id(
+    object_id_key_base64: &str,
+    scope: &str,
+    plain_id_base64: &str,
+) -> Result<String, JsValue> {
+    let scope = json_scope(scope)?;
+    let plain = decode_canonical_base64(plain_id_base64, "plain id")?;
+    scope
+        .hashed_id(&object_id_key_of(object_id_key_base64)?, &plain)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Seals revision `revision` of record `id` of `scope` (`contactGroups`,
+/// `calendarSettings`) from its JSON plaintext, checked by its format.
+#[wasm_bindgen(js_name = sealScopeRecord)]
+pub fn seal_scope_record(
+    master_keys_base64: &str,
+    binding: &str,
+    scope: &str,
+    id: &str,
+    revision: f64,
+    json: &str,
+) -> Result<String, JsValue> {
+    let scope = json_scope(scope)?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let plain =
+        scope_plaintext(scope, json.as_bytes()).map_err(|error| js_error(&error.to_string()))?;
+    let sealed = scope
+        .seal(&keys, binding, id, revision_arg(revision)?, &plain)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(sealed))
+}
+
+/// Opens record `id` of `scope`: `{ value: its JSON, revision }`. A record
+/// from a newer client is the `newer format: ` error, never corrupt.
+#[wasm_bindgen(js_name = openScopeRecord)]
+pub fn open_scope_record(
+    master_keys_base64: &str,
+    binding: &str,
+    scope: &str,
+    id: &str,
+    sealed_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let scope = json_scope(scope)?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let sealed = decode_canonical_base64(sealed_base64, "record")?;
+    let (plain, revision) = scope
+        .open(&keys, binding, id, &sealed)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let json = scope_plaintext(scope, &plain).map_err(|error| js_error(&error.to_string()))?;
+    let text = String::from_utf8(json).map_err(|_| js_error("record is not UTF-8"))?;
+    revisioned(text, revision)
 }
 
 /// Seals the account's identity pin list (canonical JSON) at `revision`,

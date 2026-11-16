@@ -3,7 +3,7 @@
 use std::str::FromStr as _;
 
 use base64::Engine as _;
-use kutup_crypto::chat_attachment_ledger::{self, MAX_CHAT_ATTACHMENT_LEDGER_PLAINTEXT_BYTES};
+use kutup_crypto::chat_attachment_ledger::MAX_CHAT_ATTACHMENT_LEDGER_PLAINTEXT_BYTES;
 use kutup_crypto::chat_media::{ChatMediaSuiteId, MAX_CHAT_MEDIA_PLAINTEXT_BYTES};
 use kutup_crypto::chat_media_blocks;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,6 @@ pub const MAX_CHAT_MEDIA_CAPTION_BYTES: usize = 4096;
 pub const MAX_CHAT_MEDIA_PREVIEW_BYTES: usize = 32 * 1024;
 pub const MAX_CHAT_MEDIA_CONVERSATION_REF_BYTES: usize = 512;
 pub const MAX_CHAT_MEDIA_DISPLAY_NAME_BYTES: usize = 1024;
-pub const MAX_CHAT_ATTACHMENT_LEDGER_PAGE_ENTITIES: usize = 256;
 
 const LEDGER_ENTRY_MAGIC: &[u8; 8] = b"KUTPCE1\0";
 
@@ -272,105 +271,6 @@ pub struct ChatMediaOfferResponseV1 {
     pub status: ChatMediaDeliveryStatusV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_reference_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChatAttachmentLedgerPutRequestV1 {
-    pub operation_id: String,
-    pub envelope: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChatAttachmentLedgerPutReceiptV1 {
-    pub entity_id: String,
-    pub revision: String,
-    pub envelope_digest: String,
-    pub cursor: String,
-    pub idempotent: bool,
-}
-
-impl ChatAttachmentLedgerPutReceiptV1 {
-    pub fn validate(&self) -> Result<(), String> {
-        require_canonical_uuid("entityId", &self.entity_id)?;
-        parse_canonical_u64("revision", &self.revision, false)?;
-        validate_sha256("envelopeDigest", &self.envelope_digest)?;
-        parse_canonical_u64("cursor", &self.cursor, false)?;
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChatAttachmentLedgerWireEntityV1 {
-    pub entity_id: String,
-    pub revision: String,
-    pub envelope_digest: String,
-    pub envelope: String,
-    pub cursor: String,
-}
-
-impl ChatAttachmentLedgerWireEntityV1 {
-    pub fn validate(&self) -> Result<(), String> {
-        require_canonical_uuid("entityId", &self.entity_id)?;
-        let revision = parse_canonical_u64("revision", &self.revision, false)?;
-        validate_sha256("envelopeDigest", &self.envelope_digest)?;
-        let _ = parse_canonical_u64("cursor", &self.cursor, false)?;
-        let envelope = chat_attachment_ledger::decode_canonical_b64(&self.envelope)
-            .map_err(|error| error.to_string())?;
-        let header =
-            chat_attachment_ledger::inspect(&envelope).map_err(|error| error.to_string())?;
-        if Uuid::from_bytes(header.context.entity_id)
-            .hyphenated()
-            .to_string()
-            != self.entity_id
-            || header.context.revision != revision
-            || chat_attachment_ledger::envelope_digest(&envelope)
-                .map_err(|error| error.to_string())?
-                != self.envelope_digest
-        {
-            return Err("Chat attachment ledger entity differs from its envelope".into());
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChatAttachmentLedgerDiffPageV1 {
-    pub entities: Vec<ChatAttachmentLedgerWireEntityV1>,
-    pub next_cursor: String,
-    pub more: bool,
-}
-
-impl ChatAttachmentLedgerDiffPageV1 {
-    pub fn validate(&self, after_cursor: &str) -> Result<(), String> {
-        if self.entities.len() > MAX_CHAT_ATTACHMENT_LEDGER_PAGE_ENTITIES {
-            return Err("Chat attachment ledger page is too large".into());
-        }
-        let mut previous = parse_canonical_u64("after cursor", after_cursor, true)?;
-        for entity in &self.entities {
-            entity.validate()?;
-            let cursor = parse_canonical_u64("entity cursor", &entity.cursor, false)?;
-            if cursor <= previous {
-                return Err("Chat attachment ledger page is reordered or duplicated".into());
-            }
-            previous = cursor;
-        }
-        let next = parse_canonical_u64("next cursor", &self.next_cursor, true)?;
-        if next != previous {
-            return Err("Chat attachment ledger page next cursor is inconsistent".into());
-        }
-        if self.more && self.entities.len() != MAX_CHAT_ATTACHMENT_LEDGER_PAGE_ENTITIES {
-            return Err("Chat attachment ledger continuation is not a full page".into());
-        }
-        Ok(())
-    }
 }
 
 /// Sender-free signed server-to-server transaction. The authenticated
@@ -663,22 +563,6 @@ fn validate_sha256(field: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_canonical_u64(field: &str, value: &str, allow_zero: bool) -> Result<u64, String> {
-    if value.is_empty()
-        || (value.len() > 1 && value.starts_with('0'))
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err(format!("{field} must be a canonical u64"));
-    }
-    let parsed = value
-        .parse::<u64>()
-        .map_err(|_| format!("{field} must be a canonical u64"))?;
-    if !allow_zero && parsed == 0 {
-        return Err(format!("{field} must be non-zero"));
-    }
-    Ok(parsed)
-}
-
 fn validate_display_name(value: &str, max: usize, field: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > max
@@ -914,33 +798,6 @@ mod tests {
         }
     }
 
-    fn ledger_wire_entity(cursor: u64) -> ChatAttachmentLedgerWireEntityV1 {
-        let entity_id = "99999999-9999-4999-8999-999999999999";
-        let context = chat_attachment_ledger::ChatAttachmentLedgerContextV1::new(
-            &"aa".repeat(32),
-            entity_id,
-            1,
-            None,
-        )
-        .unwrap();
-        let envelope = chat_attachment_ledger::seal_with_nonce(
-            &ledger_entry().canonical_bytes().unwrap(),
-            &[8; 32],
-            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
-            "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
-            context,
-            &[9; 24],
-        )
-        .unwrap();
-        ChatAttachmentLedgerWireEntityV1 {
-            entity_id: entity_id.into(),
-            revision: "1".into(),
-            envelope_digest: chat_attachment_ledger::envelope_digest(&envelope).unwrap(),
-            envelope: base64::engine::general_purpose::STANDARD.encode(&envelope),
-            cursor: cursor.to_string(),
-        }
-    }
-
     #[test]
     fn descriptor_is_strict_and_context_complete() {
         descriptor().validate().unwrap();
@@ -973,56 +830,6 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert!(ChatAttachmentLedgerEntryV1::from_canonical_bytes(&trailing).is_err());
-    }
-
-    #[test]
-    fn ledger_receipt_and_diff_page_are_strict_ordered_and_envelope_bound() {
-        let entity = ledger_wire_entity(7);
-        entity.validate().unwrap();
-        let request = ChatAttachmentLedgerPutRequestV1 {
-            operation_id: "88888888-8888-4888-8888-888888888888".into(),
-            envelope: entity.envelope.clone(),
-        };
-        let mut request_json = serde_json::to_value(&request).unwrap();
-        request_json["unknown"] = serde_json::Value::Bool(true);
-        assert!(serde_json::from_value::<ChatAttachmentLedgerPutRequestV1>(request_json).is_err());
-        ChatAttachmentLedgerPutReceiptV1 {
-            entity_id: entity.entity_id.clone(),
-            revision: entity.revision.clone(),
-            envelope_digest: entity.envelope_digest.clone(),
-            cursor: entity.cursor.clone(),
-            idempotent: false,
-        }
-        .validate()
-        .unwrap();
-        ChatAttachmentLedgerDiffPageV1 {
-            entities: vec![entity.clone()],
-            next_cursor: "7".into(),
-            more: false,
-        }
-        .validate("0")
-        .unwrap();
-
-        let mut bad = entity.clone();
-        bad.envelope_digest = "11".repeat(32);
-        assert!(bad.validate().is_err());
-        let mut bad = entity.clone();
-        bad.revision = "2".into();
-        assert!(bad.validate().is_err());
-        assert!(ChatAttachmentLedgerDiffPageV1 {
-            entities: vec![entity.clone()],
-            next_cursor: "6".into(),
-            more: false,
-        }
-        .validate("0")
-        .is_err());
-        assert!(ChatAttachmentLedgerDiffPageV1 {
-            entities: vec![entity],
-            next_cursor: "7".into(),
-            more: true,
-        }
-        .validate("0")
-        .is_err());
     }
 
     #[test]

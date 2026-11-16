@@ -122,7 +122,7 @@ Specific codes, where an app does something particular (a test in
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
 | `accountRootsInvalid` | 400 | `register`, `complete-setup`: `accountRoots` is not one record of each root, at generation 1, bound to the key binding (docs/plans/identity-root.md) |
 | `masterKeyStale` | 409 | a write sealed under an older master key than the account's (another device rotated it, docs/plans/mk-rotation-exercise.md): sign in again |
-| `scopeFull` | 400 | an account-records batch would take a scope past its per-account count (a site setting; `scope` names it) |
+| `scopeFull` | 400 | an account-records batch would take a scope past its per-account count (a site setting; `scope` names it, `max` is the count) |
 | `rotationInvalid` | 400 | `account/master-key/rotate`: a record is not this rotation's (`field` names it) |
 | `organizationKeys` | 409 | `account/master-key/rotate`: the account holds an organization escrow or key copy, which a rotation can't carry yet |
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
@@ -1613,7 +1613,12 @@ One store for the account's synced private records
 ([plans/account-records.md](plans/account-records.md)), under the account
 head. The server keeps the records opaque. Scopes (`kutup_crypto::account_records`)
 are `passSecrets` (id: the vault's file id), `pins` (id: `pins`),
-`chatGroups` and `chatContacts` (id: 43-character base64url of a keyed hash).
+`chatGroups`, `chatContacts`, `contactGroups` and `calendarSettings` (id:
+43-character base64url of a keyed hash), `photosLibrary` (the Photos marks,
+one record), `chatAttachments` (the Chat attachment ledger, one record per
+entity at its newest revision) and `joinedMeetings` (immutable, filed at
+revision 1), the last three with random ids (43-character base64url of 32
+random bytes the client chose).
 Each record is an account record sealed for its own id. Until a scope's
 clients move here, `GET /api/account/index/:scope` lists its old store and
 this one. **Auth:** Bearer JWT on all three.
@@ -1643,7 +1648,8 @@ all or nothing with the next head (required once the account keeps one).
 - Every item names the revision it read (0: a new record; a delete at least
   1), and the stored revision must still be it.
 - A put's new revision is the one in its envelope's header, above
-  `baseRevision`. The envelope must be this account's, of the scope's purpose
+  `baseRevision`. A record of an immutable purpose (a joined meeting) has
+  none: it takes only `baseRevision` 0 and is filed at revision 1. The envelope must be this account's, of the scope's purpose
   and sealed for the item's id.
 - Each record at most once per batch; at most a site-set number of items;
   each scope's count is a per-account site setting.
@@ -1653,7 +1659,9 @@ all or nothing with the next head (required once the account keeps one).
 "revision" }]` (the stored revision, 0 for none) for every item not at its
 base; a batch that already landed and is sent again gets this, and the client
 reads again. `409 head_conflict`, `head_required`, `masterKeyStale` as for any
-listed write. `400 scopeFull` past a scope's count.
+listed write. `400 scopeFull` past a scope's count, with `scope` and `max`
+(the count allowed), so a client can make room (the Chat app removes its
+oldest joined meetings in the same batch).
 
 ---
 
@@ -2789,12 +2797,13 @@ recently used first. For recipient, share and invitee pickers.
 
 ### Groups
 
-`GET /api/contacts/groups` → `[{ "id", "name", "color", "members" }]`;
-`POST /api/contacts/groups` `{ "name", "color": "#rrggbb" }` → `201`;
-`PUT /api/contacts/groups/:id` (rename, recolour) → `204`;
-`DELETE /api/contacts/groups/:id` → `204` (members stay; their summaries are
-re-signed without it on their next edit, and readers ignore unknown ids).
-Membership is the summary's `groups`, so it is signed.
+Contact groups are records of the account-records store's `contactGroups`
+scope (above): each one's name and colour sealed under the master key
+(`ContactGroupV1`, purpose `ContactGroup`), so the server sees neither.
+Membership is the summary's `groups`, the groups' record ids, so it is
+signed; the server checks each is a record the account keeps (`400`
+otherwise). A deleted group's members stay; their summaries drop it on their
+next edit, and readers ignore ids that no longer exist.
 
 ---
 
@@ -2807,9 +2816,12 @@ name and description are sealed to the calendar key. Events are Proton's
 parts (`SealedEventV1`): signed parts in the clear, encrypted parts as data
 packets, two key packets to the calendar key, every part signed by its
 author's address key. The browser makes and opens all of it through the
-`crypto-calendar` WASM. Every calendar a member holds is listed by the
-account head's `calendars` scope (the calendar id and the member row's
-`revision`); a write that adds, changes or removes one carries `head`.
+`crypto-calendar` WASM. A member's own colour and display flag are a record
+of the account-records store's `calendarSettings` scope (`CalendarSettingsV1`,
+purpose `CalendarSettings`), filed under a keyed hash of the calendar id, so
+the server can't tie it to its calendar; the client writes it before it
+creates the calendar, and lists the calendars against those records. The
+default reminders stay on the member row: the server fires the alarms.
 
 ### GET /api/calendar/calendars · POST /api/calendar/calendars
 
@@ -2820,13 +2832,13 @@ account head's `calendars` scope (the calendar id and the member row's
 signatures), `publicKey`, `fingerprint`, `lockedSecretKey`, `passphrase`
 (`dataPacket`, `signature`, `keyPacket`), `addressId` (the member's address
 the key packet is to), `metadata` (`keyPacket`, `dataPacket`, `signature`),
-`permissions` (Proton's bits; 127 for the owner), `color`, `display`,
-`revision`, `createdAt`, `updatedAt`.
+`permissions` (Proton's bits; 127 for the owner), `defaultReminders`,
+`createdAt`, `updatedAt`.
 
-`POST` makes one: `{ id, addressId, publicKey, lockedSecretKey, passphrase,
-metadata, color, head }` (`createCalendar` in WASM makes the keys, the
+`POST` makes one: `{ id, publicKey, lockedSecretKey, passphraseShare,
+metadata }` (`createCalendar` in WASM makes the keys, the
 passphrase and the metadata). `id` is a fresh UUID v4 the client draws, so
-the account head naming it is made before the create; one in use is
+its settings record is filed before the create; one in use is
 `409 calendarExists`. The server checks the key's shape, that the locked secret is the
 key's and locked, that the passphrase's key packet is to the address's
 primary key and the metadata's to the calendar key. `201` with the
@@ -2836,15 +2848,14 @@ quota.
 
 ### PUT /api/calendar/calendars/{id} · DELETE /api/calendar/calendars/{id}
 
-`PUT` takes `{ metadata?, color?, display?, defaultReminders?, baseRevision,
-revision, head }`: the owner's new sealed name and description, and the
-member's own colour, visibility and default reminders (`{ timed, allDay }`,
+`PUT` takes `{ metadata?, defaultReminders? }`: the owner's new sealed name
+and description, and the member's own default reminders (`{ timed, allDay }`,
 lists of reminders as below, `calendarDefaultReminders` (5) each; Proton's
 defaults: 15 minutes before a timed event, 15 hours before an all-day one,
 on the device and by email). A calendar's view carries the member's
-`defaultReminders`. `409 revision_conflict` when `baseRevision` is not the
-member row's; `403` when someone else than the owner sends `metadata`.
-`DELETE` (body `{ head }`) deletes the calendar and its events, owner only.
+`defaultReminders`. `403` when someone else than the owner sends `metadata`.
+`DELETE` deletes the calendar and its events, owner only; the owner's
+client then deletes its settings record.
 
 ### GET /api/calendar/calendars/{id}/events?start=&end=&afterStart=&afterId=&limit=
 
@@ -3123,20 +3134,12 @@ Folders deleted, or no longer shared with you, are left out.
 your own folders, not in the trash; each library folder one you can open,
 at most 200 (`400` otherwise). Returns what was saved.
 
-### GET /api/photos/library · PUT /api/photos/library
+### The Photos library record
 
-Your own marks on photos (favourites, archived, hidden) as one
-account-private envelope (`kutup-crypto` `photos_library`), sealed under a
-subkey of the master key; the server never reads it.
-
-- **GET** (Bearer JWT): `{ envelope, revision, envelopeDigest }`, `404`
-  before the first.
-- **PUT** (Bearer JWT): `{ envelope }`, the next revision: its header must
-  name this account's incarnation, the stored revision plus one and the
-  stored envelope's SHA-256 (revision 1 when there is none, or when the
-  stored one is from before the account was reset). `200` with the stored
-  record; `409` with the current record otherwise, which the client merges
-  into and seals again. Up to 6 MiB.
+Your own marks on photos (favourites, archived, hidden) are one
+account-private record (`kutup-crypto` `photos_library`, purpose 13) in the
+account-records store's `photosLibrary` scope (see "The account-records
+store"); the server never reads it.
 
 ### Albums
 
@@ -4315,7 +4318,8 @@ The caller's storage pool as the Chat storage screen shows it:
 `totalQuotaBytes` / `totalUsedBytes` are the account pool. `driveBytes` sums
 the caller's files, assets, thumbnails and versions; `chatMediaBytes` sums the
 caller's Chat delivery media references. Per-conversation totals are computed
-on the client from the encrypted attachment ledger. `GET /api/user/storage`
+on the client from the encrypted attachment ledger (the account-records
+`chatAttachments` scope). `GET /api/user/storage`
 gives the full breakdown.
 
 ### PUT /api/chat/keys?deviceId=N
@@ -4900,29 +4904,6 @@ everyone in it and begin a new sitting, which the SFU tokens of the ended
 one do not open. Every seat and role is forgotten and whoever is waiting is
 turned away; the link keeps working. `404` for anyone but the owner, `502`
 when the SFU's API cannot be reached.
-
-### GET /api/chat/joined-meetings
-
-→ `{ "entries": [{ "id", "entry" }] }`: the meetings this account joined,
-most recently recorded first, at most 100
-([`chat-calls.md`](chat-calls.md) "History"). Each `entry` is a stay sealed
-in the browser as an account record (`KUTPAR1`, purpose `JoinedMeeting`,
-base64, 1171 bytes); the server cannot open it.
-
-### POST /api/chat/joined-meetings
-
-`{ "id", "entry" }` → `204`: record a stay. `id` is 32 lowercase hex
-characters chosen by the browser, and the record names it: a record of
-another account, or one sealed for another id, is refused (`400`).
-Recording the same id again changes nothing. Beyond 100 the oldest are dropped.
-
-### DELETE /api/chat/joined-meetings/:id
-
-→ `204`: take one stay off the list.
-
-### DELETE /api/chat/joined-meetings
-
-→ `204`: clear the list.
 
 ### PUT /api/chat/push-subscription
 

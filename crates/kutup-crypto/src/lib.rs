@@ -55,6 +55,7 @@ pub mod calendar;
 pub mod calendar_event;
 #[cfg(feature = "calendar")]
 pub mod calendar_recurrence;
+pub mod calendar_settings;
 pub mod chat_attachment_ledger;
 pub mod chat_backup;
 pub mod chat_backup_media;
@@ -70,6 +71,7 @@ pub mod chat_store;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
+pub mod contact_group;
 #[cfg(feature = "mail")]
 pub mod dkim_key;
 pub mod drive_blocks;

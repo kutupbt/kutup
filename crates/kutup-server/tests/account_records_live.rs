@@ -50,8 +50,13 @@ impl Chain {
 
     /// The next head with `chatGroups` holding `index`, kept as the last.
     fn next(&mut self, index: &[(&str, u64)]) -> String {
+        self.next_in("chatGroups", index)
+    }
+
+    /// The next head with `scope` holding `index`, kept as the last.
+    fn next_in(&mut self, scope: &str, index: &[(&str, u64)]) -> String {
         let index: Vec<(String, u64)> = index.iter().map(|(id, r)| (id.to_string(), *r)).collect();
-        let entry: ScopeV1 = self.keys.scope_digest("chatGroups", &index).unwrap();
+        let entry: ScopeV1 = self.keys.scope_digest(scope, &index).unwrap();
         let head = match &self.last {
             Some((head, sealed)) => head.next(sealed, &self.writer, vec![entry]).unwrap(),
             None => AccountHeadV1::first(
@@ -318,4 +323,111 @@ fn records_land_in_batches_under_the_head() {
         "puts": [{ "scope": "passSecrets", "id": file.to_string(), "baseRevision": 0, "envelope": secret }],
     }));
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+/// Slice 7's scopes: a contact group and a calendar's settings (hashed ids,
+/// mutable), and a joined meeting (a random id, immutable: only ever added,
+/// at revision 1, or removed).
+#[test]
+fn contact_groups_calendar_settings_and_joined_meetings_are_records() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_owned();
+    let c = crate::common::client();
+    let user = register(&c, &base);
+    let account = Account {
+        c: &c,
+        base: &base,
+        user: &user,
+        groups: GroupListKey::new(
+            &user.master_key,
+            MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
+        ),
+    };
+    let mut chain = Chain::new(&user.binding);
+    let (_, empty) = account.get("/api/account/records/joinedMeetings?after=0");
+    let first = chain.next_in("joinedMeetings", &[]);
+    let r = bearer(c.post(format!("{base}/api/account/head")), &user.token)
+        .json(&json!({ "head": first, "basis": empty["basis"] }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK, "{}", r.text().unwrap());
+
+    // A joined meeting: filed at revision 1, never replaced.
+    let (id, _) = kutup_crypto::account_records::RecordScope::JoinedMeetings
+        .random_id()
+        .unwrap();
+    let id = id.as_str();
+    let stay = kutup_crypto::chat_call_link::seal_joined_meeting(
+        &b64(&user.master_key),
+        MasterKeyGeneration::FIRST,
+        &user.binding,
+        id,
+        &kutup_crypto::chat_call_link::JoinedMeetingV1 {
+            fragment: kutup_crypto::chat_call_link::call_link_fragment(&b64(&[5u8; 32])).unwrap(),
+            title: "Standup".into(),
+            joined_at_ms: 1,
+            seconds: 60,
+        },
+    )
+    .unwrap();
+    let meeting = |base_revision: i64| json!({ "scope": "joinedMeetings", "id": id, "baseRevision": base_revision, "envelope": stay });
+    let head = chain.next_in("joinedMeetings", &[(id, 1)]);
+    let (status, body) = account.batch(json!({ "head": head, "puts": [meeting(0)] }));
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, page) = account.get("/api/account/records/joinedMeetings?after=0");
+    assert_eq!(page["records"][0]["revision"], 1);
+    assert_eq!(page["head"].as_str(), Some(head.as_str()));
+    let landed = chain.last.clone();
+    let again = chain.next_in("joinedMeetings", &[(id, 1)]);
+    chain.last = landed;
+    let (status, body) = account.batch(json!({ "head": again, "puts": [meeting(0)] }));
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::CONFLICT, Some("revision_conflict"))
+    );
+    let (status, _) = account.batch(json!({ "puts": [meeting(1)] }));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // An id that isn't a random id's form (43 base64url characters), as
+    // the old 32 lowercase hex.
+    for bad in [&id[..42], "00112233445566778899aabbccddeeff"] {
+        let (status, _) = account.batch(json!({
+            "puts": [{ "scope": "joinedMeetings", "id": bad, "baseRevision": 0, "envelope": stay }],
+        }));
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    // A contact group: its name sealed, its id a keyed hash; the head's
+    // index lists it under that id only.
+    let keys = kutup_crypto::master_keys::MasterKeys::first(&user.master_key);
+    let scope = kutup_crypto::account_records::RecordScope::ContactGroups;
+    let group = scope.hashed_id(&user.roots.object_id, &[1u8; 16]).unwrap();
+    let plain = kutup_crypto::contact_group::ContactGroupV1::new("Aile", "#8080ff")
+        .encode()
+        .unwrap();
+    let sealed = b64(&scope.seal(&keys, &user.binding, &group, 1, &plain).unwrap());
+    let head = chain.next_in("contactGroups", &[(&group, 1)]);
+    let (status, body) = account.batch(json!({
+        "head": head,
+        "puts": [{ "scope": "contactGroups", "id": group, "baseRevision": 0, "envelope": sealed }],
+    }));
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, index) = account.get("/api/account/index/contactGroups");
+    assert_eq!(index["values"], json!([[group, 1]]));
+    // A contact group's record is not a calendar's settings.
+    let (status, _) = account.batch(json!({
+        "puts": [{ "scope": "calendarSettings", "id": group, "baseRevision": 0, "envelope": sealed }],
+    }));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // The old routes are gone.
+    for gone in ["/api/contacts/groups", "/api/chat/joined-meetings"] {
+        let (status, _) = account.get(gone);
+        assert!(
+            status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED,
+            "{gone}: {status}"
+        );
+    }
 }

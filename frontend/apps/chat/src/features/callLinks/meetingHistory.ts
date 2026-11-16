@@ -1,4 +1,4 @@
-import { randomBytes } from '@kutup/crypto/random'
+import { randomRecordId } from '@kutup/session/accountRecords'
 // The meetings an account joined from this browser, on their way to the
 // account's list.
 //
@@ -16,7 +16,7 @@ const KEY = 'kutup-meeting-history'
 const LIMIT = 30
 
 export interface JoinedMeeting {
-  /** 32 lowercase hex characters: the same stay recorded twice is one. */
+  /** The stay's record id (a random id, 43 base64url characters): the same stay recorded twice is one. */
   id: string
   /** The part of the link after `#`: what rejoining needs. */
   fragment: string
@@ -29,16 +29,12 @@ export interface JoinedMeeting {
   account: string
 }
 
-function newId(): string {
-  return Array.from(randomBytes(16), (byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
 function isEntry(value: unknown): value is JoinedMeeting {
   if (!value || typeof value !== 'object') return false
   const entry = value as Record<string, unknown>
   return (
     typeof entry.id === 'string' &&
-    /^[0-9a-f]{32}$/.test(entry.id) &&
+    /^[A-Za-z0-9_-]{43}$/.test(entry.id) &&
     typeof entry.fragment === 'string' &&
     /^[A-Za-z0-9_-]{44}$/.test(entry.fragment) &&
     typeof entry.roomId === 'string' &&
@@ -70,7 +66,7 @@ function store(entries: JoinedMeeting[]): void {
 
 /** Record a meeting the account signed in here (`account`) just left. */
 export function recordJoinedMeeting(entry: Omit<JoinedMeeting, 'id' | 'account'>, account: string): void {
-  store([{ ...entry, id: newId(), account }, ...joinedMeetings()])
+  store([{ ...entry, id: randomRecordId(), account }, ...joinedMeetings()])
 }
 
 export function forgetJoinedMeetings(ids: ReadonlySet<string>): void {

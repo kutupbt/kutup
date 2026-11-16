@@ -6,8 +6,29 @@
  * which verify every page's head and check the index once caught up.
  */
 
+import { toBase64Url } from '@kutup/crypto/base64'
+import { randomBytes } from '@kutup/crypto/random'
+
 /** The scopes of the store (`RecordScope` in kutup-crypto). */
-export type RecordScopeName = 'passSecrets' | 'pins' | 'chatGroups' | 'chatContacts'
+export type RecordScopeName =
+  | 'passSecrets'
+  | 'pins'
+  | 'chatGroups'
+  | 'chatContacts'
+  | 'photosLibrary'
+  | 'chatAttachments'
+  | 'contactGroups'
+  | 'calendarSettings'
+  | 'joinedMeetings'
+
+/**
+ * A new record id for a scope whose ids are random (`IdForm::Random`: the
+ * Photos library, the attachment ledger, a joined meeting): 32 random bytes,
+ * unpadded base64url.
+ */
+export function randomRecordId(): string {
+  return toBase64Url(randomBytes(32))
+}
 
 /** One record as a device keeps it. */
 export interface StoredRecord {

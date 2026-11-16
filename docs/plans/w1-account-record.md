@@ -178,7 +178,8 @@ there.
 ## Slice 3b as built
 
 - `JoinedMeeting` (15): the object is the row's id (16 bytes, the random id
-  the browser sends with the row), the stay is padded to 1024 bytes
+  the browser sends with the row; since W3 slices 6 and 7 it is the record's
+  32-byte random id, see account-records.md), the stay is padded to 1024 bytes
   (`Fixed`), no revision. Every record is 1171 bytes
   (`kutup_crypto::chat_call_link::JOINED_MEETING_SEALED_BYTES`), and the
   table requires it (migration `20261027190000`). The server checks each

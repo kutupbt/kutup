@@ -4211,7 +4211,7 @@ pub fn call_link_host_token(
 }
 
 /// Seal one stay in a meeting for the account's own list of joined meetings,
-/// as the row `id` (32 lowercase hex) of the account bound by `binding`,
+/// as the record `id` (a random id, 43 base64url characters) of the account bound by `binding`,
 /// under the account's current master key (`master_keys`: the encoded set,
 /// standard base64).
 #[wasm_bindgen(js_name = callLinkSealJoined)]

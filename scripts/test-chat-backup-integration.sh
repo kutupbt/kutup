@@ -160,12 +160,6 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server -- legal::tests::live_ federation_switch::tests::live_ \
     mail::sealed::tests::live_ federation_stream_control::tests::live_ --nocapture
-# The Photos library record (docs/plans/photos.md): this account's chain only.
-KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  cargo test -p kutup-server --test photos_library_live -- --nocapture
-# The Chat attachment ledger: this account's records, per entity, chained.
-KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  cargo test -p kutup-server --test chat_attachment_ledger_live -- --nocapture
 
 # Drive: names unique in a folder, as Proton Drive's hashes (required on
 # every write, restore under a new name, which names are free), moves, and

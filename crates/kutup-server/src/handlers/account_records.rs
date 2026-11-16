@@ -32,9 +32,10 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::site_settings::{
-    NumericSetting, ACCOUNT_RECORDS_BATCH_ITEMS, ACCOUNT_RECORDS_CHAT_CONTACTS,
-    ACCOUNT_RECORDS_CHAT_GROUPS, ACCOUNT_RECORDS_PAGE, ACCOUNT_RECORDS_PASS_SECRETS,
-    ACCOUNT_RECORDS_TOMBSTONE_DAYS,
+    NumericSetting, ACCOUNT_RECORDS_BATCH_ITEMS, ACCOUNT_RECORDS_CALENDAR_SETTINGS,
+    ACCOUNT_RECORDS_CHAT_ATTACHMENTS, ACCOUNT_RECORDS_CHAT_CONTACTS, ACCOUNT_RECORDS_CHAT_GROUPS,
+    ACCOUNT_RECORDS_CONTACT_GROUPS, ACCOUNT_RECORDS_JOINED_MEETINGS, ACCOUNT_RECORDS_PAGE,
+    ACCOUNT_RECORDS_PASS_SECRETS, ACCOUNT_RECORDS_PHOTOS_LIBRARY, ACCOUNT_RECORDS_TOMBSTONE_DAYS,
 };
 use crate::AppState;
 
@@ -50,6 +51,11 @@ fn max_count(scope: RecordScope) -> Option<NumericSetting> {
         RecordScope::PassSecrets => Some(ACCOUNT_RECORDS_PASS_SECRETS),
         RecordScope::ChatGroups => Some(ACCOUNT_RECORDS_CHAT_GROUPS),
         RecordScope::ChatContacts => Some(ACCOUNT_RECORDS_CHAT_CONTACTS),
+        RecordScope::PhotosLibrary => Some(ACCOUNT_RECORDS_PHOTOS_LIBRARY),
+        RecordScope::ChatAttachments => Some(ACCOUNT_RECORDS_CHAT_ATTACHMENTS),
+        RecordScope::ContactGroups => Some(ACCOUNT_RECORDS_CONTACT_GROUPS),
+        RecordScope::CalendarSettings => Some(ACCOUNT_RECORDS_CALENDAR_SETTINGS),
+        RecordScope::JoinedMeetings => Some(ACCOUNT_RECORDS_JOINED_MEETINGS),
         RecordScope::Pins => None,
     }
 }
@@ -406,10 +412,20 @@ pub async fn batch(
         let header =
             account_record::validate_for(&envelope, info.purpose, locked.binding(), &object)
                 .map_err(|_| AppError::bad_request("envelope is not this record's"))?;
-        let revision = header
-            .revision
-            .ok_or_else(|| AppError::bad_request("envelope has no revision"))?;
-        let revision = crate::revisions::check_follows(revision, item.base_revision)?;
+        // A mutable record follows its base; an immutable one (a joined
+        // meeting) is only ever added, at revision 1.
+        let revision = scope
+            .stored_revision(header.revision)
+            .map_err(|_| AppError::bad_request("envelope has no revision"))?;
+        let revision = if info.purpose.policy().mutable {
+            crate::revisions::check_follows(revision, item.base_revision)?
+        } else if item.base_revision == 0 {
+            1
+        } else {
+            return Err(AppError::bad_request(
+                "an immutable record is never replaced",
+            ));
+        };
         if info.id == IdForm::DriveFileId {
             vault_reachable(&state.pool, user_id, &object).await?;
         }
@@ -473,9 +489,11 @@ pub async fn batch(
         .bind(scope.info().number)
         .fetch_one(&mut *tx)
         .await?;
-        if count + added - removed > setting.load_for(&mut *tx, user_id).await? {
+        let max = setting.load_for(&mut *tx, user_id).await?;
+        if count + added - removed > max {
+            // `max` lets a client make room (the oldest joined meeting goes).
             return Err(AppError::bad_request("the scope is full")
-                .with_details(json!({ "code": "scopeFull", "scope": scope.name() })));
+                .with_details(json!({ "code": "scopeFull", "scope": scope.name(), "max": max })));
         }
     }
 

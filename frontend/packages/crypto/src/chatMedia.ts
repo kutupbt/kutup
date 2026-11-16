@@ -136,60 +136,38 @@ export interface ChatAttachmentLedgerOwner {
   binding: string
 }
 
-export interface ChatAttachmentLedgerContextV1 {
-  accountIncarnationId: string
-  entityId: string
-  revision: bigint
-  previousEnvelopeDigest?: string
-}
-
+/**
+ * Seal one ledger entity's record (the account-records `chatAttachments`
+ * scope; `entityId` is its random record id) as `revision`.
+ */
 export async function sealChatAttachmentLedger(
   plaintext: Uint8Array,
   owner: ChatAttachmentLedgerOwner,
-  context: ChatAttachmentLedgerContextV1,
+  entityId: string,
+  revision: number,
 ): Promise<string> {
   return (await getCryptoWasm()).sealChatAttachmentLedger(
     toBase64(plaintext),
     owner.masterKeys,
     owner.binding,
-    context.accountIncarnationId,
-    context.entityId,
-    context.revision,
-    context.previousEnvelopeDigest ?? '',
+    entityId,
+    revision,
   )
 }
 
+/** Open the record `entityId`: its plaintext and the revision it was sealed at. */
 export async function openChatAttachmentLedger(
   envelope: string,
   owner: ChatAttachmentLedgerOwner,
-  expected: ChatAttachmentLedgerContextV1,
-): Promise<Uint8Array> {
-  return fromBase64((await getCryptoWasm()).openChatAttachmentLedger(
+  entityId: string,
+): Promise<{ plaintext: Uint8Array; revision: number }> {
+  const opened = (await getCryptoWasm()).openChatAttachmentLedger(
     envelope,
     owner.masterKeys,
     owner.binding,
-    expected.accountIncarnationId,
-    expected.entityId,
-    expected.revision,
-    expected.previousEnvelopeDigest ?? '',
-  ))
-}
-
-export async function chatAttachmentLedgerEnvelopeDigest(envelope: string): Promise<string> {
-  return (await getCryptoWasm()).chatAttachmentLedgerEnvelopeDigest(envelope)
-}
-
-export interface ChatAttachmentLedgerHeaderV1 {
-  accountIncarnationId: string
-  entityId: string
-  revision: string
-  previousEnvelopeDigest: string
-}
-
-export async function inspectChatAttachmentLedgerEnvelope(
-  envelope: string,
-): Promise<ChatAttachmentLedgerHeaderV1> {
-  return (await getCryptoWasm()).inspectChatAttachmentLedgerEnvelope(envelope)
+    entityId,
+  )
+  return { plaintext: fromBase64(opened.plaintext), revision: opened.revision }
 }
 
 export async function encodeChatAttachmentLedgerEntry(entry: unknown): Promise<Uint8Array> {

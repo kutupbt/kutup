@@ -494,7 +494,7 @@ export class ChatService {
     let attachmentLedger: ChatAttachmentLedger | null = null
     try {
       attachmentLedger = capabilities.media
-        ? await ChatAttachmentLedger.open(options, options.envelopeBinding)
+        ? await ChatAttachmentLedger.open(options)
         : null
     } catch (error) {
       client.free()

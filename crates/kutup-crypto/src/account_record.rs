@@ -203,16 +203,16 @@ pub enum AccountRecordPurpose {
     /// object is [`hashed_object`] of the contact's account, so the server
     /// never sees whom an entry is about.
     ChatContactListEntry = 12,
-    /// The account's Photos library (`photos_library`); its object is the
-    /// account incarnation, and its records form a chain.
+    /// The account's Photos library (`photos_library`), an account-records
+    /// scope; its object is the record's random id (32 bytes).
     PhotosLibrary = 13,
     /// One entry of the account's Chat attachment ledger
-    /// (`chat_attachment_ledger`); its object is the account incarnation and
-    /// the entry's id (48 bytes), and its records form a chain.
+    /// (`chat_attachment_ledger`), an account-records scope; its object is
+    /// the entry's random id (32 bytes).
     ChatAttachmentLedger = 14,
-    /// One meeting the account joined (`chat_call_link`); its object is the
-    /// row id the client chose (16 bytes), so a record can't be swapped for
-    /// another's.
+    /// One meeting the account joined (`chat_call_link`), an account-records
+    /// scope; its object is the record's random id the client chose (32
+    /// bytes), so a record can't be swapped for another's.
     JoinedMeeting = 15,
     /// The account's own copy of its Chat profile key: the object is the
     /// profile version the key derives (32 bytes), the revision the
@@ -267,6 +267,18 @@ pub enum AccountRecordPurpose {
     /// A device's Chat store key (`chat_store`), never sent to a server: the
     /// key its SQLCipher or IndexedDB store's records are sealed under.
     ChatStoreKey = 28,
+    // 29 and 30 are left to the pre-wipe branches building beside this one
+    // (docs/plans/account-records.md takes its purposes from 31).
+    /// One of the account's contact groups (`contact_group`, the
+    /// `contactGroups` records scope): its name and colour. Its object is
+    /// [`hashed_object`] of a random id the creating device drew, so the
+    /// server sees neither the name nor anything to match it with.
+    ContactGroup = 31,
+    /// The account's own settings for one calendar it belongs to
+    /// (`calendar_settings`, the `calendarSettings` records scope): colour
+    /// and display. Its object is [`hashed_object`] of the calendar id, so
+    /// the server can't tie it to its calendar.
+    CalendarSettings = 32,
 }
 
 /// The object of a record whose id the server must not see (a group id, the
@@ -418,20 +430,20 @@ impl AccountRecordPurpose {
                 length: Length::Bucket(256),
                 mutable: true,
                 max_len: bucketed(crate::photos_library::MAX_PHOTOS_LIBRARY_PLAINTEXT_BYTES),
-                chained: true,
+                chained: false,
             },
             Self::ChatAttachmentLedger => PurposePolicy {
-                object: ObjectPolicy::Required(48),
+                object: ObjectPolicy::Required(32),
                 length: Length::Bucket(256),
                 mutable: true,
                 max_len: bucketed(
                     crate::chat_attachment_ledger::MAX_CHAT_ATTACHMENT_LEDGER_PLAINTEXT_BYTES,
                 ),
-                chained: true,
+                chained: false,
             },
             // One size, so a stay's length says nothing of its meeting.
             Self::JoinedMeeting => PurposePolicy {
-                object: ObjectPolicy::Required(16),
+                object: ObjectPolicy::Required(32),
                 length: Length::Fixed(crate::chat_call_link::JOINED_PADDED_BYTES),
                 mutable: false,
                 max_len: crate::chat_call_link::JOINED_PADDED_BYTES,
@@ -479,6 +491,21 @@ impl AccountRecordPurpose {
                 object: ObjectPolicy::Required(32),
                 ..KEY
             },
+            // One size each, so a record's length says nothing of its name.
+            Self::ContactGroup => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Fixed(crate::contact_group::MAX_PLAIN_LEN + 1),
+                mutable: true,
+                max_len: crate::contact_group::MAX_PLAIN_LEN + 1,
+                chained: false,
+            },
+            Self::CalendarSettings => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Fixed(crate::calendar_settings::MAX_PLAIN_LEN + 1),
+                mutable: true,
+                max_len: crate::calendar_settings::MAX_PLAIN_LEN + 1,
+                chained: false,
+            },
             // The revision (u64, big-endian) and the chain's 32-byte digest.
             Self::LocalChainPin => PurposePolicy {
                 object: ObjectPolicy::Required(32),
@@ -491,7 +518,7 @@ impl AccountRecordPurpose {
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 29] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -519,6 +546,8 @@ impl AccountRecordPurpose {
         Self::ObjectIdKey,
         Self::MasterKeyKeyring,
         Self::ChatStoreKey,
+        Self::ContactGroup,
+        Self::CalendarSettings,
     ];
 }
 
@@ -554,6 +583,8 @@ impl TryFrom<u16> for AccountRecordPurpose {
             26 => Ok(Self::ObjectIdKey),
             27 => Ok(Self::MasterKeyKeyring),
             28 => Ok(Self::ChatStoreKey),
+            31 => Ok(Self::ContactGroup),
+            32 => Ok(Self::CalendarSettings),
             // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
             0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(

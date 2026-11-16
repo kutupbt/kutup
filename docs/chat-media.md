@@ -253,48 +253,45 @@ The homeserver's quota rows know only recipient, opaque object/reference IDs,
 namespace, byte counts and lifecycle state. Named per-conversation totals are a
 client projection over `ChatAttachmentLedgerV1` encrypted entities.
 
-Each revision of a ledger entity is one chained account record
+Each ledger entity is one account record in the account-records store's
+`chatAttachments` scope ([plans/account-records.md](plans/account-records.md),
+W3 slice 6), kept at its newest revision only
 (`kutup_crypto::chat_attachment_ledger`):
 
 ```text
 header (KUTPAR1)  suite 1, purpose ChatAttachmentLedger (14), master-key
                   generation, the account's key binding,
-                  object = account_incarnation_id (32) || entity_id (16),
+                  object = the entity's record id (32 random bytes),
                   revision (non-zero),
-                  previous = SHA-256 of the entity's previous record
-                  (all-zero only at revision 1),
                   key commitment, nonce, ciphertext length
 ciphertext        the entry, padded to a 256-byte bucket, plus the tag
 ```
 
 The whole header is the AEAD's associated data and the record key's input;
-the server checks it (this account's binding, the URL's entity, the account's
-current incarnation, the revision and predecessor) without opening anything.
-An envelope plaintext is capped at 16 KiB and uses the project canonical
-big-endian length-prefixed encoding, not signed JSON. It binds version,
-conversation kind/reference, logical message UUID, attachment UUID, opaque
+the server checks it (this account's binding, the item's record id, the
+revision above the stored one) without opening anything. An envelope
+plaintext is capped at 16 KiB and uses the project canonical big-endian
+length-prefixed encoding, not signed JSON. It binds version, conversation
+kind/reference, logical message UUID, attachment UUID, opaque
 storage-reference UUID, exact logical ciphertext bytes, state, media class,
 bounded display name, update time and an optional promoted Drive file UUID.
 States are `active`, `cleared`, `saved_to_drive` and `expired`. The server
 cannot classify or join an entry to a sender or conversation.
 
-The server assigns a monotonically increasing account cursor after validating
-an exact revision/predecessor transition. It preserves every opaque encrypted
-revision append-only; a separate current pointer exists only for transactional
-compare-and-swap. Bounded diff pages therefore replay the complete revision
-chain, including authenticated encrypted tombstones. Operation IDs make retries
-idempotent. A missing/skipped revision, stale revision, predecessor mismatch,
-changed replay or unknown suite is rejected rather than last-write-wins.
+Writes are batches of `POST /api/account/records` with the next account head:
+each entity's put names the revision it read, so a retried or raced write is
+refused (`revision_conflict`) and the client reads again and redoes it. The
+account head covers the scope (a count and digest of every `(id, revision)`),
+so a server that rolls an entity back, drops one or brings an old one back is
+caught when the client checks the scope's index against the verified head.
+The private hash chain, the history table, the operation ids and the ledger's
+own cursor are gone: the records feed (`GET /api/account/records/chatAttachments`)
+and the head replace them.
 
-Clients decrypt diff pages and build a disposable in-memory projection. A
-new/recovered device rebuilds from cursor zero. The browser persists only a
-compact identifier-free hash-chain pin over the ordered opaque revision feed;
-it does not persist decrypted conversation or attachment metadata. On reload,
-the client replays from zero and requires the exact pinned cursor and chain
-digest before accepting any later revisions. Server withholding is an
-availability failure; it cannot forge a valid entity. If a browser denies all
-persistent local storage, the authenticated revision chains still verify but
-cross-restart rollback pinning is unavailable on that device.
+Clients decrypt the scope and build a disposable in-memory projection; they
+do not persist decrypted conversation or attachment metadata. The number of
+entities an account keeps is a site setting
+(`account_records_chat_attachments`).
 
 ## 9. Client behavior
 
