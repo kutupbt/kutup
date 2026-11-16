@@ -1,17 +1,22 @@
 //! Calendars (docs/plans/calendar.md, E1): Proton Calendar's keys and
-//! packets, through rPGP as Mail's address keys.
+//! packets, through rPGP as Mail's address keys, with the passphrase on the
+//! account's keys (docs/plans/wipe-unification.md, W4).
 //!
 //! - Each calendar has its own OpenPGP key, in the address keys' shape, its
 //!   secret locked with a passphrase (`generateCalendarKey`; user ID
 //!   "Calendar key", so an exported key confuses no one).
-//! - The passphrase is the base64 text of 32 random bytes. It is kept as one
-//!   data packet under a session key, one key packet per member (to that
-//!   member's address key) and the owner's detached signature over it
-//!   (Proton's `encryptPassphrase`), so adding a member re-wraps the session
-//!   key and re-encrypts nothing.
+//! - The passphrase is the base64 text of 32 random bytes. Each member holds
+//!   it as a [`CalendarShareEnvelopeV1`]: the 32 bytes sealed with X-Wing
+//!   HPKE to the member's account key (the Drive HPKE key their identity
+//!   root derives) and signed by the owner's account signing key, bound to
+//!   the calendar, its key generation and both accounts by id and
+//!   incarnation, never by an address. The owner's own copy is a share to
+//!   itself. A rename or a removed address changes none of it, and the wrap
+//!   is post-quantum. (Proton wraps it to address keys, the only account key
+//!   its peers see; Kutup's peers verify the account key.)
 //! - Events and the calendar's encrypted metadata are data packets under
 //!   session keys wrapped to the calendar key, each part signed (detached)
-//!   by its author's address key ([`crate::calendar_event`]).
+//!   by its author's address key ([`crate::calendar_event`]), as Proton's.
 //!
 //! Only version 3 key packets and SEIPDv1 data packets (AES-256) are made or
 //! read: what the address keys and every OpenPGP client use.
@@ -30,18 +35,24 @@ use pgp::{
 };
 use zeroize::Zeroizing;
 
+use crate::account_ref::AccountRef;
 use crate::calendar_event::{CalendarEncrypted, CalendarSigned, SharedEncrypted, SharedSigned};
 use crate::error::{CryptoError, Result};
 use crate::format::Extra;
+use crate::identity::AccountIdentityKeysV1;
 use crate::mail_key::{
     backend, encryption_subkey, fingerprint_of, generate_key, packet_extent, parse_recipient,
     sign_detached, verify_detached, FINGERPRINT_LEN,
 };
+pub use crate::named_share::CalendarShareEnvelopeV1;
 
 /// The calendar key's user ID, as Proton's.
 pub const CALENDAR_KEY_USER_ID: &str = "Calendar key";
 /// Random bytes in a calendar's passphrase (its text is their base64).
 pub const PASSPHRASE_BYTES: usize = 32;
+/// A calendar's first key generation; a new key (E3, when a member is
+/// removed) takes the next, and every share names the one it unlocks.
+pub const FIRST_KEY_GENERATION: u32 = 1;
 /// An AES-256 session key.
 pub const SESSION_KEY_LEN: usize = 32;
 /// The largest data packet read: an event part or metadata is far smaller.
@@ -111,6 +122,25 @@ impl Passphrase {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The passphrase whose bytes a share carries.
+    fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != PASSPHRASE_BYTES {
+            return Err(CryptoError::InvalidInput(
+                "a passphrase is 32 random bytes".into(),
+            ));
+        }
+        Ok(Passphrase(Zeroizing::new(STANDARD.encode(bytes))))
+    }
+
+    /// The 32 bytes a share carries.
+    fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(
+            STANDARD
+                .decode(self.0.as_bytes())
+                .expect("a passphrase's text is base64"),
+        )
     }
 }
 
@@ -420,8 +450,8 @@ pub fn unlock_calendar_key(
 }
 
 /// A key packet carrying `session_key` to `public_key`'s encryption subkey
-/// (version 3, as the address keys use): a member's copy of a calendar's
-/// passphrase, or an event's key packet to its calendar.
+/// (version 3, as the address keys use): an event's or the metadata's key
+/// packet to its calendar.
 pub(crate) fn key_packet_to(session_key: &SessionKey, public_key: &[u8]) -> Result<Vec<u8>> {
     let recipient = parse_recipient(public_key)?;
     let subkey = encryption_subkey(&recipient)?;
@@ -525,77 +555,124 @@ pub fn decrypt_data_packet(
     Ok(data)
 }
 
-/// A calendar's passphrase as stored: one data packet, the owner's detached
-/// signature over the passphrase, and one key packet per member, in the
-/// order of the member keys given.
-pub struct SealedPassphrase {
-    pub data_packet: Vec<u8>,
-    /// Armored, as Proton's.
-    pub signature: String,
-    pub key_packets: Vec<Vec<u8>>,
+/// A member a calendar's passphrase is shared with: their account, its
+/// incarnation (lowercase hex) and its account HPKE key, as their verified
+/// key binding names them.
+pub struct CalendarMember<'a> {
+    pub account: &'a AccountRef,
+    pub incarnation_id: &'a str,
+    pub hpke_public_key: &'a [u8],
 }
 
-/// Seals a new calendar's `passphrase` for its owner, signed by the owner's
-/// unlocked address key: the one key packet is to the public key derived
-/// from that secret, never to one a server hands over (#307 review N1).
+/// A calendar's owner as a member checks their share: their account, its
+/// incarnation (lowercase hex) and its account signing key, verified.
+pub struct CalendarOwner<'a> {
+    pub account: &'a AccountRef,
+    pub incarnation_id: &'a str,
+    pub signing_public_key: &'a [u8],
+}
+
+/// Shares `passphrase` (the calendar `calendar_id`'s, at `key_generation`)
+/// with `member`, signed by the owner `owner` with its identity's account
+/// signing key. Sharing (E3) adds members through it; the owner's own copy
+/// is [`seal_own_passphrase`].
 pub fn seal_passphrase(
     passphrase: &Passphrase,
-    owner_secret_key: &[u8],
-) -> Result<SealedPassphrase> {
-    let owner = SignedSecretKey::from_bytes(owner_secret_key)
-        .map_err(|_| CryptoError::InvalidInput("secret key does not parse".into()))?;
-    let owner_public = SignedPublicKey::from(owner).to_bytes().map_err(backend)?;
-    seal_passphrase_to(passphrase, &[&owner_public], owner_secret_key)
+    calendar_id: &str,
+    key_generation: u32,
+    owner: &AccountRef,
+    owner_identity: &AccountIdentityKeysV1,
+    member: &CalendarMember<'_>,
+) -> Result<CalendarShareEnvelopeV1> {
+    CalendarShareEnvelopeV1::seal(
+        &passphrase.to_bytes(),
+        calendar_id,
+        key_generation,
+        owner,
+        &owner_identity.incarnation_id(),
+        owner_identity.drive_signing_key(),
+        member.account,
+        member.incarnation_id,
+        member.hpke_public_key,
+    )
 }
 
-/// Seals `passphrase` for `member_public_keys` (each member's primary
-/// address key, verified by the caller), signed by the owner's unlocked
-/// address key. Sharing (E3) adds members through it.
-pub(crate) fn seal_passphrase_to(
+/// The owner's own copy of a new calendar's passphrase: a share to itself,
+/// to the account key its identity derives, never to one a server hands over
+/// (#307 review N1).
+pub fn seal_own_passphrase(
     passphrase: &Passphrase,
-    member_public_keys: &[&[u8]],
-    owner_secret_key: &[u8],
-) -> Result<SealedPassphrase> {
-    if member_public_keys.is_empty() {
-        return Err(CryptoError::InvalidInput("a calendar has a member".into()));
-    }
-    let session_key = SessionKey::generate();
-    Ok(SealedPassphrase {
-        data_packet: encrypt_data_packet(&session_key, passphrase.as_str().as_bytes())?,
-        signature: sign_detached(owner_secret_key, passphrase.as_str().as_bytes())?,
-        key_packets: member_public_keys
-            .iter()
-            .map(|key| key_packet_to(&session_key, key))
-            .collect::<Result<_>>()?,
-    })
+    calendar_id: &str,
+    key_generation: u32,
+    owner: &AccountRef,
+    owner_identity: &AccountIdentityKeysV1,
+) -> Result<CalendarShareEnvelopeV1> {
+    let incarnation_id = owner_identity.incarnation_id();
+    seal_passphrase(
+        passphrase,
+        calendar_id,
+        key_generation,
+        owner,
+        owner_identity,
+        &CalendarMember {
+            account: owner,
+            incarnation_id: &incarnation_id,
+            hpke_public_key: &owner_identity.drive_hpke_public_key(),
+        },
+    )
 }
 
-/// Opens a member's copy of a calendar's passphrase with the member's
-/// unlocked address key, and checks the signature against the owner's
-/// address keys (any of them). An unsigned or wrongly signed passphrase is
-/// refused: a server must not hand a member a passphrase of its own.
+/// Opens a member's share of a calendar's passphrase with the member's
+/// identity: refused unless it names this calendar, key generation, owner
+/// and member, and the owner's account signing key signed it. A server can't
+/// hand a member a passphrase of its own.
 pub fn open_passphrase(
-    key_packet: &[u8],
-    data_packet: &[u8],
-    signature: &[u8],
-    member_secret_key: &[u8],
-    owner_public_keys: &[&[u8]],
+    share: &CalendarShareEnvelopeV1,
+    calendar_id: &str,
+    key_generation: u32,
+    owner: &CalendarOwner<'_>,
+    member: &AccountRef,
+    member_identity: &AccountIdentityKeysV1,
 ) -> Result<Passphrase> {
-    let session_key = open_key_packet(key_packet, member_secret_key)?;
-    let text = decrypt_data_packet(&session_key, data_packet)?;
-    let passphrase = Passphrase::from_text(&text)?;
-    let signed = owner_public_keys.iter().any(|key| {
-        verify_detached(signature, passphrase.as_str().as_bytes(), key).unwrap_or(false)
-    });
-    if !signed {
-        return Err(CryptoError::AuthFailed);
-    }
-    Ok(passphrase)
+    let bytes = Zeroizing::new(share.open(
+        calendar_id,
+        key_generation,
+        owner.account,
+        owner.incarnation_id,
+        owner.signing_public_key,
+        member,
+        &member_identity.incarnation_id(),
+        member_identity.drive_hpke_private_key(),
+    )?);
+    Passphrase::from_bytes(&bytes)
+}
+
+/// Opens the owner's own copy: the share from `account` to itself, checked
+/// against the keys its identity derives.
+pub fn open_own_passphrase(
+    share: &CalendarShareEnvelopeV1,
+    calendar_id: &str,
+    key_generation: u32,
+    account: &AccountRef,
+    identity: &AccountIdentityKeysV1,
+) -> Result<Passphrase> {
+    let incarnation_id = identity.incarnation_id();
+    open_passphrase(
+        share,
+        calendar_id,
+        key_generation,
+        &CalendarOwner {
+            account,
+            incarnation_id: &incarnation_id,
+            signing_public_key: &identity.drive_signing_public_key(),
+        },
+        account,
+        identity,
+    )
 }
 
 /// The key ID a key packet is encrypted to (a server checks that an event's
-/// key packets name the calendar key, and a member's names their address
-/// key).
+/// and the metadata's key packets name the calendar key).
 pub fn key_packet_key_id(key_packet: &[u8]) -> Result<[u8; 8]> {
     let (tag, _, length) = packet_extent(key_packet)?;
     if tag != TAG_PKESK || length != key_packet.len() {
@@ -1024,7 +1101,7 @@ impl SealedMetadataV1 {
 /// The packet builders, for this crate's tests and the server's live tests
 /// that make malformed or misaddressed values (feature `test-vectors`, never
 /// on for a client): a client seals only through [`UnlockedCalendarKey`] and
-/// [`seal_passphrase`].
+/// [`seal_own_passphrase`] or [`seal_passphrase`].
 #[cfg(feature = "test-vectors")]
 pub mod testing {
     use super::{Result, SessionKey};
@@ -1085,47 +1162,102 @@ mod tests {
         ));
     }
 
+    fn identity(seed: u8) -> AccountIdentityKeysV1 {
+        AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes([seed; 32]))
+            .unwrap()
+    }
+
+    fn account(id: &str) -> AccountRef {
+        AccountRef::new("kutup.test", id).unwrap()
+    }
+
+    const CALENDAR: &str = "6f1d3c2a-8b4e-4f7a-9c1d-2e3f4a5b6c7d";
+
     #[test]
-    fn a_passphrase_opens_only_signed_by_the_owner() {
-        let owner = generate_address_key("ada@example.org", 1_760_000_000).unwrap();
-        let member = generate_address_key("bob@example.org", 1_760_000_000).unwrap();
-        let stranger = generate_address_key("eve@example.org", 1_760_000_000).unwrap();
+    fn the_owner_holds_the_passphrase_on_its_account_key() {
+        let ada = account("00000000-0000-4000-8000-0000000000a1");
+        let ada_keys = identity(1);
         let passphrase = Passphrase::generate();
-        let sealed = seal_passphrase_to(
+        let share =
+            seal_own_passphrase(&passphrase, CALENDAR, FIRST_KEY_GENERATION, &ada, &ada_keys)
+                .unwrap();
+        let share = CalendarShareEnvelopeV1::decode_b64(&share.encode_b64().unwrap()).unwrap();
+        let opened =
+            open_own_passphrase(&share, CALENDAR, FIRST_KEY_GENERATION, &ada, &ada_keys).unwrap();
+        assert_eq!(opened.as_str(), passphrase.as_str());
+        // Another calendar, another key generation, another account or a
+        // later incarnation of the same one: refused.
+        let other = "7f1d3c2a-8b4e-4f7a-9c1d-2e3f4a5b6c7d";
+        assert!(open_own_passphrase(&share, other, 1, &ada, &ada_keys).is_err());
+        assert!(open_own_passphrase(&share, CALENDAR, 2, &ada, &ada_keys).is_err());
+        let eve = account("00000000-0000-4000-8000-0000000000e1");
+        assert!(open_own_passphrase(&share, CALENDAR, 1, &eve, &ada_keys).is_err());
+        assert!(open_own_passphrase(&share, CALENDAR, 1, &ada, &identity(3)).is_err());
+        // Never a Drive share: its own magic and HPKE info.
+        let bytes = share.encode().unwrap();
+        assert!(crate::named_share::NamedShareEnvelopeV1::decode(&bytes).is_err());
+    }
+
+    #[test]
+    fn a_member_opens_only_what_the_owner_signed() {
+        let ada = account("00000000-0000-4000-8000-0000000000a1");
+        let bob = account("00000000-0000-4000-8000-0000000000b1");
+        let (ada_keys, bob_keys, eve_keys) = (identity(1), identity(2), identity(3));
+        let passphrase = Passphrase::generate();
+        let bob_incarnation = bob_keys.incarnation_id();
+        let share = seal_passphrase(
             &passphrase,
-            &[&owner.public_key, &member.public_key],
-            &owner.secret_key,
+            CALENDAR,
+            FIRST_KEY_GENERATION,
+            &ada,
+            &ada_keys,
+            &CalendarMember {
+                account: &bob,
+                incarnation_id: &bob_incarnation,
+                hpke_public_key: &bob_keys.drive_hpke_public_key(),
+            },
         )
         .unwrap();
-        for (index, holder) in [&owner, &member].into_iter().enumerate() {
-            let opened = open_passphrase(
-                &sealed.key_packets[index],
-                &sealed.data_packet,
-                sealed.signature.as_bytes(),
-                &holder.secret_key,
-                &[&owner.public_key],
+        let ada_incarnation = ada_keys.incarnation_id();
+        let owner = |signing: &[u8; 32]| -> Result<Passphrase> {
+            open_passphrase(
+                &share,
+                CALENDAR,
+                FIRST_KEY_GENERATION,
+                &CalendarOwner {
+                    account: &ada,
+                    incarnation_id: &ada_incarnation,
+                    signing_public_key: signing,
+                },
+                &bob,
+                &bob_keys,
             )
-            .unwrap();
-            assert_eq!(opened.as_str(), passphrase.as_str());
-        }
+        };
+        assert_eq!(
+            owner(&ada_keys.drive_signing_public_key())
+                .unwrap()
+                .as_str(),
+            passphrase.as_str()
+        );
         // Signed by someone else: refused.
         assert!(matches!(
-            open_passphrase(
-                &sealed.key_packets[1],
-                &sealed.data_packet,
-                sealed.signature.as_bytes(),
-                &member.secret_key,
-                &[&stranger.public_key],
-            ),
+            owner(&eve_keys.drive_signing_public_key()),
             Err(CryptoError::AuthFailed)
         ));
-        // Someone else's key packet: refused.
+        // Someone else's share: Ada's own copy doesn't open for Bob.
+        let own = seal_own_passphrase(&passphrase, CALENDAR, FIRST_KEY_GENERATION, &ada, &ada_keys)
+            .unwrap();
         assert!(open_passphrase(
-            &sealed.key_packets[0],
-            &sealed.data_packet,
-            sealed.signature.as_bytes(),
-            &member.secret_key,
-            &[&owner.public_key],
+            &own,
+            CALENDAR,
+            FIRST_KEY_GENERATION,
+            &CalendarOwner {
+                account: &ada,
+                incarnation_id: &ada_incarnation,
+                signing_public_key: &ada_keys.drive_signing_public_key(),
+            },
+            &bob,
+            &bob_keys,
         )
         .is_err());
     }
@@ -1244,31 +1376,6 @@ mod tests {
         assert!(servers_unlocked
             .open_metadata(&metadata, "c1", &[&author.public_key])
             .is_err());
-    }
-
-    /// A new calendar's passphrase is to the owner's own key, derived from
-    /// the secret that signs it: there is no public key to substitute.
-    #[test]
-    fn the_passphrase_is_sealed_to_the_owners_own_key() {
-        let owner = generate_address_key("ada@example.org", 1_760_000_000).unwrap();
-        let servers = generate_address_key("eve@example.org", 1_760_000_000).unwrap();
-        let passphrase = Passphrase::generate();
-        let sealed = seal_passphrase(&passphrase, &owner.secret_key).unwrap();
-        assert_eq!(sealed.key_packets.len(), 1);
-        assert_eq!(
-            key_packet_key_id(&sealed.key_packets[0]).unwrap(),
-            encryption_key_id(&owner.public_key).unwrap()
-        );
-        let opened = open_passphrase(
-            &sealed.key_packets[0],
-            &sealed.data_packet,
-            sealed.signature.as_bytes(),
-            &owner.secret_key,
-            &[&owner.public_key],
-        )
-        .unwrap();
-        assert_eq!(opened.as_str(), passphrase.as_str());
-        assert!(open_key_packet(&sealed.key_packets[0], &servers.secret_key).is_err());
     }
 
     /// Only a key locked as this crate locks one unlocks: no other S2K, so a

@@ -3055,7 +3055,7 @@ async fn clear_account_values(
         "DELETE FROM contacts WHERE user_id = $1",
         "DELETE FROM chat_group_list WHERE user_id = $1",
         "DELETE FROM chat_contact_list WHERE user_id = $1",
-        // Calendars' passphrases were sealed to the old address keys: the
+        // Calendars' passphrases were shared with the old incarnation's keys: the
         // account's own calendars go, and its places in others'.
         "DELETE FROM calendars WHERE owner_id = $1",
         "DELETE FROM calendar_members WHERE user_id = $1",

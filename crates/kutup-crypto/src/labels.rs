@@ -82,6 +82,12 @@ pub const ACCOUNT_SUCCESSION_BY_PREVIOUS_V1: &[u8] = b"kutup/account/succession/
 /// The same statement, signed by the new authority.
 pub const ACCOUNT_SUCCESSION_BY_NEW_V1: &[u8] = b"kutup/account/succession/by-new/v1\0";
 
+// --- calendar ----------------------------------------------------------------
+
+/// `kutup-crypto/src/named_share.rs` (`CALENDAR_HPKE_INFO`): a calendar's
+/// passphrase to a member's account key
+pub const CALENDAR_SHARE_HPKE_V1: &[u8] = b"kutup/calendar/share-hpke/v1\0";
+
 // --- calls -------------------------------------------------------------------
 
 /// `kutup-server/src/calls.rs` (`turn_credential`): keyed by the TURN secret,
@@ -555,7 +561,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 170] = [
+pub const ALL: [&[u8]; 171] = [
     SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
@@ -664,6 +670,7 @@ pub const ALL: [&[u8]; 170] = [
     DRIVE_FOLDER_HASH_KEY_V1,
     DRIVE_KEY_BINDING_V2,
     DRIVE_NAMED_SHARE_HPKE_V1,
+    CALENDAR_SHARE_HPKE_V1,
     DRIVE_PROFILE_KEY_HPKE_V1,
     DRIVE_TOP_LEVEL_NAMES_V1,
     FAKE_ACCOUNT_V1,

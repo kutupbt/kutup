@@ -7,9 +7,9 @@ import type { Session } from '@kutup/session/store'
 // whose metadata opens only under the id it names.
 
 vi.mock('@kutup/crypto/calendar', () => ({
-  unlockCalendar: (_key: unknown, passphrase: { keyPacket: string }) =>
+  unlockCalendar: (_account: unknown, lock: { passphraseShare: string }) =>
     Promise.resolve({
-      fingerprint: passphrase.keyPacket,
+      fingerprint: lock.passphraseShare,
       openMetadata: (metadata: { dataPacket: string; signature: string }, calendarId: string) => {
         if (metadata.dataPacket !== calendarId) throw new Error('another calendar')
         return { name: `name of ${calendarId}`, description: '', verified: metadata.signature === 'owner' }
@@ -17,12 +17,13 @@ vi.mock('@kutup/crypto/calendar', () => ({
       free: () => undefined,
     }),
   createCalendar: () =>
-    Promise.resolve({ publicKey: 'P', lockedSecretKey: 'L', fingerprint: 'f', passphrase: { dataPacket: 'd', signature: 's', keyPacket: 'f' }, metadata: { keyPacket: 'k', dataPacket: 'd', signature: 's' } }),
+    Promise.resolve({ publicKey: 'P', lockedSecretKey: 'L', fingerprint: 'f', passphraseShare: 'f', metadata: { keyPacket: 'k', dataPacket: 'd', signature: 's' } }),
   localToUtc: () => Promise.resolve(''),
   sealCalendarEvent: () => ({}),
   sealCalendarMetadata: () => ({}),
 }))
 vi.mock('@kutup/mail-core/api', () => ({ useMailAccount: vi.fn() }))
+vi.mock('@kutup/session/devices', () => ({ ownAccount: () => Promise.resolve('aci:u1@kutup.test') }))
 
 const http = vi.hoisted(() => ({
   rows: [] as unknown[],
@@ -78,16 +79,16 @@ const account = {
 
 let fingerprints = 0
 /** A calendar as the server lists it; its metadata names `metadataId`, signed by `signer`. */
-function row(id: string, revision: number, { metadataId = id, signer = 'owner', listed = 'own' } = {}) {
+function row(id: string, revision: number, { metadataId = id, signer = 'owner', listed = 'own', ownerId = 'u1' } = {}) {
   const fingerprint = `fp${++fingerprints}`
   return {
     id,
-    ownerAddress: 'ada@kutup.test',
+    ownerId,
     publicKey: 'P',
     fingerprint: listed === 'own' ? fingerprint : listed,
     lockedSecretKey: 'L',
-    passphrase: { dataPacket: 'd', signature: 's', keyPacket: fingerprint },
-    addressId: 'a1',
+    keyGeneration: 1,
+    passphraseShare: fingerprint,
     metadata: { keyPacket: 'k', dataPacket: metadataId, signature: signer },
     permissions: 127,
     color: '#8080ff',
@@ -130,6 +131,13 @@ describe('reading the calendars', () => {
     expect(unreadable).toBe(2)
   })
 
+  it('opens no calendar of another account (sharing comes in E3)', async () => {
+    http.rows = [row('c1', 1, { ownerId: 'u2' })]
+    const { calendars, unreadable } = await loadCalendars(session, account)
+    expect(calendars).toHaveLength(0)
+    expect(unreadable).toBe(1)
+  })
+
   it('refuses a key that is not the one listed', async () => {
     http.rows = [row('c1', 1, { listed: 'another' })]
     const { calendars, unreadable } = await loadCalendars(session, account)
@@ -168,7 +176,8 @@ describe('writing calendars', () => {
   it('creates a calendar under the id the head names', async () => {
     http.post.mockResolvedValue({ data: {} })
     const id = await createCalendar(session, account, 'Ev', '#8080ff')
-    expect(http.post).toHaveBeenCalledWith('/calendar/calendars', expect.objectContaining({ id, head: 'head-1', addressId: 'a1' }))
+    expect(http.post).toHaveBeenCalledWith('/calendar/calendars', expect.objectContaining({ id, head: 'head-1', passphraseShare: 'f' }))
+    expect(http.post.mock.calls[0][1]).not.toHaveProperty('addressId')
   })
 
   it('writes nothing while the app is blocked: calendars or events', async () => {

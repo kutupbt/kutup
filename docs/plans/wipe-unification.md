@@ -430,6 +430,9 @@ the integration branch, with the existing live tests per app.
 
 ## W4. Calendar keys on account-level keys
 
+**Built (2026-11-16), option (a),** on `wipe/calendar-keys`: see
+[`calendar.md`](calendar.md), "W4".
+
 ### Today
 
 Calendar E1 (#316 and before) follows Proton Calendar: each calendar has an

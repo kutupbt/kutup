@@ -1,8 +1,10 @@
 //! Calendars (docs/plans/calendar.md, E1): Proton Calendar's model.
 //!
 //! A calendar is its OpenPGP key (the secret locked with a passphrase), the
-//! passphrase sealed per member to the member's address key and signed by
-//! the owner, and its name and description sealed to the calendar key.
+//! passphrase shared with each member on their account key and signed by
+//! the owner's account key (docs/plans/wipe-unification.md, W4: no address
+//! in it, so a rename or a removed address orphans no one), and its name and
+//! description sealed to the calendar key.
 //! Events are Proton's parts: the server checks the signed ones against the
 //! author's address keys and reads its time columns from the shared signed
 //! part only, never from the request; it can't open the encrypted ones.
@@ -92,29 +94,21 @@ fn color(value: &str) -> AppResult<String> {
     Ok(value)
 }
 
-/// A member's copy of the passphrase.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PassphraseV1 {
-    pub data_packet: String,
-    pub signature: String,
-    pub key_packet: String,
-}
-
 /// A calendar as one member sees it.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarView {
     pub id: Uuid,
-    /// The owner's address that signed the passphrase and the metadata:
-    /// verify against its key list.
-    pub owner_address: String,
+    /// The owner's account id (on this server): who shared the passphrase.
+    pub owner_id: Uuid,
     pub public_key: String,
     pub fingerprint: String,
     pub locked_secret_key: String,
-    pub passphrase: PassphraseV1,
-    /// The member's address the passphrase's key packet is to.
-    pub address_id: Uuid,
+    /// The calendar key's generation, which the share names.
+    pub key_generation: i32,
+    /// The member's share of the passphrase (`CalendarShareEnvelopeV1`,
+    /// base64), to their account key and signed by the owner's.
+    pub passphrase_share: String,
     #[schema(value_type = Object)]
     pub metadata: SealedMetadataV1,
     pub permissions: i32,
@@ -146,14 +140,12 @@ pub struct CalendarList {
 #[derive(sqlx::FromRow)]
 struct ViewRow {
     id: Uuid,
-    owner_address: String,
+    owner_id: Uuid,
     public_key: Vec<u8>,
     fingerprint: String,
     locked_secret_key: Vec<u8>,
-    passphrase_data_packet: Vec<u8>,
-    passphrase_signature: String,
-    passphrase_key_packet: Vec<u8>,
-    address_id: Uuid,
+    key_generation: i32,
+    passphrase_share: Vec<u8>,
     metadata_key_packet: Vec<u8>,
     metadata_data_packet: Vec<u8>,
     metadata_signature: String,
@@ -167,30 +159,23 @@ struct ViewRow {
     updated_at: time::OffsetDateTime,
 }
 
-const VIEW: &str =
-    "SELECT c.id, oa.address AS owner_address, c.public_key, c.fingerprint, c.locked_secret_key,
-        c.passphrase_data_packet, c.passphrase_signature, m.passphrase_key_packet, m.address_id,
+const VIEW: &str = "SELECT c.id, c.owner_id, c.public_key, c.fingerprint, c.locked_secret_key,
+        c.key_generation, m.passphrase_share,
         c.metadata_key_packet, c.metadata_data_packet, c.metadata_signature,
         m.permissions, m.color, m.display, m.default_reminders_timed,
         m.default_reminders_all_day, m.revision, c.created_at, c.updated_at
    FROM calendar_members m
-   JOIN calendars c ON c.id = m.calendar_id
-   JOIN calendar_members om ON om.calendar_id = c.id AND om.user_id = c.owner_id
-   JOIN mail_addresses oa ON oa.id = om.address_id";
+   JOIN calendars c ON c.id = m.calendar_id";
 
 fn view(row: ViewRow) -> CalendarView {
     CalendarView {
         id: row.id,
-        owner_address: row.owner_address,
+        owner_id: row.owner_id,
         public_key: STANDARD.encode(row.public_key),
         fingerprint: row.fingerprint,
         locked_secret_key: STANDARD.encode(row.locked_secret_key),
-        passphrase: PassphraseV1 {
-            data_packet: STANDARD.encode(row.passphrase_data_packet),
-            signature: row.passphrase_signature,
-            key_packet: STANDARD.encode(row.passphrase_key_packet),
-        },
-        address_id: row.address_id,
+        key_generation: row.key_generation,
+        passphrase_share: STANDARD.encode(row.passphrase_share),
         metadata: SealedMetadataV1 {
             key_packet: STANDARD.encode(row.metadata_key_packet),
             data_packet: STANDARD.encode(row.metadata_data_packet),
@@ -242,13 +227,18 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Js
     }))
 }
 
+/// The longest passphrase share taken, in base64: two accounts on the
+/// longest server names (the column holds 2048 bytes).
+const MAX_SHARE_B64: usize = 2048 / 3 * 4 + 4;
+
 /// The caller's active address `address_id` and its keys that may still
-/// verify (Mail's `FLAG_NOT_COMPROMISED`): `(public keys, primary key)`.
+/// verify (Mail's `FLAG_NOT_COMPROMISED`): what an author's parts are
+/// checked against.
 async fn address_keys(
     conn: &mut sqlx::PgConnection,
     user_id: Uuid,
     address_id: Uuid,
-) -> AppResult<(Vec<Vec<u8>>, Vec<u8>)> {
+) -> AppResult<Vec<Vec<u8>>> {
     let rows: Vec<(Vec<u8>, bool)> = sqlx::query_as(
         "SELECT k.public_key, k.is_primary FROM mail_address_keys k
            JOIN mail_addresses a ON a.id = k.address_id
@@ -261,12 +251,12 @@ async fn address_keys(
     .bind(kutup_crypto::mail_key::FLAG_NOT_COMPROMISED as i32)
     .fetch_all(&mut *conn)
     .await?;
-    let primary = rows
-        .iter()
-        .find(|(_, primary)| *primary)
-        .map(|(key, _)| key.clone())
-        .ok_or_else(|| AppError::bad_request("the address has no key; add one in Mail first"))?;
-    Ok((rows.into_iter().map(|(key, _)| key).collect(), primary))
+    if !rows.iter().any(|(_, primary)| *primary) {
+        return Err(AppError::bad_request(
+            "the address has no key; add one in Mail first",
+        ));
+    }
+    Ok(rows.into_iter().map(|(key, _)| key).collect())
 }
 
 /// A new calendar, as `createCalendar` in the browser makes it.
@@ -277,11 +267,11 @@ pub struct CalendarCreate {
     /// head's `calendars` scope names it, and the head is made before the
     /// create (as Contacts' UIDs).
     pub id: Uuid,
-    /// The owner's address whose key the passphrase is sealed to.
-    pub address_id: Uuid,
     pub public_key: String,
     pub locked_secret_key: String,
-    pub passphrase: PassphraseV1,
+    /// The owner's own share of the passphrase (`CalendarShareEnvelopeV1`,
+    /// base64): from the caller to the caller, at the first key generation.
+    pub passphrase_share: String,
     #[schema(value_type = Object)]
     pub metadata: SealedMetadataV1,
     pub color: String,
@@ -319,15 +309,17 @@ pub async fn create(
     let locked = b64(&input.locked_secret_key, "locked secret key")?;
     let fingerprint = cal::inspect_calendar_public_key(&public_key).map_err(crypto)?;
     cal::inspect_locked_calendar_key(&locked, &public_key).map_err(crypto)?;
-    let data_packet = b64(&input.passphrase.data_packet, "passphrase data packet")?;
-    let key_packet = b64(&input.passphrase.key_packet, "passphrase key packet")?;
+    if input.passphrase_share.len() > MAX_SHARE_B64 {
+        return Err(AppError::bad_request("the passphrase share is too large"));
+    }
+    let share = cal::CalendarShareEnvelopeV1::decode_b64(&input.passphrase_share)
+        .map_err(|_| AppError::bad_request("the passphrase share does not parse"))?;
     let metadata = input.metadata.to_sealed().map_err(crypto)?;
     let color = color(&input.color)?;
-    if input.passphrase.signature.len() > 4096 || metadata.signature.len() > 4096 {
+    if metadata.signature.len() > 4096 {
         return Err(AppError::bad_request("a signature is too large"));
     }
-    // The metadata is to the calendar key; the passphrase to the owner's
-    // primary address key.
+    // The metadata is to the calendar key.
     if cal::key_packet_key_id(&metadata.key_packet).map_err(crypto)?
         != cal::encryption_key_id(&public_key).map_err(crypto)?
     {
@@ -337,14 +329,32 @@ pub async fn create(
     }
     let mut tx = state.pool.begin().await?;
     let locked_head = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
-    let (_, primary) = address_keys(&mut tx, user_id, input.address_id).await?;
-    if cal::key_packet_key_id(&key_packet).map_err(crypto)?
-        != cal::encryption_key_id(&primary).map_err(crypto)?
-    {
-        return Err(AppError::bad_request(
-            "the passphrase is not to the address's primary key",
-        ));
-    }
+    // The owner's own copy: from the caller's account, as it is now, to
+    // itself, for this calendar's first key, signed by its account key.
+    let (incarnation, signing): (String, String) = sqlx::query_as(
+        "SELECT account_incarnation_id, drive_signing_public_key FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let signing = STANDARD
+        .decode(&signing)
+        .map_err(|_| AppError::conflict("account identity is unavailable"))?;
+    let me = crate::account_ids::local(&state.config.chat_server_name, user_id)?;
+    share
+        .verify_binding_and_signature(
+            &input.id.to_string(),
+            cal::FIRST_KEY_GENERATION,
+            &me,
+            &incarnation,
+            &signing,
+            &me,
+            &incarnation,
+        )
+        .map_err(|_| {
+            AppError::bad_request("the passphrase share is not the owner's own, for this calendar")
+        })?;
+    let share = share.encode().map_err(crypto)?;
     let owned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM calendars WHERE owner_id = $1")
         .bind(user_id)
         .fetch_one(&mut *tx)
@@ -355,26 +365,22 @@ pub async fn create(
     }
     let bytes = (public_key.len()
         + locked.len()
-        + data_packet.len()
-        + input.passphrase.signature.len()
-        + key_packet.len()
+        + share.len()
         + metadata.key_packet.len()
         + metadata.data_packet.len()
         + metadata.signature.len()) as i64;
     crate::storage_pool::charge_within_quota(&mut tx, user_id, bytes).await?;
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO calendars (id, owner_id, public_key, fingerprint, locked_secret_key,
-             passphrase_data_packet, passphrase_signature,
-             metadata_key_packet, metadata_data_packet, metadata_signature, bytes)
-         VALUES ($11, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             key_generation, metadata_key_packet, metadata_data_packet, metadata_signature, bytes)
+         VALUES ($10, $1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id",
     )
     .bind(user_id)
     .bind(&public_key)
     .bind(hex::encode(fingerprint))
     .bind(&locked)
-    .bind(&data_packet)
-    .bind(&input.passphrase.signature)
+    .bind(cal::FIRST_KEY_GENERATION as i32)
     .bind(&metadata.key_packet)
     .bind(&metadata.data_packet)
     .bind(&metadata.signature)
@@ -390,15 +396,14 @@ pub async fn create(
         _ => error.into(),
     })?;
     sqlx::query(
-        "INSERT INTO calendar_members (calendar_id, user_id, address_id, permissions,
-             passphrase_key_packet, color, revision)
-         VALUES ($1, $2, $3, $4, $5, $6, 1)",
+        "INSERT INTO calendar_members (calendar_id, user_id, permissions,
+             passphrase_share, color, revision)
+         VALUES ($1, $2, $3, $4, $5, 1)",
     )
     .bind(id)
     .bind(user_id)
-    .bind(input.address_id)
     .bind(OWNS)
-    .bind(&key_packet)
+    .bind(&share)
     .bind(&color)
     .execute(&mut *tx)
     .await?;
@@ -1212,7 +1217,7 @@ pub async fn sync(
     };
     let author_keys = {
         let mut conn = state.pool.acquire().await?;
-        address_keys(&mut conn, user_id, input.address_id).await?.0
+        address_keys(&mut conn, user_id, input.address_id).await?
     };
     let max_events = CALENDAR_EVENTS_PER_CALENDAR.load(&state.pool).await?;
     let max_count = CALENDAR_MAX_COUNT.load(&state.pool).await?;

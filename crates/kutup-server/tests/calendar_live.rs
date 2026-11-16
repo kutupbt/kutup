@@ -7,8 +7,8 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 
 use kutup_crypto::calendar::{
-    self as cal, EventPartV1, Passphrase, SealedEventV1, SealedMetadataV1, SessionKey,
-    UnlockedCalendarKey,
+    self as cal, CalendarShareEnvelopeV1, EventPartV1, Passphrase, SealedEventV1, SealedMetadataV1,
+    SessionKey, UnlockedCalendarKey, FIRST_KEY_GENERATION,
 };
 use kutup_crypto::calendar_event::{EventFieldsV1, TimeV1};
 use kutup_crypto::mail_key::{self, MailKeyEntryV1, MailKeyListV1, DEFAULT_FLAGS};
@@ -89,7 +89,14 @@ fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase, UnlockedCalend
     let id = uuid::Uuid::new_v4();
     let passphrase = Passphrase::generate();
     let key = cal::generate_calendar_key(&passphrase, 1_790_000_000).unwrap();
-    let sealed = cal::seal_passphrase(&passphrase, &owner.secret_key).unwrap();
+    let share = cal::seal_own_passphrase(
+        &passphrase,
+        &id.to_string(),
+        FIRST_KEY_GENERATION,
+        &owner.user.person,
+        &owner.user.identity,
+    )
+    .unwrap();
     let metadata = key
         .unlocked
         .seal_metadata(&id.to_string(), name, "Family", &owner.secret_key)
@@ -97,14 +104,9 @@ fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase, UnlockedCalend
     (
         json!({
             "id": id,
-            "addressId": owner.address_id,
             "publicKey": b64(&key.public_key),
             "lockedSecretKey": b64(&key.locked_secret_key),
-            "passphrase": {
-                "dataPacket": b64(&sealed.data_packet),
-                "signature": sealed.signature,
-                "keyPacket": b64(&sealed.key_packets[0]),
-            },
+            "passphraseShare": share.encode_b64().unwrap(),
             "metadata": SealedMetadataV1::of(&metadata),
             "color": "#3E7BFA",
         }),
@@ -204,8 +206,8 @@ fn calendars_and_events() {
     let ada = owner(&c, &base);
     let eve = owner(&c, &base);
 
-    // A calendar: its key, the passphrase sealed to Ada's address key and
-    // signed, the name sealed to the calendar.
+    // A calendar: its key, the passphrase shared with Ada's own account key
+    // and signed by it, the name sealed to the calendar.
     let (body, passphrase, key) = new_calendar(&ada, "Ev");
     let r = bearer(
         c.post(format!("{base}/api/calendar/calendars")),
@@ -231,15 +233,14 @@ fn calendars_and_events() {
     );
 
     // What the server hands back opens: the passphrase, the key, the name.
-    let opened = cal::open_passphrase(
-        &decode(created["passphrase"]["keyPacket"].as_str().unwrap()),
-        &decode(created["passphrase"]["dataPacket"].as_str().unwrap()),
-        created["passphrase"]["signature"]
-            .as_str()
-            .unwrap()
-            .as_bytes(),
-        &ada.secret_key,
-        &[&ada.public_key],
+    assert_eq!(created["keyGeneration"], 1);
+    assert_eq!(created["ownerId"], ada.user.id.as_str());
+    let opened = cal::open_own_passphrase(
+        &CalendarShareEnvelopeV1::decode_b64(created["passphraseShare"].as_str().unwrap()).unwrap(),
+        &id,
+        FIRST_KEY_GENERATION,
+        &ada.user.person,
+        &ada.user.identity,
     )
     .unwrap();
     assert_eq!(opened.as_str(), passphrase.as_str());
@@ -282,11 +283,49 @@ fn calendars_and_events() {
     assert_eq!(r.status(), StatusCode::CONFLICT);
     assert_eq!(r.json::<Value>().unwrap()["code"], "calendarExists");
 
-    // Refused calendars: a passphrase to someone else's key, a locked key
-    // that isn't the calendar's, another account's address.
+    // Refused calendars: Eve's own share, a share of another calendar of
+    // Ada's, a share to Eve signed by Ada, a locked key that isn't the
+    // calendar's.
     let (mut bad, _, _) = new_calendar(&ada, "Bad");
     let (other, _, _) = new_calendar(&eve, "Other");
-    bad["passphrase"] = other["passphrase"].clone();
+    bad["passphraseShare"] = other["passphraseShare"].clone();
+    assert_status(
+        &c,
+        &base,
+        &ada.user,
+        "POST",
+        "/api/calendar/calendars",
+        &bad,
+        StatusCode::BAD_REQUEST,
+    );
+    let (mut bad, _, _) = new_calendar(&ada, "Bad");
+    let (elsewhere, _, _) = new_calendar(&ada, "Elsewhere");
+    bad["passphraseShare"] = elsewhere["passphraseShare"].clone();
+    assert_status(
+        &c,
+        &base,
+        &ada.user,
+        "POST",
+        "/api/calendar/calendars",
+        &bad,
+        StatusCode::BAD_REQUEST,
+    );
+    let (mut bad, _, _) = new_calendar(&ada, "Bad");
+    let eve_incarnation = eve.user.identity.incarnation_id();
+    let to_eve = cal::seal_passphrase(
+        &Passphrase::generate(),
+        bad["id"].as_str().unwrap(),
+        FIRST_KEY_GENERATION,
+        &ada.user.person,
+        &ada.user.identity,
+        &cal::CalendarMember {
+            account: &eve.user.person,
+            incarnation_id: &eve_incarnation,
+            hpke_public_key: &eve.user.identity.drive_hpke_public_key(),
+        },
+    )
+    .unwrap();
+    bad["passphraseShare"] = json!(to_eve.encode_b64().unwrap());
     assert_status(
         &c,
         &base,
@@ -298,17 +337,6 @@ fn calendars_and_events() {
     );
     let (mut bad, _, _) = new_calendar(&ada, "Bad");
     bad["lockedSecretKey"] = other["lockedSecretKey"].clone();
-    assert_status(
-        &c,
-        &base,
-        &ada.user,
-        "POST",
-        "/api/calendar/calendars",
-        &bad,
-        StatusCode::BAD_REQUEST,
-    );
-    let (mut bad, _, _) = new_calendar(&ada, "Bad");
-    bad["addressId"] = json!(eve.address_id);
     assert_status(
         &c,
         &base,

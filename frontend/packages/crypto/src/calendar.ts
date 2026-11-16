@@ -2,8 +2,12 @@
 // `crypto-calendar` WASM runtime: the Calendar app (and Mail for
 // invitations) loads it instead of `crypto` (@kutup/config/vite). The
 // unlocked calendar key stays in WASM inside an `UnlockedCalendar`; this
-// module never sees it or the passphrase.
+// module never sees it or the passphrase. The passphrase is shared on the
+// account's keys, which WASM derives from the identity root
+// (docs/plans/wipe-unification.md, W4); the address key signs the name and
+// the events.
 
+import type { IdentityRoot } from './accountRoots'
 import type { MasterKeys } from './masterKeys'
 import type { SealedMailKey } from './mailKey'
 import { getCryptoWasm } from './rustWasm'
@@ -65,13 +69,6 @@ export interface SealedMetadata {
   signature: string
 }
 
-/** A member's copy of a calendar's passphrase. */
-export interface SealedPassphrase {
-  dataPacket: string
-  signature: string
-  keyPacket: string
-}
-
 export interface CalendarMetadata {
   name: string
   description: string
@@ -88,7 +85,8 @@ export interface NewCalendar {
   publicKey: string
   lockedSecretKey: string
   fingerprint: string
-  passphrase: SealedPassphrase
+  /** The owner's own share of the passphrase (`CalendarShareEnvelopeV1`, base64). */
+  passphraseShare: string
   metadata: SealedMetadata
 }
 
@@ -110,9 +108,32 @@ export interface UnlockedCalendar {
   free(): void
 }
 
+/** The signed-in account: its identity root and `aci:<uuid>@<server>`. */
+export interface CalendarAccount {
+  identityRoot: IdentityRoot
+  account: string
+}
+
+/** A calendar as its member's row names it, for unlocking. */
+export interface CalendarLock {
+  calendarId: string
+  keyGeneration: number
+  passphraseShare: string
+  lockedSecretKey: string
+}
+
 interface CalendarWasm {
-  createCalendar(...args: [...KeyArgs, calendarId: string, metadata: CalendarMetadata, createdAtSecs: number]): NewCalendar
-  unlockCalendar(...args: [...KeyArgs, passphrase: SealedPassphrase, ownerPublicKeys: string[], lockedSecretKey: string]): UnlockedCalendar
+  createCalendar(
+    ...args: [...KeyArgs, identityRoot: IdentityRoot, account: string, calendarId: string, metadata: CalendarMetadata, createdAtSecs: number]
+  ): NewCalendar
+  unlockCalendar(
+    identityRoot: IdentityRoot,
+    account: string,
+    calendarId: string,
+    keyGeneration: number,
+    passphraseShare: string,
+    lockedSecretKey: string,
+  ): UnlockedCalendar
   calendarUtcToLocal(instant: string, tzid: string): string
   calendarLocalToUtc(local: string, tzid: string): string
   calendarTimeZones(): string[]
@@ -132,25 +153,35 @@ function keyArgs(key: SealedMailKey): KeyArgs {
 }
 
 /**
- * A new calendar `calendarId` owned by `owner` (its primary address key),
- * named `metadata`; the passphrase is sealed to the key derived from the
- * owner's secret, never to a public key given.
+ * A new calendar `calendarId` owned by `owner`, named `metadata` (signed by
+ * `signer`, its primary address key); the passphrase is shared with the
+ * owner's own account key, derived from its identity root, never a public
+ * key given.
  */
-export async function createCalendar(owner: SealedMailKey, calendarId: string, metadata: CalendarMetadata): Promise<NewCalendar> {
-  return (await wasm()).createCalendar(...keyArgs(owner), calendarId, metadata, Math.floor(Date.now() / 1000))
+export async function createCalendar(
+  owner: CalendarAccount,
+  signer: SealedMailKey,
+  calendarId: string,
+  metadata: CalendarMetadata,
+): Promise<NewCalendar> {
+  return (await wasm()).createCalendar(...keyArgs(signer), owner.identityRoot, owner.account, calendarId, metadata, Math.floor(Date.now() / 1000))
 }
 
 /**
- * Unlocks a calendar with the member's address key: refused unless one of
- * `ownerPublicKeys` (the owner's address keys, verified) signed the passphrase.
+ * Unlocks a calendar of the signed-in account from its own share of the
+ * passphrase: refused unless the share names this calendar and key
+ * generation and the account itself signed it. (Shared calendars, E3, add
+ * the owner's verified keys.)
  */
-export async function unlockCalendar(
-  member: SealedMailKey,
-  passphrase: SealedPassphrase,
-  ownerPublicKeys: string[],
-  lockedSecretKey: string,
-): Promise<UnlockedCalendar> {
-  return (await wasm()).unlockCalendar(...keyArgs(member), passphrase, ownerPublicKeys, lockedSecretKey)
+export async function unlockCalendar(member: CalendarAccount, lock: CalendarLock): Promise<UnlockedCalendar> {
+  return (await wasm()).unlockCalendar(
+    member.identityRoot,
+    member.account,
+    lock.calendarId,
+    lock.keyGeneration,
+    lock.passphraseShare,
+    lock.lockedSecretKey,
+  )
 }
 
 /** Seals an event's fields for an unlocked calendar, signed by the author's address key. */

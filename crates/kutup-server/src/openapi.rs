@@ -781,7 +781,6 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::storage::ChatUsage,
         crate::handlers::storage::ContactsUsage,
         crate::handlers::storage::CalendarUsage,
-        crate::handlers::calendar::PassphraseV1,
         crate::handlers::calendar::CalendarView,
         crate::handlers::calendar::DefaultReminders,
         crate::calendar_reminders::Reminder,

@@ -1337,9 +1337,11 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   head.free()
 }
 
-// Calendars (docs/plans/calendar.md, E1): the owner (the mail vectors'
-// address key) unlocks the calendar from its sealed passphrase, and the
-// event and metadata open as the Rust vectors say; the refused ones don't.
+// Calendars (docs/plans/calendar.md, E1; docs/plans/wipe-unification.md, W4):
+// the owner unlocks the calendar from its own share of the passphrase, with
+// the keys its identity root derives, and the event and metadata (signed by
+// the mail vectors' address key) open as the Rust vectors say; the refused
+// ones don't.
 if (build === 'crypto') {
   for (const name of ['createCalendar', 'unlockCalendar', 'calendarTimeZones', 'calendarOccurrences', 'calendarRuleText']) {
     assert.equal(crypto[name], undefined, `${name} is in the plain crypto build`)
@@ -1347,8 +1349,8 @@ if (build === 'crypto') {
 } else {
   const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/calendar-v1.json`, 'utf8'))
   const owner = [masterKeySet(mailVectors.masterKey), mailVectors.binding, mailVectors.address, mailVectors.envelope, mailVectors.fingerprint]
-  const passphrase = { dataPacket: v.passphraseDataPacket, signature: v.passphraseSignature, keyPacket: v.passphraseKeyPacket }
-  const unlocked = crypto.unlockCalendar(...owner, passphrase, [v.ownerPublicKey], v.calendarLockedSecretKey)
+  const unlock = (id, generation, share, locked) => crypto.unlockCalendar(v.ownerIdentityRoot, v.ownerAccount, id, generation, share, locked)
+  const unlocked = unlock(v.calendarId, v.keyGeneration, v.passphraseShare, v.calendarLockedSecretKey)
   const opened = unlocked.openEvent(v.event, [v.ownerPublicKey])
   assert.equal(opened.verified, true)
   assert.deepEqual(opened.fields, v.fields)
@@ -1370,8 +1372,14 @@ if (build === 'crypto') {
     }
     assert.equal(accepted, false, refused.why)
   }
-  // A passphrase signed by someone else: the calendar doesn't unlock.
-  assert.throws(() => crypto.unlockCalendar(...owner, passphrase, [v.calendarPublicKey], v.calendarLockedSecretKey))
+  // Another calendar's, another key generation's, another account's share:
+  // the calendar doesn't unlock; nor under another id or generation.
+  assert.ok(v.refusedShares.length > 0)
+  for (const refused of v.refusedShares) {
+    assert.throws(() => unlock(v.calendarId, v.keyGeneration, refused.share, v.calendarLockedSecretKey), undefined, refused.why)
+  }
+  assert.throws(() => unlock('7f1d3c2a-8b4e-4f7a-9c1d-2e3f4a5b6c7d', v.keyGeneration, v.passphraseShare, v.calendarLockedSecretKey))
+  assert.throws(() => unlock(v.calendarId, v.keyGeneration + 1, v.passphraseShare, v.calendarLockedSecretKey))
   // What the browser seals, the vectors' calendar opens.
   const sealed = unlocked.sealEvent(...owner, v.fields)
   assert.deepEqual(unlocked.openEvent(sealed, [v.ownerPublicKey]).fields, v.fields)
@@ -1380,10 +1388,11 @@ if (build === 'crypto') {
   // A rename keeps what a newer client wrote (docs/plans/format-evolution.md).
   const kept = unlocked.sealMetadata(...owner, v.calendarId, { name: 'Ev', description: '', rest: { v: 1, colourHint: 'teal' } })
   assert.deepEqual(unlocked.openMetadata(kept, v.calendarId, [v.ownerPublicKey]).rest, { v: 1, colourHint: 'teal' })
-  // A new calendar, under the id the client drew.
-  const made = crypto.createCalendar(...owner, 'c-new', { name: 'İş', description: '' }, 1790000000)
-  const opened2 = crypto.unlockCalendar(...owner, made.passphrase, [v.ownerPublicKey], made.lockedSecretKey)
-  assert.equal(opened2.openMetadata(made.metadata, 'c-new', [v.ownerPublicKey]).name, 'İş')
+  // A new calendar, under the id the client drew, shared with the owner itself.
+  const fresh = '8f1d3c2a-8b4e-4f7a-9c1d-2e3f4a5b6c7d'
+  const made = crypto.createCalendar(...owner, v.ownerIdentityRoot, v.ownerAccount, fresh, { name: 'İş', description: '' }, 1790000000)
+  const opened2 = unlock(fresh, 1, made.passphraseShare, made.lockedSecretKey)
+  assert.equal(opened2.openMetadata(made.metadata, fresh, [v.ownerPublicKey]).name, 'İş')
   assert.equal(opened2.fingerprint, made.fingerprint)
   opened2.free()
   // Time zones: the bundled database, as the server converts.
