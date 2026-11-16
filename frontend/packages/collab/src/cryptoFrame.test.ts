@@ -79,8 +79,11 @@ describe('canonical collaboration frame', () => {
     const module = await getCryptoWasm()
     const key = toBase64(keypair.publicKey)
     expect(module.verifyCollabFrame(toBase64(frame), ACCOUNT, key)).toBe(true)
-    // A server naming another sender breaks the signature.
-    expect(module.verifyCollabFrame(toBase64(frame), `aci:${ACCOUNT_ID}@other.example`, key)).toBe(false)
+    // A server naming another sender breaks the signature; the signature
+    // covers the account id alone, never its server's name (routing, which
+    // can change: docs/plans/identity-rotation.md §6).
+    expect(module.verifyCollabFrame(toBase64(frame), 'aci:33333333-3333-4333-8333-333333333333@' + ACCOUNT.split('@')[1], key)).toBe(false)
+    expect(module.verifyCollabFrame(toBase64(frame), `aci:${ACCOUNT_ID}@other.example`, key)).toBe(true)
   })
 
   it('refuses a bare frame where a delivered one belongs', async () => {

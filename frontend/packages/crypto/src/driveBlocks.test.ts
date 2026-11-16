@@ -167,7 +167,7 @@ describe('upload drafts', () => {
     const revisionId = newRevisionId()
     const draft = { name: 'a.txt', mimeType: 'text/plain', size: 3, sha256: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=' }
     const envelope = await sealFileMetadataDraftV1(fileId, 1, revisionId, fileKey, draft)
-    expect(await openFileMetadataDraftV1(envelope, fileId, 1, revisionId, fileKey)).toEqual(draft)
+    expect(await openFileMetadataDraftV1(envelope, fileId, 1, revisionId, fileKey)).toEqual({ v: 2, ...draft })
     await expect(openFileMetadataDraftV1(envelope, fileId, 1, newRevisionId(), fileKey)).rejects.toThrow()
   })
 })
