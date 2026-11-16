@@ -10,15 +10,21 @@ ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_kind_
     'nameDropped', 'nameClosed', 'nameFreed', 'domainLost',
     'twoFactorOn', 'twoFactorOff', 'recoveryCodeUsed', 'recoveryCodesRenewed',
     'securityKeyAdded', 'securityKeyRemoved', 'securityKeyCompromised',
-    'authenticatorOn', 'authenticatorOff']));
+    'authenticatorOn', 'authenticatorOff',
+    'orgJoined', 'orgLeft', 'orgRemoved', 'orgAccessGranted', 'orgAccessRevoked',
+    'orgReset', 'orgSignIn',
+    'signIn', 'signInFailedPassword', 'signInFailed2fa', 'signOut',
+    'sessionRevoked', 'allSessionsRevoked', 'adminAccess',
+    'accountClosing', 'accountKept']));
 
 ALTER TABLE opaque_login_states DROP CONSTRAINT opaque_login_states_grant_for_check;
 ALTER TABLE opaque_login_states ADD CONSTRAINT opaque_login_states_grant_for_check CHECK (grant_for = ANY (ARRAY[
-    'pass', 'passwordChange', 'totp', 'adminReset', 'verify', 'rename']));
+    'pass', 'passwordChange', 'totp', 'adminReset', 'verify', 'rename', 'close']));
 
 ALTER TABLE auth_grants DROP CONSTRAINT auth_grants_purpose_check;
 ALTER TABLE auth_grants ADD CONSTRAINT auth_grants_purpose_check CHECK (purpose = ANY (ARRAY[
-    'pass', 'passwordChange', 'totp', 'adminReset', 'recovery', 'rotate', 'rename']));
+    'pass', 'passwordChange', 'totp', 'adminReset', 'recovery', 'rotate', 'rename',
+    'close', 'keep']));
 
 DELETE FROM account_roots WHERE purpose = 27;
 ALTER TABLE account_roots DROP CONSTRAINT account_roots_purpose_check;
