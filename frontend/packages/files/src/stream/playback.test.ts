@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_STREAM_LIMITS, type StreamLimits } from './limits'
-import type { PlayerStream } from './page'
+import { streamingAvailable, type PlayerStream } from './page'
 import { openMediaPlayback, streamFallbackDecision, type MediaPlaybackSource, type PlaybackFallback } from './playback'
 
 vi.mock('./page', async (original) => ({
@@ -28,7 +28,7 @@ function source(size = 10) {
       }
     },
   }
-  const readWhole = vi.fn(() => Promise.resolve(new Uint8Array(size)))
+  const readWhole = vi.fn<MediaPlaybackSource['readWhole']>(() => Promise.resolve(new Uint8Array(size)))
   const media: MediaPlaybackSource = {
     size,
     mimeType: 'video/mp4',
@@ -122,6 +122,34 @@ describe('a stream’s fallback to a whole download', () => {
       refuse()
       expect(fallback).toHaveBeenCalledWith({ kind: 'tooLarge' })
       expect(readWhole).not.toHaveBeenCalled()
+    })
+
+    it('gives the Blob a media type only from the allowlist, else bytes', async () => {
+      const made: Blob[] = []
+      URL.createObjectURL = vi.fn((blob: Blob) => {
+        made.push(blob)
+        return `blob:test/${made.length}`
+      })
+      vi.mocked(streamingAvailable).mockResolvedValue(false)
+      try {
+        for (const [mimeType, expected] of [
+          ['video/mp4', 'video/mp4'],
+          ['Audio/MPEG; codecs=mp3', 'audio/mpeg'],
+          ['text/html', 'application/octet-stream'],
+          ['image/svg+xml', 'application/octet-stream'],
+          ['', 'application/octet-stream'],
+        ]) {
+          const { media, readWhole } = source()
+          media.mimeType = mimeType
+          // A Blob read with a type of its own is retyped as well.
+          readWhole.mockResolvedValueOnce(new Blob(['<html>'], { type: 'text/html' }))
+          const playback = await openMediaPlayback(media)
+          expect(playback).toMatchObject({ kind: 'ready', streamed: false })
+          expect(made.at(-1)?.type, mimeType).toBe(expected)
+        }
+      } finally {
+        vi.mocked(streamingAvailable).mockResolvedValue(true)
+      }
     })
 
     it('says failed when the whole download fails', async () => {

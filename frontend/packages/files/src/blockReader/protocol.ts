@@ -16,6 +16,41 @@ export const STREAM_PROTOCOL_VERSION = 1
 export const STREAM_ANSWER_HARD_MAX_BYTES = 16 * 1024 * 1024
 
 /**
+ * The types a stream or its Blob fallback may be served as; anything else
+ * is `application/octet-stream`, so a stream's URL is never a document. The
+ * service worker keeps the same list (`MEDIA_TYPES`); a test holds the two
+ * equal.
+ */
+export const STREAM_MEDIA_TYPES: readonly string[] = [
+  'video/mp4',
+  'video/webm',
+  'video/ogg',
+  'video/quicktime',
+  'video/x-matroska',
+  'video/mp2t',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/aac',
+  'audio/ogg',
+  'audio/opus',
+  'audio/webm',
+  'audio/flac',
+  'audio/x-flac',
+  'audio/wav',
+  'audio/wave',
+  'audio/x-wav',
+]
+
+const MEDIA_TYPE_SET = new Set(STREAM_MEDIA_TYPES)
+
+/** A served type: one of `STREAM_MEDIA_TYPES` (its parameters dropped), else application/octet-stream. */
+export function streamMediaType(type: unknown): string {
+  const base = typeof type === 'string' ? (type.split(';')[0] ?? '').trim().toLowerCase() : ''
+  return MEDIA_TYPE_SET.has(base) ? base : 'application/octet-stream'
+}
+
+/**
  * The service worker asks the page that made a request for its bytes: `v`
  * is the worker's own version, `accepts` every version it can still serve
  * (its own and the one before, for a release), and the answer goes back on

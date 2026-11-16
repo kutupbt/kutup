@@ -17,3 +17,7 @@ right file here, not into `.github/workflows/ci.yml`.
 | `office.txt` | Mail browser specs: Office collaboration step (and collab sender verification) |
 | `mail-domains.txt` | Mail custom domains browser specs (`scripts/test-mail-domains-browser.sh`, on the mail gate's stack) |
 | `chat-backup.txt` | Clean-browser Chat backup recovery |
+| `webkit.txt` | None: the media streaming specs on WebKit (`scripts/gate.sh browser webkit`), in the pre-release full test |
+
+A suite runs on Chromium unless its file has a `# project: <name>` line naming
+another Playwright project (`webkit.txt` does).

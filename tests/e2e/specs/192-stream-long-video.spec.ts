@@ -1,14 +1,21 @@
 // Streaming a long video by block (docs/plans/drive-block-format.md §4, §9):
-// a two-hour, low-bitrate WebM (made with ffmpeg here; Playwright's
-// Chromium plays VP8, not H.264) uploaded to Photos, played in Photos'
-// viewer and on Drive's file page. A seek to 1:30:00 plays within seconds,
-// and the network log shows the reader fetched only the blocks it needed: the
-// header, the trailer and manifest, the blocks around each position and the
-// WebM's cues at the end, never the whole file. A song plays from Drive's
-// file page the same way. With service workers blocked the players fall back
-// to a whole download into a Blob.
+// a two-hour, low-bitrate video made with ffmpeg here, uploaded to Photos,
+// played in Photos' viewer and on Drive's file page. A seek to 1:30:00 plays
+// within seconds, and the network log shows the reader fetched only the
+// blocks it needed: the header, the trailer and manifest, the blocks around
+// each position and the container's index, never the whole file. A song
+// plays from Drive's file page the same way. With service workers blocked
+// the players fall back to a whole download into a Blob.
 //
-// Needs ffmpeg with libvpx on the PATH; skipped without it.
+// Chromium: a WebM (VP8; Playwright's Chromium plays no H.264), and every
+// player must stream. WebKit (suites/webkit.txt): an H.264 MP4, since WebKit
+// may not play WebM, and a player may stream or fall back to a Blob (some
+// builds give a media element an empty `destination`, which the worker
+// refuses); it must play either way, and the path it took is recorded as a
+// "playback path" annotation. The block counts apply to a stream only.
+//
+// Needs ffmpeg on the PATH, with libvpx (Chromium) or libx264 (WebKit);
+// skipped without it.
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,33 +23,57 @@ import { join } from 'node:path'
 import { expect, test, type BrowserContext, type Locator, type Page, type Request } from '@playwright/test'
 import { appUrl, newAccount, registerAccount, signIn } from '../fixtures/apps'
 import { item, openItem, waitForFilePage } from '../fixtures/drive'
-import { wav } from '../fixtures/stream'
+import { playingPath, wav } from '../fixtures/stream'
 
 const PASSWORD = 'Deneme123*StreamLongVideoPassword'
-const NAME = 'long.webm'
 const DURATION_S = 2 * 60 * 60
 const SEEK_TO_S = 90 * 60
 const BLOCK = 4 * 1024 * 1024
+const SOURCE = ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=size=320x180:rate=4:duration=${DURATION_S}`]
 
-function hasFfmpeg(): boolean {
+/** The test video for a browser: what it plays, and how ffmpeg makes it. */
+interface LongVideo {
+  name: string
+  mimeType: string
+  encoder: string
+  args: string[]
+}
+
+function videoFor(browserName: string): LongVideo {
+  if (browserName === 'webkit') {
+    return {
+      // H.264 at a constant 320 kbit/s (filler keeps x264 from undershooting a
+      // still test card), the index at the front: about 290 MB.
+      name: 'long.mp4',
+      mimeType: 'video/mp4',
+      encoder: 'libx264',
+      args: ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-b:v', '320k', '-minrate', '320k', '-maxrate', '320k',
+        '-bufsize', '640k', '-x264-params', 'nal-hrd=cbr', '-g', '40', '-movflags', '+faststart', '-an'],
+    }
+  }
+  // VP8 at about 320 kbit/s (about 290 MB over two hours, above the 50-block floor), its cues at the end.
+  return {
+    name: 'long.webm',
+    mimeType: 'video/webm',
+    encoder: 'libvpx',
+    args: ['-c:v', 'libvpx', '-b:v', '320k', '-minrate', '320k', '-maxrate', '320k', '-deadline', 'realtime', '-cpu-used', '8', '-g', '40', '-an'],
+  }
+}
+
+function hasEncoder(encoder: string): boolean {
   try {
-    return execFileSync('ffmpeg', ['-hide_banner', '-encoders'], { stdio: 'pipe' }).toString().includes('libvpx')
+    return execFileSync('ffmpeg', ['-hide_banner', '-encoders'], { stdio: 'pipe' }).toString().includes(encoder)
   } catch {
     return false
   }
 }
 
-/** Two hours of a moving test card at 4 fps, about 160 kbit/s: a few hundred MB. */
-function longVideo(): Buffer {
+/** Two hours of a moving test card at 4 fps. */
+function longVideo(spec: LongVideo): Buffer {
   const dir = mkdtempSync(join(tmpdir(), 'kutup-192-'))
   try {
-    const out = join(dir, NAME)
-    execFileSync(
-      'ffmpeg',
-      ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=size=320x180:rate=4:duration=${DURATION_S}`,
-        '-c:v', 'libvpx', '-b:v', '160k', '-deadline', 'realtime', '-cpu-used', '8', '-g', '40', '-an', out],
-      { stdio: 'pipe', timeout: 15 * 60_000 },
-    )
+    const out = join(dir, spec.name)
+    execFileSync('ffmpeg', [...SOURCE, ...spec.args, out], { stdio: 'pipe', timeout: 15 * 60_000 })
     return readFileSync(out)
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -76,13 +107,6 @@ function rangeLog(context: BrowserContext) {
   }
 }
 
-async function startMuted(media: Locator): Promise<void> {
-  await media.evaluate(async (element: HTMLMediaElement) => {
-    element.muted = true
-    await element.play()
-  })
-}
-
 async function seekAndPlay(media: Locator, seconds: number): Promise<void> {
   await media.evaluate((element: HTMLMediaElement, at: number) => {
     element.currentTime = at
@@ -91,64 +115,68 @@ async function seekAndPlay(media: Locator, seconds: number): Promise<void> {
   await expect.poll(() => media.evaluate((element: HTMLMediaElement) => element.currentTime), { timeout: 20_000 }).toBeGreaterThan(seconds + 1)
 }
 
-async function uploadToPhotos(page: Page, video: Buffer): Promise<void> {
+async function uploadToPhotos(page: Page, spec: LongVideo, video: Buffer): Promise<void> {
   await page.goto(appUrl('photos'))
   const upload = page.getByRole('button', { name: 'Upload', exact: true }).first()
   await expect(upload).toBeVisible({ timeout: 120_000 })
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), upload.click()])
-  await chooser.setFiles({ name: NAME, mimeType: 'video/webm', buffer: video })
+  await chooser.setFiles({ name: spec.name, mimeType: spec.mimeType, buffer: video })
   await expect(page.getByText('Uploads complete')).toBeVisible({ timeout: 10 * 60_000 })
 }
 
 test.describe('a long video streams by block', () => {
-  test.skip(!hasFfmpeg(), 'needs ffmpeg with libvpx to make the two-hour video')
-
-  test('Photos and Drive play it, a seek to 1:30:00 fetches only the blocks it needs', async ({ browser }) => {
+  test('Photos and Drive play it, a seek to 1:30:00 fetches only the blocks it needs', async ({ browser, browserName }) => {
+    const spec = videoFor(browserName)
+    test.skip(!hasEncoder(spec.encoder), `needs ffmpeg with ${spec.encoder} to make the two-hour ${spec.name} for ${browserName}`)
     test.setTimeout(30 * 60_000)
-    const video = longVideo()
+    const video = longVideo(spec)
     expect(video.length).toBeGreaterThan(50 * BLOCK)
     const context = await browser.newContext()
     await registerAccount(context, newAccount('longvid', PASSWORD))
     const log = rangeLog(context)
     const page = await context.newPage()
-    await uploadToPhotos(page, video)
+    await uploadToPhotos(page, spec, video)
 
     // Photos' viewer.
-    await page.getByRole('button', { name: new RegExp(`^${NAME.replace('.', '\\.')},`) }).click()
+    await page.getByRole('button', { name: new RegExp(`^${spec.name.replace('.', '\\.')},`) }).click()
     const inPhotos = page.locator('video')
     await expect(inPhotos).toBeVisible({ timeout: 60_000 })
-    expect(await inPhotos.getAttribute('src')).toMatch(/^\/sw\/stream\/[A-Za-z0-9_-]{22}$/)
-    await startMuted(inPhotos)
+    if (browserName === 'chromium') expect(await inPhotos.getAttribute('src')).toMatch(/^\/sw\/stream\/[A-Za-z0-9_-]{22}$/)
+    const inPhotosPath = await playingPath(inPhotos, `Photos' viewer ${spec.name}`, { timeout: 10 * 60_000 })
     const beforeSeek = log.reads.length
     await seekAndPlay(inPhotos, SEEK_TO_S)
-    // The block under 1:30:00 and the one read ahead, perhaps the next: a handful, not the file.
-    expect(log.blocksSince(beforeSeek).size).toBeLessThanOrEqual(4)
-    // From the first byte to here: the header, the manifest, the start, the cues and the seek.
-    expect(log.bytesSince(0)).toBeLessThan(12 * BLOCK)
-    expect(log.bytesSince(0)).toBeLessThan(video.length / 4)
+    if (inPhotosPath === 'stream') {
+      // The block under 1:30:00 and the one read ahead, perhaps the next: a handful, not the file.
+      expect(log.blocksSince(beforeSeek).size).toBeLessThanOrEqual(4)
+      // From the first byte to here: the header, the manifest, the start, the index and the seek.
+      expect(log.bytesSince(0)).toBeLessThan(12 * BLOCK)
+      expect(log.bytesSince(0)).toBeLessThan(video.length / 4)
+    }
     await page.keyboard.press('Escape')
 
     // Drive's file page: the same file, from the Photos folder.
     await page.goto(appUrl('drive'))
     await expect(page.getByRole('button', { name: 'New' }).first()).toBeVisible({ timeout: 120_000 })
     await openItem(page, 'Photos')
-    await expect(item(page, NAME)).toBeVisible({ timeout: 60_000 })
+    await expect(item(page, spec.name)).toBeVisible({ timeout: 60_000 })
     const beforeDrive = log.reads.length
-    await openItem(page, NAME)
+    await openItem(page, spec.name)
     await waitForFilePage(page, 'drive')
     const inDrive = page.locator('video')
     await expect(inDrive).toBeVisible({ timeout: 60_000 })
-    expect(await inDrive.getAttribute('src')).toMatch(/^\/sw\/stream\//)
-    await startMuted(inDrive)
+    if (browserName === 'chromium') expect(await inDrive.getAttribute('src')).toMatch(/^\/sw\/stream\//)
+    const inDrivePath = await playingPath(inDrive, `Drive's file page ${spec.name}`, { timeout: 10 * 60_000 })
     const beforeDriveSeek = log.reads.length
     await seekAndPlay(inDrive, SEEK_TO_S + 600)
-    expect(log.blocksSince(beforeDriveSeek).size).toBeLessThanOrEqual(4)
-    expect(log.bytesSince(beforeDrive)).toBeLessThan(12 * BLOCK)
+    if (inDrivePath === 'stream') {
+      expect(log.blocksSince(beforeDriveSeek).size).toBeLessThanOrEqual(4)
+      expect(log.bytesSince(beforeDrive)).toBeLessThan(12 * BLOCK)
+    }
     await context.close()
   })
 })
 
-test('a song plays from Drive’s file page, and without a service worker from a Blob', async ({ browser }) => {
+test('a song plays from Drive’s file page, and without a service worker from a Blob', async ({ browser, browserName }) => {
   test.slow()
   const account = newAccount('songpage', PASSWORD)
   const context = await browser.newContext()
@@ -164,8 +192,8 @@ test('a song plays from Drive’s file page, and without a service worker from a
   await waitForFilePage(page, 'drive')
   const audio = page.locator('audio')
   await expect(audio).toBeVisible({ timeout: 60_000 })
-  expect(await audio.getAttribute('src')).toMatch(/^\/sw\/stream\//)
-  await startMuted(audio)
+  if (browserName === 'chromium') expect(await audio.getAttribute('src')).toMatch(/^\/sw\/stream\//)
+  await playingPath(audio, 'Drive’s file page song.wav')
   await seekAndPlay(audio, 40)
   const fileUrl = page.url()
   await context.close()
@@ -179,7 +207,7 @@ test('a song plays from Drive’s file page, and without a service worker from a
   const fallback = again.locator('audio')
   await expect(fallback).toBeVisible({ timeout: 90_000 })
   expect(await fallback.getAttribute('src')).toMatch(/^blob:/)
-  await startMuted(fallback)
+  await playingPath(fallback, 'song.wav with service workers blocked', { expected: 'fallback' })
   await seekAndPlay(fallback, 40)
   await blocked.close()
 })

@@ -339,6 +339,31 @@ fn thumbnails_contract() {
         StatusCode::BAD_REQUEST,
         "revision bound"
     );
+    // Sealed and named consistently, but not a revision of this file.
+    let made_up = uuid();
+    let made_up_revision = thumbnail::seal(
+        &picture(3, 100),
+        ThumbnailVariant::Small,
+        &file_key,
+        &file_id,
+        &made_up,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        put_thumb(
+            &c,
+            &base,
+            &token,
+            &file_id,
+            "sm",
+            made_up_revision,
+            &made_up,
+            None
+        ),
+        StatusCode::BAD_REQUEST,
+        "unknown revision"
+    );
     let mut unnamed = bearer(
         c.put(format!("{base}/api/files/{file_id}/thumbnails/sm")),
         &token,

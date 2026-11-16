@@ -634,7 +634,8 @@ worker) and browsers with service workers disabled.
   default).
 - Lock screen and background playback are best-effort: iOS may suspend the
   page that supplies the bytes.
-- The e2e suite runs on WebKit to cover this (slice 5).
+- The e2e suite runs on WebKit to cover this (slice 5): `suites/webkit.txt`,
+  where a player may stream or fall back, and records which.
 
 **Tests.** Unit tests: range parsing, the response headers, the type
 allowlist, the answer checks and the 503 on a version mismatch
@@ -1100,9 +1101,13 @@ Each slice is a PR.
      ffmpeg, skipped without it; Photos' viewer and Drive's file page seek to
      1:30:00 and the network log holds the reads to a few blocks; a song on
      the file page; the Blob fallback with service workers blocked), in the
-     account suite. Written, not yet run. The e2e config runs Chromium only:
-     a WebKit project waits for a host that runs it (the dev VM lacks its
-     libraries).
+     account suite. Written, not yet run.
+   - WebKit (2026-11-16): a `webkit` Playwright project runs 190-192 from
+     `tests/e2e/suites/webkit.txt` (`scripts/gate.sh browser webkit`; not in
+     CI). 192 makes an H.264 MP4 there; each player must play by stream or
+     Blob fallback, and the path is recorded. For the full test, on a host
+     with WebKit's libraries (`playwright install --with-deps webkit`; the dev
+     VM lacked them).
    - Left: downloads through the worker (`/sw/{id}`, open question 7).
 6. **Chat.** Built (2026-11-13).
    - Attachments: `ChatMediaSuiteId` 2 is the only suite the descriptor,
