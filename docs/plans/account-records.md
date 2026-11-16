@@ -202,8 +202,10 @@ chain pins (purpose 21) stay for anything left outside the head.
    server slice and the Rust core ship first, so the clients can follow in
    parallel.
 
-Open point: Pass secrets are keyed by the vault's Drive file id, which the
-server already knows (a Drive row). The server uses it to refuse a key for a
-file that is gone or not the caller's, and to drop the key when the file is
-deleted. A hashed id would lose both. Proposed: Pass keeps the file id as its
-record id, the one exception, named in the registry.
+9. **Pass secrets keep the Drive file id as their record id**, the one named
+   exception to decision 4. The server already knows the id (a Drive row),
+   and today's table is keyed by it. What it reveals is that this file is a
+   vault the account holds a key for, the same as today. It keeps the
+   server's check that the file is live and the caller's, and the key's
+   removal when the file is deleted. Every other scope's id is
+   `hashed_object` or random. The registry states the exception and why.
