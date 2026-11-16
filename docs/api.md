@@ -1440,27 +1440,19 @@ disabled and not yet set-up accounts are left out); `400` for more than 100.
 
 **Auth:** Bearer JWT; counted with the user lookups (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), one per request.
 
-### GET /api/user/identity-pins · PUT /api/user/identity-pins
+### The identity pin list
 
 The account's pins on other accounts' authorities: one list sealed under a key
 derived from its master key (`kutup_crypto::identity_pins`), opaque to the
-server, shared by every app of the account.
-
-**Auth:** Bearer JWT
-
-**Response (GET):** `{ "revision": 1791633600000, "envelope": "<canonical base64>" }`
-(the revision is the one in the envelope's header).
-**Body (PUT):** `{ "baseRevision": 1791633600000, "envelope": "<canonical base64>" }`
-
-`GET` answers `404` before the first list. The revision is sealed in the
-envelope's authenticated header (a time in unix milliseconds, above every
-revision the writer has seen; docs/plans/sealed-revisions.md). A `PUT` is
-stored only if the stored list is still `baseRevision` (0 before the first)
-and the envelope's revision is above it (`400` if not), else `409` with
-`{ "code": "revision_conflict", "revision": <stored> }`: the client merges with
-the stored list and tries again. Clients refuse a list older than one they
-have seen.
-
+server, shared by every app of the account. It is the one record of the
+account-records scope `pins` (id `pins`; [the account-records
+store](#the-account-records-store)): read with `GET
+/api/account/records/pins` (or `…/pins/pins`, `404` before the first) and
+stored with `POST /api/account/records` and the next head. The revision is
+sealed in the envelope's authenticated header (a time in unix milliseconds,
+above every revision the writer has seen; docs/plans/sealed-revisions.md). On
+a `revision_conflict` the client merges with the stored list and tries again.
+Clients refuse a list older than one they have seen.
 
 ### GET /api/account/ui-preferences · PUT /api/account/ui-preferences
 

@@ -17,7 +17,6 @@ pub mod collab;
 pub mod devices;
 pub mod federation;
 pub mod files;
-pub mod identity;
 pub mod opaque;
 pub mod pass;
 pub mod public;

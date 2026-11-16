@@ -396,11 +396,15 @@ their own plans. See [`mobile-build.md`](mobile-build.md) and
 [`chat-native-bindings.md`](chat-native-bindings.md).
 
 **The account head in native clients** (docs/plans/rollback-protection.md):
-`kutup-client-ffi`'s HTTP transport stores Chat's identity pin list without
-the account head today. On an account that keeps one, the server refuses the
-write (409), and Chat's pin sync, which is best effort, keeps to its own
-pins. Before a native app ships, its transport writes and reads pins through
-Rust `account_head`, the way the web Chat transport goes through the web head
+`kutup-client-ffi`'s HTTP transport stores Chat's identity pin list (the
+`pins` record of the account-records store, docs/plans/account-records.md)
+without the account head today, and reads it unverified. On an account that
+keeps one, the server refuses the write (409 `head_required`), and Chat's pin
+sync, which is best effort, keeps to its own pins. Before a native app ships,
+its transport reads the records with every page's head verified and writes
+them with the next head, through Rust `account_head` and
+`kutup_crypto::account_records` (the CLI's `CliHead::records` and
+`records_write`), the way the web Chat transport goes through the web head
 client:
 - a `LocalHeadStateV1` kept in its SQLite store, one device per app;
 - the verified index checked on reads;

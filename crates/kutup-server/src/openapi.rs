@@ -335,7 +335,6 @@ All file content and metadata are encrypted client-side; the server stores only 
         // --- public shares ---
         crate::handlers::shares::create_public_share,
         crate::handlers::shares::get_public_share,
-        crate::handlers::identity::get_identity_pins,
         crate::handlers::chat_contact_list::list,
         crate::handlers::chat_contact_list::put,
         crate::handlers::chat_contact_list::delete,
@@ -346,7 +345,6 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::chat_group_list::list,
         crate::handlers::chat_group_list::put,
         crate::handlers::chat_group_list::delete,
-        crate::handlers::identity::put_identity_pins,
         crate::handlers::pass::pin_status,
         crate::handlers::pass::set_pin,
         crate::handlers::pass::remove_pin,
@@ -665,7 +663,6 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::models::FeedbackSettings,
         crate::handlers::link_reports::ReportLinkRequest,
         crate::handlers::link_reports::LinkReport,
-        crate::handlers::identity::IdentityPinsBody,
         crate::handlers::chat_contact_list::ContactList,
         crate::handlers::chat_contact_list::ContactListEntry,
         crate::handlers::chat_contact_list::ContactListWrite,

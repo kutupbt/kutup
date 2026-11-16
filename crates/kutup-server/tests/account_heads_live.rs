@@ -153,9 +153,11 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
         .unwrap())
     };
     let put_pins = |base_revision: i64, revision: u64, head: Option<&str>| {
-        bearer(c.put(format!("{base}/api/user/identity-pins")), &user.token)
+        // The one record of the account-records scope `pins`.
+        bearer(c.post(format!("{base}/api/account/records")), &user.token)
             .json(
-                &json!({ "baseRevision": base_revision, "envelope": pins(revision), "head": head }),
+                &json!({ "head": head, "puts": [{ "scope": "pins", "id": "pins",
+                "baseRevision": base_revision, "envelope": pins(revision) }] }),
             )
             .send()
             .unwrap()
@@ -167,7 +169,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
         get(&c, &base, &user, "/api/account/head")["head"],
         Value::Null
     );
-    assert_eq!(put_pins(0, 1, None).status(), StatusCode::NO_CONTENT);
+    assert_eq!(put_pins(0, 1, None).status(), StatusCode::OK);
     let index = get(&c, &base, &user, "/api/account/index/pins");
     assert_eq!(index["head"], Value::Null);
     assert_eq!(index["values"], json!([["pins", 1]]));
@@ -181,7 +183,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
         code(put_pins(1, 2, Some(&first_b64))),
         (StatusCode::CONFLICT, json!("head_conflict"))
     );
-    assert_eq!(put_pins(1, 2, None).status(), StatusCode::NO_CONTENT);
+    assert_eq!(put_pins(1, 2, None).status(), StatusCode::OK);
     assert_eq!(
         code(start(&c, &base, &user, &first_b64, &on)),
         (StatusCode::CONFLICT, json!("head_conflict")),
@@ -240,10 +242,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
         StatusCode::BAD_REQUEST
     );
     let second = chain.keep(second);
-    assert_eq!(
-        put_pins(2, 3, Some(&second)).status(),
-        StatusCode::NO_CONTENT
-    );
+    assert_eq!(put_pins(2, 3, Some(&second)).status(), StatusCode::OK);
 
     // A label: created only with the next head; recoloured without one (not
     // sealed, not protected), never with one.

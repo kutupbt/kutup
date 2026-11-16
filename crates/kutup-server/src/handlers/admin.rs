@@ -3052,7 +3052,6 @@ async fn clear_account_values(
 ) -> Result<(), sqlx::Error> {
     for statement in [
         "DELETE FROM account_heads WHERE user_id = $1",
-        "DELETE FROM identity_pins WHERE user_id = $1",
         "DELETE FROM contacts WHERE user_id = $1",
         "DELETE FROM chat_group_list WHERE user_id = $1",
         "DELETE FROM chat_contact_list WHERE user_id = $1",

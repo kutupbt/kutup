@@ -234,51 +234,29 @@ export class ApiChatTransport implements ChatTransportPort {
    * banner says why.
    */
   async fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null> {
-    const head = await accountHead(signedIn())
-    // Two reads: a write landing between them is read again once.
-    for (let attempt = 0; ; attempt++) {
-      const index = await head.verifiedIndex('pins')
-      let record: { revision: number; envelope: string } | null
-      try {
-        record = await api.get<{ revision: number; envelope: string }>('/user/identity-pins').then((response) => response.data)
-      } catch (error) {
-        if (!(axios.isAxiosError(error) && error.response?.status === 404)) throw error
-        record = null
-      }
-      try {
-        if (record) index.expect('pins', record.revision)
-        else index.expectListing([])
-        return record
-      } catch (error) {
-        if (!(error instanceof NotInVerifiedIndexError) || attempt > 0) throw error
-      }
-    }
+    // The pins are the one record of the account-records scope `pins`
+    // (docs/plans/account-records.md): read with every page's head verified
+    // and the scope checked against it.
+    const copy = await (await accountHead(signedIn())).records('pins')
+    return copy.records.get('pins') ?? null
   }
 
   /**
    * Stores the engine's next list with the next account head. `false` when
    * another app stored a list first (the engine reads it again and redoes its
-   * change, or a revision it lists already); sent again on a new head when
-   * only another value moved.
+   * change, or a revision it lists already).
    */
   async storeIdentityPins(write: { baseRevision: number; envelope: string; revision: number }): Promise<boolean> {
-    let stored = false
-    await (await accountHead(signedIn())).listedWrite('pins', (index) => {
-      const listed = index.revision('pins') ?? 0
+    const stored = await (await accountHead(signedIn())).recordsWrite('pins', (copy) => {
+      const listed = copy.records.get('pins')?.revision ?? 0
       // Already at this revision: perhaps ours (an answer that was lost),
       // perhaps another device's at the same number. Not "stored": the
-      // engine reads again and merges, which settles either case.
-      if (listed === write.revision) return Promise.resolve(null)
-      if (listed !== write.baseRevision) return Promise.resolve(null)
-      return Promise.resolve({
-        changes: [['pins', write.revision]] as const,
-        send: async (head: string) => {
-          await api.put('/user/identity-pins', { baseRevision: write.baseRevision, envelope: write.envelope, head })
-          stored = true
-        },
-      })
+      // engine reads again and merges, which settles either case. Another
+      // base: another app wrote first.
+      if (listed === write.revision || listed !== write.baseRevision) return Promise.resolve(null)
+      return Promise.resolve({ puts: [{ id: 'pins', revision: write.revision, envelope: write.envelope }], deletes: [], done: true })
     })
-    return stored
+    return stored === true
   }
 
   /**

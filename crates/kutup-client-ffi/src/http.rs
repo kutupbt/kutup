@@ -162,7 +162,14 @@ impl ChatTransport for NativeTransport {
 
     async fn fetch_identity_pins(&self) -> CoreResult<Option<IdentityPinsRecord>> {
         let response = self
-            .request(ChatHttpMethod::Get, "/user/identity-pins".into(), None)
+            // The one record of the account-records scope `pins`
+            // (docs/plans/account-records.md), read unverified: this client
+            // has no head manager yet (docs/roadmap.md, native apps).
+            .request(
+                ChatHttpMethod::Get,
+                "/account/records/pins/pins".into(),
+                None,
+            )
             .await?;
         if response.status == 404 {
             return Ok(None);
@@ -174,15 +181,20 @@ impl ChatTransport for NativeTransport {
     async fn store_identity_pins(&self, write: &IdentityPinsWrite) -> CoreResult<bool> {
         let response = self
             .request(
-                ChatHttpMethod::Put,
-                "/user/identity-pins".into(),
-                // The server reads the revision from the envelope's header.
-                // This transport writes no account head yet: the native
-                // apps will (docs/roadmap.md), and a headed account refuses
-                // the write (409), which pin sync takes as best effort.
+                ChatHttpMethod::Post,
+                "/account/records".into(),
+                // A batch of the one `pins` record; the server reads the
+                // revision from the envelope's header. This transport writes
+                // no account head yet: the native apps will (docs/roadmap.md),
+                // and a headed account refuses the write (409), which pin sync
+                // takes as best effort.
                 Some(encode(&serde_json::json!({
-                    "baseRevision": write.base_revision,
-                    "envelope": write.envelope,
+                    "puts": [{
+                        "scope": "pins",
+                        "id": "pins",
+                        "baseRevision": write.base_revision,
+                        "envelope": write.envelope,
+                    }],
                 }))?),
             )
             .await?;

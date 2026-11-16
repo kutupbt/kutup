@@ -18,9 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::account_head::{
-    self, HeadKeys, HeadStatus, IndexCheck, LocalHeadStateV1, VerifiedHead,
-};
+use kutup_crypto::account_head::{self, HeadKeys, HeadStatus, LocalHeadStateV1, VerifiedHead};
 use kutup_crypto::account_records::{Merged, RecordScope, ScopeRecords};
 use kutup_crypto::revision_guard::GuardKeys;
 
@@ -34,77 +32,6 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
-}
-
-/// A scope's values as the verified head vouches for them.
-#[derive(Debug, Clone)]
-pub struct Index {
-    pub scope: String,
-    pub values: Vec<(String, u64)>,
-    /// The head covers the scope: values outside it, or at another revision, are refused.
-    pub covered: bool,
-    /// The account has no head yet: the chain starts on this basis.
-    pub basis: Option<String>,
-}
-
-impl Index {
-    /// No index to hold values to (the device is blocked on another history,
-    /// so only its own guard holds them).
-    pub fn uncovered(scope: &str) -> Self {
-        Self {
-            scope: scope.to_owned(),
-            values: Vec::new(),
-            covered: false,
-            basis: None,
-        }
-    }
-
-    pub fn revision(&self, id: &str) -> Option<u64> {
-        self.values
-            .iter()
-            .find(|(value, _)| value == id)
-            .map(|(_, revision)| *revision)
-    }
-
-    /// Refuses a value at another revision than the covered index lists.
-    pub fn expect(&self, id: &str, revision: u64) -> Result<()> {
-        if self.covered && self.revision(id) != Some(revision) {
-            bail!(
-                "{}: {id} is not at the revision the account's verified state lists (rolled back, or brought back)",
-                self.scope
-            );
-        }
-        Ok(())
-    }
-
-    /// Refuses a listing that is not exactly the covered index's ids.
-    pub fn expect_listing<'a>(&self, ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
-        if !self.covered {
-            return Ok(());
-        }
-        let mut listed: Vec<&str> = ids.into_iter().collect();
-        listed.sort_unstable();
-        let mut indexed: Vec<&str> = self.values.iter().map(|(id, _)| id.as_str()).collect();
-        indexed.sort_unstable();
-        if listed != indexed {
-            bail!(
-                "{}: the server's list is not the one the account's verified state lists (a value dropped or brought back)",
-                self.scope
-            );
-        }
-        Ok(())
-    }
-}
-
-/// Sends a listed write with the given head; `Ok(None)` when another device wrote first.
-pub type Send<'a, T> = Box<dyn FnOnce(&str) -> Result<Option<T>> + 'a>;
-
-/// What a listed write sends: the index after it, and how to send it with a head.
-pub struct Edit<'a, T> {
-    /// Each id's new revision, or `None` when the write removes it.
-    pub changes: Vec<(String, Option<u64>)>,
-    /// Sends the write with `head`; `Ok(None)` when another device wrote first.
-    pub send: Send<'a, T>,
 }
 
 /// What a records batch changes: puts as `(id, revision, envelope)` (the
@@ -540,110 +467,31 @@ impl<'a> CliHead<'a> {
         }
     }
 
-    /// A scope's index, checked against the head it was read with. A
-    /// rollback or fork is read once more first: another device moving on
+    /// The server's head, checked, and before the account's first head the
+    /// basis to start the chain on (the contacts index answers with both).
+    /// A rollback or fork is read once more first: another device moving on
     /// between two reads is not one.
-    pub fn index(&mut self, scope: &str) -> Result<Index> {
-        match self.index_once(scope) {
-            Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => self.index_once(scope),
+    fn checked_basis(&mut self) -> Result<Option<String>> {
+        match self.checked_basis_once() {
+            Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => {
+                self.checked_basis_once()
+            }
             other => other,
         }
     }
 
-    fn index_once(&mut self, scope: &str) -> Result<Index> {
-        let Some(record) = self.client.get_account_index(scope)? else {
+    fn checked_basis_once(&mut self) -> Result<Option<String>> {
+        let Some(record) = self.client.get_account_index("contacts")? else {
             let head = self.client.get_account_head()?;
             self.verify(head.as_deref())?;
-            return Ok(Index {
-                scope: scope.to_owned(),
-                values: Vec::new(),
-                covered: false,
-                basis: None,
-            });
+            return Ok(None);
         };
         self.verify(record.head.as_deref())?;
-        let covered = match &self.verified {
-            None => false,
-            Some(verified) => {
-                match account_head::check_index(&self.store.keys, verified, scope, &record.values) {
-                    Ok(IndexCheck::Matches) => true,
-                    Ok(IndexCheck::Uncovered) => false,
-                    Err(_) => bail!(
-                        "{scope}: the server's list does not match the account's verified state"
-                    ),
-                }
-            }
-        };
-        Ok(Index {
-            scope: scope.to_owned(),
-            values: record.values,
-            covered,
-            basis: if record.head.is_none() {
-                record.basis
-            } else {
-                None
-            },
+        Ok(if record.head.is_none() {
+            record.basis
+        } else {
+            None
         })
-    }
-
-    /// A listed write of `scope`: the edit made on the verified index, sent
-    /// with the next head, redone (five tries) when another device wrote
-    /// first; the chain started first when there is none. An edit returning
-    /// `None` sends nothing.
-    pub fn listed_write<'e, T>(
-        &mut self,
-        scope: &str,
-        mut edit: impl FnMut(&Index, u32) -> Result<Option<Edit<'e, T>>>,
-    ) -> Result<Option<T>> {
-        for attempt in 1..=5 {
-            let index = self.index(scope)?;
-            let writer = self.store.keys.writer(&self.load()?.device_id)?;
-            let Some(change) = edit(&index, attempt)? else {
-                return Ok(None);
-            };
-            if let Some(basis) = &index.basis {
-                let entry = self.store.keys.scope_digest(scope, &index.values)?;
-                let (first, verified) = account_head::first(
-                    &self.store.keys,
-                    &self.store.binding,
-                    &self.store.incarnation,
-                    self.store.generations,
-                    &writer,
-                    vec![entry],
-                )?;
-                if !self
-                    .client
-                    .start_account_head(&STANDARD.encode(&first), basis)?
-                {
-                    continue;
-                }
-                self.verified = Some(verified);
-                self.advance()?;
-            }
-            let mut values: BTreeMap<String, u64> = index.values.iter().cloned().collect();
-            for (id, revision) in &change.changes {
-                match revision {
-                    Some(revision) => values.insert(id.clone(), *revision),
-                    None => values.remove(id),
-                };
-            }
-            let values: Vec<(String, u64)> = values.into_iter().collect();
-            let entry = self.store.keys.scope_digest(scope, &values)?;
-            let verified = self.verified.as_ref().context("no verified account head")?;
-            let next = verified.next(&writer, vec![entry])?;
-            let sealed = account_head::seal(&self.store.keys, &self.store.binding, &next)?;
-            match (change.send)(&STANDARD.encode(&sealed))? {
-                Some(done) => {
-                    let committed =
-                        verified.committed(&self.store.keys, &self.store.binding, &sealed)?;
-                    self.verified = Some(committed);
-                    self.advance()?;
-                    return Ok(Some(done));
-                }
-                None => continue,
-            }
-        }
-        bail!("{scope}: another device kept writing first; try again")
     }
 
     /// A records scope, read from the start and checked: every page's head
@@ -778,14 +626,12 @@ impl<'a> CliHead<'a> {
     /// A rollback or fork is [`HeadBlocked`], as for any other check.
     pub fn at_sign_in(&mut self) -> Result<()> {
         for _ in 1..=5 {
-            // Any scope's index answers with the head and, before the first, the basis.
-            let index = self.index("contacts")?;
+            let basis = self.checked_basis()?;
             if self.verified.is_some() {
                 return Ok(());
             }
-            let basis = index
-                .basis
-                .context("the server has no account head and no basis to start one on")?;
+            let basis =
+                basis.context("the server has no account head and no basis to start one on")?;
             let writer = self.store.keys.writer(&self.load()?.device_id)?;
             let (first, verified) = account_head::first(
                 &self.store.keys,
@@ -896,30 +742,6 @@ const GUARD_BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn index(covered: bool, values: &[(&str, u64)]) -> Index {
-        Index {
-            scope: "contacts".into(),
-            values: values.iter().map(|(id, r)| (id.to_string(), *r)).collect(),
-            covered,
-            basis: None,
-        }
-    }
-
-    #[test]
-    fn a_covered_index_holds_values_and_listings() {
-        let index = index(true, &[("a", 1), ("b", 2)]);
-        index.expect("a", 1).unwrap();
-        assert!(index.expect("a", 2).is_err());
-        assert!(index.expect("c", 1).is_err());
-        index.expect_listing(["b", "a"]).unwrap();
-        assert!(index.expect_listing(["a"]).is_err());
-        assert!(index.expect_listing(["a", "b", "c"]).is_err());
-        // Uncovered: nothing to hold it to yet.
-        let open = super::tests::index(false, &[]);
-        open.expect("x", 9).unwrap();
-        open.expect_listing(["x"]).unwrap();
-    }
 
     #[test]
     fn the_guard_is_sealed_and_only_moves_forward() {

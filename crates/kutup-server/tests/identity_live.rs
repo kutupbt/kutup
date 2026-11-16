@@ -139,22 +139,22 @@ fn identity_pins_sync_by_revision() {
         }],
         ..Default::default()
     };
+    // The one record of the account-records scope `pins`
+    // (docs/plans/account-records.md).
     let get = || {
         bearer(
-            c.get(format!("{base}/api/user/identity-pins")),
+            c.get(format!("{base}/api/account/records/pins/pins")),
             &owner.token,
         )
         .send()
         .unwrap()
     };
     let put = |base_revision: i64, envelope: String| {
-        bearer(
-            c.put(format!("{base}/api/user/identity-pins")),
-            &owner.token,
-        )
-        .json(&json!({ "baseRevision": base_revision, "envelope": envelope }))
-        .send()
-        .unwrap()
+        bearer(c.post(format!("{base}/api/account/records")), &owner.token)
+            .json(&json!({ "puts": [{ "scope": "pins", "id": "pins",
+                "baseRevision": base_revision, "envelope": envelope }] }))
+            .send()
+            .unwrap()
     };
     assert_eq!(get().status(), StatusCode::NOT_FOUND);
     let seal = |revision: u64| {
@@ -173,15 +173,15 @@ fn identity_pins_sync_by_revision() {
     // refused with the current revision.
     const T: u64 = 1_791_633_600_000;
     assert_eq!(put(5, seal(T)).status(), StatusCode::CONFLICT);
-    assert_eq!(put(0, seal(T)).status(), StatusCode::NO_CONTENT);
+    assert_eq!(put(0, seal(T)).status(), StatusCode::OK);
     let again = put(0, seal(T + 1));
     assert_eq!(again.status(), StatusCode::CONFLICT);
     let body: Value = again.json().unwrap();
     assert_eq!(body["code"], "revision_conflict");
-    assert_eq!(body["revision"], T);
+    assert_eq!(body["conflicts"][0]["revision"], T);
     // Not newer than its base: refused.
     assert_eq!(put(T as i64, seal(T)).status(), StatusCode::BAD_REQUEST);
-    assert_eq!(put(T as i64, seal(T + 7)).status(), StatusCode::NO_CONTENT);
+    assert_eq!(put(T as i64, seal(T + 7)).status(), StatusCode::OK);
     assert_eq!(put(T as i64, seal(T + 8)).status(), StatusCode::CONFLICT);
 
     // What comes back carries its revision in its header, for its owner's key binding.
@@ -205,7 +205,7 @@ fn identity_pins_sync_by_revision() {
     let other = register(&c, &base);
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/user/identity-pins")),
+            c.get(format!("{base}/api/account/records/pins/pins")),
             &other.token
         )
         .send()

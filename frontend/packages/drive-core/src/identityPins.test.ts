@@ -218,31 +218,42 @@ const server = {
   heldNames: new Map<string, unknown>(),
 }
 
-// The account head (docs/plans/rollback-protection.md), its rules kept
-// small: an index of the one `pins` value, covered or not, and listed writes
-// redone on a conflict as the real client does. Its own tests are in
-// @kutup/session/accountHead.test.ts.
-const head = vi.hoisted(() => ({ covered: false, revision: 0, blocked: false, sent: [] as string[] }))
+// The account head and its records (docs/plans/account-records.md), kept
+// small: the one `pins` record as the fake server holds it, covered by the
+// head or not, and batches redone on a conflict as the real client does.
+// Its own tests are in @kutup/session/accountHead.test.ts.
+const head = vi.hoisted(() => ({ covered: false, revision: 0, blocked: false, sent: [] as string[], store: null as unknown as (base: number, envelope: string, head: string) => Promise<void> }))
 vi.mock('@kutup/session/accountHead', async () => {
   const actual = await vi.importActual<typeof import('@kutup/session/accountHead')>('@kutup/session/accountHead')
-  const index = () => new actual.VerifiedIndex('pins', head.covered, head.covered ? [['pins', head.revision]] : [], null)
+  const { ScopeRecords } = await vi.importActual<typeof import('@kutup/session/accountRecords')>('@kutup/session/accountRecords')
+  const copy = () => {
+    const records = new ScopeRecords('pins')
+    if (server.pins) records.records.set('pins', { revision: server.pins.revision, envelope: server.pins.envelope })
+    // A head that covers the scope vouches for exactly one revision.
+    if (head.covered && (server.pins?.revision ?? 0) !== head.revision) throw new actual.IndexMismatchError('pins')
+    return records
+  }
   const conflicted = (error: unknown) => {
     const code = (error as { response?: { status?: number; data?: { code?: string } } }).response?.data?.code
     return code === 'head_conflict' || code === 'revision_conflict'
   }
   const client = {
-    verifiedIndex: () => (head.blocked ? Promise.reject(new actual.HeadBlockedError('fork')) : Promise.resolve(index())),
-    listedWrite: async <T,>(_scope: string, edit: (i: InstanceType<typeof actual.VerifiedIndex>, attempt: number) => Promise<{ changes: [string, number | null][]; send: (h: string) => Promise<T> } | null>) => {
+    records: () => (head.blocked ? Promise.reject(new actual.HeadBlockedError('fork')) : Promise.resolve().then(copy)),
+    recordsWrite: async <T,>(_scope: string, edit: (copy: InstanceType<typeof ScopeRecords>, attempt: number) => Promise<{ puts: { id: string; revision: number; envelope: string }[]; deletes: string[]; done: T } | null>) => {
       for (let attempt = 1; ; attempt++) {
         if (head.blocked) throw new actual.HeadBlockedError('fork')
-        const change = await edit(index(), attempt)
+        const records = copy()
+        const change = await edit(records, attempt)
         if (!change) return undefined
+        const batch = records.plan(change)
+        const put = batch.puts[0]
+        if (!put) return change.done
         try {
           const sealed = `head-${head.sent.length + 1}`
-          const result = await change.send(sealed)
+          await head.store(put.baseRevision, put.envelope, sealed)
           head.sent.push(sealed)
-          head.revision = change.changes[0][1] ?? 0
-          return result
+          head.revision = put.revision
+          return change.done
         } catch (error) {
           if (conflicted(error) && attempt < 5) continue
           throw error
@@ -257,10 +268,33 @@ vi.mock('@kutup/session/client', () => {
   const notFound = () => Object.assign(new Error('404'), { isAxiosError: true, response: { status: 404 } })
   const conflict = () =>
     Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict' } } })
+  // The server's side of a pins batch: stored only on top of the revision it started from.
+  head.store = (baseRevision: number, envelope: string, sealedHead: string) => {
+    const body = { baseRevision, envelope, head: sealedHead }
+    server.puts++
+    server.heads.push(body.head)
+    if (server.conflictOnce) {
+      server.conflictOnce = false
+      // Another app stored revision 1 with a pin of its own.
+      server.pins = {
+        revision: 1,
+        envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [{ account: { server: 'kutup.dev', accountId: 'acct-C' }, authorityPublicKey: 'C', state: 'seen', since: '2026-10-10T00:00:00Z', addresses: [{ address: 'carol@kutup.dev', seenAt: '2026-10-10T00:00:00Z' }] }] } }),
+      }
+      return Promise.reject(conflict())
+    }
+    // Stored only on top of the revision the write started from, newer than it.
+    const revision = (JSON.parse(body.envelope) as { revision: number }).revision
+    if (body.baseRevision !== (server.pins?.revision ?? 0) || revision <= body.baseRevision) return Promise.reject(conflict())
+    server.pins = { revision, envelope: body.envelope }
+    return Promise.resolve()
+  }
   return {
     default: {
       get: vi.fn((url: string) => {
-        if (url === '/user/identity-pins') return server.pins ? Promise.resolve({ data: server.pins }) : Promise.reject(notFound())
+        if (url === '/account/records/pins?after=0') {
+          const records = server.pins ? [{ id: 'pins', revision: server.pins.revision, envelope: server.pins.envelope, seq: 1 }] : []
+          return Promise.resolve({ data: { records, deleted: [], next: records.length, more: false, resync: false, head: 'h', basis: null } })
+        }
         if (url.startsWith('/users/renames/')) {
           const found = server.renames.get(decodeURIComponent(url.slice('/users/renames/'.length)))
           return Promise.resolve({ data: found ?? { version: 1, chains: [] } })
@@ -278,24 +312,6 @@ vi.mock('@kutup/session/client', () => {
         if (url !== '/users/drive-identities') return Promise.reject(new Error(url))
         server.batches.push(body.accounts)
         return Promise.resolve({ data: body.accounts.flatMap((a) => server.people.get(a) ?? []) })
-      }),
-      put: vi.fn((_url: string, body: { baseRevision: number; envelope: string; head?: string }) => {
-        server.puts++
-        server.heads.push(body.head)
-        if (server.conflictOnce) {
-          server.conflictOnce = false
-          // Another app stored revision 1 with a pin of its own.
-          server.pins = {
-            revision: 1,
-            envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [{ account: { server: 'kutup.dev', accountId: 'acct-C' }, authorityPublicKey: 'C', state: 'seen', since: '2026-10-10T00:00:00Z', addresses: [{ address: 'carol@kutup.dev', seenAt: '2026-10-10T00:00:00Z' }] }] } }),
-          }
-          return Promise.reject(conflict())
-        }
-        // Stored only on top of the revision the write started from, newer than it.
-        const revision = (JSON.parse(body.envelope) as { revision: number }).revision
-        if (body.baseRevision !== (server.pins?.revision ?? 0) || revision <= body.baseRevision) return Promise.reject(conflict())
-        server.pins = { revision, envelope: body.envelope }
-        return Promise.resolve({ data: null })
       }),
     },
   }

@@ -346,7 +346,8 @@ engine accepts a contact's identity, and before anything is sealed to them:
 The list never lifts a quarantine: only an exact scan does, and its result is
 written back as verified. Chat's own in-person verification also outranks a
 list entry that was only accepted elsewhere without comparing. The web and
-native engines read and store the list (`GET/PUT /api/user/identity-pins`)
+native engines read and store the list (the `pins` account record,
+[account-records](plans/account-records.md))
 with the key derived from the master key at start-up.
 
 Relevant routes:

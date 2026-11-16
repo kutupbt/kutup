@@ -63,7 +63,8 @@ pub enum SendOutcome {
 }
 
 /// The account's sealed identity pin list as the server stores it
-/// (`GET/PUT /api/user/identity-pins`; docs/plans/drive-identity-pins.md).
+/// (the one record of the account-records scope `pins`,
+/// docs/plans/account-records.md; docs/plans/drive-identity-pins.md).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityPinsRecord {
@@ -73,7 +74,7 @@ pub struct IdentityPinsRecord {
     pub envelope: String,
 }
 
-/// A new sealed list for `PUT /api/user/identity-pins`: stored only if the
+/// A new sealed list for the `pins` record: stored only if the
 /// server still holds `base_revision` (0: none yet). The new revision is in
 /// the envelope's header and must be above it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -127,7 +127,8 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await expect(bobPage.getByTestId('drive-safety-number')).toHaveText(aliceNumber, { timeout: 30_000 })
   await bobPage.getByLabel(/paste/i).fill(payload)
   // The verification is stored in the pin list before the page moves on.
-  const verified = bobPage.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname.endsWith('/user/identity-pins'))
+  // The pins are an account record (docs/plans/account-records.md).
+  const verified = bobPage.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/account/records'))
   await bobPage.getByRole('button', { name: 'Verify exact match' }).click()
   expect((await verified).status()).toBe(204)
   await bobPage.keyboard.press('Escape')

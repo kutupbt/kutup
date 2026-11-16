@@ -238,3 +238,12 @@ parallel.
    would break the head. As today, a key stays until its owner forgets it.)
    Every other scope's id is
    `hashed_object` or random. The registry states the exception and why.
+
+### Deferred: the FFI's pins without a head (main session, 2026-11-16)
+
+Slice 4 moves `kutup-client-ffi`'s pins to the records routes with today's
+behaviour: read unverified, written without a head (an account that keeps
+one refuses it with `head_required`). The FFI has no head manager yet, and
+building one is the native-apps work: it is done together with
+`start_client`'s head check (docs/roadmap.md, "Native iOS and Android
+apps"), not as a half head manager here.

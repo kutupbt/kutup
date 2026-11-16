@@ -96,7 +96,7 @@ another revision, the suite-1 value).
 The revision is in the list's authenticated header: a time in unix
 milliseconds above every revision the writer has seen
 (docs/plans/sealed-revisions.md). Stored by the server, opaque, at
-`GET / PUT /api/user/identity-pins` with a compare-and-swap on the revision
+the `pins` account record (since W3, docs/plans/account-records.md) with a compare-and-swap on the revision
 the write started from (`baseRevision`; two apps writing at once merge and
 retry). Each browser (`RevisionGuard`), the CLI and the Chat core remember
 the highest revision they have seen, so the server cannot quietly hand back

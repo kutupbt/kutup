@@ -44,7 +44,7 @@ contact's PGP preferences).
 | Account | theme, language | `user_ui_preferences` |
 | Account | two-factor sign-in | `users.totp_*` |
 | Account | presence / cursor colour | `users.color` |
-| Account | identity pins | `identity_pins` (sealed; highest revision seen also kept on each device against rollback) |
+| Account | identity pins | the `pins` account record (sealed; highest revision seen also kept on each device against rollback) |
 | Chat | profile (name, avatar, about) | `chat_profiles` (end to end encrypted) |
 | Chat | per-conversation pinned, archived, muted, read | hidden Note to Self messages (end to end encrypted) |
 | Mail | every option on its settings pages: auto-delete, sign outside mail, public key attachment and PGP scheme, link confirmation, spam action, remote images, image proxy, embedded images, image metadata, undo-send delay, layout, density, view and composer modes, page size, composer defaults | `mail_settings` |

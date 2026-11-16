@@ -9,6 +9,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::account_records::{RecordScope, ScopeRecords};
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
@@ -17,7 +18,6 @@ use kutup_crypto::identity_pins::{
 };
 use kutup_crypto::safety_number;
 
-use crate::api::types::IdentityPinsWrite;
 use crate::config;
 use crate::context::Ctx;
 
@@ -248,23 +248,20 @@ pub(crate) fn bound(person: &Published) -> bool {
 /// What the revision guard calls the pin list (as the web does).
 pub const PINS_GUARD_SCOPE: &str = "identity-pins";
 pub const PINS_GUARD_ID: &str = "list";
-/// The pin list is one value of the account head's `pins` scope.
-const HEAD_SCOPE: &str = "pins";
-const HEAD_ID: &str = "pins";
+/// The pin list is the one record of the account-records scope `pins`
+/// (docs/plans/account-records.md), under the account head.
+const SCOPE: RecordScope = RecordScope::Pins;
+const RECORD_ID: &str = "pins";
 
-/// Reads the list and opens it, held to `index` and to this device's guard.
-fn read_pins(
-    ctx: &Ctx,
-    me: &Me,
-    index: &crate::account_head::Index,
-) -> Result<(u64, IdentityPinsV2)> {
+/// Opens the list `copy` holds, held to this device's guard: the revision
+/// sealed in its header must be the one the (verified) records name.
+fn read_pins(me: &Me, copy: &ScopeRecords) -> Result<(u64, IdentityPinsV2)> {
     let guard = me.guard()?;
-    let (revision, list) = match ctx.client.get_identity_pins()? {
+    let (revision, list) = match copy.records.get(RECORD_ID) {
         None => {
             if guard.seen(PINS_GUARD_SCOPE, PINS_GUARD_ID)? > 0 {
                 bail!("the server returned no identity pin list, though this device has seen one");
             }
-            index.expect_listing([])?;
             (0, IdentityPinsV2::default())
         }
         Some(record) => {
@@ -273,7 +270,9 @@ fn read_pins(
                 .context("identity pins are not base64")?;
             let key = me.master_keys.key_for(&sealed)?;
             let (list, revision) = identity_pins::open(key, &me.binding, &sealed)?;
-            index.expect(HEAD_ID, revision)?;
+            if revision != record.revision {
+                bail!("the identity pin list is not at the revision the account's records name");
+            }
             (revision, list)
         }
     };
@@ -285,28 +284,20 @@ fn read_pins(
     Ok((revision, list))
 }
 
-/// The account's pin list and its revision, held to the account head (read
-/// again once when a write landed between the two reads).
+/// The account's pin list and its revision, held to the account head. While
+/// this device is blocked on another history, read unverified and held to
+/// its own guard (listed writes stop, exit 6).
 pub fn load_pins(ctx: &Ctx, me: &Me) -> Result<(u64, IdentityPinsV2)> {
     let mut head = me.head(ctx)?;
-    let index = |head: &mut crate::account_head::CliHead<'_>| match head.index(HEAD_SCOPE) {
-        Ok(index) => Ok(index),
-        // Blocked on another history: reads go on, held to this device's own
-        // guard; listed writes stop (exit 6).
+    let copy = match head.records(SCOPE) {
+        Ok((copy, _)) => copy,
         Err(error) if error.downcast_ref::<crate::errors::HeadBlocked>().is_some() => {
             eprintln!("note: {error}");
-            Ok(crate::account_head::Index::uncovered(HEAD_SCOPE))
+            crate::account_head::unverified_records(&ctx.client, SCOPE)?
         }
-        Err(error) => Err(error),
+        Err(error) => return Err(error),
     };
-    let first = index(&mut head)?;
-    match read_pins(ctx, me, &first) {
-        Ok(read) => Ok(read),
-        Err(_) => {
-            let again = index(&mut head)?;
-            read_pins(ctx, me, &again)
-        }
-    }
+    read_pins(me, &copy)
 }
 
 fn now_millis() -> u64 {
@@ -331,8 +322,8 @@ fn pin(ctx: &Ctx, me: &Me, person: &Published, update: PinUpdate) -> Result<Reco
     let guard = &guard;
     let mut head = me.head(ctx)?;
     let mut outcome = None;
-    head.listed_write(HEAD_SCOPE, |index, _attempt| {
-        let (revision, mut list) = read_pins(ctx, me, index)?;
+    let stored = head.records_write(SCOPE, |copy, _attempt| {
+        let (revision, mut list) = read_pins(me, copy)?;
         let before = list.clone();
         let since = identity_pins::since_from_unix(now_seconds());
         let recorded = identity_pins::record(
@@ -360,23 +351,15 @@ fn pin(ctx: &Ctx, me: &Me, person: &Published, update: PinUpdate) -> Result<Reco
             next,
             &list,
         )?;
-        let envelope = STANDARD.encode(sealed);
-        Ok(Some(crate::account_head::Edit {
-            changes: vec![(HEAD_ID.to_owned(), Some(next))],
-            send: Box::new(move |sealed_head: &str| {
-                let stored = ctx.client.put_identity_pins(&IdentityPinsWrite {
-                    base_revision: revision,
-                    envelope,
-                    head: Some(sealed_head.to_owned()),
-                })?;
-                if !stored {
-                    return Ok(None);
-                }
-                guard.accept(PINS_GUARD_SCOPE, PINS_GUARD_ID, next)?;
-                Ok(Some(()))
-            }),
+        Ok(Some(crate::account_head::RecordsEdit {
+            puts: vec![(RECORD_ID.to_owned(), next, STANDARD.encode(sealed))],
+            deletes: Vec::new(),
+            done: next,
         }))
     })?;
+    if let Some(next) = stored {
+        guard.accept(PINS_GUARD_SCOPE, PINS_GUARD_ID, next)?;
+    }
     outcome.context("the identity pin list was not read")
 }
 

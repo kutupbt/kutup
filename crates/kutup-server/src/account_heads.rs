@@ -394,12 +394,8 @@ async fn values(
                 .fetch_all(&mut *conn)
                 .await?
         }
-        Scope::Pins => {
-            sqlx::query_as("SELECT 'pins', revision FROM identity_pins WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_all(&mut *conn)
-                .await?
-        }
+        // In the account-records store (below) only.
+        Scope::Pins => Vec::new(),
         Scope::MailNames => {
             let rows: Vec<(String, String)> = sqlx::query_as(
                 "SELECT 'folder:' || id, name_sealed FROM mail_folders

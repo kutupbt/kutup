@@ -1034,15 +1034,6 @@ fn build_router(state: AppState) -> Router {
                     handlers::chat_group_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
                 )),
         )
-        .route(
-            "/api/user/identity-pins",
-            get(identity::get_identity_pins)
-                .put(identity::put_identity_pins)
-                // One sealed list, base64, and no more.
-                .route_layer(DefaultBodyLimit::max(
-                    kutup_crypto::identity_pins::MAX_SEALED_BYTES / 3 * 4 + 64 * 1024,
-                )),
-        )
         .route("/api/pass/vault-states", get(handlers::pass::vault_states))
         .route(
             "/api/pass/settings",
