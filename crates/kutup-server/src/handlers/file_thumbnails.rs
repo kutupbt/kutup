@@ -91,6 +91,21 @@ pub async fn upload(
         .ok_or_else(|| AppError::bad_request("revision is required"))?;
     thumbnail::validate(&body, variant, &fid.to_string(), revision, generation)
         .map_err(|_| AppError::bad_request("invalid thumbnail envelope"))?;
+    // The envelope binds whatever revision the caller named; it must also be
+    // one of this file's: its original content or one of its versions.
+    let revision_id =
+        Uuid::parse_str(revision).map_err(|_| AppError::bad_request("invalid revision"))?;
+    let known_revision: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM files WHERE id = $1 AND content_revision_id = $2)
+             OR EXISTS (SELECT 1 FROM file_versions WHERE id = $2 AND file_id = $1)",
+    )
+    .bind(fid)
+    .bind(revision_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if !known_revision {
+        return Err(AppError::bad_request("invalid revision"));
+    }
 
     let source_version = match query.source.as_deref() {
         None | Some("original") => None,

@@ -8,6 +8,7 @@
 
 import { streamingAvailable, TooManyStreams, type PlayerStream } from './page'
 import type { StreamLimits } from './limits'
+import { streamMediaType } from '../blockReader/protocol'
 
 export type Playback =
   /** A `/sw/stream/…` URL, or a Blob's URL; `close` ends it. */
@@ -96,8 +97,10 @@ export function watchMediaElements(src: string, onEvent: (event: StreamEvent) =>
 /** All of `source` in a Blob, for a player. */
 async function openWhole(source: MediaPlaybackSource, signal?: AbortSignal, onProgress?: (read: number) => void): Promise<Playback> {
   const whole = await source.readWhole(signal, onProgress)
-  const blob = whole instanceof Blob ? whole : new Blob([whole as BlobPart], { type: source.mimeType })
-  const src = URL.createObjectURL(blob.type === source.mimeType ? blob : new Blob([blob], { type: source.mimeType }))
+  // The service worker's allowlist: a `blob:` URL of this origin is never a document.
+  const type = streamMediaType(source.mimeType)
+  const blob = whole instanceof Blob ? whole : new Blob([whole as BlobPart], { type })
+  const src = URL.createObjectURL(blob.type === type ? blob : new Blob([blob], { type }))
   return { kind: 'ready', src, streamed: false, close: () => URL.revokeObjectURL(src) }
 }
 

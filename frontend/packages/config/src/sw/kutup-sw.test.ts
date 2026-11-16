@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
-import { STREAM_ANSWER_HARD_MAX_BYTES, STREAM_PROTOCOL_VERSION } from '../../../files/src/blockReader/protocol'
+import { STREAM_ANSWER_HARD_MAX_BYTES, STREAM_MEDIA_TYPES, STREAM_PROTOCOL_VERSION, streamMediaType } from '../../../files/src/blockReader/protocol'
 
 // Kutup's service worker (kutup-sw.js) run against a fake worker global:
 // its stateless stream route (docs/plans/drive-block-format.md §4) and that
@@ -52,7 +52,7 @@ function worker(reply: ((asked: Asked) => unknown) | null = null, query = '') {
     skipWaiting: vi.fn(),
     clients: { claim: vi.fn(() => Promise.resolve()), get: vi.fn((id: string) => Promise.resolve(id === 'page' ? client : undefined)) },
   }
-  const internals = runInNewContext(`${SOURCE}\n;({ parseRange, streamHeaders, mediaType, STREAM_PROTOCOL, STREAM_ACCEPTS, ANSWER_MAX_BYTES })`, {
+  const internals = runInNewContext(`${SOURCE}\n;({ parseRange, streamHeaders, mediaType, MEDIA_TYPES, STREAM_PROTOCOL, STREAM_ACCEPTS, ANSWER_MAX_BYTES })`, {
     self,
     URL,
     URLSearchParams,
@@ -64,6 +64,7 @@ function worker(reply: ((asked: Asked) => unknown) | null = null, query = '') {
     parseRange: (header: string) => unknown
     streamHeaders: (extra?: Record<string, string>) => Record<string, string>
     mediaType: (type: unknown) => string
+    MEDIA_TYPES: Set<string>
     STREAM_PROTOCOL: number
     STREAM_ACCEPTS: number[]
     ANSWER_MAX_BYTES: number
@@ -136,6 +137,14 @@ describe('the service worker', () => {
     expect(mediaType('Audio/MPEG; charset=x')).toBe('audio/mpeg')
     for (const other of ['text/html', 'image/svg+xml', 'application/javascript', 'video/../text/html', '', undefined]) {
       expect(mediaType(other), String(other)).toBe('application/octet-stream')
+    }
+  })
+
+  it('serves the same media types as the page’s Blob fallback', () => {
+    const { mediaType, MEDIA_TYPES } = worker().internals
+    expect([...MEDIA_TYPES].sort()).toEqual([...STREAM_MEDIA_TYPES].sort())
+    for (const type of ['video/mp4', 'Audio/MPEG; charset=x', 'text/html', 'image/svg+xml', '', undefined]) {
+      expect(streamMediaType(type), String(type)).toBe(mediaType(type))
     }
   })
 
