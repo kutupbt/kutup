@@ -55,7 +55,10 @@ fn metadata_v2(
         "a.txt",
         "text/plain",
         size,
-        ContentCommitmentV1::new(*uuid::Uuid::parse_str(revision).unwrap().as_bytes(), manifest),
+        ContentCommitmentV1::new(
+            *uuid::Uuid::parse_str(revision).unwrap().as_bytes(),
+            manifest,
+        ),
     ))
     .unwrap();
     drive_envelope::seal_b64(
