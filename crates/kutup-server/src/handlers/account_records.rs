@@ -154,6 +154,10 @@ pub async fn feed(
     Ok(Json(page))
 }
 
+/// A feed row: its counter, id, and (for a record, not a tombstone) its
+/// revision and envelope.
+type FeedRow = (i64, String, Option<i64>, Option<Vec<u8>>);
+
 /// One page, read in the caller's snapshot.
 pub(crate) async fn page(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -183,7 +187,7 @@ pub(crate) async fn page(
             basis,
         });
     }
-    let rows: Vec<(i64, String, Option<i64>, Option<Vec<u8>>)> = sqlx::query_as(
+    let rows: Vec<FeedRow> = sqlx::query_as(
         "SELECT change_seq, record_id, revision, envelope FROM account_records
           WHERE user_id = $1 AND scope = $2 AND change_seq > $3
          UNION ALL

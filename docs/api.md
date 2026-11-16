@@ -122,6 +122,7 @@ Specific codes, where an app does something particular (a test in
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
 | `accountRootsInvalid` | 400 | `register`, `complete-setup`: `accountRoots` is not one record of each root, at generation 1, bound to the key binding (docs/plans/identity-root.md) |
 | `masterKeyStale` | 409 | a write sealed under an older master key than the account's (another device rotated it, docs/plans/mk-rotation-exercise.md): sign in again |
+| `scopeFull` | 400 | an account-records batch would take a scope past its per-account count (a site setting; `scope` names it) |
 | `rotationInvalid` | 400 | `account/master-key/rotate`: a record is not this rotation's (`field` names it) |
 | `organizationKeys` | 409 | `account/master-key/rotate`: the account holds an organization escrow or key copy, which a rotation can't carry yet |
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
