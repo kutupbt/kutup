@@ -35,6 +35,7 @@ flowchart TD
     EMK["password master-key envelope<br/>(stored server-side)"]
     ERK["recovery master-key envelope<br/>(stored server-side)"]
     MK["master key<br/>(browser memory only)"]
+    DR["random Drive root<br/>(stored account record, with a generation)"]
     CK["per-collection key<br/>wrapped by typed DriveEnvelopeV1"]
     DRIVE["account Drive keypair<br/>publicKey + private-key envelope<br/>(for cross-user sharing)"]
     CBR["random ChatBackupRootV1<br/>typed master-key envelope"]
@@ -52,13 +53,22 @@ flowchart TD
     RE -->|encrypts| ERK
     EMK -->|client-side decrypt with KEK| MK
     ERK -->|recovery decrypt with entropy| MK
-    MK -->|encrypts| CK
+    MK -->|wraps| DR
+    DR -->|encrypts the owner copy of| CK
     MK -->|encrypts| DRIVE
     MK -->|wraps| CBR
     CBR -->|purpose-separated keys encrypt/sign| CBO
     CK -->|encrypts| FK
     FK -->|encrypts| BLOB
 ```
+
+The account's long-lived roots are random secrets stored as account records
+under the master key ([`plans/identity-root.md`](plans/identity-root.md)).
+The Drive root holds the owner copy of every folder the account owns and of
+every public link it made (`DriveEnvelopeV1` purposes 1 and 9, the root's
+generation in the revision slot), and gives the top-level name hash key, so
+a new master key re-wraps one record and moves no Drive data
+(`plans/identity-rotation.md` §3, in #413).
 
 Mail address keys are random OpenPGP keys (rPGP), one or more per email
 address, each sealed in an `AccountRecordV1` under the master key. Each
@@ -214,7 +224,8 @@ folders, compared without letter case or Unicode composition. The server
 keeps it so without reading a name: every write that names something sends
 the name's HMAC under the place's hash key (HKDF of the folder's first,
 epoch-1 key, which every member reaches through the key chain and which
-no rotation changes; the account master key for the top level), and unique
+no rotation changes; the account's current Drive root for the top level,
+whose generation each top-level folder records), and unique
 indexes plus a per-place advisory lock refuse a second item with the same
 hash (`409 name_taken`, naming what holds it). Each upload also hashes the
 plaintext (SHA-256, read while it encrypts) and records a content hash

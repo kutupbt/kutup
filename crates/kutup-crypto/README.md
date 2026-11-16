@@ -12,7 +12,8 @@ does not duplicate headers, parsers, KDF labels or AEAD constructions.
 | `kdf` | Argon2id + HKDF-SHA256 | `dryoc`, `hkdf`/`sha2` | account protection and purpose subkeys |
 | `account_record` | `KUTPAR1`: per-record HKDF key and key commitment, XChaCha20-Poly1305 | primitives (`Kdf`, `Aead`) | every account-private record: password/recovery wraps, secrets under the master key, contact cards, mail names, identity pins |
 | `identity` / `collection_epoch` | deterministic account keys and signed epoch chains | `ed25519-dalek`, `hkdf`/`sha2` | account authority and collection continuity |
-| `drive_envelope` / `asset` | purpose-bound XChaCha20-Poly1305 | `chacha20poly1305` | Drive records, public links and whiteboard assets |
+| `account_roots` | random stored roots (account records under the master key) | primitives | the identity root, the Drive root (owned folder keys, link owner copies, the top-level name hash key), pseudonym and call-link roots, the object-id key |
+| `drive_envelope` / `asset` | purpose-bound XChaCha20-Poly1305 | `chacha20poly1305` | Drive records, public links and whiteboard assets; the account's own folder and link keys under its Drive root (`seal_under_drive_root`) |
 | `blocks` / `drive_blocks` / `chat_media_blocks` / `chat_backup_media_blocks` | 4 MiB XChaCha20-Poly1305 blocks bound to their index and revision, a sealed (Drive: signed) manifest of block hashes | primitives (`Kdf`, `Aead`, `mac`, `hash`), `ed25519-dalek` | Drive originals and versions, Chat attachments, Chat backup media |
 | `named_share` | RFC 9180 X25519 HPKE + Ed25519 | `hpke-rs`, `ed25519-dalek` | authenticated local/federated collection shares |
 | `envelope` | XChaCha20-Poly1305 + Ed25519 | RustCrypto, `ed25519-dalek` | canonical collaboration frames |

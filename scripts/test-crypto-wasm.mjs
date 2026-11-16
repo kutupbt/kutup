@@ -247,6 +247,42 @@ assert.throws(
   assert.throws(() => crypto.openDriveEnvelope(wrapped, linkKey, 5, 3, 1n, file, owner), /authentication failed/)
 }
 
+// The account's own copies under its Drive root (docs/plans/identity-rotation.md
+// §3): an owned folder's key (purpose 1) and a link's key (purpose 9), the
+// root's generation in the revision slot; only their typed exports seal them.
+{
+  const v = vectors.driveOwnerKeys
+  const folderArgs = [v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerUserId, v.collectionEpoch]
+  const linkArgs = [v.driveRoot, v.driveRootGeneration, v.linkId, v.ownerUserId]
+  assert.equal(crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, ...folderArgs), v.collectionKey)
+  assert.equal(crypto.openOwnerLinkKey(v.linkKeyEnvelope, ...linkArgs), v.linkKey)
+  assert.equal(crypto.openOwnerCollectionKey(crypto.sealOwnerCollectionKey(v.collectionKey, ...folderArgs), ...folderArgs), v.collectionKey)
+  assert.equal(crypto.openOwnerLinkKey(crypto.sealOwnerLinkKey(v.linkKey, ...linkArgs), ...linkArgs), v.linkKey)
+  // The same root at another generation, or another epoch: refused.
+  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, 1, v.collectionId, v.ownerUserId, v.collectionEpoch))
+  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerUserId, v.collectionEpoch + 1))
+  assert.throws(() => crypto.openOwnerLinkKey(v.linkKeyEnvelope, v.driveRoot, 0, v.linkId, v.ownerUserId), /never 0/)
+  // The generic export refuses both purposes.
+  for (const purpose of [1, 9]) {
+    assert.throws(
+      () => crypto.sealDriveEnvelope(v.collectionKey, v.driveRoot, purpose, 1, 1n, v.collectionId, v.ownerUserId),
+      /typed export/,
+    )
+    assert.throws(
+      () => crypto.openDriveEnvelope(v.collectionKeyEnvelope, v.driveRoot, purpose, v.collectionEpoch, BigInt(v.driveRootGeneration), v.collectionId, v.ownerUserId),
+      /typed export/,
+    )
+  }
+}
+
+// Names: a folder's hash key from its first key; the top level's from the
+// Drive root.
+{
+  const v = vectors.driveNames
+  assert.equal(crypto.driveFolderHashKey(v.firstFolderKey, v.collectionId), v.hashKey)
+  assert.equal(crypto.driveTopLevelHashKey(v.driveRoot), v.topLevelHashKey)
+}
+
 // A photo in an album: purpose 12, epoch = the album's epoch, revision = the generation.
 {
   const fileKey = Buffer.alloc(32, 0x55).toString('base64')

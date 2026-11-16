@@ -138,11 +138,12 @@ fn versions_v2_contract() {
     let created = bearer(c.post(format!("{base}/api/collections")), &token)
         .json(&json!({
             "id": collection_id,
-            "ownerKeyEnvelope": drive_envelope::seal_b64(&collection_key, &owner.master_key, ctx(DriveEnvelopePurpose::CollectionKey, &collection_id, &user_id)).unwrap(),
+            "ownerKeyEnvelope": common::owner_collection_key(&collection_key, &owner, &collection_id, 1),
             "nameEnvelope": drive_envelope::seal_b64(b"Thumbs", &collection_key, ctx(DriveEnvelopePurpose::CollectionName, &collection_id, &user_id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&collection_id, &user_id, 1, None, &collection_key, identity.authority_signing_key()).unwrap().encode_b64(),
             "parentCollectionId": null,
             "nameHash": collection_id.replace('-', "").repeat(2),
+            "nameHashGeneration": owner.roots.drive_generation.get(),
         }))
         .send()
         .unwrap();
@@ -400,11 +401,12 @@ fn owned_file(c: &Client, base: &str, owner: &User) -> (String, String, [u8; 32]
     let created = bearer(c.post(format!("{base}/api/collections")), &token)
         .json(&json!({
             "id": collection_id,
-            "ownerKeyEnvelope": drive_envelope::seal_b64(&collection_key, &owner.master_key, ctx(DriveEnvelopePurpose::CollectionKey, &collection_id, &user_id)).unwrap(),
+            "ownerKeyEnvelope": common::owner_collection_key(&collection_key, owner, &collection_id, 1),
             "nameEnvelope": drive_envelope::seal_b64(b"Kasa", &collection_key, ctx(DriveEnvelopePurpose::CollectionName, &collection_id, &user_id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&collection_id, &user_id, 1, None, &collection_key, identity.authority_signing_key()).unwrap().encode_b64(),
             "parentCollectionId": null,
             "nameHash": collection_id.replace('-', "").repeat(2),
+            "nameHashGeneration": owner.roots.drive_generation.get(),
         }))
         .send()
         .unwrap();

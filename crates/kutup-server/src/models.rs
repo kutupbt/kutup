@@ -233,6 +233,10 @@ pub struct CollectionRow {
     /// absent until filled in.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_hash: Option<String>,
+    /// An owned top-level folder's: the Drive-root generation its name
+    /// hash's key came from (docs/plans/identity-rotation.md §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash_generation: Option<i32>,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
     pub created_at: time::OffsetDateTime,
@@ -258,6 +262,10 @@ pub struct CreateCollectionRequest {
     /// the account's top-level one (docs/plans/drive-unique-names.md).
     /// Required for a folder; ignored for an album.
     pub name_hash: Option<String>,
+    /// At the top level, the Drive-root generation the hash key came from
+    /// (docs/plans/identity-rotation.md §3): the owner's newest. Absent in a
+    /// folder.
+    pub name_hash_generation: Option<u32>,
 }
 
 /// `POST /api/collections` result — mirrors `handlers.CreateCollectionResult`.
@@ -274,6 +282,8 @@ pub struct UpdateCollectionRequest {
     pub name_revision: i64,
     /// The new name's hash (docs/plans/drive-unique-names.md).
     pub name_hash: Option<String>,
+    /// At the top level, the Drive-root generation of its hash key.
+    pub name_hash_generation: Option<u32>,
 }
 
 /// `PATCH /api/collections/{id}/color` body — mirrors `handlers.UpdateColorRequest`.
@@ -576,6 +586,7 @@ mod tests {
             upload_used_bytes: None,
             is_shared: false,
             name_hash: None,
+            name_hash_generation: None,
             created_at: time::macros::datetime!(2026-09-01 10:00 UTC),
             updated_at: time::macros::datetime!(2026-09-23 12:30 UTC),
         };

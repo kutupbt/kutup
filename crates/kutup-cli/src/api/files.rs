@@ -60,12 +60,14 @@ impl Client {
         collection_id: &str,
         parent: Option<&str>,
         name_hash: Option<String>,
+        name_hash_generation: Option<u32>,
     ) -> Result<()> {
         let resp = self.post_json(
             &format!("/collections/{collection_id}/move"),
             &super::MoveCollectionRequest {
                 parent_collection_id: parent.map(str::to_string),
                 name_hash,
+                name_hash_generation,
             },
         )?;
         super::check_ok(resp)

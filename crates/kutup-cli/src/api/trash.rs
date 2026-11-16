@@ -88,6 +88,10 @@ pub struct TrashFile {
 #[serde(rename_all = "camelCase")]
 pub struct RestoreRequest {
     pub name_hash: String,
+    /// At the top level, the Drive-root generation its hash key came from
+    /// (docs/plans/identity-rotation.md §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash_generation: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_envelope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

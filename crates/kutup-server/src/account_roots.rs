@@ -99,6 +99,28 @@ pub async fn delete(
     Ok(())
 }
 
+/// The newest generation of `user_id`'s Drive root: what its owner copies
+/// (owned folder keys, link keys) are sealed under and name in their
+/// revision (docs/plans/identity-rotation.md §3).
+pub async fn drive_generation<'e, E>(executor: E, user_id: Uuid) -> AppResult<RootGeneration>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    // The object is the generation, u32 big-endian: bytes order as numbers.
+    let object: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT object FROM account_roots WHERE user_id = $1 AND purpose = $2
+         ORDER BY object DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(AccountRecordPurpose::DriveRoot.as_u16() as i16)
+    .fetch_optional(executor)
+    .await?;
+    object
+        .and_then(|object| <[u8; 4]>::try_from(object.as_slice()).ok())
+        .and_then(|bytes| RootGeneration::new(u32::from_be_bytes(bytes)).ok())
+        .ok_or_else(|| AppError::conflict("the account has no Drive root"))
+}
+
 /// Every root record of `user_id`, canonical base64, in purpose order and
 /// newest generation first.
 pub async fn load<'e, E>(executor: E, user_id: Uuid) -> AppResult<Vec<String>>

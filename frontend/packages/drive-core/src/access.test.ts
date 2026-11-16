@@ -11,9 +11,10 @@ vi.mock('@kutup/crypto', () => ({
 vi.mock('@kutup/crypto/collectionEpoch', () => ({ createCollectionEpochStatement: vi.fn(() => Promise.resolve('statement')) }))
 vi.mock('@kutup/crypto/collectionKeyring', () => ({ sealPreviousCollectionKey: vi.fn(() => Promise.resolve('previous')) }))
 vi.mock('@kutup/crypto/driveEnvelope', () => ({
-  DRIVE_ENVELOPE_PURPOSE: { collectionKey: 1, collectionName: 2 },
+  DRIVE_ENVELOPE_PURPOSE: { collectionName: 2 },
   sealDriveEnvelope: vi.fn(() => Promise.resolve('envelope')),
 }))
+vi.mock('@kutup/crypto/ownedCollection', () => ({ sealOwnerCollectionKey: vi.fn(() => Promise.resolve('owner-envelope')) }))
 vi.mock('@kutup/crypto/publicLink', () => ({ openOwnerLinkKeyV1: vi.fn(() => Promise.resolve(new Uint8Array(32))) }))
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
 vi.mock('@kutup/session/client', () => ({ default: http }))

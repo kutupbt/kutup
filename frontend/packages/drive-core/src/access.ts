@@ -4,6 +4,7 @@ import type { AccountRef } from '@kutup/crypto/accountRef'
 import { createCollectionEpochStatement } from '@kutup/crypto/collectionEpoch'
 import { sealPreviousCollectionKey } from '@kutup/crypto/collectionKeyring'
 import { DRIVE_ENVELOPE_PURPOSE, sealDriveEnvelope } from '@kutup/crypto/driveEnvelope'
+import { sealOwnerCollectionKey } from '@kutup/crypto/ownedCollection'
 import { openOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import api from '@kutup/session/client'
 import type { DriveIdentity } from './identity'
@@ -84,7 +85,7 @@ export function useFolderAccess(folder: Folder | undefined) {
 
 /** A link's key, from the owner's copy. */
 export function openLinkKey(link: AccessLink, me: DriveIdentity): Promise<Uint8Array> {
-  return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.masterKey, { linkId: link.id, ownerUserId: me.userId })
+  return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.roots, { linkId: link.id, ownerUserId: me.userId })
 }
 
 export interface Removal {
@@ -177,7 +178,7 @@ export async function rotateFolder(
   })
   const [epochStatement, ownerKeyEnvelope, previousKeyEnvelope, nameEnvelope] = await Promise.all([
     createCollectionEpochStatement(me.roots.identityRoot, key, folder.id, me.userId, next, folder.epochStatementHash),
-    sealDriveEnvelope(key, me.masterKey, context(DRIVE_ENVELOPE_PURPOSE.collectionKey, 1)),
+    sealOwnerCollectionKey(key, me.roots, { collectionId: folder.id, ownerUserId: me.userId, epoch: next }),
     sealPreviousCollectionKey(folder.key, key, folder.id, me.userId, next),
     sealDriveEnvelope(
       new TextEncoder().encode(folder.name),

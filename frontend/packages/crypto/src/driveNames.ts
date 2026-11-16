@@ -2,6 +2,7 @@
 // can recognise as already there (crates/kutup-crypto/src/drive_names.rs,
 // which owns the format; this file only converts types).
 
+import type { AccountRoots } from './accountRoots'
 import { fromBase64, toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
 
@@ -11,10 +12,14 @@ export async function folderHashKey(firstFolderKey: Uint8Array, collectionId: st
   return fromBase64(wasm.driveFolderHashKey(toBase64(firstFolderKey), collectionId))
 }
 
-/** The hash key for the account's top-level folders, from its master key. */
-export async function topLevelHashKey(masterKey: Uint8Array): Promise<Uint8Array> {
+/**
+ * The hash key for the account's top-level folders, from its current Drive
+ * root; a hash made with it is sent with the root's generation, which the
+ * server records (docs/plans/identity-rotation.md §3).
+ */
+export async function topLevelHashKey(roots: Pick<AccountRoots, 'driveRoot'>): Promise<Uint8Array> {
   const wasm = await getCryptoWasm()
-  return fromBase64(wasm.driveTopLevelHashKey(toBase64(masterKey)))
+  return fromBase64(wasm.driveTopLevelHashKey(roots.driveRoot))
 }
 
 /** The hash a name is kept unique by in its folder (case and composition aside). */

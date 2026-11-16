@@ -74,11 +74,12 @@ fn folder_named(
     let r = bearer(c.post(format!("{base}/api/collections")), &owner.token)
         .json(&json!({
             "id": id,
-            "ownerKeyEnvelope": drive_envelope::seal_b64(&key, &owner.master_key, ctx(DriveEnvelopePurpose::CollectionKey, &id, &owner.id)).unwrap(),
+            "ownerKeyEnvelope": crate::common::owner_collection_key(&key, owner, &id, 1),
             "nameEnvelope": drive_envelope::seal_b64(b"Named", &key, ctx(DriveEnvelopePurpose::CollectionName, &id, &owner.id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&id, &owner.id, 1, None, &key, owner.identity.authority_signing_key()).unwrap().encode_b64(),
             "parentCollectionId": parent.map(|p| p.id.clone()),
             "nameHash": hash,
+            "nameHashGeneration": crate::common::top_level_generation(owner, parent.map(|p| p.id.as_str())),
         }))
         .send()
         .unwrap();
@@ -382,7 +383,8 @@ fn top_level_folder_names_are_unique_per_owner() {
     };
     let c = crate::common::client();
     let owner = register(&c, &base);
-    let top = drive_names::top_level_hash_key(&owner.master_key).unwrap();
+    let top = drive_names::top_level_hash_key(&owner.roots.drive).unwrap();
+    let generation = owner.roots.drive_generation.get();
     let projects = drive_names::name_hash(&top, "Projects").unwrap();
     let (status, _, first) = folder_named(&c, &base, &owner, None, &projects);
     assert!(status.is_success());
@@ -417,7 +419,7 @@ fn top_level_folder_names_are_unique_per_owner() {
         c.post(format!("{base}/api/collections/{}/move", inner.id)),
         &owner.token,
     )
-    .json(&json!({ "parentCollectionId": null, "nameHash": projects }))
+    .json(&json!({ "parentCollectionId": null, "nameHash": projects, "nameHashGeneration": generation }))
     .send()
     .unwrap();
     assert_taken(r, "folder", &first.id);
@@ -426,7 +428,7 @@ fn top_level_folder_names_are_unique_per_owner() {
         c.post(format!("{base}/api/collections/{}/move", inner.id)),
         &owner.token,
     )
-    .json(&json!({ "parentCollectionId": null, "nameHash": elsewhere }))
+    .json(&json!({ "parentCollectionId": null, "nameHash": elsewhere, "nameHashGeneration": generation }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
@@ -484,7 +486,7 @@ fn top_level_folder_names_are_unique_per_owner() {
         c.post(format!("{base}/api/trash/{}/restore", first.id)),
         &owner.token,
     )
-    .json(&json!({ "nameHash": other, "nameEnvelope": renamed, "nameRevision": 2 }))
+    .json(&json!({ "nameHash": other, "nameHashGeneration": generation, "nameEnvelope": renamed, "nameRevision": 2 }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::OK);

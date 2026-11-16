@@ -8,8 +8,10 @@ use uuid::Uuid;
 use crate::api::{Collection, CreateCollectionRequest, RenameCollectionRequest};
 use crate::session::Session;
 use kutup_crypto::account_ref::AccountRef;
+use kutup_crypto::account_roots::AccountRoots;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 
 pub fn create_owned(
@@ -18,23 +20,18 @@ pub fn create_owned(
     owner_user_id: &str,
     session: &Session,
 ) -> Result<(CreateCollectionRequest, [u8; 32])> {
-    let master_key = session.master_key_bytes()?;
-    let master_key: &[u8; 32] = master_key
-        .as_slice()
-        .try_into()
-        .context("master key must be 32 bytes")?;
+    let roots = session.roots()?;
     let id = Uuid::new_v4().to_string();
     let mut collection_key = [0u8; 32];
     kutup_crypto::primitives::random(&mut collection_key);
-    let owner_key_envelope = drive_envelope::seal_b64(
+    let owner_key_envelope = drive_envelope::seal_under_drive_root(
         &collection_key,
-        master_key,
-        context(
-            DriveEnvelopePurpose::CollectionKey,
-            1,
-            1,
+        &roots.drive,
+        DriveEnvelopeContextV1::owner_collection_key(
             &id,
             owner_user_id,
+            1,
+            roots.drive_generation,
         )?,
     )?;
     let name_envelope = drive_envelope::seal_b64(
@@ -48,7 +45,7 @@ pub fn create_owned(
             owner_user_id,
         )?,
     )?;
-    let identity = session.identity()?;
+    let identity = AccountIdentityKeysV1::derive(&roots.identity)?;
     let epoch_statement = CollectionEpochStatementV1::create(
         &id,
         owner_user_id,
@@ -67,12 +64,15 @@ pub fn create_owned(
             parent_collection_id,
             // Set by the caller, who knows the place's hash key.
             name_hash: None,
+            name_hash_generation: None,
         },
         collection_key,
     ))
 }
 
-pub fn open_key(col: &Collection, master_key: &[u8], session: &Session) -> Result<Vec<u8>> {
+/// A folder's key: an owned one from its owner copy under the Drive root
+/// in `roots`, a shared one from its named share.
+pub fn open_key(col: &Collection, roots: &AccountRoots, session: &Session) -> Result<Vec<u8>> {
     let collection_key = if col.is_shared {
         let envelope = NamedShareEnvelopeV1::decode_b64(
             col.named_share_envelope
@@ -95,7 +95,7 @@ pub fn open_key(col: &Collection, master_key: &[u8], session: &Session) -> Resul
                 .as_deref()
                 .ok_or_else(|| anyhow!("share owner signing key is missing"))?,
         )?;
-        let identity = session.identity()?;
+        let identity = AccountIdentityKeysV1::derive(&roots.identity)?;
         if envelope.recipient_incarnation_id != hex::decode(identity.incarnation_id())?.as_slice() {
             bail!("named share is intended for another account incarnation");
         }
@@ -114,19 +114,19 @@ pub fn open_key(col: &Collection, master_key: &[u8], session: &Session) -> Resul
             .owner_key_envelope
             .as_deref()
             .ok_or_else(|| anyhow!("owner key envelope is missing"))?;
-        drive_envelope::open_b64(
+        drive_envelope::open_under_drive_root(
             owner_envelope,
-            master_key,
-            context(
-                DriveEnvelopePurpose::CollectionKey,
-                col.key_epoch,
-                1,
+            &roots.drive,
+            DriveEnvelopeContextV1::owner_collection_key(
                 &col.id,
                 &col.owner_user_id,
+                col.key_epoch,
+                roots.drive_generation,
             )?,
         )?
+        .to_vec()
     };
-    verify_epoch(col, session, &collection_key)?;
+    verify_epoch(col, roots, &collection_key)?;
     Ok(collection_key)
 }
 
@@ -169,10 +169,11 @@ pub fn rename_request(
         name_envelope,
         name_revision,
         name_hash: None,
+        name_hash_generation: None,
     })
 }
 
-fn verify_epoch(col: &Collection, session: &Session, collection_key: &[u8]) -> Result<()> {
+fn verify_epoch(col: &Collection, roots: &AccountRoots, collection_key: &[u8]) -> Result<()> {
     let statement = CollectionEpochStatementV1::decode_b64(&col.epoch_statement)?;
     let authority = if col.is_shared {
         decode_key(
@@ -181,7 +182,9 @@ fn verify_epoch(col: &Collection, session: &Session, collection_key: &[u8]) -> R
                 .ok_or_else(|| anyhow!("share owner authority key is missing"))?,
         )?
     } else {
-        session.identity()?.authority_public_key().to_vec()
+        AccountIdentityKeysV1::derive(&roots.identity)?
+            .authority_public_key()
+            .to_vec()
     };
     statement.verify_authority(&authority)?;
     statement.verify_current_binding(&col.id, &col.owner_user_id, col.key_epoch)?;
@@ -254,7 +257,8 @@ mod tests {
         let master_key = [7u8; 32];
         let session = Session::for_tests(master_key);
         let (collection, expected_key) = owned_collection(&session);
-        let opened_key = open_key(&collection, &master_key, &session).unwrap();
+        let roots = session.roots().unwrap();
+        let opened_key = open_key(&collection, &roots, &session).unwrap();
         assert_eq!(opened_key, expected_key);
         assert_eq!(open_name(&collection, &opened_key).unwrap(), "Design notes");
 
@@ -277,13 +281,17 @@ mod tests {
     }
 
     #[test]
-    fn owned_record_rejects_wrong_master_and_epoch_hash() {
-        let master_key = [8u8; 32];
-        let session = Session::for_tests(master_key);
+    fn owned_record_rejects_another_drive_root_and_epoch_hash() {
+        let session = Session::for_tests([8u8; 32]);
+        let roots = session.roots().unwrap();
         let (mut collection, _) = owned_collection(&session);
-        assert!(open_key(&collection, &[9u8; 32], &session).is_err());
+        // Another account's Drive root (same identity, so only the owner
+        // copy can fail).
+        let mut other = roots.clone();
+        other.drive = kutup_crypto::account_roots::DriveRoot::from_bytes([9u8; 32]);
+        assert!(open_key(&collection, &other, &session).is_err());
 
         collection.epoch_statement_hash = "00".repeat(32);
-        assert!(open_key(&collection, &master_key, &session).is_err());
+        assert!(open_key(&collection, &roots, &session).is_err());
     }
 }

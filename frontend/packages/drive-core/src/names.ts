@@ -1,4 +1,5 @@
 import { isAxiosError } from 'axios'
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import { hashBlob } from '@kutup/crypto/contentHash'
 import {
   contentHash as contentHashOf,
@@ -22,14 +23,18 @@ import { randomBytes } from '@kutup/crypto/random'
  */
 
 /** Where a name lives: in a folder, or at the account's top level. */
-export type NamePlace = { kind: 'folder'; folder: KeyringFolder } | { kind: 'top'; masterKey: Uint8Array }
+export type NamePlace = { kind: 'folder'; folder: KeyringFolder } | { kind: 'top'; roots: TopLevelRoots }
+
+/** What the top-level hash key comes from: the account's current Drive root. */
+type TopLevelRoots = Pick<AccountRoots, 'driveRoot' | 'driveGeneration'>
 
 const folderKeys = new Map<string, Promise<Uint8Array>>()
-let topKey: { masterKey: Uint8Array; key: Promise<Uint8Array> } | null = null
+let topKey: { driveRoot: string; key: Promise<Uint8Array> } | null = null
 
 function hashKey(place: NamePlace): Promise<Uint8Array> {
   if (place.kind === 'top') {
-    if (topKey?.masterKey !== place.masterKey) topKey = { masterKey: place.masterKey, key: topLevelHashKey(place.masterKey) }
+    const { roots } = place
+    if (topKey?.driveRoot !== roots.driveRoot) topKey = { driveRoot: roots.driveRoot, key: topLevelHashKey(roots) }
     return topKey.key
   }
   const { folder } = place
@@ -45,11 +50,25 @@ function hashKey(place: NamePlace): Promise<Uint8Array> {
 }
 
 export const inFolder = (folder: KeyringFolder): NamePlace => ({ kind: 'folder', folder })
-export const atTopLevel = (masterKey: Uint8Array): NamePlace => ({ kind: 'top', masterKey })
+export const atTopLevel = (roots: TopLevelRoots): NamePlace => ({ kind: 'top', roots })
 
 /** The hash `name` is kept unique by in `place`. */
 export async function nameHashIn(place: NamePlace, name: string): Promise<string> {
   return nameHashOf(await hashKey(place), name)
+}
+
+/**
+ * What a write naming something in `place` sends besides its hash: at the
+ * top level, the Drive-root generation the hash key came from, which the
+ * server records (docs/plans/identity-rotation.md §3); in a folder, nothing.
+ */
+export function hashGenerationOf(place: NamePlace): { nameHashGeneration?: number } {
+  return place.kind === 'top' ? { nameHashGeneration: place.roots.driveGeneration } : {}
+}
+
+/** A write's name fields for `name` in `place`: its hash and, at the top level, the hash key's generation. */
+export async function nameFieldsIn(place: NamePlace, name: string): Promise<{ nameHash: string; nameHashGeneration?: number }> {
+  return { nameHash: await nameHashIn(place, name), ...hashGenerationOf(place) }
 }
 
 /**

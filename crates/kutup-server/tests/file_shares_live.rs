@@ -408,7 +408,7 @@ fn stale_file_shares_wait_for_the_owner() {
     .json(&json!({
         "fromEpoch": 1,
         "epochStatement": statement.encode_b64(),
-        "ownerKeyEnvelope": drive_envelope::seal_b64(&folder2, &alice.master_key, ctx2(DriveEnvelopePurpose::CollectionKey, 1)).unwrap(),
+        "ownerKeyEnvelope": crate::common::owner_collection_key(&folder2, &alice, &folder.id, 2),
         "previousKeyEnvelope": collection_keyring::seal_previous_key(&folder.key, &folder2, &folder.id, &alice.id, 2).unwrap(),
         "nameEnvelope": drive_envelope::seal_b64(b"Stale", &folder2, ctx2(DriveEnvelopePurpose::CollectionName, 2)).unwrap(),
         "members": [{ "userId": editor.id, "namedShareEnvelope": editor_share }],

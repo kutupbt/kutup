@@ -10,6 +10,7 @@ use crate::primitives::{Aead, Hasher, Kdf, Suite};
 use base64::Engine as _;
 use zeroize::Zeroizing;
 
+use crate::account_roots::{DriveRoot, RootGeneration};
 use crate::drive_object::{parse_canonical_uuid, DriveObjectSuiteId};
 use crate::error::{CryptoError, Result};
 use crate::padding::Length;
@@ -47,6 +48,10 @@ pub const fn max_thumbnail_envelope_bytes(variant: ThumbnailVariant) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DriveEnvelopePurpose {
+    /// An owned folder's key, sealed for its owner under their Drive root:
+    /// object = folder, parent = owner, epoch = the folder key's epoch,
+    /// revision = the Drive root's generation
+    /// ([`DriveEnvelopeContextV1::owner_collection_key`]).
     CollectionKey = 1,
     CollectionName = 2,
     FileKey = 3,
@@ -60,9 +65,10 @@ pub enum DriveEnvelopePurpose {
     /// the current key walk down to every older one
     /// (docs/plans/drive-share-revocation.md).
     PreviousCollectionKey = 8,
-    /// A public link's key, sealed for the folder owner under their master
-    /// key: object = link id, parent = owner, epoch 1. Lets the owner list,
-    /// copy and re-wrap the link.
+    /// A public link's key, sealed for the folder owner under their Drive
+    /// root: object = link id, parent = owner, epoch 1, revision = the Drive
+    /// root's generation. Lets the owner list, copy and re-wrap the link
+    /// ([`DriveEnvelopeContextV1::owner_link_key`]).
     PublicLinkKey = 9,
     /// A file key of generation `g − 1` sealed under the key of generation
     /// `g` (the context's epoch): object = parent = file. Holders of the
@@ -336,6 +342,88 @@ impl DriveEnvelopeContextV1 {
             parent_id: digest[..16].try_into().expect("sixteen-byte digest prefix"),
         })
     }
+}
+
+impl DriveEnvelopeContextV1 {
+    /// An owned folder's key at `epoch`, sealed for its owner under their
+    /// Drive root of `root_generation` (docs/plans/identity-rotation.md §3).
+    /// The revision slot carries the generation, so a reader finds the root
+    /// that opens it after the Drive root rotates.
+    pub fn owner_collection_key(
+        collection_id: &str,
+        owner_id: &str,
+        epoch: u32,
+        root_generation: RootGeneration,
+    ) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::CollectionKey,
+            epoch,
+            u64::from(root_generation.get()),
+            collection_id,
+            owner_id,
+        )
+    }
+
+    /// A public link's key, sealed for its owner under their Drive root of
+    /// `root_generation` (epoch 1, the generation in the revision slot).
+    pub fn owner_link_key(
+        link_id: &str,
+        owner_id: &str,
+        root_generation: RootGeneration,
+    ) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::PublicLinkKey,
+            1,
+            u64::from(root_generation.get()),
+            link_id,
+            owner_id,
+        )
+    }
+
+    /// The Drive root generation an owner envelope of this context is
+    /// sealed under, for the purposes sealed under the Drive root.
+    pub fn drive_root_generation(&self) -> Result<RootGeneration> {
+        if !self.purpose.is_under_drive_root() {
+            return Err(CryptoError::InvalidInput(format!(
+                "Drive envelope purpose {} is not sealed under the Drive root",
+                self.purpose.as_u8()
+            )));
+        }
+        let generation = u32::try_from(self.revision)
+            .map_err(|_| CryptoError::InvalidInput("a Drive root generation is a u32".into()))?;
+        RootGeneration::new(generation)
+    }
+}
+
+impl DriveEnvelopePurpose {
+    /// The purposes sealed for the account itself under its Drive root
+    /// (owned folder keys and link owner copies); nothing else is.
+    pub const fn is_under_drive_root(self) -> bool {
+        matches!(self, Self::CollectionKey | Self::PublicLinkKey)
+    }
+}
+
+/// Seals a key for its owner under their Drive root: `context` is an
+/// [`DriveEnvelopeContextV1::owner_collection_key`] or
+/// [`DriveEnvelopeContextV1::owner_link_key`] at the root's generation.
+pub fn seal_under_drive_root(
+    key: &[u8],
+    drive_root: &DriveRoot,
+    context: DriveEnvelopeContextV1,
+) -> Result<String> {
+    context.drive_root_generation()?;
+    seal_b64(key, drive_root.as_bytes(), context)
+}
+
+/// Opens an owner envelope sealed under `drive_root`; `expected` names the
+/// root's generation, which must be the one the envelope names.
+pub fn open_under_drive_root(
+    envelope_b64: &str,
+    drive_root: &DriveRoot,
+    expected: DriveEnvelopeContextV1,
+) -> Result<Zeroizing<Vec<u8>>> {
+    expected.drive_root_generation()?;
+    open_b64(envelope_b64, drive_root.as_bytes(), expected).map(Zeroizing::new)
 }
 
 impl DriveEnvelopeContextV1 {
@@ -663,6 +751,53 @@ mod tests {
                 .as_str(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn an_owner_key_opens_only_under_its_drive_root_and_generation() {
+        let folder = "11111111-1111-4111-8111-111111111111";
+        let owner = "22222222-2222-4222-8222-222222222222";
+        let root = DriveRoot::from_bytes([0x21; 32]);
+        let first = RootGeneration::FIRST;
+        let second = RootGeneration::new(2).unwrap();
+        let scope = DriveEnvelopeContextV1::owner_collection_key(folder, owner, 3, first).unwrap();
+        assert_eq!(scope.revision, 1);
+        assert_eq!(scope.drive_root_generation().unwrap(), first);
+        let sealed = seal_under_drive_root(&[0x55; 32], &root, scope).unwrap();
+        assert_eq!(
+            inspect(
+                &base64::engine::general_purpose::STANDARD
+                    .decode(&sealed)
+                    .unwrap()
+            )
+            .unwrap()
+            .context
+            .drive_root_generation()
+            .unwrap(),
+            first
+        );
+        assert_eq!(
+            open_under_drive_root(&sealed, &root, scope)
+                .unwrap()
+                .as_slice(),
+            &[0x55; 32]
+        );
+        // Another root, another generation, another epoch: refused.
+        assert!(open_under_drive_root(&sealed, &DriveRoot::from_bytes([0x22; 32]), scope).is_err());
+        let later = DriveEnvelopeContextV1::owner_collection_key(folder, owner, 3, second).unwrap();
+        assert!(open_under_drive_root(&sealed, &root, later).is_err());
+        let rotated =
+            DriveEnvelopeContextV1::owner_collection_key(folder, owner, 4, first).unwrap();
+        assert!(open_under_drive_root(&sealed, &root, rotated).is_err());
+        // A link's owner copy is a different thing.
+        let link = DriveEnvelopeContextV1::owner_link_key(folder, owner, first).unwrap();
+        assert_eq!((link.epoch, link.revision), (1, 1));
+        assert!(open_under_drive_root(&sealed, &root, link).is_err());
+        // Only the owner purposes go under the Drive root.
+        let name =
+            DriveEnvelopeContextV1::new(DriveEnvelopePurpose::CollectionName, 1, 1, folder, owner)
+                .unwrap();
+        assert!(seal_under_drive_root(b"x", &root, name).is_err());
     }
 
     #[test]

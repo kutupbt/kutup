@@ -116,16 +116,11 @@ pub async fn create_public_share(
         _ => return Err(AppError::bad_request("unsupported public share type")),
     };
     let link_id = canonical_uuid(&req.id)?;
+    let drive_generation = crate::account_roots::drive_generation(&state.pool, user_id).await?;
     validate_envelope(
         &req.owner_link_key_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::PublicLinkKey,
-            1,
-            1,
-            &req.id,
-            &user_id.to_string(),
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        DriveEnvelopeContextV1::owner_link_key(&req.id, &user_id.to_string(), drive_generation)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
 
     let token = random_token(32);

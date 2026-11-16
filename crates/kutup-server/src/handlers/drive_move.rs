@@ -185,6 +185,9 @@ pub struct MoveCollectionRequest {
     /// Its name's hash in the new place (docs/plans/drive-unique-names.md).
     #[serde(default)]
     pub name_hash: Option<String>,
+    /// At the top level, the Drive-root generation of its hash key.
+    #[serde(default)]
+    pub name_hash_generation: Option<u32>,
 }
 
 /// `POST /api/collections/{id}/move` — put a folder under another of the
@@ -265,10 +268,16 @@ pub async fn move_collection(
     let place = crate::drive_names::Place::of(parent, user_id);
     crate::drive_names::lock_place(&mut tx, place).await?;
     crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(folder)).await?;
-    sqlx::query("UPDATE collections SET parent_collection_id = $2, name_hash = $3 WHERE id = $1")
+    let generation =
+        crate::drive_names::hash_generation(&mut tx, place, req.name_hash_generation).await?;
+    sqlx::query(
+        "UPDATE collections SET parent_collection_id = $2, name_hash = $3, name_hash_generation = $4
+         WHERE id = $1",
+    )
         .bind(folder)
         .bind(parent)
         .bind(&name_hash)
+        .bind(generation)
         .execute(&mut *tx)
         .await
         .map_err(crate::drive_names::map_unique_violation)?;

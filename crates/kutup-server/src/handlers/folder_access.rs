@@ -560,15 +560,16 @@ pub async fn rotate(
         })
         .map_err(|_| AppError::bad_request("invalid epoch statement"))?;
     let statement_hash = statement.statement_hash();
+    let drive_generation = crate::account_roots::drive_generation(&mut *tx, owner).await?;
     validate_envelope(
         &req.owner_key_envelope,
-        context(
-            DriveEnvelopePurpose::CollectionKey,
-            next,
-            1,
-            collection_id,
-            owner,
-        )?,
+        DriveEnvelopeContextV1::owner_collection_key(
+            &collection_id.to_string(),
+            &owner.to_string(),
+            u32::try_from(next).map_err(|_| AppError::conflict("invalid epoch"))?,
+            drive_generation,
+        )
+        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     validate_envelope(
         &req.previous_key_envelope,

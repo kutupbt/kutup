@@ -4,21 +4,22 @@ use crate::api::{Client, Collection, File};
 use crate::keyring::Keyring;
 use crate::session::Session;
 use anyhow::Result;
+use kutup_crypto::account_roots::AccountRoots;
 
 /// Decrypts a collection's key, handling both owned typed envelopes and
 /// authenticated HPKE named-share envelopes.
 pub fn decrypt_collection_key(
     col: &Collection,
-    master_key: &[u8],
+    roots: &AccountRoots,
     sess: &Session,
 ) -> Result<Vec<u8>> {
-    crate::collection_crypto::open_key(col, master_key, sess)
+    crate::collection_crypto::open_key(col, roots, sess)
 }
 
 /// Decrypts a collection's display name, returning `[encrypted]` on failure
 /// (matching the Go behavior so a single bad row never aborts a listing).
-pub fn decrypt_collection_name(col: &Collection, master_key: &[u8], sess: &Session) -> String {
-    let Ok(collection_key) = decrypt_collection_key(col, master_key, sess) else {
+pub fn decrypt_collection_name(col: &Collection, roots: &AccountRoots, sess: &Session) -> String {
+    let Ok(collection_key) = decrypt_collection_key(col, roots, sess) else {
         return "[encrypted]".to_string();
     };
     match crate::collection_crypto::open_name(col, &collection_key) {
@@ -30,12 +31,12 @@ pub fn decrypt_collection_name(col: &Collection, master_key: &[u8], sess: &Sessi
 /// Returns a copy of `cols` with each `name` populated.
 pub fn decrypt_collections(
     cols: Vec<Collection>,
-    master_key: &[u8],
+    roots: &AccountRoots,
     sess: &Session,
 ) -> Vec<Collection> {
     cols.into_iter()
         .map(|mut col| {
-            col.name = decrypt_collection_name(&col, master_key, sess);
+            col.name = decrypt_collection_name(&col, roots, sess);
             col
         })
         .collect()
@@ -45,10 +46,10 @@ pub fn decrypt_collections(
 pub fn folder_keyring(
     client: &Client,
     col: &Collection,
-    master_key: &[u8],
+    roots: &AccountRoots,
     sess: &Session,
 ) -> Result<Keyring> {
-    let key = decrypt_collection_key(col, master_key, sess)?;
+    let key = decrypt_collection_key(col, roots, sess)?;
     Keyring::load(client, col, &key, sess)
 }
 
@@ -75,16 +76,16 @@ pub struct FoundFile {
 
 /// Locates a file across the user's owned collections and unwraps its file key.
 /// Mirrors `findFileAndKey` (versions.go); shared/federated collections are
-/// skipped (their keys don't open with the master key directly).
+/// skipped (their keys don't open with the Drive root).
 pub fn find_file_and_key(
     client: &Client,
-    master_key: &[u8],
+    roots: &AccountRoots,
     sess: &Session,
     file_id: &str,
 ) -> Result<FoundFile> {
     let cols = client.list_collections()?;
     for col in cols {
-        let Ok(col_key) = crate::collection_crypto::open_key(&col, master_key, sess) else {
+        let Ok(col_key) = crate::collection_crypto::open_key(&col, roots, sess) else {
             continue;
         };
         let Ok(files) = client.list_files(&col.id) else {
@@ -112,13 +113,13 @@ pub fn find_file_and_key(
 /// and those shared with it — with its key and its folder's keys.
 pub fn locate_file(
     client: &Client,
-    master_key: &[u8],
+    roots: &AccountRoots,
     sess: &Session,
     cols: &[Collection],
     file_id: &str,
 ) -> Result<FoundFile> {
     for col in cols {
-        let Ok(col_key) = decrypt_collection_key(col, master_key, sess) else {
+        let Ok(col_key) = decrypt_collection_key(col, roots, sess) else {
             continue;
         };
         let Ok(files) = client.list_files(&col.id) else {

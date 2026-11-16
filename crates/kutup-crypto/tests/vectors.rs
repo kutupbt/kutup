@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use kutup_crypto::{
     account_record::{self, AccountRecordPurpose},
+    account_roots::{DriveRoot, RootGeneration},
     asset,
     drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose},
     envelope,
@@ -973,8 +974,8 @@ fn print_drive_names_vectors() {
         "firstFolderKey": e(&first),
         "collectionId": collection_id,
         "hashKey": e(&hash_key),
-        "masterKey": e(&[0x62u8; 32]),
-        "topLevelHashKey": e(&drive_names::top_level_hash_key(&[0x62u8; 32]).unwrap()),
+        "driveRoot": e(&[0x62u8; 32]),
+        "topLevelHashKey": e(&drive_names::top_level_hash_key(&DriveRoot::from_bytes([0x62u8; 32])).unwrap()),
         "names": names,
         "content": { "plaintext": e(b"kutup"), "sha256": e(&digest), "hash": drive_names::content_hash(&hash_key, &digest).unwrap() },
     });
@@ -991,7 +992,7 @@ fn drive_names_vector() {
         drive_names::folder_hash_key(&b64(&s("firstFolderKey")), &s("collectionId")).unwrap();
     assert_eq!(hash_key.as_slice(), b64(&s("hashKey")).as_slice());
     assert_eq!(
-        drive_names::top_level_hash_key(&b64(&s("masterKey")))
+        drive_names::top_level_hash_key(&DriveRoot::from_slice(&b64(&s("driveRoot"))).unwrap())
             .unwrap()
             .as_slice(),
         b64(&s("topLevelHashKey")).as_slice()
@@ -1016,6 +1017,95 @@ fn drive_names_vector() {
     assert_eq!(
         drive_names::content_hash(&hash_key, &digest).unwrap(),
         content["hash"].as_str().unwrap()
+    );
+}
+
+/// Prints the `driveOwnerKeys` vectors for `tests/vectors/crypto.json`: an
+/// owned folder's key and a link's owner copy, sealed under the Drive root
+/// at its generation (docs/plans/identity-rotation.md §3).
+/// `cargo test -p kutup-crypto --test vectors print_drive_owner_key_vectors -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_drive_owner_key_vectors() {
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let root = [0x63u8; 32];
+    let generation = RootGeneration::new(2).unwrap();
+    let (folder, owner, link) = (
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333",
+    );
+    let collection =
+        DriveEnvelopeContextV1::owner_collection_key(folder, owner, 3, generation).unwrap();
+    let link_scope = DriveEnvelopeContextV1::owner_link_key(link, owner, generation).unwrap();
+    let v = serde_json::json!({
+        "description": "An owned folder's key and a link's owner copy under the Drive root; the revision slot is the root's generation (kutup-crypto/src/drive_envelope.rs).",
+        "driveRoot": e(&root),
+        "driveRootGeneration": generation.get(),
+        "ownerUserId": owner,
+        "collectionId": folder,
+        "collectionEpoch": 3,
+        "collectionKey": e(&[0x64; 32]),
+        "collectionNonce": e(&[0x65; 24]),
+        "collectionKeyEnvelope": e(&drive_envelope::seal_with_nonce(&[0x64; 32], &root, collection, &[0x65; 24]).unwrap()),
+        "linkId": link,
+        "linkKey": e(&[0x66; 32]),
+        "linkNonce": e(&[0x67; 24]),
+        "linkKeyEnvelope": e(&drive_envelope::seal_with_nonce(&[0x66; 32], &root, link_scope, &[0x67; 24]).unwrap()),
+    });
+    println!("{}", serde_json::to_string_pretty(&v).unwrap());
+}
+
+#[test]
+fn drive_owner_key_vector() {
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["driveOwnerKeys"];
+    let s = |key: &str| v[key].as_str().unwrap().to_owned();
+    let root = DriveRoot::from_slice(&b64(&s("driveRoot"))).unwrap();
+    let generation =
+        RootGeneration::new(v["driveRootGeneration"].as_u64().unwrap() as u32).unwrap();
+    let epoch = v["collectionEpoch"].as_u64().unwrap() as u32;
+    let collection = DriveEnvelopeContextV1::owner_collection_key(
+        &s("collectionId"),
+        &s("ownerUserId"),
+        epoch,
+        generation,
+    )
+    .unwrap();
+    let link = DriveEnvelopeContextV1::owner_link_key(&s("linkId"), &s("ownerUserId"), generation)
+        .unwrap();
+    for (scope, key, nonce, envelope) in [
+        (
+            collection,
+            "collectionKey",
+            "collectionNonce",
+            "collectionKeyEnvelope",
+        ),
+        (link, "linkKey", "linkNonce", "linkKeyEnvelope"),
+    ] {
+        let sealed =
+            drive_envelope::seal_with_nonce(&b64(&s(key)), root.as_bytes(), scope, &b64(&s(nonce)))
+                .unwrap();
+        assert_eq!(sealed, b64(&s(envelope)));
+        let header = drive_envelope::inspect(&sealed).unwrap();
+        assert_eq!(header.context.drive_root_generation().unwrap(), generation);
+        assert_eq!(
+            drive_envelope::open_under_drive_root(&s(envelope), &root, scope)
+                .unwrap()
+                .as_slice(),
+            b64(&s(key)).as_slice()
+        );
+    }
+    // The generation is bound: the same root at another generation fails.
+    let first = DriveEnvelopeContextV1::owner_collection_key(
+        &s("collectionId"),
+        &s("ownerUserId"),
+        epoch,
+        RootGeneration::FIRST,
+    )
+    .unwrap();
+    assert!(
+        drive_envelope::open_under_drive_root(&s("collectionKeyEnvelope"), &root, first).is_err()
     );
 }
 

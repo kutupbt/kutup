@@ -122,6 +122,7 @@ pub(crate) async fn collection_rows(
         time::OffsetDateTime,
         time::OffsetDateTime,
         Option<String>,
+        Option<i32>,
     );
     let own: Vec<OwnRow> = sqlx::query_as(
         r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
@@ -132,7 +133,7 @@ pub(crate) async fn collection_rows(
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
                            COALESCE((SELECT MAX(sc.created_at) FROM collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
-                  c.name_hash
+                  c.name_hash, c.name_hash_generation
            FROM collections c WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
              AND c.kind = $2
            ORDER BY c.created_at ASC"#,
@@ -159,6 +160,7 @@ pub(crate) async fn collection_rows(
                 created_at,
                 updated_at,
                 name_hash,
+                name_hash_generation,
             )| CollectionRow {
                 id: id.to_string(),
                 owner_user_id: owner.to_string(),
@@ -182,6 +184,7 @@ pub(crate) async fn collection_rows(
                 upload_used_bytes: None,
                 is_shared: false,
                 name_hash,
+                name_hash_generation,
                 created_at,
                 updated_at,
             },
@@ -258,6 +261,7 @@ pub(crate) async fn collection_rows(
             upload_used_bytes,
             is_shared: true,
             name_hash: row.name_hash.clone(),
+            name_hash_generation: None,
             created_at: row.created_at,
             updated_at: row.updated_at,
         });
@@ -312,14 +316,15 @@ pub(crate) async fn create_owned_collection(
     let authority_public_key = decode_public_key(&authority_public_key)?;
     let id_string = id.to_string();
     let owner_string = user_id.to_string();
+    // The owner copy, under the owner's Drive root at its newest generation.
+    let drive_generation = crate::account_roots::drive_generation(&state.pool, user_id).await?;
     validate_drive_envelope(
         &req.owner_key_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::CollectionKey,
-            1,
-            1,
+        DriveEnvelopeContextV1::owner_collection_key(
             &id_string,
             &owner_string,
+            1,
+            drive_generation,
         )
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
@@ -364,17 +369,20 @@ pub(crate) async fn create_owned_collection(
             return Err(AppError::bad_request("invalid parent collection"));
         }
     }
+    let mut name_hash_generation = None;
     if let Some(hash) = &name_hash {
         let place = crate::drive_names::Place::of(parent, user_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
         crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await?;
+        name_hash_generation =
+            crate::drive_names::hash_generation(&mut tx, place, req.name_hash_generation).await?;
     }
     sqlx::query(
         r#"INSERT INTO collections
               (id, owner_user_id, name_envelope, owner_key_envelope, key_epoch,
                name_revision, epoch_statement, epoch_statement_hash, parent_collection_id, kind,
-               name_hash)
-           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7,$8,$9)"#,
+               name_hash, name_hash_generation)
+           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7,$8,$9,$10)"#,
     )
     .bind(id)
     .bind(user_id)
@@ -385,6 +393,7 @@ pub(crate) async fn create_owned_collection(
     .bind(parent)
     .bind(kind)
     .bind(&name_hash)
+    .bind(name_hash_generation)
     .execute(&mut *tx)
     .await
     .map_err(crate::drive_names::map_unique_violation)?;
@@ -439,6 +448,7 @@ pub async fn get_collection(
         time::OffsetDateTime,
         time::OffsetDateTime,
         Option<String>,
+        Option<i32>,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
@@ -449,7 +459,7 @@ pub async fn get_collection(
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
                            COALESCE((SELECT MAX(sc.created_at) FROM collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
-                  c.name_hash
+                  c.name_hash, c.name_hash_generation
            FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL"#,
     )
     .bind(coll_id)
@@ -471,10 +481,12 @@ pub async fn get_collection(
         created_at,
         updated_at,
         name_hash,
+        name_hash_generation,
     )) = row
     {
         return Ok(Json(CollectionRow {
             name_hash,
+            name_hash_generation,
             id: cid.to_string(),
             owner_user_id: owner.to_string(),
             name_envelope: name,
@@ -541,6 +553,7 @@ pub async fn get_collection(
         .ok_or_else(|| AppError::conflict("share owner identity is unavailable"))?;
     Ok(Json(CollectionRow {
         name_hash: row.name_hash.clone(),
+        name_hash_generation: None,
         id: coll_id.to_string(),
         owner_user_id: row.owner_user_id.to_string(),
         name_envelope: row.name_envelope,
@@ -606,10 +619,14 @@ pub async fn update_collection(
         let place = crate::drive_names::Place::of(parent, user_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
         crate::drive_names::ensure_name_free(&mut tx, place, &hash, Some(coll_id)).await?;
-        Some(hash)
+        let generation =
+            crate::drive_names::hash_generation(&mut tx, place, req.name_hash_generation).await?;
+        Some((hash, generation))
     } else {
         None
     };
+    let (name_hash, name_hash_generation) = name_hash.unzip();
+    let name_hash_generation = name_hash_generation.flatten();
     if req.name_revision != current_revision.saturating_add(1) {
         return Err(AppError::conflict(
             "collection name revision must advance by exactly one",
@@ -628,7 +645,8 @@ pub async fn update_collection(
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     let res = sqlx::query(
-        r#"UPDATE collections SET name_envelope = $1, name_revision = $2, name_hash = $6, updated_at = NOW()
+        r#"UPDATE collections SET name_envelope = $1, name_revision = $2, name_hash = $6,
+                  name_hash_generation = $7, updated_at = NOW()
            WHERE id = $3 AND owner_user_id = $4 AND name_revision = $5 AND deleted_at IS NULL"#,
     )
     .bind(&req.name_envelope)
@@ -637,6 +655,7 @@ pub async fn update_collection(
     .bind(user_id)
     .bind(current_revision)
     .bind(&name_hash)
+    .bind(name_hash_generation)
     .execute(&mut *tx)
     .await;
     match res {

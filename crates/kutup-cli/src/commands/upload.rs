@@ -23,6 +23,7 @@ use crate::uploader::{
     self, create_sub_collection, file_name, now_unix, Progress, UploadRequest, Uploaded,
     RESUME_MAX_IDLE_SECS,
 };
+use kutup_crypto::account_roots::AccountRoots;
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -35,7 +36,7 @@ pub fn run(
     keep_both: bool,
 ) -> Result<()> {
     let ctx = require_session(profile)?;
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
 
     // Sweep resume records the server has certainly reaped by now, and
     // best-effort abort their sessions.
@@ -47,14 +48,14 @@ pub fn run(
         }
     }
 
-    let cols = decrypt_collections(ctx.client.list_collections()?, &master_key, &ctx.session);
+    let cols = decrypt_collections(ctx.client.list_collections()?, &roots, &ctx.session);
     let col = find_collection(&cols, collection_id)
         .ok_or_else(|| crate::errors::NotFound(format!("collection {collection_id} not found")))?;
     let up = Uploads {
         client: &ctx.client,
         store: &ctx.store,
         session: &ctx.session,
-        master_key: &master_key,
+        roots: &roots,
         no_resume,
         keep_both,
     };
@@ -137,14 +138,14 @@ struct Uploads<'a> {
     client: &'a Client,
     store: &'a Store,
     session: &'a Session,
-    master_key: &'a [u8],
+    roots: &'a AccountRoots,
     no_resume: bool,
     keep_both: bool,
 }
 
 impl Uploads<'_> {
     fn target(&self, col: &Collection) -> Result<Target> {
-        let key = decrypt_collection_key(col, self.master_key, self.session)?;
+        let key = decrypt_collection_key(col, self.roots, self.session)?;
         let keys = Keyring::load(self.client, col, &key, self.session)?;
         Ok(Target {
             id: col.id.clone(),

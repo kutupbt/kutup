@@ -360,7 +360,7 @@ function memberTo(
 
 /** A file link's key, from the owner's copy. */
 function fileLinkKey(link: FileLink, me: DriveIdentity): Promise<Uint8Array> {
-  return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.masterKey, { linkId: link.id, ownerUserId: me.userId })
+  return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.roots, { linkId: link.id, ownerUserId: me.userId })
 }
 
 function wrapForLink(file: DriveFile, fileKey: Uint8Array, generation: number, linkKey: Uint8Array, me: DriveIdentity) {
@@ -763,7 +763,7 @@ export function useCreateFileLink() {
         targetId: file.id,
         collectionKeyEnvelope: await wrapForLink(file, file.fileKey!, file.keyGeneration, linkKey, me),
         id,
-        ownerLinkKeyEnvelope: await sealOwnerLinkKeyV1(linkKey, me.masterKey, { linkId: id, ownerUserId: me.userId }),
+        ownerLinkKeyEnvelope: await sealOwnerLinkKeyV1(linkKey, me.roots, { linkId: id, ownerUserId: me.userId }),
       })
       return publicLinkUrl(data.token, linkKey, fileLinkApp(file.name))
     } finally {

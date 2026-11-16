@@ -269,3 +269,49 @@ Beyond the note:
   head of other generations. The list entry ids under the object-id key are
   computed only inside chat-core (no WASM export reaches them); the browser
   suites exercise that path.
+
+## The Drive root in use (main's slice 3, 2026-11-15)
+
+Built on `wipe/drive-root` (identity-rotation.md §8 step 3):
+
+- **Owned folder keys** (`DriveEnvelopeV1` purpose 1) and **link owner
+  copies** (purpose 9) are sealed under the Drive root, never the master
+  key. The revision slot carries the Drive root's generation (purpose 1's
+  epoch stays the folder key's, purpose 9's stays 1), so a reader finds the
+  root for an envelope from its header after a Drive-root rotation.
+  `DriveEnvelopeContextV1::owner_collection_key` / `owner_link_key` build
+  the contexts; `seal_under_drive_root` / `open_under_drive_root` take a
+  `&DriveRoot` and refuse every other purpose. The generic WASM export
+  refuses purposes 1 and 9; `sealOwnerCollectionKey`, `openOwnerCollectionKey`,
+  `sealOwnerLinkKey` and `openOwnerLinkKey` take the root and its generation.
+- **The server** checks each new owner copy (folder creation, key rotation,
+  link creation) against the owner's newest Drive-root generation in
+  `account_roots`.
+- **The top-level name hash key** comes from the current Drive root
+  (`top_level_hash_key(&DriveRoot)`, same label and derivation). Each
+  top-level folder records the generation its hash was made under
+  (`collections.name_hash_generation`, migration `20261111130000`): writes
+  that name a folder at the top level (create, rename, move, restore) send
+  `nameHashGeneration`, which the server requires there, refuses in a
+  folder, and checks is the owner's newest (`409 driveRootChanged`
+  otherwise). Folders keep hashing under their first key: that is data an
+  escrow admin already had. The top level does not, because after an
+  escrow release the former admin knows the old Drive root, and new
+  top-level names under it would stay guessable to them; rehashing the top
+  level at a Drive-root rotation is the rotation flow's job (after the
+  wipe).
+- **At a Drive-root rotation** (the rotation flow, after the wipe):
+  - every top-level name is rehashed under the new root in one
+    transaction, the one that adds the new root's record: an account has
+    few top-level folders. Live top-level folders are then all at one
+    generation again, so the unique index stays `(owner_user_id,
+    name_hash)` over live top-level folders, without the generation;
+  - the link owner copies (purpose 9) are re-wrapped under the new root at
+    once, in the same rotation, not lazily, so every listed link opens with
+    the newest root.
+- **Only top-level names use the Drive root.** A name inside a folder is
+  hashed under that folder's key (from its first key), which every member
+  of the folder can compute.
+- **Vectors:** `crypto.json` → `driveOwnerKeys` (new) and `driveNames`
+  (`masterKey` renamed `driveRoot`; the bytes and the hash key are
+  unchanged).

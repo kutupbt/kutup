@@ -234,7 +234,7 @@
     "firstFolderKey": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     "collectionId": "11111111-1111-4111-8111-111111111111",
     "hashKey": "ezWY2MOU2sM+8HVDJDgmKFWX/M1KfKVbSKZGmT7KQro=",
-    "masterKey": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=",
+    "driveRoot": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=",
     "topLevelHashKey": "TD/MUk3IzrMfbui30oc1LbAe4dqf7y0xEzvr1Du6qcI=",
     "names": [
       {
@@ -318,6 +318,21 @@
       "sha256": "XQfapCZwe60o9JKABSPv4Ek/O3wVGT2/ITGKpzhdL80=",
       "hash": "95711511faa8a8d174be5afe69050fa50249a60dc9256599aa259690f6468f8c"
     }
+  },
+  "driveOwnerKeys": {
+    "description": "An owned folder's key and a link's owner copy under the Drive root; the revision slot is the root's generation (kutup-crypto/src/drive_envelope.rs).",
+    "driveRoot": "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2M=",
+    "driveRootGeneration": 2,
+    "ownerUserId": "22222222-2222-4222-8222-222222222222",
+    "collectionId": "11111111-1111-4111-8111-111111111111",
+    "collectionEpoch": 3,
+    "collectionKey": "ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQ=",
+    "collectionNonce": "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVl",
+    "collectionKeyEnvelope": "S1VUUERFMQAAAQEAAAAAAwAAAAAAAAACERERERERQRGBERERERERESIiIiIiIkIigiIiIiIiIiJlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWUAAAAwNRmmtaebUoKgF9cujFAhyAUKDs5mMldBG4u0u3p3mPFQ06RjlbKFf2j5p1ccM7QH",
+    "linkId": "33333333-3333-4333-8333-333333333333",
+    "linkKey": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=",
+    "linkNonce": "Z2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dn",
+    "linkKeyEnvelope": "S1VUUERFMQAAAQkAAAAAAQAAAAAAAAACMzMzMzMzQzODMzMzMzMzMyIiIiIiIkIigiIiIiIiIiJnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2cAAAAw/ojw23K1IFxFlW5v8EwYges7NOowNV3iRmQWcIvTqgGuuFzS76L9wtkKQ+ERC/v7"
   },
   "safetyNumber": {
     "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V3): Signal's fingerprint v2 (5200 x SHA-512 per side, 2 x 30 digits, CombinedFingerprints QR) with the stable id AccountRef::bytes() and the identity key the raw 32-byte Ed25519 account authority (no type prefix). A rename keeps the number; a reset or another account changes it.",

@@ -155,6 +155,7 @@ Specific codes, where an app does something particular (a test in
 | `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
+| `driveRootChanged` | 409 | A top-level name hash sent with a `nameHashGeneration` that is not the owner's newest Drive-root generation: hash it again under the current root |
 | `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
 | `frameRefused` | 409 | A collaboration frame sent over HTTP was not kept (stale key or document key, not this device's, a replay): read the log again |
 | `deviceNotAuthorized` | 403 | A collaboration device the account has not vouched for (an unanswered, used or expired challenge, a statement that does not verify, a revoked device or one of an earlier incarnation): register one again, do not sign out |
@@ -1398,7 +1399,10 @@ List all collections accessible to the current user (owned and shared).
 **Auth:** Bearer JWT
 
 **Response:** Array of collection objects. Owned and shared collections use the
-same authenticated record. An owned row contains `ownerKeyEnvelope`; a shared
+same authenticated record. An owned row contains `ownerKeyEnvelope` (the
+folder key sealed under the owner's Drive root, `DriveEnvelopeV1` purpose 1,
+revision = the Drive root's generation; creating a folder or rotating its key
+takes it at the owner's newest generation, else `400`); a shared
 row contains `namedShareEnvelope`, `isShared: true`, and the owner's registered
 identity fields required for independent client verification. Neither key
 envelope is returned in the other row type.
@@ -3211,7 +3215,10 @@ and subfolders together, and among an owner's top-level folders (albums
 aside), compared without letter case or Unicode composition. The server
 never reads a name: clients send its hash, `HMAC-SHA256(hash key, "name" ‖
 0 ‖ canonical name)` (`kutup_crypto::drive_names`), under the folder's hash
-key (from its first key) or, at the top level, the account's. A file's
+key (from its first key) or, at the top level, the account's (from its
+Drive root; a top-level hash comes with `nameHashGeneration`, the Drive-root
+generation, on create, rename, move and restore, required there and refused
+in a folder; `409 driveRootChanged` when it is not the owner's newest). A file's
 content hash, `HMAC-SHA256(hash key, "content" ‖ 0 ‖ SHA-256 of the
 plaintext)`, lets a client tell that the file it is about to upload is
 already there.
@@ -3657,8 +3664,9 @@ Empty the caller's whole trash. Irreversible.
 
 Create a public share link for one collection. **Body** also carries the
 link's client-chosen `id` (canonical UUID) and `ownerLinkKeyEnvelope`: the
-link key sealed for the owner under their master key (`DriveEnvelopeV1`
-purpose 9, object = link id, parent = owner, epoch 1), so the owner can list
+link key sealed for the owner under their Drive root (`DriveEnvelopeV1`
+purpose 9, object = link id, parent = owner, epoch 1, revision = the owner's
+newest Drive-root generation, else `400`), so the owner can list
 and copy the link and keep it working across folder-key rotations. The link key used to open the
 typed collection-key envelope lives only in the URL fragment; the server never
 sees it.

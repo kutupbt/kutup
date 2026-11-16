@@ -1337,7 +1337,7 @@ fn drive_round_trip(
     bob_token: &str,
     admins: (&str, &str),
 ) {
-    let alice_master = test_master_key(ALICE_EMAIL);
+    let alice_roots = test_roots(ALICE_EMAIL);
     let alice_identity = AccountIdentityKeysV1::derive(&test_roots(ALICE_EMAIL).identity).unwrap();
     let bob_identity = AccountIdentityKeysV1::derive(&test_roots(BOB_EMAIL).identity).unwrap();
     let alice_me = json_response(
@@ -1350,12 +1350,11 @@ fn drive_round_trip(
     let owner_user_id = alice_me["id"].as_str().unwrap();
     let collection_id = uuid::Uuid::new_v4().to_string();
     let collection_key = [0x45; 32];
-    let owner_key_context = DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::CollectionKey,
-        1,
-        1,
+    let owner_key_context = DriveEnvelopeContextV1::owner_collection_key(
         &collection_id,
         owner_user_id,
+        1,
+        alice_roots.drive_generation,
     )
     .unwrap();
     let name_context = DriveEnvelopeContextV1::new(
@@ -1366,8 +1365,12 @@ fn drive_round_trip(
         owner_user_id,
     )
     .unwrap();
-    let owner_key_envelope =
-        drive_envelope::seal_b64(&collection_key, &alice_master, owner_key_context).unwrap();
+    let owner_key_envelope = drive_envelope::seal_under_drive_root(
+        &collection_key,
+        &alice_roots.drive,
+        owner_key_context,
+    )
+    .unwrap();
     let name_envelope =
         drive_envelope::seal_b64(b"Federated V2 collection", &collection_key, name_context)
             .unwrap();
@@ -1389,7 +1392,8 @@ fn drive_round_trip(
                 "nameEnvelope": name_envelope,
                 "ownerKeyEnvelope": owner_key_envelope,
                 "epochStatement": epoch_statement.encode_b64(),
-                "nameHash": collection_id.replace('-', "").repeat(2)
+                "nameHash": collection_id.replace('-', "").repeat(2),
+                "nameHashGeneration": alice_roots.drive_generation.get()
             }))
             .send()
             .unwrap(),
@@ -1407,12 +1411,13 @@ fn drive_round_trip(
     assert_eq!(collection["nameRevision"], 1);
     assert_eq!(collection["epochStatementHash"], epoch_statement_hash);
     assert_eq!(
-        drive_envelope::open_b64(
+        drive_envelope::open_under_drive_root(
             collection["ownerKeyEnvelope"].as_str().unwrap(),
-            &alice_master,
+            &alice_roots.drive,
             owner_key_context,
         )
-        .unwrap(),
+        .unwrap()
+        .to_vec(),
         collection_key
     );
     assert_eq!(
@@ -1447,15 +1452,13 @@ fn drive_round_trip(
                 "shareType": "collection",
                 "targetId": collection_id,
                 "collectionKeyEnvelope": public_link_envelope,
-                "ownerLinkKeyEnvelope": drive_envelope::seal_b64(
+                "ownerLinkKeyEnvelope": drive_envelope::seal_under_drive_root(
                     &link_key,
-                    &alice_master,
-                    DriveEnvelopeContextV1::new(
-                        DriveEnvelopePurpose::PublicLinkKey,
-                        1,
-                        1,
+                    &alice_roots.drive,
+                    DriveEnvelopeContextV1::owner_link_key(
                         &public_link_id,
                         owner_user_id,
+                        alice_roots.drive_generation,
                     )
                     .unwrap(),
                 )
@@ -2071,8 +2074,9 @@ fn drive_round_trip(
             .json(&json!({
                 "fromEpoch": epoch - 1,
                 "epochStatement": statement.encode_b64(),
-                "ownerKeyEnvelope": drive_envelope::seal_b64(key, &alice_master,
-                    rotation_ctx(DriveEnvelopePurpose::CollectionKey, epoch, 1)).unwrap(),
+                "ownerKeyEnvelope": drive_envelope::seal_under_drive_root(key, &alice_roots.drive,
+                    DriveEnvelopeContextV1::owner_collection_key(&collection_id, owner_user_id, epoch,
+                        alice_roots.drive_generation).unwrap()).unwrap(),
                 "previousKeyEnvelope": kutup_crypto::collection_keyring::seal_previous_key(
                     previous_key, key, &collection_id, owner_user_id, epoch).unwrap(),
                 "nameEnvelope": drive_envelope::seal_b64(b"Federated V2 collection", key,

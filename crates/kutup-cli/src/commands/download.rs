@@ -13,12 +13,12 @@ use anyhow::{Context, Result};
 pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Result<()> {
     let dest_dir = dest.unwrap_or(".");
     let ctx = require_session(profile)?;
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     crate::drive_signer::load_pins(&ctx, profile);
 
-    let cols = decrypt_collections(ctx.client.list_collections()?, &master_key, &ctx.session);
+    let cols = decrypt_collections(ctx.client.list_collections()?, &roots, &ctx.session);
     for col in &cols {
-        let Ok(col_key) = decrypt_collection_key(col, &master_key, &ctx.session) else {
+        let Ok(col_key) = decrypt_collection_key(col, &roots, &ctx.session) else {
             continue;
         };
         let Ok(files) = ctx.client.list_files(&col.id) else {

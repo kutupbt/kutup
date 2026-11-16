@@ -81,6 +81,8 @@ fn move_folder(
     .json(&json!({
         "parentCollectionId": parent.map(|p| p.id.clone()),
         "nameHash": test_name_hash(&format!("{}{}", folder.id, parent.map_or(folder.id.as_str(), |p| p.id.as_str())))[..64].to_owned(),
+        // A test account's Drive root is at its first generation.
+        "nameHashGeneration": parent.is_none().then_some(1),
     }))
     .send()
     .unwrap()
@@ -287,7 +289,7 @@ fn drive_move_contract() {
     .json(&json!({
         "fromEpoch": 1,
         "epochStatement": statement.encode_b64(),
-        "ownerKeyEnvelope": drive_envelope::seal_b64(&a2, &owner.master_key, ctx2(DriveEnvelopePurpose::CollectionKey, 1)).unwrap(),
+        "ownerKeyEnvelope": crate::common::owner_collection_key(&a2, &owner, &a.id, 2),
         "previousKeyEnvelope": collection_keyring::seal_previous_key(&a.key, &a2, &a.id, &owner.id, 2).unwrap(),
         "nameEnvelope": drive_envelope::seal_b64(b"Integrity", &a2, ctx2(DriveEnvelopePurpose::CollectionName, 2)).unwrap(),
         "members": [{ "userId": editor.id, "namedShareEnvelope": editor_share }],

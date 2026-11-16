@@ -305,7 +305,7 @@ pub fn sync(
     authority: crate::senders::AuthorityCheck<'_>,
 ) -> Result<SyncResult> {
     let mut result = SyncResult::default();
-    let master_key = sess.master_key_bytes().context("master key")?;
+    let roots = sess.roots().context("account roots")?;
     let mut peer = crate::yjs_sync::Peer::new(client, store, sess, authority);
     vaults.refresh(sess)?;
     let root = PathBuf::from(local_dir);
@@ -319,7 +319,7 @@ pub fn sync(
         .find(|c| c.id == collection_id)
         .ok_or_else(|| crate::errors::NotFound(format!("collection {collection_id} not found")))?;
     let root_key =
-        decrypt_collection_key(root_col, &master_key, sess).context("decrypt collection key")?;
+        decrypt_collection_key(root_col, &roots, sess).context("decrypt collection key")?;
     let root_keys = crate::keyring::Keyring::load(client, root_col, &root_key, sess)?;
 
     let mut children: BTreeMap<&str, Vec<&crate::api::Collection>> = BTreeMap::new();
@@ -344,7 +344,7 @@ pub fn sync(
     let mut stack: Vec<(String, String)> = vec![(String::new(), collection_id.to_string())];
     while let Some((rel, col_id)) = stack.pop() {
         for sub in children.get(col_id.as_str()).into_iter().flatten() {
-            let Ok(key) = decrypt_collection_key(sub, &master_key, sess) else {
+            let Ok(key) = decrypt_collection_key(sub, &roots, sess) else {
                 result.errors.push(format!("decrypt folder key {}", sub.id));
                 continue;
             };

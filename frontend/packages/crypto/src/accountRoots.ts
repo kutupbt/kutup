@@ -36,9 +36,9 @@ export interface AccountRoots {
 }
 
 /**
- * What seals and signs as the account: its master key (account records and,
- * until the Drive root takes over, its own collection keys) and its roots.
- * A session is one.
+ * What seals and signs as the account: its master key (account records) and
+ * its roots (its identity, its own Drive keys under the Drive root). A
+ * session is one.
  */
 export interface AccountSecrets {
   masterKey: Uint8Array

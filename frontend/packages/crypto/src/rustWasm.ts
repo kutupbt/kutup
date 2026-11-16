@@ -450,6 +450,26 @@ export interface CryptoWasmModule {
     expectedObjectId: string,
     expectedParentId: string,
   ): string
+  /** An owned folder's key at `epoch`, sealed for its owner under their Drive root of `driveGeneration`. */
+  sealOwnerCollectionKey(
+    collectionKeyBase64: string,
+    driveRootBase64: string,
+    driveGeneration: number,
+    collectionId: string,
+    ownerId: string,
+    epoch: number,
+  ): string
+  openOwnerCollectionKey(
+    envelopeBase64: string,
+    driveRootBase64: string,
+    driveGeneration: number,
+    collectionId: string,
+    ownerId: string,
+    epoch: number,
+  ): string
+  /** A public link's key, sealed for its owner under their Drive root of `driveGeneration`. */
+  sealOwnerLinkKey(linkKeyBase64: string, driveRootBase64: string, driveGeneration: number, linkId: string, ownerId: string): string
+  openOwnerLinkKey(envelopeBase64: string, driveRootBase64: string, driveGeneration: number, linkId: string, ownerId: string): string
   sealWhiteboardAsset(
     plaintextBase64: string,
     fileKeyBase64: string,
@@ -757,7 +777,8 @@ export interface CryptoWasmModule {
   ): string
   canonicalFileMetadata(json: string): string
   driveFolderHashKey(firstFolderKeyBase64: string, collectionId: string): string
-  driveTopLevelHashKey(masterKeyBase64: string): string
+  /** From the account's Drive root. */
+  driveTopLevelHashKey(driveRootBase64: string): string
   driveNameHash(hashKeyBase64: string, name: string): string
   driveContentHash(hashKeyBase64: string, contentSha256Base64: string): string
   driveCanonicalName(name: string): string

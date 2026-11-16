@@ -151,12 +151,12 @@ pub fn run(profile: &str, json: bool, cmd: &ShareCmd) -> Result<()> {
 
 /// Looks up an owned collection and returns its record plus unwrapped key.
 fn owned_collection(ctx: &Ctx, collection_id: &str) -> Result<(Collection, Vec<u8>)> {
-    let master_key = ctx.session.master_key_bytes()?;
-    let cols = decrypt_collections(ctx.client.list_collections()?, &master_key, &ctx.session);
+    let roots = ctx.session.roots()?;
+    let cols = decrypt_collections(ctx.client.list_collections()?, &roots, &ctx.session);
     let col = find_collection(&cols, collection_id)
         .ok_or_else(|| NotFound(format!("collection {collection_id} not found")))?;
     let key =
-        decrypt_collection_key(col, &master_key, &ctx.session).context("decrypt collection key")?;
+        decrypt_collection_key(col, &roots, &ctx.session).context("decrypt collection key")?;
     Ok((col.clone(), key))
 }
 
@@ -364,16 +364,11 @@ fn share_public(profile: &str, json: bool, collection_id: &str) -> Result<()> {
     let collection_key_envelope =
         drive_envelope::seal_b64(&collection_key, &link_key, envelope_context)?;
     let id = uuid::Uuid::new_v4().to_string();
-    let owner_link_key_envelope = drive_envelope::seal_b64(
+    let roots = ctx.session.roots()?;
+    let owner_link_key_envelope = drive_envelope::seal_under_drive_root(
         &link_key,
-        &ctx.session.master_key_bytes()?,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::PublicLinkKey,
-            1,
-            1,
-            &id,
-            &ctx.session.user_id,
-        )?,
+        &roots.drive,
+        DriveEnvelopeContextV1::owner_link_key(&id, &ctx.session.user_id, roots.drive_generation)?,
     )?;
 
     let resp = ctx
@@ -442,7 +437,7 @@ fn unwrap_shared_collection_key(s: &IncomingShare, sess: &Session) -> Result<Vec
         upload_quota_bytes: s.upload_quota_bytes,
         name: String::new(),
     };
-    crate::collection_crypto::open_key(&collection, &sess.master_key_bytes()?, sess)
+    crate::collection_crypto::open_key(&collection, &sess.roots()?, sess)
 }
 
 /// A federated share's folder keys: the current one, and older ones through

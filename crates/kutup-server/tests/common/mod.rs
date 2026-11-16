@@ -634,6 +634,13 @@ pub fn test_name_hash(id: &str) -> String {
     id.replace('-', "").repeat(2)
 }
 
+/// What a name hash in a place is sent with: at the top level the owner's
+/// Drive-root generation (docs/plans/identity-rotation.md §3), in a folder
+/// nothing.
+pub fn top_level_generation(owner: &User, parent: Option<&str>) -> Option<u32> {
+    parent.is_none().then(|| owner.roots.drive_generation.get())
+}
+
 pub fn create_folder(c: &Client, base: &str, owner: &User) -> Folder {
     create_folder_in(c, base, owner, None)
 }
@@ -645,11 +652,12 @@ pub fn create_folder_in(c: &Client, base: &str, owner: &User, parent: Option<&st
     let r = bearer(c.post(format!("{base}/api/collections")), &owner.token)
         .json(&json!({
             "id": id,
-            "ownerKeyEnvelope": drive_envelope::seal_b64(&key, &owner.master_key, ctx(DriveEnvelopePurpose::CollectionKey, &id, &owner.id)).unwrap(),
+            "ownerKeyEnvelope": owner_collection_key(&key, owner, &id, 1),
             "nameEnvelope": drive_envelope::seal_b64(b"Integrity", &key, ctx(DriveEnvelopePurpose::CollectionName, &id, &owner.id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&id, &owner.id, 1, None, &key, owner.identity.authority_signing_key()).unwrap().encode_b64(),
             "parentCollectionId": parent,
             "nameHash": test_name_hash(&id),
+            "nameHashGeneration": top_level_generation(owner, parent),
         }))
         .send()
         .unwrap();
@@ -1002,19 +1010,36 @@ pub fn tus_create(
         .unwrap()
 }
 
-/// A link key sealed for its owner (purpose 9), as `POST /share` takes it.
-pub fn owner_link_key(link_key: &[u8; 32], owner: &User, link_id: &str) -> String {
-    drive_envelope::seal_b64(
-        link_key,
-        &owner.master_key,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::PublicLinkKey,
-            1,
-            1,
-            link_id,
+/// A folder key at `epoch` sealed for its owner under their Drive root
+/// (purpose 1), as `POST /collections` and a rotation take it.
+pub fn owner_collection_key(
+    key: &[u8; 32],
+    owner: &User,
+    collection_id: &str,
+    epoch: u32,
+) -> String {
+    drive_envelope::seal_under_drive_root(
+        key,
+        &owner.roots.drive,
+        DriveEnvelopeContextV1::owner_collection_key(
+            collection_id,
             &owner.id,
+            epoch,
+            owner.roots.drive_generation,
         )
         .unwrap(),
+    )
+    .unwrap()
+}
+
+/// A link key sealed for its owner under their Drive root (purpose 9), as
+/// `POST /share` takes it.
+pub fn owner_link_key(link_key: &[u8; 32], owner: &User, link_id: &str) -> String {
+    drive_envelope::seal_under_drive_root(
+        link_key,
+        &owner.roots.drive,
+        DriveEnvelopeContextV1::owner_link_key(link_id, &owner.id, owner.roots.drive_generation)
+            .unwrap(),
     )
     .unwrap()
 }

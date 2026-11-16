@@ -1,11 +1,56 @@
 import { createCollectionEpochStatement, verifyCollectionEpochStatement } from './collectionEpoch'
 import { DRIVE_ENVELOPE_PURPOSE, openDriveEnvelope, sealDriveEnvelope } from './driveEnvelope'
 import { deriveAccountIdentityKeys } from './identity'
-import type { AccountSecrets } from './accountRoots'
+import type { AccountRoots, AccountSecrets } from './accountRoots'
 import type { AccountRef } from './accountRef'
 import { openNamedShareEnvelope } from './namedShare'
-import { fromBase64 } from './base64'
+import { fromBase64, toBase64 } from './base64'
+import { getCryptoWasm } from './rustWasm'
 import { generateKey } from './symmetric'
+
+/** Which owned folder key an owner copy holds. */
+export interface OwnerCollectionKeyContext {
+  collectionId: string
+  ownerUserId: string
+  /** The folder key's epoch. */
+  epoch: number
+}
+
+/**
+ * An owned folder's key sealed for its owner under their Drive root, at the
+ * root's generation (docs/plans/identity-rotation.md §3): a new master key
+ * re-wraps the root's record and moves none of these.
+ */
+export async function sealOwnerCollectionKey(
+  collectionKey: Uint8Array,
+  roots: Pick<AccountRoots, 'driveRoot' | 'driveGeneration'>,
+  context: OwnerCollectionKeyContext,
+): Promise<string> {
+  return (await getCryptoWasm()).sealOwnerCollectionKey(
+    toBase64(collectionKey),
+    roots.driveRoot,
+    roots.driveGeneration,
+    context.collectionId,
+    context.ownerUserId,
+    context.epoch,
+  )
+}
+
+/** Opens an owner copy sealed under this Drive root; the envelope must name its generation. */
+export async function openOwnerCollectionKey(
+  envelope: string,
+  roots: Pick<AccountRoots, 'driveRoot' | 'driveGeneration'>,
+  context: OwnerCollectionKeyContext,
+): Promise<Uint8Array> {
+  return fromBase64((await getCryptoWasm()).openOwnerCollectionKey(
+    envelope,
+    roots.driveRoot,
+    roots.driveGeneration,
+    context.collectionId,
+    context.ownerUserId,
+    context.epoch,
+  ))
+}
 
 export interface OwnedCollectionWireV1 {
   id: string
@@ -39,13 +84,7 @@ export async function createOwnedCollectionV1(
 ): Promise<CreateOwnedCollectionV1> {
   const id = crypto.randomUUID().toLowerCase()
   const collectionKey = await generateKey()
-  const ownerKeyEnvelope = await sealDriveEnvelope(collectionKey, account.masterKey, {
-    purpose: DRIVE_ENVELOPE_PURPOSE.collectionKey,
-    epoch: 1,
-    revision: 1n,
-    objectId: id,
-    parentId: ownerUserId,
-  })
+  const ownerKeyEnvelope = await sealOwnerCollectionKey(collectionKey, account.roots, { collectionId: id, ownerUserId, epoch: 1 })
   const nameEnvelope = await sealDriveEnvelope(new TextEncoder().encode(name), collectionKey, {
     purpose: DRIVE_ENVELOPE_PURPOSE.collectionName,
     epoch: 1,
@@ -106,12 +145,10 @@ export async function openOwnedCollectionKeyV1(
   if (!Number.isSafeInteger(row.keyEpoch) || row.keyEpoch < 1) {
     throw new Error('invalid collection epoch')
   }
-  const collectionKey = await openDriveEnvelope(row.ownerKeyEnvelope, account.masterKey, {
-    purpose: DRIVE_ENVELOPE_PURPOSE.collectionKey,
+  const collectionKey = await openOwnerCollectionKey(row.ownerKeyEnvelope, account.roots, {
+    collectionId: row.id,
+    ownerUserId: row.ownerUserId,
     epoch: row.keyEpoch,
-    revision: 1n,
-    objectId: row.id,
-    parentId: row.ownerUserId,
   })
   const identity = await deriveAccountIdentityKeys(account.roots.identityRoot)
   const statementHash = await verifyCollectionEpochStatement(

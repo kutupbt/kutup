@@ -723,10 +723,14 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
 /// The purposes whose context is two plain UUIDs. Whiteboard assets and
 /// thumbnails derive their parent id and have typed exports
 /// (`sealWhiteboardAsset`, `sealThumbnail`); the generic path refuses them so
-/// their bindings cannot be bypassed.
+/// their bindings cannot be bypassed. The owner copies under the Drive root
+/// (owned folder keys, link keys) take the root itself
+/// (`sealOwnerCollectionKey`, `sealOwnerLinkKey` and their openers).
 fn generic_drive_purpose(value: u8) -> Result<DriveEnvelopePurpose, JsValue> {
     match DriveEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
-        DriveEnvelopePurpose::WhiteboardAsset
+        DriveEnvelopePurpose::CollectionKey
+        | DriveEnvelopePurpose::PublicLinkKey
+        | DriveEnvelopePurpose::WhiteboardAsset
         | DriveEnvelopePurpose::Thumbnail
         | DriveEnvelopePurpose::PreviousCollectionKey
         | DriveEnvelopePurpose::PreviousFileKey
@@ -785,6 +789,104 @@ pub fn open_drive_envelope(
     let plaintext = drive_envelope::open_b64(envelope_base64, &root_key, context)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
+}
+
+fn crypto_error(error: kutup_crypto::error::CryptoError) -> JsValue {
+    js_error(&error.to_string())
+}
+
+fn drive_root_at(
+    drive_root_base64: &str,
+    generation: u32,
+) -> Result<
+    (
+        kutup_crypto::account_roots::DriveRoot,
+        kutup_crypto::account_roots::RootGeneration,
+    ),
+    JsValue,
+> {
+    let root = kutup_crypto::account_roots::DriveRoot::from_slice(&decode_canonical_base64(
+        drive_root_base64,
+        "Drive root",
+    )?)
+    .map_err(crypto_error)?;
+    let generation =
+        kutup_crypto::account_roots::RootGeneration::new(generation).map_err(crypto_error)?;
+    Ok((root, generation))
+}
+
+/// An owned folder's key at `epoch`, sealed for its owner under their Drive
+/// root of `drive_generation` (docs/plans/identity-rotation.md §3).
+#[wasm_bindgen(js_name = sealOwnerCollectionKey)]
+pub fn seal_owner_collection_key(
+    collection_key_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    collection_id: &str,
+    owner_id: &str,
+    epoch: u32,
+) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(collection_key_base64, "collection key")?;
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context =
+        DriveEnvelopeContextV1::owner_collection_key(collection_id, owner_id, epoch, generation)
+            .map_err(crypto_error)?;
+    drive_envelope::seal_under_drive_root(&key, &root, context).map_err(crypto_error)
+}
+
+/// Opens an owned folder's key sealed under the owner's Drive root of
+/// `drive_generation`, the generation the envelope names.
+#[wasm_bindgen(js_name = openOwnerCollectionKey)]
+pub fn open_owner_collection_key(
+    envelope_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    collection_id: &str,
+    owner_id: &str,
+    epoch: u32,
+) -> Result<String, JsValue> {
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context =
+        DriveEnvelopeContextV1::owner_collection_key(collection_id, owner_id, epoch, generation)
+            .map_err(crypto_error)?;
+    let key = drive_envelope::open_under_drive_root(envelope_base64, &root, context)
+        .map_err(crypto_error)?;
+    Ok(STANDARD.encode(key.as_slice()))
+}
+
+/// A public link's key, sealed for its owner under their Drive root of
+/// `drive_generation`.
+#[wasm_bindgen(js_name = sealOwnerLinkKey)]
+pub fn seal_owner_link_key(
+    link_key_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    link_id: &str,
+    owner_id: &str,
+) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(link_key_base64, "link key")?;
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context = DriveEnvelopeContextV1::owner_link_key(link_id, owner_id, generation)
+        .map_err(crypto_error)?;
+    drive_envelope::seal_under_drive_root(&key, &root, context).map_err(crypto_error)
+}
+
+/// Opens a link's owner copy sealed under the owner's Drive root of
+/// `drive_generation`.
+#[wasm_bindgen(js_name = openOwnerLinkKey)]
+pub fn open_owner_link_key(
+    envelope_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    link_id: &str,
+    owner_id: &str,
+) -> Result<String, JsValue> {
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context = DriveEnvelopeContextV1::owner_link_key(link_id, owner_id, generation)
+        .map_err(crypto_error)?;
+    let key = drive_envelope::open_under_drive_root(envelope_base64, &root, context)
+        .map_err(crypto_error)?;
+    Ok(STANDARD.encode(key.as_slice()))
 }
 
 #[wasm_bindgen(js_name = sealWhiteboardAsset)]
@@ -2015,13 +2117,18 @@ pub fn drive_folder_hash_key(
         .map_err(|error| js_error(&error.to_string()))
 }
 
-/// The hash key for an account's top-level folders, from its master key.
+/// The hash key for an account's top-level folders, from its Drive root
+/// (the folder records the root's generation next to the hash).
 #[wasm_bindgen(js_name = driveTopLevelHashKey)]
-pub fn drive_top_level_hash_key(master_key_base64: &str) -> Result<String, JsValue> {
-    let key = decode_canonical_base64(master_key_base64, "master key")?;
-    kutup_crypto::drive_names::top_level_hash_key(&key)
+pub fn drive_top_level_hash_key(drive_root_base64: &str) -> Result<String, JsValue> {
+    let root = kutup_crypto::account_roots::DriveRoot::from_slice(&decode_canonical_base64(
+        drive_root_base64,
+        "Drive root",
+    )?)
+    .map_err(crypto_error)?;
+    kutup_crypto::drive_names::top_level_hash_key(&root)
         .map(|key| STANDARD.encode(key))
-        .map_err(|error| js_error(&error.to_string()))
+        .map_err(crypto_error)
 }
 
 /// The hash a name is kept unique by in its folder (lowercase hex).

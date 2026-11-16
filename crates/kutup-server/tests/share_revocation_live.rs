@@ -135,8 +135,7 @@ fn share_revocation_contract() {
         json!({
             "fromEpoch": 1,
             "epochStatement": statement.encode_b64(),
-            "ownerKeyEnvelope": drive_envelope::seal_b64(&key2, &owner.master_key,
-                ctx_at(DriveEnvelopePurpose::CollectionKey, 2, 1, &folder.id, &owner.id)).unwrap(),
+            "ownerKeyEnvelope": crate::common::owner_collection_key(&key2, &owner, &folder.id, 2),
             "previousKeyEnvelope": collection_keyring::seal_previous_key(&folder.key, &key2, &folder.id, &owner.id, 2).unwrap(),
             "nameEnvelope": drive_envelope::seal_b64(b"Integrity", &key2,
                 ctx_at(DriveEnvelopePurpose::CollectionName, 2, 2, &folder.id, &owner.id)).unwrap(),
