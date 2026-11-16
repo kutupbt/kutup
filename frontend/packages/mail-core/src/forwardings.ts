@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import { acceptMailForwarding, foldAddress, MAIL_KEY_FLAGS, makeMailForwarding, toBase64, type SealedMailKey } from '@kutup/crypto'
+import { acceptMailForwarding, foldAddress, MAIL_KEY_FLAGS, makeMailForwarding, type SealedMailKey } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 import { mailKey, useMailAccount, usePinnedKeys, type MailAccount, type PinnedKeys } from './api'
@@ -183,7 +183,7 @@ export interface NewForwarding {
 }
 
 /** The address's primary key, as the key list this account signed names it, sealed. */
-function sealedPrimary(session: Pick<Session, 'masterKey' | 'envelopeBinding'>, address: CheckedAddress): SealedMailKey {
+function sealedPrimary(session: Pick<Session, 'masterKeys' | 'envelopeBinding'>, address: CheckedAddress): SealedMailKey {
   if (!address.verifiedList) throw new KeyListNotSigned()
   // Usable, as Mail's own primary must be: neither compromised nor obsolete.
   const usable = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete
@@ -192,7 +192,7 @@ function sealedPrimary(session: Pick<Session, 'masterKey' | 'envelopeBinding'>, 
   const primary = entry && address.keys.find((key) => !key.forwarding && key.listed && key.fingerprint === entry.fingerprint)
   if (!primary) throw new Error(`${address.address} has no primary key`)
   return {
-    masterKeyBase64: toBase64(session.masterKey),
+    masterKeys: session.masterKeys,
     binding: session.envelopeBinding,
     address: address.address,
     envelope: primary.privateKeyEnvelope,

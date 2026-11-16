@@ -10,7 +10,6 @@
 // it for that.
 import '../polyfills'
 import { getCryptoWasm, type OpaqueLoginHandle, type OpaqueRegistrationHandle } from '../rustWasm'
-import { MASTER_KEY_GENERATION } from '../masterKeyGeneration'
 
 export type OpaqueWorkerRequest =
   | { type: 'loginStart'; password: string }
@@ -19,7 +18,7 @@ export type OpaqueWorkerRequest =
   | { type: 'registrationStart'; password: string }
   | { type: 'registrationAgain' }
   | { type: 'registrationFinish'; response: string }
-  | { type: 'sealMasterKey'; masterKey: string; keyBinding: string }
+  | { type: 'sealMasterKey'; masterKey: string; generation: number; keyBinding: string }
   | { type: 'close' }
 
 export type OpaqueWorkerResponse =
@@ -76,7 +75,7 @@ async function handle(request: OpaqueWorkerRequest): Promise<OpaqueWorkerRespons
       return { type: 'finished', message: registration.finish(request.response) }
     case 'sealMasterKey':
       if (!registration) throw new Error('no registration started')
-      return { type: 'sealed', envelope: registration.sealMasterKey(request.masterKey, MASTER_KEY_GENERATION, request.keyBinding) }
+      return { type: 'sealed', envelope: registration.sealMasterKey(request.masterKey, request.generation, request.keyBinding) }
     case 'close':
       endLogin()
       endRegistration()

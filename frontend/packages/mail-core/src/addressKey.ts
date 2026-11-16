@@ -1,4 +1,4 @@
-import { DEFAULT_MAIL_KEY_FLAGS, foldAddress, generateMailAddressKey, signMailKeyList, toBase64 } from '@kutup/crypto'
+import { DEFAULT_MAIL_KEY_FLAGS, foldAddress, generateMailAddressKey, signMailKeyList } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { Session } from '@kutup/session/store'
 
@@ -15,10 +15,10 @@ export interface FirstAddressKey {
 
 /** Generates the first key of `address` and signs its first key list. */
 export async function firstAddressKey(
-  session: Pick<Session, 'masterKey' | 'roots' | 'envelopeBinding'>,
+  session: Pick<Session, 'masterKeys' | 'roots' | 'envelopeBinding'>,
   address: string,
 ): Promise<FirstAddressKey> {
-  const masterKey = toBase64(session.masterKey)
+  const masterKey = session.masterKeys
   const key = await generateMailAddressKey(masterKey, session.envelopeBinding, address)
   const list = await signMailKeyList(session.roots.identityRoot, {
     address,

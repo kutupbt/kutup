@@ -213,6 +213,7 @@ impl ChatAccount {
                 .unwrap(),
             authority_key_id: hex::encode(hash(Suite::V1, public.to_bytes())),
             self_authority_key: b64(&public.to_bytes()),
+            successions: Vec::new(),
             signature: String::new(),
         };
         self.bind(&mut manifest);

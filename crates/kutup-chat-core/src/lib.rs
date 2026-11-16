@@ -54,9 +54,13 @@ mod group_send;
 mod group_settings;
 mod keys;
 pub use keys::PublishedKeys;
+/// The account's master keys (docs/plans/mk-rotation-exercise.md): the
+/// current one and every older one through the keyring.
+pub use kutup_crypto::account_record::MasterKeyGeneration;
 /// The account's stored roots (docs/plans/identity-root.md), as native
 /// apps hand them over.
 pub use kutup_crypto::account_roots::AccountRoots;
+pub use kutup_crypto::master_keys::{MasterKeys, MASTER_KEY_STALE};
 mod manifest;
 mod media_wait;
 mod multi_seal;

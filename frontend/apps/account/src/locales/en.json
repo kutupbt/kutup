@@ -385,7 +385,8 @@
           "allSessionsRevoked": "All other sessions were ended",
           "adminAccess": "An administrator opened your account's details",
           "accountClosing": "You asked for the account to be deleted",
-          "accountKept": "The account was kept: it is no longer closing"
+          "accountKept": "The account was kept: it is no longer closing",
+          "masterKeyRotated": "New account key and recovery phrase"
         }
       },
       "recovery": "Recovery phrase",

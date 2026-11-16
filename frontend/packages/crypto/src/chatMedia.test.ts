@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./rustWasm', async () => {
@@ -62,7 +63,7 @@ describe('Chat-media block format (suite 2) through Rust/WASM', () => {
 
 describe('Chat attachment ledger Rust/WASM envelope', () => {
   it('is an account record of its account, entity and place in the chain', async () => {
-    const key = { masterKey: new Uint8Array(32).fill(0x33), binding: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b' }
+    const key = { masterKey: new Uint8Array(32).fill(0x33), masterKeys: firstMasterKeys(new Uint8Array(32).fill(0x33)), binding: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b' }
     const plaintext = new TextEncoder().encode('canonical entry')
     const context = {
       accountIncarnationId: incarnationId,
@@ -89,7 +90,7 @@ describe('Chat attachment ledger Rust/WASM envelope', () => {
     })).rejects.toThrow()
     // Another account's key binding, or another master key: refused.
     await expect(openChatAttachmentLedger(envelope, { ...key, binding: '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d' }, context)).rejects.toThrow()
-    await expect(openChatAttachmentLedger(envelope, { ...key, masterKey: new Uint8Array(32).fill(0x34) }, context)).rejects.toThrow()
+    await expect(openChatAttachmentLedger(envelope, { ...key, masterKeys: firstMasterKeys(new Uint8Array(32).fill(0x34)) }, context)).rejects.toThrow()
   })
 
   it('uses the strict Rust canonical codec for private accounting entries', async () => {

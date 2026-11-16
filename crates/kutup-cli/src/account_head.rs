@@ -25,6 +25,8 @@ use kutup_crypto::revision_guard::GuardKeys;
 
 use crate::api::Client;
 use crate::errors::HeadBlocked;
+use kutup_crypto::account_roots::ObjectIdKey;
+use kutup_crypto::master_keys::MasterKeys;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -229,14 +231,15 @@ pub(crate) struct StateStore {
 
 impl StateStore {
     pub(crate) fn new(
-        master_key: &[u8; 32],
+        master_keys: &MasterKeys,
+        object_id_key: &ObjectIdKey,
         binding: &str,
         incarnation: &str,
         generations: account_head::RootGenerations,
         dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
-            keys: HeadKeys::derive(master_key)?,
+            keys: HeadKeys::derive(master_keys, object_id_key)?,
             binding: binding.to_owned(),
             incarnation: incarnation.to_owned(),
             generations,
@@ -351,7 +354,8 @@ pub struct HeadReport {
 impl<'a> CliHead<'a> {
     pub fn open(
         client: &'a Client,
-        master_key: &[u8; 32],
+        master_keys: &MasterKeys,
+        object_id_key: &ObjectIdKey,
         binding: &str,
         incarnation: &str,
         generations: account_head::RootGenerations,
@@ -359,7 +363,14 @@ impl<'a> CliHead<'a> {
     ) -> Result<Self> {
         Ok(Self {
             client,
-            store: StateStore::new(master_key, binding, incarnation, generations, dir)?,
+            store: StateStore::new(
+                master_keys,
+                object_id_key,
+                binding,
+                incarnation,
+                generations,
+                dir,
+            )?,
             verified: None,
             blocked: None,
         })
@@ -369,12 +380,12 @@ impl<'a> CliHead<'a> {
     /// `identity-pins-revision` once (its value becomes the pin list's).
     pub fn guard(
         dir: &Path,
-        master_key: &[u8; 32],
-        object_id_key: &kutup_crypto::account_roots::ObjectIdKey,
+        master_keys: &MasterKeys,
+        object_id_key: &ObjectIdKey,
         binding: &str,
     ) -> Result<Guard> {
         let guard = Guard {
-            keys: GuardKeys::derive(master_key, object_id_key, binding)?,
+            keys: GuardKeys::derive(master_keys, object_id_key, binding)?,
             path: dir.join("revisions.json"),
         };
         let old = dir.join("identity-pins-revision");
@@ -649,6 +660,15 @@ impl<'a> CliHead<'a> {
         bail!("another device kept starting the account's history; try again")
     }
 
+    /// The head a master-key rotation continues: checked now (the chain
+    /// started first when there is none), and this device's writer id.
+    pub fn for_rotation(&mut self) -> Result<(&VerifiedHead, String)> {
+        self.at_sign_in()?;
+        let writer = self.store.keys.writer(&self.load()?.device_id)?;
+        let verified = self.verified.as_ref().context("no verified account head")?;
+        Ok((verified, writer))
+    }
+
     /// Where this device stands: checks the head now.
     pub fn report(&mut self) -> Result<HeadReport> {
         // Read once more before a rollback or fork counts.
@@ -760,7 +780,7 @@ mod tests {
         let dir = temp.path();
         let guard = CliHead::guard(
             dir,
-            &[7u8; 32],
+            &MasterKeys::first(&[7u8; 32]),
             &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
             GUARD_BINDING,
         )
@@ -774,7 +794,7 @@ mod tests {
         assert_eq!(
             CliHead::guard(
                 dir,
-                &[8u8; 32],
+                &MasterKeys::first(&[8u8; 32]),
                 &kutup_crypto::account_roots::ObjectIdKey::from_bytes([8u8; 32]),
                 GUARD_BINDING
             )
@@ -795,7 +815,7 @@ mod tests {
         std::fs::write(dir.join("identity-pins-revision"), "1790000000000").unwrap();
         let guard = CliHead::guard(
             dir,
-            &[7u8; 32],
+            &MasterKeys::first(&[7u8; 32]),
             &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
             GUARD_BINDING,
         )
@@ -817,7 +837,11 @@ mod tests {
 
     /// `n` verified heads of one account, each on the one before.
     fn verified_chain(n: usize) -> Vec<VerifiedHead> {
-        let keys = HeadKeys::derive(&[7u8; 32]).unwrap();
+        let keys = HeadKeys::derive(
+            &MasterKeys::first(&[7u8; 32]),
+            &ObjectIdKey::from_bytes([7u8; 32]),
+        )
+        .unwrap();
         let writer = keys.writer("device-a").unwrap();
         let entry = |i: u64| {
             keys.scope_digest("pins", &[("pins".to_string(), i)])
@@ -830,6 +854,9 @@ mod tests {
             account_head::RootGenerations {
                 identity: 1,
                 drive: 1,
+                object_id: 1,
+                pseudonym: 1,
+                call_link: 1,
             },
             &writer,
             vec![entry(1)],
@@ -847,12 +874,16 @@ mod tests {
 
     fn store(dir: &Path) -> StateStore {
         StateStore::new(
-            &[7u8; 32],
+            &MasterKeys::first(&[7u8; 32]),
+            &ObjectIdKey::from_bytes([7u8; 32]),
             BINDING,
             INCARNATION,
             account_head::RootGenerations {
                 identity: 1,
                 drive: 1,
+                object_id: 1,
+                pseudonym: 1,
+                call_link: 1,
             },
             dir.to_path_buf(),
         )
@@ -872,7 +903,7 @@ mod tests {
                     let store = store(&dir);
                     let guard = CliHead::guard(
                         &dir,
-                        &[7u8; 32],
+                        &MasterKeys::first(&[7u8; 32]),
                         &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
                         GUARD_BINDING,
                     )
@@ -905,7 +936,7 @@ mod tests {
         );
         let guard = CliHead::guard(
             temp.path(),
-            &[7u8; 32],
+            &MasterKeys::first(&[7u8; 32]),
             &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
             GUARD_BINDING,
         )
@@ -964,7 +995,7 @@ mod tests {
         std::fs::create_dir(dir.join("revisions.json")).unwrap();
         assert!(CliHead::guard(
             dir,
-            &[7u8; 32],
+            &MasterKeys::first(&[7u8; 32]),
             &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
             GUARD_BINDING
         )

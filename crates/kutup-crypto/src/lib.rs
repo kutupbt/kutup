@@ -99,6 +99,9 @@ pub mod mail_group;
 pub mod mail_key;
 pub mod mail_names;
 pub mod mail_search;
+pub mod master_keys;
+#[cfg(feature = "mnemonic")]
+pub mod mk_rotation;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;

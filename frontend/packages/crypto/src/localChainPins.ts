@@ -12,8 +12,8 @@
 // is missing or does not open (altered, moved, another account's) is
 // "unseen": the next state read is trusted and pinned, as on a new device.
 
+import type { MasterKeys } from './masterKeys'
 import type { ObjectIdKey } from './accountRoots'
-import { toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
 import { indexedDbRevisionStore, memoryRevisionStore, serialized, type RevisionStore } from './revisionGuard'
 
@@ -93,7 +93,7 @@ export class LocalChainPins {
 
 let shared: RevisionStore | null = null
 /** By account (its key binding): the pins, for the master key they were made with. */
-const pins = new Map<string, { masterKey: string; pins: LocalChainPins }>()
+const pins = new Map<string, { masterKeys: MasterKeys; pins: LocalChainPins }>()
 /** Set by tests: keys that need no WASM. */
 let testKeys: ((binding: string) => ChainPinKeys) | null = null
 
@@ -102,23 +102,23 @@ let testKeys: ((binding: string) => ChainPinKeys) | null = null
  * key and key binding (`envelopeBinding`).
  */
 export function localChainPins(session: {
-  masterKey: Uint8Array
+  masterKeys: MasterKeys
   roots: { objectIdKey: ObjectIdKey }
   envelopeBinding: string
 }): LocalChainPins {
-  const masterKey = toBase64(session.masterKey)
+  const masterKeys = session.masterKeys
   const objectIdKey = session.roots.objectIdKey
   const binding = session.envelopeBinding
   const known = pins.get(binding)
   // Made again when the master key is another (the keys are both).
-  if (known?.masterKey === masterKey) return known.pins
+  if (known && known.masterKeys === masterKeys) return known.pins
   shared ??= indexedDbRevisionStore()
   let keys: Promise<ChainPinKeys> | null = null
   const forTests = testKeys
   const load = (): Promise<ChainPinKeys> => {
     if (forTests) return Promise.resolve(forTests(binding))
     keys ??= getCryptoWasm()
-      .then((wasm): ChainPinKeys => new wasm.LocalChainPins(masterKey, objectIdKey, binding))
+      .then((wasm): ChainPinKeys => new wasm.LocalChainPins(masterKeys, objectIdKey, binding))
       .catch((error: unknown) => {
         // Not kept: the next call loads again.
         keys = null
@@ -127,7 +127,7 @@ export function localChainPins(session: {
     return keys
   }
   const made = new LocalChainPins(shared, load)
-  pins.set(binding, { masterKey, pins: made })
+  pins.set(binding, { masterKeys, pins: made })
   return made
 }
 

@@ -1,3 +1,4 @@
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { useCallback, useMemo } from 'react'
@@ -9,7 +10,6 @@ import {
   revisionGuard,
   sealContactCard,
   signContactSummary,
-  toBase64,
   verifyContactSummary,
   type ContactSummary,
 } from '@kutup/crypto'
@@ -104,7 +104,7 @@ export function useAccountAddress() {
 async function openRow(
   session: Session,
   row: ContactRow,
-  masterKey: string,
+  masterKey: MasterKeys,
   authority: string,
   index: VerifiedIndex | null,
 ): Promise<Contact | null> {
@@ -147,7 +147,7 @@ export function useContacts() {
 }
 
 export async function loadContacts(session: Session): Promise<{ contacts: Contact[]; unreadable: number }> {
-  const masterKey = toBase64(session.masterKey)
+  const masterKey = session.masterKeys
   const { authorityPublicKey } = await deriveAccountIdentityKeys(session.roots.identityRoot)
   // The book and the head's index are two reads: a write landing between
   // them is read again once before the book counts as one the head does not
@@ -214,7 +214,7 @@ function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
  * started from; 0 for a new contact).
  */
 async function prepare(session: Session, uid: string, input: ContactDraft, base = 0) {
-  const masterKey = toBase64(session.masterKey)
+  const masterKey = session.masterKeys
   // Keys of addresses still among the emails, each once, in order, as many as the summary holds.
   const addresses = new Set(input.emails.map((email) => email.address.trim().toLowerCase()))
   const keys = (await withFingerprints(input.keys))

@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { firstMasterKeys } from './masterKeys'
 import { describe, expect, it, vi } from 'vitest'
 import vectors from '../../../../crates/kutup-crypto/tests/vectors/crypto.json'
 
@@ -41,8 +42,8 @@ describe('local-state envelopes', () => {
   it('seal manifest pins under the master key only (purpose 4)', async () => {
     const pins = v.manifestPins
     const plain = JSON.parse(new TextDecoder().decode(fromBase64(pins.plaintext)))
-    expect(await openManifestPins(pins.envelope, pins.masterKey, pins.profile)).toEqual(plain)
-    await expect(openManifestPins(pins.envelope, v.key, pins.profile)).rejects.toBeDefined()
+    expect(await openManifestPins(pins.envelope, firstMasterKeys(fromBase64(pins.masterKey)), pins.profile)).toEqual(plain)
+    await expect(openManifestPins(pins.envelope, firstMasterKeys(fromBase64(v.key)), pins.profile)).rejects.toBeDefined()
     await expect(sealLocalState(fromBase64(pins.plaintext), key, 4 as LocalStatePurpose, pins.profile)).rejects.toBeDefined()
   })
 

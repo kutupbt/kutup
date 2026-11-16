@@ -314,6 +314,7 @@ impl AccountAuthority {
             issued_at: issued_at.into(),
             authority_key_id: self.key_id(),
             self_authority_key: self.public_key_base64(),
+            successions: Vec::new(),
             signature: String::new(),
         };
         let bytes = manifest.signing_bytes().map_err(ChatError::Invalid)?;

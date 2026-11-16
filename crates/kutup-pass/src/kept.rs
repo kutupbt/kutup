@@ -9,9 +9,9 @@
 //! file is kept as its key element ([`key_file_secret`]). The format itself is
 //! `kutup_crypto::pass_vault`.
 
-use kutup_crypto::account_record;
 /// Which master key a kept key is sealed under (`account_record`).
 pub use kutup_crypto::account_record::MasterKeyGeneration;
+pub use kutup_crypto::master_keys::MasterKeys;
 use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecret};
 use zeroize::Zeroizing;
 
@@ -115,19 +115,24 @@ pub fn open(
 /// `revision`: for a copy of the vault, which has the same key. The secret
 /// moves as it is (a chosen password's hash, a generated password, a key
 /// file's element), so neither vault is opened and no password is needed.
+/// It opens under the master key of the generation it names and is sealed
+/// under the account's current one (docs/plans/mk-rotation-exercise.md).
 pub fn reseal(
     envelope: &[u8],
-    master_key: &[u8],
+    master_keys: &MasterKeys,
     binding: &str,
     from: &[u8; 16],
     to: &[u8; 16],
     revision: u64,
 ) -> Result<Vec<u8>, KeptError> {
-    let (secret, _) = open_vault_secret(envelope, master_key, binding, from)?;
-    // Under the same master key it opened with.
-    let generation = account_record::inspect(envelope)?.generation;
+    let (secret, _) = open_vault_secret(envelope, master_keys.key_for(envelope)?, binding, from)?;
     Ok(seal_vault_secret(
-        master_key, generation, binding, to, revision, &secret,
+        master_keys.current(),
+        master_keys.generation(),
+        binding,
+        to,
+        revision,
+        &secret,
     )?)
 }
 
@@ -213,7 +218,15 @@ mod tests {
                 kind(generated),
             )
             .unwrap();
-            let copied = reseal(&envelope, &MASTER, BINDING, &VAULT, &COPY, 1).unwrap();
+            let copied = reseal(
+                &envelope,
+                &MasterKeys::first(&MASTER),
+                BINDING,
+                &VAULT,
+                &COPY,
+                1,
+            )
+            .unwrap();
             let kept = open(&copied, &MASTER, BINDING, &COPY).unwrap();
             assert_eq!(kept.revision, 1);
             assert!(open_vault(&contents, &kept.key).is_ok());
@@ -235,8 +248,24 @@ mod tests {
             PasswordKind::Chosen,
         )
         .unwrap();
-        assert!(reseal(&envelope, &MASTER, BINDING, &COPY, &VAULT, 1).is_err());
-        assert!(reseal(&envelope, &[8; 32], BINDING, &VAULT, &COPY, 1).is_err());
+        assert!(reseal(
+            &envelope,
+            &MasterKeys::first(&MASTER),
+            BINDING,
+            &COPY,
+            &VAULT,
+            1
+        )
+        .is_err());
+        assert!(reseal(
+            &envelope,
+            &MasterKeys::first(&[8; 32]),
+            BINDING,
+            &VAULT,
+            &COPY,
+            1
+        )
+        .is_err());
     }
 
     #[test]

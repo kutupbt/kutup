@@ -52,13 +52,15 @@ pub fn run(
 /// `register/start` with `grant` for the account's own key binding, the
 /// client's half, then `register/finish` with the master key sealed under
 /// the new password's export key. `client` carries the session the grant was
-/// issued to (none for a recovery). The new password envelope.
+/// issued to (none for a recovery). `generation` is the master key's (the
+/// account's current one). The new password envelope.
 pub(crate) fn set_password(
     client: &Client,
     grant: &str,
     key_binding: &str,
     password: &str,
     master_key: &[u8; 32],
+    generation: kutup_crypto::account_record::MasterKeyGeneration,
 ) -> Result<String> {
     let (registering, request) = opaque::client_registration_start(password).context("OPAQUE")?;
     let started = client
@@ -69,11 +71,7 @@ pub(crate) fn set_password(
         .context("the server's registration answer")?;
     let envelope = registered
         .export_key
-        .seal_master_key(
-            master_key,
-            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
-            key_binding,
-        )
+        .seal_master_key(master_key, generation, key_binding)
         .context("seal master-key envelope")?;
     client
         .register_finish(
@@ -214,6 +212,26 @@ pub(crate) fn login_with_password(
         .as_slice()
         .try_into()
         .context("the master key is 32 bytes")?;
+    // Its generation is the one the envelope's (authenticated) header names;
+    // the keyring reaches every older key (docs/plans/mk-rotation-exercise.md).
+    let generation = kutup_crypto::account_record::inspect(
+        &b64.decode(&resp.master_key_envelope)
+            .context("the master-key envelope is not base64")?,
+    )
+    .context("the master-key envelope")?
+    .generation;
+    if resp.master_key_generation != generation.get() {
+        bail!("the server named another master-key generation than the envelope's");
+    }
+    let keyring = resp
+        .master_keyring
+        .iter()
+        .map(|record| b64.decode(record))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("the account's keyring records are not base64")?;
+    let master_keys =
+        kutup_crypto::master_keys::MasterKeys::open(&master, generation, &binding, &keyring)
+            .context("open the account's master-key keyring")?;
     let authority: [u8; 32] = b64
         .decode(&resp.account_authority_public_key)
         .ok()
@@ -225,9 +243,13 @@ pub(crate) fn login_with_password(
         .map(|record| b64.decode(record))
         .collect::<std::result::Result<Vec<_>, _>>()
         .context("the account's root records are not base64")?;
-    let roots =
-        kutup_crypto::account_roots::AccountRoots::open(&records, &master, &binding, &authority)
-            .context("open the account's roots")?;
+    let roots = kutup_crypto::account_roots::AccountRoots::open(
+        &records,
+        &master_keys,
+        &binding,
+        &authority,
+    )
+    .context("open the account's roots")?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
         .context("derive the account's keys")?;
     let public_key = b64.encode(identity.drive_hpke_public_key());
@@ -242,7 +264,7 @@ pub(crate) fn login_with_password(
     let mut master_key_envelope = resp.master_key_envelope;
     if let (true, Some(grant)) = (resp.rotate, resp.grant.as_deref()) {
         let signed = Client::new(server, &resp.access_token);
-        match set_password(&signed, grant, &binding, password, &master_key) {
+        match set_password(&signed, grant, &binding, password, &master, generation) {
             Ok(envelope) => master_key_envelope = envelope,
             Err(e) => eprintln!("note: moving the password to the server's new key failed: {e:#}"),
         }
@@ -267,7 +289,8 @@ pub(crate) fn login_with_password(
     let checked = config::data_dir(profile).and_then(|dir| {
         crate::account_head::CliHead::open(
             &signed,
-            &master,
+            &master_keys,
+            &roots.object_id,
             &binding,
             &identity.incarnation_id(),
             roots.head_generations(),
@@ -304,6 +327,8 @@ pub(crate) fn login_with_password(
         master_key_envelope,
         account_roots: resp.account_roots,
         account_authority_public_key: resp.account_authority_public_key,
+        master_key_generation: generation.get(),
+        master_keyring: resp.master_keyring,
         storage_quota_bytes: resp.storage_quota_bytes,
         storage_used_bytes: resp.storage_used_bytes,
     };

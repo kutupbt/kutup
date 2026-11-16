@@ -47,7 +47,7 @@ const PIN_SCOPE = 'photos-library'
 const OLD_PIN_PREFIX = 'kutup.photos.library.pin.v1.'
 
 function pinsOf(me: DriveIdentity) {
-  return localChainPins({ masterKey: me.masterKey, roots: me.roots, envelopeBinding: me.binding })
+  return localChainPins({ masterKeys: me.masterKeys, roots: me.roots, envelopeBinding: me.binding })
 }
 
 async function loadPin(me: DriveIdentity): Promise<{ revision: number; digest: string } | null> {

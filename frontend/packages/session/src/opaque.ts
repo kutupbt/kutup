@@ -3,6 +3,7 @@
 // administrator's temporary passwords. The cryptography runs in a worker
 // (@kutup/crypto/opaqueWorker); this file sequences it against the API.
 
+import type { MasterKeyAt } from '@kutup/crypto/masterKeys'
 import { isAxiosError } from 'axios'
 import {
   startOpaqueRegistration,
@@ -83,7 +84,7 @@ export function conflictCode(error: unknown): string | null {
 
 /**
  * Registers the password `registrar` holds for the account bound to
- * `keyBinding`, and seals its `masterKey` under it: `register/start`
+ * `keyBinding`, and seals its `masterKey` (at its generation) under it: `register/start`
  * (allowed by `auth`; none for a new account), then the record and the
  * envelope, which the caller sends with the request that stores them. The
  * registrar stays open: a record the server then refuses as stale
@@ -92,7 +93,7 @@ export function conflictCode(error: unknown): string | null {
 export async function registerWith(
   registrar: OpaqueRegistrar,
   keyBinding: string,
-  masterKey: Uint8Array,
+  masterKey: MasterKeyAt,
   auth: RegistrationAuth,
 ): Promise<RegisteredPassword>
 export async function registerWith(
@@ -104,7 +105,7 @@ export async function registerWith(
 export async function registerWith(
   registrar: OpaqueRegistrar,
   keyBinding: string,
-  masterKey: Uint8Array | null,
+  masterKey: MasterKeyAt | null,
   auth: RegistrationAuth,
 ): Promise<RegisteredPassword | RegisteredTemporaryPassword> {
   const registration = await registrar.register()
@@ -124,7 +125,7 @@ export async function registerWith(
   )
   const opaqueRecord = await registration.finish(data.registrationResponse)
   if (!masterKey) return { opaqueRecord, opaqueServerKeyId: data.serverKeyId }
-  const masterKeyEnvelope = await registration.sealMasterKey(masterKey, keyBinding)
+  const masterKeyEnvelope = await registration.sealMasterKey(masterKey.key, masterKey.generation, keyBinding)
   const minted = data.accountId && data.accountIdProof ? { accountId: data.accountId, accountIdProof: data.accountIdProof } : {}
   return { opaqueRecord, opaqueServerKeyId: data.serverKeyId, masterKeyEnvelope, ...minted }
 }
@@ -153,7 +154,7 @@ export async function opaqueRegister(
 export async function reregisterWith(
   registrar: OpaqueRegistrar,
   keyBinding: string,
-  masterKey: Uint8Array,
+  masterKey: MasterKeyAt,
   grant: string,
 ): Promise<void> {
   const store = async () => {
@@ -172,7 +173,7 @@ export async function reregisterWith(
 export async function opaqueReregister(
   password: string,
   keyBinding: string,
-  masterKey: Uint8Array,
+  masterKey: MasterKeyAt,
   grant: string,
 ): Promise<void> {
   const registrar = await startOpaqueRegistration(password)

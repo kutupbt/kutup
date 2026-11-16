@@ -1,3 +1,4 @@
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@kutup/session/client'
@@ -64,7 +65,7 @@ export function useFilters() {
   })
 }
 
-type FilterSession = { masterKey: Uint8Array; roots: AccountRoots; envelopeBinding: string; userId: string }
+type FilterSession = { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; userId: string }
 
 interface FilterTools {
   /** Creates a filter: `post` gets its sealed name and the next account head. */

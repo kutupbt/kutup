@@ -5,8 +5,8 @@
 // manifest is unsigned because the E2EE descriptor commits to its SHA-256.
 // The ledger envelopes below are Rust-owned account records.
 
+import type { MasterKeys } from './masterKeys'
 import { fromBase64, toBase64 } from './base64'
-import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 import { getCryptoWasm, type WasmBlockEncryptor, type WasmBlockReader } from './rustWasm'
 
 /** The Chat-media suite every new attachment is sealed under. */
@@ -131,7 +131,8 @@ export async function openChatMedia(
  * account (docs/chat-media.md).
  */
 export interface ChatAttachmentLedgerOwner {
-  masterKey: Uint8Array
+  /** The account's master keys (`session.masterKeys`). */
+  masterKeys: MasterKeys
   binding: string
 }
 
@@ -149,8 +150,7 @@ export async function sealChatAttachmentLedger(
 ): Promise<string> {
   return (await getCryptoWasm()).sealChatAttachmentLedger(
     toBase64(plaintext),
-    toBase64(owner.masterKey),
-    MASTER_KEY_GENERATION,
+    owner.masterKeys,
     owner.binding,
     context.accountIncarnationId,
     context.entityId,
@@ -166,7 +166,7 @@ export async function openChatAttachmentLedger(
 ): Promise<Uint8Array> {
   return fromBase64((await getCryptoWasm()).openChatAttachmentLedger(
     envelope,
-    toBase64(owner.masterKey),
+    owner.masterKeys,
     owner.binding,
     expected.accountIncarnationId,
     expected.entityId,

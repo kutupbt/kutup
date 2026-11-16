@@ -26,8 +26,11 @@ use crate::primitives::{Hasher, Kdf, Mac, Suite};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
+use crate::account_record::MasterKeyGeneration;
+use crate::account_record::{self, AccountRecordPurpose};
 use crate::error::{CryptoError, Result};
+use crate::master_keys::MasterKeys;
+use std::collections::BTreeMap;
 
 const SALT: &[u8] = crate::labels::ACCOUNT_HEAD_V1;
 const ID_KEY_INFO: &[u8] = crate::labels::ACCOUNT_HEAD_ID_KEY_V1;
@@ -57,33 +60,37 @@ fn is_lower_hex_32(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// The account's head keys: the master key, which heads and local states are
-/// sealed under (as account records), and the key value ids, writers and
-/// local names are HMAC'd with, derived from it.
+/// The account's head keys: its master keys, which heads and local states
+/// are sealed under (as account records; each opens under the key of the
+/// generation its header names), and the key value ids, writers and local
+/// names are HMAC'd with. That one derives from the stored object-id root,
+/// so a master-key rotation changes no id, digest or local name
+/// (docs/plans/mk-rotation-exercise.md).
 pub struct HeadKeys {
-    master: Zeroizing<[u8; 32]>,
-    generation: MasterKeyGeneration,
+    master: MasterKeys,
     id: Zeroizing<[u8; 32]>,
 }
 
 impl HeadKeys {
-    /// The keys of the master key's first generation (every account's, until
-    /// master-key rotation exists).
-    pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        Self::derive_at(master_key, MasterKeyGeneration::FIRST)
-    }
-
-    /// The keys of `master_key`, which is the account's at `generation`.
-    pub fn derive_at(master_key: &[u8; 32], generation: MasterKeyGeneration) -> Result<Self> {
-        let hkdf = Kdf::new(Suite::V1, SALT, master_key);
+    /// The keys of an account with master keys `master` and object-id root
+    /// `object_id_key`.
+    pub fn derive(
+        master: &MasterKeys,
+        object_id_key: &crate::account_roots::ObjectIdKey,
+    ) -> Result<Self> {
+        let hkdf = Kdf::new(Suite::V1, SALT, object_id_key.as_bytes());
         let mut id = Zeroizing::new([0u8; 32]);
         hkdf.expand(ID_KEY_INFO, id.as_mut_slice())
             .map_err(|_| CryptoError::Backend("account head key".into()))?;
         Ok(Self {
-            master: Zeroizing::new(*master_key),
-            generation,
+            master: master.clone(),
             id,
         })
+    }
+
+    /// The master keys heads are sealed and opened under.
+    pub fn master_keys(&self) -> &MasterKeys {
+        &self.master
     }
 
     fn mac(&self, domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
@@ -182,30 +189,127 @@ pub struct ScopeV1 {
     pub digest: String,
 }
 
-/// The generations of the account's identity root and Drive root a head
-/// records (docs/plans/identity-root.md): the server can't forge or roll back
-/// a head, so a root the server serves of another generation than the head's
+/// The generations of the account's five roots a head records
+/// (docs/plans/identity-root.md): the server can't forge or roll back a
+/// head, so a root the server serves of another generation than the head's
 /// is refused, on every device (a new one too, from its first head).
+/// Releasing an escrow rotates all five (docs/plans/mk-rotation-exercise.md).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RootGenerations {
     pub identity: u32,
     pub drive: u32,
+    pub object_id: u32,
+    pub pseudonym: u32,
+    pub call_link: u32,
+}
+
+/// The names a head's `generations` map gives the master key and each root.
+/// A head must name these six; it may name more (a later root is additive:
+/// a reader checks the ones it knows).
+pub const GENERATION_NAMES: [&str; 6] = [
+    "mk",
+    "identity",
+    "drive",
+    "objectId",
+    "pseudonym",
+    "callLink",
+];
+
+/// The most entries a head's `generations` map has.
+pub const MAX_GENERATIONS: usize = 32;
+
+/// A head's `generations` map: the current master key's and the roots'.
+pub fn generations_map(
+    master_key: MasterKeyGeneration,
+    roots: RootGenerations,
+) -> BTreeMap<String, u32> {
+    [
+        ("mk", master_key.get()),
+        ("identity", roots.identity),
+        ("drive", roots.drive),
+        ("objectId", roots.object_id),
+        ("pseudonym", roots.pseudonym),
+        ("callLink", roots.call_link),
+    ]
+    .into_iter()
+    .map(|(name, generation)| (name.to_owned(), generation))
+    .collect()
 }
 
 /// The error [`check`] gives when the head names other root generations
 /// than the roots in use.
 pub const ROOT_GENERATION_MISMATCH: &str = "rootGenerationMismatch";
 
-/// The account head.
+/// The newest account-head version this reader knows
+/// (docs/plans/format-evolution.md).
+pub const ACCOUNT_HEAD_VERSION: u16 = 1;
+/// The newest local-state version this reader knows.
+pub const LOCAL_HEAD_STATE_VERSION: u16 = 1;
+/// The most fields a newer writer may add that this reader keeps.
+const MAX_EXTRA_FIELDS: usize = 64;
+
+/// Fields a newer writer added: kept, in sorted order, and written back.
+pub type Extra = BTreeMap<String, serde_json::Value>;
+
+/// The error a reader gives an object a newer writer made that it may not
+/// act on: "update Kutup", the bytes kept (docs/plans/format-evolution.md,
+/// rule 5). Its text starts `newer format:`.
+fn newer(what: &str) -> CryptoError {
+    CryptoError::InvalidInput(format!("newer format: {what}"))
+}
+
+/// `v` and `min` (absent: `v`; present: below `v`) against this reader's
+/// version: version 0 or a bad `min` is corrupt, a minimum above the reader
+/// is newer than me.
+fn check_version(what: &str, v: u16, min: Option<u16>, reader: u16) -> Result<()> {
+    let minimum = match min {
+        _ if v == 0 => return Err(invalid("version 0")),
+        None => v,
+        Some(min) if min >= 1 && min < v => min,
+        Some(_) => return Err(invalid("min must be below v")),
+    };
+    if minimum > reader {
+        return Err(newer(what));
+    }
+    Ok(())
+}
+
+/// Reads `v` and `min` before the struct, so an object from a newer writer
+/// is newer than me even when its fields no longer fit this reader's struct.
+fn check_json_version(what: &str, plain: &[u8], reader: u16) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Probe {
+        v: u16,
+        #[serde(default)]
+        min: Option<u16>,
+    }
+    let probe: Probe = serde_json::from_slice(plain).map_err(|_| invalid("decode"))?;
+    check_version(what, probe.v, probe.min, reader)
+}
+
+fn check_extra(extra: &Extra) -> Result<()> {
+    if extra.len() > MAX_EXTRA_FIELDS {
+        return Err(invalid("too many unknown fields"));
+    }
+    Ok(())
+}
+
+/// The account head. `v` first (docs/plans/format-evolution.md); fields a
+/// newer writer added are kept in `extra` and written back by the next head;
+/// a scope this reader doesn't know is kept and counted like any other.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountHeadV1 {
+    pub v: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u16>,
     /// The account's incarnation (lowercase hex).
     pub incarnation_id: String,
-    /// The account's current identity-root generation.
-    pub identity_generation: u32,
-    /// The account's current Drive-root generation.
-    pub drive_generation: u32,
+    /// The account's current generations, by name ([`GENERATION_NAMES`]):
+    /// the master key's (in the plaintext, not only the record header,
+    /// which says which key sealed the head, not which key is current) and
+    /// each root's.
+    pub generations: BTreeMap<String, u32>,
     /// 1, 2, 3, …: one per change of any listed value.
     pub sequence: u64,
     /// The digest of the head before (lowercase hex); absent at 1.
@@ -215,15 +319,29 @@ pub struct AccountHeadV1 {
     pub writer: String,
     /// Sorted by scope, one each.
     pub scopes: Vec<ScopeV1>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: Extra,
 }
 
 impl AccountHeadV1 {
     fn validate(&self) -> Result<()> {
+        check_version("account head", self.v, self.min, ACCOUNT_HEAD_VERSION)?;
+        check_extra(&self.extra)?;
         if !is_lower_hex_32(&self.incarnation_id) || !is_lower_hex_32(&self.writer) {
             return Err(invalid("incarnation or writer is invalid"));
         }
-        if self.identity_generation == 0 || self.drive_generation == 0 {
-            return Err(invalid("a root generation is 0"));
+        if self.generations.len() > MAX_GENERATIONS
+            || !GENERATION_NAMES
+                .iter()
+                .all(|name| self.generations.contains_key(*name))
+            || self.generations.iter().any(|(name, generation)| {
+                *generation == 0
+                    || name.is_empty()
+                    || name.len() > 32
+                    || !name.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
+        {
+            return Err(invalid("the generations are invalid"));
         }
         if self.sequence == 0 || self.sequence > 1 << 53 {
             return Err(invalid("sequence is invalid"));
@@ -250,6 +368,19 @@ impl AccountHeadV1 {
         Ok(())
     }
 
+    /// The generation the head records under `name`.
+    pub fn generation(&self, name: &str) -> Option<u32> {
+        self.generations.get(name).copied()
+    }
+
+    /// The same head naming `master_key` as the current master key's
+    /// generation: a rotation's head.
+    pub fn with_master_key(mut self, master_key: MasterKeyGeneration) -> Result<Self> {
+        self.generations.insert("mk".to_owned(), master_key.get());
+        self.validate()?;
+        Ok(self)
+    }
+
     /// The entry for `scope`, if the head covers it yet.
     pub fn scope(&self, scope: &str) -> Option<&ScopeV1> {
         self.scopes.iter().find(|entry| entry.scope == scope)
@@ -265,13 +396,15 @@ impl AccountHeadV1 {
         }
         scopes.sort_by(|a, b| a.scope.cmp(&b.scope));
         let next = Self {
+            v: self.v,
+            min: self.min,
             incarnation_id: self.incarnation_id.clone(),
-            identity_generation: self.identity_generation,
-            drive_generation: self.drive_generation,
+            generations: self.generations.clone(),
             sequence: self.sequence + 1,
             previous: Some(hex::encode(digest(sealed))),
             writer: writer.to_owned(),
             scopes,
+            extra: self.extra.clone(),
         };
         next.validate()?;
         Ok(next)
@@ -280,19 +413,22 @@ impl AccountHeadV1 {
     /// The first head of an account: trust on first use of what is there now.
     pub fn first(
         incarnation_id: &str,
+        master_key: MasterKeyGeneration,
         generations: RootGenerations,
         writer: &str,
         mut scopes: Vec<ScopeV1>,
     ) -> Result<Self> {
         scopes.sort_by(|a, b| a.scope.cmp(&b.scope));
         let head = Self {
+            v: ACCOUNT_HEAD_VERSION,
+            min: None,
             incarnation_id: incarnation_id.to_owned(),
-            identity_generation: generations.identity,
-            drive_generation: generations.drive,
+            generations: generations_map(master_key, generations),
             sequence: 1,
             previous: None,
             writer: writer.to_owned(),
             scopes,
+            extra: Extra::new(),
         };
         head.validate()?;
         Ok(head)
@@ -348,9 +484,9 @@ fn seal_with_nonce(
     }
     account_record::seal_chained(
         &plain,
-        keys.master.as_slice(),
+        keys.master.current().as_slice(),
         HEAD_PURPOSE,
-        keys.generation,
+        keys.master.generation(),
         binding,
         &[],
         head.sequence,
@@ -396,15 +532,20 @@ pub fn validate(sealed: &[u8], binding: &str) -> Result<HeadHeader> {
 
 /// Opens a sealed head of the account whose key binding is `binding`.
 pub fn open(keys: &HeadKeys, binding: &str, sealed: &[u8]) -> Result<AccountHeadV1> {
-    let (plain, sequence, previous) =
-        account_record::open_chained(sealed, keys.master.as_slice(), HEAD_PURPOSE, binding, &[])?;
+    let (plain, sequence, previous) = account_record::open_chained(
+        sealed,
+        keys.master.key_for(sealed)?,
+        HEAD_PURPOSE,
+        binding,
+        &[],
+    )?;
+    check_json_version("account head", &plain, ACCOUNT_HEAD_VERSION)?;
     let head: AccountHeadV1 = serde_json::from_slice(&plain).map_err(|_| invalid("decode"))?;
     head.validate()?;
-    if head.sequence != sequence
-        || previous_bytes(&head)? != previous
-        || serde_json::to_vec(&head).ok().as_deref() != Some(&plain[..])
-    {
-        return Err(invalid("the head is not canonical"));
+    // The plaintext is taken as received (unknown fields included), never
+    // re-encoded; its header must say the same sequence and predecessor.
+    if head.sequence != sequence || previous_bytes(&head)? != previous {
+        return Err(invalid("the head does not match its header"));
     }
     Ok(head)
 }
@@ -532,10 +673,18 @@ pub fn check(
     }
     // The roots in use must be the head's: a server serving an older root
     // generation (or a newer one the head never recorded) is refused.
-    if head.identity_generation != generations.identity
-        || head.drive_generation != generations.drive
+    let expected = generations_map(keys.master.generation(), generations);
+    if GENERATION_NAMES
+        .iter()
+        .any(|name| head.generation(name) != expected.get(*name).copied())
     {
         return Err(invalid(ROOT_GENERATION_MISMATCH));
+    }
+    // The newest head is sealed under the master key it names current: a
+    // rotation writes one, so a head of an older key is a history from
+    // before a rotation this client already holds the key of.
+    if account_record::inspect(current)?.generation != keys.master.generation() {
+        return Err(invalid("the head is sealed under an older master key"));
     }
     let status = status_of(
         keys,
@@ -727,7 +876,13 @@ pub fn first(
     writer: &str,
     scopes: Vec<ScopeV1>,
 ) -> Result<(Vec<u8>, VerifiedHead)> {
-    let head = AccountHeadV1::first(incarnation_id, generations, writer, scopes)?;
+    let head = AccountHeadV1::first(
+        incarnation_id,
+        keys.master.generation(),
+        generations,
+        writer,
+        scopes,
+    )?;
     let sealed = seal(keys, binding, &head)?;
     let verified = verified(head, &sealed)?;
     Ok((sealed, verified))
@@ -769,8 +924,11 @@ pub enum LocalHeadEvent {
 /// one, sealed ([`seal_local_state`]) under the name
 /// [`HeadKeys::local_state_name`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct LocalHeadStateV1 {
+    pub v: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u16>,
     pub incarnation_id: String,
     /// Random, this device's: [`HeadKeys::writer`] hashes it into heads.
     pub device_id: String,
@@ -782,6 +940,8 @@ pub struct LocalHeadStateV1 {
     /// kept until the anchor it starts from is logged with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_over: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: Extra,
 }
 
 impl LocalHeadStateV1 {
@@ -795,18 +955,28 @@ impl LocalHeadStateV1 {
     /// [`Self::new`] with a given device id (vectors; a device moving its id).
     pub fn with_device(incarnation_id: &str, device_id: &str) -> Result<Self> {
         let state = Self {
+            v: LOCAL_HEAD_STATE_VERSION,
+            min: None,
             incarnation_id: incarnation_id.to_owned(),
             device_id: device_id.to_owned(),
             anchor: None,
             anchored_at_ms: 0,
             log: Vec::new(),
             started_over: None,
+            extra: Extra::new(),
         };
         state.validate()?;
         Ok(state)
     }
 
     fn validate(&self) -> Result<()> {
+        check_version(
+            "account head state",
+            self.v,
+            self.min,
+            LOCAL_HEAD_STATE_VERSION,
+        )?;
+        check_extra(&self.extra)?;
         if !is_lower_hex_32(&self.incarnation_id) {
             return Err(invalid("incarnation id is invalid"));
         }
@@ -933,9 +1103,9 @@ fn seal_local_with_nonce(
     account_record::seal_suite(
         account_record::AccountRecordSuiteId::V1,
         &plain,
-        keys.master.as_slice(),
+        keys.master.current().as_slice(),
         LOCAL_PURPOSE,
-        keys.generation,
+        keys.master.generation(),
         binding,
         &incarnation_object(&state.incarnation_id)?,
         None,
@@ -955,11 +1125,12 @@ pub fn open_local_state(
 ) -> Result<LocalHeadStateV1> {
     let plain = Zeroizing::new(account_record::open_object(
         sealed,
-        keys.master.as_slice(),
+        keys.master.key_for(sealed)?,
         LOCAL_PURPOSE,
         binding,
         &incarnation_object(incarnation_id)?,
     )?);
+    check_json_version("account head state", &plain, LOCAL_HEAD_STATE_VERSION)?;
     let state: LocalHeadStateV1 = serde_json::from_slice(&plain).map_err(|_| invalid("decode"))?;
     state.validate()?;
     if state.incarnation_id != incarnation_id {
@@ -977,10 +1148,23 @@ mod tests {
     const GENS: RootGenerations = RootGenerations {
         identity: 1,
         drive: 1,
+        object_id: 1,
+        pseudonym: 1,
+        call_link: 1,
     };
 
+    /// The head keys of an account whose master key and object-id root are
+    /// `n` repeated.
+    fn keys_of(n: u8) -> HeadKeys {
+        HeadKeys::derive(
+            &MasterKeys::first(&[n; 32]),
+            &crate::account_roots::ObjectIdKey::from_bytes([n; 32]),
+        )
+        .unwrap()
+    }
+
     fn keys() -> HeadKeys {
-        HeadKeys::derive(&[7u8; 32]).unwrap()
+        keys_of(7)
     }
 
     fn index(pairs: &[(&str, u64)]) -> Vec<(String, u64)> {
@@ -999,7 +1183,14 @@ mod tests {
             contacts.push((format!("contact-{i}"), 100 + i as u64));
             let entry = keys.scope_digest("contacts", &contacts).unwrap();
             let head = if i == 0 {
-                AccountHeadV1::first(INCARNATION, GENS, &writer, vec![entry]).unwrap()
+                AccountHeadV1::first(
+                    INCARNATION,
+                    MasterKeyGeneration::FIRST,
+                    GENS,
+                    &writer,
+                    vec![entry],
+                )
+                .unwrap()
             } else {
                 let before: &Vec<u8> = &sealed[i - 1];
                 open(keys, BINDING, before)
@@ -1021,7 +1212,7 @@ mod tests {
         assert_eq!(inspect(&sealed[1]).unwrap(), 2);
         assert_eq!(head.previous, Some(hex::encode(digest(&sealed[0]))));
         assert!(open(&keys, "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d", &sealed[1]).is_err());
-        assert!(open(&HeadKeys::derive(&[8u8; 32]).unwrap(), BINDING, &sealed[1]).is_err());
+        assert!(open(&keys_of(8), BINDING, &sealed[1]).is_err());
         let mut relabelled = sealed[1].clone();
         relabelled[10..18].copy_from_slice(&3u64.to_be_bytes());
         assert!(open(&keys, BINDING, &relabelled).is_err());
@@ -1082,6 +1273,130 @@ mod tests {
             .scope_digest("contacts", &index(&[("a", 1), ("a", 2)]))
             .is_err());
         assert!(keys.scope_digest("contacts", &index(&[("a", 0)])).is_err());
+    }
+
+    /// A master-key rotation seals the next head under the new key: a
+    /// device anchored before it follows the chain across it (each head
+    /// opens under its own generation's key), the ids and digests unchanged.
+    #[test]
+    fn a_chain_across_a_master_key_rotation_extends() {
+        let before = keys();
+        let sealed = chain(&before, 2);
+        let anchor = verified_of(&before, &sealed[0]).anchor().clone();
+        let rotated = HeadKeys::derive(
+            &before.master_keys().rotated(&[9; 32]).unwrap(),
+            &crate::account_roots::ObjectIdKey::from_bytes([7; 32]),
+        )
+        .unwrap();
+        // The ids come from the object-id root: unchanged.
+        assert_eq!(
+            rotated.local_state_name(INCARNATION).unwrap(),
+            before.local_state_name(INCARNATION).unwrap()
+        );
+        let writer = rotated.writer("device-a").unwrap();
+        let next = open(&rotated, BINDING, &sealed[1])
+            .unwrap()
+            .next(&sealed[1], &writer, vec![])
+            .unwrap()
+            .with_master_key(MasterKeyGeneration::new(2).unwrap())
+            .unwrap();
+        let third = seal(&rotated, BINDING, &next).unwrap();
+        assert_eq!(account_record::inspect(&third).unwrap().generation.get(), 2);
+        let segment = [sealed[0].clone(), sealed[1].clone(), third.clone()];
+        assert_eq!(
+            status(&rotated, Some(&anchor), &third, Some(&segment)),
+            HeadStatus::Extends
+        );
+        // The old key alone can't read past the rotation: sign in again.
+        let error = check(
+            &before,
+            BINDING,
+            INCARNATION,
+            GENS,
+            Some(&anchor),
+            &third,
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains(crate::master_keys::MASTER_KEY_STALE),
+            "{error}"
+        );
+        // A head of the old key shown to a client of the new one: refused.
+        assert!(check(&rotated, BINDING, INCARNATION, GENS, None, &sealed[1], None).is_err());
+    }
+
+    /// docs/plans/format-evolution.md: a head of a newer version than this
+    /// reader is "newer format", a field or scope it doesn't know is kept and
+    /// written back by the next head.
+    #[test]
+    fn heads_evolve_without_a_wipe() {
+        let keys = keys();
+        let writer = keys.writer("device-a").unwrap();
+        let mut head = AccountHeadV1::first(
+            INCARNATION,
+            MasterKeyGeneration::FIRST,
+            GENS,
+            &writer,
+            vec![],
+        )
+        .unwrap();
+        head.extra
+            .insert("futureField".into(), serde_json::json!({"a": 1}));
+        head.scopes.push(ScopeV1 {
+            scope: "futureScope".into(),
+            count: 2,
+            digest: "ab".repeat(32),
+        });
+        let sealed = seal(&keys, BINDING, &head).unwrap();
+        let opened = open(&keys, BINDING, &sealed).unwrap();
+        assert_eq!(opened, head);
+        let next = opened.next(&sealed, &writer, vec![]).unwrap();
+        assert_eq!(next.extra, head.extra);
+        assert!(next.scope("futureScope").is_some());
+        // A newer version this reader may not act on: newer, not corrupt.
+        let mut newer_head = head.clone();
+        newer_head.v = ACCOUNT_HEAD_VERSION + 1;
+        let plain = serde_json::to_vec(&newer_head).unwrap();
+        let sealed = account_record::seal_chained(
+            &plain,
+            keys.master_keys().current(),
+            HEAD_PURPOSE,
+            keys.master_keys().generation(),
+            BINDING,
+            &[],
+            1,
+            &[0; 32],
+            None,
+        )
+        .unwrap();
+        let error = open(&keys, BINDING, &sealed).unwrap_err();
+        assert!(
+            error.to_string().contains("newer format: account head"),
+            "{error}"
+        );
+        // The same version with a minimum this reader meets: it opens.
+        newer_head.min = Some(ACCOUNT_HEAD_VERSION);
+        let plain = serde_json::to_vec(&newer_head).unwrap();
+        let sealed = account_record::seal_chained(
+            &plain,
+            keys.master_keys().current(),
+            HEAD_PURPOSE,
+            keys.master_keys().generation(),
+            BINDING,
+            &[],
+            1,
+            &[0; 32],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            open(&keys, BINDING, &sealed).unwrap().v,
+            ACCOUNT_HEAD_VERSION + 1
+        );
     }
 
     #[test]
@@ -1210,8 +1525,14 @@ mod tests {
         let writer = keys.writer("d").unwrap();
         let a = keys.scope_digest("a", &[]).unwrap();
         let b = keys.scope_digest("b", &[]).unwrap();
-        let head =
-            AccountHeadV1::first(INCARNATION, GENS, &writer, vec![b.clone(), a.clone()]).unwrap();
+        let head = AccountHeadV1::first(
+            INCARNATION,
+            MasterKeyGeneration::FIRST,
+            GENS,
+            &writer,
+            vec![b.clone(), a.clone()],
+        )
+        .unwrap();
         assert_eq!(head.scopes, vec![a.clone(), b.clone()], "sorted");
         let mut twice = head.clone();
         twice.scopes = vec![a.clone(), a];
@@ -1283,10 +1604,7 @@ mod tests {
         );
         assert_ne!(
             keys.local_state_name(INCARNATION).unwrap(),
-            HeadKeys::derive(&[8u8; 32])
-                .unwrap()
-                .local_state_name(INCARNATION)
-                .unwrap()
+            keys_of(8).local_state_name(INCARNATION).unwrap()
         );
         let state = LocalHeadStateV1::new(INCARNATION).unwrap();
         assert_eq!(state.device_id.len(), 32);
@@ -1304,13 +1622,7 @@ mod tests {
             &sealed
         )
         .is_err());
-        assert!(open_local_state(
-            &HeadKeys::derive(&[8u8; 32]).unwrap(),
-            BINDING,
-            INCARNATION,
-            &sealed
-        )
-        .is_err());
+        assert!(open_local_state(&keys_of(8), BINDING, INCARNATION, &sealed).is_err());
         // Altered: it does not open.
         let mut altered = sealed.clone();
         *altered.last_mut().unwrap() ^= 1;
@@ -1424,18 +1736,19 @@ mod tests {
     /// never recorded) is refused.
     #[test]
     fn a_head_refuses_roots_of_other_generations() {
-        let keys = HeadKeys::derive(&[3u8; 32]).unwrap();
+        let keys = keys_of(3);
         let writer = keys.writer("d").unwrap();
         let (sealed, _) = first(&keys, BINDING, INCARNATION, GENS, &writer, vec![]).unwrap();
         assert!(check(&keys, BINDING, INCARNATION, GENS, None, &sealed, None).is_ok());
         for other in [
             RootGenerations {
                 identity: 2,
-                drive: 1,
+                ..GENS
             },
+            RootGenerations { drive: 2, ..GENS },
             RootGenerations {
-                identity: 1,
-                drive: 2,
+                object_id: 2,
+                ..GENS
             },
         ] {
             let error = check(&keys, BINDING, INCARNATION, other, None, &sealed, None).unwrap_err();
@@ -1447,9 +1760,10 @@ mod tests {
         // A head can't record generation 0.
         assert!(AccountHeadV1::first(
             INCARNATION,
+            MasterKeyGeneration::FIRST,
             RootGenerations {
                 identity: 0,
-                drive: 1
+                ..GENS
             },
             &writer,
             vec![]

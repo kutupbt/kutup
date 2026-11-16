@@ -76,6 +76,11 @@ pub const ACCOUNT_MANIFEST_V1: &[u8] = b"kutup/account/manifest/v1\0";
 pub const ACCOUNT_MANIFEST_V3: &[u8] = b"kutup/account/manifest/v3\0";
 /// `kutup-crypto/src/account_rename.rs` (`DOMAIN`)
 pub const ACCOUNT_RENAME_V1: &[u8] = b"kutup/account/rename/v1\0";
+/// `kutup-chat-proto/src/account_identity.rs` (`AccountSuccessionV1`): the
+/// previous authority's signature over an identity rotation's statement.
+pub const ACCOUNT_SUCCESSION_BY_PREVIOUS_V1: &[u8] = b"kutup/account/succession/by-previous/v1\0";
+/// The same statement, signed by the new authority.
+pub const ACCOUNT_SUCCESSION_BY_NEW_V1: &[u8] = b"kutup/account/succession/by-new/v1\0";
 
 // --- calls -------------------------------------------------------------------
 
@@ -209,8 +214,6 @@ pub const CHAT_STORE_INDEX_V1: &[u8] = b"kutup/chat-store/index/v1\0";
 pub const CHAT_STORE_RECORD_V1: &[u8] = b"kutup/chat-store/record/v1\0";
 /// `kutup-crypto/src/chat_store.rs` (`VALUE_INFO`)
 pub const CHAT_STORE_VALUE_V1: &[u8] = b"kutup/chat-store/value/v1\0";
-/// `kutup-crypto/src/chat_store.rs` (`WRAP_INFO`)
-pub const CHAT_STORE_WRAP_V1: &[u8] = b"kutup/chat-store/wrap/v1\0";
 
 // --- chat --------------------------------------------------------------------
 
@@ -552,7 +555,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 169] = [
+pub const ALL: [&[u8]; 170] = [
     SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
@@ -591,6 +594,8 @@ pub const ALL: [&[u8]; 169] = [
     ACCOUNT_INCARNATION_V1,
     ACCOUNT_MANIFEST_V1,
     ACCOUNT_MANIFEST_V3,
+    ACCOUNT_SUCCESSION_BY_PREVIOUS_V1,
+    ACCOUNT_SUCCESSION_BY_NEW_V1,
     ACCOUNT_RENAME_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_BLOCK_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_MANIFEST_KEY_V1,
@@ -635,7 +640,6 @@ pub const ALL: [&[u8]; 169] = [
     CHAT_STORE_INDEX_V1,
     CHAT_STORE_RECORD_V1,
     CHAT_STORE_VALUE_V1,
-    CHAT_STORE_WRAP_V1,
     CHAT_CALL_LINK_V1,
     CHAT_DEVICE_CREDENTIAL_V1,
     CHAT_KEYS_CHECK_V1,

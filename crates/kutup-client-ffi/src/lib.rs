@@ -20,7 +20,7 @@ use rand::rngs::OsRng;
 use rand::TryRngCore as _;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 pub use http::ChatHttpClient;
 pub use types::*;
@@ -324,8 +324,16 @@ pub async fn open_linked_native_chat_client(
 /// there.
 #[derive(uniffi::Record)]
 pub struct NativeAccountKeys {
-    /// The account master key (32 bytes).
+    /// The account master key (32 bytes): the current one, which the
+    /// password opened.
     pub master_key: Vec<u8>,
+    /// Its generation (`masterKeyGeneration`; 1 until the first rotation).
+    pub master_key_generation: u32,
+    /// The account's master-key keyring records, as `GET /api/account/roots`
+    /// and the sign-in answered them (`masterKeyring`, base64-decoded): each
+    /// older master key, sealed under the one after it, so records sealed
+    /// before a rotation still open (docs/plans/mk-rotation-exercise.md).
+    pub master_keyring: Vec<Vec<u8>>,
     /// The account's root records, as the sign-in answered them
     /// (`accountRoots`, base64-decoded).
     pub root_records: Vec<Vec<u8>>,
@@ -374,23 +382,36 @@ async fn start_client(
     let database_key = take_key(database_key, "database key")?;
     let NativeAccountKeys {
         master_key,
+        master_key_generation,
+        master_keyring,
         root_records,
         authority_public_key,
         binding,
     } = keys;
-    let master_key = take_key(master_key, "account master key")?;
+    let master_key = Zeroizing::new(take_key(master_key, "account master key")?);
+    let invalid = |error: &dyn std::fmt::Display| KutupChatError::InvalidInput {
+        message: error.to_string(),
+    };
+    // The account's master keys: the current one and, through the keyring,
+    // every older one (a newer keyring record than the key is
+    // `masterKeyStale`: another device rotated it, and the app signs in
+    // again).
+    let generation = kutup_chat_core::MasterKeyGeneration::new(master_key_generation)
+        .map_err(|error| invalid(&error))?;
+    let master_keys =
+        kutup_chat_core::MasterKeys::open(&master_key, generation, &binding, &master_keyring)
+            .map_err(|error| invalid(&error))?;
+    drop(master_key);
     // The account's stored roots (docs/plans/identity-root.md), opened here:
     // the newest identity root must be the account's registered authority's.
     let authority_public_key = take_key(authority_public_key, "account authority")?;
     let roots = kutup_chat_core::AccountRoots::open(
         &root_records,
-        &master_key,
+        &master_keys,
         &binding,
         &authority_public_key,
     )
-    .map_err(|error| KutupChatError::InvalidInput {
-        message: error.to_string(),
-    })?;
+    .map_err(|error| invalid(&error))?;
     let (commands, receiver) = mpsc::channel();
     let (ready, initialized) = oneshot::channel();
     let worker_user = user.clone();
@@ -401,7 +422,7 @@ async fn start_client(
                 WorkerConfig {
                     database_path,
                     database_key,
-                    master_key,
+                    master_keys: Some(master_keys),
                     roots,
                     binding,
                     user: worker_user,
@@ -439,7 +460,9 @@ async fn start_client(
 struct WorkerConfig {
     database_path: String,
     database_key: [u8; 32],
-    master_key: [u8; 32],
+    /// The account's master keys; dropped (they zeroize) once the lists
+    /// that need them are set up.
+    master_keys: Option<kutup_chat_core::MasterKeys>,
     roots: kutup_chat_core::AccountRoots,
     binding: String,
     /// The account: `aci:<uuid>@<server>`.
@@ -573,9 +596,13 @@ fn worker_main(
             }
         };
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
-        engine.enable_identity_pins(&config.master_key, &config.binding)?;
-        engine.enable_group_list(&config.master_key, &config.roots, &config.binding)?;
-        config.master_key.zeroize();
+        let master_keys = config
+            .master_keys
+            .take()
+            .expect("the worker starts with the master keys");
+        engine.enable_identity_pins(&master_keys, &config.binding)?;
+        engine.enable_group_list(&master_keys, &config.roots, &config.binding)?;
+        drop(master_keys);
         // The account's identity: a kept sync, one in the mailbox, or none
         // (this device missed it: `LinkRequired`).
         engine.catch_up_identity(&mut rng).await?;
@@ -587,7 +614,7 @@ fn worker_main(
         Ok(value) => value,
         Err(error) => {
             config.database_key.zeroize();
-            config.master_key.zeroize();
+            config.master_keys = None;
             let _ = ready.send(Err(error));
             return;
         }

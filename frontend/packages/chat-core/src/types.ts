@@ -1,4 +1,5 @@
 import type { AccountRoots, CallLinkRoot } from '@kutup/crypto/accountRoots'
+import type { MasterKeys, MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import type { AccountRef } from '@kutup/crypto/accountRef'
 
 export type { AccountRef }
@@ -814,9 +815,9 @@ export interface CallLinkCrypto {
    * (base64) of the account bound by `binding`, for the row `id` (32
    * lowercase hex).
    */
-  callLinkSealJoined(masterKey: string, generation: number, binding: string, id: string, entry: JoinedMeetingRecord): string
+  callLinkSealJoined(masterKeys: MasterKeys, binding: string, id: string, entry: JoinedMeetingRecord): string
   /** Throws when the record was not sealed by this account for row `id`. */
-  callLinkOpenJoined(masterKey: string, binding: string, id: string, sealed: string): JoinedMeetingRecord
+  callLinkOpenJoined(masterKeys: MasterKeys, binding: string, id: string, sealed: string): JoinedMeetingRecord
 }
 
 /** One stay in a meeting, as the account that joined keeps it. */
@@ -1142,23 +1143,23 @@ export interface ChatWasmModule extends CallLinkCrypto {
    * The account's own profile key, from the master key (at `generation`)
    * and the key binding (`session.envelopeBinding`) its own copy is sealed for.
    */
-  accountProfileKey(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): ProfileLookup
+  accountProfileKey(masterKeys: MasterKeysBytes, current: unknown, account: string, binding: string): ProfileLookup
   /** Where to fetch a profile, from its key (standard base64). */
   profileLookup(key: string): ProfileLookup
   /** Open someone's fetched profile with their key (standard base64). */
   profileOpenPeer(peer: string, encrypted: unknown, key: string): AccountProfileView
   /** Open the account's profile from the master key and key binding (no chat device). */
-  accountProfileOpen(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): AccountProfileView
+  accountProfileOpen(masterKeys: MasterKeysBytes, current: unknown, account: string, binding: string): AccountProfileView
   /**
    * Seal the next profile revision (or the first) as the account app: the
    * profile names `account`; its own copy of the key is an account record
    * for `binding`, under the master key at `generation`.
    */
-  accountProfileSeal(masterKey: Uint8Array, generation: number, current: unknown | null, update: AccountProfileInput, account: string, binding: string): unknown
+  accountProfileSeal(masterKeys: MasterKeysBytes, current: unknown | null, update: AccountProfileInput, account: string, binding: string): unknown
   /** Seal small browser-side values for an account scope, one purpose each. */
-  sealLocalData(masterKey: Uint8Array, scope: string, purposes: string[], plaintexts: Uint8Array[]): Uint8Array[]
+  sealLocalData(masterKeys: MasterKeysBytes, scope: string, purposes: string[], plaintexts: Uint8Array[]): Uint8Array[]
   /** Open what `sealLocalData` sealed; a value that does not open is `null`. */
-  openLocalData(masterKey: Uint8Array, scope: string, purposes: string[], sealed: Uint8Array[]): (Uint8Array | null)[]
+  openLocalData(masterKeys: MasterKeysBytes, scope: string, purposes: string[], sealed: Uint8Array[]): (Uint8Array | null)[]
   default(input?: unknown): Promise<unknown>
   WasmChatClient: {
     /**
@@ -1170,7 +1171,9 @@ export interface ChatWasmModule extends CallLinkCrypto {
     installation(
       databaseName: string,
       account: string,
-      masterKey: Uint8Array,
+      masterKeys: MasterKeysBytes,
+      /** The account's key binding (`session.envelopeBinding`): the store's key is bound to it. */
+      binding: string,
       transport: ChatTransportPort,
     ): Promise<ChatInstallation>
     open(
@@ -1178,7 +1181,7 @@ export interface ChatWasmModule extends CallLinkCrypto {
       user: string,
       serverName: string,
       sealedSenderEnabled: boolean,
-      masterKey: Uint8Array,
+      masterKeys: MasterKeysBytes,
       /** The account's roots (`session.roots`, docs/plans/identity-root.md). */
       roots: AccountRoots,
       /** The account's key binding (`session.envelopeBinding`), which its own seals bind. */
@@ -1191,7 +1194,7 @@ export interface ChatWasmModule extends CallLinkCrypto {
       user: string,
       serverName: string,
       sealedSenderEnabled: boolean,
-      masterKey: Uint8Array,
+      masterKeys: MasterKeysBytes,
       /** The account's roots (`session.roots`, docs/plans/identity-root.md). */
       roots: AccountRoots,
       binding: string,
@@ -1213,7 +1216,7 @@ export interface WasmLinkingDeviceHandle {
     user: string,
     displayName: string,
     sealedSenderEnabled: boolean,
-    masterKey: Uint8Array,
+    masterKeys: MasterKeysBytes,
     roots: AccountRoots,
     binding: string,
     transport: ChatTransportPort,

@@ -82,7 +82,7 @@ export function useJoinedMeetingsSync(): void {
   const queryClient = useQueryClient()
   const local = useSyncExternalStore(subscribeJoinedMeetings, snapshot)
   const moving = useRef(false)
-  const { userId, masterKey, envelopeBinding } = session
+  const { userId, masterKeys, envelopeBinding } = session
 
   useEffect(() => {
     const pending = theirs(local, userId)
@@ -93,7 +93,7 @@ export function useJoinedMeetingsSync(): void {
       try {
         // Oldest first, so the server's order is the order they happened in.
         for (const stay of [...pending].reverse()) {
-          await addJoinedMeeting(masterKey, envelopeBinding, stay)
+          await addJoinedMeeting(masterKeys, envelopeBinding, stay)
           moved.add(stay.id)
         }
       } catch (error) {
@@ -106,7 +106,7 @@ export function useJoinedMeetingsSync(): void {
         }
       }
     })()
-  }, [local, userId, masterKey, envelopeBinding, queryClient])
+  }, [local, userId, masterKeys, envelopeBinding, queryClient])
 }
 
 /**
@@ -122,7 +122,7 @@ export function useJoinedMeetings() {
   // when this window is looked at, and every half minute while it is open.
   const list = useQuery({
     queryKey: JOINED_QUERY,
-    queryFn: () => listJoinedMeetings(session.masterKey, session.envelopeBinding, session.userId),
+    queryFn: () => listJoinedMeetings(session.masterKeys, session.envelopeBinding, session.userId),
     refetchOnWindowFocus: true,
     refetchInterval: 30_000,
     staleTime: 0,

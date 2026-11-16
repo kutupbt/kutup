@@ -1,7 +1,8 @@
 // One loader for Kutup-owned browser cryptography. Feature adapters expose
 // typed operations; this module owns only generated-module initialization.
 
-import type { IdentityRoot } from './accountRoots'
+import type { IdentityRoot, ObjectIdKey } from './accountRoots'
+import type { MasterKeys, MasterKeysBytes } from './masterKeys'
 import { freshUrl, retryLoad } from './retry'
 
 // The runtime's path is its build (`crypto-wasm`, or `crypto-calendar-wasm`
@@ -88,13 +89,12 @@ export interface WasmBlockReader {
 }
 
 export interface CryptoWasmModule {
-  accountProfileKey(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): import('./profile').ProfileLookup
+  accountProfileKey(masterKeys: MasterKeysBytes, current: unknown, account: string, binding: string): import('./profile').ProfileLookup
   profileLookup(key: string): import('./profile').ProfileLookup
   profileOpenPeer(peer: string, encrypted: unknown, key: string): import('./profile').AccountProfileView
-  accountProfileOpen(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): import('./profile').AccountProfileView
+  accountProfileOpen(masterKeys: MasterKeysBytes, current: unknown, account: string, binding: string): import('./profile').AccountProfileView
   accountProfileSeal(
-    masterKey: Uint8Array,
-    generation: number,
+    masterKeys: MasterKeysBytes,
     current: unknown | null,
     update: import('./profile').AccountProfileInput,
     account: string,
@@ -115,8 +115,8 @@ export interface CryptoWasmModule {
   ): string
   deriveRecoveryAuthProof(recoveryEntropyBase64: string, binding: string): string
   /** `roots` null: a new account's, made now. */
-  sealAccountRoots(masterKeyBase64: string, generation: number, binding: string, roots: unknown): unknown
-  openAccountRoots(masterKeyBase64: string, binding: string, envelopes: string[], authorityBase64: string): unknown
+  sealAccountRoots(masterKeys: MasterKeys, binding: string, roots: unknown): unknown
+  openAccountRoots(masterKeys: MasterKeys, binding: string, envelopes: string[], authorityBase64: string): unknown
   deriveAccountIdentityKeys(identityRoot: IdentityRoot): {
     authorityPublicKey: string
     authorityKeyId: string
@@ -178,8 +178,8 @@ export interface CryptoWasmModule {
     bindingEpoch: number,
   ): boolean
   incarnationIdOfAuthority(authorityPublicKeyBase64: string): string
-  sealIdentityPins(masterKeyBase64: string, generation: number, binding: string, revision: number, pinsJson: string): string
-  openIdentityPins(masterKeyBase64: string, binding: string, sealedBase64: string): { value: string; revision: number }
+  sealIdentityPins(masterKeys: MasterKeys, binding: string, revision: number, pinsJson: string): string
+  openIdentityPins(masterKeys: MasterKeys, binding: string, sealedBase64: string): { value: string; revision: number }
   signContactSummary(identityRoot: IdentityRoot, binding: string, revision: number, summaryJson: string): { summary: string; signature: string }
   verifyContactSummary(
     summary: string,
@@ -188,23 +188,27 @@ export interface CryptoWasmModule {
     revision: number,
     authorityPublicKeyBase64: string,
   ): import('./contactCard').ContactSummary
-  sealContactCard(masterKeyBase64: string, generation: number, binding: string, uid: string, revision: number, vcard: string): string
-  openContactCard(masterKeyBase64: string, binding: string, uid: string, sealedBase64: string): { value: string; revision: number }
-  sealMailName(masterKeyBase64: string, generation: number, binding: string, kind: string, id: string, revision: number, name: string): string
-  openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
+  sealContactCard(masterKeys: MasterKeys, binding: string, uid: string, revision: number, vcard: string): string
+  openContactCard(masterKeys: MasterKeys, binding: string, uid: string, sealedBase64: string): { value: string; revision: number }
+  sealMailName(masterKeys: MasterKeys, binding: string, kind: string, id: string, revision: number, name: string): string
+  openMailName(masterKeys: MasterKeys, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
   inspectAccountRecord(envelopeBase64: string): { purpose: number; generation: number }
-  RevisionGuardKeys: new (masterKeyBase64: string, objectIdKeyBase64: string, binding: string) => import('./revisionGuard').GuardKeys & { free(): void }
-  LocalChainPins: new (masterKeyBase64: string, objectIdKeyBase64: string, binding: string) => import('./localChainPins').ChainPinKeys & { free(): void }
+  RevisionGuardKeys: new (masterKeys: MasterKeys, objectIdKeyBase64: string, binding: string) => import('./revisionGuard').GuardKeys & { free(): void }
+  LocalChainPins: new (masterKeys: MasterKeys, objectIdKeyBase64: string, binding: string) => import('./localChainPins').ChainPinKeys & { free(): void }
   CollabSender: new (account: string, pin: unknown) => import('./accountManifest').CollabSenderHandle
   deliveredFrameSender(delivered: Uint8Array): string
-  sealManifestPins(pins: unknown, masterKeyBase64: string, profile: string): string
-  openManifestPins(envelopeBase64: string, masterKeyBase64: string, profile: string): unknown
+  sealManifestPins(pins: unknown, masterKeys: MasterKeys, profile: string): string
+  openManifestPins(envelopeBase64: string, masterKeys: MasterKeys, profile: string): unknown
   AccountHeadKeys: new (
-    masterKeyBase64: string,
+    masterKeys: MasterKeys,
+    objectIdKey: ObjectIdKey,
     binding: string,
     incarnationId: string,
     identityGeneration: number,
     driveGeneration: number,
+    objectIdGeneration: number,
+    pseudonymGeneration: number,
+    callLinkGeneration: number,
   ) => AccountHeadKeysHandle
   OpaqueLogin: { start(password: string): OpaqueLoginHandle }
   OpaqueRegistration: { start(password: string): OpaqueRegistrationHandle }
@@ -225,8 +229,8 @@ export interface CryptoWasmModule {
   ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
   encryptMailMessageUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
   encryptMailPgpUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): string
-  signMailDetached(masterKeyBase64: string, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, content: Uint8Array): string
-  signMailCleartext(masterKeyBase64: string, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, text: string): string
+  signMailDetached(masterKeys: MasterKeys, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, content: Uint8Array): string
+  signMailCleartext(masterKeys: MasterKeys, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, text: string): string
   signMailCleartextAsGroup(
     key: GroupKeyHolder,
     text: string,
@@ -246,7 +250,7 @@ export interface CryptoWasmModule {
     plaintext: Uint8Array,
   ): string
   exportMailAddressKey(
-    masterKeyBase64: string,
+    masterKeys: MasterKeys,
     binding: string,
     address: string,
     envelopeBase64: string,
@@ -254,16 +258,14 @@ export interface CryptoWasmModule {
     passphrase: string,
   ): string
   importMailAddressKey(
-    masterKeyBase64: string,
-    generation: number,
+    masterKeys: MasterKeys,
     binding: string,
     address: string,
     file: Uint8Array,
     passphrase: string,
   ): { publicKey: string; envelope: string; fingerprint: string; sha256Fingerprint: string }
   generateMailAddressKey(
-    masterKeyBase64: string,
-    generation: number,
+    masterKeys: MasterKeys,
     binding: string,
     address: string,
     createdAtSecs: number,
@@ -300,7 +302,7 @@ export interface CryptoWasmModule {
     previousSignatureBase64?: string,
   ): import('./mailKey').SignedMailKeyList
   makeMailForwarding(
-    masterKeyBase64: string,
+    masterKeys: MasterKeys,
     binding: string,
     forwarderAddress: string,
     envelopeBase64: string,
@@ -312,8 +314,7 @@ export interface CryptoWasmModule {
     expiresAtSecs: number,
   ): import('./mailKey').MailForwardingMaterial
   acceptMailForwarding(
-    masterKeyBase64: string,
-    generation: number,
+    masterKeys: MasterKeys,
     binding: string,
     forwardeeAddress: string,
     envelopeBase64: string,
@@ -325,7 +326,7 @@ export interface CryptoWasmModule {
     activation: string,
   ): import('./mailKey').AcceptedMailForwarding
   openForwardedMailMessage(
-    masterKeyBase64: string,
+    masterKeys: MasterKeys,
     binding: string,
     address: string,
     envelopeBase64: string,
@@ -334,7 +335,7 @@ export interface CryptoWasmModule {
     senderPublicKeyBase64?: string,
   ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
   openMailMessage(
-    masterKeyBase64: string,
+    masterKeys: MasterKeys,
     binding: string,
     address: string,
     envelopeBase64: string,
@@ -343,7 +344,7 @@ export interface CryptoWasmModule {
     senderPublicKeyBase64?: string,
   ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
   encryptMailMessage(
-    masterKeyBase64: string,
+    masterKeys: MasterKeys,
     binding: string,
     address: string,
     envelopeBase64: string,
@@ -355,7 +356,7 @@ export interface CryptoWasmModule {
   describeExternalMailKey(publicKey: Uint8Array): { publicKey: string; fingerprint: string; createdAt: number }
   describeExternalMailKeyDetails(publicKey: Uint8Array, address: string): import('./mailKey').ExternalMailKeyDetails
   encryptMailPgp(
-    masterKeyBase64: string,
+    masterKeys: MasterKeys,
     binding: string,
     address: string,
     envelopeBase64: string,
@@ -378,6 +379,8 @@ export interface CryptoWasmModule {
     expectedPurpose: number,
     binding: string,
   ): string
+  openAccountRecordWithMasterKeys(envelopeBase64: string, masterKeys: MasterKeys, expectedPurpose: number, binding: string): string
+  openMasterKeys(masterKeyBase64: string, envelopeBase64: string, binding: string, keyring: string[]): string
   createChatBackupSignerAuthorization(
     identityRoot: IdentityRoot,
     backupRootBase64: string,
@@ -604,8 +607,7 @@ export interface CryptoWasmModule {
   }
   sealChatAttachmentLedger(
     plaintextBase64: string,
-    masterKeyBase64: string,
-    generation: number,
+    masterKeys: MasterKeys,
     binding: string,
     accountIncarnationId: string,
     entityId: string,
@@ -614,7 +616,7 @@ export interface CryptoWasmModule {
   ): string
   openChatAttachmentLedger(
     envelopeBase64: string,
-    masterKeyBase64: string,
+    masterKeys: MasterKeys,
     binding: string,
     expectedAccountIncarnationId: string,
     expectedEntityId: string,
@@ -785,8 +787,7 @@ export interface CryptoWasmModule {
   yjsSeedClientId(fileId: string, content: Uint8Array): number
   sealPhotosLibrary(
     libraryJson: string,
-    masterKeyBase64: string,
-    generation: number,
+    masterKeys: MasterKeys,
     binding: string,
     accountIncarnationId: string,
     revision: number,
@@ -794,7 +795,7 @@ export interface CryptoWasmModule {
   ): { envelope: string; digest: string }
   openPhotosLibrary(
     envelopeBase64: string,
-    masterKeyBase64: string,
+    masterKeys: MasterKeys,
     binding: string,
     accountIncarnationId: string,
     revision: number,

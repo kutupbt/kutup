@@ -13,7 +13,6 @@
 
 import { openManifestPins, sealManifestPins, type AccountManifestPin } from '@kutup/crypto/accountManifest'
 import { accountKeyOf } from '@kutup/crypto/accountRef'
-import { toBase64 } from '@kutup/crypto/base64'
 import { getClientType } from './client'
 import { readPersisted } from './persistedStore'
 import { getSession, type Session } from './store'
@@ -48,7 +47,7 @@ async function readSealed(session: Session): Promise<AccountManifestPin[]> {
   try {
     const sealed = localStorage.getItem(storageKey(session.userId))
     if (!sealed) return []
-    return await openManifestPins(sealed, toBase64(session.masterKey), profile(session))
+    return await openManifestPins(sealed, session.masterKeys, profile(session))
   } catch {
     // Unreadable (storage blocked, or another key): none, first use again.
     return []
@@ -86,7 +85,7 @@ async function persist(session: Session, pins: Map<string, AccountManifestPin>, 
       for (const [account, pin] of merged) pins.set(account, pin)
       localStorage.setItem(
         storageKey(session.userId),
-        await sealManifestPins([...merged.values()], toBase64(session.masterKey), profile(session)),
+        await sealManifestPins([...merged.values()], session.masterKeys, profile(session)),
       )
     } catch {
       // Storage unavailable: kept for the page only.

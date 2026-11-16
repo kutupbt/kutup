@@ -29,10 +29,9 @@ pub const SEALED_LEN: usize = match account_record::exact_record_len(PURPOSE) {
     None => panic!("list entries have one length"),
 };
 
-/// An account's group list: its master key and the generation it seals at.
+/// An account's group list: its master keys (the current one seals).
 pub struct GroupListKey {
-    master_key: Zeroizing<[u8; 32]>,
-    generation: MasterKeyGeneration,
+    keys: crate::master_keys::MasterKeys,
     object_id_key: crate::account_roots::ObjectIdKey,
 }
 
@@ -43,16 +42,28 @@ pub struct OpenedEntry {
 }
 
 impl GroupListKey {
-    /// Entries sealed under `master_key` (of `generation`), their ids
+    /// Entries sealed under `master_key` (of `generation`) alone, their ids
     /// hashed under the account's `object_id_key`.
     pub fn new(
         master_key: &[u8; 32],
         generation: MasterKeyGeneration,
         object_id_key: &crate::account_roots::ObjectIdKey,
     ) -> Self {
+        Self::from_keys(
+            &crate::master_keys::MasterKeys::only(master_key, generation),
+            object_id_key,
+        )
+    }
+
+    /// Entries sealed under the account's current master key and opened
+    /// under the one of the generation their header names, their ids hashed
+    /// under the account's `object_id_key`.
+    pub fn from_keys(
+        keys: &crate::master_keys::MasterKeys,
+        object_id_key: &crate::account_roots::ObjectIdKey,
+    ) -> Self {
         Self {
-            master_key: Zeroizing::new(*master_key),
-            generation,
+            keys: keys.clone(),
             object_id_key: object_id_key.clone(),
         }
     }
@@ -93,9 +104,9 @@ impl GroupListKey {
         account_record::seal_suite(
             account_record::AccountRecordSuiteId::V1,
             plain,
-            self.master_key.as_slice(),
+            self.keys.current(),
             PURPOSE,
-            self.generation,
+            self.keys.generation(),
             binding,
             entry_id,
             Some(revision),
@@ -114,7 +125,7 @@ impl GroupListKey {
     ) -> Result<OpenedEntry> {
         let (plain, revision) = account_record::open_revision(
             sealed,
-            self.master_key.as_slice(),
+            self.keys.key_for(sealed)?,
             PURPOSE,
             binding,
             entry_id,

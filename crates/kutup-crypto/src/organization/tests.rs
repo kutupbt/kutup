@@ -25,10 +25,25 @@ fn member() -> (AccountIdentityKeysV1, Party) {
     person(0x33, "aci:0f4a6d83-2e5c-4a1b-9d7f-8c3b4a5e6f7d@kutup.dev")
 }
 
+/// The test accounts all live on kutup.dev; a party names only the id.
+fn account_of(party: &Party) -> AccountRef {
+    let h = hex::encode(party.account_id);
+    let id = format!(
+        "{}-{}-{}-{}-{}",
+        &h[..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..]
+    );
+    AccountRef::new("kutup.dev", &id).unwrap()
+}
+
 fn drive_key(keys: &AccountIdentityKeysV1, party: &Party) -> VerifiedDriveKey {
-    let signature = crate::drive_key_binding::sign(keys, &party.account, 1).unwrap();
+    let account = account_of(party);
+    let signature = crate::drive_key_binding::sign(keys, &account, 1).unwrap();
     VerifiedDriveKey::verify(
-        &party.account,
+        &account,
         &keys.authority_public_key(),
         1,
         &keys.drive_hpke_public_key(),

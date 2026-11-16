@@ -119,9 +119,16 @@ pub struct IndexedDbChatDb {
 
 impl IndexedDbChatDb {
     /// Open (or create) the versioned browser database, encrypted under a key
-    /// wrapped by `master_key` (the account master key). A database with no
-    /// wrapped key is started fresh here: cleared and keyed in one transaction.
-    pub async fn open(name: &str, master_key: &[u8; 32]) -> Result<Self> {
+    /// wrapped by the account's master keys (an account record bound to its
+    /// key `binding` and the database's name). A database with no wrapped key
+    /// is started fresh here: cleared and keyed in one transaction. A key
+    /// wrapped under an older master key (before a rotation) is wrapped again
+    /// under the current one and written back.
+    pub async fn open(
+        name: &str,
+        master_keys: &kutup_crypto::master_keys::MasterKeys,
+        binding: &str,
+    ) -> Result<Self> {
         if name.trim().is_empty() {
             return Err(ChatError::Invalid(
                 "IndexedDB chat database name must not be empty".into(),
@@ -158,10 +165,17 @@ impl IndexedDbChatDb {
                         "the chat store is in an unknown format".into(),
                     ));
                 }
-                StoreCipher::unwrap(master_key, name, &wrapped)?
+                let cipher = StoreCipher::unwrap(master_keys, binding, name, &wrapped)?;
+                if let Some(rewrapped) =
+                    StoreCipher::rewrapped(master_keys, binding, name, &wrapped)?
+                {
+                    write_store_key(&writer, &rewrapped).await?;
+                }
+                cipher
             }
             None => {
-                let (cipher, wrapped) = StoreCipher::create(master_key, name, &mut OsRng)?;
+                let (cipher, wrapped) =
+                    StoreCipher::create(master_keys, binding, name, &mut OsRng)?;
                 start_new_store(&writer, &wrapped).await?;
                 cipher
             }
@@ -370,6 +384,28 @@ async fn start_new_store(writer: &web_sys::IdbDatabase, wrapped: &[u8]) -> Resul
         JsValue::from_str(SEALED_FORMAT),
         JsValue::from_str(STORE_FORMAT),
     ));
+    finish_write(transaction, operations).await
+}
+
+/// Replace the wrapped store key in `meta` (after a master-key rotation),
+/// durably, as [`start_new_store`] writes it. The store key itself is
+/// unchanged, so every record stays as it is.
+async fn write_store_key(writer: &web_sys::IdbDatabase, wrapped: &[u8]) -> Result<()> {
+    let database: &DurableDatabase = wasm_bindgen::JsCast::unchecked_ref(writer);
+    let options = js_sys::Object::new();
+    js_sys::Reflect::set(&options, &"durability".into(), &"strict".into())
+        .map_err(|error| ChatError::Db(format!("IndexedDB write options: {error:?}")))?;
+    let names: Array = std::iter::once(JsValue::from_str(META)).collect();
+    let transaction: idb::Transaction = database
+        .transaction_with_options(&names, "readwrite", &options)
+        .map_err(|error| ChatError::Db(format!("IndexedDB write transaction: {error:?}")))?
+        .into();
+    let meta = transaction.object_store(META).map_err(write_error)?;
+    let operations = vec![put_op(
+        &meta,
+        Uint8Array::from(wrapped).into(),
+        JsValue::from_str(STORE_KEY),
+    )];
     finish_write(transaction, operations).await
 }
 
@@ -1205,10 +1241,55 @@ mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
+    const TEST_BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+
+    fn test_keys() -> kutup_crypto::master_keys::MasterKeys {
+        kutup_crypto::master_keys::MasterKeys::first(&[3; 32])
+    }
+
+    #[wasm_bindgen_test]
+    async fn the_store_key_follows_a_master_key_rotation() {
+        use kutup_crypto::account_record::MasterKeyGeneration;
+        use kutup_crypto::master_keys::MasterKeys;
+        let name = format!("kutup-chat-test-rotation-{}", js_sys::Date::now());
+        let db = IndexedDbChatDb::open(&name, &test_keys(), TEST_BINDING)
+            .await
+            .unwrap();
+        let mut pending = Pending::default();
+        pending.sessions.insert("alice.1".into(), Some(vec![4]));
+        db.commit(pending).await.unwrap();
+        let before = plain_meta(&db.db, STORE_KEY).await.unwrap().unwrap();
+        db.db.close();
+
+        // After a rotation the set holds both keys: the store opens under
+        // the old one and its key is wrapped again under the new one.
+        let rotated = test_keys().rotated(&[4; 32]).unwrap();
+        let db = IndexedDbChatDb::open(&name, &rotated, TEST_BINDING)
+            .await
+            .unwrap();
+        let after = plain_meta(&db.db, STORE_KEY).await.unwrap().unwrap();
+        assert_ne!(
+            Uint8Array::new(&before).to_vec(),
+            Uint8Array::new(&after).to_vec()
+        );
+        db.db.close();
+
+        // So the new key alone opens it now, records and all.
+        let only_new = MasterKeys::only(&[4; 32], MasterKeyGeneration::new(2).unwrap());
+        let db = IndexedDbChatDb::open(&name, &only_new, TEST_BINDING)
+            .await
+            .unwrap();
+        assert_eq!(db.load_session("alice.1").await.unwrap(), Some(vec![4]));
+        db.db.close();
+        Rexie::delete(&name).await.unwrap();
+    }
+
     #[wasm_bindgen_test]
     async fn atomically_round_trips_every_durable_domain() {
         let name = format!("kutup-chat-test-{}", js_sys::Date::now());
-        let db = IndexedDbChatDb::open(&name, &[3; 32]).await.unwrap();
+        let db = IndexedDbChatDb::open(&name, &test_keys(), TEST_BINDING)
+            .await
+            .unwrap();
         let mut pending = Pending::default();
         pending.local_identity = Some(LocalIdentity {
             identity_key_pair: vec![1, 2, 3],
@@ -1386,7 +1467,9 @@ mod tests {
         transaction.done().await.unwrap();
         raw.close();
 
-        let db = IndexedDbChatDb::open(&name, &[3; 32]).await.unwrap();
+        let db = IndexedDbChatDb::open(&name, &test_keys(), TEST_BINDING)
+            .await
+            .unwrap();
         assert!(db.list_messages().await.unwrap().is_empty());
         assert!(plain_meta(&db.db, STORE_KEY).await.unwrap().is_some());
         db.db.close();

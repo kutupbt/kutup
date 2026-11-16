@@ -94,7 +94,7 @@ export function withEncryptionOff(keys: MailKeyEntry[], on: boolean): MailKeyEnt
  * it).
  */
 export async function nextKeyList(
-  session: Pick<Session, 'masterKey' | 'roots'>,
+  session: Pick<Session, 'masterKeys' | 'roots'>,
   address: Pick<KeyListAddress, 'verifiedList'>,
   keys: MailKeyEntry[],
 ): Promise<SignedMailKeyList> {
@@ -119,7 +119,7 @@ function signList(session: Pick<Session, 'roots'>, current: SignedMailKeyList, k
  * list's keys otherwise: what an address's first outside forwarding brings
  * (`keyList` in `POST /api/mail/forwardings`).
  */
-export async function encryptionOffList(session: Pick<Session, 'masterKey' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
+export async function encryptionOffList(session: Pick<Session, 'masterKeys' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
   return nextKeyList(session, address, withEncryptionOff(signedEntries(address), true))
 }
 
@@ -128,7 +128,7 @@ export async function encryptionOffList(session: Pick<Session, 'masterKey' | 'ro
  * otherwise: end-to-end encryption back on, once the address's last outside
  * forwarding has ended (`keyListOwed`).
  */
-export async function encryptionOnList(session: Pick<Session, 'masterKey' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
+export async function encryptionOnList(session: Pick<Session, 'masterKeys' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
   const current = address.verifiedList
   if (!current) throw new KeyListNotSigned()
   return signList(session, current, withEncryptionOff(signedEntries(address), false))
@@ -139,7 +139,7 @@ export async function encryptionOnList(session: Pick<Session, 'masterKey' | 'roo
  * encrypted to (`NOT_OBSOLETE` cleared), so senders and WKD stop offering it
  * (`PUT /api/mail/addresses/{id}/disable`).
  */
-export async function disabledKeyList(session: Pick<Session, 'masterKey' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
+export async function disabledKeyList(session: Pick<Session, 'masterKeys' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
   return nextKeyList(
     session,
     address,
@@ -152,7 +152,7 @@ export async function disabledKeyList(session: Pick<Session, 'masterKey' | 'root
  * encrypted to (`PUT /api/mail/addresses/{id}/enable`); the others stay as
  * they are (only the primary is encrypted to).
  */
-export async function enabledKeyList(session: Pick<Session, 'masterKey' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
+export async function enabledKeyList(session: Pick<Session, 'masterKeys' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
   return nextKeyList(
     session,
     address,
@@ -186,7 +186,7 @@ export type CheckedAddress = Omit<AddressRow, 'keys'> & {
  * on already is left alone, whatever the server says. Another tab doing the
  * same is safe: the server takes the first list and refuses the second (409).
  */
-export async function settleOwedKeyLists(session: Pick<Session, 'masterKey' | 'roots' | 'userId' | 'envelopeBinding'>, rows: AddressRow[]): Promise<boolean> {
+export async function settleOwedKeyLists(session: Pick<Session, 'masterKeys' | 'roots' | 'userId' | 'envelopeBinding'>, rows: AddressRow[]): Promise<boolean> {
   const owed = rows.filter((row) => row.keyListOwed && row.keyList)
   if (owed.length === 0) return false
   let signed = false
@@ -235,7 +235,7 @@ export type CheckedKey<K> = K & { listed: boolean }
  * `OwnKeyListRolledBack` when `strict`, else is null.
  */
 export async function checkedAddresses<T extends OwnRow<ListedKey & { publicKey: string }>>(
-  session: Pick<Session, 'masterKey' | 'roots' | 'userId' | 'envelopeBinding'>,
+  session: Pick<Session, 'masterKeys' | 'roots' | 'userId' | 'envelopeBinding'>,
   rows: T[],
   options: { strict?: boolean } = {},
 ): Promise<(Omit<T, 'keys'> & { keys: CheckedKey<T['keys'][number]>[]; verifiedList: SignedMailKeyList | null })[]> {
@@ -252,7 +252,7 @@ export async function checkedAddresses<T extends OwnRow<ListedKey & { publicKey:
 }
 
 async function ownList(
-  session: Pick<Session, 'masterKey' | 'roots' | 'userId' | 'envelopeBinding'>,
+  session: Pick<Session, 'masterKeys' | 'roots' | 'userId' | 'envelopeBinding'>,
   authorityPublicKey: string,
   row: OwnRow<unknown>,
   strict: boolean,

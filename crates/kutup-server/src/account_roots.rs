@@ -128,7 +128,8 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let rows: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT envelope FROM account_roots WHERE user_id = $1 ORDER BY purpose, object DESC",
+        "SELECT envelope FROM account_roots WHERE user_id = $1 AND purpose BETWEEN 22 AND 26
+          ORDER BY purpose, object DESC",
     )
     .bind(user_id)
     .fetch_all(executor)
@@ -137,6 +138,59 @@ where
         .iter()
         .map(|envelope| STANDARD.encode(envelope))
         .collect())
+}
+
+/// The account's master-key keyring (purpose 27, canonical base64): each
+/// previous master key sealed under the one after it, newest first
+/// (docs/plans/mk-rotation-exercise.md). Empty before a first rotation.
+pub async fn load_keyring<'e, E>(executor: E, user_id: Uuid) -> AppResult<Vec<String>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let rows: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT envelope FROM account_roots WHERE user_id = $1 AND purpose = 27
+          ORDER BY object DESC",
+    )
+    .bind(user_id)
+    .fetch_all(executor)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|envelope| STANDARD.encode(envelope))
+        .collect())
+}
+
+/// What a client needs to open the account's keys besides its password or
+/// session: the master key's generation, the keyring, the roots and the
+/// authority the newest identity root must derive.
+pub struct AccountKeys {
+    pub master_key_generation: u32,
+    pub master_keyring: Vec<String>,
+    pub account_roots: Vec<String>,
+    pub account_authority_public_key: String,
+}
+
+/// [`AccountKeys`] of `user_id`, read in one snapshot.
+pub async fn account_keys(pool: &sqlx::PgPool, user_id: Uuid) -> AppResult<AccountKeys> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let (authority, generation): (String, i32) = sqlx::query_as(
+        "SELECT account_authority_public_key, master_key_generation FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let keys = AccountKeys {
+        master_key_generation: u32::try_from(generation)
+            .map_err(|_| AppError::internal("master_key_generation out of range"))?,
+        master_keyring: load_keyring(&mut *tx, user_id).await?,
+        account_roots: load(&mut *tx, user_id).await?,
+        account_authority_public_key: authority,
+    };
+    tx.commit().await?;
+    Ok(keys)
 }
 
 /// The caller's own roots and the authority the newest identity root must
@@ -150,10 +204,14 @@ pub struct AccountRootsResponse {
     /// The account's authority public key (base64): the newest identity
     /// root's must equal it.
     account_authority_public_key: String,
+    /// The master key's current generation, and every older key's keyring
+    /// record (newest first): what opens records sealed before a rotation.
+    master_key_generation: u32,
+    master_keyring: Vec<String>,
 }
 
-/// `GET /api/account/roots` — the caller's own root records, for a client
-/// that holds the master key but not the roots.
+/// `GET /api/account/roots` — the caller's own root records and master-key
+/// keyring, for a client that holds the master key but not the roots.
 #[utoipa::path(
     get,
     path = "/api/account/roots",
@@ -163,14 +221,12 @@ pub struct AccountRootsResponse {
 )]
 pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
-    let authority: String =
-        sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let keys = account_keys(&state.pool, user_id).await?;
     Ok(Json(AccountRootsResponse {
-        account_roots: load(&state.pool, user_id).await?,
-        account_authority_public_key: authority,
+        account_roots: keys.account_roots,
+        account_authority_public_key: keys.account_authority_public_key,
+        master_key_generation: keys.master_key_generation,
+        master_keyring: keys.master_keyring,
     })
     .into_response())
 }

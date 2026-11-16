@@ -1510,16 +1510,19 @@ impl WasmChatClient {
     /// of the account holds the identity: show "Link this device"), or
     /// `"reregister"` (the account has no Chat identity yet: this is its
     /// first device). A store from before the account identity counts as no
-    /// device (docs/plans/account-identity-key.md).
+    /// device (docs/plans/account-identity-key.md). `master_keys` is the
+    /// account's master-key set (`MasterKeys::encode`), `binding` its key
+    /// binding: the store's key is sealed to both.
     #[wasm_bindgen(js_name = installation)]
     pub async fn installation(
         database_name: String,
         account: String,
-        master_key: Vec<u8>,
+        master_keys: Vec<u8>,
+        binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<String, JsValue> {
-        let master_key = master_key_bytes(master_key)?;
-        let db = IndexedDbChatDb::open(&database_name, &master_key)
+        let master_keys = master_keys_input(master_keys)?;
+        let db = IndexedDbChatDb::open(&database_name, &master_keys, &binding)
             .await
             .map_err(chat_error)?;
         let transport = BrowserTransport { js: transport };
@@ -1545,10 +1548,12 @@ impl WasmChatClient {
     /// account scoped; `account` is this account's string form,
     /// `aci:<uuid>@<server>`; `display_name` is the name a first profile
     /// starts with (the username); `binding` is the account's key binding
-    /// (`session.envelopeBinding`), which its own seals bind. A browser
-    /// without a device is refused: ask `installation` first.
+    /// (`session.envelopeBinding`), which its own seals bind; `master_keys`
+    /// is the account's master-key set (`MasterKeys::encode`): the current
+    /// key seals, the one a record names opens it. A browser without a
+    /// device is refused: ask `installation` first.
     // The page passes one argument list to open, reregister and
-    // completeLink (the master key, its roots and binding among them).
+    // completeLink (the master-key set, its roots and binding among them).
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = open)]
     pub async fn open(
@@ -1556,15 +1561,15 @@ impl WasmChatClient {
         account: String,
         display_name: String,
         sealed_sender_enabled: bool,
-        master_key: Vec<u8>,
+        master_keys: Vec<u8>,
         roots: JsValue,
         binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<WasmChatClient, JsValue> {
-        let master_key = master_key_bytes(master_key)?;
+        let master_keys = master_keys_input(master_keys)?;
         let roots = account_roots(roots)?;
         let db = Rc::new(
-            IndexedDbChatDb::open(&database_name, &master_key)
+            IndexedDbChatDb::open(&database_name, &master_keys, &binding)
                 .await
                 .map_err(chat_error)?,
         );
@@ -1587,7 +1592,7 @@ impl WasmChatClient {
         .map_err(chat_error)?;
         Self::finish_open(
             engine,
-            &master_key,
+            &master_keys,
             &roots,
             &binding,
             &display_name,
@@ -1601,7 +1606,7 @@ impl WasmChatClient {
     /// The account's first Chat device does this; so does "I don't have my
     /// other devices". Contacts see the safety number change once.
     // The page passes one argument list to open, reregister and
-    // completeLink (the master key, its roots and binding among them).
+    // completeLink (the master-key set, its roots and binding among them).
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = reregister)]
     pub async fn reregister(
@@ -1609,16 +1614,16 @@ impl WasmChatClient {
         account: String,
         display_name: String,
         sealed_sender_enabled: bool,
-        master_key: Vec<u8>,
+        master_keys: Vec<u8>,
         roots: JsValue,
         binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<WasmChatClient, JsValue> {
-        let master_key = master_key_bytes(master_key)?;
+        let master_keys = master_keys_input(master_keys)?;
         let roots = account_roots(roots)?;
         let authority = AccountAuthority::derive(&roots.identity).map_err(chat_error)?;
         let db = Rc::new(
-            IndexedDbChatDb::open(&database_name, &master_key)
+            IndexedDbChatDb::open(&database_name, &master_keys, &binding)
                 .await
                 .map_err(chat_error)?,
         );
@@ -1638,7 +1643,7 @@ impl WasmChatClient {
         .map_err(chat_error)?;
         Self::finish_open(
             engine,
-            &master_key,
+            &master_keys,
             &roots,
             &binding,
             &display_name,
@@ -1651,7 +1656,7 @@ impl WasmChatClient {
     /// sealed sender, this device in the account's manifest, the profile.
     async fn finish_open(
         mut engine: Engine,
-        master_key: &[u8; 32],
+        master_keys: &kutup_crypto::master_keys::MasterKeys,
         roots: &kutup_crypto::account_roots::AccountRoots,
         binding: &str,
         display_name: &str,
@@ -1659,19 +1664,19 @@ impl WasmChatClient {
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let authority = AccountAuthority::derive(&roots.identity).map_err(chat_error)?;
         let profile_owner =
-            crate::profile::profile_owner_key(master_key, binding).map_err(chat_error)?;
+            crate::profile::profile_owner_key(master_keys, binding).map_err(chat_error)?;
         let mut rng = OsRng.unwrap_err();
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine
-            .enable_identity_pins(master_key, binding)
+            .enable_identity_pins(master_keys, binding)
             .map_err(chat_error)?;
         engine
-            .enable_group_list(master_key, roots, binding)
+            .enable_group_list(master_keys, roots, binding)
             .map_err(chat_error)?;
         // The web writes a block at once (docs/plans/chat-contacts-sync.md).
         engine
             .enable_contact_list(
-                master_key,
+                master_keys,
                 &roots.object_id,
                 binding,
                 crate::contact_list::ContactListTiming {
@@ -4101,28 +4106,25 @@ struct CallLinkKeysOutput {
 
 /// A fresh public nonce for a new call link (docs/chat-calls.md).
 fn local_cipher(
-    master_key: &[u8],
+    master_keys: Vec<u8>,
     scope: &str,
 ) -> std::result::Result<crate::db::store_cipher::LocalCipher, JsValue> {
-    let master_key: &[u8; 32] = master_key
-        .try_into()
-        .map_err(|_| js_error("local chat data requires a 32-byte master key"))?;
-    crate::db::store_cipher::LocalCipher::new(master_key, scope).map_err(chat_error)
+    let master_keys = master_keys_input(master_keys)?;
+    crate::db::store_cipher::LocalCipher::new(&master_keys, scope).map_err(chat_error)
 }
 
 /// Seal small browser-side chat data (drafts, read positions, the backup
 /// mirror's records) for this account (`scope`), one value per purpose, under
-/// a key derived from the account master key (`db/store_cipher.rs`). One call
-/// seals a whole batch.
+/// a key derived from the account's current master key (`master_keys`, the
+/// encoded set; `db/store_cipher.rs`). One call seals a whole batch.
 #[wasm_bindgen(js_name = sealLocalData)]
 pub fn seal_local_data(
-    master_key: Vec<u8>,
+    master_keys: Vec<u8>,
     scope: String,
     purposes: Vec<String>,
     plaintexts: js_sys::Array,
 ) -> std::result::Result<js_sys::Array, JsValue> {
-    let master_key = zeroize::Zeroizing::new(master_key);
-    let local = local_cipher(&master_key, &scope)?;
+    let local = local_cipher(master_keys, &scope)?;
     if purposes.len() != plaintexts.length() as usize {
         return Err(js_error("one purpose per value"));
     }
@@ -4140,15 +4142,16 @@ pub fn seal_local_data(
 
 /// Open what `sealLocalData` sealed, one value per purpose. A value that does
 /// not open comes back as `null`, so one damaged value does not hide the rest.
+/// Each key of the set (`master_keys`) is tried, newest first: a value sealed
+/// before a rotation still opens, and is sealed again as the page next writes.
 #[wasm_bindgen(js_name = openLocalData)]
 pub fn open_local_data(
-    master_key: Vec<u8>,
+    master_keys: Vec<u8>,
     scope: String,
     purposes: Vec<String>,
     sealed: js_sys::Array,
 ) -> std::result::Result<js_sys::Array, JsValue> {
-    let master_key = zeroize::Zeroizing::new(master_key);
-    let local = local_cipher(&master_key, &scope)?;
+    let local = local_cipher(master_keys, &scope)?;
     if purposes.len() != sealed.length() as usize {
         return Err(js_error("one purpose per value"));
     }
@@ -4205,31 +4208,31 @@ pub fn call_link_host_token(
 }
 
 /// Seal one stay in a meeting for the account's own list of joined meetings,
-/// as the row `id` (32 lowercase hex) of the account bound by `binding`.
+/// as the row `id` (32 lowercase hex) of the account bound by `binding`,
+/// under the account's current master key (`master_keys`: the encoded set,
+/// standard base64).
 #[wasm_bindgen(js_name = callLinkSealJoined)]
 pub fn call_link_seal_joined(
-    master_key: String,
-    generation: u32,
+    master_keys: String,
     binding: String,
     id: String,
     entry: JsValue,
 ) -> std::result::Result<String, JsValue> {
-    let master_key = zeroize::Zeroizing::new(master_key);
-    let generation = master_key_generation(generation)?;
+    let master_keys = master_keys_base64(master_keys)?;
     let entry: crate::call_link::JoinedMeetingV1 = from_transport(entry).map_err(chat_error)?;
-    crate::call_link::seal_joined_meeting(&master_key, generation, &binding, &id, &entry)
-        .map_err(chat_error)
+    crate::call_link::seal_joined_meeting(&master_keys, &binding, &id, &entry).map_err(chat_error)
 }
 
+/// Open one stay, under the master key of the generation it was sealed at.
 #[wasm_bindgen(js_name = callLinkOpenJoined)]
 pub fn call_link_open_joined(
-    master_key: String,
+    master_keys: String,
     binding: String,
     id: String,
     sealed: String,
 ) -> std::result::Result<JsValue, JsValue> {
-    let master_key = zeroize::Zeroizing::new(master_key);
-    let entry = crate::call_link::open_joined_meeting(&master_key, &binding, &id, &sealed)
+    let master_keys = master_keys_base64(master_keys)?;
+    let entry = crate::call_link::open_joined_meeting(&master_keys, &binding, &id, &sealed)
         .map_err(chat_error)?;
     to_output(&entry)
 }
@@ -4322,7 +4325,9 @@ pub fn call_link_open_message(
 }
 
 /// The account's profile for the account app (docs/plans/unified-profile.md):
-/// open it, and seal the next revision, from the master key alone.
+/// open it, and seal the next revision, from the master keys alone (the
+/// encoded set: opened under the key of the generation each copy names,
+/// sealed under the current one).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AccountProfileView {
@@ -4349,35 +4354,39 @@ struct AccountProfileInput {
     avatar_content_type: Option<String>,
 }
 
-fn master_key_input(master_key: Vec<u8>) -> std::result::Result<[u8; 32], JsValue> {
-    master_key
-        .try_into()
-        .map_err(|_| js_error("the account master key is 32 bytes"))
+/// The account's master keys as a page passes them: the set's encoding
+/// (`MasterKeys::encode`, docs/plans/mk-rotation-exercise.md).
+fn master_keys_input(
+    master_keys: Vec<u8>,
+) -> std::result::Result<kutup_crypto::master_keys::MasterKeys, JsValue> {
+    let master_keys = zeroize::Zeroizing::new(master_keys);
+    kutup_crypto::master_keys::MasterKeys::decode(&master_keys)
+        .map_err(|_| js_error("the account's master keys are malformed"))
 }
 
-/// The master key's generation a page passes (never 0; `MASTER_KEY_GENERATION`
-/// in `@kutup/crypto` until rotation exists).
-fn master_key_generation(
-    generation: u32,
-) -> std::result::Result<kutup_crypto::account_record::MasterKeyGeneration, JsValue> {
-    kutup_crypto::account_record::MasterKeyGeneration::new(generation)
-        .map_err(|error| chat_error(ChatError::Invalid(error.to_string())))
+/// [`master_keys_input`] from standard base64.
+fn master_keys_base64(
+    master_keys: String,
+) -> std::result::Result<kutup_crypto::master_keys::MasterKeys, JsValue> {
+    let master_keys = zeroize::Zeroizing::new(master_keys);
+    let bytes = STANDARD
+        .decode(master_keys.as_bytes())
+        .map_err(|_| js_error("the account's master keys are malformed"))?;
+    master_keys_input(bytes)
 }
 
 #[wasm_bindgen(js_name = accountProfileOpen)]
 pub fn account_profile_open(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     current: JsValue,
     account: String,
     binding: String,
 ) -> std::result::Result<JsValue, JsValue> {
-    let master_key = master_key_input(master_key)?;
+    let master_keys = master_keys_input(master_keys)?;
     let current: kutup_chat_proto::PutChatProfileRequest =
         from_transport(current).map_err(chat_error)?;
     let profile = crate::profile::open_account_profile(
-        &master_key,
-        master_key_generation(generation)?,
+        &master_keys,
         &current,
         &crate::address::parse_account(&account).map_err(chat_error)?,
         &binding,
@@ -4414,18 +4423,16 @@ fn profile_lookup_of(key: &[u8]) -> std::result::Result<ProfileLookup, JsValue> 
 /// with), opened from the master key.
 #[wasm_bindgen(js_name = accountProfileKey)]
 pub fn account_profile_key(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     current: JsValue,
     account: String,
     binding: String,
 ) -> std::result::Result<JsValue, JsValue> {
-    let master_key = master_key_input(master_key)?;
+    let master_keys = master_keys_input(master_keys)?;
     let current: kutup_chat_proto::PutChatProfileRequest =
         from_transport(current).map_err(chat_error)?;
     let profile = crate::profile::open_account_profile(
-        &master_key,
-        master_key_generation(generation)?,
+        &master_keys,
         &current,
         &crate::address::parse_account(&account).map_err(chat_error)?,
         &binding,
@@ -4467,14 +4474,13 @@ pub fn profile_open_peer(
 
 #[wasm_bindgen(js_name = accountProfileSeal)]
 pub fn account_profile_seal(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     current: JsValue,
     update: JsValue,
     account: String,
     binding: String,
 ) -> std::result::Result<JsValue, JsValue> {
-    let master_key = master_key_input(master_key)?;
+    let master_keys = master_keys_input(master_keys)?;
     let current: Option<kutup_chat_proto::PutChatProfileRequest> =
         if current.is_null() || current.is_undefined() {
             None
@@ -4489,8 +4495,7 @@ pub fn account_profile_seal(
         .map_err(chat_error)?;
     let mut rng = OsRng.unwrap_err();
     let upload = crate::profile::seal_account_profile(
-        &master_key,
-        master_key_generation(generation)?,
+        &master_keys,
         current.as_ref(),
         crate::profile::AccountProfileUpdate {
             display_name: update.display_name,
@@ -4677,9 +4682,13 @@ pub async fn bench_search_index(name: String, count: u32) -> std::result::Result
             .and_then(|value| value.as_f64())
             .unwrap_or(0.0)
     }
-    let db = crate::IndexedDbChatDb::open(&name, &[7u8; 32])
-        .await
-        .map_err(chat_error)?;
+    let db = crate::IndexedDbChatDb::open(
+        &name,
+        &kutup_crypto::master_keys::MasterKeys::first(&[7u8; 32]),
+        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+    )
+    .await
+    .map_err(chat_error)?;
     let report = crate::search::bench::run(&db, count as usize, performance_now)
         .await
         .map_err(chat_error)?;
@@ -4695,12 +4704,6 @@ fn account_roots(
         .map_err(|_| js_error("the account's roots are malformed"))?;
     kutup_crypto::account_roots::AccountRoots::try_from(&json)
         .map_err(|error| js_error(&error.to_string()))
-}
-
-fn master_key_bytes(master_key: Vec<u8>) -> std::result::Result<[u8; 32], JsValue> {
-    master_key
-        .try_into()
-        .map_err(|_| js_error("chat account authority requires a 32-byte master key"))
 }
 
 /// The device's account, for good: its string form.
@@ -4754,18 +4757,18 @@ impl WasmLinkingDevice {
         account: String,
         display_name: String,
         sealed_sender_enabled: bool,
-        master_key: Vec<u8>,
+        master_keys: Vec<u8>,
         roots: JsValue,
         binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let envelope: kutup_chat_proto::ProvisionEnvelopeV1 =
             from_transport(envelope).map_err(chat_error)?;
-        let master_key = master_key_bytes(master_key)?;
+        let master_keys = master_keys_input(master_keys)?;
         let roots = account_roots(roots)?;
         let authority = AccountAuthority::derive(&roots.identity).map_err(chat_error)?;
         let db = Rc::new(
-            IndexedDbChatDb::open(&database_name, &master_key)
+            IndexedDbChatDb::open(&database_name, &master_keys, &binding)
                 .await
                 .map_err(chat_error)?,
         );
@@ -4783,7 +4786,7 @@ impl WasmLinkingDevice {
             .map_err(chat_error)?;
         WasmChatClient::finish_open(
             engine,
-            &master_key,
+            &master_keys,
             &roots,
             &binding,
             &display_name,

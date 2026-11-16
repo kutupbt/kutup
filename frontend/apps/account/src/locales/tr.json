@@ -385,7 +385,8 @@
           "allSessionsRevoked": "Diğer tüm oturumlar sonlandırıldı",
           "adminAccess": "Bir yönetici hesabınızın ayrıntılarını açtı",
           "accountClosing": "Hesabın silinmesini istediniz",
-          "accountKept": "Hesap tutuldu: artık kapanmıyor"
+          "accountKept": "Hesap tutuldu: artık kapanmıyor",
+          "masterKeyRotated": "Yeni hesap anahtarı ve kurtarma ifadesi"
         }
       },
       "recovery": "Kurtarma ifadesi",

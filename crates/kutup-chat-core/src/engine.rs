@@ -373,9 +373,14 @@ impl Engine {
     /// Share identities with the account's other apps through its synced
     /// identity pins (docs/plans/drive-identity-pins.md). The list is sealed
     /// to the account's key binding (`binding`), never to its address.
-    pub fn enable_identity_pins(&mut self, master_key: &[u8; 32], binding: &str) -> Result<()> {
+    pub fn enable_identity_pins(
+        &mut self,
+        master_keys: &kutup_crypto::master_keys::MasterKeys,
+        binding: &str,
+    ) -> Result<()> {
         self.identity_pins = Some(crate::identity_sync::IdentityPinsSync::new(
-            binding, master_key,
+            binding,
+            master_keys,
         )?);
         Ok(())
     }

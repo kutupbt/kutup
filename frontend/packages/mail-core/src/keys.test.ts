@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { fromBase64 } from '@kutup/crypto/base64'
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('../../crypto/src/rustWasm', async () => {
   const [{ readFile }, module] = await Promise.all([
@@ -63,7 +65,7 @@ import { asIdentityRoot } from '@kutup/crypto/accountRoots.testing'
 
 /** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
 async function lookupOf(master: string, binding: string, address: string, listed = address, flags: number = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete) {
-  const key = await generateMailAddressKey(master, binding, address)
+  const key = await generateMailAddressKey(firstMasterKeys(fromBase64(master)), binding, address)
   const list = await signMailKeyList(asIdentityRoot(master), {
     address: listed,
     sequence: 1,
@@ -170,7 +172,7 @@ describe('an address’s key lists against what this device has seen', () => {
     pins.verdict = { kind: 'unknown' }
     forgetKeys()
     const first = await lookupOf(master, binding, 'roll_back@kutup.dev')
-    const key = await generateMailAddressKey(master, binding, 'roll_back@kutup.dev')
+    const key = await generateMailAddressKey(firstMasterKeys(fromBase64(master)), binding, 'roll_back@kutup.dev')
     const { verifyMailKeyList } = await import('@kutup/crypto')
     const one = await verifyMailKeyList(first.keyLists[0], first.accountAuthorityPublicKey)
     const second = await signMailKeyList(asIdentityRoot(master), {
@@ -270,7 +272,7 @@ describe('a shared mailbox’s keys against the pin list', () => {
   /** A mailbox's chain of `count` lists from a new signer; the key the lists name is real. */
   async function newChain(count: number): Promise<Chain & { holder: GroupSignerHolder }> {
     const identity = await deriveAccountIdentityKeys(asIdentityRoot(master))
-    const key = await generateMailAddressKey(master, binding, 'team@kutup.dev')
+    const key = await generateMailAddressKey(firstMasterKeys(fromBase64(master)), binding, 'team@kutup.dev')
     const entry = { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete }
     const first = await newMailGroupSigner(
       groupId,

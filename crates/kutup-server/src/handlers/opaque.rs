@@ -670,6 +670,9 @@ pub async fn register_start(
                     Purpose::Recovery,
                     Purpose::Rotate,
                     Purpose::AdminReset,
+                    // A master-key rotation registers the same password again;
+                    // its finish is the rotation itself (`master_key::rotate`).
+                    Purpose::MasterKeyRotation,
                 ],
             )
             .await?
@@ -802,6 +805,23 @@ pub async fn register_finish(
         && caller.as_ref().map(|c| c.session.session_id) != grant.session_id
     {
         return Err(grants::invalid());
+    }
+    // The new password wraps the account's current master key: one of an
+    // older generation is a client that missed a rotation (sign in again).
+    let envelope_generation = kutup_crypto::account_record::inspect(
+        &kutup_crypto::account_record::decode_canonical_b64(&req.master_key_envelope)
+            .map_err(|_| AppError::bad_request("invalid masterKeyEnvelope encoding"))?,
+    )
+    .map_err(|_| AppError::bad_request("invalid masterKeyEnvelope"))?
+    .generation
+    .get();
+    let current: Option<i32> =
+        sqlx::query_scalar("SELECT master_key_generation FROM users WHERE id = $1 FOR UPDATE")
+            .bind(grant.user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if current.and_then(|g| u32::try_from(g).ok()) != Some(envelope_generation) {
+        return Err(crate::account_heads::master_key_stale());
     }
     // A rotation only moves an account off a retired setup: once per setup,
     // and never a password change in disguise for an account already on the

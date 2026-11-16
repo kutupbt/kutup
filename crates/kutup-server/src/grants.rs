@@ -40,6 +40,9 @@ pub enum Purpose {
     Close,
     /// Keeping a closing account: a sign-in that passed every step (no session).
     Keep,
+    /// A new master key (docs/plans/mk-rotation-exercise.md): the password
+    /// registered again with it, all in one transaction.
+    MasterKeyRotation,
 }
 
 impl Purpose {
@@ -54,6 +57,7 @@ impl Purpose {
             Purpose::Rename => "rename",
             Purpose::Close => "close",
             Purpose::Keep => "keep",
+            Purpose::MasterKeyRotation => "masterKeyRotation",
         }
     }
 
@@ -66,6 +70,7 @@ impl Purpose {
             "adminReset" => Purpose::AdminReset,
             "rename" => Purpose::Rename,
             "close" => Purpose::Close,
+            "masterKeyRotation" => Purpose::MasterKeyRotation,
             _ => return None,
         })
     }

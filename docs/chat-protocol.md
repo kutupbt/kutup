@@ -1064,8 +1064,10 @@ with the session repair and the visible record described in §6.
 
 The browser store is encrypted at rest (`kutup-chat-core/src/db/store_cipher.rs`,
 `docs/research/16-browser-storage-architecture.md`). A random 256-bit store key
-is wrapped with XChaCha20-Poly1305 under a key derived from the account master
-key (HKDF-SHA256, `kutup/chat-store/wrap/v1`) and bound to the database name;
+is kept as an account record (purpose 28, `ChatStoreKey`) under the account
+master key, its header naming the key's generation so it opens across a
+master-key rotation, bound to the account's key binding and, by its object (the
+SHA-256 of the name), to the database name;
 the wrapped key and a format marker are the only plain entries. Each record is
 stored under `HMAC-SHA256(index key, object store ‖ key)`, so no address or id
 is readable, and its value (CBOR) is sealed with XChaCha20-Poly1305 together

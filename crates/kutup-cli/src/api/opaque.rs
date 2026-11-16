@@ -146,12 +146,17 @@ impl Client {
         super::check_ok(resp)
     }
 
-    /// A recovery grant, from the recovery phrase's proof.
-    pub fn recover_grant(&self, name: &str, recovery_proof: &str) -> Result<String> {
+    /// A recovery grant and the recovery envelope, from the recovery
+    /// phrase's proof.
+    pub fn recover_grant(
+        &self,
+        name: &str,
+        recovery_proof: &str,
+    ) -> Result<super::types::RecoverGranted> {
         let resp = self
             .request(Method::POST, "/auth/recover/grant")
             .json(&serde_json::json!({ "name": name, "recoveryProof": recovery_proof }))
             .send()?;
-        Ok(super::decode_json::<Granted>(resp)?.grant)
+        super::decode_json::<super::types::RecoverGranted>(resp)
     }
 }

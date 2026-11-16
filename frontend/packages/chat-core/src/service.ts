@@ -1,3 +1,4 @@
+import { masterKeysBytes, type MasterKeys } from '@kutup/crypto/masterKeys'
 import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import api from '@kutup/session/client'
 import { isAxiosError } from 'axios'
@@ -246,7 +247,7 @@ async function openClientHandle(
     accountKey(options.account),
     options.displayName,
     options.capabilities.sealedSender,
-    options.masterKey,
+    masterKeysBytes(options.masterKeys),
     options.roots,
     options.envelopeBinding,
     transport,
@@ -257,7 +258,8 @@ async function openClientHandle(
   const state = await wasm.WasmChatClient.installation(
     databaseName,
     accountKey(options.account),
-    options.masterKey,
+    masterKeysBytes(options.masterKeys),
+    options.envelopeBinding,
     transport,
   )
   if (state === 'link') throw new ChatServiceError('linkRequired')
@@ -281,7 +283,8 @@ export interface ChatServiceOptions {
   account: AccountRef
   /** The name a first profile starts with (the username). */
   displayName: string
-  masterKey: Uint8Array
+  /** The account's master keys (`session.masterKeys`). */
+  masterKeys: MasterKeys
   /** The account's stored roots (`session.roots`, docs/plans/identity-root.md). */
   roots: AccountRoots
   capabilities: ChatCapabilities
@@ -507,14 +510,14 @@ export class ChatService {
       transport,
       options.account,
       attachmentLedger,
-      new SealedStorage(wasm, options.masterKey, scope),
+      new SealedStorage(wasm, masterKeysBytes(options.masterKeys), scope),
     )
     try {
       if (capabilities.backup?.alwaysEnabled) {
         service.backup = await ChatBackupCoordinator.open({
           databaseName,
           envelopeBinding: options.envelopeBinding,
-          masterKey: options.masterKey,
+          masterKeys: options.masterKeys,
           roots: options.roots,
           deviceId: service.deviceId,
           history: () => service.liveHistory(),

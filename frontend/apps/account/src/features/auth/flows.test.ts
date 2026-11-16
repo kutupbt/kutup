@@ -21,6 +21,15 @@ const roots_ = vi.hoisted(() => ({
   isIdentityRootMismatch: (error: unknown) => String(error).includes('identityRootMismatch'),
 }))
 vi.mock('@kutup/crypto/accountRoots', () => roots_)
+// The set the keyring gives (its own tests are Rust's and the WASM's).
+const masterKeys_ = vi.hoisted(() => ({
+  openMasterKeys: vi.fn(() => Promise.resolve('master-keys')),
+  masterKeyGeneration: () => 1,
+  currentMasterKeyAt: () => ({ key: new Uint8Array(32).fill(7), generation: 1 }),
+  firstMasterKeys: () => 'first-master-keys',
+  FIRST_MASTER_KEY_GENERATION: 1,
+}))
+vi.mock('@kutup/crypto/masterKeys', () => masterKeys_)
 const registrar = vi.hoisted(() => ({ register: vi.fn(), close: vi.fn() }))
 vi.mock('@kutup/crypto/opaqueWorker', () => ({ startOpaqueRegistration: vi.fn(() => Promise.resolve(registrar)) }))
 const signDriveKeyBinding = vi.hoisted(() => vi.fn(() => Promise.resolve('binding')))
@@ -109,7 +118,7 @@ describe('signIn', () => {
     roots_.openAccountRoots.mockRejectedValueOnce(new Error('identityRootMismatch: the newest identity root (generation 2) does not derive this account\'s authority'))
     post.mockResolvedValue({ data: {} })
     await expect(signIn('alice', 'pw')).rejects.toBeInstanceOf(AccountKeysMismatchError)
-    expect(roots_.openAccountRoots).toHaveBeenCalledWith(masterKey, 'kb', ['r'], 'a')
+    expect(roots_.openAccountRoots).toHaveBeenCalledWith('master-keys', 'kb', ['r'], 'a')
     expect(post).toHaveBeenCalledWith('/auth/logout')
     expect(store.clearSession).toHaveBeenCalled()
     expect(masterKey.every((byte) => byte === 0)).toBe(true)
@@ -130,7 +139,7 @@ describe('signIn', () => {
     opaque.opaqueLogin.mockResolvedValue({ data: { ...session, rotate: true, grant: 'kg1_rotate' }, signIn: opened })
     opaque.reregisterWith.mockRejectedValue(new Error('offline'))
     await expect(signIn('alice', 'pw')).resolves.toEqual({ kind: 'signedIn' })
-    expect(opaque.reregisterWith).toHaveBeenCalledWith(opened, 'kb', expect.any(Uint8Array), 'kg1_rotate')
+    expect(opaque.reregisterWith).toHaveBeenCalledWith(opened, 'kb', { key: expect.any(Uint8Array), generation: 1 }, 'kg1_rotate')
     expect(opened.close).toHaveBeenCalled()
   })
 
@@ -145,7 +154,7 @@ describe('signIn', () => {
     post.mockResolvedValue({ data: { ...session, rotate: true, grant: 'kg1_rotate' } })
     opaque.reregisterWith.mockResolvedValue(undefined)
     await completeTotp(result.challenge, '123456')
-    expect(opaque.reregisterWith).toHaveBeenCalledWith(opened, 'kb', expect.any(Uint8Array), 'kg1_rotate')
+    expect(opaque.reregisterWith).toHaveBeenCalledWith(opened, 'kb', { key: expect.any(Uint8Array), generation: 1 }, 'kg1_rotate')
     expect(opened.close).toHaveBeenCalled()
   })
 
@@ -223,7 +232,7 @@ describe('registerAndSignIn', () => {
     opaque.registerWith.mockResolvedValue({ opaqueRecord: 'record-2', opaqueServerKeyId: 2, masterKeyEnvelope: 'envelope-2', accountId: second, accountIdProof: 'proof-2' })
     const k = keys()
     await registerAndSignIn('a', k)
-    expect(opaque.registerWith).toHaveBeenCalledWith(registrar, k.keyBinding, k.masterKey, null)
+    expect(opaque.registerWith).toHaveBeenCalledWith(registrar, k.keyBinding, { key: k.masterKey, generation: 1 }, null)
     // The new start minted a new id: the binding names that one.
     expect(post.mock.calls[1][1]).toMatchObject({ keyBinding: k.keyBinding, opaqueRecord: 'record-2', opaqueServerKeyId: 2, accountId: second, accountIdProof: 'proof-2' })
     expect(signDriveKeyBinding).toHaveBeenLastCalledWith(expect.any(String), { server: 'kutup.dev', accountId: second }, 1)

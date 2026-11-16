@@ -21,6 +21,7 @@ const KNOWN = new Set([
   'adminAccess',
   'accountClosing',
   'accountKept',
+  'masterKeyRotated',
 ])
 /**
  * Events about a name, or a named security key: their text names it

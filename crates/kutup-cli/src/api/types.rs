@@ -80,6 +80,12 @@ pub struct LoginResponse {
     pub account_roots: Vec<String>,
     #[serde(default)]
     pub account_authority_public_key: String,
+    /// The master key's generation and every older key's keyring record
+    /// (docs/plans/mk-rotation-exercise.md); with the session.
+    #[serde(default)]
+    pub master_key_generation: u32,
+    #[serde(default)]
+    pub master_keyring: Vec<String>,
     #[serde(default)]
     pub public_key: String,
     /// What the account's sealed keys are bound to; only with a session.
@@ -123,15 +129,22 @@ pub struct TotpRequest {
     pub code: String,
 }
 
-/// `GET /auth/recover/preflight` — encrypted recovery-key material. The
-/// server answers unknown names with deterministic fake data, so a wrong
-/// phrase/name only ever fails client-side at unwrap time.
+/// `GET /auth/recover/preflight` — the key binding a recovery proof is
+/// derived with (a fake one for an unknown name). The recovery envelope comes
+/// only with the grant, after the proof.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverPreflightResponse {
     #[serde(default)]
     pub envelope_binding: String,
-    #[serde(default)]
+}
+
+/// `POST /auth/recover/grant` — a recovery grant, and the master key under
+/// the recovery phrase.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverGranted {
+    pub grant: String,
     pub recovery_key_envelope: String,
 }
 

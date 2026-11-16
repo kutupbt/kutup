@@ -127,7 +127,7 @@ async function ownLookup(me: DriveIdentity): Promise<ProfileLookup | null> {
     throw error
   }
   // Sealed for the account, never its address.
-  return accountProfileKey(me.masterKey, sealed, accountKeyOf(me.accountRef), me.binding)
+  return accountProfileKey(me.masterKeys, sealed, accountKeyOf(me.accountRef), me.binding)
 }
 
 /** Give someone your current profile key, if they do not have it yet. */

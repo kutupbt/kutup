@@ -114,11 +114,13 @@ pub struct AdminSettingsResponse {
     pub pass_vault_max_bytes: i64,
 }
 
-/// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
+/// `GET /api/auth/recover/preflight`: what a recovery proof is derived with.
+/// The recovery envelope comes only with the grant, after the proof
+/// (`RecoverGrantResponse`), so nothing in its header (the master key's
+/// generation) tells a real account from an unknown name.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightRecoverResponse {
-    pub recovery_key_envelope: String,
     /// What the envelopes carry now (the recovery check is derived with it too).
     pub envelope_binding: String,
 }

@@ -591,8 +591,13 @@ pub fn fetch_roots(
     let authority: [u8; 32] = b64_decode(answer["accountAuthorityPublicKey"].as_str().unwrap())
         .try_into()
         .unwrap();
-    kutup_crypto::account_roots::AccountRoots::open(&records, master_key, binding, &authority)
-        .unwrap()
+    kutup_crypto::account_roots::AccountRoots::open(
+        &records,
+        &kutup_crypto::master_keys::MasterKeys::first(master_key),
+        binding,
+        &authority,
+    )
+    .unwrap()
 }
 
 /// `roots` as an account's client sends them: sealed under `master_key` for

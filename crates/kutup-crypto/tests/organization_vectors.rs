@@ -83,9 +83,10 @@ fn write_vectors() {
     let (_, member) = person(&member_master, MEMBER);
     let issued_at = 1_793_000_000;
     let certificate = KeyCertificateV1::sign(ORG, &public, issued_at, &admin, &admin_keys).unwrap();
-    let binding = kutup_crypto::drive_key_binding::sign(&second_keys, &second.account, 1).unwrap();
+    let second_account: AccountRef = SECOND_ADMIN.parse().unwrap();
+    let binding = kutup_crypto::drive_key_binding::sign(&second_keys, &second_account, 1).unwrap();
     let second_drive_key = VerifiedDriveKey::verify(
-        &second.account,
+        &second_account,
         &second_keys.authority_public_key(),
         1,
         &second_keys.drive_hpke_public_key(),

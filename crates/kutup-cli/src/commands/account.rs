@@ -40,6 +40,15 @@ pub enum AccountCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// A new account key (master key) and a new recovery phrase
+    /// (docs/plans/mk-rotation-exercise.md): for a password or recovery
+    /// phrase that may have been seen. Nothing your contacts see changes;
+    /// your other sign-ins end, and the old recovery phrase stops working.
+    RotateMasterKey {
+        /// Do not ask to confirm the new recovery phrase (it is still shown).
+        #[arg(long)]
+        yes: bool,
+    },
     /// The names this account has: the current one and those it holds.
     Names {
         #[command(subcommand)]
@@ -60,6 +69,7 @@ pub fn run(profile: &str, json: bool, cmd: &AccountCmd) -> Result<()> {
     match cmd {
         AccountCmd::State | AccountCmd::Reanchor { .. } => history(profile, json, cmd),
         AccountCmd::Rename { name, yes } => rename(profile, json, name, *yes),
+        AccountCmd::RotateMasterKey { yes } => rotate_master_key(profile, json, *yes),
         AccountCmd::Names { command: None } => names(profile, json),
         AccountCmd::Names {
             command: Some(NamesCmd::Drop { name }),
@@ -130,7 +140,9 @@ fn history(profile: &str, json: bool, cmd: &AccountCmd) -> Result<()> {
                 println!("This device now follows the server's data.");
             }
         }
-        AccountCmd::Rename { .. } | AccountCmd::Names { .. } => unreachable!("not history"),
+        AccountCmd::Rename { .. }
+        | AccountCmd::Names { .. }
+        | AccountCmd::RotateMasterKey { .. } => unreachable!("not history"),
     }
     Ok(())
 }
@@ -344,6 +356,139 @@ fn own_address_of(rows: &Value, address: &str) -> OwnAddress {
         }
     }
     own
+}
+
+/// `rotate-master-key`: a new master key at the next generation, in one
+/// server transaction with the password registered again, a new recovery
+/// phrase, the roots re-wrapped, the old key in the keyring and the next
+/// account head (docs/plans/mk-rotation-exercise.md).
+fn rotate_master_key(profile: &str, json: bool, yes: bool) -> Result<()> {
+    // Nobody confirms a phrase they did not see: with --json it is printed
+    // only at the end, so --yes must be given on purpose.
+    if json && !yes {
+        return Err(crate::errors::UsageError(
+            "--json needs --yes for kutup account rotate-master-key".into(),
+        )
+        .into());
+    }
+    let mut ctx = require_session(profile)?;
+    let password = crate::commands::login::current_password()?;
+    let master_keys = ctx.session.master_keys()?;
+    let roots = ctx.session.roots()?;
+    let binding = ctx.session.binding().to_owned();
+
+    // The password proved again, for a grant this rotation is made under.
+    let grant = crate::commands::login::reauth_grant(&ctx.client, &password, "masterKeyRotation")
+        .map_err(|e| anyhow::anyhow!("the password: {e:#}"))?;
+
+    // The head it continues, checked now; then the rotation, sealed here.
+    let me = Me::of(&ctx, profile)?;
+    let mut head = me.head(&ctx)?;
+    let (verified, writer) = head.for_rotation()?;
+    let rotation =
+        kutup_crypto::mk_rotation::prepare(&master_keys, &binding, &roots, verified, &writer)
+            .context("prepare the rotation")?;
+
+    // The new recovery phrase, shown once and confirmed before anything
+    // changes: the old one stops working with the rotation.
+    if !json {
+        println!("Your new recovery phrase (write it down; the old one stops working):\n");
+        println!("  {}\n", rotation.recovery_phrase.as_str());
+    }
+    if !yes {
+        confirm_phrase(&rotation.recovery_phrase)?;
+    }
+
+    // The same password registered again, wrapping the new master key.
+    let (registering, request) =
+        kutup_crypto::opaque::client_registration_start(&password).context("OPAQUE")?;
+    let started = ctx
+        .client
+        .register_start(&binding, &request, Some(&grant))
+        .context("register the password")?;
+    let registered = registering
+        .finish(&started.response()?)
+        .context("the server's registration answer")?;
+    let master_key_envelope = registered
+        .export_key
+        .seal_master_key(rotation.master_key(), rotation.generation(), &binding)
+        .context("seal master-key envelope")?;
+
+    eprintln!("Rotating the account key…");
+    ctx.client
+        .rotate_master_key(&json!({
+            "grant": grant,
+            "opaqueRecord": STANDARD.encode(&registered.record),
+            "opaqueServerKeyId": started.server_key_id,
+            "masterKeyEnvelope": master_key_envelope,
+            "recoveryKeyEnvelope": STANDARD.encode(&rotation.recovery_envelope),
+            "recoveryProof": STANDARD.encode(rotation.recovery_proof.as_slice()),
+            "accountRoots": rotation.roots.iter().map(|r| STANDARD.encode(r)).collect::<Vec<_>>(),
+            "masterKeyring": STANDARD.encode(&rotation.keyring),
+            "head": STANDARD.encode(&rotation.head),
+        }))
+        .context("rotate the account key")?;
+
+    // This profile's session holds the new key from now on; the keys the
+    // server keeps are read back, as a sign-in would.
+    let keys = ctx
+        .client
+        .get_account_keys()
+        .context("read the account's keys")?;
+    ctx.session.master_key = STANDARD.encode(rotation.master_key());
+    ctx.session.master_key_envelope = master_key_envelope;
+    ctx.session.master_key_generation = keys.master_key_generation;
+    ctx.session.master_keyring = keys.master_keyring;
+    ctx.session.account_roots = keys.account_roots;
+    ctx.session.account_authority_public_key = keys.account_authority_public_key;
+    // Read back as a check: the new key opens the roots and the keyring.
+    ctx.session
+        .roots()
+        .context("the rotated keys do not open the account's roots")?;
+    ctx.store
+        .save_session(&ctx.session)
+        .context("save session")?;
+
+    if json {
+        print_json(&json!({
+            "rotated": true,
+            "masterKeyGeneration": rotation.generation().get(),
+            "recoveryPhrase": rotation.recovery_phrase.as_str(),
+        }))?;
+    } else {
+        println!(
+            "Done: the account key is new (generation {}), your other sign-ins ended, \
+             and only the new recovery phrase recovers the account.",
+            rotation.generation().get()
+        );
+    }
+    Ok(())
+}
+
+/// Asks for two of the phrase's words, by position, so a phrase not
+/// written down is caught before it is the only one.
+fn confirm_phrase(phrase: &str) -> Result<()> {
+    use std::io::IsTerminal as _;
+    if !std::io::stdin().is_terminal() {
+        return Err(crate::errors::UsageError(
+            "confirming the new recovery phrase needs a terminal — pass --yes to skip it".into(),
+        )
+        .into());
+    }
+    let words: Vec<&str> = phrase.split_whitespace().collect();
+    let mut picks = [0usize; 2];
+    let mut random = [0u8; 2];
+    kutup_crypto::primitives::random(&mut random);
+    picks[0] = random[0] as usize % words.len();
+    picks[1] = (picks[0] + 1 + random[1] as usize % (words.len() - 1)) % words.len();
+    picks.sort_unstable();
+    for pick in picks {
+        let typed = prompt_line(&format!("Word #{} of the new phrase: ", pick + 1))?;
+        if typed.trim().to_lowercase() != words[pick] {
+            bail!("that is not word #{}: nothing was changed", pick + 1);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

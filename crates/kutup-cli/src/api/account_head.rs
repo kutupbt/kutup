@@ -17,6 +17,18 @@ pub struct AccountIndexRecord {
     pub basis: Option<String>,
 }
 
+/// `GET /api/account/roots`: the account's root records, its authority, the
+/// master key's generation and its keyring.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountKeysRecord {
+    pub account_roots: Vec<String>,
+    pub account_authority_public_key: String,
+    pub master_key_generation: u32,
+    #[serde(default)]
+    pub master_keyring: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct HeadRecord {
     head: Option<String>,
@@ -76,6 +88,23 @@ impl Client {
             return Ok(None);
         }
         super::decode_json(resp).map(Some)
+    }
+
+    /// The account's root records, authority, master-key generation and
+    /// keyring.
+    pub fn get_account_keys(&self) -> Result<AccountKeysRecord> {
+        let resp = self.get("/account/roots")?;
+        super::decode_json(resp)
+    }
+
+    /// `POST /api/account/master-key/rotate` with `body`
+    /// (docs/plans/mk-rotation-exercise.md).
+    pub fn rotate_master_key(&self, body: &serde_json::Value) -> Result<()> {
+        let resp = self
+            .request(Method::POST, "/account/master-key/rotate")
+            .json(body)
+            .send()?;
+        super::check_ok(resp)
     }
 
     /// Starts the account's chain with `head` (sequence 1) on `basis`.

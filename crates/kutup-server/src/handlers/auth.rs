@@ -105,6 +105,15 @@ pub struct LoginResponse {
     /// derive it. With the session only.
     #[serde(skip_serializing_if = "String::is_empty")]
     account_authority_public_key: String,
+    /// The master key's current generation (what `masterKeyEnvelope` holds),
+    /// with the session only; 0 (left out) otherwise.
+    #[serde(skip_serializing_if = "is_zero")]
+    master_key_generation: u32,
+    /// Every previous master key's keyring record, newest first
+    /// (docs/plans/mk-rotation-exercise.md); with the session only, and
+    /// empty before a first rotation.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    master_keyring: Vec<String>,
     public_key: String,
     is_admin: bool,
     storage_quota_bytes: i64,
@@ -318,6 +327,10 @@ pub struct CompleteSetupResponse {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 pub(crate) fn decode_canonical_base64_exact(
@@ -1118,18 +1131,17 @@ pub(crate) async fn issue_after_second_step(
     path = "/api/auth/recover/preflight",
     tag = "auth",
     params(("name" = String, Query, description = "The username or the Kutup address")),
-    responses((status = 200, description = "Encrypted recovery key material and its binding", body = PreflightRecoverResponse))
+    responses((status = 200, description = "The binding a recovery proof is derived with", body = PreflightRecoverResponse))
 )]
 pub async fn get_recovery_preflight(
     State(state): State<AppState>,
     Query(q): Query<NameQuery>,
 ) -> AppResult<Response> {
     let name = q.name()?;
-    let row: Option<(String, String)> = match account_by_name(&state, &name).await? {
+    let row: Option<String> = match account_by_name(&state, &name).await? {
         Some(id) => {
-            sqlx::query_as(
-                "SELECT recovery_key_envelope, COALESCE(key_binding, '') FROM users
-                  WHERE id = $1 AND key_binding IS NOT NULL",
+            sqlx::query_scalar(
+                "SELECT key_binding FROM users WHERE id = $1 AND key_binding IS NOT NULL",
             )
             .bind(id)
             .fetch_optional(&state.pool)
@@ -1139,16 +1151,11 @@ pub async fn get_recovery_preflight(
     };
 
     let resp = match row {
-        Some((recovery_key_envelope, envelope_binding)) => PreflightRecoverResponse {
-            recovery_key_envelope,
-            envelope_binding,
-        },
+        Some(envelope_binding) => PreflightRecoverResponse { envelope_binding },
         None => {
             let secret = fake_accounts_key(&state).await?;
-            let binding = fake_binding(&secret, &canonical_name(&state, &name));
             PreflightRecoverResponse {
-                recovery_key_envelope: deterministic_fake_account_record(&secret, &binding),
-                envelope_binding: binding,
+                envelope_binding: fake_binding(&secret, &canonical_name(&state, &name)),
             }
         }
     };
@@ -1156,17 +1163,18 @@ pub async fn get_recovery_preflight(
 }
 
 /// `POST /api/auth/recover/grant` — the recovery phrase's proof, for a
-/// `recovery` grant (no session): with it the client registers a new password
-/// (register/start, register/finish), which ends every sign-in of the
-/// account. An unknown name, an account without a verifier and a wrong
-/// phrase are the same `401`, checked at full cost.
+/// `recovery` grant (no session) and the recovery envelope (the master key
+/// under the phrase): with them the client opens the master key and
+/// registers a new password (register/start, register/finish), which ends
+/// every sign-in of the account. An unknown name, an account without a
+/// verifier and a wrong phrase are the same `401`, checked at full cost.
 #[utoipa::path(
     post,
     path = "/api/auth/recover/grant",
     tag = "auth",
     request_body = RecoverRequest,
     responses(
-        (status = 200, description = "A recovery grant", body = crate::handlers::opaque::GrantResponse),
+        (status = 200, description = "A recovery grant and the recovery envelope", body = RecoverGrantResponse),
         (status = 401, description = "invalid recovery proof")
     )
 )]
@@ -1204,8 +1212,8 @@ pub async fn recover_grant(
     // Only while the phrase checked is still the account's: a wipe (or a new
     // setup) in between replaces the verifier, and leaves no grant behind.
     let mut tx = state.pool.begin().await?;
-    let still: Option<Uuid> = sqlx::query_scalar(&format!(
-        "SELECT id FROM users
+    let still: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT recovery_key_envelope FROM users
          WHERE id = $1 AND {} AND recovery_key_verifier = $2
          FOR SHARE",
         crate::account_closing::SIGNS_IN
@@ -1214,9 +1222,9 @@ pub async fn recover_grant(
     .bind(&stored_verifier)
     .fetch_optional(&mut *tx)
     .await?;
-    if still.is_none() {
+    let Some(recovery_key_envelope) = still else {
         return Err(AppError::unauthorized("invalid recovery proof"));
-    }
+    };
     let grant = crate::grants::issue(
         &mut *tx,
         crate::grants::Purpose::Recovery,
@@ -1227,7 +1235,24 @@ pub async fn recover_grant(
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(crate::handlers::opaque::GrantResponse::new(grant)).into_response())
+    Ok(Json(RecoverGrantResponse {
+        grant: crate::handlers::opaque::GrantResponse::new(grant),
+        recovery_key_envelope,
+    })
+    .into_response())
+}
+
+/// A recovery grant, and the master key under the recovery phrase (only
+/// after the phrase's proof).
+// No Debug: it carries a one-time grant.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverGrantResponse {
+    #[serde(flatten)]
+    grant: crate::handlers::opaque::GrantResponse,
+    /// The master key sealed under the recovery phrase (`RecoveryMasterKey`,
+    /// its header naming the master key's generation).
+    recovery_key_envelope: String,
 }
 
 /// `POST /api/auth/refresh` — rotates the session's refresh token. Web clients present
@@ -2267,12 +2292,7 @@ async fn issue_tokens_and_respond(
     tx.commit().await?;
     // The account's roots and the authority they must give, with the
     // session only (docs/plans/identity-root.md).
-    let account_roots = crate::account_roots::load(&state.pool, uid).await?;
-    let account_authority_public_key: String =
-        sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
-            .bind(uid)
-            .fetch_one(&state.pool)
-            .await?;
+    let keys = crate::account_roots::account_keys(&state.pool, uid).await?;
     let access = jwt::generate_access_token(
         user_id,
         is_admin,
@@ -2287,8 +2307,10 @@ async fn issue_tokens_and_respond(
         user_id: user_id.to_string(),
         username: username.to_string(),
         master_key_envelope: master_key_envelope.to_string(),
-        account_roots,
-        account_authority_public_key,
+        account_roots: keys.account_roots,
+        account_authority_public_key: keys.account_authority_public_key,
+        master_key_generation: keys.master_key_generation,
+        master_keyring: keys.master_keyring,
         public_key: pub_key.to_string(),
         is_admin,
         storage_quota_bytes: quota,
@@ -2416,35 +2438,6 @@ fn deterministic_fake_bytes(secret: &[u8], name: &str, purpose: &str, len: usize
     }
     out.truncate(len);
     STANDARD.encode(out)
-}
-
-fn deterministic_fake_account_record(secret: &[u8], binding: &str) -> String {
-    let key = STANDARD
-        .decode(deterministic_fake_bytes(
-            secret,
-            binding,
-            "recovery-envelope-key",
-            32,
-        ))
-        .expect("deterministic fake key is base64");
-    let nonce = STANDARD
-        .decode(deterministic_fake_bytes(
-            secret,
-            binding,
-            "recovery-envelope-nonce",
-            24,
-        ))
-        .expect("deterministic fake nonce is base64");
-    let envelope = kutup_crypto::account_record::seal_with_nonce(
-        &[0u8; 32],
-        &key,
-        kutup_crypto::account_record::AccountRecordPurpose::RecoveryMasterKey,
-        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
-        binding,
-        &nonce,
-    )
-    .expect("fake recovery envelope inputs are valid");
-    STANDARD.encode(envelope)
 }
 
 /// Where the authenticator app's secret is sealed: the account's own row.
@@ -2581,23 +2574,6 @@ mod tests {
         );
         // 16 raw bytes → 24-char standard base64.
         assert_eq!(a.len(), 24);
-    }
-
-    #[test]
-    fn fake_recovery_envelope_is_stable_and_structurally_valid() {
-        // Faked under the name's fake binding, as preflight answers it.
-        let binding = fake_binding(&[7u8; 32], "user");
-        let first = deterministic_fake_account_record(&[7u8; 32], &binding);
-        let second = deterministic_fake_account_record(&[7u8; 32], &binding);
-        assert_eq!(first, second);
-        let decoded = kutup_crypto::account_record::decode_canonical_b64(&first).unwrap();
-        kutup_crypto::account_record::validate_for(
-            &decoded,
-            kutup_crypto::account_record::AccountRecordPurpose::RecoveryMasterKey,
-            &binding,
-            &[],
-        )
-        .unwrap();
     }
 
     #[test]

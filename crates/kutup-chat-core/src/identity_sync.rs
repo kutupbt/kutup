@@ -26,7 +26,6 @@ use base64::Engine as _;
 use kutup_crypto::identity_pins::{
     self, AuthorityCheck, IdentityPinsV2, PinMatch, PinState, PinUpdate, Recorded,
 };
-use zeroize::Zeroizing;
 
 use crate::db::{AuthorityTrust, ManifestTrust};
 use crate::error::{ChatError, Result};
@@ -50,7 +49,7 @@ pub(crate) enum Reconcile {
 pub(crate) struct IdentityPinsSync {
     /// The account's key binding, which the list is sealed to.
     binding: String,
-    key: Zeroizing<[u8; 32]>,
+    keys: kutup_crypto::master_keys::MasterKeys,
     cache: Option<(u64, IdentityPinsV2)>,
     /// The highest revision this engine has seen: an older list is refused
     /// (the server replaying one), as on the web.
@@ -58,12 +57,15 @@ pub(crate) struct IdentityPinsSync {
 }
 
 impl IdentityPinsSync {
-    pub(crate) fn new(binding: &str, master_key: &[u8; 32]) -> Result<Self> {
+    pub(crate) fn new(
+        binding: &str,
+        master_keys: &kutup_crypto::master_keys::MasterKeys,
+    ) -> Result<Self> {
         Ok(Self {
             binding: kutup_crypto::key_binding::check(binding)
                 .map_err(crypto)?
                 .to_string(),
-            key: Zeroizing::new(*master_key),
+            keys: master_keys.clone(),
             cache: None,
             highest_seen: 0,
         })
@@ -86,8 +88,9 @@ impl IdentityPinsSync {
                 let sealed = STANDARD
                     .decode(&record.envelope)
                     .map_err(|_| ChatError::Invalid("identity pins are not base64".into()))?;
+                let key = self.keys.key_for(&sealed).map_err(crypto)?;
                 let (list, revision) =
-                    identity_pins::open(&self.key, &self.binding, &sealed).map_err(crypto)?;
+                    identity_pins::open(key, &self.binding, &sealed).map_err(crypto)?;
                 // The revision the server (and the account head the
                 // transport checked it against) named is the sealed one.
                 if revision != record.revision {
@@ -231,11 +234,9 @@ impl IdentityPinsSync {
                 .saturating_mul(1000)
                 .max(revision + 1)
                 .max(self.highest_seen + 1);
-            // Rotation (docs/plans/w6-key-hierarchy.md) seals at the
-            // account's current generation; until it exists, the first.
             let sealed = identity_pins::seal(
-                &self.key,
-                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                self.keys.current(),
+                self.keys.generation(),
                 &self.binding,
                 next,
                 &list,
@@ -277,6 +278,7 @@ mod tests {
     use crate::transport::IdentityPinsRecord;
     use crate::transport::SendOutcome;
     use kutup_crypto::identity_pins::IdentityPinV2;
+    use zeroize::Zeroizing;
 
     /// Only the identity pin calls; the server's list, revision by revision.
     #[derive(Default)]
@@ -363,7 +365,11 @@ mod tests {
     }
 
     fn sync() -> IdentityPinsSync {
-        IdentityPinsSync::new(OWNER, &MASTER).unwrap()
+        IdentityPinsSync::new(
+            OWNER,
+            &kutup_crypto::master_keys::MasterKeys::first(&MASTER),
+        )
+        .unwrap()
     }
 
     #[test]

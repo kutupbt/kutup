@@ -3,6 +3,8 @@
 // file sequences them against the API and hands the unlocked keys to the
 // session layer, which activates and persists them for this origin.
 
+import { inspectAccountRecord } from '@kutup/crypto/accountRecord'
+import { currentMasterKeyAt, FIRST_MASTER_KEY_GENERATION, firstMasterKeys, masterKeyGeneration, openMasterKeys, type MasterKeys } from '@kutup/crypto/masterKeys'
 import {
   ACCOUNT_RECORD_PURPOSE,
   driveKeysOf,
@@ -40,6 +42,12 @@ interface LoginResponse {
   /** The account's root records and the authority they must give (docs/plans/identity-root.md); with the session. */
   accountRoots?: string[]
   accountAuthorityPublicKey?: string
+  /**
+   * The master key's generation and every older key's keyring record
+   * (docs/plans/mk-rotation-exercise.md); with the session.
+   */
+  masterKeyGeneration?: number
+  masterKeyring?: string[]
   publicKey: string
   /** What the account's keys are bound to (docs/plans/account-identity.md); only with a session. */
   keyBinding?: string
@@ -177,13 +185,20 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
     // The master envelope opens only under its own binding, so once it has
     // opened the binding is verified.
     const masterKey = await opened.openMasterKey(data.masterKeyEnvelope, binding)
-    // The account's roots open with the master key; the newest identity root
-    // must give the account's published authority, or the keys are refused
+    // Every older master key comes through the keyring, from the generation
+    // the envelope's header names (docs/plans/mk-rotation-exercise.md). The
+    // account's roots open with them; the newest identity root must give the
+    // account's published authority, or the keys are refused
     // (docs/plans/identity-root.md). The Drive keys derive from it, never
     // stored (docs/plans/w6-key-hierarchy.md §1); the server must publish the same.
     let roots: AccountRoots
+    let masterKeys: MasterKeys
     try {
-      roots = await openAccountRoots(masterKey, binding, data.accountRoots ?? [], data.accountAuthorityPublicKey ?? '')
+      masterKeys = await openMasterKeys(masterKey, data.masterKeyEnvelope, binding, data.masterKeyring ?? [])
+      if (data.masterKeyGeneration !== undefined && data.masterKeyGeneration !== masterKeyGeneration(masterKeys)) {
+        throw new Error('the server named another master-key generation than the envelope')
+      }
+      roots = await openAccountRoots(masterKeys, binding, data.accountRoots ?? [], data.accountAuthorityPublicKey ?? '')
     } catch (error) {
       setAccessToken(data.accessToken)
       await api.post('/auth/logout').catch(() => undefined)
@@ -202,11 +217,13 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
       privateKey.fill(0)
       throw new Error("the server publishes another Drive key than this account's")
     }
-    await activate(data, { userId: data.userId, masterKey, roots, privateKey, publicKey, keyBinding: binding })
+    await activate(data, { userId: data.userId, masterKey, masterKeys, roots, privateKey, publicKey, keyBinding: binding })
     // A new server setup: the password just used (held by the sign-in's
     // worker) is registered again under it, without asking. A failure leaves
     // the old record, and the next sign-in asks again.
-    if (data.rotate && data.grant) await reregisterWith(opened, binding, masterKey, data.grant).catch(() => undefined)
+    if (data.rotate && data.grant) {
+      await reregisterWith(opened, binding, currentMasterKeyAt(masterKeys), data.grant).catch(() => undefined)
+    }
   } finally {
     opened.close()
   }
@@ -265,7 +282,7 @@ export async function generateAccountKeys(password: string, setupToken?: string)
     const draw = async () => {
       const keyBinding = crypto.randomUUID()
       const keys = await generateAccountKeySet(keyBinding)
-      const registered = await registerWith(registrar, keyBinding, keys.masterKey, auth)
+      const registered = await registerWith(registrar, keyBinding, { key: keys.masterKey, generation: FIRST_MASTER_KEY_GENERATION }, auth)
       return { ...keys, keyBinding, ...registered, registrar, auth }
     }
     try {
@@ -293,11 +310,11 @@ export function releaseAccountKeys(keys: AccountKeys): void {
  */
 async function remade(keys: AccountKeys, code: string): Promise<AccountKeys> {
   if (code === 'opaqueKeyStale') {
-    return { ...keys, ...(await registerWith(keys.registrar, keys.keyBinding, keys.masterKey, keys.auth)) }
+    return { ...keys, ...(await registerWith(keys.registrar, keys.keyBinding, { key: keys.masterKey, generation: FIRST_MASTER_KEY_GENERATION }, keys.auth)) }
   }
   const keyBinding = crypto.randomUUID()
   const resealed = await rebindAccountKeySet(keys, keyBinding)
-  const registered = await registerWith(keys.registrar, keyBinding, keys.masterKey, keys.auth)
+  const registered = await registerWith(keys.registrar, keyBinding, { key: keys.masterKey, generation: FIRST_MASTER_KEY_GENERATION }, keys.auth)
   return { ...keys, ...resealed, keyBinding, ...registered }
 }
 
@@ -344,6 +361,8 @@ function sessionKeys(keys: AccountKeys): SessionKeys {
   return {
     userId: '',
     masterKey: keys.masterKey,
+    // A new account's: generation 1, no keyring.
+    masterKeys: firstMasterKeys(keys.masterKey),
     roots: keys.roots,
     privateKey: keys.privateKey,
     publicKey: keys.publicKey,
@@ -431,24 +450,24 @@ export function normalizeMnemonic(value: string): string {
  * account ends. (The phrase is the second factor, so 2FA is not asked.)
  */
 export async function recoverAccount(name: string, mnemonic: string, newPassword: string): Promise<void> {
-  const { data } = await api.get<{ recoveryKeyEnvelope: string; envelopeBinding: string }>('/auth/recover/preflight', {
+  // The binding the phrase's proof is derived with; the recovery envelope
+  // comes only with the grant, after the proof (its header names the master
+  // key's generation, which nobody learns without the phrase).
+  const { data } = await api.get<{ envelopeBinding: string }>('/auth/recover/preflight', {
     params: { name },
   })
   const binding = data.envelopeBinding
   const { decodeMnemonic } = await import('@kutup/crypto/mnemonic')
   const recoveryKey = decodeMnemonic(normalizeMnemonic(mnemonic))
-  const masterKey = await openAccountRecord(
-    data.recoveryKeyEnvelope,
-    recoveryKey,
-    ACCOUNT_RECORD_PURPOSE.recoveryMasterKey,
-    binding,
-  )
+  let masterKey: Uint8Array | null = null
   try {
     const recoveryProof = await deriveRecoveryAuthProof(toBase64(recoveryKey), binding)
-    const { data: granted } = await api.post<{ grant: string }>('/auth/recover/grant', { name, recoveryProof })
-    await opaqueReregister(newPassword, binding, masterKey, granted.grant)
+    const { data: granted } = await api.post<{ grant: string; recoveryKeyEnvelope: string }>('/auth/recover/grant', { name, recoveryProof })
+    masterKey = await openAccountRecord(granted.recoveryKeyEnvelope, recoveryKey, ACCOUNT_RECORD_PURPOSE.recoveryMasterKey, binding)
+    const { generation } = await inspectAccountRecord(granted.recoveryKeyEnvelope)
+    await opaqueReregister(newPassword, binding, { key: masterKey, generation }, granted.grant)
   } finally {
-    masterKey.fill(0)
+    masterKey?.fill(0)
     recoveryKey.fill(0)
   }
 }

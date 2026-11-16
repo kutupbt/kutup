@@ -56,6 +56,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::renames::chains,
         crate::handlers::security_events::list,
         crate::account_roots::get,
+        crate::handlers::master_key::rotate,
         crate::handlers::account_heads::head,
         crate::handlers::account_heads::start,
         crate::handlers::account_heads::heads,
@@ -510,6 +511,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::chat_federation::deliver_messages,
     ),
     components(schemas(
+        crate::handlers::master_key::RotateRequest,
         kutup_chat_proto::RegisterDeviceRequestV1,
         kutup_chat_proto::RegisterDeviceResponseV1,
         kutup_chat_proto::AccountDeviceV1,
@@ -752,6 +754,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::registration_codes::RegistrationCodeUse,
         crate::handlers::registration_codes::SignedUpWith,
         models::PreflightRecoverResponse,
+        crate::handlers::auth::RecoverGrantResponse,
         models::RefreshResponse,
         crate::config::AppOrigins,
         crate::handlers::sessions::SessionView,

@@ -329,7 +329,7 @@ export type CheckedOwnAddress = Omit<OwnAddressRow, 'keys'> & {
 export function mailAccountOf(
   rows: readonly CheckedOwnAddress[],
   identity: Pick<MailIdentity, 'displayName' | 'signature'> | null,
-  session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'privateKey'>,
+  session: Pick<Session, 'masterKeys' | 'envelopeBinding' | 'username' | 'privateKey'>,
   fold: (address: string) => string | null,
   /**
    * The account itself, as `/user/me` names it: its server and id, and
@@ -371,7 +371,7 @@ export function mailAccountOf(
   const held = rows.filter((row) => row.state !== 'freed')
   const own = new Set(held.map((row) => fold(row.address)).filter((folded) => folded !== null))
   const sealed = (row: CheckedOwnAddress) => (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
-    masterKeyBase64: toBase64(session.masterKey),
+    masterKeys: session.masterKeys,
     binding: session.envelopeBinding,
     address: row.address,
     envelope: key.privateKeyEnvelope,

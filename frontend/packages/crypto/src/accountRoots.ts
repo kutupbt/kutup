@@ -3,8 +3,7 @@
 // master key changes nothing a contact sees. Each is its own branded type:
 // a master key, or another root, passed where one belongs fails to compile.
 
-import { toBase64 } from './base64'
-import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
+import { firstMasterKeys, type MasterKeys } from './masterKeys'
 import { getCryptoWasm } from './rustWasm'
 
 declare const rootKind: unique symbol
@@ -41,7 +40,10 @@ export interface AccountRoots {
  * session is one.
  */
 export interface AccountSecrets {
+  /** The current master key (the account's own Drive keys are sealed under it). */
   masterKey: Uint8Array
+  /** Every master key: what account records are sealed and opened through. */
+  masterKeys: MasterKeys
   roots: AccountRoots
 }
 
@@ -63,15 +65,15 @@ export async function generateAccountRoots(
   masterKey: Uint8Array,
   binding: string,
 ): Promise<{ roots: AccountRoots; envelopes: string[] }> {
-  return (await getCryptoWasm()).sealAccountRoots(toBase64(masterKey), MASTER_KEY_GENERATION, binding, null) as {
+  return (await getCryptoWasm()).sealAccountRoots(firstMasterKeys(masterKey), binding, null) as {
     roots: AccountRoots
     envelopes: string[]
   }
 }
 
-/** `roots` sealed again under the master key for the key `binding` (a sign-up whose binding was drawn again). */
+/** `roots` sealed again under a new account's master key for the key `binding` (a sign-up whose binding was drawn again). */
 export async function sealAccountRoots(masterKey: Uint8Array, binding: string, roots: AccountRoots): Promise<string[]> {
-  const sealed = (await getCryptoWasm()).sealAccountRoots(toBase64(masterKey), MASTER_KEY_GENERATION, binding, roots) as {
+  const sealed = (await getCryptoWasm()).sealAccountRoots(firstMasterKeys(masterKey), binding, roots) as {
     envelopes: string[]
   }
   return sealed.envelopes
@@ -79,15 +81,15 @@ export async function sealAccountRoots(masterKey: Uint8Array, binding: string, r
 
 /**
  * The account's roots from its records (`accountRoots` of the sign-in's
- * answer, or `GET /api/account/roots`), opened with its master key. The
+ * answer, or `GET /api/account/roots`), opened with its master keys. The
  * newest identity root must derive `authorityPublicKey`, the account's
  * published authority; otherwise it throws ({@link isIdentityRootMismatch}).
  */
 export async function openAccountRoots(
-  masterKey: Uint8Array,
+  masterKeys: MasterKeys,
   binding: string,
   envelopes: string[],
   authorityPublicKey: string,
 ): Promise<AccountRoots> {
-  return (await getCryptoWasm()).openAccountRoots(toBase64(masterKey), binding, envelopes, authorityPublicKey) as AccountRoots
+  return (await getCryptoWasm()).openAccountRoots(masterKeys, binding, envelopes, authorityPublicKey) as AccountRoots
 }

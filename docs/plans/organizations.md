@@ -306,13 +306,16 @@ can't tell a managed account from a private one, as at Proton.
 
 #### Formats (kutup-crypto, all post-quantum where Kutup is)
 
+- **Parties:** every document names a person by the account's permanent id
+  (16 bytes) and its incarnation (32 bytes), never the server's name, which
+  is routing and can change (the `AccountRef` split).
 - **Organization key:** an X-Wing key pair (the HPKE suite of
   [`pq-shares.md`](pq-shares.md)), its seed random, made in the creating
   owner's browser. Its id is a hash of the public key under
   `kutup/org/key-id/v1\0`.
 - **`OrganizationKeyCertificateV1`** (`kutup/org/key-certificate/v1\0`):
   organization id, key id, the X-Wing public key, issued at, and the signing
-  admin's account ref, incarnation and authority key id; Ed25519 signature
+  admin's account id, incarnation and authority key id; Ed25519 signature
   by that admin's account authority. It is Proton's fingerprint signature
   (`organizationKeys.ts:485-530`); members check it against their pins of
   that admin before consenting.
@@ -325,20 +328,22 @@ can't tell a managed account from a private one, as at Proton.
 - **`OrganizationKeyShareV1`** (`kutup/org/key-share/v1\0`): the seed sealed
   (HPKE, X-Wing) to a new admin's account HPKE key (the X-Wing key their
   key binding and manifest publish), AAD binding organization id, key id,
-  recipient account ref and incarnation, and the granting admin; signed by
+  recipient account id and incarnation, and the granting admin; signed by
   the granting admin's authority. Proton's `OrganizationKeyInvitation`.
   The recipient key is the account's Drive X-Wing key (derived from the
   master key, W6): one key for two purposes, kept apart by the HPKE info
   label (`kutup/org/key-share/v1\0` here, the share labels for Drive), as
   Proton seals organization keys to the user's address key.
 - **`OrganizationAccessRequestV1`** (`kutup/org/access-request/v1\0`):
-  organization id, key id, member account ref and incarnation, requesting
+  organization id, key id, member account id and incarnation, requesting
   admin, issued at; signed by the requesting admin's authority. Proton's
   signed `InvitationData`.
 - **`OrganizationEscrowV1`** (`kutup/org/member-escrow/v1\0`): the member's
   master key and identity root (docs/plans/identity-root.md) sealed together
-  (HPKE, X-Wing, 64 bytes) to the organization key, AAD binding organization
-  id, key id, member account ref, incarnation and master-key generation. No
+  (HPKE, X-Wing; the plaintext a version byte, then length-prefixed parts,
+  docs/plans/mk-rotation-exercise.md §9) to the organization key, AAD binding
+  organization id, key id, member account id, incarnation and master-key
+  generation. No
   separate signature is needed: an admin who opens it derives the authority
   from the identity root and checks it equals the member's published
   authority for that incarnation, and opens the member's identity-root

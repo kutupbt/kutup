@@ -1,3 +1,4 @@
+import type { MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import type { ChatWasmModule } from './types'
 
 /**
@@ -11,7 +12,7 @@ import type { ChatWasmModule } from './types'
 export class SealedStorage {
   constructor(
     private readonly wasm: Pick<ChatWasmModule, 'sealLocalData' | 'openLocalData'>,
-    private readonly masterKey: Uint8Array,
+    private readonly masterKeys: MasterKeysBytes,
     /** The account's chat scope (the chat store's name suffix). */
     readonly scope: string,
     private readonly storage: Storage = window.localStorage,
@@ -50,7 +51,7 @@ export class SealedStorage {
     if (entries.length === 0) return []
     const encoder = new TextEncoder()
     return this.wasm.sealLocalData(
-      this.masterKey,
+      this.masterKeys,
       this.scope,
       entries.map((entry) => entry.name),
       entries.map((entry) => encoder.encode(JSON.stringify(entry.value))),
@@ -62,7 +63,7 @@ export class SealedStorage {
     if (entries.length === 0) return []
     const decoder = new TextDecoder()
     return this.wasm
-      .openLocalData(this.masterKey, this.scope, entries.map((entry) => entry.name), entries.map((entry) => entry.sealed))
+      .openLocalData(this.masterKeys, this.scope, entries.map((entry) => entry.name), entries.map((entry) => entry.sealed))
       .map((bytes) => {
         if (!bytes) return undefined
         try {

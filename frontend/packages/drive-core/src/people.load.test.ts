@@ -1,3 +1,4 @@
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
@@ -30,7 +31,7 @@ const ME = {
   accountRef: { server: 'kutup.dev', accountId: '00000000-0000-4000-8000-00000000000e' },
   binding: 'binding',
   incarnationId: 'inc-me',
-  masterKey: new Uint8Array(32),
+  masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)),
   roots: testRoots(0),
   privateKey: new Uint8Array(32),
   authorityPublicKey: 'auth-me',
@@ -82,7 +83,7 @@ describe('loadPeople', () => {
 
   it('opens its own profile key for its own account key, and gives it to them by account', async () => {
     await loadPeople(ME)
-    expect(wasm.accountProfileKey).toHaveBeenCalledWith(ME.masterKey, { sealed: 'own' }, `aci:${ME.userId}@kutup.dev`, 'binding')
+    expect(wasm.accountProfileKey).toHaveBeenCalledWith(ME.masterKeys, { sealed: 'own' }, `aci:${ME.userId}@kutup.dev`, 'binding')
     expect(put).toHaveBeenCalledWith('/drive/profile-keys', {
       recipientServer: 'kutup.dev',
       recipientAccountId: ADA_ID,

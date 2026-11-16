@@ -3,11 +3,19 @@
 
 import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'
+import { currentMasterKey, type MasterKeys } from '@kutup/crypto/masterKeys'
 
 export interface SessionKeys {
   userId: string
-  /** The account master key (32 bytes). */
+  /** The account's current master key (32 bytes). */
   masterKey: Uint8Array
+  /**
+   * The account's master keys (docs/plans/mk-rotation-exercise.md): the
+   * current one (`masterKey`) and every older one, which still opens what was
+   * sealed before a rotation. Every account record is sealed and opened
+   * through it.
+   */
+  masterKeys: MasterKeys
   /** The account's stored roots (docs/plans/identity-root.md), opened. */
   roots: AccountRoots
   /** The Drive HPKE private key (32 bytes). */
@@ -60,13 +68,15 @@ interface EncodedDevice {
 }
 
 /**
- * v5: the account's roots (docs/plans/identity-root.md) and a device of the
- * account's manifest. Older payloads carry no roots: refused (sign in again).
+ * v6: the account's master-key set (docs/plans/mk-rotation-exercise.md), its
+ * roots (docs/plans/identity-root.md) and a device of the account's
+ * manifest. Older payloads carry no set: refused (sign in again).
  */
 interface EncodedKeys {
-  v: 5
+  v: 6
   userId: string
   masterKey: string
+  masterKeys: string
   roots: AccountRoots
   privateKey: string
   publicKey: string
@@ -81,9 +91,10 @@ const KEY_BINDING = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 export function encodeKeys(keys: SessionKeys): Uint8Array {
   if (!KEY_BINDING.test(keys.keyBinding)) throw new Error('session keys have no valid key binding')
   const value: EncodedKeys = {
-    v: 5,
+    v: 6,
     userId: keys.userId,
     masterKey: toBase64(keys.masterKey),
+    masterKeys: keys.masterKeys,
     roots: keys.roots,
     privateKey: toBase64(keys.privateKey),
     publicKey: keys.publicKey,
@@ -104,9 +115,10 @@ export function encodeKeys(keys: SessionKeys): Uint8Array {
 export function decodeKeys(bytes: Uint8Array): SessionKeys {
   const value = JSON.parse(new TextDecoder().decode(bytes)) as Partial<EncodedKeys>
   if (
-    value.v !== 5 ||
+    value.v !== 6 ||
     typeof value.userId !== 'string' ||
     typeof value.masterKey !== 'string' ||
+    typeof value.masterKeys !== 'string' ||
     !isRoots(value.roots) ||
     typeof value.privateKey !== 'string' ||
     typeof value.publicKey !== 'string' ||
@@ -120,9 +132,15 @@ export function decodeKeys(bytes: Uint8Array): SessionKeys {
   if (masterKey.length !== 32 || privateKey.length !== 32) {
     throw new Error('session key payload has keys of the wrong length')
   }
+  // The set's current key is the session's master key.
+  const masterKeys = value.masterKeys as MasterKeys
+  if (toBase64(currentMasterKey(masterKeys)) !== value.masterKey) {
+    throw new Error('session key payload has a master-key set of another key')
+  }
   const keys: SessionKeys = {
     userId: value.userId,
     masterKey,
+    masterKeys,
     roots: value.roots,
     privateKey,
     publicKey: value.publicKey,

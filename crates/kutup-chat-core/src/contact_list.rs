@@ -243,11 +243,11 @@ fn identity_of(
 
 impl Engine {
     /// Keeps this account's contacts in its contact list, sealed under its
-    /// `master_key` and named under its `object_id_key` (a stored root),
+    /// current master key (of `master_keys`) and named under its `object_id_key` (a stored root),
     /// bound to its key `binding`, timed as `timing` says.
     pub fn enable_contact_list(
         &mut self,
-        master_key: &[u8; 32],
+        master_keys: &kutup_crypto::master_keys::MasterKeys,
         object_id_key: &kutup_crypto::account_roots::ObjectIdKey,
         binding: &str,
         timing: ContactListTiming,
@@ -255,13 +255,7 @@ impl Engine {
         kutup_crypto::key_binding::check(binding)
             .map_err(|_| ChatError::Invalid("the account's key binding is invalid".into()))?;
         self.contact_list = Some(ContactListSync {
-            // Rotation (docs/plans/w6-key-hierarchy.md) seals at the
-            // account's current generation; until it exists, the first.
-            key: ContactListKey::new(
-                master_key,
-                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
-                object_id_key,
-            ),
+            key: ContactListKey::from_keys(master_keys, object_id_key),
             binding: binding.to_string(),
             timing,
             listed: BTreeMap::new(),

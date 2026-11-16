@@ -1,10 +1,11 @@
 // @vitest-environment node
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import 'fake-indexeddb/auto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@kutup/crypto/accountRecord', () => ({
   ACCOUNT_RECORD_PURPOSE: { chatBackupRoot: 4 },
-  openAccountRecord: vi.fn(async () => new Uint8Array(32).fill(7)),
+  openMasterKeyRecord: vi.fn(async () => new Uint8Array(32).fill(7)),
   sealAccountRecord: vi.fn(async () => 'sealed-root'),
 }))
 
@@ -300,7 +301,7 @@ async function open(
   const coordinator = await ChatBackupCoordinator.open({
     databaseName,
     envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
-    masterKey: new Uint8Array(32).fill(3),
+    masterKeys: firstMasterKeys(new Uint8Array(32).fill(3)),
     roots: testRoots(3),
     deviceId,
     history,
@@ -324,7 +325,7 @@ async function openWithRetries(
   const coordinator = await ChatBackupCoordinator.open({
     databaseName,
     envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
-    masterKey: new Uint8Array(32).fill(3),
+    masterKeys: firstMasterKeys(new Uint8Array(32).fill(3)),
     roots: testRoots(3),
     deviceId: 9,
     history,
@@ -1107,7 +1108,7 @@ describe('ChatBackupCoordinator collection by conversation', () => {
       const coordinator = await ChatBackupCoordinator.open({
         databaseName: database,
         envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
-        masterKey: new Uint8Array(32).fill(3),
+        masterKeys: firstMasterKeys(new Uint8Array(32).fill(3)),
     roots: testRoots(3),
         deviceId: 9,
         history: async () => history,

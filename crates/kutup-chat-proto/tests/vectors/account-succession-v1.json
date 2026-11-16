@@ -1,0 +1,166 @@
+{
+  "absent": {
+    "manifestVersion": 3,
+    "account": {
+      "server": "example.test",
+      "accountId": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b"
+    },
+    "incarnationId": "269d476a80d27f312ace88babbc1fb13208c478899b735af496d82021f7b2f6c",
+    "sequence": 1,
+    "identityKey": "BQMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD",
+    "identityBinding": "W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbWw==",
+    "drive": {
+      "suite": 2,
+      "hpkePublicKey": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ==",
+      "shareSigningPublicKey": "E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o="
+    },
+    "devices": [
+      {
+        "deviceId": 1,
+        "kind": "chat",
+        "chat": {
+          "directChatSuite": 1,
+          "registrationId": 10
+        },
+        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+      },
+      {
+        "deviceId": 2,
+        "kind": "chat",
+        "chat": {
+          "directChatSuite": 1,
+          "registrationId": 20
+        },
+        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+      }
+    ],
+    "issuedAt": "2026-10-22T12:00:00Z",
+    "authorityKeyId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "selfAuthorityKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "signature": "VFFe94ne94NUyb1FbxInx5836EtFYwZegQr7dPnqQRTKgKAFcsvvdoAAClGIvt30rusqNdwvxj2D7y+7D5QbCw=="
+  },
+  "present": {
+    "manifestVersion": 3,
+    "account": {
+      "server": "example.test",
+      "accountId": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b"
+    },
+    "incarnationId": "269d476a80d27f312ace88babbc1fb13208c478899b735af496d82021f7b2f6c",
+    "sequence": 1,
+    "identityKey": "BQMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD",
+    "identityBinding": "W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbWw==",
+    "drive": {
+      "suite": 2,
+      "hpkePublicKey": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ==",
+      "shareSigningPublicKey": "E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o="
+    },
+    "devices": [
+      {
+        "deviceId": 1,
+        "kind": "chat",
+        "chat": {
+          "directChatSuite": 1,
+          "registrationId": 10
+        },
+        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+      },
+      {
+        "deviceId": 2,
+        "kind": "chat",
+        "chat": {
+          "directChatSuite": 1,
+          "registrationId": 20
+        },
+        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+      }
+    ],
+    "issuedAt": "2026-10-22T12:00:00Z",
+    "authorityKeyId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "selfAuthorityKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "successions": [
+      {
+        "accountId": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+        "previousAuthority": "rwaj4ykXFOTzVsGcmxXNGVHsbmZiqne+B1R/KJODNB0=",
+        "previousIdGen": 1,
+        "newAuthority": "LfBBJfABWvtHzoU674dyCU/5SYwUyxueEpc8KSfaD6Y=",
+        "newIdGen": 2,
+        "previousManifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "signedByPrevious": "4OcGCxjJ8mg9FHRlqq3lbpNuHbDdrQB6uWdpLmFEdv3SbsAA2skFgcNLfzrbb3StsW3v67LyXoO2bTDnfGePAw==",
+        "signedByNew": "E8gXED5mOVuHuGFnNjaGuClobpvR8eNRwk4ccnOg5MkktzUTBaoE+zv8w/0XHwyhKvaXPz6nqju7b+nQWdUFBQ=="
+      },
+      {
+        "accountId": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+        "previousAuthority": "LfBBJfABWvtHzoU674dyCU/5SYwUyxueEpc8KSfaD6Y=",
+        "previousIdGen": 2,
+        "newAuthority": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+        "newIdGen": 3,
+        "previousManifestHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "signedByPrevious": "co/XTEUkESE6S57KZ1FjxJYYi4BqRBvVhmnHUvfEPN5LJpCFbmttaBudGdr2/HDG6oO7TyP+0JKMDTWKcC6zAA==",
+        "signedByNew": "S9wHxEONsvDNfvBeOzip8rIfIMAlo8OGvrnB9W71Y5hGyJr+kAFcwB8nTG9zLcy8T6laQMSH4dgWnaAZARbgCA=="
+      }
+    ],
+    "signature": "gIEJwbZHWWmVtv8imxpcoHiVNzOFnNfYqXMw0OQob4dhpXY4lywlnIufL74aHmX1B+78t+U/p20xFAZ80OeHAQ=="
+  },
+  "wrongSignature": {
+    "manifestVersion": 3,
+    "account": {
+      "server": "example.test",
+      "accountId": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b"
+    },
+    "incarnationId": "269d476a80d27f312ace88babbc1fb13208c478899b735af496d82021f7b2f6c",
+    "sequence": 1,
+    "identityKey": "BQMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD",
+    "identityBinding": "W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbWw==",
+    "drive": {
+      "suite": 2,
+      "hpkePublicKey": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ==",
+      "shareSigningPublicKey": "E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o="
+    },
+    "devices": [
+      {
+        "deviceId": 1,
+        "kind": "chat",
+        "chat": {
+          "directChatSuite": 1,
+          "registrationId": 10
+        },
+        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+      },
+      {
+        "deviceId": 2,
+        "kind": "chat",
+        "chat": {
+          "directChatSuite": 1,
+          "registrationId": 20
+        },
+        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+      }
+    ],
+    "issuedAt": "2026-10-22T12:00:00Z",
+    "authorityKeyId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "selfAuthorityKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "successions": [
+      {
+        "accountId": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+        "previousAuthority": "rwaj4ykXFOTzVsGcmxXNGVHsbmZiqne+B1R/KJODNB0=",
+        "previousIdGen": 1,
+        "newAuthority": "LfBBJfABWvtHzoU674dyCU/5SYwUyxueEpc8KSfaD6Y=",
+        "newIdGen": 2,
+        "previousManifestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "signedByPrevious": "4OcGCxjJ8mg9FHRlqq3lbpNuHbDdrQB6uWdpLmFEdv3SbsAA2skFgcNLfzrbb3StsW3v67LyXoO2bTDnfGePAw==",
+        "signedByNew": "E8gXED5mOVuHuGFnNjaGuClobpvR8eNRwk4ccnOg5MkktzUTBaoE+zv8w/0XHwyhKvaXPz6nqju7b+nQWdUFBQ=="
+      },
+      {
+        "accountId": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+        "previousAuthority": "LfBBJfABWvtHzoU674dyCU/5SYwUyxueEpc8KSfaD6Y=",
+        "previousIdGen": 2,
+        "newAuthority": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+        "newIdGen": 3,
+        "previousManifestHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "signedByPrevious": "4OcGCxjJ8mg9FHRlqq3lbpNuHbDdrQB6uWdpLmFEdv3SbsAA2skFgcNLfzrbb3StsW3v67LyXoO2bTDnfGePAw==",
+        "signedByNew": "S9wHxEONsvDNfvBeOzip8rIfIMAlo8OGvrnB9W71Y5hGyJr+kAFcwB8nTG9zLcy8T6laQMSH4dgWnaAZARbgCA=="
+      }
+    ],
+    "signature": "Ft3mMLwoYPodWVrWq6DggqQvfxZnNgw6vB6jcc9CQiRr0d7wjcmiSgSE1tI09ek1x/PZgdlMawTd9QeFYBvgBw=="
+  }
+}

@@ -104,7 +104,7 @@ pub struct Me {
     /// The account's key binding, which its own seals (the pin list) bind.
     binding: String,
     pub identity: AccountIdentityKeysV1,
-    master_key: [u8; 32],
+    master_keys: kutup_crypto::master_keys::MasterKeys,
     /// The account's object-id key (a stored root): its guard's names.
     object_id_key: kutup_crypto::account_roots::ObjectIdKey,
     /// The root generations in use, which the account head must record.
@@ -114,12 +114,7 @@ pub struct Me {
 
 impl Me {
     pub fn of(ctx: &Ctx, profile: &str) -> Result<Me> {
-        let master_key: [u8; 32] = ctx
-            .session
-            .master_key_bytes()?
-            .as_slice()
-            .try_into()
-            .context("master key must be 32 bytes")?;
+        let master_keys = ctx.session.master_keys()?;
         // Who this account is, read with the session: by its id, never by
         // the username the session last saw (a rename elsewhere changes it).
         let current = ctx.client.me().context("read the account")?;
@@ -132,7 +127,7 @@ impl Me {
                 .context("this session's account id is not valid")?,
             binding: ctx.session.binding().to_string(),
             identity: AccountIdentityKeysV1::derive(&roots.identity)?,
-            master_key,
+            master_keys,
             root_generations: roots.head_generations(),
             object_id_key: roots.object_id,
             profile: profile.to_string(),
@@ -147,7 +142,8 @@ impl Me {
     pub fn head<'a>(&self, ctx: &'a Ctx) -> Result<crate::account_head::CliHead<'a>> {
         crate::account_head::CliHead::open(
             &ctx.client,
-            &self.master_key,
+            &self.master_keys,
+            &self.object_id_key,
             &self.binding,
             &self.identity.incarnation_id(),
             self.root_generations,
@@ -159,7 +155,7 @@ impl Me {
     pub fn guard(&self) -> Result<crate::account_head::Guard> {
         crate::account_head::CliHead::guard(
             &config::data_dir(&self.profile)?,
-            &self.master_key,
+            &self.master_keys,
             &self.object_id_key,
             &self.binding,
         )
@@ -262,7 +258,6 @@ fn read_pins(
     me: &Me,
     index: &crate::account_head::Index,
 ) -> Result<(u64, IdentityPinsV2)> {
-    let key = &me.master_key;
     let guard = me.guard()?;
     let (revision, list) = match ctx.client.get_identity_pins()? {
         None => {
@@ -276,6 +271,7 @@ fn read_pins(
             let sealed = STANDARD
                 .decode(&record.envelope)
                 .context("identity pins are not base64")?;
+            let key = me.master_keys.key_for(&sealed)?;
             let (list, revision) = identity_pins::open(key, &me.binding, &sealed)?;
             index.expect(HEAD_ID, revision)?;
             (revision, list)
@@ -331,7 +327,6 @@ fn now_seconds() -> u64 {
 /// `identity_pins::record`) with the next account head; merges with whatever
 /// another app stored meanwhile.
 fn pin(ctx: &Ctx, me: &Me, person: &Published, update: PinUpdate) -> Result<Recorded> {
-    let key = &me.master_key;
     let guard = me.guard()?;
     let guard = &guard;
     let mut head = me.head(ctx)?;
@@ -356,11 +351,11 @@ fn pin(ctx: &Ctx, me: &Me, person: &Published, update: PinUpdate) -> Result<Reco
         let next = guard
             .next(PINS_GUARD_SCOPE, PINS_GUARD_ID, revision)?
             .max(now_millis());
-        // Rotation (docs/plans/w6-key-hierarchy.md) seals at the account's
-        // current generation; until it exists there is only the first.
+        // Sealed under the account's current master key (a list sealed
+        // before a rotation is sealed again here).
         let sealed = identity_pins::seal(
-            key,
-            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            me.master_keys.current(),
+            me.master_keys.generation(),
             &me.binding,
             next,
             &list,

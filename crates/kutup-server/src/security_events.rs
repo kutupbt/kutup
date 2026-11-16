@@ -75,6 +75,9 @@ pub enum Kind {
     AccountClosing,
     /// A closing account was kept.
     AccountKept,
+    /// A new master key and recovery phrase (docs/plans/mk-rotation-exercise.md);
+    /// the account's other sign-ins end.
+    MasterKeyRotated,
 }
 
 impl Kind {
@@ -108,6 +111,7 @@ impl Kind {
             Kind::AdminAccess => "adminAccess",
             Kind::AccountClosing => "accountClosing",
             Kind::AccountKept => "accountKept",
+            Kind::MasterKeyRotated => "masterKeyRotated",
         }
     }
 }

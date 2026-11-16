@@ -1,3 +1,4 @@
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The crypto is Rust's (kutup-crypto vectors); here, its decisions are
@@ -334,7 +335,7 @@ const me: DriveIdentity = {
   accountRef: { server: 'kutup.dev', accountId: 'me-id' },
   binding: ME_BINDING,
   incarnationId: 'inc-ME',
-  masterKey: new Uint8Array(32),
+  masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)),
   roots: testRoots(0),
   privateKey: new Uint8Array(32),
   authorityPublicKey: 'ME',

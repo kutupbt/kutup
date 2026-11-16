@@ -39,7 +39,11 @@ struct Chain {
 
 impl Chain {
     fn new(binding: &str) -> Self {
-        let keys = HeadKeys::derive(&[0x42; 32]).unwrap();
+        let keys = HeadKeys::derive(
+            &kutup_crypto::master_keys::MasterKeys::first(&[0x42; 32]),
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([0x43; 32]),
+        )
+        .unwrap();
         let writer = keys.writer("live-test").unwrap();
         Self {
             keys,
@@ -57,9 +61,13 @@ impl Chain {
             Some((head, sealed)) => head.next(sealed, &self.writer, vec![entry]).unwrap(),
             None => AccountHeadV1::first(
                 &"ab".repeat(32),
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
                 kutup_crypto::account_head::RootGenerations {
                     identity: 1,
                     drive: 1,
+                    object_id: 1,
+                    pseudonym: 1,
+                    call_link: 1,
                 },
                 &self.writer,
                 vec![entry],

@@ -108,6 +108,12 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test account_roots_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server account_roots::tests::live_ -- --nocapture
+# A master-key rotation (docs/plans/mk-rotation-exercise.md): the server's
+# transaction (its account purged after, so the storage check below holds);
+# the CLI's two-device run is in the CLI checks at the end.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test master_key_live -- --nocapture
 # Permanent account ids (docs/plans/account-ids.md): minted at sign-up,
 # retired on delete, found by id, kept through a rename.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
@@ -344,9 +350,10 @@ while :; do
 done
 
 # The kutup CLI end to end, as a person runs it: Drive (scripts/verify-cli.sh),
-# then Kutup Pass sync between two machines and its SSH agent. Each makes its
-# own account with `kutup register`. After the purge checks above, which
-# expect no account's bytes left.
-for check in verify-cli verify-pass-sync verify-pass-ssh; do
+# then Kutup Pass sync between two machines and its SSH agent, then a
+# master-key rotation on two devices (docs/plans/mk-rotation-exercise.md).
+# Each makes its own account with `kutup register`. After the purge checks
+# above, which expect no account's bytes left.
+for check in verify-cli verify-pass-sync verify-pass-ssh verify-mk-rotation; do
   KUTUP_SERVER="http://127.0.0.1:$port" "$root_dir/scripts/$check.sh"
 done

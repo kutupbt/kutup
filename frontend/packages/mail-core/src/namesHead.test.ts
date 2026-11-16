@@ -1,3 +1,4 @@
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Folder, label and filter names under the account head
@@ -71,7 +72,7 @@ import { loadFilters } from './filters'
 import { createName, folderAndInside, loadPlaces, renameName } from './places'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
-const session = { userId: 'u1', masterKey: new Uint8Array(32), roots: testRoots(0), envelopeBinding: 'b' }
+const session = { userId: 'u1', masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)), roots: testRoots(0), envelopeBinding: 'b' }
 const sealed = (kind: string, id: string, revision: number, value: string) => JSON.stringify({ kind, id, revision, value })
 const folderRow = (id: string, name: string | null, parentId: string | null = null) => ({ id, parentId, name, color: '#8080ff', position: 0, expanded: true, notify: true })
 
