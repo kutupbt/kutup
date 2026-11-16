@@ -51,12 +51,12 @@ function videoFor(browserName: string): LongVideo {
         '-bufsize', '640k', '-x264-params', 'nal-hrd=cbr', '-g', '40', '-movflags', '+faststart', '-an'],
     }
   }
-  // VP8 at about 160 kbit/s: a few hundred MB, its cues at the end.
+  // VP8 at about 320 kbit/s (about 290 MB over two hours, above the 50-block floor), its cues at the end.
   return {
     name: 'long.webm',
     mimeType: 'video/webm',
     encoder: 'libvpx',
-    args: ['-c:v', 'libvpx', '-b:v', '160k', '-deadline', 'realtime', '-cpu-used', '8', '-g', '40', '-an'],
+    args: ['-c:v', 'libvpx', '-b:v', '320k', '-minrate', '320k', '-maxrate', '320k', '-deadline', 'realtime', '-cpu-used', '8', '-g', '40', '-an'],
   }
 }
 
