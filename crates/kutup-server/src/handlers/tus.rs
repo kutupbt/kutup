@@ -374,12 +374,15 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         }
     };
 
+    // The metadata comes with the commit: NULL, never the columns' old
+    // default (`uploads_metadata_at_commit`).
     let ins = sqlx::query(
         "INSERT INTO uploads \
             (id, user_id, collection_id, file_id, total_bytes, \
              file_key_envelope, key_epoch, \
-             storage_path, s3_upload_id, name_hash, revision_id, blob_suite) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+             storage_path, s3_upload_id, name_hash, revision_id, blob_suite, \
+             metadata_envelope, metadata_revision) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULL,NULL)",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -395,7 +398,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     .bind(crate::drive_blob::BLOCK_SUITE)
     .execute(&mut *tx)
     .await;
-    if ins.is_err() {
+    if let Err(error) = ins {
+        tracing::error!(%error, "upload: inserting the upload row failed");
         let _ = state
             .storage
             .abort_multipart(&storage_path, &s3_upload_id)

@@ -202,8 +202,13 @@ fn names_are_unique_in_a_folder() {
     let late = seal_file(&folder, &uuid(), b"late");
     let late_name = name(&folder, "late.txt");
     let r = tus_create_named(&c, &base, &owner, &folder, &late, Some(&late_name));
-    assert_eq!(r.status(), StatusCode::CREATED);
-    let location = r.headers()["location"].to_str().unwrap().to_owned();
+    let status = r.status();
+    let location = r
+        .headers()
+        .get("location")
+        .map(|l| l.to_str().unwrap().to_owned());
+    assert_eq!(status, StatusCode::CREATED, "{}", r.text().unwrap());
+    let location = location.unwrap();
     let racer = seal_file(&folder, &uuid(), b"racer");
     assert!(
         upload_named(&c, &base, &owner, &folder, &racer, Some(&late_name))
