@@ -13,7 +13,6 @@
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::collection_keyring;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::file_keyring::{self, FileKeyLinkV1};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
@@ -82,6 +81,8 @@ fn move_folder(
     .json(&json!({
         "parentCollectionId": parent.map(|p| p.id.clone()),
         "nameHash": test_name_hash(&format!("{}{}", folder.id, parent.map_or(folder.id.as_str(), |p| p.id.as_str())))[..64].to_owned(),
+        // A test account's Drive root is at its first generation.
+        "nameHashGeneration": parent.is_none().then_some(1),
     }))
     .send()
     .unwrap()
@@ -217,12 +218,7 @@ fn drive_move_contract() {
     let after = download(&c, &base, &owner.token, &file.id).1;
     assert_eq!(after, before);
     assert_eq!(
-        drive_object::decrypt_file_blob(
-            &after,
-            &key,
-            DriveFileBlobContextV1::new(&file.id, 1).unwrap()
-        )
-        .unwrap(),
+        open_blob(&after, &file.id, &key, 1).unwrap(),
         b"moves without re-encryption"
     );
     assert_eq!(used(&c, &base, &owner.token), used_before, "a move is free");
@@ -293,7 +289,7 @@ fn drive_move_contract() {
     .json(&json!({
         "fromEpoch": 1,
         "epochStatement": statement.encode_b64(),
-        "ownerKeyEnvelope": drive_envelope::seal_b64(&a2, &owner.master_key, ctx2(DriveEnvelopePurpose::CollectionKey, 1)).unwrap(),
+        "ownerKeyEnvelope": crate::common::owner_collection_key(&a2, &owner, &a.id, 2),
         "previousKeyEnvelope": collection_keyring::seal_previous_key(&a.key, &a2, &a.id, &owner.id, 2).unwrap(),
         "nameEnvelope": drive_envelope::seal_b64(b"Integrity", &a2, ctx2(DriveEnvelopePurpose::CollectionName, 2)).unwrap(),
         "members": [{ "userId": editor.id, "namedShareEnvelope": editor_share }],
@@ -385,10 +381,11 @@ fn drive_move_contract() {
         .collect();
     let first = file_keyring::key_at(&current, &second.id, 2, &chain, 1).unwrap();
     assert_eq!(
-        drive_object::decrypt_file_blob(
+        open_blob(
             &download(&c, &base, &owner.token, &second.id).1,
+            &second.id,
             &first,
-            DriveFileBlobContextV1::new(&second.id, 1).unwrap()
+            1
         )
         .unwrap(),
         b"sealed under generation 1"

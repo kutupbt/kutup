@@ -17,6 +17,7 @@ import { classifyUploadError, isFolderKeyChanged } from '@kutup/drive-ui/uploadE
 import { uploads } from '@kutup/drive-ui/uploadStore'
 import { uploadDirectoryInto } from './folderUpload'
 import { BatchListing, placeFile } from './upload'
+import { freeNameIn } from '@kutup/drive-core/names'
 
 export { uploadCreating, uploadOne } from './upload'
 
@@ -144,6 +145,7 @@ export function useUploadActions() {
                 onProgress: progress,
                 onWaiting: waiting,
                 signal,
+                freeName: freeNameIn(folder),
               })
               // A new version's content hash landed with it.
               if (!uploaded.version) await recordContentHash(folder, uploaded.fileId, uploaded.contentSha256)

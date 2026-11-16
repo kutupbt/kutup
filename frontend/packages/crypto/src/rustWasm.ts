@@ -49,6 +49,44 @@ export interface GroupKeyMember {
   hpkePublicKey: string
 }
 
+/** `kutup-crypto-wasm`'s `BlockEncryptor` (blocks.rs). */
+export interface WasmBlockEncryptor {
+  header(): Uint8Array
+  readonly size: number
+  readonly blockCount: number
+  readonly nextIndex: number
+  blockLength(index: number): number
+  blockOffset(index: number): number
+  readonly objectLength: number
+  /** Set once finished: the sealed manifest's SHA-256, canonical base64. */
+  readonly manifestSha256: string | undefined
+  sealNext(plaintext: Uint8Array): Uint8Array
+  /** The sealed manifest and trailer of an unsigned family (Chat media, backup media). */
+  finish(): Uint8Array
+  /** For backup media: the media id the backup root derived for the source. */
+  readonly mediaId: string | undefined
+  finishSigned(identityRootBase64: string, uploaderAccountId: string, uploaderIncarnationId: string): Uint8Array
+  free(): void
+}
+
+/** `kutup-crypto-wasm`'s `BlockReader` (blocks.rs): one object, read by block in any order. */
+export interface WasmBlockReader {
+  readonly size: number
+  readonly blockCount: number
+  readonly objectLength: number
+  readonly signerAccountId: string | undefined
+  readonly signerIncarnationId: string | undefined
+  /** For backup media: the source's length without its padding. */
+  readonly sourceBytes: number | undefined
+  blockOffset(index: number): number
+  sealedBlockLength(index: number): number
+  /** Block `index`'s plaintext; throws unless the sealed bytes hash to the manifest's entry and open at that index. */
+  openBlock(index: number, block: Uint8Array): Uint8Array
+  /** Throws unless this Drive signing public key (base64) made the manifest's signature. */
+  verifySigner(driveSigningPublicKeyBase64: string): void
+  free(): void
+}
+
 export interface CryptoWasmModule {
   accountProfileKey(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): import('./profile').ProfileLookup
   profileLookup(key: string): import('./profile').ProfileLookup
@@ -392,18 +430,6 @@ export interface CryptoWasmModule {
   ): {
     mediaId: string
     outerEncryptionKey: string
-    objectHeader: string
-    paddedPlaintextBytes: number
-  }
-  openChatBackupMediaHeader(
-    headerBase64: string,
-    backupRootBase64: string,
-    expectedAccountIncarnationId: string,
-    expectedBackupIncarnationId: string,
-    expectedMediaId: string,
-  ): {
-    outerEncryptionKey: string
-    sourceCiphertextBytes: number
     paddedPlaintextBytes: number
   }
   sealDriveEnvelope(
@@ -424,6 +450,26 @@ export interface CryptoWasmModule {
     expectedObjectId: string,
     expectedParentId: string,
   ): string
+  /** An owned folder's key at `epoch`, sealed for its owner under their Drive root of `driveGeneration`. */
+  sealOwnerCollectionKey(
+    collectionKeyBase64: string,
+    driveRootBase64: string,
+    driveGeneration: number,
+    collectionId: string,
+    ownerId: string,
+    epoch: number,
+  ): string
+  openOwnerCollectionKey(
+    envelopeBase64: string,
+    driveRootBase64: string,
+    driveGeneration: number,
+    collectionId: string,
+    ownerId: string,
+    epoch: number,
+  ): string
+  /** A public link's key, sealed for its owner under their Drive root of `driveGeneration`. */
+  sealOwnerLinkKey(linkKeyBase64: string, driveRootBase64: string, driveGeneration: number, linkId: string, ownerId: string): string
+  openOwnerLinkKey(envelopeBase64: string, driveRootBase64: string, driveGeneration: number, linkId: string, ownerId: string): string
   sealWhiteboardAsset(
     plaintextBase64: string,
     fileKeyBase64: string,
@@ -446,6 +492,7 @@ export interface CryptoWasmModule {
     variant: string,
     fileKeyBase64: string,
     fileId: string,
+    revisionId: string,
     generation: number,
   ): string
   openThumbnail(
@@ -453,28 +500,108 @@ export interface CryptoWasmModule {
     variant: string,
     fileKeyBase64: string,
     expectedFileId: string,
+    expectedRevisionId: string,
     expectedGeneration: number,
   ): { format: number; width: number; height: number; image: string }
-  prepareDriveFileBlob(
-    fileKeyBase64: string,
-    fileId: string,
-    generation: number,
-  ): { objectHeader: string; streamKey: string }
-  openDriveFileBlobHeader(
-    objectHeaderBase64: string,
+  /** Where everything sits in an object of a block family (`drive`, `chatMedia`, `chatBackupMedia`). */
+  blockLayout(family: string): { headerBytes: number; blockSize: number; blockOverhead: number; trailerBytes: number }
+  /** The sealed manifest's length a trailer (the object's last bytes) names. */
+  blockTrailerManifestLength(family: string, trailer: Uint8Array): number
+  /**
+   * A reader of the Drive revision its metadata commits to: the header must
+   * name that revision, the sealed manifest must have that digest and size.
+   * Blocks open by index, each checked against the manifest's hash first.
+   */
+  driveBlockReader(
     fileKeyBase64: string,
     expectedFileId: string,
     expectedGeneration: number,
-  ): string
-  prepareChatMediaObject(
-    attachmentKeyBase64: string,
-    attachmentId: string,
-  ): { objectHeader: string; streamKey: string }
-  openChatMediaObjectHeader(
-    objectHeaderBase64: string,
+    contentRevisionId: string,
+    contentManifestSha256: string,
+    size: number,
+    header: Uint8Array,
+    sealedManifest: Uint8Array,
+  ): WasmBlockReader
+  /** A Chat attachment's block encryptor (`KUTPCM2`, unsigned: the descriptor commits to its manifest). */
+  chatMediaBlockEncryptor(attachmentKeyBase64: string, attachmentId: string, size: number): WasmBlockEncryptor
+  /** A reader of a Chat attachment whose sealed manifest has the descriptor's digest. */
+  chatMediaBlockReader(
     attachmentKeyBase64: string,
     expectedAttachmentId: string,
+    expectedManifestSha256: string,
+    header: Uint8Array,
+    sealedManifest: Uint8Array,
+  ): WasmBlockReader
+  /**
+   * The backup copy of a Chat attachment's ciphertext (`KUTPBM2`): its media
+   * id and key derived from the backup root and the source's binding. Fed
+   * the source, then zeros up to `size` (the padded length).
+   */
+  chatBackupMediaBlockEncryptor(
+    backupRootBase64: string,
+    accountIncarnationId: string,
+    backupIncarnationId: string,
+    stableSourceBinding: string,
+    sourceBytes: number,
+  ): WasmBlockEncryptor
+  /** A reader of a backup media copy whose sealed manifest is the one the backup's index names. */
+  chatBackupMediaBlockReader(
+    backupRootBase64: string,
+    expectedAccountIncarnationId: string,
+    expectedBackupIncarnationId: string,
+    expectedMediaId: string,
+    expectedManifestSha256: string,
+    header: Uint8Array,
+    sealedManifest: Uint8Array,
+  ): WasmBlockReader
+  /** A Drive revision's block encryptor (docs/plans/drive-block-format.md §2). */
+  driveBlockEncryptor(fileKeyBase64: string, fileId: string, revisionId: string, generation: number, size: number): WasmBlockEncryptor
+  /** A whole Drive revision sealed at once, signed by the uploader. */
+  driveSealFile(
+    plaintext: Uint8Array,
+    fileKeyBase64: string,
+    fileId: string,
+    revisionId: string,
+    generation: number,
+    identityRootBase64: string,
+    uploaderAccountId: string,
+    uploaderIncarnationId: string,
+  ): { bytes: Uint8Array; manifestSha256: string; free(): void }
+  /** One revision's content record (id, manifest digest, size), sealed under the file key of `generation`. */
+  sealRevisionContent(
+    fileKeyBase64: string,
+    fileId: string,
+    revisionId: string,
+    manifestSha256: string,
+    size: number,
+    generation: number,
   ): string
+  /** Opens a revision's content record for exactly this file, revision and key generation. */
+  openRevisionContent(
+    envelopeBase64: string,
+    fileKeyBase64: string,
+    expectedFileId: string,
+    expectedRevisionId: string,
+    expectedGeneration: number,
+  ): { revisionId: string; manifestSha256: string; size: number }
+  /** A whole Drive revision opened against its metadata's content commitment. */
+  driveOpenFile(
+    object: Uint8Array,
+    fileKeyBase64: string,
+    expectedFileId: string,
+    expectedGeneration: number,
+    contentRevisionId: string,
+    contentManifestSha256: string,
+    size: number,
+  ): {
+    /** The plaintext, handed over once. */
+    takeBytes(): Uint8Array
+    readonly signerAccountId: string | undefined
+    readonly signerIncarnationId: string | undefined
+    /** Whether the manifest's signature is by this Drive signing public key (base64). */
+    signedBy(driveSigningPublicKeyBase64: string): boolean
+    free(): void
+  }
   sealChatAttachmentLedger(
     plaintextBase64: string,
     masterKeyBase64: string,
@@ -650,7 +777,8 @@ export interface CryptoWasmModule {
   ): string
   canonicalFileMetadata(json: string): string
   driveFolderHashKey(firstFolderKeyBase64: string, collectionId: string): string
-  driveTopLevelHashKey(masterKeyBase64: string): string
+  /** From the account's Drive root. */
+  driveTopLevelHashKey(driveRootBase64: string): string
   driveNameHash(hashKeyBase64: string, name: string): string
   driveContentHash(hashKeyBase64: string, contentSha256Base64: string): string
   driveCanonicalName(name: string): string

@@ -5,6 +5,7 @@ import {
   type DriveEnvelopeContextV1,
 } from './driveEnvelope'
 import { sealPreviousFileKeyV1 } from './fileKeyring'
+import type { ContentCommitment } from './driveBlocks'
 import { getCryptoWasm } from './rustWasm'
 import { generateKey } from './symmetric'
 
@@ -41,11 +42,31 @@ export interface MediaMetadataV1 {
   liveOf?: string
 }
 
-export interface FileMetadataV1 {
+/**
+ * A file's sealed metadata (`kutup-crypto` `FileMetadataV2`): what it is, and
+ * the content it commits to (docs/plans/drive-block-format.md §2). Every new
+ * current revision seals the next metadata revision with its `content`, in
+ * the request that commits it.
+ */
+export interface FileMetadataV2 {
   name: string
   mimeType: string
   size: number
-  /** SHA-256 of the content, canonical base64: lets a move recompute the content hash. */
+  /** The current revision and its sealed manifest's digest: a reader refuses any other object. */
+  content: ContentCommitment
+  /**
+   * The original upload's revision: set by the first commit (the first
+   * `content.revisionId`) and carried unchanged by every later revision, so
+   * a read of `/original` refuses any other revision the server serves.
+   */
+  originalRevisionId?: string
+  /**
+   * A note's or place list's latest saved Yjs state: each state commits
+   * with the metadata revision that names it, so a reader asks for exactly
+   * this state and refuses any other.
+   */
+  stateRevisionId?: string
+  /** SHA-256 of the plaintext, canonical base64: Photos' duplicate check only. */
   sha256?: string
   media?: MediaMetadataV1
 }
@@ -60,14 +81,13 @@ export interface FileWireV1 {
   metadataRevision: number
 }
 
+/** A new file's key, before its content and metadata: the metadata is sealed when its first revision commits. */
 export interface CreatedFileRecordV1 {
   fileId: string
   fileKey: Uint8Array
-  metadataEnvelope: string
   fileKeyEnvelope: string
   keyEpoch: number
   keyGeneration: 1
-  metadataRevision: 1
 }
 
 function validateCounter(value: number, what: string): void {
@@ -83,18 +103,20 @@ function validateRevision(value: number): void {
 }
 
 /** The canonical bytes, checked by the Rust format (`canonicalFileMetadata`). */
-async function encodeMetadata(metadata: FileMetadataV1): Promise<Uint8Array> {
+async function encodeMetadata(metadata: FileMetadataV2): Promise<Uint8Array> {
   const module = await getCryptoWasm()
-  const plain: FileMetadataV1 = { name: metadata.name, mimeType: metadata.mimeType, size: metadata.size }
+  const plain: FileMetadataV2 = { name: metadata.name, mimeType: metadata.mimeType, size: metadata.size, content: { revisionId: metadata.content.revisionId, manifestSha256: metadata.content.manifestSha256 } }
+  if (metadata.originalRevisionId) plain.originalRevisionId = metadata.originalRevisionId
+  if (metadata.stateRevisionId) plain.stateRevisionId = metadata.stateRevisionId
   if (metadata.sha256) plain.sha256 = metadata.sha256
   if (metadata.media) plain.media = metadata.media
   return new TextEncoder().encode(module.canonicalFileMetadata(JSON.stringify(plain)))
 }
 
-async function decodeMetadata(bytes: Uint8Array): Promise<FileMetadataV1> {
+async function decodeMetadata(bytes: Uint8Array): Promise<FileMetadataV2> {
   const module = await getCryptoWasm()
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-  return JSON.parse(module.canonicalFileMetadata(text)) as FileMetadataV1
+  return JSON.parse(module.canonicalFileMetadata(text)) as FileMetadataV2
 }
 
 /** The file key's wrap under its folder's key at `keyEpoch`. */
@@ -132,12 +154,11 @@ function metadataContext(
   }
 }
 
-/** Construct both envelopes before any upload reaches the server. */
+/** A new file's id and key, wrapped under its folder's key, before any upload reaches the server. */
 export async function createFileRecordV1(
   collectionId: string,
   keyEpoch: number,
   collectionKey: Uint8Array,
-  metadata: FileMetadataV1,
 ): Promise<CreatedFileRecordV1> {
   const fileId = crypto.randomUUID().toLowerCase()
   const fileKey = await generateKey()
@@ -146,20 +167,7 @@ export async function createFileRecordV1(
     collectionKey,
     fileKeyContext(fileId, collectionId, keyEpoch, 1),
   )
-  const metadataEnvelope = await sealDriveEnvelope(
-    await encodeMetadata(metadata),
-    fileKey,
-    metadataContext(fileId, 1, 1),
-  )
-  return {
-    fileId,
-    fileKey,
-    metadataEnvelope,
-    fileKeyEnvelope,
-    keyEpoch,
-    keyGeneration: 1,
-    metadataRevision: 1,
-  }
+  return { fileId, fileKey, fileKeyEnvelope, keyEpoch, keyGeneration: 1 }
 }
 
 /** Open a file's key (under `collectionKey`, the folder key at the row's
@@ -167,7 +175,7 @@ export async function createFileRecordV1(
 export async function openFileRecordV1(
   row: FileWireV1,
   collectionKey: Uint8Array,
-): Promise<{ fileKey: Uint8Array; metadata: FileMetadataV1 }> {
+): Promise<{ fileKey: Uint8Array; metadata: FileMetadataV2 }> {
   const fileKey = await openDriveEnvelope(
     row.fileKeyEnvelope,
     collectionKey,
@@ -188,7 +196,7 @@ export async function openFileRecordV1(
 export async function openFileMetadataV1(
   row: Pick<FileWireV1, 'id' | 'keyGeneration' | 'metadataRevision' | 'metadataEnvelope'>,
   fileKey: Uint8Array,
-): Promise<FileMetadataV1> {
+): Promise<FileMetadataV2> {
   const metadataBytes = await openDriveEnvelope(
     row.metadataEnvelope,
     fileKey,
@@ -197,12 +205,17 @@ export async function openFileMetadataV1(
   return decodeMetadata(metadataBytes)
 }
 
+/**
+ * The file's next metadata revision: a rename, a move's details, or a new
+ * current revision's commit (`metadata.content`). A new file's first commit
+ * passes `metadataRevision: 0`.
+ */
 export async function renameFileRecordV1(
   row: Pick<FileWireV1, 'id' | 'keyGeneration' | 'metadataRevision'>,
   fileKey: Uint8Array,
-  metadata: FileMetadataV1,
+  metadata: FileMetadataV2,
 ): Promise<{ metadataEnvelope: string; metadataRevision: number }> {
-  validateRevision(row.metadataRevision)
+  if (row.metadataRevision !== 0) validateRevision(row.metadataRevision)
   const metadataRevision = row.metadataRevision + 1
   const metadataEnvelope = await sealDriveEnvelope(
     await encodeMetadata(metadata),
@@ -224,7 +237,7 @@ export async function rekeyFileRecordV1(
   currentFileKey: Uint8Array,
   keyEpoch: number,
   collectionKey: Uint8Array,
-  metadata: FileMetadataV1,
+  metadata: FileMetadataV2,
 ): Promise<{
   fileKey: Uint8Array
   keyGeneration: number
@@ -268,5 +281,70 @@ export async function wrapFileKeyForV1(
     fileKey,
     collectionKey,
     fileKeyContext(file.id, collectionId, keyEpoch, file.keyGeneration),
+  )
+}
+
+/** A file's metadata before its content is sealed: everything but `content`. */
+export type FileMetadataDraftV1 = Omit<FileMetadataV2, 'content'>
+
+/** The draft's place in the canonical encoding: a digest no manifest has (never committed, never sent). */
+const DRAFT_MANIFEST = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+
+/**
+ * The context of an upload's draft metadata, kept only in this browser
+ * while the upload runs: under the file key like the file's own metadata,
+ * but with the revision id where the metadata has the file, so a draft never
+ * opens as the file's metadata (nor one revision's as another's).
+ */
+function draftContext(fileId: string, keyGeneration: number, revisionId: string): DriveEnvelopeContextV1 {
+  validateCounter(keyGeneration, 'file key generation')
+  return {
+    purpose: DRIVE_ENVELOPE_PURPOSE.fileMetadata,
+    epoch: keyGeneration,
+    revision: 1n,
+    objectId: fileId,
+    parentId: revisionId,
+  }
+}
+
+/**
+ * Seals what an upload's metadata will say (its name, type, size, hash and
+ * a photo's details) for the browser's record of a running upload
+ * (`pendingUploads`): the metadata itself is sealed only at the commit, once
+ * the manifest's digest is known.
+ */
+export async function sealFileMetadataDraftV1(
+  fileId: string,
+  keyGeneration: number,
+  revisionId: string,
+  fileKey: Uint8Array,
+  draft: FileMetadataDraftV1,
+): Promise<string> {
+  const placeholder: FileMetadataV2 = { ...draft, content: { revisionId, manifestSha256: DRAFT_MANIFEST } }
+  return sealDriveEnvelope(await encodeMetadata(placeholder), fileKey, draftContext(fileId, keyGeneration, revisionId))
+}
+
+export async function openFileMetadataDraftV1(
+  envelope: string,
+  fileId: string,
+  keyGeneration: number,
+  revisionId: string,
+  fileKey: Uint8Array,
+): Promise<FileMetadataDraftV1> {
+  const bytes = await openDriveEnvelope(envelope, fileKey, draftContext(fileId, keyGeneration, revisionId))
+  const { content: _content, ...draft } = await decodeMetadata(bytes)
+  void _content
+  return draft
+}
+
+/** Opens a new file's key alone, from its folder's key (an upload whose metadata is not committed yet). */
+export async function openFileKeyV1(
+  row: Pick<FileWireV1, 'id' | 'collectionId' | 'keyEpoch' | 'keyGeneration' | 'fileKeyEnvelope'>,
+  collectionKey: Uint8Array,
+): Promise<Uint8Array> {
+  return openDriveEnvelope(
+    row.fileKeyEnvelope,
+    collectionKey,
+    fileKeyContext(row.id, row.collectionId, row.keyEpoch, row.keyGeneration),
   )
 }

@@ -450,6 +450,10 @@ const DELETION_JOBS: &[(&str, &str, &str)] = &[
         "fn sweep_chat_delivery_media_before",
     ),
     ("jobs.rs", include_str!("jobs.rs"), "fn trash_sweep_once"),
+    // Abandoned uploads, uploaded revisions never committed among them
+    // (take_stale_upload repeats the check under its lock).
+    ("jobs.rs", include_str!("jobs.rs"), "fn uploads_sweep_once"),
+    ("jobs.rs", include_str!("jobs.rs"), "fn take_stale_upload"),
     // Chat send records' retention (the Office log trim is in
     // version_retention_tick, above).
     (

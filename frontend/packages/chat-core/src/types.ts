@@ -259,12 +259,16 @@ export interface ChatMediaPreviewV1 {
 /** Exact E2EE attachment body validated again by the Rust Chat engine. */
 export interface ChatAttachmentDescriptorV1 {
   version: 1
-  suite: 1
+  /** Chat-media suite 2: the block format, `KUTPCM2` (docs/chat-media.md). */
+  suite: 2
   attachmentId: string
   originDomain: string
   retrievalToken: string
   ciphertextBytes: number
+  /** The whole object's SHA-256 (hex): what servers bind at admission and federation. */
   ciphertextSha256: string
+  /** The sealed manifest's SHA-256 (canonical base64): what the reader opens the object against. */
+  manifestSha256: string
   attachmentKey: string
   plaintextBytes: number
   filename: string
@@ -276,6 +280,8 @@ export interface ChatAttachmentDescriptorV1 {
   durationMs?: number
   preview?: ChatMediaPreviewV1
   backupMediaId?: string
+  /** The backup copy's sealed manifest SHA-256 (canonical base64), with `backupMediaId`: what restore opens it against. */
+  backupMediaManifestSha256?: string
   /** Account-local authenticated reference used only by continuous backup reconciliation. */
   backupMediaReferenceId?: string
 }

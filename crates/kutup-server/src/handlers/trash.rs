@@ -169,6 +169,9 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RestoreRequest {
     pub name_hash: Option<String>,
+    /// With a folder's `name_hash` at the top level: the Drive-root
+    /// generation of its hash key.
+    pub name_hash_generation: Option<u32>,
     pub metadata_envelope: Option<String>,
     pub metadata_revision: Option<i64>,
     pub name_envelope: Option<String>,
@@ -324,8 +327,10 @@ pub async fn restore(
     // names it there.
     let place = crate::drive_names::Place::of(lands, user_id);
     crate::drive_names::lock_place(&mut tx, place).await?;
-    let (stored_hash, epoch, revision): (String, i32, i64) =
-        sqlx::query_as("SELECT name_hash, key_epoch, name_revision FROM collections WHERE id = $1")
+    let (stored_hash, stored_generation, epoch, revision): (String, Option<i32>, i32, i64) =
+        sqlx::query_as(
+            "SELECT name_hash, name_hash_generation, key_epoch, name_revision FROM collections WHERE id = $1",
+        )
             .bind(root_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -355,9 +360,13 @@ pub async fn restore(
             .execute(&mut *tx)
             .await?;
     }
-    let name_hash = match given_hash {
-        Some(hash) => hash,
-        None if lands == parent => stored_hash,
+    let (name_hash, generation) = match given_hash {
+        Some(hash) => (
+            hash,
+            crate::drive_names::hash_generation(&mut tx, place, req.name_hash_generation).await?,
+        ),
+        // Kept where it was, under the key it was made with.
+        None if lands == parent => (stored_hash, stored_generation),
         None => {
             return Err(
                 AppError::conflict("the folder comes back at the top level: name it there")
@@ -366,9 +375,10 @@ pub async fn restore(
         }
     };
     crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(root_id)).await?;
-    sqlx::query("UPDATE collections SET name_hash = $2 WHERE id = $1")
+    sqlx::query("UPDATE collections SET name_hash = $2, name_hash_generation = $3 WHERE id = $1")
         .bind(root_id)
         .bind(&name_hash)
+        .bind(generation)
         .execute(&mut *tx)
         .await
         .map_err(crate::drive_names::map_unique_violation)?;

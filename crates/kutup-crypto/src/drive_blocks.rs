@@ -1,7 +1,6 @@
 //! Drive blobs in the block format (docs/plans/drive-block-format.md §2):
-//! Drive object suite 2 (`DRIVE_BLOCKS_SUITE`; `DriveObjectSuiteId` gains it
-//! when clients switch, so nothing parsing suite 1 accepts it before). Every original, version and editor
-//! snapshot is a revision with its own id, chosen by the client before it
+//! Drive object suite 2 (`DRIVE_BLOCKS_SUITE`), the one suite of Drive file
+//! blobs. Every original, version and editor snapshot is a revision with its own id, chosen by the client before it
 //! seals, so blocks can't move between versions, and the manifest is signed
 //! by the uploader's Drive signing key.
 //!
@@ -15,7 +14,9 @@
 
 use zeroize::Zeroizing;
 
-use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest, SealedObject};
+use crate::blocks::{
+    self, BlockFamily, BlockReader, BlockSealer, Manifest, SealedObject, SignerIdentity,
+};
 use crate::drive_object::{parse_canonical_uuid, DriveObjectPurpose};
 use crate::error::{CryptoError, Result};
 use crate::file_metadata::ContentCommitmentV1;
@@ -182,14 +183,14 @@ pub fn seal_file(
     file_key_bytes: &[u8],
     context: DriveBlobContextV2,
     signer: &SigningKey,
-    account_id: [u8; 16],
+    identity: SignerIdentity,
 ) -> Result<SealedObject> {
     blocks::seal_object(
         &DRIVE_BLOCKS,
         file_key(file_key_bytes)?,
         &header(context),
         plaintext,
-        Some((signer, account_id)),
+        Some((signer, identity)),
     )
 }
 
@@ -229,7 +230,10 @@ mod tests {
     const FILE: &str = "11111111-1111-4111-8111-111111111111";
     const REVISION: &str = "22222222-2222-4222-8222-222222222222";
     const KEY: [u8; 32] = [7; 32];
-    const ACCOUNT: [u8; 16] = [3; 16];
+    const ACCOUNT: SignerIdentity = SignerIdentity {
+        account_id: [3; 16],
+        incarnation_id: [5; 32],
+    };
 
     fn context() -> DriveBlobContextV2 {
         DriveBlobContextV2::new(FILE, REVISION, 4).unwrap()
@@ -286,7 +290,9 @@ mod tests {
                 (size as u64).div_ceil(BLOCK_SIZE as u64).max(1)
             );
             manifest.verify_signer(&signer().verifying_key()).unwrap();
-            assert_eq!(manifest.signer.as_ref().unwrap().account_id, ACCOUNT);
+            let named = manifest.signer.as_ref().unwrap();
+            assert_eq!(named.account_id, ACCOUNT.account_id);
+            assert_eq!(named.incarnation_id, ACCOUNT.incarnation_id);
             // The digest a metadata commits to is the sealed manifest's.
             assert_eq!(
                 sealed_digest(object),

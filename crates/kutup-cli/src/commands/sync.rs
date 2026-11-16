@@ -128,6 +128,8 @@ fn do_sync(
     vaults: &mut VaultKeys,
 ) -> Result<()> {
     let ctx = require_session(profile)?;
+    // Every revision the run reads has its signer checked against the pins.
+    crate::drive_signer::load_pins(&ctx, profile);
     vaults.sign_in(&ctx.session, profile)?;
     // The identity pins' word on a collab sender's authority (a reset this
     // account hasn't accepted refuses its frames), read once per run.

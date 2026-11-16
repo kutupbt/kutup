@@ -3,12 +3,16 @@
 // browser"). Kept in IndexedDB, one store per app origin, each record for
 // one account.
 //
-// Nothing here is readable without the folder's key: the file's key and
-// its name travel in the two envelopes the upload already made (sealed
-// under the folder key and the file key, exactly as the server stores
-// them), and the prefix (the Drive and secretstream headers) is not
-// secret: it is the start of what was uploaded. The size and the time the
-// file was last modified pick out the same file when it is chosen again.
+// Nothing here is readable without the folder's key: the file's key travels
+// in the envelope the upload already made (sealed under the folder key, as
+// the server stores it), and what the metadata will say in a draft sealed
+// under the file key for this revision alone. The revision id is not secret:
+// the object's header names it. The tail (the sealed manifest and trailer)
+// is kept once made, before any of it is sent: its nonce is random, so it
+// could not be made the same again. The size and the time the file was last
+// modified pick out the same file when it is chosen again.
+
+import type { ContentCommitment } from '@kutup/crypto'
 
 export interface PendingUpload {
   fileId: string
@@ -22,14 +26,24 @@ export interface PendingUpload {
   keyEpoch: number
   /** The file key sealed under the folder key at `keyEpoch`. */
   fileKeyEnvelope: string
-  /** The name and details sealed under the file key. */
-  metadataEnvelope: string
-  /** Base64 of the ciphertext's first bytes (Drive header, secretstream header). */
-  prefix: string
+  /** The content revision the upload seals (docs/plans/drive-block-format.md §2). */
+  revisionId: string
+  /** What the metadata will say (`FileMetadataDraftV1`), sealed under the file key for this revision. */
+  draftEnvelope: string
+  /**
+   * For an upload whose metadata carries no SHA-256: the blocks sealed so
+   * far, by index (`SealedBlockLog` in encryptedSource.ts). A resumed
+   * upload seals them again and they must come out the same, so another
+   * file chosen to resume with is refused before any of it is sent.
+   */
+  sealedBlocks?: string[]
+  /** Once made: the sealed manifest and trailer (base64), and what the metadata commits to. */
+  tail?: { tail: string; content: ContentCommitment }
   /**
    * A new version of the file `fileId` (Replace), not a new file: the
    * file's key generation it is sealed for and the metadata revision it
-   * brings; `fileKeyEnvelope` is then the file's own at `keyEpoch`.
+   * started from (the commit seals the next); `fileKeyEnvelope` is then the
+   * file's own at `keyEpoch`.
    */
   version?: { keyGeneration: number; metadataRevision: number }
   startedAt: number
@@ -87,7 +101,9 @@ export const pendingUploads = {
     const all = (await run<PendingUpload[]>('readonly', (store) => store.index('owner').getAll(owner))) ?? []
     const live: PendingUpload[] = []
     for (const upload of all) {
-      if (now - upload.updatedAt >= PENDING_UPLOAD_LIFETIME_MS) await pendingUploads.remove(upload.fileId)
+      // Older than the block format (no revision): it cannot go on.
+      const stale = typeof upload.revisionId !== 'string' || typeof upload.draftEnvelope !== 'string'
+      if (stale || now - upload.updatedAt >= PENDING_UPLOAD_LIFETIME_MS) await pendingUploads.remove(upload.fileId)
       else live.push(upload)
     }
     return live.sort((a, b) => b.startedAt - a.startedAt)

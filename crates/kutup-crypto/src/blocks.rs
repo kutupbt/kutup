@@ -36,8 +36,11 @@ pub const MAX_BLOCKS: u64 = 1 << 20;
 const KEY_LEN: usize = 32;
 const MANIFEST_FIXED_LEN: usize = 4 + 4 + 8;
 const SIGNER_NONE: u8 = 0;
-const SIGNER_DRIVE_SIGNING_KEY: u8 = 1;
+/// A Drive signing key, named by its account and the account's incarnation
+/// (kind 1, an account id alone, never shipped and is not read).
+const SIGNER_DRIVE_SIGNING_KEY: u8 = 2;
 const ACCOUNT_LEN: usize = 16;
+const INCARNATION_LEN: usize = 32;
 const SIGNATURE_LEN: usize = 64;
 const MANIFEST_AAD_LABEL: &[u8] = b"manifest";
 
@@ -57,7 +60,7 @@ pub struct BlockFamily {
 impl BlockFamily {
     fn signer_len(&self) -> usize {
         1 + if self.signed {
-            ACCOUNT_LEN + SIGNATURE_LEN
+            ACCOUNT_LEN + INCARNATION_LEN + SIGNATURE_LEN
         } else {
             0
         }
@@ -298,10 +301,20 @@ pub fn open_block(
     Ok(plaintext)
 }
 
+/// Whose Drive signing key signs a manifest: the account, and its
+/// incarnation (the hash of its authority key, `identity.rs`), so a reader
+/// can tell which key signed after the account was reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SignerIdentity {
+    pub account_id: [u8; ACCOUNT_LEN],
+    pub incarnation_id: [u8; INCARNATION_LEN],
+}
+
 /// Who signed a manifest: an account's Drive signing key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ManifestSigner {
     pub account_id: [u8; ACCOUNT_LEN],
+    pub incarnation_id: [u8; INCARNATION_LEN],
     pub signature: [u8; SIGNATURE_LEN],
 }
 
@@ -329,11 +342,12 @@ impl Manifest {
 }
 
 /// What a signed family's uploader signs: the domain, the header, the
-/// account it names as the signer, and the manifest's fields.
+/// account and incarnation it names as the signer, and the manifest's fields.
 fn signed_message(
     family: &BlockFamily,
     header: &[u8],
     account_id: &[u8; ACCOUNT_LEN],
+    incarnation_id: &[u8; INCARNATION_LEN],
     size: u64,
     hashes: &[[u8; HASH_LEN]],
 ) -> Vec<u8> {
@@ -341,12 +355,14 @@ fn signed_message(
         family.signature_domain.len()
             + header.len()
             + ACCOUNT_LEN
+            + INCARNATION_LEN
             + MANIFEST_FIXED_LEN
             + hashes.len() * HASH_LEN,
     );
     message.extend_from_slice(family.signature_domain);
     message.extend_from_slice(header);
     message.extend_from_slice(account_id);
+    message.extend_from_slice(incarnation_id);
     message.extend_from_slice(&(BLOCK_SIZE as u32).to_be_bytes());
     message.extend_from_slice(&(hashes.len() as u32).to_be_bytes());
     message.extend_from_slice(&size.to_be_bytes());
@@ -415,8 +431,8 @@ impl<'a> BlockSealer<'a> {
     }
 
     /// The sealed manifest and the trailer, once every block is sealed; a
-    /// signed family takes the uploader's key and account.
-    pub fn finish(self, signer: Option<(&SigningKey, [u8; ACCOUNT_LEN])>) -> Result<SealedTail> {
+    /// signed family takes the uploader's key, account and incarnation.
+    pub fn finish(self, signer: Option<(&SigningKey, SignerIdentity)>) -> Result<SealedTail> {
         let mut nonce = [0u8; NONCE_LEN];
         crate::primitives::random(&mut nonce);
         self.finish_with_nonce(signer, &nonce)
@@ -427,7 +443,7 @@ impl<'a> BlockSealer<'a> {
     #[cfg(any(test, feature = "test-vectors"))]
     pub fn finish_with_fixed_nonce(
         self,
-        signer: Option<(&SigningKey, [u8; ACCOUNT_LEN])>,
+        signer: Option<(&SigningKey, SignerIdentity)>,
         nonce: &[u8; NONCE_LEN],
     ) -> Result<SealedTail> {
         self.finish_with_nonce(signer, nonce)
@@ -435,7 +451,7 @@ impl<'a> BlockSealer<'a> {
 
     fn finish_with_nonce(
         self,
-        signer: Option<(&SigningKey, [u8; ACCOUNT_LEN])>,
+        signer: Option<(&SigningKey, SignerIdentity)>,
         nonce: &[u8; NONCE_LEN],
     ) -> Result<SealedTail> {
         if self.next_index() != self.count {
@@ -453,16 +469,18 @@ impl<'a> BlockSealer<'a> {
             plaintext.extend_from_slice(block_hash);
         }
         match (self.family.signed, signer) {
-            (true, Some((key, account_id))) => {
+            (true, Some((key, identity))) => {
                 let signature: [u8; SIGNATURE_LEN] = key.sign_array(&signed_message(
                     self.family,
                     &self.header,
-                    &account_id,
+                    &identity.account_id,
+                    &identity.incarnation_id,
                     self.size,
                     &self.hashes,
                 ));
                 plaintext.push(SIGNER_DRIVE_SIGNING_KEY);
-                plaintext.extend_from_slice(&account_id);
+                plaintext.extend_from_slice(&identity.account_id);
+                plaintext.extend_from_slice(&identity.incarnation_id);
                 plaintext.extend_from_slice(&signature);
             }
             (false, None) => plaintext.push(SIGNER_NONE),
@@ -640,18 +658,28 @@ fn parse_manifest(family: &BlockFamily, header: &[u8], plaintext: &[u8]) -> Resu
     let signer_bytes = &plaintext[hashes_end..];
     let signer = match (family.signed, signer_bytes) {
         (true, [SIGNER_DRIVE_SIGNING_KEY, rest @ ..])
-            if rest.len() == ACCOUNT_LEN + SIGNATURE_LEN =>
+            if rest.len() == ACCOUNT_LEN + INCARNATION_LEN + SIGNATURE_LEN =>
         {
+            let (account_id, rest) = rest.split_at(ACCOUNT_LEN);
+            let (incarnation_id, signature) = rest.split_at(INCARNATION_LEN);
             Some(ManifestSigner {
-                account_id: rest[..ACCOUNT_LEN].try_into().expect("an account id"),
-                signature: rest[ACCOUNT_LEN..].try_into().expect("a signature"),
+                account_id: account_id.try_into().expect("an account id"),
+                incarnation_id: incarnation_id.try_into().expect("an incarnation id"),
+                signature: signature.try_into().expect("a signature"),
             })
         }
         (false, [SIGNER_NONE]) => None,
         _ => return Err(malformed()),
     };
     let signed_message = signer.as_ref().map_or_else(Vec::new, |signer| {
-        signed_message(family, header, &signer.account_id, size, &hashes)
+        signed_message(
+            family,
+            header,
+            &signer.account_id,
+            &signer.incarnation_id,
+            size,
+            &hashes,
+        )
     });
     Ok(Manifest {
         size,
@@ -669,7 +697,7 @@ pub fn seal_object(
     ikm: &[u8],
     header: &[u8],
     plaintext: &[u8],
-    signer: Option<(&SigningKey, [u8; ACCOUNT_LEN])>,
+    signer: Option<(&SigningKey, SignerIdentity)>,
 ) -> Result<SealedObject> {
     let mut sealer = BlockSealer::new(family, ikm, header, plaintext.len() as u64)?;
     let mut object =
@@ -868,7 +896,7 @@ mod tests {
             ("no blocks", manifest(B as u32, 0, 0, &none)),
             (
                 "a signer on an unsigned family",
-                manifest(B as u32, 1, 5, &[1; 81]),
+                manifest(B as u32, 1, 5, &[2; 113]),
             ),
             (
                 "trailing bytes",
@@ -884,11 +912,15 @@ mod tests {
         }
         let header = drive_header();
         let mut signed = vec![SIGNER_DRIVE_SIGNING_KEY];
-        signed.extend_from_slice(&[3; ACCOUNT_LEN + SIGNATURE_LEN]);
+        signed.extend_from_slice(&[3; ACCOUNT_LEN + INCARNATION_LEN + SIGNATURE_LEN]);
         assert!(open(&DRIVE_BLOCKS, &header, &manifest(B as u32, 1, 5, &signed)).is_ok());
         for (why, signer) in [
             ("no signer on a signed family", vec![SIGNER_NONE]),
-            ("an unknown signer kind", [&[2][..], &signed[1..]].concat()),
+            ("an unknown signer kind", [&[3][..], &signed[1..]].concat()),
+            (
+                "the account-only signer kind, which never shipped",
+                [&[1][..], &signed[1..1 + ACCOUNT_LEN + SIGNATURE_LEN]].concat(),
+            ),
             ("a short signature", signed[..signed.len() - 1].to_vec()),
             ("trailing bytes", [&signed[..], &[0]].concat()),
         ] {
@@ -925,15 +957,24 @@ mod tests {
         ));
     }
 
-    /// The signature covers the account the manifest names: a holder of the
-    /// file key can't move your signature onto another account's name.
+    /// The signature covers the account and the incarnation the manifest
+    /// names: a holder of the file key can't move your signature onto another
+    /// account's name, or onto another incarnation of yours.
     #[test]
-    fn the_signature_covers_the_signers_account() {
+    fn the_signature_covers_the_signers_account_and_incarnation() {
         let header = drive_header();
         let key = SigningKey::from_seed(Suite::V1, &[9; 32]);
         let mut sealer = BlockSealer::new(&DRIVE_BLOCKS, &KEY, &header, 5).unwrap();
         sealer.seal_next(&[1; 5]).unwrap();
-        let tail = sealer.finish(Some((&key, [3; ACCOUNT_LEN]))).unwrap();
+        let tail = sealer
+            .finish(Some((
+                &key,
+                SignerIdentity {
+                    account_id: [3; ACCOUNT_LEN],
+                    incarnation_id: [5; INCARNATION_LEN],
+                },
+            )))
+            .unwrap();
         let sealed = &tail.bytes[..tail.bytes.len() - TRAILER_LEN];
         let honest =
             BlockReader::open(&DRIVE_BLOCKS, &KEY, &header, sealed, &tail.manifest_sha256).unwrap();
@@ -943,31 +984,38 @@ mod tests {
             .unwrap();
 
         let signature = honest.manifest().signer.as_ref().unwrap().signature;
-        let mut plaintext = Vec::new();
-        plaintext.extend_from_slice(&(BLOCK_SIZE as u32).to_be_bytes());
-        plaintext.extend_from_slice(&1u32.to_be_bytes());
-        plaintext.extend_from_slice(&5u64.to_be_bytes());
-        plaintext.extend_from_slice(&honest.manifest().hashes[0]);
-        plaintext.push(SIGNER_DRIVE_SIGNING_KEY);
-        plaintext.extend_from_slice(&[4; ACCOUNT_LEN]);
-        plaintext.extend_from_slice(&signature);
-        let renamed =
-            seal_manifest_plaintext(&DRIVE_BLOCKS, &KEY, &header, &plaintext, &NONCE).unwrap();
-        let reader = BlockReader::open(
-            &DRIVE_BLOCKS,
-            &KEY,
-            &header,
-            &renamed,
-            &manifest_digest(&renamed),
-        )
-        .unwrap();
-        assert_eq!(
-            reader.manifest().signer.as_ref().unwrap().account_id,
-            [4; ACCOUNT_LEN]
-        );
-        assert!(reader
-            .manifest()
-            .verify_signer(&key.verifying_key())
-            .is_err());
+        for (account, incarnation) in [
+            ([4; ACCOUNT_LEN], [5; INCARNATION_LEN]),
+            ([3; ACCOUNT_LEN], [6; INCARNATION_LEN]),
+        ] {
+            let mut plaintext = Vec::new();
+            plaintext.extend_from_slice(&(BLOCK_SIZE as u32).to_be_bytes());
+            plaintext.extend_from_slice(&1u32.to_be_bytes());
+            plaintext.extend_from_slice(&5u64.to_be_bytes());
+            plaintext.extend_from_slice(&honest.manifest().hashes[0]);
+            plaintext.push(SIGNER_DRIVE_SIGNING_KEY);
+            plaintext.extend_from_slice(&account);
+            plaintext.extend_from_slice(&incarnation);
+            plaintext.extend_from_slice(&signature);
+            let renamed =
+                seal_manifest_plaintext(&DRIVE_BLOCKS, &KEY, &header, &plaintext, &NONCE).unwrap();
+            let reader = BlockReader::open(
+                &DRIVE_BLOCKS,
+                &KEY,
+                &header,
+                &renamed,
+                &manifest_digest(&renamed),
+            )
+            .unwrap();
+            let named = reader.manifest().signer.as_ref().unwrap();
+            assert_eq!(
+                (named.account_id, named.incarnation_id),
+                (account, incarnation)
+            );
+            assert!(reader
+                .manifest()
+                .verify_signer(&key.verifying_key())
+                .is_err());
+        }
     }
 }

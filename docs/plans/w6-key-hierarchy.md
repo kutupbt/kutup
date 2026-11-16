@@ -52,6 +52,7 @@ When master-key rotation is built, every place that writes `MasterKeyGeneration:
 - **Secrets sealed under the master key:**
   - mail address keys: `mail_key.rs` (`first_address_key`) and web `mailKey.ts` (generate, import, and `acceptMailForwarding`);
   - Pass kept keys: CLI `vaultsync.rs` and web `pass/src/vault/worker.ts` (`keepKey`). `kept::reseal` already keeps the generation of the envelope it opens, so a copied vault follows its source.
+- **Not on this list: Drive.** The account's own folder keys, its link owner copies and the top-level name hash key are under the stored Drive root (docs/plans/identity-rotation.md §3), so a rotation re-wraps the Drive-root record with the other roots and moves no Drive data.
 - **Account records sealed by Rust callers** (W1 slices 2 and 3a): identity pins from the CLI (`identity.rs`, `pin`) and from chat-core (`identity_sync.rs`); the Chat group and contact lists from chat-core (`group_list.rs`, `contact_list.rs`). The web passes `MASTER_KEY_GENERATION` to `sealContactCard`, `sealMailName` and `sealIdentityPins`.
 - **The server's fake recovery envelope** (`handlers/auth.rs`, `deterministic_fake_account_envelope`): an unknown name gets a stable fake so it looks like a real account. Once accounts can be past generation 1, the fake must carry a generation as plausible as a real one, or the header tells a fake from a real account.
 - **The constant itself:** `@kutup/crypto/masterKeyGeneration` and its doc comment in `kutup-crypto-wasm` (`sealAccountRecord`).

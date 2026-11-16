@@ -238,6 +238,8 @@
     "notFound": "It may have been moved to the trash, or you may no longer have access to its folder.",
     "undecryptable": "Its keys could not be decrypted with your account. Ask the folder's owner to share it again.",
     "tooLarge": "At {{size}} it is too large to open in the browser (the limit is {{limit}}). Download it instead.",
+    "mediaTooLarge": "At {{size}} it is too large to play in this browser, which can’t stream it here. Download it instead.",
+    "busy": "Too many videos or songs are playing in this tab. Close one to play this.",
     "loadFailed": "It could not be loaded. Check your connection and try again.",
     "noPreviewTitle": "No preview for this kind of file",
     "noPreview": "Download it to open it on your device.",

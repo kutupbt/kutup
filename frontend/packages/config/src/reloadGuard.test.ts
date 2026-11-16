@@ -1,6 +1,6 @@
 import { Script } from 'node:vm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { reloadGuard, reloadGuardScript, type GuardWindow } from './reloadGuard'
+import { RELOAD_NEEDED_EVENT, reloadGuard, reloadGuardScript, type GuardWindow } from './reloadGuard'
 
 const ORIGIN = 'https://mail.kutup.dev'
 
@@ -34,6 +34,19 @@ beforeEach(() => {
 })
 
 describe('the reload guard', () => {
+  it('offers Reload over a page that has drawn when the page says it is out of date', () => {
+    const p = page()
+    reloadGuard(p.win, 'b1')
+    document.getElementById('root')!.innerHTML = '<p>the app</p>'
+    p.fire(RELOAD_NEEDED_EVENT)
+    p.fire(RELOAD_NEEDED_EVENT)
+    expect(document.querySelectorAll('[role="alert"]')).toHaveLength(1)
+    expect(document.querySelector('[role="alert"] h1')?.textContent).toBe('Kutup was updated')
+    expect(p.reload).not.toHaveBeenCalled()
+    document.querySelector('button')!.click()
+    expect(p.reload).toHaveBeenCalledTimes(1)
+  })
+
   it('reloads a blank page once when its own script fails', () => {
     const p = page()
     reloadGuard(p.win, 'b1')

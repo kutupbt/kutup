@@ -11,6 +11,7 @@ mod commands;
 mod config;
 mod context;
 mod cryptohelpers;
+mod drive_signer;
 mod editor_kind;
 mod errors;
 mod file_crypto;
@@ -19,6 +20,7 @@ mod keyring;
 mod mimetype;
 mod names;
 mod output;
+mod revisions;
 mod senders;
 mod session;
 #[cfg(unix)]

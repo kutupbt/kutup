@@ -5,6 +5,7 @@ import { useKeepFileSharesCurrent } from '@kutup/drive-core/fileShares'
 import { FileRoute } from '@kutup/editors/FileRoute'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { requestFork } from '@kutup/session/fork'
+import { ManifestSignerWarnings } from '@kutup/drive-ui/ManifestSignerWarnings'
 import { Toaster } from '@kutup/ui/components/sonner'
 import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { Boot } from './app/Boot'
@@ -96,6 +97,7 @@ export function App() {
         </Routes>
         {/* Outside the routes so a toast survives the navigation after a save. */}
         <Toaster />
+        <ManifestSignerWarnings />
       </TooltipProvider>
     </BrowserRouter>
   )

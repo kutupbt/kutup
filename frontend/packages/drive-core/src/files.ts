@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { openFileRecordV1, type FileMetadataV1 } from '@kutup/crypto'
+import { openFileRecordV1, type FileMetadataV2 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { FileRow } from '@kutup/session/api-types'
 import { fileKind } from './kinds'
 import { foldersKey } from './folders'
 import { folderKeyAt } from './keyring'
+import { acceptFileMetadata } from './metadataGuard'
 import { folderLocation, type DriveFile, type Folder } from './model'
 
 export const filesKey = (folderId: string) => ['files', folderId] as const
@@ -30,6 +31,11 @@ async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
     // A file not re-keyed since the folder rotated is wrapped under an older key.
     pending = folderKeyAt(folder, row.keyEpoch)
       .then((collectionKey) => openFileRecordV1(row, collectionKey))
+      // Older metadata than this device has seen of the file does not open.
+      .then(async (result) => {
+        await acceptFileMetadata(row.id, row.metadataRevision)
+        return result
+      })
       .catch(() => null)
     opened.set(cacheKey, pending)
   }
@@ -39,7 +45,7 @@ async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
 /** A listed file, from its row and what opening it gave (null: it did not open). */
 export function toDriveFile(
   row: FileRowLike,
-  result: { fileKey: Uint8Array; metadata: FileMetadataV1 } | null,
+  result: { fileKey: Uint8Array; metadata: FileMetadataV2 } | null,
 ): DriveFile {
   const name = result?.metadata.name ?? null
   return {
@@ -54,6 +60,9 @@ export function toDriveFile(
     size: result?.metadata.size ?? 0,
     sha256: result?.metadata.sha256 ?? null,
     media: result?.metadata.media ?? null,
+    content: result?.metadata.content ?? null,
+    originalRevisionId: result?.metadata.originalRevisionId ?? null,
+    stateRevisionId: result?.metadata.stateRevisionId ?? null,
     fileKey: result?.fileKey ?? null,
     fileKeyEnvelope: row.fileKeyEnvelope,
     originalKeyGeneration: row.originalKeyGeneration,

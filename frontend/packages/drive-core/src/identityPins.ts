@@ -1070,6 +1070,35 @@ export async function acceptGroup(me: DriveIdentity, server: string, groupId: st
   })
 }
 
+
+/**
+ * The pinned accounts with this permanent id, on any server: what names a
+ * revision's signer (a manifest names an account id and its incarnation,
+ * not a server; the incarnation tells them apart).
+ */
+export async function pinsOfAccountId(me: DriveIdentity, accountId: string): Promise<IdentityPin[]> {
+  return (await pinStore(me)).pins.list.pins.filter((pin) => pin.account.accountId === accountId)
+}
+
+/**
+ * The Drive signing key a pinned account's own authority vouches for now
+ * (its key binding, checked), or null when it can't be had: the account is
+ * known at no address, its server answers for another account or authority,
+ * or the keys published are not bound.
+ */
+export async function boundSigningKeyOf(me: DriveIdentity, pin: IdentityPin): Promise<string | null> {
+  const address = pinAddress(pin)
+  if (!address) return null
+  let person: PublishedIdentity
+  try {
+    person = await publishedIdentity(me, address)
+  } catch {
+    return null
+  }
+  if (!sameAccount(refOf(person), pin.account) || person.accountAuthorityPublicKey !== pin.authorityPublicKey) return null
+  return (await keysBound(person)) ? person.driveSigningPublicKey : null
+}
+
 /** Test seam: forget what this page has looked up and pinned. */
 export function resetIdentityPinsForTesting(): void {
   published.clear()

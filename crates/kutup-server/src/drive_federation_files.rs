@@ -87,6 +87,11 @@ pub struct FileStateResponse {
     pub key_generation: i32,
     /// Base64.
     pub state: String,
+    /// The version the state is.
+    pub version_id: Uuid,
+    /// Its sealed content record (docs/plans/drive-block-format.md §2),
+    /// which a reader opens before the state.
+    pub revision_content_envelope: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -878,15 +883,15 @@ pub async fn remove_file_share(
 
 /// The latest saved Yjs state of `file_id`, as a response body.
 async fn saved_state(state: &AppState, file_id: Uuid) -> AppResult<FileStateResponse> {
-    let latest: Option<(String, i32)> = sqlx::query_as(
-        "SELECT storage_path, key_generation FROM file_versions
+    let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, storage_path, key_generation, revision_content_envelope FROM file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(file_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, key_generation)) = latest else {
+    let Some((version_id, path, key_generation, revision_content_envelope)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
     let (object, _) = state
@@ -902,6 +907,8 @@ async fn saved_state(state: &AppState, file_id: Uuid) -> AppResult<FileStateResp
     Ok(FileStateResponse {
         key_generation,
         state: STANDARD.encode(bytes),
+        version_id,
+        revision_content_envelope,
     })
 }
 

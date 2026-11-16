@@ -1,4 +1,5 @@
 import { CheckCheck, Copy, Download, ExternalLink, Eye, FolderInput, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
+import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
 import { useCallback, useMemo, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -268,7 +269,13 @@ export function FolderPage() {
         }
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        toast.error(error instanceof FsaRequiredError ? t('drive.zipTooLarge') : t('drive.downloadFailed'))
+        toast.error(
+          error instanceof FsaRequiredError
+            ? t('drive.zipTooLarge')
+            : error instanceof BlobDownloadTooLarge
+              ? t('drive.fileTooLargeForBrowser')
+              : t('drive.downloadFailed'),
+        )
       }
     },
     [t, folder],

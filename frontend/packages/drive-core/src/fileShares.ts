@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { isAxiosError } from 'axios'
-import { generateKey, openFileMetadataV1, openFileShareEnvelope, rekeyFileRecordV1, sealFileShareEnvelope, sealPublicLinkFileKeyV1 } from '@kutup/crypto'
+import { generateKey, openFileMetadataV1, type FileMetadataV2, openFileShareEnvelope, rekeyFileRecordV1, sealFileShareEnvelope, sealPublicLinkFileKeyV1 } from '@kutup/crypto'
 import type { AccountRef } from '@kutup/crypto/accountRef'
 import { openOwnerLinkKeyV1, sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import api from '@kutup/session/client'
@@ -22,6 +22,7 @@ import {
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
 import { fileMetadataOf, type DriveFile, type Folder } from './model'
+import { acceptFileMetadata } from './metadataGuard'
 
 /**
  * Sharing a single file (docs/plans/drive-file-sharing.md), like Proton
@@ -87,7 +88,7 @@ export interface SharedFile {
 
 export const sharedFilesKey = ['shared-files'] as const
 
-type Opened = { fileKey: Uint8Array; metadata: { name: string; mimeType: string; size: number } } | null
+type Opened = { fileKey: Uint8Array; metadata: FileMetadataV2 } | null
 
 const opened = new Map<string, Promise<Opened>>()
 
@@ -109,8 +110,12 @@ async function openShared(row: SharedFileRow, me: DriveIdentity, remoteShareId?:
           recipient: me.accountRef,
           recipientIncarnationId: me.incarnationId,
         })
+        // The current metadata, unless older than this device has seen of the file.
         const metadata = current
-          ? await openFileMetadataV1(file, fileKey)
+          ? await openFileMetadataV1(file, fileKey).then(async (opened) => {
+              await acceptFileMetadata(file.id, file.metadataRevision)
+              return opened
+            })
           : await openFileMetadataV1(
               { id: file.id, keyGeneration: row.keyGeneration, metadataRevision: behind!.revision, metadataEnvelope: behind!.envelope },
               fileKey,
@@ -357,7 +362,7 @@ function memberTo(
 
 /** A file link's key, from the owner's copy. */
 function fileLinkKey(link: FileLink, me: DriveIdentity): Promise<Uint8Array> {
-  return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.masterKey, { linkId: link.id, ownerUserId: me.userId })
+  return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.roots, { linkId: link.id, ownerUserId: me.userId })
 }
 
 function wrapForLink(file: DriveFile, fileKey: Uint8Array, generation: number, linkKey: Uint8Array, me: DriveIdentity) {
@@ -760,7 +765,7 @@ export function useCreateFileLink() {
         targetId: file.id,
         collectionKeyEnvelope: await wrapForLink(file, file.fileKey!, file.keyGeneration, linkKey, me),
         id,
-        ownerLinkKeyEnvelope: await sealOwnerLinkKeyV1(linkKey, me.masterKey, { linkId: id, ownerUserId: me.userId }),
+        ownerLinkKeyEnvelope: await sealOwnerLinkKeyV1(linkKey, me.roots, { linkId: id, ownerUserId: me.userId }),
       })
       return publicLinkUrl(data.token, linkKey, fileLinkApp(file.name))
     } finally {

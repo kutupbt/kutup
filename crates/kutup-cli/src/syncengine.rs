@@ -21,12 +21,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use kutup_crypto::drive_object::DriveFileBlobContextV1;
 
 use crate::api::Client;
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_file_meta};
 use crate::session::{sync_pair_id, Session, Store, SyncDirState, SyncFileState};
-use crate::transfer::stream_download;
 use crate::uploader::{self, now_unix, Progress, UploadRequest};
 use crate::vaultsync::{
     describe, is_vault, merge_and_save, recorded, save_version, VaultFile, VaultKeys,
@@ -307,7 +305,7 @@ pub fn sync(
     authority: crate::senders::AuthorityCheck<'_>,
 ) -> Result<SyncResult> {
     let mut result = SyncResult::default();
-    let master_key = sess.master_key_bytes().context("master key")?;
+    let roots = sess.roots().context("account roots")?;
     let mut peer = crate::yjs_sync::Peer::new(client, store, sess, authority);
     vaults.refresh(sess)?;
     let root = PathBuf::from(local_dir);
@@ -321,7 +319,7 @@ pub fn sync(
         .find(|c| c.id == collection_id)
         .ok_or_else(|| crate::errors::NotFound(format!("collection {collection_id} not found")))?;
     let root_key =
-        decrypt_collection_key(root_col, &master_key, sess).context("decrypt collection key")?;
+        decrypt_collection_key(root_col, &roots, sess).context("decrypt collection key")?;
     let root_keys = crate::keyring::Keyring::load(client, root_col, &root_key, sess)?;
 
     let mut children: BTreeMap<&str, Vec<&crate::api::Collection>> = BTreeMap::new();
@@ -346,7 +344,7 @@ pub fn sync(
     let mut stack: Vec<(String, String)> = vec![(String::new(), collection_id.to_string())];
     while let Some((rel, col_id)) = stack.pop() {
         for sub in children.get(col_id.as_str()).into_iter().flatten() {
-            let Ok(key) = decrypt_collection_key(sub, &master_key, sess) else {
+            let Ok(key) = decrypt_collection_key(sub, &roots, sess) else {
                 result.errors.push(format!("decrypt folder key {}", sub.id));
                 continue;
             };
@@ -1247,12 +1245,21 @@ fn download_decrypt(
     let file_key = crate::file_crypto::open_key(f, dir_keys).context("decrypt file key")?;
     // What the file holds now (its latest whole-file version, else the
     // upload), sealed at its own key generation.
+    let metadata =
+        crate::file_crypto::open_metadata(f, &file_key).context("decrypt file metadata")?;
     let (content_key, content_generation) = crate::file_crypto::content_key(f, &file_key)?;
-    let (stream, version) = client.download_current_stream(&f.id)?;
     let mut out = std::fs::File::create(tmp).context("create temp file")?;
-    let blob_context = DriveFileBlobContextV1::new(&f.id, content_generation)?;
-    match stream_download(stream, &content_key, blob_context, &mut out, |_| {}) {
-        Ok(_) => Ok(version),
+    match crate::revisions::read(
+        client,
+        &crate::api::versions::ContentRoute::Current(&f.id),
+        &content_key,
+        &f.id,
+        content_generation,
+        &crate::revisions::current(&metadata),
+        &mut out,
+        |_| {},
+    ) {
+        Ok(opened) => Ok(opened.version),
         Err(e) => {
             drop(out);
             let _ = std::fs::remove_file(tmp);
@@ -1289,6 +1296,7 @@ fn push_version(
         &dir.collection_id,
         dir.key_epoch,
     )?;
+    let identity = crate::drive_signer::identity(client)?;
     let landed = version_upload::upload_version(
         client,
         store,
@@ -1301,6 +1309,7 @@ fn push_version(
             based_on: Some(based_on),
             progress: Progress::Quiet,
             crashed_after_secs: crate::version_upload::FILE_CRASHED_AFTER_SECS,
+            signer: identity.signer(),
         },
     )?;
     if let version_upload::Landed::Conflict(why) = &landed {

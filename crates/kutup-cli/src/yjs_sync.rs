@@ -14,7 +14,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_collab::{ListDoc, TextDoc};
-use kutup_crypto::drive_object::{decrypt_file_blob, encrypt_file_blob, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, kind, CollabFrameContextV3, Frame};
 
 use crate::api::versions::{NewVersion, VersionRow};
@@ -228,9 +227,7 @@ fn read_remote(
         if let Some(version) = newest_yjs(&client.list_versions(&file.id)?) {
             saved = true;
             if version.size_bytes > 0 {
-                let blob = client.download_version(&file.id, &version.id)?;
-                let context = DriveFileBlobContextV1::new(&file.id, version.key_generation)?;
-                let state = decrypt_file_blob(&blob, &keys.at(version.key_generation)?, context)
+                let state = crate::revisions::read_version(client, file, &keys.current, version)
                     .context("open the saved state")?;
                 doc.apply_v2(&state)?;
             }
@@ -301,14 +298,9 @@ fn apply_frame(doc: &Doc, keys: &Keys, packed: &[u8]) -> Result<()> {
 /// What a file nobody has opened holds, decrypted, as the editors seed from
 /// it: its newest whole-file version, else its upload.
 fn current_content(client: &Client, keys: &Keys) -> Result<Vec<u8>> {
-    let file = &keys.file;
-    let (key, generation) = crate::file_crypto::content_key(file, &keys.current)?;
-    let (response, _) = client
-        .download_current_stream(&file.id)
+    let (content, _) = crate::revisions::read_current(client, &keys.file, &keys.current)
         .context("download the file")?;
-    let blob = response.bytes().context("download the file")?;
-    let context = DriveFileBlobContextV1::new(&file.id, generation)?;
-    Ok(decrypt_file_blob(&blob, &key, context)?)
+    Ok(content)
 }
 
 /// A sender sequence prefix above `must_exceed`: 31 random bits, shifted
@@ -387,20 +379,27 @@ fn refused(error: &anyhow::Error) -> bool {
 
 /// Saves the document as a `yjs` version, as the editor's autosave does: the
 /// log up to `remote.through` is in it, and the server trims the log there.
+/// The state commits with the file's next metadata naming it
+/// (`stateRevisionId`, drive-core `stateCommitter`), so a reader that asks
+/// for the state the metadata names gets no other.
 fn snapshot(client: &Client, keys: &Keys, remote: &Remote) -> Result<()> {
-    let file = &keys.file;
-    let context = DriveFileBlobContextV1::new(&file.id, file.key_generation)?;
-    let sealed = encrypt_file_blob(&remote.doc.state_v2(), &keys.current, context)?;
-    client.create_version(
-        &file.id,
-        sealed,
-        &NewVersion {
+    crate::revisions::save_version(
+        client,
+        &crate::revisions::Target {
+            file: &keys.file,
+            file_key: &keys.current,
+        },
+        &remote.doc.state_v2(),
+        NewVersion {
             kind: "yjs".into(),
             seq_at_snapshot: remote.through,
             doc_key_id: i64::from(remote.doc_key_id),
-            label: String::new(),
-            keep_forever: false,
-            based_on: None,
+            ..Default::default()
+        },
+        |current, _, revision_id| {
+            let mut next = current.clone();
+            next.state_revision_id = Some(revision_id.to_string());
+            next
         },
     )?;
     Ok(())

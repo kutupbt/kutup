@@ -134,6 +134,7 @@
     "zipEmpty": "This folder has no files to download.",
     "zipTooLarge": "This folder is over 1 GB. Use Chrome or Edge to download it as a ZIP, or download files one by one.",
     "downloadFailed": "The download failed.",
+    "fileTooLargeForBrowser": "This file is too large to download in this browser. Use Chrome or Edge, or the Kutup CLI.",
     "linkFailed": "The link could not be created.",
     "dropHere": "Drop to upload into {{name}}"
   },
@@ -310,6 +311,11 @@
     "emptyTitle": "No files",
     "emptyDescription": "This folder has no files in it right now.",
     "footer": "Kutup · end-to-end encrypted. The server never saw these files' contents.",
+    "player": {
+      "play": "Play",
+      "description": "Plays in your browser, decrypted with the key in this link.",
+      "loading": "Opening…"
+    },
     "failure": {
       "missingKey": {
         "title": "This link is incomplete",
@@ -377,7 +383,8 @@
     "none": {
       "type": "There is no preview for this kind of file.",
       "size": "This file is too large to preview. Open or download it instead.",
-      "failed": "The preview could not be loaded."
+      "failed": "The preview could not be loaded.",
+      "busy": "Too many videos or songs are playing in this tab. Close one to play this."
     },
     "picture": {
       "type": "A preview picture. Open the file to see and edit all of it.",

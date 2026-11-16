@@ -9,14 +9,13 @@ use serde::Deserialize;
 
 use kutup_crypto::{
     account_record::{self, AccountRecordPurpose},
+    account_roots::{DriveRoot, RootGeneration},
     asset,
     drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose},
-    drive_object::{self, DriveFileBlobContextV1},
     envelope,
     identity::AccountIdentityKeysV1,
     kdf,
     local_state::{self, LocalStatePurpose},
-    stream,
 };
 
 fn b64(s: &str) -> Vec<u8> {
@@ -35,9 +34,6 @@ struct CryptoVectors {
     account_record: AccountRecordVec,
     #[serde(rename = "driveEnvelope")]
     drive_envelope: DriveEnvelopeVec,
-    #[serde(rename = "driveFileBlob")]
-    drive_file_blob: DriveFileBlobVec,
-    stream: Vec<StreamVec>,
     asset: AssetVec,
     thumbnail: ThumbnailVec,
     #[serde(rename = "collectionKeyring")]
@@ -216,24 +212,6 @@ struct DriveEnvelopeLimit {
     sealed_len: Option<usize>,
 }
 #[derive(Deserialize)]
-struct DriveFileBlobVec {
-    #[serde(rename = "fileKey")]
-    file_key: String,
-    #[serde(rename = "fileId")]
-    file_id: String,
-    generation: u32,
-    #[serde(rename = "objectHeader")]
-    object_header: String,
-    #[serde(rename = "derivedStreamKey")]
-    derived_stream_key: String,
-}
-#[derive(Deserialize)]
-struct StreamVec {
-    key: String,
-    plaintext: String,
-    ciphertext: String,
-}
-#[derive(Deserialize)]
 struct AssetVec {
     #[serde(rename = "fileKey")]
     file_key: String,
@@ -252,6 +230,8 @@ struct ThumbnailVec {
     file_key: String,
     #[serde(rename = "fileId")]
     file_id: String,
+    #[serde(rename = "revisionId")]
+    revision_id: String,
     generation: u32,
     variant: String,
     nonce: String,
@@ -496,31 +476,6 @@ fn drive_envelope_vector() {
 }
 
 #[test]
-fn drive_file_blob_header_and_key_vector() {
-    let vector = load_crypto().drive_file_blob;
-    let context = DriveFileBlobContextV1::new(&vector.file_id, vector.generation).unwrap();
-    assert_eq!(
-        drive_object::file_blob_header(context).as_slice(),
-        b64(&vector.object_header)
-    );
-    assert_eq!(
-        drive_object::derive_file_blob_key(&b64(&vector.file_key), context)
-            .unwrap()
-            .as_slice(),
-        b64(&vector.derived_stream_key)
-    );
-    drive_object::validate_file_blob_header(&b64(&vector.object_header), context).unwrap();
-}
-
-#[test]
-fn stream_decrypts_go_output() {
-    for v in load_crypto().stream {
-        let dec = stream::decrypt_stream(&b64(&v.ciphertext), &b64(&v.key)).unwrap();
-        assert_eq!(dec, b64(&v.plaintext), "stream plaintext mismatch");
-    }
-}
-
-#[test]
 fn whiteboard_asset_matches_canonical_vector() {
     let v = load_crypto().asset;
     let context =
@@ -545,33 +500,6 @@ fn whiteboard_asset_matches_canonical_vector() {
 }
 
 // --- Rust-only round-trips that complement the Go-cross vectors -------------
-
-#[test]
-fn stream_multichunk_roundtrip() {
-    // Exercise the 5 MiB chunk boundary (intermediate TAG_MESSAGE + final).
-    let key = [0x33u8; 32];
-    let plain: Vec<u8> = (0..stream::CHUNK_SIZE + 1)
-        .map(|i| (i % 251) as u8)
-        .collect();
-    let ct = stream::encrypt_stream(&plain, &key).unwrap();
-    // header + 2 chunks: (CHUNK_SIZE + 1) plaintext + 2*ABYTES overhead.
-    assert_eq!(
-        ct.len(),
-        stream::HEADER_BYTES + plain.len() + 2 * stream::ABYTES,
-        "expected exactly two chunks",
-    );
-    let dec = stream::decrypt_stream(&ct, &key).unwrap();
-    assert_eq!(dec, plain);
-}
-
-#[test]
-fn stream_tamper_fails() {
-    let key = [0x33u8; 32];
-    let mut ct = stream::encrypt_stream(b"sensitive content", &key).unwrap();
-    let n = ct.len();
-    ct[n / 2] ^= 0xff;
-    assert!(stream::decrypt_stream(&ct, &key).is_err());
-}
 
 #[test]
 fn asset_tamper_and_aad_fail() {
@@ -731,17 +659,19 @@ fn thumbnail_matches_canonical_vector() {
         variant,
         &b64(&v.file_key),
         &v.file_id,
+        &v.revision_id,
         v.generation,
         &b64(&v.nonce),
     )
     .unwrap();
     assert_eq!(envelope, b64(&v.envelope));
-    thumbnail::validate(&envelope, variant, &v.file_id, v.generation).unwrap();
+    thumbnail::validate(&envelope, variant, &v.file_id, &v.revision_id, v.generation).unwrap();
     let opened = thumbnail::open(
         &envelope,
         variant,
         &b64(&v.file_key),
         &v.file_id,
+        &v.revision_id,
         v.generation,
     )
     .unwrap();
@@ -751,6 +681,16 @@ fn thumbnail_matches_canonical_vector() {
         ThumbnailVariant::Large,
         &b64(&v.file_key),
         &v.file_id,
+        &v.revision_id,
+        v.generation
+    )
+    .is_err());
+    // A thumbnail of another revision of the file.
+    assert!(thumbnail::validate(
+        &envelope,
+        variant,
+        &v.file_id,
+        "44444444-4444-4444-8444-444444444444",
         v.generation
     )
     .is_err());
@@ -816,7 +756,7 @@ fn file_keyring_matches_canonical_vector() {
     assert!(file_keyring::key_at(&b64(&v.keys[1]), &v.file_id, generation, &chain, 1).is_err());
 }
 
-/// Prints the vectors that bind Drive file objects to their file and key
+/// Prints the vectors that bind Drive file values to their file and key
 /// generation, for `tests/vectors/crypto.json`:
 /// `cargo test -p kutup-crypto --test vectors print_file_bound_vectors -- --ignored --nocapture`.
 #[test]
@@ -824,16 +764,6 @@ fn file_keyring_matches_canonical_vector() {
 fn print_file_bound_vectors() {
     let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
     let file_id = "11111111-1111-4111-8111-111111111111";
-
-    let file_key = [0x42u8; 32];
-    let context = DriveFileBlobContextV1::new(file_id, 7).unwrap();
-    let blob = serde_json::json!({
-        "fileKey": e(&file_key),
-        "fileId": file_id,
-        "generation": 7,
-        "objectHeader": e(&drive_object::file_blob_header(context)),
-        "derivedStreamKey": e(drive_object::derive_file_blob_key(&file_key, context).unwrap().as_slice()),
-    });
 
     let asset_key = [0x41u8; 32];
     let asset_plain = b"data:image/png;base64,iVBORw0KGgo=";
@@ -907,7 +837,6 @@ fn print_file_bound_vectors() {
     println!(
         "{}",
         serde_json::json!({
-            "driveFileBlob": blob,
             "asset": asset,
             "fileKeyring": keyring,
             "collabFrame": frame,
@@ -945,18 +874,18 @@ fn file_metadata_matches_canonical_vector() {
     use kutup_crypto::file_metadata::{self, ContentHasher};
     let v = load_crypto().file_metadata;
     for case in &v.canonical {
-        let parsed = file_metadata::decode(case.input.as_bytes()).unwrap();
+        let parsed = file_metadata::decode_v2(case.input.as_bytes()).unwrap();
         assert_eq!(
-            std::str::from_utf8(&file_metadata::encode(&parsed).unwrap()).unwrap(),
+            std::str::from_utf8(&file_metadata::encode_v2(&parsed).unwrap()).unwrap(),
             case.output
         );
         assert_eq!(
-            file_metadata::decode(case.output.as_bytes()).unwrap(),
+            file_metadata::decode_v2(case.output.as_bytes()).unwrap(),
             parsed
         );
     }
     for bad in &v.invalid {
-        assert!(file_metadata::decode(bad.as_bytes()).is_err(), "{bad}");
+        assert!(file_metadata::decode_v2(bad.as_bytes()).is_err(), "{bad}");
     }
     let mut hasher = ContentHasher::new();
     for chunk in &v.content_hash.chunks {
@@ -1045,8 +974,8 @@ fn print_drive_names_vectors() {
         "firstFolderKey": e(&first),
         "collectionId": collection_id,
         "hashKey": e(&hash_key),
-        "masterKey": e(&[0x62u8; 32]),
-        "topLevelHashKey": e(&drive_names::top_level_hash_key(&[0x62u8; 32]).unwrap()),
+        "driveRoot": e(&[0x62u8; 32]),
+        "topLevelHashKey": e(&drive_names::top_level_hash_key(&DriveRoot::from_bytes([0x62u8; 32])).unwrap()),
         "names": names,
         "content": { "plaintext": e(b"kutup"), "sha256": e(&digest), "hash": drive_names::content_hash(&hash_key, &digest).unwrap() },
     });
@@ -1063,7 +992,7 @@ fn drive_names_vector() {
         drive_names::folder_hash_key(&b64(&s("firstFolderKey")), &s("collectionId")).unwrap();
     assert_eq!(hash_key.as_slice(), b64(&s("hashKey")).as_slice());
     assert_eq!(
-        drive_names::top_level_hash_key(&b64(&s("masterKey")))
+        drive_names::top_level_hash_key(&DriveRoot::from_slice(&b64(&s("driveRoot"))).unwrap())
             .unwrap()
             .as_slice(),
         b64(&s("topLevelHashKey")).as_slice()
@@ -1088,6 +1017,95 @@ fn drive_names_vector() {
     assert_eq!(
         drive_names::content_hash(&hash_key, &digest).unwrap(),
         content["hash"].as_str().unwrap()
+    );
+}
+
+/// Prints the `driveOwnerKeys` vectors for `tests/vectors/crypto.json`: an
+/// owned folder's key and a link's owner copy, sealed under the Drive root
+/// at its generation (docs/plans/identity-rotation.md §3).
+/// `cargo test -p kutup-crypto --test vectors print_drive_owner_key_vectors -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_drive_owner_key_vectors() {
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let root = [0x63u8; 32];
+    let generation = RootGeneration::new(2).unwrap();
+    let (folder, owner, link) = (
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333",
+    );
+    let collection =
+        DriveEnvelopeContextV1::owner_collection_key(folder, owner, 3, generation).unwrap();
+    let link_scope = DriveEnvelopeContextV1::owner_link_key(link, owner, generation).unwrap();
+    let v = serde_json::json!({
+        "description": "An owned folder's key and a link's owner copy under the Drive root; the revision slot is the root's generation (kutup-crypto/src/drive_envelope.rs).",
+        "driveRoot": e(&root),
+        "driveRootGeneration": generation.get(),
+        "ownerUserId": owner,
+        "collectionId": folder,
+        "collectionEpoch": 3,
+        "collectionKey": e(&[0x64; 32]),
+        "collectionNonce": e(&[0x65; 24]),
+        "collectionKeyEnvelope": e(&drive_envelope::seal_with_nonce(&[0x64; 32], &root, collection, &[0x65; 24]).unwrap()),
+        "linkId": link,
+        "linkKey": e(&[0x66; 32]),
+        "linkNonce": e(&[0x67; 24]),
+        "linkKeyEnvelope": e(&drive_envelope::seal_with_nonce(&[0x66; 32], &root, link_scope, &[0x67; 24]).unwrap()),
+    });
+    println!("{}", serde_json::to_string_pretty(&v).unwrap());
+}
+
+#[test]
+fn drive_owner_key_vector() {
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["driveOwnerKeys"];
+    let s = |key: &str| v[key].as_str().unwrap().to_owned();
+    let root = DriveRoot::from_slice(&b64(&s("driveRoot"))).unwrap();
+    let generation =
+        RootGeneration::new(v["driveRootGeneration"].as_u64().unwrap() as u32).unwrap();
+    let epoch = v["collectionEpoch"].as_u64().unwrap() as u32;
+    let collection = DriveEnvelopeContextV1::owner_collection_key(
+        &s("collectionId"),
+        &s("ownerUserId"),
+        epoch,
+        generation,
+    )
+    .unwrap();
+    let link = DriveEnvelopeContextV1::owner_link_key(&s("linkId"), &s("ownerUserId"), generation)
+        .unwrap();
+    for (scope, key, nonce, envelope) in [
+        (
+            collection,
+            "collectionKey",
+            "collectionNonce",
+            "collectionKeyEnvelope",
+        ),
+        (link, "linkKey", "linkNonce", "linkKeyEnvelope"),
+    ] {
+        let sealed =
+            drive_envelope::seal_with_nonce(&b64(&s(key)), root.as_bytes(), scope, &b64(&s(nonce)))
+                .unwrap();
+        assert_eq!(sealed, b64(&s(envelope)));
+        let header = drive_envelope::inspect(&sealed).unwrap();
+        assert_eq!(header.context.drive_root_generation().unwrap(), generation);
+        assert_eq!(
+            drive_envelope::open_under_drive_root(&s(envelope), &root, scope)
+                .unwrap()
+                .as_slice(),
+            b64(&s(key)).as_slice()
+        );
+    }
+    // The generation is bound: the same root at another generation fails.
+    let first = DriveEnvelopeContextV1::owner_collection_key(
+        &s("collectionId"),
+        &s("ownerUserId"),
+        epoch,
+        RootGeneration::FIRST,
+    )
+    .unwrap();
+    assert!(
+        drive_envelope::open_under_drive_root(&s("collectionKeyEnvelope"), &root, first).is_err()
     );
 }
 

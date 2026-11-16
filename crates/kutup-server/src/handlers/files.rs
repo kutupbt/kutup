@@ -154,7 +154,7 @@ pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> Ap
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "Fields: fileId, collectionId, metadataEnvelope, fileKeyEnvelope + the encrypted `file` part"
+        description = "Fields: fileId, collectionId, metadataEnvelope, fileKeyEnvelope, nameHash, revisionId, metadataRevision (1), revisionContentEnvelope (the revision's sealed content record), optional contentHash + the encrypted `file` part (block format, docs/plans/drive-block-format.md): the upload commits inline"
     ),
     responses((status = 201, description = "File stored", body = UploadResult))
 )]
@@ -205,7 +205,7 @@ pub async fn upload(
                 .await
                 .map_err(|_| AppError::bad_request("invalid multipart form"))?
             {
-                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 8 {
+                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 10 {
                     return Err(AppError::bad_request("form field too large"));
                 }
                 val.extend_from_slice(&chunk);
@@ -274,12 +274,27 @@ pub async fn upload(
         DriveEnvelopeContextV1::file_metadata(&file_id_str, 1, 1)
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
-    // A new file's key is generation 1. With `revisionId` the blob is in the
-    // block format, bound to that revision; without, the streaming format.
-    let format =
-        crate::drive_blob::BlobFormat::from_revision(fields.get("revisionId").map(String::as_str))?;
-    format.check_file(&tmp_file, file_size as u64, file_id, 1)?;
-    let revision = format.revision_id();
+    // A new file's key is generation 1. The blob is bound to the revision
+    // `revisionId` names.
+    let blob =
+        crate::drive_blob::BlockBlob::from_revision(fields.get("revisionId").map(String::as_str))?;
+    // It commits inline (docs/plans/drive-block-format.md §10 slice 3): the
+    // client sealed the whole buffer, so its metadata, naming revision 1,
+    // comes with the content.
+    crate::drive_blob::check_first_metadata_revision(
+        fields.get("metadataRevision").map(String::as_str),
+    )?;
+    blob.check_file(&tmp_file, file_size as u64, file_id, 1)?;
+    // What the revision is, sealed under the key of generation 1.
+    let revision_content = crate::drive_blob::revision_content_envelope(
+        blob,
+        fields
+            .get(crate::drive_blob::REVISION_CONTENT_FIELD)
+            .map(String::as_str),
+        file_id,
+        1,
+    )?;
+    let revision = blob.revision_id;
     let storage_path = crate::file_content::revision_path(file_id, revision);
 
     // Claim the id, then check room — both held until commit, so neither a
@@ -326,8 +341,9 @@ pub async fn upload(
                               metadata_envelope, file_key_envelope,
                               key_epoch, key_generation, metadata_revision,
                               storage_path, encrypted_size_bytes, original_key_generation,
-                              name_hash, content_hash, content_revision_id)
-           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,$9,$10,$11)"#,
+                              name_hash, content_hash, content_revision_id,
+                              blob_suite, revision_content_envelope)
+           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,$9,$10,$11,$12,$13)"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -340,6 +356,8 @@ pub async fn upload(
     .bind(&name_hash)
     .bind(&content_hash)
     .bind(revision)
+    .bind(crate::drive_blob::BLOCK_SUITE)
+    .bind(&revision_content)
     .execute(&mut *tx)
     .await;
     if let Err(error) = insert {

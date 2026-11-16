@@ -46,7 +46,7 @@ preferences applied from authentication through editors and public shares.
 
 <img src="docs/screenshots/01-drive.png" alt="Drive view" width="800" />
 
-Nested collections, drag-and-drop upload, public share links, per-user folder shares with read/upload/delete permissions, and a hard-baked encryption boundary. Filenames, MIME types, and folder structure are encrypted client-side. Stream upload via `crypto_secretstream_xchacha20poly1305` keeps large files out of memory. Deletes are recoverable: items land in a trash with restore + permanent delete and a configurable retention sweep (30 days by default). Storage backs onto SeaweedFS (S3-compatible).
+Nested collections, drag-and-drop upload, public share links, per-user folder shares with read/upload/delete permissions, and a hard-baked encryption boundary. Filenames, MIME types, and folder structure are encrypted client-side. Uploads are sealed in 4 MiB blocks with a signed manifest (the block format), so large files stay out of memory and video and audio stream with seeking. Deletes are recoverable: items land in a trash with restore + permanent delete and a configurable retention sweep (30 days by default). Storage backs onto SeaweedFS (S3-compatible).
 
 ### Live notes & code
 
@@ -226,9 +226,9 @@ kutup ls <folder-id>           # contents of a sub-folder
 # (KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD for non-interactive use).
 kutup recover --server https://your.kutup.host --username you
 
-# Upload a file. Chunked stream encryption (5 MB blocks via
-# crypto_secretstream), so file size is bounded by disk, not RAM.
-# Interrupted uploads RESUME from the last 5 MB chunk when you rerun
+# Upload a file. Sealed in 4 MiB blocks (the block format), so file size
+# is bounded by disk, not RAM.
+# Interrupted uploads RESUME from where the server stopped when you rerun
 # the same command (--no-resume restarts from zero). Names are unique
 # in a folder: the same file already there is skipped, a different one
 # under its name stops the upload unless --keep-both uploads it as
@@ -299,7 +299,7 @@ kutup --help
 kutup version
 ```
 
-Large files go either way: the browser encrypts 5 MB at a time as each part is sent (memory stays at about two parts, and an upload goes on after a lost connection or a reload), and the CLI streams `crypto_secretstream` (XChaCha20-Poly1305, 5 MB chunks) over a Rust reader at constant ~5 MB memory, which suits scripts, servers and very large datasets.
+Large files go either way: the browser encrypts 5 MB at a time as each part is sent (memory stays at about two parts, and an upload goes on after a lost connection or a reload), and the CLI seals the same 4 MiB blocks (XChaCha20-Poly1305, a signed manifest of block hashes) over a Rust reader with a few blocks in memory, resumes an interrupted upload from wherever the server stopped, and reads files back block by block with ranged requests, which suits scripts, servers and very large datasets.
 
 ---
 
@@ -332,9 +332,9 @@ For the full picture (key hierarchy, login flow, federation model, storage layer
 | Layer | Technology |
 |-------|------------|
 | Backend | Rust, [Axum 0.7](https://github.com/tokio-rs/axum) (HTTP + WebSocket), [sqlx](https://github.com/launchbadge/sqlx) (Postgres), [aws-sdk-s3](https://crates.io/crates/aws-sdk-s3), PostgreSQL 16 |
-| CLI / crypto | Rust — `dryoc` + RustCrypto (Argon2id, XChaCha20-Poly1305 AEAD/secretstream, X25519 HPKE, Ed25519); `clap` CLI |
+| CLI / crypto | Rust — `dryoc` + RustCrypto (Argon2id, XChaCha20-Poly1305 AEAD and blocks, X25519 HPKE, Ed25519); `clap` CLI |
 | Frontend | React 18, TypeScript 5.4, Vite 8, [Redux Toolkit 2](https://redux-toolkit.js.org/), [TailwindCSS](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) |
-| Frontend crypto | Canonical Rust via `kutup-crypto-wasm`; a narrow [libsodium-wrappers-sumo](https://github.com/jedisct1/libsodium.js) adapter streams large secretstream blobs and supplies browser CSPRNG bytes |
+| Frontend crypto | Canonical Rust via `kutup-crypto-wasm`; a narrow [libsodium-wrappers-sumo](https://github.com/jedisct1/libsodium.js) adapter supplies browser CSPRNG bytes and a few remaining primitives (`docs/roadmap.md`) |
 | Realtime collab | Yjs 13 + `y-codemirror.next` (notes); OnlyOffice + `x2t` WASM (office); `@excalidraw/excalidraw` (whiteboards); a server relay with per-frame AEAD envelopes |
 | Chat | libsignal Direct/Note to Self, pairwise groups (sender keys), IndexedDB state, continuous E2EE history/media backup |
 | Storage | [SeaweedFS](https://github.com/seaweedfs/seaweedfs) (S3-compatible) |

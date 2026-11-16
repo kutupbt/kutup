@@ -6,33 +6,49 @@ import { ACCOUNT_RECORD_PURPOSE, sealAccountRecord } from './accountRecord'
 import { deriveAccountIdentityKeys } from './identity'
 import { generateAccountRoots, sealAccountRoots, type AccountRoots, type IdentityRoot } from './accountRoots'
 
-export { encryptStream, decryptStream } from './symmetric'
 export {
-  decryptFileBlobV1,
-  encryptFileBlobV1,
-  fileBlobCipherSize,
-  newFileBlobStreamEncryptorV1,
-  openFileBlobStreamV1,
-} from './fileBlob'
-export type { FileBlobContextV1 } from './fileBlob'
+  checkServedRecord,
+  committedContent,
+  DRIVE_BLOCK_SIZE,
+  manifestSignerOf,
+  newDriveBlockEncryptor,
+  newRevisionId,
+  openDriveFile,
+  openDriveObject,
+  openRevisionContent,
+  resolveServed,
+  setManifestSignerCheck,
+  REVISION_CONTENT_HEADER,
+  REVISION_HEADER,
+  sealDriveFile,
+  sealRevisionContent,
+} from './driveBlocks'
+export type {
+  ContentCommitment,
+  DriveBlockEncryptor,
+  DriveObjectExpected,
+  DriveObjectToOpen,
+  DriveRevisionContext,
+  ManifestSignature,
+  ManifestSigner,
+  ManifestSignerCheck,
+  ServedRevision,
+} from './driveBlocks'
 export {
-  CHAT_MEDIA_OBJECT_HEADER_BYTES,
-  CHAT_MEDIA_OBJECT_PREFIX_BYTES,
-  CHAT_MEDIA_SUITE_V1,
+  CHAT_MEDIA_SUITE,
   MAX_CHAT_MEDIA_PLAINTEXT_BYTES,
   chatAttachmentLedgerEnvelopeDigest,
-  chatMediaCipherSize,
-  decryptChatMediaV1,
-  encryptChatMediaV1,
-  newChatMediaStreamEncryptorV1,
+  chatMediaObjectLength,
+  newChatMediaBlockEncryptor,
   openChatAttachmentLedger,
-  openChatMediaStreamV1,
+  openChatMedia,
+  openChatMediaReader,
   sealChatAttachmentLedger,
+  sealChatMedia,
 } from './chatMedia'
 export type {
   ChatAttachmentLedgerContextV1,
   ChatAttachmentLedgerOwner,
-  ChatMediaStreamEncryptorV1,
 } from './chatMedia'
 // The recovery phrase (bip39 and its wordlists) is @kutup/crypto/mnemonic,
 // kept out of this barrel so only the pages that use it load it.
@@ -152,8 +168,11 @@ export {
 export type { CreateOwnedCollectionV1, OwnedCollectionWireV1 } from './ownedCollection'
 export {
   createFileRecordV1,
+  openFileKeyV1,
+  openFileMetadataDraftV1,
   openFileMetadataV1,
   openFileRecordV1,
+  sealFileMetadataDraftV1,
   rekeyFileRecordV1,
   renameFileRecordV1,
   wrapFileKeyForV1,
@@ -162,7 +181,8 @@ export { fileKeyAtV1, sealPreviousFileKeyV1 } from './fileKeyring'
 export type { FileKeyLinkV1 } from './fileKeyring'
 export type {
   CreatedFileRecordV1,
-  FileMetadataV1,
+  FileMetadataDraftV1,
+  FileMetadataV2,
   MediaMetadataV1,
   TakenFromV1,
   FileWireV1,

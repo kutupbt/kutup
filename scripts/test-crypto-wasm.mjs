@@ -247,6 +247,42 @@ assert.throws(
   assert.throws(() => crypto.openDriveEnvelope(wrapped, linkKey, 5, 3, 1n, file, owner), /authentication failed/)
 }
 
+// The account's own copies under its Drive root (docs/plans/identity-rotation.md
+// §3): an owned folder's key (purpose 1) and a link's key (purpose 9), the
+// root's generation in the revision slot; only their typed exports seal them.
+{
+  const v = vectors.driveOwnerKeys
+  const folderArgs = [v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerUserId, v.collectionEpoch]
+  const linkArgs = [v.driveRoot, v.driveRootGeneration, v.linkId, v.ownerUserId]
+  assert.equal(crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, ...folderArgs), v.collectionKey)
+  assert.equal(crypto.openOwnerLinkKey(v.linkKeyEnvelope, ...linkArgs), v.linkKey)
+  assert.equal(crypto.openOwnerCollectionKey(crypto.sealOwnerCollectionKey(v.collectionKey, ...folderArgs), ...folderArgs), v.collectionKey)
+  assert.equal(crypto.openOwnerLinkKey(crypto.sealOwnerLinkKey(v.linkKey, ...linkArgs), ...linkArgs), v.linkKey)
+  // The same root at another generation, or another epoch: refused.
+  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, 1, v.collectionId, v.ownerUserId, v.collectionEpoch))
+  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerUserId, v.collectionEpoch + 1))
+  assert.throws(() => crypto.openOwnerLinkKey(v.linkKeyEnvelope, v.driveRoot, 0, v.linkId, v.ownerUserId), /never 0/)
+  // The generic export refuses both purposes.
+  for (const purpose of [1, 9]) {
+    assert.throws(
+      () => crypto.sealDriveEnvelope(v.collectionKey, v.driveRoot, purpose, 1, 1n, v.collectionId, v.ownerUserId),
+      /typed export/,
+    )
+    assert.throws(
+      () => crypto.openDriveEnvelope(v.collectionKeyEnvelope, v.driveRoot, purpose, v.collectionEpoch, BigInt(v.driveRootGeneration), v.collectionId, v.ownerUserId),
+      /typed export/,
+    )
+  }
+}
+
+// Names: a folder's hash key from its first key; the top level's from the
+// Drive root.
+{
+  const v = vectors.driveNames
+  assert.equal(crypto.driveFolderHashKey(v.firstFolderKey, v.collectionId), v.hashKey)
+  assert.equal(crypto.driveTopLevelHashKey(v.driveRoot), v.topLevelHashKey)
+}
+
 // A photo in an album: purpose 12, epoch = the album's epoch, revision = the generation.
 {
   const fileKey = Buffer.alloc(32, 0x55).toString('base64')
@@ -257,32 +293,6 @@ assert.throws(
   assert.equal(crypto.openDriveEnvelope(wrapped, albumKey, 12, 2, 3n, file, album), fileKey)
   assert.throws(() => crypto.openDriveEnvelope(wrapped, albumKey, 12, 1, 3n, file, album), /authentication failed/)
   assert.throws(() => crypto.openDriveEnvelope(wrapped, albumKey, 3, 2, 3n, file, album), /authentication failed/)
-}
-
-// File blobs are bound to the file and the file key's generation, not a folder.
-const blobVector = vectors.driveFileBlob
-const driveFileBlob = crypto.prepareDriveFileBlob(blobVector.fileKey, blobVector.fileId, blobVector.generation)
-assert.deepEqual(driveFileBlob, {
-  objectHeader: blobVector.objectHeader,
-  streamKey: blobVector.derivedStreamKey,
-})
-assert.equal(
-  crypto.openDriveFileBlobHeader(
-    driveFileBlob.objectHeader,
-    blobVector.fileKey,
-    blobVector.fileId,
-    blobVector.generation,
-  ),
-  driveFileBlob.streamKey,
-)
-for (const [fileId, generation] of [
-  ['33333333-3333-4333-8333-333333333333', blobVector.generation],
-  [blobVector.fileId, blobVector.generation + 1],
-]) {
-  assert.throws(
-    () => crypto.openDriveFileBlobHeader(driveFileBlob.objectHeader, blobVector.fileKey, fileId, generation),
-    /context does not match/,
-  )
 }
 
 const identityMaster = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
@@ -371,25 +381,6 @@ assert.throws(
 )
 
 const attachmentId = '11111111-1111-4111-8111-111111111111'
-const attachmentKey = Buffer.alloc(32, 0x42).toString('base64')
-const chatMedia = crypto.prepareChatMediaObject(attachmentKey, attachmentId)
-assert.deepEqual(chatMedia, {
-  objectHeader: 'S1VUUENNMQAAAQEAERERERERQRGBEREREREREQ==',
-  streamKey: 'pV4kyXvsX6NrGxJmf9SVT3kNGZu2EgwWQWC/qS2kbF8=',
-})
-assert.equal(
-  crypto.openChatMediaObjectHeader(chatMedia.objectHeader, attachmentKey, attachmentId),
-  chatMedia.streamKey,
-)
-assert.throws(
-  () => crypto.openChatMediaObjectHeader(
-    chatMedia.objectHeader,
-    attachmentKey,
-    '22222222-2222-4222-8222-222222222222',
-  ),
-  /context does not match/,
-)
-
 // The Chat attachment ledger: one chained account record per entity.
 const ledgerMaster = Buffer.alloc(32, 0x33).toString('base64')
 const ledgerBinding = '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b'
@@ -528,7 +519,7 @@ const backupMedia = crypto.prepareChatBackupMedia(
 )
 assert.match(backupMedia.mediaId, /^[0-9a-f]{64}$/)
 assert.equal(backupMedia.paddedPlaintextBytes >= 10_000, true)
-assert.equal(Buffer.from(backupMedia.objectHeader, 'base64').length, 107)
+assert.equal(backupMedia.objectHeader, undefined)
 
 // Local-state envelopes: session-fork payloads (2) and persisted web
 // sessions (3) open to the canonical Rust vectors, fail closed on the wrong
@@ -575,28 +566,40 @@ assert.throws(
   )
 }
 
-// Thumbnails: the canonical envelope opens to the vector's picture, only as
-// its own variant, file and key generation; a fresh seal round-trips; the
+// Thumbnails: the browser seals and opens only thumbnails bound to the
+// content revision they show (docs/plans/drive-block-format.md §2): the
+// canonical vector opens, and a fresh seal round-trips. One
+// opens only as its own variant, file, revision and key generation; the
 // generic envelope export refuses the purposes that have typed exports.
 const thumb = vectors.thumbnail
+const thumbRevision = thumb.revisionId
 assert.deepEqual(
-  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation),
+  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation),
   { format: 1, width: thumb.width, height: thumb.height, image: thumb.image },
 )
-assert.throws(() => crypto.openThumbnail(thumb.envelope, 'lg', thumb.fileKey, thumb.fileId, thumb.generation))
+const sealedThumb = crypto.sealThumbnail(
+  thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation,
+)
+assert.deepEqual(
+  crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation),
+  { format: 1, width: thumb.width, height: thumb.height, image: thumb.image },
+)
+assert.notEqual(
+  crypto.sealThumbnail(thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation),
+  sealedThumb,
+  'nonce must be random',
+)
+assert.throws(() => crypto.openThumbnail(sealedThumb, 'lg', thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation))
 assert.throws(() =>
-  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, '33333333-3333-4333-8333-333333333333', thumb.generation),
+  crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, '33333333-3333-4333-8333-333333333333', thumbRevision, thumb.generation),
 )
-const resealedThumb = crypto.sealThumbnail(
-  thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation,
+// Drawn from older content: refused under the revision the metadata names now.
+assert.throws(() =>
+  crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, '44444444-4444-4444-8444-444444444444', thumb.generation),
 )
-assert.notEqual(resealedThumb, thumb.envelope, 'nonce must be random')
-assert.equal(
-  crypto.openThumbnail(resealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation).image,
-  thumb.image,
-)
+assert.throws(() => crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation + 1))
 assert.throws(
-  () => crypto.sealThumbnail(Buffer.from('<svg/>').toString('base64'), 3, 10, 10, 'sm', thumb.fileKey, thumb.fileId, 1),
+  () => crypto.sealThumbnail(Buffer.from('<svg/>').toString('base64'), 3, 10, 10, 'sm', thumb.fileKey, thumb.fileId, thumbRevision, 1),
   /format/,
 )
 for (const purpose of [6, 7, 8, 10]) {
@@ -706,6 +709,8 @@ assert.throws(() =>
   crypto.openCollabFrame(frameVector.frame, frameVector.fileKey, frameVector.fileId, frameVector.keyGeneration + 1),
 )
 
+// The file metadata (FileMetadataV2): canonical, strict, and committing to
+// its content.
 const metadataVector = vectors.fileMetadata
 for (const { input, output } of metadataVector.canonical) {
   assert.equal(crypto.canonicalFileMetadata(input), output)
@@ -742,6 +747,29 @@ assert.equal(
   crypto.openPhotosLibrary(resealed.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope)),
   '{"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[]}',
 )
+
+// What one Drive revision is (docs/plans/drive-block-format.md §2): the
+// canonical record opens for exactly its file, revision and generation; a
+// fresh seal round-trips; every negative is refused.
+{
+  const rc = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/revision-content-v1.json`, 'utf8'))
+  const open = (envelope, fileId = rc.fileId, revisionId = rc.revisionId, generation = rc.generation) =>
+    crypto.openRevisionContent(envelope, rc.fileKey, fileId, revisionId, generation)
+  assert.deepEqual({ ...open(rc.envelope) }, rc.content)
+  assert.throws(() => open(rc.envelope, '33333333-3333-4333-8333-333333333333'))
+  assert.throws(() => open(rc.envelope, rc.fileId, '44444444-4444-4444-8444-444444444444'))
+  assert.throws(() => open(rc.envelope, rc.fileId, rc.revisionId, rc.generation + 1))
+  for (const negative of rc.negatives) {
+    assert.throws(
+      () => open(negative.envelope, negative.fileId ?? rc.fileId, negative.revisionId ?? rc.revisionId, negative.generation ?? rc.generation),
+      negative.name,
+    )
+  }
+  const fresh = crypto.sealRevisionContent(rc.fileKey, rc.fileId, rc.revisionId, rc.content.manifestSha256, rc.content.size, rc.generation)
+  assert.notEqual(fresh, rc.envelope, 'nonce must be random')
+  assert.equal(fresh.length, rc.envelope.length, 'one length for every record')
+  assert.deepEqual({ ...open(fresh) }, rc.content)
+}
 
 // Mail address keys (docs/plans/mail-address-keys.md).
 const mailVectors = JSON.parse(
@@ -1383,7 +1411,7 @@ const c0Digest = (digest) => {
     }
     if (c.lastBlock) assert.equal(b64(sealed.at(-1)), c.lastBlock, c.name)
     assert.equal(encryptor.manifestSha256, undefined)
-    const tail = isDrive ? encryptor.finishSigned(identityMaster, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90') : encryptor.finish()
+    const tail = isDrive ? encryptor.finishSigned(identityMaster, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90', crypto.deriveAccountIdentityKeys(identityMaster).incarnationId) : encryptor.finish()
     const wasmDigest = encryptor.manifestSha256
     assert.throws(() => encryptor.sealNext(new Uint8Array(0)), /already finished/)
     encryptor.free()
@@ -1415,13 +1443,16 @@ const c0Digest = (digest) => {
       assert.throws(() => reader.openBlock(0, flipped))
       if (isDrive && manifestTail === vectorTail) {
         assert.equal(reader.signerAccountId, uuid(bytes(v.accountId)))
+        assert.equal(reader.signerIncarnationId, v.incarnationId)
         reader.verifySigner(v.signerPublicKey)
         assert.throws(() => reader.verifySigner(crypto.deriveAccountIdentityKeys(identityMaster).driveSigningPublicKey))
       } else if (isDrive) {
         assert.equal(reader.signerAccountId, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
+        assert.equal(reader.signerIncarnationId, crypto.deriveAccountIdentityKeys(identityMaster).incarnationId)
         reader.verifySigner(crypto.deriveAccountIdentityKeys(identityMaster).driveSigningPublicKey)
       } else {
         assert.equal(reader.signerAccountId, undefined)
+        assert.equal(reader.signerIncarnationId, undefined)
       }
       reader.free()
     }

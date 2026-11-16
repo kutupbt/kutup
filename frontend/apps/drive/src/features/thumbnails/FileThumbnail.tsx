@@ -40,12 +40,15 @@ function backfill(folder: Folder, file: DriveFile, userId: string): void {
   tried.add(attempt)
   const fileKey = file.fileKey
   const name = file.name
+  // Bound to the content it is drawn from: the revision the metadata commits to.
+  const revisionId = file.content?.revisionId
+  if (!revisionId) return
   enqueueThumbnail(file.id, async () => {
     const content = await currentContent(folder, file)
     const blob = await readFile(folder, file)
     const made = await thumbnailsOfFile(new File([blob], name, { type: file.mimeType }))
     return storeThumbnails(
-      { fileId: file.id, fileKey, keyGeneration: file.keyGeneration },
+      { fileId: file.id, fileKey, keyGeneration: file.keyGeneration, revisionId },
       made,
       content.kind === 'original' ? 'original' : (content.versionId ?? 'original'),
     )

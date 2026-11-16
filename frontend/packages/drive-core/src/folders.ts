@@ -5,7 +5,7 @@ import api from '@kutup/session/client'
 import type { CollectionRow } from '@kutup/session/api-types'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { ROOT_NAME, type Folder } from './model'
-import { atTopLevel, nameHashIn } from './names'
+import { atTopLevel, nameFieldsIn } from './names'
 
 export const foldersKey = ['folders'] as const
 
@@ -199,7 +199,7 @@ async function loadFolders(me: DriveIdentity): Promise<FolderIndex> {
     // First visit: every account keeps its top-level files in one root folder.
     const created = await createOwnedCollectionV1(me, me.userId, ROOT_NAME, null)
     try {
-      await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(atTopLevel(me.masterKey), ROOT_NAME) })
+      await api.post('/collections', { ...created.payload, ...(await nameFieldsIn(atTopLevel(me.roots), ROOT_NAME)) })
     } catch (error) {
       // Another tab made it first: its name is taken at the top level.
       if (!(isAxiosError(error) && error.response?.status === 409)) throw error

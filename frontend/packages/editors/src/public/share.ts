@@ -3,13 +3,26 @@
 // from the link's fragment; the server only ever serves ciphertext. Drive
 // lists a folder's link, Office shows a document reached by one.
 
-import { fromBase64, openFileMetadataV1, openFileRecordV1, openPublicLinkCollectionKeyV1, openPublicLinkFileKeyV1 } from '@kutup/crypto'
+import {
+  fromBase64,
+  openDriveObject,
+  openFileMetadataV1,
+  openFileRecordV1,
+  openPublicLinkCollectionKeyV1,
+  openPublicLinkFileKeyV1,
+  resolveServed,
+  REVISION_CONTENT_HEADER,
+  REVISION_HEADER,
+  type ContentCommitment,
+  type DriveObjectExpected,
+} from '@kutup/crypto'
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
-import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
 import { editorKindFor } from '@kutup/drive-core/editorKind'
+import { openPublicPlayback, type Playback, type PlaybackFallback } from '@kutup/drive-core/playback'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
 import { streamDownload } from '@kutup/files/download/streamDownload'
+import { driveStreamLimits } from '@kutup/files/stream/limits'
 import { isListName, stateToListJson } from '@kutup/map/list'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
@@ -56,6 +69,10 @@ export interface PublicFile {
   name: string | null
   mimeType: string
   size: number
+  /** The current content its metadata commits to (docs/plans/drive-block-format.md §2); null when it did not open. */
+  content: ContentCommitment | null
+  /** A note's or place list's latest saved state, as its metadata names it; null when none (or it did not open). */
+  stateRevisionId: string | null
 }
 
 export interface PublicShare {
@@ -189,6 +206,8 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
         name: opened?.metadata.name ?? null,
         mimeType: opened?.metadata.mimeType ?? 'application/octet-stream',
         size: opened?.metadata.size ?? 0,
+        content: opened?.metadata.content ?? null,
+        stateRevisionId: opened?.metadata.stateRevisionId ?? null,
       }
     }),
   )
@@ -219,7 +238,15 @@ async function loadFile(share: ShareInfo, key: Uint8Array): Promise<PublicFile> 
     name: metadata?.name ?? null,
     mimeType: metadata?.mimeType ?? 'application/octet-stream',
     size: metadata?.size ?? 0,
+    content: metadata?.content ?? null,
+    stateRevisionId: metadata?.stateRevisionId ?? null,
   }
+}
+
+/** What the file's current content must be: the revision and digest its metadata commits to, and its size. */
+function currentExpected(file: PublicFile): DriveObjectExpected {
+  if (!file.content) throw new Error('file is not open')
+  return { fileId: file.row.id, generation: file.row.contentKeyGeneration, content: file.content, size: file.size }
 }
 
 /** The file key of `generation`, through the file's own key chain. */
@@ -237,21 +264,34 @@ export function publicFileBase(token: string, fileId: string): string {
  * A note's text or a place list's places as last saved. Their edits are Yjs
  * state, not whole-file versions, so the download alone is the upload. Null
  * for other files, or when nothing was saved since the upload.
+ *
+ * The state read is the one the file's sealed metadata names
+ * (`stateRevisionId`, committed with each saved state): the page asks for
+ * it by id and refuses any other the server serves, so it can't be handed
+ * an older genuine state under the current metadata
+ * (docs/plans/drive-block-format.md §8).
  */
 export async function editedContent(token: string, file: PublicFile): Promise<Uint8Array | null> {
   const name = file.name ?? ''
   const list = isListName(name)
   if (!file.currentKey || (!list && editorKindFor(name) !== 'text')) return null
-  let response
-  try {
-    response = await api.get<ArrayBuffer>(`${shareBase(token)}/state/${file.row.id}`, { responseType: 'arraybuffer' })
-  } catch (error) {
-    if ((error as { response?: { status?: number } }).response?.status === 404) return null
-    throw error
-  }
+  // Nothing saved since the upload, as the metadata says: the upload is it.
+  const stateRevisionId = file.stateRevisionId
+  if (!stateRevisionId) return null
+  // A state the metadata names but the server doesn't serve is refused (a 404 too).
+  const response = await api.get<ArrayBuffer>(`${shareBase(token)}/state/${file.row.id}`, {
+    params: { revision: stateRevisionId },
+    responseType: 'arraybuffer',
+  })
   const generation = Number(response.headers['x-kutup-key-generation'])
   const key = await publicFileKeyAt(file, generation)
-  const state = await decryptFileBlobV1(new Uint8Array(response.data), key, { fileId: file.row.id, generation })
+  // That state, opened against the sealed record served with it.
+  const expected = await resolveServed(key, { fileId: file.row.id, generation, revisionId: stateRevisionId, served: true }, {
+    revisionId: typeof response.headers[REVISION_HEADER] === 'string' ? response.headers[REVISION_HEADER] : null,
+    revisionContentEnvelope:
+      typeof response.headers[REVISION_CONTENT_HEADER] === 'string' ? response.headers[REVISION_CONTENT_HEADER] : null,
+  })
+  const state = await openDriveObject(new Uint8Array(response.data), key, expected)
   if (list) return stateToListJson(state)
   const Y = await import('yjs')
   const doc = new Y.Doc()
@@ -271,7 +311,7 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
   const url = `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`
   const parts: Uint8Array[] = []
   let length = 0
-  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, { fileId: file.row.id, generation: file.row.contentKeyGeneration }, viewerToken(), signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, currentExpected(file), viewerToken(), signal)) {
     parts.push(plain)
     length += plain.length
   }
@@ -282,6 +322,36 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
     at += part.length
   }
   return bytes
+}
+
+/**
+ * A video or song through the link, for its player: streamed by block
+ * through the service worker (docs/plans/drive-block-format.md §4) with the
+ * link's key and the default limits, or read whole where no worker controls
+ * the page.
+ */
+export async function openPublicFilePlayback(
+  token: string,
+  file: PublicFile,
+  signal?: AbortSignal,
+  onProgress?: (read: number) => void,
+  onFallback?: (next: PlaybackFallback) => void,
+): Promise<Playback> {
+  const fileKey = file.fileKey
+  if (!fileKey) throw new Error('file is not open')
+  return openPublicPlayback(
+    {
+      url: `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`,
+      size: file.size,
+      mimeType: file.mimeType,
+      content: () => Promise.resolve({ fileKey, expected: currentExpected(file) }),
+      accessToken: viewerToken(),
+      readWhole: (readSignal) => readPublicFile(token, file, readSignal),
+    },
+    signal,
+    onProgress,
+    onFallback,
+  )
 }
 
 /** Save the file as it is now (a note or list with its edits) to this device. */
@@ -296,10 +366,11 @@ export async function downloadPublicFile(token: string, file: PublicFile): Promi
   await streamDownload({
     url: `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`,
     fileKey: file.fileKey,
-    context: { fileId: file.row.id, generation: file.row.contentKeyGeneration },
+    context: currentExpected(file),
     filename: file.name,
     mimeType: file.mimeType,
     expectedPlainSize: file.size,
+    blobFallbackMaxBytes: async () => (await driveStreamLimits({ anonymous: true })).blobFallbackMaxBytes,
     accessToken: viewerToken(),
   })
 }

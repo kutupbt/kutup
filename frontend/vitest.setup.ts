@@ -11,8 +11,8 @@ afterEach(() => {
 })
 
 // toEqual on typed arrays compares them byte for byte here. The default walks
-// every element as an object key, which takes about a minute for one 5 MiB
-// secretstream chunk; this takes milliseconds. Arrays of different kinds or
+// every element as an object key, which takes about a minute for one 4 MiB
+// block; this takes milliseconds. Arrays of different kinds or
 // other values fall through to the default.
 expect.addEqualityTesters([
   function typedArraysEqual(a: unknown, b: unknown) {

@@ -1117,7 +1117,9 @@
         "driveStreamResponseMaxBytes": "İstek başına en büyük parça (bayt)",
         "driveStreamResponseMaxBytesHint": "Aralıklı bir indirme yanıtının taşıdığı en fazla bayt; sunucular arasında da.",
         "driveStreamBlobFallbackMaxBytes": "Bellekten oynatılan en büyük dosya (bayt)",
-        "driveStreamBlobFallbackMaxBytesHint": "Tarayıcının akış yapamadığı yerde, bu boyuta kadar dosyalar oynatmak için tamamen belleğe yüklenir."
+        "driveStreamBlobFallbackMaxBytesHint": "Tarayıcının akış yapamadığı yerde, bu boyuta kadar dosyalar oynatmak için tamamen belleğe yüklenir.",
+        "storageIncompleteMultipartMaxAgeSeconds": "Artık yükleme parçalarını şu süreden sonra iptal et (saniye)",
+        "storageIncompleteMultipartMaxAgeSecondsHint": "Hiçbir yüklemenin artık adını taşımadığı yarım kalmış çok parçalı yüklemeler bu yaşa gelince iptal edilir ve parçaları silinir."
       },
       "privacyLimits": {
         "keyBackupKeepDays": "Hesap anahtarı yedeklerini sakla (gün)",

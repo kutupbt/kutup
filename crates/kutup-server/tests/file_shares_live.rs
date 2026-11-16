@@ -15,7 +15,6 @@
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::collection_keyring;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::file_keyring;
 use kutup_crypto::named_share::FileShareEnvelopeV1;
 use reqwest::blocking::Client;
@@ -152,12 +151,7 @@ fn file_share_contract() {
     let (status, blob) = download(&c, &base, &bob.token, &file.id);
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        drive_object::decrypt_file_blob(
-            &blob,
-            &opened,
-            DriveFileBlobContextV1::new(&file.id, 1).unwrap()
-        )
-        .unwrap(),
+        open_blob(&blob, &file.id, &opened, 1).unwrap(),
         b"just this one"
     );
     let folder_files = bearer(
@@ -178,19 +172,11 @@ fn file_share_contract() {
     );
 
     // Viewing is not editing.
-    let version = || {
-        drive_object::encrypt_file_blob(
-            b"edited",
-            &file.key,
-            DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-        )
-        .unwrap()
-    };
     assert_eq!(
-        post_version(&c, &base, &bob.token, &file.id, version()).status(),
+        post_version(&c, &base, &bob.token, &file, b"edited").status(),
         StatusCode::FORBIDDEN
     );
-    assert!(post_version(&c, &base, &carol.token, &file.id, version())
+    assert!(post_version(&c, &base, &carol.token, &file, b"edited")
         .status()
         .is_success());
 
@@ -370,19 +356,16 @@ fn stale_file_shares_wait_for_the_owner() {
     assert!(listing(&editor.token)[0].get("shared").is_none());
     let pending = |token: &str| get(&c, format!("{base}/api/file-shares/pending"), token);
     assert_eq!(pending(&alice.token).as_array().unwrap().len(), 0);
-    let version = |key: &[u8; 32], generation: u32| {
-        drive_object::encrypt_file_blob(
-            b"v",
-            key,
-            DriveFileBlobContextV1::new(&file.id, generation).unwrap(),
+    let version = |token: &str, key: &[u8; 32], generation: u32| {
+        save_version(
+            &c,
+            &base,
+            token,
+            &Version::seal(&file.id, key, generation, b"v"),
+            &WHOLE_FILE,
         )
-        .unwrap()
     };
-    assert!(
-        post_version(&c, &base, &carol.token, &file.id, version(&file.key, 1))
-            .status()
-            .is_success()
-    );
+    assert!(version(&carol.token, &file.key, 1).status().is_success());
 
     // The folder moves to a new key (the leaver removed); the file is behind.
     let access = get(
@@ -425,7 +408,7 @@ fn stale_file_shares_wait_for_the_owner() {
     .json(&json!({
         "fromEpoch": 1,
         "epochStatement": statement.encode_b64(),
-        "ownerKeyEnvelope": drive_envelope::seal_b64(&folder2, &alice.master_key, ctx2(DriveEnvelopePurpose::CollectionKey, 1)).unwrap(),
+        "ownerKeyEnvelope": crate::common::owner_collection_key(&folder2, &alice, &folder.id, 2),
         "previousKeyEnvelope": collection_keyring::seal_previous_key(&folder.key, &folder2, &folder.id, &alice.id, 2).unwrap(),
         "nameEnvelope": drive_envelope::seal_b64(b"Stale", &folder2, ctx2(DriveEnvelopePurpose::CollectionName, 2)).unwrap(),
         "members": [{ "userId": editor.id, "namedShareEnvelope": editor_share }],
@@ -450,7 +433,7 @@ fn stale_file_shares_wait_for_the_owner() {
     assert_eq!(pending(&carol.token).as_array().unwrap().len(), 0);
     // The leaver holds the key the file is still under: Carol may not write.
     assert_eq!(
-        post_version(&c, &base, &carol.token, &file.id, version(&file.key, 1)).status(),
+        version(&carol.token, &file.key, 1).status(),
         StatusCode::FORBIDDEN
     );
     assert_eq!(
@@ -466,8 +449,9 @@ fn stale_file_shares_wait_for_the_owner() {
             "fromGeneration": 1,
             "fileKeyEnvelope": drive_envelope::seal_b64(&key2, &folder2,
                 DriveEnvelopeContextV1::file_key(&file.id, &folder.id, 2, 2).unwrap()).unwrap(),
+            // Revision 2: Carol's version above committed the next metadata.
             "metadataEnvelope": drive_envelope::seal_b64(br#"{"name":"a.txt","mimeType":"text/plain","size":1}"#, &key2,
-                DriveEnvelopeContextV1::file_metadata(&file.id, 2, 1).unwrap()).unwrap(),
+                DriveEnvelopeContextV1::file_metadata(&file.id, 2, 2).unwrap()).unwrap(),
             "previousKeyEnvelope": file_keyring::seal_previous_key(&file.key, &key2, &file.id, 2).unwrap(),
         }))
         .send()
@@ -489,7 +473,7 @@ fn stale_file_shares_wait_for_the_owner() {
     assert!(!named.is_empty());
     assert_eq!(pending(&alice.token).as_array().unwrap().len(), 1);
     assert_eq!(
-        post_version(&c, &base, &carol.token, &file.id, version(&key2, 2)).status(),
+        version(&carol.token, &key2, 2).status(),
         StatusCode::FORBIDDEN
     );
 
@@ -503,11 +487,7 @@ fn stale_file_shares_wait_for_the_owner() {
     assert_eq!(pending(&alice.token).as_array().unwrap().len(), 0);
     assert_eq!(carol_entry(&carol.token)["keyGeneration"], 2);
     assert!(carol_entry(&carol.token).get("metadataAtShare").is_none());
-    assert!(
-        post_version(&c, &base, &carol.token, &file.id, version(&key2, 2))
-            .status()
-            .is_success()
-    );
+    assert!(version(&carol.token, &key2, 2).status().is_success());
 }
 
 #[test]
@@ -735,12 +715,7 @@ fn a_public_link_to_one_file() {
         .unwrap();
     assert_eq!(blob.status(), StatusCode::OK);
     assert_eq!(
-        drive_object::decrypt_file_blob(
-            &blob.bytes().unwrap(),
-            &file.key,
-            DriveFileBlobContextV1::new(&file.id, 1).unwrap()
-        )
-        .unwrap(),
+        open_blob(&blob.bytes().unwrap(), &file.id, &file.key, 1).unwrap(),
         b"just this file"
     );
     // A picture in the file (a note's image) reaches the link; one in a

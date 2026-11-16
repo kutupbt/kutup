@@ -69,6 +69,8 @@ export interface StoredBackupMedia {
   referenceId: string
   mediaId: string
   ciphertextBytes: number
+  /** The copy's sealed manifest SHA-256 (canonical base64); '' until the server has it. */
+  manifestSha256: string
   protected: boolean
   needsAttention: boolean
   storageFull: boolean

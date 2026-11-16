@@ -14,8 +14,14 @@ vi.mock('./rustWasm', async () => {
   return { getCryptoWasm: async () => module }
 })
 
+import vectors from '../../../../crates/kutup-crypto/tests/vectors/crypto.json'
+import type { DriveRoot } from './accountRoots'
+import { fromBase64 } from './base64'
+import { openOwnerCollectionKey, sealOwnerCollectionKey } from './ownedCollection'
 import {
+  openOwnerLinkKeyV1,
   openPublicLinkCollectionKeyV1,
+  sealOwnerLinkKeyV1,
   sealPublicLinkCollectionKeyV1,
 } from './publicLink'
 
@@ -63,5 +69,27 @@ describe('public-link collection-key envelope', () => {
       ...context,
       epoch: context.epoch + 1,
     })).rejects.toThrow()
+  })
+})
+
+describe('owner copies under the Drive root (vectors shared with Rust)', () => {
+  const v = vectors.driveOwnerKeys
+  const roots = { driveRoot: v.driveRoot as DriveRoot, driveGeneration: v.driveRootGeneration }
+  const folder = { collectionId: v.collectionId, ownerUserId: v.ownerUserId, epoch: v.collectionEpoch }
+  const link = { linkId: v.linkId, ownerUserId: v.ownerUserId }
+
+  it('opens the checked-in owner copies and round-trips new ones', async () => {
+    expect(await openOwnerCollectionKey(v.collectionKeyEnvelope, roots, folder)).toEqual(fromBase64(v.collectionKey))
+    expect(await openOwnerLinkKeyV1(v.linkKeyEnvelope, roots, link)).toEqual(fromBase64(v.linkKey))
+    const sealed = await sealOwnerCollectionKey(fromBase64(v.collectionKey), roots, folder)
+    expect(await openOwnerCollectionKey(sealed, roots, folder)).toEqual(fromBase64(v.collectionKey))
+    const sealedLink = await sealOwnerLinkKeyV1(fromBase64(v.linkKey), roots, link)
+    expect(await openOwnerLinkKeyV1(sealedLink, roots, link)).toEqual(fromBase64(v.linkKey))
+  })
+
+  it('refuses another generation, epoch or kind', async () => {
+    await expect(openOwnerCollectionKey(v.collectionKeyEnvelope, { ...roots, driveGeneration: 1 }, folder)).rejects.toThrow()
+    await expect(openOwnerCollectionKey(v.collectionKeyEnvelope, roots, { ...folder, epoch: folder.epoch + 1 })).rejects.toThrow()
+    await expect(openOwnerLinkKeyV1(v.collectionKeyEnvelope, roots, { ...link, linkId: v.collectionId })).rejects.toThrow()
   })
 })

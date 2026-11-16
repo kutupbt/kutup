@@ -12,20 +12,20 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Master-key password wrap | XSalsa20 secretbox plus separate nonce; implicit Argon parameters | **Implemented:** OPAQUE for the password (its Argon2id in the OPAQUE key-stretching function), and the suite-bearing `AccountRecordV1` (suite 2, bound to the account's key binding, XChaCha) for the wrap |
 | Master-key recovery wrap | XSalsa20 secretbox under random recovery entropy | **Implemented:** `AccountRecordV1` (suite 2) with recovery purpose, the account's key binding as context, and XChaCha |
 | Account sharing private key | XSalsa20 secretbox; public X25519 key stored separately | **Implemented:** account-scoped Drive keys in `AccountManifestV1`; private material wrapped by the Drive-private-key purpose of `AccountRecordV1` |
-| Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records (names padded to 256-byte buckets), immutable `CollectionEpochStatementV1` history and exact revision/epoch binding |
+| Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records (names padded to 256-byte buckets), immutable `CollectionEpochStatementV1` history and exact revision/epoch binding. The owner key (purpose 1) is sealed under the owner's Drive root (account-record purpose 23), not the master key, with the root's generation in the revision slot (docs/plans/identity-rotation.md §3). Vector: `crypto.json` → `driveOwnerKeys` |
 | File metadata/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated file UUID; the file key's wrap is bound to file, folder, the folder epoch it is sealed at and the key's generation, and the metadata (padded to 256-byte buckets, with the content SHA-256) to the file alone (generation and revision), across multipart, tus, trash, public-link and signed-federation paths (docs/plans/drive-move.md) |
-| File blob and version snapshot | Raw secretstream header/chunks, or nonce-prefixed snapshot AEAD | **Implemented end to end:** one `DriveObjectSuiteId` file-blob format for originals and text/office/whiteboard snapshots, with 5 MiB secretstream framing bound to the file and its key generation, never the folder |
+| File blob and version snapshot | Raw secretstream header/chunks, or nonce-prefixed snapshot AEAD | **Implemented end to end:** one block-format file blob (Drive object suite 2, `KUTPDB3`) for originals and text/office/whiteboard snapshots: 4 MiB AEAD blocks bound to the file, its key generation and the revision, never the folder, with a signed manifest of block hashes (docs/plans/drive-block-format.md) |
 | Profile key for a share partner | — (new) | **Implemented end to end:** `ProfileKeyEnvelopeV1` (`KUTPPK1`), the same HPKE suite and Drive keys as a named share, bound to both accounts and incarnations, not to a folder |
 | Single-file share | — (new) | **Implemented (local):** `FileShareEnvelopeV1` (`KUTPFS1`), the named-share layout bound to a file and its key generation instead of a folder and epoch (docs/plans/drive-file-sharing.md) |
 | Local/federated named share | Anonymous `crypto_box_seal` bytes | **Implemented end to end:** one `NamedShareEnvelopeV1` format for local and signed-federation routes, X25519 HPKE plus account-manifest-bound Ed25519 sender signature |
 | Public-link collection wrap | Secretbox under link key plus separate nonce | **Implemented end to end:** public-link purpose `DriveEnvelopeV1` bound to collection, owner and epoch; the independent link capability remains only in the URL fragment |
 | Collaborative frame | XChaCha frame with `doc_key_id`, device and sequence | **Implemented end to end:** canonical Rust `CollabFrameSuiteId = 1`, 80-byte authenticated context header, XChaCha key derived from the file key and Ed25519 signature; browser uses the Rust parser/KDF/AEAD through WASM |
 | Whiteboard asset | XChaCha with asset AAD | **Implemented end to end:** `DriveEnvelopeV1` whiteboard-asset purpose under the file key, bound to file, key generation and asset ID across browser, CLI and server ingestion |
-| File thumbnail | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 7 under the file key, bound to file, variant and key generation; padded `KTH1` container |
+| File thumbnail | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 7 under the file key, bound to file, variant, the content revision it shows and key generation; padded `KTH1` container |
 | Public link to one file | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 11 (`PublicLinkFileKey`): a file key of one generation under a link key, object = file, parent = owner, epoch = generation (docs/plans/drive-file-sharing.md, slice 3) |
 | File key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 10 seals generation *g − 1*'s file key under generation *g*'s; `file_keyring::key_at` walks the chain, so a file's history travels with it between folders (docs/plans/drive-move.md) |
 | Folder key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 8 seals epoch *e − 1*'s key under epoch *e*'s; `collection_keyring::unlock` verifies the whole owner-signed statement chain and every key commitment (docs/plans/drive-share-revocation.md) |
-| Public-link owner copy | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 9 seals a link's key under the owner's master key (object = link id), so links can be listed, copied and re-wrapped on rotation |
+| Public-link owner copy | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 9 seals a link's key under the owner's Drive root (object = link id, parent = owner, epoch 1, revision = the Drive root's generation), so links can be listed, copied and re-wrapped on rotation, and a new master key moves none of them. Vector: `crypto.json` → `driveOwnerKeys` |
 | Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability; the owner's own copy of the profile key is an account record (`KUTPAR1`, purpose `ChatProfileKeyWrap`) bound to the key binding, the profile version and the revision |
 | Identity pins | — (new) | **Implemented end to end:** the account's synced pin list, an `AccountRecordV1` (purpose `IdentityPins`, one per account) under the master key, bound to the account's key binding and the list's revision; pins are keyed by account (server and account id), with addresses kept only as labels. Vector: `identity-pins-v4.json` |
 | Contacts | — (new) | **Implemented end to end:** summaries signed by the account authority under `kutup/contact-summary/v2`, and cards as `AccountRecordV1` (purpose `ContactCard`, object the SHA-256 of the UID, which the server checks against the summary), both bound to the account's key binding. Vector: `contact-card-v3.json` |
@@ -105,30 +105,55 @@ profile envelopes. Safety numbers (V2) name only the two authority keys.
 purpose, zero reserved byte, epoch, revision, 16-byte object UUID, 16-byte
 parent UUID, 24-byte nonce, exact ciphertext length, and XChaCha20-Poly1305
 ciphertext/tag. The fixed header is AAD. Its stable scope also feeds
-HKDF-SHA256, so raw master/collection/file/link roots are never AEAD keys and
-each purpose, object, parent, epoch and revision has a distinct derived key.
+HKDF-SHA256, so raw Drive-root/collection/file/link roots are never AEAD keys
+and each purpose, object, parent, epoch and revision has a distinct derived
+key. The account's own copies, an owned folder's key (purpose 1) and a link's
+key (purpose 9), are sealed under its stored Drive root, never under the
+master key: the revision slot carries the Drive root's generation (purpose 1's
+epoch is the folder key's, purpose 9's is 1). That meaning of the slot is
+frozen for both purposes. The generation is never 0 (the context
+constructor refuses 0, as `RootGeneration` does) and, like every header
+field, it is in the AEAD associated data and in the HKDF info of the
+envelope's key, so a server can't relabel an envelope as another
+generation. After a future Drive-root
+rotation a reader picks the root by the header, and a master-key rotation
+re-wraps only the root's record. Only the typed exports
+(`sealOwnerCollectionKey`, `sealOwnerLinkKey` and their openers) seal or open
+them; the generic WASM export refuses both purposes. The top-level name hash
+key comes from the current Drive root (`drive_names::top_level_hash_key`,
+same label and derivation as under the master key), and each top-level
+folder records the root's generation next to its hash
+(`collections.name_hash_generation`, sent as `nameHashGeneration`), so a
+reader knows which key made it; a Drive-root rotation rehashes the top level
+(the rotation flow).
 
-A file blob is `[DriveFileBlobHeaderV1][secretstream header][frames]`.
-The 32-byte Drive header is magic `KUTPDB2\0`, big-endian
-`DriveObjectSuiteId`, file-blob purpose, zero reserved byte, the non-zero
-generation of the file key that sealed it, and the file UUID. It names no
-folder, so a file moves without re-encryption (docs/plans/drive-move.md; the
-48-byte `KUTPDB1` layout, which also named the folder, was replaced before the
-first tag). HKDF-SHA256 derives a purpose key from the random file key using
-the fixed header as info. The same header is associated data for every 5 MiB
-secretstream frame. Every blob, including an empty file, contains an
-authenticated `TAG_FINAL` frame; truncation, trailing frames and
-file/generation relocation fail closed. Multipart, tus, snapshot and
-signed-federation ingestion validate the exact public header before storage.
+A file blob is `[header][blocks][sealed manifest][trailer]` in the block
+format (docs/plans/drive-block-format.md §2). The 48-byte header is magic
+`KUTPDB3\0`, big-endian Drive object suite 2, file-blob purpose, zero
+reserved byte, the non-zero generation of the file key that sealed it, the
+file UUID and the revision UUID the client chose. It names no folder, so a
+file moves without re-encryption (docs/plans/drive-move.md). HKDF-SHA256
+derives the block, nonce and manifest keys from the random file key using
+the header as info. Each 4 MiB XChaCha20-Poly1305 block is bound to the
+header, its index and whether it is the last; the sealed manifest carries
+the block hashes, the plaintext size and the uploader's Ed25519 signature,
+and fixes the size and the end. Truncation, trailing bytes and
+file/generation/revision relocation fail closed. Multipart, tus, snapshot
+and signed-federation ingestion validate the exact public header and the
+structure (from the trailer and the length) before a revision is stored.
+The streaming format before it (`KUTPDB2`, a secretstream with 5 MiB
+frames, suite 1) was removed with the clean-slate wipe.
 
 A file's key is wrapped under its folder's key as a purpose-3 envelope: object
 = file, parent = folder, epoch = the folder epoch it is sealed at, revision =
 the file key's generation. It is the only file object that names the folder;
 moving a file re-seals it alone. The metadata (purpose 4) is sealed under the
 file key with object = parent = file, epoch = key generation and revision =
-metadata revision. Its plaintext is `FileMetadataV1` (`kutup-crypto`
+metadata revision. Its plaintext is `FileMetadataV2` (`kutup-crypto`
 `file_metadata`, vector `fileMetadata`): canonical JSON `{ name, mimeType,
-size, media? }`, decoded strictly (unknown fields and out-of-range values
+size, content, originalRevisionId?, stateRevisionId?, sha256?, media? }`,
+where `content` commits to the current revision and its sealed manifest's
+SHA-256, decoded strictly (unknown fields and out-of-range values
 refused) by the browser (WASM) and the CLI alike. `media` holds a photo's or
 video's details (docs/plans/photos.md): when it was taken (UTC ms, the time
 zone in minutes, and where the date came from), place, size on screen,
@@ -248,7 +273,7 @@ authorize a profile fetch.
 Chat backup uses `ChatBackupRootV1`, wrapped with the Chat-backup purpose of
 `AccountRecordV1`. Fixed HKDF-SHA256 labels derive independent message,
 media-ID, media-encryption, manifest-signing and segment keys. Typed headers
-bind every XChaCha20-Poly1305/secretstream object to its suite, account,
+bind every XChaCha20-Poly1305 object and block-format media object to its suite, account,
 incarnation, protection domain, generation and object purpose. Signed,
 hash-chained manifests select one encrypted base plus an ordered event tail;
 the homeserver stores and quotas opaque objects but cannot inspect Chat

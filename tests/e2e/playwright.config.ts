@@ -1,6 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { allOrigins, appOrigin } from './fixtures/apps'
 
@@ -56,8 +58,27 @@ export default defineConfig({
         launchOptions: { args: browserArgs() },
       },
     },
+    {
+      // WebKit, for what Safari does differently: only the specs in
+      // suites/webkit.txt (the media streaming ones), so a plain run or a
+      // mistaken `--project=webkit` never starts the rest. Not in PR CI.
+      // `playwright install --with-deps webkit`; see README.md.
+      name: 'webkit',
+      testMatch: suiteSpecs('webkit'),
+      use: { ...devices['Desktop Safari'] },
+    },
   ],
 })
+
+/** The spec paths a suite file lists (tests/e2e/suites/<suite>.txt; '#' starts a comment), as scripts/gate.sh reads them. */
+function suiteSpecs(suite: string): string[] {
+  const here = dirname(fileURLToPath(import.meta.url))
+  return readFileSync(resolve(here, 'suites', `${suite}.txt`), 'utf8')
+    .split('\n')
+    .map((line) => line.replace(/#.*/, '').trim())
+    .filter((line) => line !== '')
+    .map((line) => resolve(here, line))
+}
 
 /**
  * Test hostnames outside `localhost` (the federation stack's `*.a.test`)

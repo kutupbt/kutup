@@ -20,10 +20,8 @@ use kutup_crypto::chat_backup::{
     self, ChatBackupContextV1, ChatBackupObjectContextV1, ChatBackupObjectPurposeV1,
     ChatBackupProtectionDomainV1, ChatBackupSuiteId,
 };
-use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
 use kutup_crypto::chat_profile;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV3};
 use kutup_crypto::kdf;
 use kutup_crypto::local_state::{self, LocalStatePurpose};
@@ -46,32 +44,9 @@ struct AccountIdentityKeysView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DriveFileBlobPreparationView {
-    object_header: String,
-    stream_key: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChatMediaObjectPreparationView {
-    object_header: String,
-    stream_key: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ChatBackupMediaPreparationView {
     media_id: String,
     outer_encryption_key: String,
-    object_header: String,
-    padded_plaintext_bytes: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenedChatBackupMediaHeaderView {
-    outer_encryption_key: String,
-    source_ciphertext_bytes: u64,
     padded_plaintext_bytes: u64,
 }
 
@@ -514,63 +489,15 @@ pub fn prepare_chat_backup_media(
         .map_err(|error| js_error(&error.to_string()))?;
     let key = chat_backup::derive_media_encryption_key(&root, context, &media_id)
         .map_err(|error| js_error(&error.to_string()))?;
-    let header = kutup_crypto::chat_backup_media::build_media_header(
-        kutup_crypto::chat_backup_media::ChatBackupMediaContextV1 {
-            account_incarnation_id: context.account_incarnation_id,
-            backup_incarnation_id: context.backup_incarnation_id,
-            protection_domain: context.protection_domain,
-            media_id,
-        },
-        source_ciphertext_bytes,
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
-    let parsed = kutup_crypto::chat_backup_media::inspect_media_header(&header)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let padded_plaintext_bytes =
+        kutup_crypto::chat_backup_media::padded_media_plaintext_bytes(source_ciphertext_bytes)
+            .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&ChatBackupMediaPreparationView {
         media_id: hex::encode(media_id),
         outer_encryption_key: STANDARD.encode(key.as_slice()),
-        object_header: STANDARD.encode(header),
-        padded_plaintext_bytes: parsed.padded_plaintext_bytes,
+        padded_plaintext_bytes,
     })
     .map_err(|error| js_error(&format!("encode backup media preparation: {error}")))
-}
-
-#[wasm_bindgen(js_name = openChatBackupMediaHeader)]
-pub fn open_chat_backup_media_header(
-    header_base64: &str,
-    backup_root_base64: &str,
-    expected_account_incarnation_id: &str,
-    expected_backup_incarnation_id: &str,
-    expected_media_id: &str,
-) -> Result<JsValue, JsValue> {
-    let header = decode_canonical_base64(header_base64, "backup media header")?;
-    let root = decode_canonical_base64(backup_root_base64, "backup root")?;
-    let expected = chat_backup_context(
-        expected_account_incarnation_id,
-        expected_backup_incarnation_id,
-    )?;
-    let media_id: [u8; 32] = hex::decode(expected_media_id)
-        .ok()
-        .and_then(|value| value.try_into().ok())
-        .filter(|value: &[u8; 32]| hex::encode(value) == expected_media_id)
-        .ok_or_else(|| js_error("backup media id must be lowercase 32-byte hex"))?;
-    let parsed = kutup_crypto::chat_backup_media::inspect_media_header(&header)
-        .map_err(|error| js_error(&error.to_string()))?;
-    if parsed.context.account_incarnation_id != expected.account_incarnation_id
-        || parsed.context.backup_incarnation_id != expected.backup_incarnation_id
-        || parsed.context.protection_domain != expected.protection_domain
-        || parsed.context.media_id != media_id
-    {
-        return Err(js_error("backup media header context mismatch"));
-    }
-    let key = chat_backup::derive_media_encryption_key(&root, expected, &media_id)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&OpenedChatBackupMediaHeaderView {
-        outer_encryption_key: STANDARD.encode(key.as_slice()),
-        source_ciphertext_bytes: parsed.source_ciphertext_bytes,
-        padded_plaintext_bytes: parsed.padded_plaintext_bytes,
-    })
-    .map_err(|error| js_error(&format!("encode opened backup media header: {error}")))
 }
 
 /// Derive the recovery authorization proof sent to the server. Raw recovery
@@ -796,13 +723,18 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
 /// The purposes whose context is two plain UUIDs. Whiteboard assets and
 /// thumbnails derive their parent id and have typed exports
 /// (`sealWhiteboardAsset`, `sealThumbnail`); the generic path refuses them so
-/// their bindings cannot be bypassed.
+/// their bindings cannot be bypassed. The owner copies under the Drive root
+/// (owned folder keys, link keys) take the root itself
+/// (`sealOwnerCollectionKey`, `sealOwnerLinkKey` and their openers).
 fn generic_drive_purpose(value: u8) -> Result<DriveEnvelopePurpose, JsValue> {
     match DriveEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
-        DriveEnvelopePurpose::WhiteboardAsset
+        DriveEnvelopePurpose::CollectionKey
+        | DriveEnvelopePurpose::PublicLinkKey
+        | DriveEnvelopePurpose::WhiteboardAsset
         | DriveEnvelopePurpose::Thumbnail
         | DriveEnvelopePurpose::PreviousCollectionKey
-        | DriveEnvelopePurpose::PreviousFileKey => Err(js_error(
+        | DriveEnvelopePurpose::PreviousFileKey
+        | DriveEnvelopePurpose::RevisionContent => Err(js_error(
             "this Drive envelope purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -859,6 +791,104 @@ pub fn open_drive_envelope(
     Ok(STANDARD.encode(plaintext))
 }
 
+fn crypto_error(error: kutup_crypto::error::CryptoError) -> JsValue {
+    js_error(&error.to_string())
+}
+
+fn drive_root_at(
+    drive_root_base64: &str,
+    generation: u32,
+) -> Result<
+    (
+        kutup_crypto::account_roots::DriveRoot,
+        kutup_crypto::account_roots::RootGeneration,
+    ),
+    JsValue,
+> {
+    let root = kutup_crypto::account_roots::DriveRoot::from_slice(&decode_canonical_base64(
+        drive_root_base64,
+        "Drive root",
+    )?)
+    .map_err(crypto_error)?;
+    let generation =
+        kutup_crypto::account_roots::RootGeneration::new(generation).map_err(crypto_error)?;
+    Ok((root, generation))
+}
+
+/// An owned folder's key at `epoch`, sealed for its owner under their Drive
+/// root of `drive_generation` (docs/plans/identity-rotation.md §3).
+#[wasm_bindgen(js_name = sealOwnerCollectionKey)]
+pub fn seal_owner_collection_key(
+    collection_key_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    collection_id: &str,
+    owner_id: &str,
+    epoch: u32,
+) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(collection_key_base64, "collection key")?;
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context =
+        DriveEnvelopeContextV1::owner_collection_key(collection_id, owner_id, epoch, generation)
+            .map_err(crypto_error)?;
+    drive_envelope::seal_under_drive_root(&key, &root, context).map_err(crypto_error)
+}
+
+/// Opens an owned folder's key sealed under the owner's Drive root of
+/// `drive_generation`, the generation the envelope names.
+#[wasm_bindgen(js_name = openOwnerCollectionKey)]
+pub fn open_owner_collection_key(
+    envelope_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    collection_id: &str,
+    owner_id: &str,
+    epoch: u32,
+) -> Result<String, JsValue> {
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context =
+        DriveEnvelopeContextV1::owner_collection_key(collection_id, owner_id, epoch, generation)
+            .map_err(crypto_error)?;
+    let key = drive_envelope::open_under_drive_root(envelope_base64, &root, context)
+        .map_err(crypto_error)?;
+    Ok(STANDARD.encode(key.as_slice()))
+}
+
+/// A public link's key, sealed for its owner under their Drive root of
+/// `drive_generation`.
+#[wasm_bindgen(js_name = sealOwnerLinkKey)]
+pub fn seal_owner_link_key(
+    link_key_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    link_id: &str,
+    owner_id: &str,
+) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(link_key_base64, "link key")?;
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context = DriveEnvelopeContextV1::owner_link_key(link_id, owner_id, generation)
+        .map_err(crypto_error)?;
+    drive_envelope::seal_under_drive_root(&key, &root, context).map_err(crypto_error)
+}
+
+/// Opens a link's owner copy sealed under the owner's Drive root of
+/// `drive_generation`.
+#[wasm_bindgen(js_name = openOwnerLinkKey)]
+pub fn open_owner_link_key(
+    envelope_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    link_id: &str,
+    owner_id: &str,
+) -> Result<String, JsValue> {
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context = DriveEnvelopeContextV1::owner_link_key(link_id, owner_id, generation)
+        .map_err(crypto_error)?;
+    let key = drive_envelope::open_under_drive_root(envelope_base64, &root, context)
+        .map_err(crypto_error)?;
+    Ok(STANDARD.encode(key.as_slice()))
+}
+
 #[wasm_bindgen(js_name = sealWhiteboardAsset)]
 pub fn seal_whiteboard_asset(
     plaintext_base64: &str,
@@ -909,7 +939,8 @@ fn thumbnail_variant(value: &str) -> Result<ThumbnailVariant, JsValue> {
 }
 
 /// Frame, pad and seal a thumbnail under the file key
-/// (docs/plans/drive-thumbnails.md). `format`: 1 JPEG, 2 WebP, 3 PNG.
+/// (docs/plans/drive-thumbnails.md), bound to the content revision it shows
+/// (docs/plans/drive-block-format.md §2). `format`: 1 JPEG, 2 WebP, 3 PNG.
 #[wasm_bindgen(js_name = sealThumbnail)]
 #[allow(clippy::too_many_arguments)]
 pub fn seal_thumbnail(
@@ -920,6 +951,7 @@ pub fn seal_thumbnail(
     variant: &str,
     file_key_base64: &str,
     file_id: &str,
+    revision_id: &str,
     generation: u32,
 ) -> Result<String, JsValue> {
     let thumbnail = Thumbnail {
@@ -934,19 +966,22 @@ pub fn seal_thumbnail(
         thumbnail_variant(variant)?,
         &file_key,
         file_id,
+        revision_id,
         generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(envelope))
 }
 
-/// Open a thumbnail of exactly this file, variant and key generation.
+/// Open a thumbnail of exactly this file, content revision, variant and key
+/// generation: one drawn from older content fails, and is drawn again.
 #[wasm_bindgen(js_name = openThumbnail)]
 pub fn open_thumbnail(
     envelope_base64: &str,
     variant: &str,
     file_key_base64: &str,
     expected_file_id: &str,
+    expected_revision_id: &str,
     expected_generation: u32,
 ) -> Result<JsValue, JsValue> {
     let envelope = decode_canonical_base64(envelope_base64, "thumbnail envelope")?;
@@ -956,6 +991,7 @@ pub fn open_thumbnail(
         thumbnail_variant(variant)?,
         &file_key,
         expected_file_id,
+        expected_revision_id,
         expected_generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -968,78 +1004,69 @@ pub fn open_thumbnail(
     .map_err(|error| js_error(&error.to_string()))
 }
 
-#[wasm_bindgen(js_name = prepareDriveFileBlob)]
-pub fn prepare_drive_file_blob(
+/// A revision's content as JavaScript sees it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RevisionContentView {
+    revision_id: String,
+    manifest_sha256: String,
+    size: f64,
+}
+
+/// Seal what one content revision is (its id, its sealed manifest's SHA-256
+/// and its size) under the file key of `generation`, the generation that
+/// sealed its object (docs/plans/drive-block-format.md §2): every upload and
+/// save sends it with the revision, and readers of a non-current revision
+/// open it before the object.
+#[wasm_bindgen(js_name = sealRevisionContent)]
+pub fn seal_revision_content(
     file_key_base64: &str,
     file_id: &str,
+    revision_id: &str,
+    manifest_sha256: &str,
+    size: f64,
     generation: u32,
-) -> Result<JsValue, JsValue> {
+) -> Result<String, JsValue> {
+    if size.fract() != 0.0 || !(0.0..=9_007_199_254_740_991.0).contains(&size) {
+        return Err(js_error("revision size must be a whole number"));
+    }
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let context = DriveFileBlobContextV1::new(file_id, generation)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let object_header = drive_object::file_blob_header(context);
-    let stream_key = drive_object::derive_file_blob_key(&file_key, context)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&DriveFileBlobPreparationView {
-        object_header: STANDARD.encode(object_header),
-        stream_key: STANDARD.encode(stream_key.as_slice()),
-    })
-    .map_err(|error| js_error(&format!("encode Drive file-blob preparation: {error}")))
+    let content = kutup_crypto::revision_content::RevisionContentV1 {
+        revision_id: revision_id.to_owned(),
+        manifest_sha256: manifest_sha256.to_owned(),
+        size: size as u64,
+    };
+    kutup_crypto::revision_content::seal_revision_content(&content, &file_key, file_id, generation)
+        .map(|envelope| STANDARD.encode(envelope))
+        .map_err(|error| js_error(&error.to_string()))
 }
 
-#[wasm_bindgen(js_name = openDriveFileBlobHeader)]
-pub fn open_drive_file_blob_header(
-    object_header_base64: &str,
+/// Open the record of exactly this file, revision and key generation:
+/// `{revisionId, manifestSha256, size}`, what the revision's object must be.
+#[wasm_bindgen(js_name = openRevisionContent)]
+pub fn open_revision_content(
+    envelope_base64: &str,
     file_key_base64: &str,
     expected_file_id: &str,
+    expected_revision_id: &str,
     expected_generation: u32,
-) -> Result<String, JsValue> {
-    let object_header = decode_canonical_base64(object_header_base64, "object header")?;
-    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let expected = DriveFileBlobContextV1::new(expected_file_id, expected_generation)
-        .map_err(|error| js_error(&error.to_string()))?;
-    drive_object::validate_file_blob_header(&object_header, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let stream_key = drive_object::derive_file_blob_key(&file_key, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(stream_key.as_slice()))
-}
-
-/// Return the canonical Chat-media header and its purpose-derived stream key.
-/// JS owns only bounded secretstream I/O, exactly as for Drive file blobs.
-#[wasm_bindgen(js_name = prepareChatMediaObject)]
-pub fn prepare_chat_media_object(
-    attachment_key_base64: &str,
-    attachment_id: &str,
 ) -> Result<JsValue, JsValue> {
-    let attachment_key = decode_canonical_base64(attachment_key_base64, "attachment key")?;
-    let context = ChatMediaObjectContextV1::new(attachment_id)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let object_header = chat_media::object_header(context);
-    let stream_key = chat_media::derive_object_key(&attachment_key, context)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&ChatMediaObjectPreparationView {
-        object_header: STANDARD.encode(object_header),
-        stream_key: STANDARD.encode(stream_key.as_slice()),
+    let envelope = decode_canonical_base64(envelope_base64, "revision content envelope")?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let content = kutup_crypto::revision_content::open_revision_content(
+        &envelope,
+        &file_key,
+        expected_file_id,
+        expected_revision_id,
+        expected_generation,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&RevisionContentView {
+        revision_id: content.revision_id,
+        manifest_sha256: content.manifest_sha256,
+        size: content.size as f64,
     })
-    .map_err(|error| js_error(&format!("encode Chat-media preparation: {error}")))
-}
-
-#[wasm_bindgen(js_name = openChatMediaObjectHeader)]
-pub fn open_chat_media_object_header(
-    object_header_base64: &str,
-    attachment_key_base64: &str,
-    expected_attachment_id: &str,
-) -> Result<String, JsValue> {
-    let object_header = decode_canonical_base64(object_header_base64, "object header")?;
-    let attachment_key = decode_canonical_base64(attachment_key_base64, "attachment key")?;
-    let expected = ChatMediaObjectContextV1::new(expected_attachment_id)
-        .map_err(|error| js_error(&error.to_string()))?;
-    chat_media::validate_object_header(&object_header, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let stream_key = chat_media::derive_object_key(&attachment_key, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(stream_key.as_slice()))
+    .map_err(|error| js_error(&error.to_string()))
 }
 
 /// Seal one ledger entity's record as an account record of the account bound
@@ -1951,15 +1978,16 @@ pub(crate) fn js_error(message: &str) -> JsValue {
     JsValue::from_str(message)
 }
 
-/// A Drive file's metadata (name, type, size, photo details), checked and
-/// written canonically (docs/plans/photos.md): JSON text in, the exact JSON
-/// text to seal out. Opening metadata runs it through here too, so every
-/// client refuses the same things.
+/// A Drive file's metadata (name, type, size, photo details, and the content
+/// revision it commits to), checked and written canonically
+/// (docs/plans/photos.md, docs/plans/drive-block-format.md §2): JSON text
+/// in, the exact JSON text to seal out. Opening metadata runs it through here
+/// too, so every client refuses the same things.
 #[wasm_bindgen(js_name = canonicalFileMetadata)]
 pub fn canonical_file_metadata(json: &str) -> Result<String, JsValue> {
-    let metadata = kutup_crypto::file_metadata::decode(json.as_bytes())
+    let metadata = kutup_crypto::file_metadata::decode_v2(json.as_bytes())
         .map_err(|error| js_error(&error.to_string()))?;
-    let bytes = kutup_crypto::file_metadata::encode(&metadata)
+    let bytes = kutup_crypto::file_metadata::encode_v2(&metadata)
         .map_err(|error| js_error(&error.to_string()))?;
     String::from_utf8(bytes).map_err(|_| js_error("file metadata is not UTF-8"))
 }
@@ -2089,13 +2117,18 @@ pub fn drive_folder_hash_key(
         .map_err(|error| js_error(&error.to_string()))
 }
 
-/// The hash key for an account's top-level folders, from its master key.
+/// The hash key for an account's top-level folders, from its Drive root
+/// (the folder records the root's generation next to the hash).
 #[wasm_bindgen(js_name = driveTopLevelHashKey)]
-pub fn drive_top_level_hash_key(master_key_base64: &str) -> Result<String, JsValue> {
-    let key = decode_canonical_base64(master_key_base64, "master key")?;
-    kutup_crypto::drive_names::top_level_hash_key(&key)
+pub fn drive_top_level_hash_key(drive_root_base64: &str) -> Result<String, JsValue> {
+    let root = kutup_crypto::account_roots::DriveRoot::from_slice(&decode_canonical_base64(
+        drive_root_base64,
+        "Drive root",
+    )?)
+    .map_err(crypto_error)?;
+    kutup_crypto::drive_names::top_level_hash_key(&root)
         .map(|key| STANDARD.encode(key))
-        .map_err(|error| js_error(&error.to_string()))
+        .map_err(crypto_error)
 }
 
 /// The hash a name is kept unique by in its folder (lowercase hex).

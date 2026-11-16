@@ -346,6 +346,15 @@
       "useNow": "{{now}} ile paylaş",
       "formerly": "önceden {{formerly}}"
     },
+    "content": {
+      "forged": "Bu dosya {{name}} adını taşıyor ama onun anahtarıyla imzalanmamış. Erişimi olan başka biri yazmış olabilir: onunla doğrulamadan içeriğine güvenmeyin.",
+      "forgedUnnamed": "Bu dosyanın imzası, adını taşıdığı kişiyle eşleşmiyor. Erişimi olan başka biri yazmış olabilir: onunla doğrulamadan içeriğine güvenmeyin.",
+      "changed": "Bu dosyayı {{name}}, tanıdığınız anahtarlardan farklı anahtarlarla imzalamış. Hesabı sıfırlanmış olabilir ya da biri onun adını kullanıyor olabilir. Güvenmeden önce onunla başka bir yoldan doğrulayın.",
+      "changedUnnamed": "Bu dosya, yazarı için tanıdığınız anahtarlardan farklı anahtarlarla imzalanmış. Güvenmeden önce onunla başka bir yoldan doğrulayın.",
+      "authorMismatch": "Bu dosyanın geçmişi onu {{claimed}} kişisinin kaydettiğini söylüyor, ama {{name}} imzalamış. Güvenmeden önce onlarla başka bir yoldan doğrulayın.",
+      "authorMismatchSigner": "Bu dosyayı, geçmişinin kaydettiğini söylediği kişi değil {{name}} imzalamış. Güvenmeden önce onlarla başka bir yoldan doğrulayın.",
+      "authorMismatchUnnamed": "Bu dosyayı, geçmişinin kaydettiğini söylediği kişiden başkası imzalamış. Güvenmeden önce onlarla başka bir yoldan doğrulayın."
+    },
     "accept": "Yeni kimliğe güven",
     "acceptFailed": "Kaydedilemedi. Yeniden deneyin.",
     "knownAs": "{{name}} olarak tanıdığınız hesap",

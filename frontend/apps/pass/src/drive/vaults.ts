@@ -5,18 +5,17 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo } from 'react'
-import { createVersion, listVersions } from '@kutup/collab/api'
-import { encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
+import { listVersions } from '@kutup/collab/api'
 import { allFilesKey, loadAllFiles, loadFolderFiles } from '@kutup/drive-core/files'
 import { isVaultName } from '@kutup/drive-core/editorKind'
 import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { foldersKey, useFolders } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
-import { sealedAt } from '@kutup/drive-core/keyring'
-import type { DriveFile, Folder } from '@kutup/drive-core/model'
+import { currentContentOf, originalContentOf, versionContentOf } from '@kutup/drive-core/keyring'
+import { fileMetadataOf, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { uploadUnderFreeName } from '@kutup/drive-core/names'
 import { rekeyFile } from '@kutup/drive-core/rekey'
-import { loadVersionBytes } from '@kutup/editors/snapshots'
+import { loadVersionBytes, saveFileVersion, type SnapshotTarget } from '@kutup/editors/snapshots'
 import { streamUpload } from '@kutup/files/upload/streamUpload'
 import { freshAccessToken } from '@kutup/session/client'
 
@@ -88,18 +87,21 @@ export function useVaultFiles() {
 /** One version's contents (KDBX bytes): a version id, or {@link ORIGINAL}. */
 export async function readVaultVersion(file: DriveFile, version: string): Promise<Uint8Array> {
   if (version === ORIGINAL) {
-    return loadVersionBytes(await sealedAt(file, file.originalKeyGeneration), `/files/${file.id}/original`)
+    // The upload, which the version list does not name: it opens against
+    // the revision and sealed record served with it.
+    return loadVersionBytes(await originalContentOf(file), `/files/${file.id}/original`)
   }
   const row = (await listVersions(file.id)).find((v) => v.id === version)
   if (!row) throw new Error(`version ${version} is gone`)
-  return loadVersionBytes(await sealedAt(file, row.keyGeneration), `/files/${file.id}/versions/${row.id}/download`)
+  return loadVersionBytes(await versionContentOf(file, row), `/files/${file.id}/versions/${row.id}/download`)
 }
 
 /** What the vault holds now, and which version that is. */
 export async function readCurrentVault(file: DriveFile): Promise<{ contents: Uint8Array; version: string }> {
   const newest = (await listVersions(file.id)).find((v) => v.kind === 'file')
-  const version = newest?.id ?? ORIGINAL
-  return { contents: await readVaultVersion(file, version), version }
+  if (newest) return { contents: await readVaultVersion(file, newest.id), version: newest.id }
+  // Never saved: the upload is the file's content, opened against what its metadata commits to.
+  return { contents: await loadVersionBytes(await currentContentOf(file), `/files/${file.id}/download`), version: ORIGINAL }
 }
 
 /** The file as its folder lists it now (its key may have moved on). */
@@ -122,9 +124,27 @@ export async function saveVaultVersion(
 ): Promise<{ version: string; file: DriveFile }> {
   const current = await rekeyFile(folder, file)
   if (!current.fileKey) throw new Error('file is not open')
-  const sealed = await encryptFileBlobV1(contents, current.fileKey, { fileId: current.id, generation: current.keyGeneration })
-  const row = await createVersion(current.id, sealed, { kind: 'file', seqAtSnapshot: 0, docKeyId: 1, basedOn })
-  return { version: row.id, file: current }
+  // The new content becomes the file's, with its next metadata (docs/plans/drive-block-format.md §2).
+  const target: SnapshotTarget = {
+    fileKey: current.fileKey,
+    context: { fileId: current.id, generation: current.keyGeneration },
+    file: { collectionId: current.collectionId, metadataRevision: current.metadataRevision, metadata: fileMetadataOf(current) },
+  }
+  const row = await saveFileVersion(target, contents, { basedOn })
+  const metadata = target.file.metadata!
+  return {
+    version: row.id,
+    // The file after: the next save commits on top of this metadata.
+    file: {
+      ...current,
+      name: metadata.name,
+      size: metadata.size,
+      sha256: null,
+      content: metadata.content,
+      metadataRevision: target.file.metadataRevision,
+      contentKeyGeneration: current.keyGeneration,
+    },
+  }
 }
 
 /** Makes a vault file `name`.kdbx in `folder` (under a free name); returns its id. */

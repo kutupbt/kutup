@@ -4,9 +4,8 @@ use std::str::FromStr as _;
 
 use base64::Engine as _;
 use kutup_crypto::chat_attachment_ledger::{self, MAX_CHAT_ATTACHMENT_LEDGER_PLAINTEXT_BYTES};
-use kutup_crypto::chat_media::{
-    object_ciphertext_size, ChatMediaSuiteId, MAX_CHAT_MEDIA_PLAINTEXT_BYTES,
-};
+use kutup_crypto::chat_media::{ChatMediaSuiteId, MAX_CHAT_MEDIA_PLAINTEXT_BYTES};
+use kutup_crypto::chat_media_blocks;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -77,6 +76,10 @@ pub struct ChatAttachmentDescriptorV1 {
     pub retrieval_token: String,
     pub ciphertext_bytes: u64,
     pub ciphertext_sha256: String,
+    /// Canonical base64 SHA-256 of the object's sealed manifest
+    /// (docs/plans/drive-block-format.md §2): the descriptor commits to it,
+    /// and the reader opens nothing but the object behind that manifest.
+    pub manifest_sha256: String,
     /// Canonical base64 32-byte random attachment key, protected by the outer
     /// libsignal or MLS application ciphertext.
     pub attachment_key: String,
@@ -98,6 +101,11 @@ pub struct ChatAttachmentDescriptorV1 {
     /// It is present only in backup display records, never required for live delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup_media_id: Option<String>,
+    /// Canonical base64 SHA-256 of the backup copy's sealed manifest: the
+    /// backup's sealed index commits to it. Present exactly when
+    /// `backup_media_id` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_media_manifest_sha256: Option<String>,
 }
 
 impl ChatAttachmentDescriptorV1 {
@@ -111,9 +119,12 @@ impl ChatAttachmentDescriptorV1 {
         decode_canonical_base64::<32>("retrievalToken", &self.retrieval_token)?;
         decode_canonical_base64::<32>("attachmentKey", &self.attachment_key)?;
         validate_sha256("ciphertextSha256", &self.ciphertext_sha256)?;
+        decode_canonical_base64::<32>("manifestSha256", &self.manifest_sha256)?;
+        // An unknown or retired media suite never authorizes retrieval.
+        require_block_suite(self.suite)?;
         if self.plaintext_bytes > MAX_CHAT_MEDIA_PLAINTEXT_BYTES
             || self.ciphertext_bytes
-                != object_ciphertext_size(self.plaintext_bytes)
+                != chat_media_blocks::object_len(self.plaintext_bytes)
                     .map_err(|error| error.to_string())?
         {
             return Err("Chat attachment length does not match its suite framing".into());
@@ -143,8 +154,17 @@ impl ChatAttachmentDescriptorV1 {
                 return Err("Chat attachment preview length is invalid".into());
             }
         }
-        if let Some(media_id) = &self.backup_media_id {
-            validate_sha256("backupMediaId", media_id)?;
+        match (&self.backup_media_id, &self.backup_media_manifest_sha256) {
+            (Some(media_id), Some(manifest)) => {
+                validate_sha256("backupMediaId", media_id)?;
+                decode_canonical_base64::<32>("backupMediaManifestSha256", manifest)?;
+            }
+            (None, None) => {}
+            _ => {
+                return Err(
+                    "Chat attachment backup media id and manifest digest go together".into(),
+                )
+            }
         }
         Ok(())
     }
@@ -168,7 +188,7 @@ impl ChatMediaCapabilitiesV1 {
         }
         Ok(Self {
             protocol_version: CHAT_MEDIA_PROTOCOL_VERSION,
-            suites: vec![ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1],
+            suites: vec![ChatMediaSuiteId::KutupChatMediaBlocksV1],
             maximum_plaintext_bytes,
         })
     }
@@ -216,8 +236,10 @@ impl ChatMediaDeliveryOfferV1 {
         validate_sha256("ciphertextSha256", &self.ciphertext_sha256)?;
         decode_canonical_base64::<32>("retrievalToken", &self.retrieval_token)?;
         decode_canonical_base64::<16>("deliveryCapability", &self.delivery_capability)?;
-        if self.ciphertext_bytes == 0
-            || self.ciphertext_bytes > kutup_crypto::chat_media::max_object_ciphertext_bytes()
+        require_block_suite(self.suite)?;
+        if self.ciphertext_bytes < chat_media_blocks::min_object_len()
+            || self.ciphertext_bytes
+                > chat_media_blocks::max_object_len(MAX_CHAT_MEDIA_PLAINTEXT_BYTES)
         {
             return Err("Chat media offer ciphertext length is invalid".into());
         }
@@ -487,7 +509,8 @@ impl ChatAttachmentLedgerEntryV1 {
         require_canonical_uuid("attachmentId", &self.attachment_id)?;
         require_canonical_uuid("storageReferenceId", &self.storage_reference_id)?;
         if self.ciphertext_bytes == 0
-            || self.ciphertext_bytes > kutup_crypto::chat_media::max_object_ciphertext_bytes()
+            || self.ciphertext_bytes
+                > chat_media_blocks::max_object_len(MAX_CHAT_MEDIA_PLAINTEXT_BYTES)
         {
             return Err("Chat attachment ledger byte count is invalid".into());
         }
@@ -624,6 +647,14 @@ fn decode_canonical_base64<const N: usize>(field: &str, value: &str) -> Result<[
         .map_err(|_| format!("{field} must decode to {N} bytes"))
 }
 
+/// Chat media travels in the block format only (suite 2).
+fn require_block_suite(suite: ChatMediaSuiteId) -> Result<(), String> {
+    if suite != ChatMediaSuiteId::KutupChatMediaBlocksV1 {
+        return Err("unsupported Chat media suite".into());
+    }
+    Ok(())
+}
+
 fn validate_sha256(field: &str, value: &str) -> Result<(), String> {
     let decoded = hex::decode(value).map_err(|_| format!("{field} must be lowercase hex"))?;
     if decoded.len() != 32 || hex::encode(decoded) != value {
@@ -747,12 +778,13 @@ mod tests {
     fn descriptor() -> ChatAttachmentDescriptorV1 {
         ChatAttachmentDescriptorV1 {
             version: 1,
-            suite: ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1,
+            suite: ChatMediaSuiteId::KutupChatMediaBlocksV1,
             attachment_id: "11111111-1111-4111-8111-111111111111".into(),
             origin_domain: "a.example".into(),
             retrieval_token: base64::engine::general_purpose::STANDARD.encode([1; 32]),
-            ciphertext_bytes: object_ciphertext_size(7).unwrap(),
+            ciphertext_bytes: chat_media_blocks::object_len(7).unwrap(),
             ciphertext_sha256: "22".repeat(32),
+            manifest_sha256: base64::engine::general_purpose::STANDARD.encode([4; 32]),
             attachment_key: base64::engine::general_purpose::STANDARD.encode([3; 32]),
             plaintext_bytes: 7,
             filename: "cat.jpg".into(),
@@ -764,7 +796,44 @@ mod tests {
             duration_ms: None,
             preview: None,
             backup_media_id: None,
+            backup_media_manifest_sha256: None,
         }
+    }
+
+    #[test]
+    fn a_descriptor_names_the_block_suite_and_its_manifest() {
+        descriptor().validate().unwrap();
+        // Suite 1 (a secretstream) no longer parses.
+        let mut old_suite = serde_json::to_value(descriptor()).unwrap();
+        old_suite["suite"] = 1.into();
+        assert!(serde_json::from_value::<ChatAttachmentDescriptorV1>(old_suite).is_err());
+        let wrong_length = ChatAttachmentDescriptorV1 {
+            ciphertext_bytes: descriptor().ciphertext_bytes + 1,
+            ..descriptor()
+        };
+        assert!(wrong_length.validate().is_err());
+        let no_manifest = ChatAttachmentDescriptorV1 {
+            manifest_sha256: "AAAA".into(),
+            ..descriptor()
+        };
+        assert!(no_manifest.validate().is_err());
+        let backed_up = ChatAttachmentDescriptorV1 {
+            backup_media_id: Some("55".repeat(32)),
+            backup_media_manifest_sha256: Some(
+                base64::engine::general_purpose::STANDARD.encode([6; 32]),
+            ),
+            ..descriptor()
+        };
+        backed_up.validate().unwrap();
+        let half = ChatAttachmentDescriptorV1 {
+            backup_media_manifest_sha256: None,
+            ..backed_up
+        };
+        assert!(half.validate().is_err());
+        assert_eq!(
+            ChatMediaCapabilitiesV1::v1(1).unwrap().suites,
+            vec![ChatMediaSuiteId::KutupChatMediaBlocksV1]
+        );
     }
 
     #[test]
@@ -836,7 +905,7 @@ mod tests {
             message_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
             attachment_id: "11111111-1111-4111-8111-111111111111".into(),
             storage_reference_id: "22222222-2222-4222-8222-222222222222".into(),
-            ciphertext_bytes: object_ciphertext_size(7).unwrap(),
+            ciphertext_bytes: chat_media_blocks::object_len(7).unwrap(),
             state: ChatAttachmentLedgerStateV1::Active,
             media_class: ChatMediaClassV1::Photo,
             display_name: "cat.jpg".into(),
@@ -895,7 +964,7 @@ mod tests {
         let bytes = entry.canonical_bytes().unwrap();
         assert_eq!(
             hex::encode(&bytes),
-            "4b5554504345310000010101020000346163693a30303030303030302d303030302d343030302d383030302d303030303030303030303032406578616d706c652e6f7267aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa1111111111114111811111111111111122222222222242228222222222222222000000000000004c0000018bcfe5680000076361742e6a706700"
+            "4b5554504345310000010101020000346163693a30303030303030302d303030302d343030302d383030302d303030303030303030303032406578616d706c652e6f7267aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa111111111111411181111111111111112222222222224222822222222222222200000000000000b00000018bcfe5680000076361742e6a706700"
         );
         assert_eq!(
             ChatAttachmentLedgerEntryV1::from_canonical_bytes(&bytes).unwrap(),
@@ -966,8 +1035,8 @@ mod tests {
                 .unwrap(),
             operation_id: "33333333-3333-4333-8333-333333333333".into(),
             attachment_id: "11111111-1111-4111-8111-111111111111".into(),
-            suite: ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1,
-            ciphertext_bytes: object_ciphertext_size(7).unwrap(),
+            suite: ChatMediaSuiteId::KutupChatMediaBlocksV1,
+            ciphertext_bytes: chat_media_blocks::object_len(7).unwrap(),
             ciphertext_sha256: "44".repeat(32),
             retrieval_token: base64::engine::general_purpose::STANDARD.encode([5; 32]),
             delivery_capability: base64::engine::general_purpose::STANDARD.encode([6; 16]),
@@ -995,7 +1064,7 @@ mod tests {
                 "\"recipient\":{\"server\":\"b.example\",\"accountId\":\"22222222-2222-4222-8222-222222222222\"},",
                 "\"operationId\":\"33333333-3333-4333-8333-333333333333\",",
                 "\"attachmentId\":\"11111111-1111-4111-8111-111111111111\",",
-                "\"suite\":1,\"ciphertextBytes\":76,\"ciphertextSha256\":\"",
+                "\"suite\":2,\"ciphertextBytes\":176,\"ciphertextSha256\":\"",
                 "4444444444444444444444444444444444444444444444444444444444444444\",",
                 "\"retrievalToken\":\"BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU=\",",
                 "\"deliveryCapability\":\"BgYGBgYGBgYGBgYGBgYGBg==\",\"expiresAt\":1800}}"
@@ -1019,8 +1088,8 @@ mod tests {
                 .unwrap(),
             operation_id: "33333333-3333-4333-8333-333333333333".into(),
             attachment_id: "11111111-1111-4111-8111-111111111111".into(),
-            suite: ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1,
-            ciphertext_bytes: object_ciphertext_size(0).unwrap(),
+            suite: ChatMediaSuiteId::KutupChatMediaBlocksV1,
+            ciphertext_bytes: chat_media_blocks::object_len(0).unwrap(),
             ciphertext_sha256: "44".repeat(32),
             retrieval_token: base64::engine::general_purpose::STANDARD.encode([5; 32]),
             delivery_capability: base64::engine::general_purpose::STANDARD.encode([6; 16]),
@@ -1035,9 +1104,10 @@ mod tests {
         offer.expires_at = 1_001;
         offer.ciphertext_bytes = 0;
         assert!(offer.validate("b.example", 1_000).is_err());
-        offer.ciphertext_bytes = kutup_crypto::chat_media::max_object_ciphertext_bytes() + 1;
+        offer.ciphertext_bytes =
+            chat_media_blocks::max_object_len(MAX_CHAT_MEDIA_PLAINTEXT_BYTES) + 1;
         assert!(offer.validate("b.example", 1_000).is_err());
-        offer.ciphertext_bytes = object_ciphertext_size(0).unwrap();
+        offer.ciphertext_bytes = chat_media_blocks::object_len(0).unwrap();
         // A recipient on another server than the destination.
         offer.recipient =
             AccountRef::new("c.example", "22222222-2222-4222-8222-222222222222").unwrap();

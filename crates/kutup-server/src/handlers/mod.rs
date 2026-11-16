@@ -56,6 +56,7 @@ pub mod pass_icons;
 pub mod rate_limits;
 pub mod registration_codes;
 pub mod renames;
+pub mod revision_commit;
 pub mod security_events;
 pub mod security_keys;
 pub mod sessions;

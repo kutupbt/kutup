@@ -50,6 +50,7 @@ import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { useRequiredSession } from '@kutup/session/store'
 import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
+import { stateCommitter, type MetadataTarget } from '@kutup/drive-core/metadataCommit'
 import { SenderCheck } from '@kutup/collab/senders'
 import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
 import { accountNameOfKey } from '@kutup/drive-core/accountName'
@@ -95,6 +96,17 @@ interface Props {
   fileKeyAt?: (generation: number) => Promise<Uint8Array>
   /** A file on another server: its calls go through this server (see `localBase`). */
   base?: string
+  /**
+   * The file's current content revision (its metadata's `content`): thumbnails
+   * are sealed bound to it (docs/plans/drive-block-format.md §2). Null: none drawn.
+   */
+  contentRevisionId?: string | null
+  /**
+   * The file as each saved state commits its next metadata on top of it,
+   * naming the state (drive-core `stateCommitter`). Needed to save; MUST be
+   * referentially stable, like `fileKey`.
+   */
+  metadataTarget?: MetadataTarget
 }
 
 /** The first content of a note no one has edited yet (see deterministicSeed). */
@@ -152,6 +164,8 @@ export default function TextCollabEditor({
   readOnly = false,
   fileKeyAt,
   base,
+  contentRevisionId = null,
+  metadataTarget,
 }: Props) {
   const { t, i18n } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -396,7 +410,10 @@ export default function TextCollabEditor({
       // (throttled; see noteThumbnailScheduler).
       // Thumbnails are stored with the file's own server: not from here for a
       // file on another one.
-      const thumbnails = readOnly || base ? null : noteThumbnailScheduler({ fileId, fileKey, keyGeneration }, filename)
+      const thumbnails =
+        readOnly || base || !contentRevisionId
+          ? null
+          : noteThumbnailScheduler({ fileId, fileKey, keyGeneration, revisionId: contentRevisionId }, filename)
       let ytext: Y.Text | null = null
       // The file's language (its own chunk) loads while the session opens.
       const ext = filename.split('.').pop()?.toLowerCase() ?? ''
@@ -409,6 +426,8 @@ export default function TextCollabEditor({
         keyGeneration,
         fileKeyAt,
         readOnly,
+        // Each saved state commits with the file's next metadata naming it.
+        commitState: metadataTarget ? stateCommitter(metadataTarget) : undefined,
         username,
         cursorColor,
         seed: initialContent

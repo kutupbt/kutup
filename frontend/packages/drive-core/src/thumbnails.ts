@@ -9,17 +9,24 @@ import { fileKeyAt } from './keyring'
 import type { DriveFile } from './model'
 import type { MadeThumbnails } from '@kutup/files/thumbnails'
 
-/** What a thumbnail is sealed to: the file and its current key. */
+/** What a thumbnail is sealed to: the file, its current key, and the content revision it shows. */
 export interface ThumbnailTarget {
   fileId: string
   fileKey: Uint8Array
   keyGeneration: number
+  /**
+   * The current content's revision (its metadata's `content.revisionId`):
+   * a thumbnail of other content no longer opens and is drawn again
+   * (docs/plans/drive-block-format.md §2).
+   */
+  revisionId: string
 }
 
 /**
  * Seal and store each thumbnail made for a file, replacing what was there.
  * `source` is the version it was drawn from, or `original` for the upload;
- * the listing compares it with the latest version to spot stale ones.
+ * the listing compares it with the latest version to spot stale ones. The
+ * server checks the envelope is bound to the revision named.
  */
 export async function storeThumbnails(
   target: ThumbnailTarget,
@@ -32,11 +39,12 @@ export async function storeThumbnails(
     if (!image) continue
     const envelope = await sealThumbnailV1(image, target.fileKey, {
       fileId: target.fileId,
+      revisionId: target.revisionId,
       generation: target.keyGeneration,
       variant,
     })
     await api.put(
-      `/files/${target.fileId}/thumbnails/${variant}?${new URLSearchParams({ source }).toString()}`,
+      `/files/${target.fileId}/thumbnails/${variant}?${new URLSearchParams({ source, revision: target.revisionId }).toString()}`,
       envelope,
       { headers: { 'Content-Type': 'application/octet-stream' } },
     )
@@ -74,8 +82,9 @@ export function thumbnailUrl(
   path = `/files/${file.id}/thumbnails/${variant}`,
 ): Promise<string | null> {
   const stamp = file.thumbnails[variant]
-  if (!stamp || !file.fileKey) return Promise.resolve(null)
-  const key = `${file.id}:${variant}:${stamp}`
+  const revisionId = file.content?.revisionId
+  if (!stamp || !file.fileKey || !revisionId) return Promise.resolve(null)
+  const key = `${file.id}:${variant}:${stamp}:${revisionId}`
   const hit = cache.get(key)
   if (hit) {
     // Most recently used goes to the back.
@@ -95,6 +104,7 @@ export function thumbnailUrl(
       )
       const opened = await openThumbnailV1(new Uint8Array(data), fileKey, {
         fileId: file.id,
+        revisionId,
         generation,
         variant,
       })

@@ -9,6 +9,7 @@ import {
   toBase64,
 } from '@kutup/crypto'
 import type { AccountRef } from '@kutup/crypto/accountRef'
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import { sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import { appUrl } from '@kutup/session/apps'
 import api from '@kutup/session/client'
@@ -17,7 +18,8 @@ import { cachedFolderIndex, foldersKey } from './folders'
 import { trashKey } from './trash'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
-import { atTopLevel, inFolder, nameHashIn, randomNameHash, type NamePlace } from './names'
+import { acceptFileMetadata } from './metadataGuard'
+import { atTopLevel, inFolder, nameFieldsIn, nameHashIn, randomNameHash, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
 import { confirmRecipient, lookupAddress } from './identityPins'
 
@@ -60,8 +62,8 @@ export function useCreateFolder() {
  * Where a folder's name lives: in its parent, or at the owner's top level.
  * Null when the parent is not at hand (it cannot be hashed then).
  */
-export function folderNamePlace(folder: Folder, parent: Folder | null | undefined, masterKey: Uint8Array): NamePlace | null {
-  if (!folder.parentId) return atTopLevel(masterKey)
+export function folderNamePlace(folder: Folder, parent: Folder | null | undefined, roots: AccountRoots): NamePlace | null {
+  if (!folder.parentId) return atTopLevel(roots)
   return parent?.key ? inFolder(parent) : null
 }
 
@@ -76,9 +78,9 @@ export function useRenameFolder() {
       name.trim(),
     )
     const parent = folder.parentId ? cachedFolderIndex(queryClient)?.byId.get(folder.parentId) : null
-    const place = folderNamePlace(folder, parent, me.masterKey)
+    const place = folderNamePlace(folder, parent, me.roots)
     if (!place) throw new Error('the parent folder is not loaded')
-    await api.put(`/collections/${folder.id}`, { ...next, nameHash: await nameHashIn(place, name.trim()) })
+    await api.put(`/collections/${folder.id}`, { ...next, ...(await nameFieldsIn(place, name.trim())) })
   })
 }
 
@@ -98,6 +100,8 @@ export function useRenameFile() {
       ...next,
       nameHash: folder.key ? await nameHashIn(inFolder(folder), name.trim()) : randomNameHash(),
     })
+    // This device's own write: the file's newest metadata.
+    await acceptFileMetadata(file.id, next.metadataRevision).catch(() => undefined)
   })
 }
 
@@ -160,7 +164,7 @@ export function useCreatePublicLink(app: 'drive' | 'photos' = 'drive') {
     })
     // A copy of the link key for the owner: to list and copy the link later,
     // and to keep it working when the folder key rotates.
-    const ownerLinkKeyEnvelope = await sealOwnerLinkKeyV1(linkKey, me.masterKey, { linkId: id, ownerUserId: me.userId })
+    const ownerLinkKeyEnvelope = await sealOwnerLinkKeyV1(linkKey, me.roots, { linkId: id, ownerUserId: me.userId })
     const { data } = await api.post<{ token: string }>('/share', {
       id,
       shareType: 'collection',

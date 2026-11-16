@@ -44,21 +44,4 @@ impl Client {
             .send()?;
         super::decode_json(resp)
     }
-
-    /// Streams the encrypted blob of a file in a public share (no total
-    /// timeout — large blobs must survive slow links). Anonymous: the token
-    /// is the capability.
-    pub fn public_share_download_stream(
-        &self,
-        token: &str,
-        file_id: &str,
-    ) -> Result<reqwest::blocking::Response> {
-        let resp = self
-            .upload_request(Method::GET, &format!("/share/{token}/download/{file_id}"))
-            .send()?;
-        if resp.status().as_u16() >= 400 {
-            return Err(super::api_error(resp));
-        }
-        Ok(resp)
-    }
 }

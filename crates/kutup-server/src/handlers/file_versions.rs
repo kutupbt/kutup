@@ -48,6 +48,11 @@ pub struct VersionRow {
     /// A whole-file version: the version it replaced (`null`: the original
     /// upload, or not recorded).
     parent_version_id: Option<String>,
+    /// The version's sealed content record (`RevisionContent`, bound to the
+    /// file, this version's id and `keyGeneration`): readers open it first,
+    /// then the version's object against the digest and size it commits to.
+    /// Every version has one (a CHECK, migration 20261109160000).
+    revision_content_envelope: Option<String>,
 }
 
 pub(crate) type VersionTuple = (
@@ -65,6 +70,7 @@ pub(crate) type VersionTuple = (
     Option<String>,
     Option<Uuid>,
     Option<Uuid>,
+    Option<String>,
 );
 
 pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
@@ -83,6 +89,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         remote_author_server,
         remote_author_account_id,
         parent_version_id,
+        revision_content_envelope,
     ) = t;
     let remote_author = match (remote_author_server, remote_author_account_id) {
         (Some(server), Some(id)) => {
@@ -104,12 +111,14 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         key_generation,
         remote_author,
         parent_version_id: parent_version_id.map(|id| id.to_string()),
+        revision_content_envelope,
     }
 }
 
 pub(crate) const VERSION_SELECT: &str = r#"SELECT id, storage_path, seq_at_snapshot,
        doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-       remote_author_server, remote_author_account_id, parent_version_id
+       remote_author_server, remote_author_account_id, parent_version_id,
+       revision_content_envelope
 FROM file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -160,7 +169,7 @@ pub async fn list(
         ("vid" = String, Path, description = "Version id")
     ),
     responses(
-        (status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq headers; the ETag is the version id"),
+        (status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq headers, `x-kutup-revision` (the version id, also the ETag) and `x-kutup-revision-content` (its sealed content record)"),
         (status = 206, description = "The one `Range` asked"),
         (status = 416, description = "The range starts past the end")
     )
@@ -177,25 +186,26 @@ pub async fn download(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let row: Option<(String, i64, i64, i64)> = sqlx::query_as(
-        "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot
+    let row: Option<(String, i64, i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot, revision_content_envelope
          FROM file_versions WHERE id = $1 AND file_id = $2",
     )
     .bind(vid)
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, size, doc_key_id, seq)) = row else {
+    let Some((path, size, doc_key_id, seq, revision_content)) = row else {
         return Err(AppError::not_found("not found"));
     };
 
-    let extra = vec![
+    let mut extra = crate::file_content::revision_headers(vid, revision_content.as_deref());
+    extra.extend([
         (
             HeaderName::from_static("x-kutup-doc-key-id"),
             doc_key_id.to_string(),
         ),
         (HeaderName::from_static("x-kutup-seq"), seq.to_string()),
-    ];
+    ]);
     // A version's id is its revision's: its ETag.
     crate::content_range::serve_revision(
         &state.pool,
@@ -274,10 +284,11 @@ pub async fn patch(
     Ok(Json(to_version_row(t)).into_response())
 }
 
-/// A file's newest version, which stays: for documents and notes it is the
-/// file's current content (version_retention keeps it for the same reason).
+/// A file's newest version of its kind, which stays: for documents it is the
+/// file's current content, for notes the saved state their metadata names
+/// (version_retention keeps it for the same reason).
 pub(crate) const NEWEST_VERSION: &str =
-    "SELECT n.id FROM file_versions n WHERE n.file_id = v.file_id ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
+    "SELECT n.id FROM file_versions n WHERE n.file_id = v.file_id AND n.kind = v.kind ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
 
 /// `DELETE /api/files/{fileId}/versions/{vid}` — deletes one earlier version
 /// for good and frees its storage. The file's owner or the version's author
@@ -409,11 +420,11 @@ const MAX_LABEL_CHARS: usize = 200;
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content), and `revisionId` (a block-format blob's revision, which becomes the version's id)"
+        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content), `revisionId` (the block-format blob's revision, which becomes the version's id), `revisionContentEnvelope` (the revision's sealed content record, for every kind). Every save commits inline: `metadataEnvelope` and `metadataRevision` (the file's current + 1), the file's next metadata, committing to this revision (`kind: file`) or naming it as the saved state (`kind: yjs`)"
     ),
     responses(
         (status = 201, description = "The stored version", body = VersionRow),
-        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use"),
+        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revision_conflict`: `metadataRevision` is not the file's current + 1 (`metadataRevision` and `metadataEnvelope` give the current one)"),
         (status = 413, description = "Storage quota exceeded, or larger than `driveVersionMaxBytes`")
     )
 )]
@@ -463,7 +474,13 @@ pub async fn create(
                 .await
                 .map_err(|_| AppError::bad_request("invalid form"))?
             {
-                if value.len() + chunk.len() > 4096 || fields.len() >= 8 {
+                // The sealed metadata of a save is larger.
+                let limit = if name == "metadataEnvelope" {
+                    crate::handlers::files::MAX_TEXT_FIELD_BYTES
+                } else {
+                    4096
+                };
+                if value.len() + chunk.len() > limit || fields.len() >= 12 {
                     return Err(AppError::bad_request("form field too large"));
                 }
                 value.extend_from_slice(&chunk);
@@ -539,13 +556,37 @@ pub(crate) async fn store_version(
     .ok_or_else(|| AppError::not_found("not found"))?;
     let generation =
         u32::try_from(key_generation).map_err(|_| AppError::conflict("invalid key generation"))?;
-    // With `revisionId` a block-format blob bound to that revision, which
-    // becomes the version's id; without, the streaming format.
-    let format =
-        crate::drive_blob::BlobFormat::from_revision(fields.get("revisionId").map(String::as_str))?;
-    format.check_file(&tmp_file, size as u64, fid, generation)?;
+    // A block-format blob bound to the revision `revisionId` names, which
+    // becomes the version's id.
+    let blob =
+        crate::drive_blob::BlockBlob::from_revision(fields.get("revisionId").map(String::as_str))?;
+    blob.check_file(&tmp_file, size as u64, fid, generation)?;
+    // What the version is, sealed under the key it was sealed at: every
+    // version (a whole file or a note's state) carries it.
+    let revision_content = crate::drive_blob::revision_content_envelope(
+        blob,
+        fields
+            .get(crate::drive_blob::REVISION_CONTENT_FIELD)
+            .map(String::as_str),
+        fid,
+        generation,
+    )?;
+    // A save commits inline (docs/plans/drive-block-format.md §10 slice 3):
+    // a whole file becomes the file's content, so the file's next metadata,
+    // committing to it, comes along; a note's state (`yjs`) comes with the
+    // next metadata naming it as the saved state, so a reader that asks for
+    // the state the metadata names gets no other.
+    let metadata_envelope = fields
+        .get("metadataEnvelope")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::bad_request("metadataEnvelope is required"))?;
+    let metadata_revision = crate::drive_blob::parse_metadata_revision(
+        fields
+            .get("metadataRevision")
+            .ok_or_else(|| AppError::bad_request("metadataRevision is required"))?,
+    )?;
 
-    let version_id = format.revision_id();
+    let version_id = blob.revision_id;
     let storage_path = crate::file_content::revision_path(fid, version_id);
 
     let mut tx = state.pool.begin().await?;
@@ -561,11 +602,13 @@ pub(crate) async fn store_version(
     // One whole-file save at a time per file, so the content it replaces is
     // the content current when it lands. Taken before the key check's shared
     // lock: upgrading a shared lock would deadlock two saves.
+    // Every save commits metadata, so it locks the row: the metadata's
+    // revision is checked and advanced below.
+    sqlx::query("SELECT 1 FROM files WHERE id = $1 FOR UPDATE")
+        .bind(fid)
+        .execute(&mut *tx)
+        .await?;
     let parent = if kind == "file" {
-        sqlx::query("SELECT 1 FROM files WHERE id = $1 FOR UPDATE")
-            .bind(fid)
-            .execute(&mut *tx)
-            .await?;
         let current = current_whole_version(&mut tx, fid).await?;
         check_based_on(based_on, current)?;
         current
@@ -575,6 +618,33 @@ pub(crate) async fn store_version(
     // Sealed under the file key read above; a re-key since would put new
     // content under a key the folder has left.
     crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
+    // Its metadata is the file's next revision (the row is locked above).
+    {
+        let (current, current_envelope): (i64, Option<String>) =
+            sqlx::query_as("SELECT metadata_revision, metadata_envelope FROM files WHERE id = $1")
+                .bind(fid)
+                .fetch_one(&mut *tx)
+                .await?;
+        if current.checked_add(1) != Some(metadata_revision) {
+            // The metadata as it is now comes back, so the saver seals on
+            // top of it without reading the file's folder again (an editor
+            // on another server has none to read).
+            return Err(crate::drive_blob::revision_conflict_at(
+                current,
+                current_envelope.as_deref(),
+            ));
+        }
+        crate::handlers::files::validate_envelope(
+            metadata_envelope,
+            kutup_crypto::drive_envelope::DriveEnvelopeContextV1::file_metadata(
+                &fid.to_string(),
+                generation,
+                u64::try_from(metadata_revision)
+                    .map_err(|_| AppError::bad_request("invalid metadata revision"))?,
+            )
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        )?;
+    }
     // The measured size, never a client's claim.
     crate::drive_writes::check_room(&mut tx, payer, collection_id, size, None)
         .await?
@@ -594,11 +664,14 @@ pub(crate) async fn store_version(
         r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
                                       key_generation, remote_author_server,
-                                      remote_author_account_id, parent_version_id, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp())
+                                      remote_author_account_id, parent_version_id, created_at,
+                                      blob_suite, revision_content_envelope)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp(),
+                   $15, $16)
            RETURNING id, storage_path, seq_at_snapshot, doc_key_id,
                      author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-                     remote_author_server, remote_author_account_id, parent_version_id"#,
+                     remote_author_server, remote_author_account_id, parent_version_id,
+                     revision_content_envelope"#,
     )
     .bind(version_id)
     .bind(fid)
@@ -614,16 +687,24 @@ pub(crate) async fn store_version(
     .bind(remote_author.map(|author| author.server.clone()))
     .bind(parent)
     .bind(remote_author.map(|author| Uuid::parse_str(&author.account_id).expect("canonical")))
+    .bind(crate::drive_blob::BLOCK_SUITE)
+    .bind(&revision_content)
     .fetch_one(&mut *tx)
     .await?;
     crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(payer), size).await?;
     // A new version is an edit: the file (and so its folder) was modified now.
     // New content: the hash it was recognised by no longer holds; the client
     // records the new one (docs/plans/drive-unique-names.md).
-    sqlx::query("UPDATE files SET updated_at = NOW(), content_hash = NULL WHERE id = $1")
-        .bind(fid)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE files SET updated_at = NOW(), content_hash = NULL,
+                          metadata_envelope = $2, metadata_revision = $3
+         WHERE id = $1",
+    )
+    .bind(fid)
+    .bind(metadata_envelope)
+    .bind(metadata_revision)
+    .execute(&mut *tx)
+    .await?;
     // Everything up to this point of the collaboration log is in the version.
     // Under the relay's own per-file lock, so no frame lands in between; never
     // past the log's head, and only for the document key the log is under (a

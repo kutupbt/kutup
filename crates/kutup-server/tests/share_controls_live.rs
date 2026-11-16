@@ -65,6 +65,9 @@ fn open(c: &Client, base: &str, token: &str, viewer: Option<&str>) -> (StatusCod
     (status, r.json().unwrap_or(Value::Null))
 }
 
+/// The GET routes in [`every_route`]'s answers (the report is last).
+const GET_ROUTES: usize = 9;
+
 /// Every public route of a link, each answering before it reaches anything
 /// (a made-up file id is enough): what each refusal must cover.
 fn every_route(
@@ -81,6 +84,9 @@ fn every_route(
         format!("{base}/api/share/{token}/album"),
         format!("{base}/api/share/{token}/thumbnails/{file}/sm"),
         format!("{base}/api/share/{token}/state/{file}"),
+        // The block format's state by revision (a player's or editor's
+        // exact saved state) passes the same check.
+        format!("{base}/api/share/{token}/state/{file}?revision={}", uuid()),
         format!("{base}/api/share/{token}/files/{file}/assets/{}", uuid()),
         format!("{base}/api/share/{token}/download/{file}"),
     ];
@@ -257,7 +263,7 @@ fn links_follow_blocks_and_both_switches() {
     };
     set_site(&c, &base, &admin, "signed_in");
     all_refuse(
-        &every_route(&c, &base, &token, None)[..8],
+        &every_route(&c, &base, &token, None)[..GET_ROUTES],
         StatusCode::FORBIDDEN,
         "sign_in_required",
     );
@@ -271,7 +277,7 @@ fn links_follow_blocks_and_both_switches() {
     );
     set_site(&c, &base, &admin, "off");
     all_refuse(
-        &every_route(&c, &base, &token, Some(&viewer.token))[..8],
+        &every_route(&c, &base, &token, Some(&viewer.token))[..GET_ROUTES],
         StatusCode::GONE,
         "sharing_off",
     );

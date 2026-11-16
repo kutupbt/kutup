@@ -659,11 +659,12 @@ export class ChatService {
 
   backupMediaCiphertext(
     mediaId: string,
+    manifestSha256: string,
     accessToken: string,
     signal?: AbortSignal,
   ): AsyncIterable<Uint8Array> {
     if (!this.backup) throw new Error('encrypted Chat history is unavailable')
-    return this.backup.fetchMediaCiphertext(mediaId, accessToken, signal)
+    return this.backup.fetchMediaCiphertext(mediaId, manifestSha256, accessToken, signal)
   }
 
   private liveHistory(): Promise<ChatHistoryEntry[]> {

@@ -329,6 +329,31 @@ impl StorageService {
         Ok(out.version_id().unwrap_or("").to_string())
     }
 
+    /// An object's length as the store holds it now, or `None` when there is
+    /// no such object (a HEAD): what a commit asks before it makes an
+    /// uploaded revision a file's content.
+    pub async fn object_len(&self, path: &str) -> Result<Option<i64>> {
+        // A HEAD has no body: the per-try and total limits apply.
+        match self
+            .quick
+            .head_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .send()
+            .await
+        {
+            Ok(out) => Ok(Some(out.content_length().unwrap_or(0))),
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|service| service.is_not_found()) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error).context("s3 head"),
+        }
+    }
+
     /// Fetches an object — mirrors `GetObject`. Returns the body stream + content length.
     pub async fn get_object(&self, path: &str) -> Result<(ByteStream, i64)> {
         let out = self
@@ -773,6 +798,51 @@ impl StorageService {
             .await
             .context("s3 complete multipart")?;
         Ok(())
+    }
+
+    /// Multipart uploads the store holds that were started before
+    /// `before_unix_secs` (key, upload id), at most `limit`: what the sweep
+    /// of incomplete uploads looks at (`jobs::sweep_incomplete_multipart`).
+    pub async fn list_multipart_uploads_before(
+        &self,
+        before_unix_secs: i64,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        let mut key_marker: Option<String> = None;
+        let mut upload_id_marker: Option<String> = None;
+        loop {
+            let page = self
+                .quick
+                .list_multipart_uploads()
+                .bucket(&self.bucket)
+                .set_key_marker(key_marker.take())
+                .set_upload_id_marker(upload_id_marker.take())
+                .send()
+                .await
+                .context("s3 list multipart uploads")?;
+            for upload in page.uploads() {
+                let (Some(key), Some(id), Some(initiated)) =
+                    (upload.key(), upload.upload_id(), upload.initiated())
+                else {
+                    continue;
+                };
+                if initiated.secs() < before_unix_secs {
+                    out.push((key.to_owned(), id.to_owned()));
+                    if out.len() >= limit {
+                        return Ok(out);
+                    }
+                }
+            }
+            if page.is_truncated() != Some(true) {
+                return Ok(out);
+            }
+            key_marker = page.next_key_marker().map(str::to_owned);
+            upload_id_marker = page.next_upload_id_marker().map(str::to_owned);
+            if key_marker.is_none() && upload_id_marker.is_none() {
+                return Ok(out);
+            }
+        }
     }
 
     /// Discards a multipart upload (user cancel / stale-upload sweep) — mirrors

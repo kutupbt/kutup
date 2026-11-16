@@ -60,9 +60,9 @@ pub fn run(profile: &str, json: bool, cmd: &PassCmd) -> Result<()> {
 }
 
 fn locate(ctx: &crate::context::Ctx, file_id: &str) -> Result<FoundFile> {
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let cols = ctx.client.list_collections()?;
-    locate_file(&ctx.client, &master_key, &ctx.session, &cols, file_id)
+    locate_file(&ctx.client, &roots, &ctx.session, &cols, file_id)
 }
 
 fn keep(

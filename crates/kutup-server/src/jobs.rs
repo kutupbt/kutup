@@ -290,7 +290,17 @@ pub async fn sweep_chat_mailboxes_before(
 /// objects for good and releases their bytes. Returns what was removed.
 pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> usize {
     let now = OffsetDateTime::now_utc();
-    type Row = (Uuid, Uuid, OffsetDateTime, bool, String, Uuid, i64, i32);
+    type Row = (
+        Uuid,
+        Uuid,
+        OffsetDateTime,
+        bool,
+        String,
+        Uuid,
+        i64,
+        i32,
+        String,
+    );
     let mut removed = 0;
     // Every file with thinnable versions, a page at a time (keyed on the
     // file id, so a file whose versions all stay never hides the rest).
@@ -298,7 +308,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     loop {
         let rows: Vec<Row> = match sqlx::query_as(
             r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path,
-                  v.author_user_id, v.size_bytes, u.version_retention_days
+                  v.author_user_id, v.size_bytes, u.version_retention_days, v.kind
            FROM file_versions v
            JOIN files f ON f.id = v.file_id
            JOIN collections c ON c.id = f.collection_id
@@ -311,7 +321,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
                AND tv.file_id > $1 AND NOT kutup_account_held(tc.owner_user_id)
              ORDER BY tv.file_id
              LIMIT 500)
-           ORDER BY v.file_id, v.created_at DESC"#,
+           ORDER BY v.file_id, v.kind, v.created_at DESC"#,
         )
         .bind(after)
         .fetch_all(pool)
@@ -327,7 +337,9 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
             break;
         };
         after = last.1;
-        for file in rows.chunk_by(|a, b| a.1 == b.1) {
+        // Each kind on its own: a note's newest state stays, whatever
+        // whole-file version came after it (its metadata names that state).
+        for file in rows.chunk_by(|a, b| a.1 == b.1 && a.8 == b.8) {
             let retention = i64::from(file[0].7);
             let candidates: Vec<crate::version_retention::Candidate> = file
                 .iter()
@@ -339,7 +351,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
                 .collect();
             let doomed = crate::version_retention::doomed(&candidates, now, retention);
             for row in file.iter().filter(|r| doomed.contains(&r.0)) {
-                let (id, _, _, _, path, _, _, _) = row;
+                let (id, _, _, _, path, _, _, _, _) = row;
                 // Row and charge go together, and only if this pass removed the
                 // row (a purge of the file may have raced it). The object goes
                 // after: a failed delete leaves an orphan for the sweep, never a
@@ -670,21 +682,107 @@ fn reconcile_sums(user: &str) -> String {
     )
 }
 
+/// Removes one abandoned upload's row, if it is still stale and nothing holds
+/// it, and gives what it held in storage (path, multipart id, whether the
+/// object is complete) to free after the transaction commits.
+async fn take_stale_upload(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<(String, String, bool)>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let row: Option<(String, String, bool)> = sqlx::query_as(
+        "SELECT storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM uploads
+         WHERE id = $1 AND updated_at < NOW() - $2 * interval '1 second'
+           AND NOT kutup_account_held((SELECT c.owner_user_id FROM collections c
+                                        WHERE c.id = uploads.collection_id))
+         FOR UPDATE SKIP LOCKED",
+    )
+    .bind(id)
+    .bind(UPLOADS_STALE_AFTER_SECS)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    sqlx::query("DELETE FROM uploads WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Some(row))
+}
+
+/// Most incomplete multipart uploads one sweep looks at.
+const INCOMPLETE_MULTIPART_PER_SWEEP: usize = 1000;
+
+/// Aborts the store's multipart uploads that were started longer ago than
+/// `storage_incomplete_multipart_max_age_seconds` (a day by default) and that
+/// no upload row (`uploads`, `chat_media_uploads`) names: the parts an abort
+/// left behind when it failed after its row was removed (a cancel, the
+/// stale-upload sweep above). A bucket lifecycle rule for incomplete
+/// multipart uploads does the same on the store's side
+/// (docs/self-hosting.md). Returns how many it aborted.
+pub(crate) async fn sweep_incomplete_multipart(
+    pool: &PgPool,
+    storage: &StorageService,
+) -> anyhow::Result<usize> {
+    let max_age = crate::site_settings::STORAGE_INCOMPLETE_MULTIPART_MAX_AGE_SECONDS
+        .load(pool)
+        .await?;
+    let before = OffsetDateTime::now_utc().unix_timestamp() - max_age;
+    let uploads = storage
+        .list_multipart_uploads_before(before, INCOMPLETE_MULTIPART_PER_SWEEP)
+        .await?;
+    let mut aborted = 0;
+    for (key, upload_id) in uploads {
+        // An upload a row still names goes on (a long one), or goes with
+        // its row when that is swept.
+        let named: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM uploads WHERE s3_upload_id = $1)
+                 OR EXISTS (SELECT 1 FROM chat_media_uploads WHERE s3_upload_id = $1)",
+        )
+        .bind(&upload_id)
+        .fetch_one(pool)
+        .await?;
+        if named {
+            continue;
+        }
+        match storage.abort_multipart(&key, &upload_id).await {
+            Ok(()) => aborted += 1,
+            Err(error) => tracing::warn!(%error, "incomplete multipart abort failed"),
+        }
+    }
+    Ok(aborted)
+}
+
 /// A corrected account: its new counter, then the Drive, Chat, Contacts,
 /// Mail and Calendar bytes it adds up from.
 type Reconciled = (i64, i64, i64, i64, i64, i64);
 
-/// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h): aborts the S3
-/// multipart, then drops the row (freeing soft-reserved quota) — mirrors
-/// `UploadsSweeper.once`. Returns the number reaped.
+/// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h):
+/// drops the row (freeing soft-reserved quota), then aborts the S3 multipart.
+/// An uploaded revision never committed (docs/plans/drive-block-format.md §10
+/// slice 3) goes the same way, a day after its last part: with its row go the
+/// reservation and a new file's id, then its object is deleted.
+///
+/// The row goes first, in its own transaction, and only if nothing holds it
+/// (`FOR UPDATE SKIP LOCKED`, the staleness test repeated under the lock): a
+/// commit or a last part holds the row, so the sweep can never delete the
+/// object of a revision that is being made current, and a commit that comes
+/// later finds no row. Bytes whose removal then fails are left without a row
+/// (logged; an object is found by the orphan sweep). Returns the number
+/// reaped.
 pub async fn uploads_sweep_once(
     pool: &PgPool,
     storage: &StorageService,
     media_delivery_retention_days: i64,
 ) -> usize {
-    let stale: Vec<(Uuid, String, String)> = match sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id FROM uploads \
-         WHERE updated_at < NOW() - $1 * interval '1 second'",
+    let stale: Vec<Uuid> = match sqlx::query_scalar(
+        // A held account's uploads stay (docs/plans/server-personal-data.md,
+        // A5): its collection's owner is the account.
+        "SELECT id FROM uploads WHERE updated_at < NOW() - $1 * interval '1 second'
+           AND NOT kutup_account_held((SELECT c.owner_user_id FROM collections c
+                                        WHERE c.id = uploads.collection_id))",
     )
     .bind(UPLOADS_STALE_AFTER_SECS)
     .fetch_all(pool)
@@ -697,26 +795,29 @@ pub async fn uploads_sweep_once(
         }
     };
     let mut reaped = 0;
-    for (id, path, s3_upload_id) in &stale {
-        // Abort first; a failure leaves the row for the next sweep.
-        if let Err(e) = storage.abort_multipart(path, s3_upload_id).await {
-            tracing::warn!("uploads-sweeper: abort {id}: {e}");
-            continue;
-        }
-        if sqlx::query("DELETE FROM uploads WHERE id = $1")
-            .bind(id)
-            .execute(pool)
-            .await
-            .is_err()
+    for id in &stale {
+        let (path, s3_upload_id, uploaded) = match take_stale_upload(pool, *id).await {
+            Ok(Some(row)) => row,
+            // Held by a commit or a part, or no longer stale: not abandoned.
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!("uploads-sweeper: take {id}: {e}");
+                continue;
+            }
+        };
+        // The row is gone for good: nothing can commit these bytes any more.
+        if let Err(e) =
+            crate::drive_blob::drop_upload_bytes(storage, &path, &s3_upload_id, uploaded).await
         {
-            continue;
+            tracing::warn!("uploads-sweeper: bytes of upload={id} path={path} left behind: {e}");
         }
         tracing::info!("uploads-sweeper: reaped upload={id} path={path}");
         reaped += 1;
     }
     let stale_media: Vec<(Uuid, String, String)> = match sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id FROM chat_media_uploads \
-         WHERE updated_at < NOW() - $1 * interval '1 second'",
+        "SELECT id, storage_path, s3_upload_id FROM chat_media_uploads
+         WHERE updated_at < NOW() - $1 * interval '1 second'
+           AND NOT kutup_account_held(user_id)",
     )
     .bind(UPLOADS_STALE_AFTER_SECS)
     .fetch_all(pool)
@@ -764,6 +865,17 @@ pub async fn uploads_sweep_once(
         }
         Ok(_) => {}
         Err(error) => tracing::warn!(error = %error, "Chat-media hand-over sweep failed"),
+    }
+    match sweep_incomplete_multipart(pool, storage).await {
+        Ok(0) => {}
+        Ok(aborted) => {
+            tracing::info!(
+                aborted,
+                "aborted incomplete multipart uploads no upload names"
+            );
+            reaped += aborted;
+        }
+        Err(error) => tracing::warn!(error = %error, "incomplete multipart sweep failed"),
     }
     if let Err(error) = sweep_chat_media_orphans(pool, storage).await {
         tracing::warn!(error = %error, "Chat-media orphan sweep failed");
@@ -1071,8 +1183,8 @@ pub async fn purge_file_root(
     // An open upload of a new version is locked before the file, the order
     // its last part takes them in (`tus::patch`: the upload row, then the
     // file), so the two never deadlock.
-    let open_versions: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id FROM uploads
+    let open_versions: Vec<(Uuid, String, String, bool)> = sqlx::query_as(
+        "SELECT id, storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM uploads
          WHERE file_id = $1 AND kind = 'version' FOR UPDATE",
     )
     .bind(file_id)
@@ -1141,7 +1253,7 @@ pub async fn purge_file_root(
         .await?;
     // The open upload of a new version goes with it (its reservation and
     // the file's one upload slot); its parts are aborted after commit.
-    for (upload_id, _, _) in &open_versions {
+    for (upload_id, _, _, _) in &open_versions {
         sqlx::query("DELETE FROM uploads WHERE id = $1")
             .bind(upload_id)
             .execute(&mut *tx)
@@ -1155,8 +1267,8 @@ pub async fn purge_file_root(
 
     // Best-effort S3 GC (post-commit): everything the file has lives under
     // files/{id}/ — the original, versions, assets and thumbnails.
-    for (_, path, upload) in &open_versions {
-        let _ = storage.abort_multipart(path, upload).await;
+    for (_, path, upload, uploaded) in &open_versions {
+        let _ = crate::drive_blob::drop_upload_bytes(storage, path, upload, *uploaded).await;
     }
     let _ = storage.delete_prefix(&format!("files/{file_id}/")).await;
     Ok(())

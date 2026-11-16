@@ -55,6 +55,15 @@ pub fn require_session(profile: &str) -> Result<Ctx> {
         }
     }
 
+    // Who signs the Drive revisions this run uploads, and the account its
+    // own revisions are checked against (docs/plans/drive-block-format.md §2).
+    match session.roots().and_then(|roots| {
+        crate::drive_signer::DriveIdentity::derive(&roots.identity, &session.user_id)
+    }) {
+        Ok(identity) => client.set_drive_identity(identity),
+        Err(error) => eprintln!("note: this session's Drive identity did not derive: {error:#}"),
+    }
+
     Ok(Ctx {
         client,
         session,

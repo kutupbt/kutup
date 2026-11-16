@@ -5,7 +5,7 @@
 //! wrapped with that link key, so the stored ciphertext is useless without the fragment.
 //! Read endpoints are anonymous — the token is the capability.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -120,16 +120,11 @@ pub async fn create_public_share(
         _ => return Err(AppError::bad_request("unsupported public share type")),
     };
     let link_id = canonical_uuid(&req.id)?;
+    let drive_generation = crate::account_roots::drive_generation(&state.pool, user_id).await?;
     validate_envelope(
         &req.owner_link_key_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::PublicLinkKey,
-            1,
-            1,
-            &req.id,
-            &user_id.to_string(),
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        DriveEnvelopeContextV1::owner_link_key(&req.id, &user_id.to_string(), drive_generation)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
 
     let token = random_token(32);
@@ -555,18 +550,30 @@ async fn link_reaches(
     Ok(fid)
 }
 
-/// `GET /api/share/{token}/state/{fileId}` — a note's or place list's latest
-/// saved state (a Yjs version, sealed under the file key of the generation in
-/// `X-Kutup-Key-Generation`), for the page to turn back into the file: their
+/// Which saved state a public link reads: `revision`, the one the file's
+/// sealed metadata names (`stateRevisionId`).
+#[derive(Debug, Deserialize)]
+pub struct StateQuery {
+    revision: Option<String>,
+}
+
+/// `GET /api/share/{token}/state/{fileId}` — a note's or place list's saved
+/// state (a Yjs version, sealed under the file key of the generation in
+/// `X-Kutup-Key-Generation`; `X-Kutup-Revision` names the version and
+/// `X-Kutup-Revision-Content` carries its sealed content record, which the
+/// page opens first), for the page to turn back into the file: their
 /// edits are not whole-file versions, so the download alone would be the
-/// upload. `404` when it has none. Anonymous.
+/// upload. `?revision=` asks for the state the file's sealed metadata names
+/// (the page refuses any other, docs/plans/drive-block-format.md §2);
+/// without it, the latest. `404` when there is no such state. Anonymous.
 #[utoipa::path(
     get,
     path = "/api/share/{token}/state/{fileId}",
     tag = "shares",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
-        ("fileId" = String, Path, description = "File id")
+        ("fileId" = String, Path, description = "File id"),
+        ("revision" = Option<String>, Query, description = "The state's revision (version) id, as the file's metadata names it")
     ),
     responses((status = 200, description = "The sealed state (application/octet-stream)"), (status = 404, description = "No saved state"))
 )]
@@ -574,17 +581,24 @@ pub async fn public_share_state(
     State(state): State<AppState>,
     viewer: crate::middleware::Viewer,
     Path((token, file_id)): Path<(String, String)>,
+    Query(query): Query<StateQuery>,
 ) -> AppResult<Response> {
     let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
-    let latest: Option<(String, i32)> = sqlx::query_as(
-        "SELECT storage_path, key_generation FROM file_versions
-         WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
+    let revision = query
+        .revision
+        .as_deref()
+        .map(|value| Uuid::parse_str(value).map_err(|_| AppError::bad_request("invalid revision")))
+        .transpose()?;
+    let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, storage_path, key_generation, revision_content_envelope FROM file_versions
+         WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0 AND ($2::uuid IS NULL OR id = $2)
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(fid)
+    .bind(revision)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, key_generation)) = latest else {
+    let Some((version_id, path, key_generation, revision_content)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
     let (body, size) = state
@@ -592,14 +606,13 @@ pub async fn public_share_state(
         .get_object(&path)
         .await
         .map_err(|_| AppError::internal("storage"))?;
-    Ok(octet_stream_response(
-        body,
-        size,
-        &[(
-            axum::http::HeaderName::from_static("x-kutup-key-generation"),
-            key_generation.to_string(),
-        )],
-    ))
+    let mut headers =
+        crate::file_content::revision_headers(version_id, revision_content.as_deref());
+    headers.push((
+        axum::http::HeaderName::from_static("x-kutup-key-generation"),
+        key_generation.to_string(),
+    ));
+    Ok(octet_stream_response(body, size, &headers))
 }
 
 /// `GET /api/share/{token}/files/{fileId}/assets/{assetId}` — a picture in a

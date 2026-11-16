@@ -241,9 +241,9 @@ fn chat_backup_lifecycle(
         self, ChatBackupContextV1, ChatBackupObjectContextV1, ChatBackupObjectPurposeV1,
         ChatBackupProtectionDomainV1, ChatBackupSuiteId,
     };
-    use kutup_crypto::chat_backup_media::{self, ChatBackupMediaContextV1};
+    use kutup_crypto::chat_backup_media::ChatBackupMediaContextV1;
+    use kutup_crypto::chat_backup_media_blocks;
     use kutup_crypto::identity::AccountIdentityKeysV1;
-    use kutup_crypto::stream::{StreamEncryptor, TAG_FINAL};
     let device_id = owner.id;
 
     let initial: Value = c
@@ -515,31 +515,21 @@ fn chat_backup_lifecycle(
     let media_id_bytes: [u8; 32] = hash(Suite::V1, source_media).into();
     let media_id = hex::encode(media_id_bytes);
     let media_reference_id = Uuid::new_v4();
-    let media_header = chat_backup_media::build_media_header(
+    let sealed_media = chat_backup_media_blocks::seal_media(
+        source_media,
+        &[0x42; 32],
         ChatBackupMediaContextV1 {
             account_incarnation_id,
             backup_incarnation_id: *backup_id.as_bytes(),
             protection_domain: ChatBackupProtectionDomainV1::StandardChat,
             media_id: media_id_bytes,
         },
-        source_media.len() as u64,
     )
     .unwrap();
-    let parsed_media = chat_backup_media::inspect_media_header(&media_header).unwrap();
-    let mut padded_media = vec![0u8; parsed_media.padded_plaintext_bytes as usize];
-    padded_media[..source_media.len()].copy_from_slice(source_media);
-    let (mut media_encryptor, stream_header) =
-        StreamEncryptor::new_with_aad(&[0x42; 32], &media_header).unwrap();
-    let encrypted_media = media_encryptor.push(&padded_media, TAG_FINAL).unwrap();
-    let mut media_ciphertext =
-        Vec::with_capacity(media_header.len() + stream_header.len() + encrypted_media.len());
-    media_ciphertext.extend_from_slice(&media_header);
-    media_ciphertext.extend_from_slice(&stream_header);
-    media_ciphertext.extend_from_slice(&encrypted_media);
+    let media_ciphertext = sealed_media.bytes.clone();
     assert_eq!(
         media_ciphertext.len() as u64,
-        chat_backup_media::media_object_ciphertext_bytes(parsed_media.padded_plaintext_bytes)
-            .unwrap()
+        chat_backup_media_blocks::object_len(source_media.len() as u64).unwrap()
     );
     let media_metadata = UploadChatBackupMediaRequestV1 {
         backup_incarnation_id: backup_id.to_string(),
@@ -548,6 +538,7 @@ fn chat_backup_lifecycle(
         source_ciphertext_bytes: source_media.len() as u64,
         ciphertext_bytes: media_ciphertext.len() as u64,
         ciphertext_sha256: hex::encode(hash(Suite::V1, &media_ciphertext)),
+        manifest_sha256: STANDARD.encode(sealed_media.manifest_sha256),
     };
     let upload_media = |metadata: &UploadChatBackupMediaRequestV1,
                         ciphertext: Vec<u8>,

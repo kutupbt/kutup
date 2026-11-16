@@ -22,9 +22,8 @@ use kutup_chat_proto::{
     ChatMediaOfferResponseV1,
 };
 use kutup_crypto::chat_attachment_ledger;
-use kutup_crypto::chat_media::{
-    self, ChatMediaObjectContextV1, ChatMediaSuiteId, CHAT_MEDIA_OBJECT_HEADER_BYTES,
-};
+use kutup_crypto::chat_media::{ChatMediaObjectContextV1, ChatMediaSuiteId};
+use kutup_crypto::chat_media_blocks::{self, CHAT_MEDIA_BLOCKS_HEADER_BYTES};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt as _;
 use utoipa::ToSchema;
@@ -163,6 +162,58 @@ fn media_context(attachment_id: Uuid) -> Option<ChatMediaObjectContextV1> {
     ChatMediaObjectContextV1::new(&attachment_id.hyphenated().to_string()).ok()
 }
 
+/// What this server checks of a whole Chat-media object before it keeps it,
+/// whoever sent it (a local upload, or a peer's hand-over): its header names
+/// this attachment in the block suite, and its length and trailer
+/// (`trailer`, the last [`kutup_crypto::blocks::TRAILER_LEN`] bytes) fit
+/// together. The manifest's digest and the AEAD are the recipients' to check.
+pub(crate) fn check_object_shape(
+    attachment_id: Uuid,
+    header: &[u8],
+    total: u64,
+    trailer: &[u8],
+) -> AppResult<()> {
+    let context = media_context(attachment_id)
+        .ok_or_else(|| AppError::bad_request("invalid attachment context"))?;
+    if header.len() < CHAT_MEDIA_BLOCKS_HEADER_BYTES
+        || chat_media_blocks::validate_header(&header[..CHAT_MEDIA_BLOCKS_HEADER_BYTES], context)
+            .is_err()
+    {
+        return Err(AppError::bad_request("invalid Chat-media object header"));
+    }
+    if total < chat_media_blocks::min_object_len()
+        || chat_media_blocks::check_structure(total, trailer).is_err()
+    {
+        return Err(AppError::bad_request("Chat-media length mismatch"));
+    }
+    Ok(())
+}
+
+/// The stored object's block structure, from its length and trailer
+/// (docs/plans/drive-block-format.md §3): the manifest length fits the
+/// block count and the count the length. The AEAD is the reader's to check.
+async fn check_stored_structure(
+    state: &AppState,
+    storage_path: &str,
+    total: i64,
+) -> Result<(), std::io::Error> {
+    let invalid = || std::io::Error::new(ErrorKind::InvalidData, "invalid Chat-media structure");
+    let total = u64::try_from(total).map_err(|_| invalid())?;
+    let trailer_len = kutup_crypto::blocks::TRAILER_LEN as u64;
+    if total < chat_media_blocks::min_object_len() {
+        return Err(invalid());
+    }
+    let body = state
+        .storage
+        .get_object_range(storage_path, total - trailer_len, total - 1, total)
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let mut trailer = Vec::with_capacity(trailer_len as usize);
+    body.into_async_read().read_to_end(&mut trailer).await?;
+    chat_media_blocks::check_structure(total, &trailer).map_err(|_| invalid())?;
+    Ok(())
+}
+
 async fn hash_stored_object(
     state: &AppState,
     storage_path: &str,
@@ -226,12 +277,11 @@ pub async fn create_upload(
     };
     let total_bytes = match header_str(&headers, "Upload-Length").parse::<i64>() {
         Ok(value)
-            if value >= chat_media::object_ciphertext_size(0).unwrap_or(u64::MAX) as i64
+            if value >= chat_media_blocks::min_object_len() as i64
                 && value
-                    <= chat_media::object_ciphertext_size(
+                    <= chat_media_blocks::max_object_len(
                         state.config.chat_media_max_plaintext_bytes,
-                    )
-                    .unwrap_or(0) as i64 =>
+                    ) as i64 =>
         {
             value
         }
@@ -258,6 +308,8 @@ pub async fn create_upload(
         .get("suite")
         .and_then(|value| value.parse::<u16>().ok())
         .and_then(|value| ChatMediaSuiteId::try_from(value).ok())
+        // Attachments are written in the block format only.
+        .filter(|suite| *suite == ChatMediaSuiteId::KutupChatMediaBlocksV1)
     {
         Some(value) => value,
         None => return tus_text(StatusCode::BAD_REQUEST, "invalid Chat-media suite"),
@@ -477,8 +529,8 @@ pub async fn patch_upload(
         let Some(context) = media_context(attachment_id) else {
             return tus_text(StatusCode::BAD_REQUEST, "invalid attachment context");
         };
-        if body.len() < CHAT_MEDIA_OBJECT_HEADER_BYTES
-            || chat_media::validate_object_header(&body[..CHAT_MEDIA_OBJECT_HEADER_BYTES], context)
+        if body.len() < CHAT_MEDIA_BLOCKS_HEADER_BYTES
+            || chat_media_blocks::validate_header(&body[..CHAT_MEDIA_BLOCKS_HEADER_BYTES], context)
                 .is_err()
         {
             return tus_text(StatusCode::BAD_REQUEST, "invalid Chat-media object header");
@@ -548,7 +600,10 @@ pub async fn patch_upload(
     {
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "storage finalize");
     }
-    let actual_digest = hash_stored_object(&state, &storage_path, total).await;
+    let actual_digest = match check_stored_structure(&state, &storage_path, total).await {
+        Ok(()) => hash_stored_object(&state, &storage_path, total).await,
+        Err(error) => Err(error),
+    };
     let actual_digest = match actual_digest {
         Ok(value) => value,
         Err(_) => {
@@ -699,8 +754,7 @@ pub async fn deliver_local(
         .validate(&offer.destination_domain, now)
         .map_err(|_| AppError::bad_request("invalid Chat media delivery"))?;
     let configured_ciphertext_limit =
-        chat_media::object_ciphertext_size(state.config.chat_media_max_plaintext_bytes)
-            .map_err(|_| AppError::internal("invalid Chat-media server limit"))?;
+        chat_media_blocks::max_object_len(state.config.chat_media_max_plaintext_bytes);
     if offer.ciphertext_bytes > configured_ciphertext_limit {
         return Err(AppError::bad_request(
             "Chat media exceeds the destination server limit",
@@ -1399,6 +1453,54 @@ pub async fn ledger_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_object_is_kept_only_in_the_block_suite_for_its_attachment() {
+        let attachment = Uuid::new_v4();
+        let context = media_context(attachment).unwrap();
+        let sealed = chat_media_blocks::seal_attachment(b"a song", &[9_u8; 32], context).unwrap();
+        let object = sealed.bytes.as_slice();
+        let total = object.len() as u64;
+        let trailer = &object[object.len() - kutup_crypto::blocks::TRAILER_LEN..];
+        check_object_shape(attachment, object, total, trailer).unwrap();
+        let refused = |header: &[u8], total: u64, trailer: &[u8]| {
+            check_object_shape(attachment, header, total, trailer)
+                .unwrap_err()
+                .message
+        };
+        // Another attachment's object, and something that isn't Kutup's.
+        assert_eq!(
+            check_object_shape(Uuid::new_v4(), object, total, trailer)
+                .unwrap_err()
+                .message,
+            "invalid Chat-media object header"
+        );
+        let foreign = vec![0x42_u8; object.len()];
+        assert_eq!(
+            refused(
+                &foreign,
+                total,
+                &foreign[foreign.len() - kutup_crypto::blocks::TRAILER_LEN..]
+            ),
+            "invalid Chat-media object header"
+        );
+        // The right header on the wrong length (a block more than the
+        // manifest counts) or trailer. A last block's own length is the
+        // AEAD's to check, not the server's.
+        let longer = total + kutup_crypto::blocks::BLOCK_SIZE as u64;
+        assert_eq!(
+            refused(object, longer, trailer),
+            "Chat-media length mismatch"
+        );
+        assert_eq!(
+            refused(object, total, &[0_u8; 12]),
+            "Chat-media length mismatch"
+        );
+        assert_eq!(
+            refused(object, chat_media_blocks::min_object_len() - 1, trailer),
+            "Chat-media length mismatch"
+        );
+    }
 
     #[test]
     fn public_identifiers_are_canonical_and_tokens_are_hashed() {

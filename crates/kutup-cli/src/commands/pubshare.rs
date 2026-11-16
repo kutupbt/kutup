@@ -13,7 +13,6 @@ use url::Url;
 use crate::api::public::PublicShare;
 use crate::api::Client;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::DriveFileBlobContextV1;
 
 #[derive(Subcommand)]
 pub enum PubCmd {
@@ -213,21 +212,29 @@ fn download(json: bool, url: &str, file_id: &str, dest: Option<&str>) -> Result<
         }
     };
 
-    let resp = client.public_share_download_stream(&p.token, file_id)?;
-    let bar = crate::output::progress_bar(resp.content_length(), &meta.name);
+    let bar = crate::output::progress_bar(Some(meta.size), &meta.name);
     let mut out = std::fs::File::create(&dest_path).context("open dest")?;
-    let blob_context = DriveFileBlobContextV1::new(&target.id, content_generation)?;
-    let written =
-        match crate::transfer::stream_download(resp, &content_key, blob_context, &mut out, |n| {
-            bar.set_position(n as u64)
-        }) {
-            Ok(w) => w,
-            Err(e) => {
-                drop(out);
-                let _ = std::fs::remove_file(&dest_path);
-                return Err(e).context("decrypt-write");
-            }
-        };
+    // A link's reader has no pins: the signer is not checked (as on the web).
+    let written = match crate::revisions::read(
+        &client,
+        &crate::api::versions::ContentRoute::Public {
+            token: &p.token,
+            file_id,
+        },
+        &content_key,
+        &target.id,
+        content_generation,
+        &crate::revisions::current(&meta),
+        &mut out,
+        |n| bar.set_position(n),
+    ) {
+        Ok(opened) => opened.size,
+        Err(e) => {
+            drop(out);
+            let _ = std::fs::remove_file(&dest_path);
+            return Err(e).context("decrypt-write");
+        }
+    };
     bar.finish_and_clear();
 
     let dest_str = dest_path.to_string_lossy().into_owned();

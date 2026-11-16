@@ -1,12 +1,14 @@
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
+import { driveStreamLimits } from '@kutup/files/stream/limits'
 import { openDownloadSink } from '@kutup/files/download/streamDownload'
 import { downloadAsZip, FsaRequiredError, type ZipFile } from '@kutup/files/zipDownload'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { freshAccessToken } from '@kutup/session/client'
-import { currentContent, readFile } from '../content'
+import { currentContent, readFile, versionToOpen } from '../content'
 import { embeddingKind, exportEmbedded, type ExportedFile } from './embedded'
 import { loadFolderFiles } from '@kutup/drive-core/files'
-import { sealedAt } from '@kutup/drive-core/keyring'
+import { currentContentOf } from '@kutup/drive-core/keyring'
+import type { FileContent } from '../content'
 import { contentPath, fileLocation, folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 
 /**
@@ -25,7 +27,12 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
     if (exported) return saveExported(file, exported)
   }
   // The save picker needs the click's user activation: ask for it first.
-  const sink = await openDownloadSink({ filename: file.name, mimeType: file.mimeType })
+  const sink = await openDownloadSink({
+    filename: file.name,
+    mimeType: file.mimeType,
+    expectedPlainSize: file.size,
+    blobFallbackMaxBytes: async () => (await driveStreamLimits()).blobFallbackMaxBytes,
+  })
   try {
     const base = await resolveApiBase()
     const content = await currentContent(folder, file)
@@ -33,10 +40,12 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
       await sink.write(content.bytes)
     } else {
       const url = content.kind === 'version' ? `${base}${content.path}` : `${base}${contentPath(fileLocation(folder), file.id)}`
-      // Sealed under the key generation of the content served (a file
-      // re-keyed since keeps older content under its older key).
-      const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
-      for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken())) {
+      // Opened with the key generation of the content served (a file
+      // re-keyed since keeps older content under its older key), against
+      // what it must be: a version by its id, the file's own content by
+      // what its metadata commits to.
+      const opened = await openedContent(file, content)
+      for await (const { plain } of fetchDecryptedChunks(url, opened.fileKey, opened.expected, await freshAccessToken())) {
         await sink.write(plain)
       }
     }
@@ -48,6 +57,15 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
 }
 
 export { FsaRequiredError }
+
+/** A ZIP entry already decrypted here: nothing is fetched or opened for it, so it names no key or revision. */
+function plainEntry(id: string, name: string, bytes: Uint8Array): ZipFile {
+  return { id, name, size: bytes.length, plain: bytes }
+}
+
+function openedContent(file: DriveFile, content: FileContent) {
+  return content.kind === 'version' ? versionToOpen(file, content) : currentContentOf(file)
+}
 
 /**
  * A file with its pictures: one file (a whiteboard, pictures inline) is
@@ -68,7 +86,7 @@ async function saveExported(file: DriveFile, exported: ExportedFile[]): Promise<
   }
   const archive = (file.name ?? 'note').replace(/\.[^.]+$/, '')
   await downloadAsZip(
-    exported.map((e, i) => ({ id: `${file.id}-${i}`, keyGeneration: 1, name: e.path, size: e.bytes.length, fileKey: new Uint8Array(32), plain: e.bytes })),
+    exported.map((e, i) => plainEntry(`${file.id}-${i}`, e.path, e.bytes)),
     archive,
     await freshAccessToken(),
     () => {},
@@ -84,14 +102,7 @@ async function zipEntries(folder: Folder, file: DriveFile, path: string): Promis
     const exported = await exportEmbedded(folder, file, await (await readFile(folder, file)).text())
     if (exported) {
       const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : ''
-      return exported.map((e, i) => ({
-        id: `${file.id}-${i}`,
-        keyGeneration: 1,
-        name: i === 0 ? path : dir + e.path,
-        size: e.bytes.length,
-        fileKey: new Uint8Array(32),
-        plain: e.bytes,
-      }))
+      return exported.map((e, i) => plainEntry(`${file.id}-${i}`, i === 0 ? path : dir + e.path, e.bytes))
     }
   }
   return [await zipEntry(folder, file, path)]
@@ -101,15 +112,17 @@ async function zipEntries(folder: Folder, file: DriveFile, path: string): Promis
 async function zipEntry(folder: Folder, file: DriveFile, path: string): Promise<ZipFile> {
   const location = folderLocation(folder)
   const content = await currentContent(folder, file)
-  const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
+  if (content.kind === 'plain') {
+    return plainEntry(file.id, path, content.bytes)
+  }
+  const opened = await openedContent(file, content)
   const entry: ZipFile = {
     id: file.id,
-    keyGeneration: sealed.context.generation,
     name: path,
     size: file.size,
-    fileKey: sealed.fileKey,
+    fileKey: opened.fileKey,
+    expected: opened.expected,
   }
-  if (content.kind === 'plain') return { ...entry, plain: content.bytes, size: content.bytes.length }
   if (location.kind === 'remote') return { ...entry, isRemote: true, remoteShareId: location.shareId }
   if (content.kind === 'version') return { ...entry, contentPath: content.path }
   return entry

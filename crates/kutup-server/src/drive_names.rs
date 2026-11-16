@@ -48,6 +48,42 @@ pub fn require_name_hash(value: Option<&str>) -> AppResult<String> {
     }
 }
 
+/// The Drive-root generation a name hash sent for `place` was made under
+/// (docs/plans/identity-rotation.md §3). At the top level the hash key comes
+/// from the owner's Drive root, so the client names the root's generation
+/// (`nameHashGeneration`), which must be the owner's newest: `409
+/// driveRootChanged` otherwise, and the client hashes the name again. In a
+/// folder the key is the folder's, and there is none.
+pub async fn hash_generation(
+    tx: &mut Transaction<'_, Postgres>,
+    place: Place,
+    sent: Option<u32>,
+) -> AppResult<Option<i32>> {
+    match place {
+        Place::Folder(_) => match sent {
+            None => Ok(None),
+            Some(_) => Err(AppError::bad_request(
+                "nameHashGeneration is only for the top level",
+            )),
+        },
+        Place::TopLevel(owner) => {
+            let sent = sent.ok_or_else(|| {
+                AppError::bad_request("a top-level name hash comes with its nameHashGeneration")
+            })?;
+            let newest = crate::account_roots::drive_generation(&mut **tx, owner).await?;
+            if sent != newest.get() {
+                return Err(AppError::conflict(
+                    "the account's Drive root has changed: hash the name again",
+                )
+                .with_details(json!({ "code": "driveRootChanged" })));
+            }
+            i32::try_from(sent)
+                .map(Some)
+                .map_err(|_| AppError::bad_request("invalid nameHashGeneration"))
+        }
+    }
+}
+
 /// A content hash as sent, same form.
 pub fn parse_content_hash(value: Option<&str>) -> AppResult<Option<String>> {
     match value {

@@ -1,4 +1,4 @@
-import type { FileMetadataV1, MediaMetadataV1 } from '@kutup/crypto'
+import type { ContentCommitment, FileMetadataV2, MediaMetadataV1 } from '@kutup/crypto'
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
 import type { FileKind } from './kinds'
 
@@ -80,6 +80,16 @@ export interface DriveFile {
   sha256: string | null
   /** A photo's or video's details (docs/plans/photos.md), when read. */
   media: MediaMetadataV1 | null
+  /**
+   * The current content its sealed metadata commits to (the revision and its
+   * manifest's digest, docs/plans/drive-block-format.md §2): the only object
+   * a download of the current content opens. Null when it could not be decrypted.
+   */
+  content: ContentCommitment | null
+  /** The original upload's revision, as the sealed metadata names it (null: not named). */
+  originalRevisionId: string | null
+  /** A note's or place list's latest saved state, as the sealed metadata names it (null: none saved). */
+  stateRevisionId: string | null
   /** The file key of `keyGeneration`. */
   fileKey: Uint8Array | null
   /** That key sealed under the folder key at `keyEpoch`, as listed. */
@@ -110,11 +120,19 @@ export interface DriveFile {
  * never dropped.
  */
 export function fileMetadataOf(
-  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media'> & { sha256?: string | null },
-  change: Partial<FileMetadataV1> = {},
-): FileMetadataV1 {
-  if (!file.name) throw new Error('file is not open')
-  const metadata: FileMetadataV1 = { name: file.name, mimeType: file.mimeType, size: file.size }
+  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media' | 'content'> & {
+    sha256?: string | null
+    originalRevisionId?: string | null
+    stateRevisionId?: string | null
+  },
+  change: Partial<FileMetadataV2> = {},
+): FileMetadataV2 {
+  const content = change.content ?? file.content
+  if (!file.name || !content) throw new Error('file is not open')
+  const metadata: FileMetadataV2 = { name: file.name, mimeType: file.mimeType, size: file.size, content }
+  // The revisions the metadata names are carried by every rewrite.
+  if (file.originalRevisionId) metadata.originalRevisionId = file.originalRevisionId
+  if (file.stateRevisionId) metadata.stateRevisionId = file.stateRevisionId
   if (file.sha256) metadata.sha256 = file.sha256
   if (file.media) metadata.media = file.media
   return { ...metadata, ...change }

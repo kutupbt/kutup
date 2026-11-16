@@ -36,6 +36,8 @@ export interface ThumbnailImage {
 
 export interface ThumbnailContext {
   fileId: string
+  /** The content revision it shows: one of older content no longer opens (docs/plans/drive-block-format.md §2). */
+  revisionId: string
   /** The generation of the file key it is sealed under. */
   generation: number
   variant: ThumbnailVariant
@@ -60,6 +62,7 @@ export async function sealThumbnailV1(
       context.variant,
       toBase64(fileKey),
       context.fileId,
+      context.revisionId,
       context.generation,
     ),
   )
@@ -76,6 +79,7 @@ export async function openThumbnailV1(
     expected.variant,
     toBase64(fileKey),
     expected.fileId,
+    expected.revisionId,
     expected.generation,
   )
   const format = (Object.keys(THUMBNAIL_FORMAT) as ThumbnailFormat[]).find(

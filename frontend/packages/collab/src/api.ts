@@ -1,6 +1,6 @@
 import axios from 'axios'
 import api from '@kutup/session/client'
-import { QuotaExceededError } from '@kutup/session/errors'
+import { MetadataConflictError, QuotaExceededError, type CurrentMetadata } from '@kutup/session/errors'
 
 export interface VersionRow {
   id: string
@@ -20,6 +20,13 @@ export interface VersionRow {
   remoteAuthor?: string
   /** A whole-file version: the version it replaced (`null`: the original upload, or not recorded). */
   parentVersionId?: string | null
+  /**
+   * What the version is, sealed by whoever saved it
+   * (docs/plans/drive-block-format.md §2): readers open it first, then the
+   * version against the digest and size it commits to. `null`: a
+   * streaming-format version, which no longer opens.
+   */
+  revisionContentEnvelope: string | null
 }
 
 /**
@@ -94,6 +101,32 @@ export interface NewVersion {
    * {@link VersionConflictError}.
    */
   basedOn?: string
+  /**
+   * The revision the sealed blob is bound to (its header names it): the
+   * version's id once stored (docs/plans/drive-block-format.md §2).
+   */
+  revisionId: string
+  /**
+   * What the revision is (`sealRevisionContent`, as `sealDriveFile` gives
+   * it): kept with the version, so it opens against a committed digest.
+   */
+  revisionContentEnvelope: string
+  /**
+   * The file's next metadata (the file's current revision + 1): a whole-file
+   * save becomes the file's current content and the metadata commits to it;
+   * a note's state (`yjs`) is named by it as the saved state
+   * (`stateRevisionId`, docs/plans/drive-block-format.md §2).
+   */
+  metadata?: { metadataEnvelope: string; metadataRevision: number }
+}
+
+/** The current metadata a `409 revision_conflict` carries (null when it carries none). */
+function currentMetadataOf(body: { metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined): CurrentMetadata | null {
+  if (!body) return null
+  const { metadataRevision, metadataEnvelope } = body
+  if (typeof metadataRevision !== 'number' || !Number.isSafeInteger(metadataRevision) || metadataRevision < 1) return null
+  if (typeof metadataEnvelope !== 'string' || !metadataEnvelope) return null
+  return { metadataRevision, metadataEnvelope }
 }
 
 /** A conditional save lost: the file holds `current` now (a version id, or `original`). */
@@ -124,6 +157,12 @@ export async function createVersion(
   form.append('keepForever', String(Boolean(version.keepForever)))
   if (version.label) form.append('label', version.label)
   if (version.basedOn) form.append('basedOn', version.basedOn)
+  form.append('revisionId', version.revisionId)
+  form.append('revisionContentEnvelope', version.revisionContentEnvelope)
+  if (version.metadata) {
+    form.append('metadataEnvelope', version.metadata.metadataEnvelope)
+    form.append('metadataRevision', String(version.metadata.metadataRevision))
+  }
   form.append('file', new Blob([sealed as BlobPart], { type: 'application/octet-stream' }), 'version')
   try {
     const r = await api.post<VersionRow>(`${base}/versions`, form)
@@ -132,9 +171,14 @@ export async function createVersion(
     if (axios.isAxiosError(err) && err.response?.status === 413) {
       throw new QuotaExceededError()
     }
-    const body = axios.isAxiosError(err) ? (err.response?.data as { code?: string; current?: string } | undefined) : undefined
+    const body = axios.isAxiosError(err)
+      ? (err.response?.data as { code?: string; current?: string; metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined)
+      : undefined
     if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'version_conflict' && body.current) {
       throw new VersionConflictError(body.current)
+    }
+    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'revision_conflict') {
+      throw new MetadataConflictError(currentMetadataOf(body))
     }
     throw err
   }

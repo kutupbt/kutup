@@ -6,8 +6,6 @@ import { exactBytes } from '@kutup/crypto/bytes'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import { getCryptoWasm } from '@kutup/crypto/rustWasm'
 import { createHasher, toHex } from '@kutup/crypto/hash'
-import { newStreamDecryptor } from '@kutup/crypto/streamDecryptor'
-import { ABYTES, HEADER_BYTES, PLAIN_CHUNK, newStreamEncryptor } from '@kutup/crypto/streamEncryptor'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import {
   acknowledgeBackupEntry as acknowledge,
@@ -48,7 +46,6 @@ const COMPACT_DAILY_MS = 24 * 60 * 60 * 1000
 // the same way, not only on the next change.
 const RETRY_FIRST_MS = 5_000
 const RETRY_MAX_MS = 5 * 60 * 1000
-const BACKUP_MEDIA_HEADER_BYTES = 107
 const encoder = new TextEncoder()
 
 export interface BackupAuthorization {
@@ -269,6 +266,7 @@ export interface ChatBackupTransport {
     ciphertextSha256: string
   }, ciphertext: Uint8Array): Promise<void>
   downloadBase(objectId: string): Promise<Uint8Array>
+  /** The server seals the copy (`KUTPBM2`) with the outer key; the receipt names its manifest's digest. */
   copyMedia(request: {
     operationId: string
     backupIncarnationId: string
@@ -276,7 +274,7 @@ export interface ChatBackupTransport {
     mediaId: string
     referenceId: string
     outerEncryptionKey: string
-  }): Promise<void>
+  }): Promise<BackupMediaReceipt>
   uploadMedia(metadata: {
     backupIncarnationId: string
     mediaId: string
@@ -284,10 +282,12 @@ export interface ChatBackupTransport {
     sourceCiphertextBytes: number
     ciphertextBytes: number
     ciphertextSha256: string
-  }, ciphertext: Blob): Promise<void>
-  downloadMedia(mediaId: string, accessToken: string, signal?: AbortSignal): Promise<{
-    body: ReadableStream<Uint8Array>
-    ciphertextSha256: string
+    manifestSha256: string
+  }, ciphertext: Blob): Promise<BackupMediaReceipt>
+  /** One range of a backup media object (`end` inclusive), and the object's whole length. */
+  downloadMediaRange(mediaId: string, accessToken: string, start: number, end: number, signal?: AbortSignal): Promise<{
+    bytes: Uint8Array
+    total: number
   }>
   reconcileMedia(request: {
     operationId: string
@@ -303,6 +303,16 @@ export interface ChatBackupTransport {
     expectedManifestDigest: string
     manifest: BackupManifest
   }): Promise<void>
+}
+
+/** What the server answers for a backup media copy it stored. */
+export interface BackupMediaReceipt {
+  mediaId: string
+  ciphertextBytes: number
+  ciphertextSha256: string
+  /** The sealed manifest's SHA-256 (canonical base64): what the backup's records commit to. */
+  manifestSha256: string
+  alreadyStored: boolean
 }
 
 export interface ChatBackupRuntime {
@@ -345,25 +355,26 @@ const browserTransport: ChatBackupTransport = {
     return new Uint8Array(response.data)
   },
   async copyMedia(request) {
-    await api.post('/chat/backup/media/copy', request)
+    return (await api.post<BackupMediaReceipt>('/chat/backup/media/copy', request)).data
   },
   async uploadMedia(metadata, ciphertext) {
     const form = new FormData()
     form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
     form.append('ciphertext', ciphertext, 'media.bin')
-    await api.post('/chat/backup/media', form)
+    return (await api.post<BackupMediaReceipt>('/chat/backup/media', form)).data
   },
-  async downloadMedia(mediaId, accessToken, signal) {
+  async downloadMediaRange(mediaId, accessToken, start, end, signal) {
     const response = await fetch(
       `${await resolveApiBase()}/chat/backup/media/${encodeURIComponent(mediaId)}`,
-      { headers: { Authorization: `Bearer ${accessToken}` }, signal },
+      { headers: { Authorization: `Bearer ${accessToken}`, Range: `bytes=${start}-${end}` }, signal, cache: 'no-store' },
     )
-    if (!response.ok || !response.body) throw new Error('protected Chat media is unavailable')
-    const ciphertextSha256 = response.headers.get('x-kutup-ciphertext-sha256')
-    if (!ciphertextSha256 || !/^[0-9a-f]{64}$/.test(ciphertextSha256)) {
-      throw new Error('protected Chat media response has no canonical digest')
+    const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('Content-Range')?.trim() ?? '')
+    if (response.status !== 206 || !range || Number(range[1]) !== start || Number(range[2]) > end) {
+      throw new Error('protected Chat media is unavailable')
     }
-    return { body: response.body, ciphertextSha256 }
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    if (bytes.length !== Number(range[2]) - start + 1) throw new Error('protected Chat media answer is truncated')
+    return { bytes, total: Number(range[3]) }
   },
   async reconcileMedia(request) {
     await api.post('/chat/backup/media/reconciliation', request)
@@ -394,6 +405,8 @@ interface MediaProtection {
   referenceId: string
   mediaId: string
   ciphertextBytes: number
+  /** The copy's sealed manifest SHA-256 (canonical base64); '' until the server has it. */
+  manifestSha256: string
   protected: boolean
   needsAttention: boolean
   storageFull: boolean
@@ -558,63 +571,65 @@ export class ChatBackupCoordinator {
     return this.restoredChanges
   }
 
+  /**
+   * A protected copy's source ciphertext (the Chat attachment's own object),
+   * read by Range: the header and the sealed manifest first, opened in Rust
+   * against the digest the backup's record commits to
+   * (`backupMediaManifestSha256`), then each block, its hash checked against
+   * the manifest before it opens and its padding checked to be zeros.
+   */
   async *fetchMediaCiphertext(
     mediaId: string,
+    manifestSha256: string,
     accessToken: string,
     signal?: AbortSignal,
   ): AsyncGenerator<Uint8Array, void, void> {
-    const response = await this.runtime.transport.downloadMedia(mediaId, accessToken, signal)
-    const reader = response.body.getReader()
-    const buffered = new BufferedStreamReader(reader)
-    const digest = await createHasher()
+    const wasm = await getCryptoWasm()
+    const layout = wasm.blockLayout('chatBackupMedia')
+    const read = async (start: number, end: number) => {
+      const out = new Uint8Array(end - start + 1)
+      let at = start
+      let total = -1
+      while (at <= end) {
+        const answer = await this.runtime.transport.downloadMediaRange(mediaId, accessToken, at, end, signal)
+        if (total >= 0 && answer.total !== total) throw new Error('protected Chat media changed while it was read')
+        total = answer.total
+        if (answer.bytes.length === 0) throw new Error('protected Chat media answer is empty')
+        out.set(answer.bytes, at - start)
+        at += answer.bytes.length
+      }
+      return { bytes: out, total }
+    }
+    const first = await read(0, layout.headerBytes - 1)
+    const objectLength = first.total
+    if (objectLength < layout.headerBytes + layout.trailerBytes) throw new Error('protected Chat media is truncated')
+    const trailer = (await read(objectLength - layout.trailerBytes, objectLength - 1)).bytes
+    const manifestLength = wasm.blockTrailerManifestLength('chatBackupMedia', trailer)
+    const manifestStart = objectLength - layout.trailerBytes - manifestLength
+    if (manifestStart < layout.headerBytes) throw new Error('protected Chat media manifest does not fit')
+    const manifest = (await read(manifestStart, objectLength - layout.trailerBytes - 1)).bytes
+    const reader = wasm.chatBackupMediaBlockReader(
+      toBase64(this.root),
+      this.accountIncarnationId,
+      this.backupIncarnationId,
+      mediaId,
+      manifestSha256,
+      first.bytes,
+      manifest,
+    )
     try {
-      const prefix = await buffered.readExact(BACKUP_MEDIA_HEADER_BYTES + HEADER_BYTES)
-      digest.update(prefix)
-      const typedHeader = prefix.subarray(0, BACKUP_MEDIA_HEADER_BYTES)
-      const streamHeader = prefix.subarray(BACKUP_MEDIA_HEADER_BYTES)
-      const opened = (await getCryptoWasm()).openChatBackupMediaHeader(
-        toBase64(typedHeader),
-        toBase64(this.root),
-        this.accountIncarnationId,
-        this.backupIncarnationId,
-        mediaId,
-      )
-      const decryptor = await newStreamDecryptor(
-        fromBase64(opened.outerEncryptionKey),
-        streamHeader,
-        typedHeader,
-      )
-      let paddedRemaining = Number(opened.paddedPlaintextBytes)
-      let sourceRemaining = Number(opened.sourceCiphertextBytes)
-      if (!Number.isSafeInteger(paddedRemaining) || !Number.isSafeInteger(sourceRemaining)
-          || sourceRemaining <= 0 || paddedRemaining < sourceRemaining) {
-        throw new Error('protected Chat media lengths are invalid')
+      if (reader.objectLength !== objectLength) throw new Error('protected Chat media length is inconsistent')
+      let sourceRemaining = reader.sourceBytes ?? 0
+      for (let index = 0; index < reader.blockCount && sourceRemaining > 0; index++) {
+        const start = reader.blockOffset(index)
+        const sealed = (await read(start, start + reader.sealedBlockLength(index) - 1)).bytes
+        const source = reader.openBlock(index, sealed)
+        sourceRemaining -= source.length
+        if (source.length > 0) yield source
       }
-      while (paddedRemaining > 0) {
-        const plainBytes = Math.min(PLAIN_CHUNK, paddedRemaining)
-        const frame = await buffered.readExact(plainBytes + ABYTES)
-        digest.update(frame)
-        const openedFrame = decryptor.pull(frame)
-        if (openedFrame.plain.length !== plainBytes
-            || openedFrame.isFinal !== (plainBytes === paddedRemaining)) {
-          throw new Error('protected Chat media secretstream framing is invalid')
-        }
-        const sourceBytes = Math.min(sourceRemaining, openedFrame.plain.length)
-        if (sourceBytes > 0) yield openedFrame.plain.slice(0, sourceBytes)
-        for (let index = sourceBytes; index < openedFrame.plain.length; index++) {
-          if (openedFrame.plain[index] !== 0) throw new Error('protected Chat media padding is invalid')
-        }
-        sourceRemaining -= sourceBytes
-        paddedRemaining -= plainBytes
-      }
-      if (sourceRemaining !== 0 || await buffered.hasMore()) {
-        throw new Error('protected Chat media length is inconsistent')
-      }
-      if (toHex(digest.digest()) !== response.ciphertextSha256) {
-        throw new Error('protected Chat media digest is invalid')
-      }
+      if (sourceRemaining !== 0) throw new Error('protected Chat media length is inconsistent')
     } finally {
-      await reader.cancel().catch(() => undefined)
+      reader.free()
     }
   }
 
@@ -803,7 +818,8 @@ export class ChatBackupCoordinator {
         state = {
           referenceId: source.referenceId,
           mediaId: prepared.mediaId,
-          ciphertextBytes: backupMediaObjectBytes(Number(prepared.paddedPlaintextBytes)),
+          ciphertextBytes: await backupMediaObjectBytes(this.root, this.accountIncarnationId, this.backupIncarnationId, source),
+          manifestSha256: '',
           protected: false,
           needsAttention: false,
           storageFull: false,
@@ -822,7 +838,7 @@ export class ChatBackupCoordinator {
           source.attachmentId,
           BigInt(source.ciphertextBytes),
         )
-        await this.runtime.transport.copyMedia({
+        const receipt = await this.runtime.transport.copyMedia({
           operationId: await deterministicUuid(`copy:${state.referenceId}:${state.mediaId}`),
           backupIncarnationId: this.backupIncarnationId,
           sourceAttachmentId: source.attachmentId,
@@ -830,13 +846,14 @@ export class ChatBackupCoordinator {
           referenceId: state.referenceId,
           outerEncryptionKey: prepared.outerEncryptionKey,
         })
+        state.manifestSha256 = checkedReceipt(receipt, state.mediaId)
         state.protected = true
       } catch (error: any) {
         if (transportStatus(error) === 404) {
           const descriptor = descriptors.get(source.attachmentId)
           if (descriptor) {
             try {
-              await this.uploadLocalMediaCopy(source, descriptor)
+              state.manifestSha256 = await this.uploadLocalMediaCopy(source, descriptor)
               state.protected = true
             } catch {
               // The verified local cache is an optional fallback. Keep this
@@ -856,81 +873,92 @@ export class ChatBackupCoordinator {
     return protectedIds
   }
 
+  /**
+   * Seals the verified local copy of an attachment's ciphertext as its
+   * backup media (`KUTPBM2`): the source, then zeros to its padded length,
+   * in 4 MiB blocks; returns the sealed manifest's digest the backup's
+   * records commit to.
+   */
   private async uploadLocalMediaCopy(
     source: BackupMediaSource,
     descriptor: ChatAttachmentDescriptorV1,
-  ): Promise<void> {
+  ): Promise<string> {
     if (descriptor.ciphertextBytes !== source.ciphertextBytes) {
       throw new Error('local Chat media length differs from its backup source')
     }
-    const prepared = (await getCryptoWasm()).prepareChatBackupMedia(
+    const encryptor = (await getCryptoWasm()).chatBackupMediaBlockEncryptor(
       toBase64(this.root),
       this.accountIncarnationId,
       this.backupIncarnationId,
       source.attachmentId,
-      BigInt(source.ciphertextBytes),
+      source.ciphertextBytes,
     )
-    const typedHeader = fromBase64(prepared.objectHeader)
-    const paddedBytes = Number(prepared.paddedPlaintextBytes)
-    if (!Number.isSafeInteger(paddedBytes) || paddedBytes < source.ciphertextBytes) {
-      throw new Error('backup media padding length is invalid')
-    }
-    const encryptor = await newStreamEncryptor(
-      fromBase64(prepared.outerEncryptionKey), typedHeader,
-    )
-    const hash = await createHasher()
-    const parts: BlobPart[] = []
-    let outerBytes = 0
-    const appendOuter = (bytes: Uint8Array) => {
-      hash.update(bytes)
-      parts.push(exactBytes(bytes))
-      outerBytes += bytes.length
-    }
-    appendOuter(typedHeader)
-    appendOuter(encryptor.header)
-
-    let sourceBytes = 0
-    let paddedEmitted = 0
-    let pending: Uint8Array<ArrayBufferLike> = new Uint8Array()
-    const emit = (plain: Uint8Array) => {
-      paddedEmitted += plain.length
-      appendOuter(encryptor.push(plain, paddedEmitted === paddedBytes))
-    }
-    for await (const chunk of this.options.localMediaCiphertext(descriptor)) {
-      sourceBytes += chunk.length
-      if (sourceBytes > descriptor.ciphertextBytes) {
-        throw new Error('local Chat media exceeds its authenticated length')
+    try {
+      const mediaId = encryptor.mediaId
+      if (!mediaId) throw new Error('backup media id is missing')
+      const hash = await createHasher()
+      const parts: BlobPart[] = []
+      let outerBytes = 0
+      const appendOuter = (bytes: Uint8Array) => {
+        hash.update(bytes)
+        parts.push(exactBytes(bytes))
+        outerBytes += bytes.length
       }
-      pending = appendBytes(pending, chunk)
-      while (paddedEmitted < paddedBytes) {
-        const frameBytes = Math.min(PLAIN_CHUNK, paddedBytes - paddedEmitted)
-        if (pending.length < frameBytes) break
-        emit(pending.slice(0, frameBytes))
-        pending = pending.slice(frameBytes)
-      }
-    }
-    if (sourceBytes !== descriptor.ciphertextBytes) {
-      throw new Error('local Chat media is truncated')
-    }
-    while (paddedEmitted < paddedBytes) {
-      const frameBytes = Math.min(PLAIN_CHUNK, paddedBytes - paddedEmitted)
-      const plain = new Uint8Array(frameBytes)
-      const copied = Math.min(pending.length, frameBytes)
-      plain.set(pending.subarray(0, copied))
-      pending = pending.slice(copied)
-      emit(plain)
-    }
-    if (pending.length !== 0) throw new Error('local Chat media padding overflow')
+      appendOuter(encryptor.header())
 
-    const metadata = {
-      backupIncarnationId: this.backupIncarnationId,
-      mediaId: prepared.mediaId,
-      referenceId: source.referenceId,
-      sourceCiphertextBytes: source.ciphertextBytes,
-      ciphertextBytes: outerBytes,
-      ciphertextSha256: toHex(hash.digest()),
+      let sourceBytes = 0
+      let index = 0
+      let pending: Uint8Array<ArrayBufferLike> = new Uint8Array()
+      const sealReady = () => {
+        while (index < encryptor.blockCount && pending.length >= encryptor.blockLength(index)) {
+          const length = encryptor.blockLength(index)
+          appendOuter(encryptor.sealNext(pending.slice(0, length)))
+          pending = pending.slice(length)
+          index++
+        }
+      }
+      for await (const chunk of this.options.localMediaCiphertext(descriptor)) {
+        sourceBytes += chunk.length
+        if (sourceBytes > descriptor.ciphertextBytes) {
+          throw new Error('local Chat media exceeds its authenticated length')
+        }
+        pending = appendBytes(pending, chunk)
+        sealReady()
+      }
+      if (sourceBytes !== descriptor.ciphertextBytes) {
+        throw new Error('local Chat media is truncated')
+      }
+      // The padding: zeros up to the padded length, in the blocks that are left.
+      while (index < encryptor.blockCount) {
+        const length = encryptor.blockLength(index)
+        const plain = new Uint8Array(length)
+        const copied = Math.min(pending.length, length)
+        plain.set(pending.subarray(0, copied))
+        pending = pending.slice(copied)
+        appendOuter(encryptor.sealNext(plain))
+        index++
+      }
+      if (pending.length !== 0) throw new Error('local Chat media padding overflow')
+      appendOuter(encryptor.finish())
+      const manifestSha256 = encryptor.manifestSha256
+      if (!manifestSha256 || outerBytes !== encryptor.objectLength) throw new Error('backup media sealing is inconsistent')
+
+      const receipt = await this.runtime.transport.uploadMedia({
+        backupIncarnationId: this.backupIncarnationId,
+        mediaId,
+        referenceId: source.referenceId,
+        sourceCiphertextBytes: source.ciphertextBytes,
+        ciphertextBytes: outerBytes,
+        ciphertextSha256: toHex(hash.digest()),
+        manifestSha256,
+      }, new Blob(parts))
+      if (checkedReceipt(receipt, mediaId) !== manifestSha256) {
+        throw new Error('the server stored other backup media than this browser sealed')
+      }
+      return manifestSha256
+    } finally {
+      encryptor.free()
     }
-    await this.runtime.transport.uploadMedia(metadata, new Blob(parts))
   }
 
   /**
@@ -1023,8 +1051,12 @@ export class ChatBackupCoordinator {
         if (!value.local || !attachment || !kept(id, value)) continue
         const mediaId = backupMedia.get(attachment.attachmentId)
         const media = this.media.get(attachment.attachmentId)
-        const [wantedMedia, wantedReference] = mediaId && media ? [mediaId, media.referenceId] : [undefined, undefined]
-        if (attachment.backupMediaId !== wantedMedia || attachment.backupMediaReferenceId !== wantedReference) {
+        // A record names its copy once the server has it: the id and the digest go together.
+        const [wantedMedia, wantedReference, wantedManifest] = mediaId && media?.manifestSha256
+          ? [mediaId, media.referenceId, media.manifestSha256]
+          : [undefined, undefined, undefined]
+        if (attachment.backupMediaId !== wantedMedia || attachment.backupMediaReferenceId !== wantedReference
+            || attachment.backupMediaManifestSha256 !== wantedManifest) {
           stale.add(collected.groupOf.get(id)!)
         }
       }
@@ -1085,9 +1117,11 @@ export class ChatBackupCoordinator {
         if (content.attachment) {
           const mediaId = backupMedia.get(content.attachment.attachmentId)
           const media = this.media.get(content.attachment.attachmentId)
-          if (mediaId && media) {
+          // The copy, once the server has it: its id with the digest a restore opens it against.
+          if (mediaId && media?.manifestSha256) {
             content.attachment.backupMediaId = mediaId
             content.attachment.backupMediaReferenceId = media.referenceId
+            content.attachment.backupMediaManifestSha256 = media.manifestSha256
           }
         }
         const sender = parseAccount(entry.sender)
@@ -1447,6 +1481,7 @@ export class ChatBackupCoordinator {
           referenceId: value.referenceId,
           mediaId: value.mediaId,
           ciphertextBytes: value.ciphertextBytes,
+          manifestSha256: value.manifestSha256,
           protected: value.protected,
           needsAttention: value.needsAttention,
           storageFull: value.storageFull,
@@ -1609,7 +1644,9 @@ export class ChatBackupCoordinator {
         referenceId: value.referenceId,
         mediaId: value.mediaId,
         ciphertextBytes: value.ciphertextBytes,
-        protected: value.protected,
+        manifestSha256: value.manifestSha256 ?? '',
+        // A copy whose digest isn't known can't be restored: it is protected again.
+        protected: value.protected && Boolean(value.manifestSha256),
         needsAttention: value.needsAttention,
         storageFull: value.storageFull,
       })
@@ -1820,18 +1857,24 @@ function restoredMedia(records: StoredRecord[]): StoredBackupMedia[] {
         )) {
       throw new Error('Chat backup media reference is invalid')
     }
+    const manifestSha256 = attachment.backupMediaManifestSha256 ?? ''
+    if (!/^[A-Za-z0-9+/]{43}=$/.test(manifestSha256)) {
+      throw new Error('Chat backup media reference is invalid')
+    }
     const candidate: StoredBackupMedia = {
       attachmentId: attachment.attachmentId,
       referenceId: attachment.backupMediaReferenceId,
       mediaId: attachment.backupMediaId,
       ciphertextBytes: 0,
+      manifestSha256,
       protected: true,
       needsAttention: false,
       storageFull: false,
     }
     const current = media.get(candidate.attachmentId)
     if (current && (current.referenceId !== candidate.referenceId
-        || current.mediaId !== candidate.mediaId)) {
+        || current.mediaId !== candidate.mediaId
+        || current.manifestSha256 !== candidate.manifestSha256)) {
       throw new Error('Chat backup media reference conflicts across records')
     }
     media.set(candidate.attachmentId, candidate)
@@ -1864,12 +1907,29 @@ function appendBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
   return joined
 }
 
-function backupMediaObjectBytes(paddedPlaintextBytes: number): number {
-  if (!Number.isSafeInteger(paddedPlaintextBytes) || paddedPlaintextBytes <= 0) {
-    throw new Error('backup media padded length is invalid')
+/** A backup media object's sealed length for `source` (its padded size, in blocks). */
+async function backupMediaObjectBytes(
+  root: Uint8Array,
+  accountIncarnationId: string,
+  backupIncarnationId: string,
+  source: BackupMediaSource,
+): Promise<number> {
+  const encryptor = (await getCryptoWasm()).chatBackupMediaBlockEncryptor(
+    toBase64(root), accountIncarnationId, backupIncarnationId, source.attachmentId, source.ciphertextBytes,
+  )
+  try {
+    return encryptor.objectLength
+  } finally {
+    encryptor.free()
   }
-  return BACKUP_MEDIA_HEADER_BYTES + HEADER_BYTES + paddedPlaintextBytes
-    + Math.ceil(paddedPlaintextBytes / PLAIN_CHUNK) * ABYTES
+}
+
+/** A copy's receipt must be for `mediaId` and name a canonical manifest digest; returns it. */
+function checkedReceipt(receipt: BackupMediaReceipt, mediaId: string): string {
+  if (receipt.mediaId !== mediaId || !/^[A-Za-z0-9+/]{43}=$/.test(receipt.manifestSha256 ?? '')) {
+    throw new Error('backup media receipt is not for this copy')
+  }
+  return receipt.manifestSha256
 }
 
 async function fingerprint(value: unknown): Promise<string> {
@@ -1915,38 +1975,4 @@ function uuidBytes(value: string): Uint8Array {
 function hexBytes(value: string): Uint8Array {
   if (value.length % 2 !== 0 || !/^[0-9a-f]+$/.test(value)) throw new Error('invalid canonical hex')
   return Uint8Array.from(value.match(/../g)!, pair => Number.parseInt(pair, 16))
-}
-
-class BufferedStreamReader {
-  private buffered = new Uint8Array()
-  private ended = false
-
-  constructor(private readonly reader: ReadableStreamDefaultReader<Uint8Array>) {}
-
-  async readExact(bytes: number): Promise<Uint8Array> {
-    while (this.buffered.length < bytes && !this.ended) {
-      const next = await this.reader.read()
-      if (next.done) {
-        this.ended = true
-        break
-      }
-      const joined = new Uint8Array(this.buffered.length + next.value.length)
-      joined.set(this.buffered)
-      joined.set(next.value, this.buffered.length)
-      this.buffered = joined
-    }
-    if (this.buffered.length < bytes) throw new Error('protected Chat media is truncated')
-    const output = this.buffered.slice(0, bytes)
-    this.buffered = this.buffered.slice(bytes)
-    return output
-  }
-
-  async hasMore(): Promise<boolean> {
-    if (this.buffered.length > 0) return true
-    if (this.ended) return false
-    const next = await this.reader.read()
-    this.ended = !!next.done
-    if (!next.done) this.buffered = new Uint8Array(next.value)
-    return !next.done
-  }
 }

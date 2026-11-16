@@ -149,8 +149,7 @@ Left before the tag:
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
-  browser still uses libsodium for secretstream chunks (`streamEncryptor.ts`),
-  collaboration Ed25519 device keys and frame signatures (`sign.ts`,
+  browser still uses libsodium for collaboration Ed25519 device keys and frame signatures (`sign.ts`,
   `devices.ts`, `cryptoFrame.ts`), random bytes, and SHA-256 in Chat's
   `backup.ts` and `media.ts`. Each gets a written 10× justification in
   [`docs/cryptographic-dependencies.md`](cryptographic-dependencies.md) or
@@ -158,9 +157,9 @@ Left before the tag:
   KSF it may be moot.
 - **Block format for large objects, so films and long recordings stream with
   seeking** ([`plans/drive-block-format.md`](plans/drive-block-format.md),
-  approved 2026-10-22; slice 1, the crypto core, and slice 2, the server's
-  ranges, revision ids, upload checks and settings, built; clients switch
-  in slices 3–6). It follows Proton Drive's block format:
+  approved 2026-10-22; slices 1–7 built: the crypto core, the server, the
+  clients, Chat, and the removal of the streaming suite 1, shipping with the
+  clean-slate wipe). It follows Proton Drive's block format:
   - 4 MiB blocks, each AEAD-sealed on its own and bound to its index and
     the file's revision;
   - a sealed manifest of block hashes signed by the uploader;
@@ -168,8 +167,8 @@ Left before the tag:
     requests while the page decrypts only the blocks needed.
 
   One framing serves Drive files, snapshots, Chat attachments and Chat
-  backup media, and secretstream and the browser's libsodium stream code
-  then go. The same change binds the sealed metadata and thumbnails to the
+  backup media; secretstream and the browser's libsodium stream code are
+  gone. The same change binds the sealed metadata and thumbnails to the
   current revision, so the server cannot serve an older version as the
   current one. The plan recommends shipping it with a wipe of kutup.dev,
   together with the Chat identity change, rather than converting files in
@@ -1501,7 +1500,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   buffers the whole encrypted file in memory (`Part::bytes`); switch to
   `Part::reader` with an encrypting reader for large-file parity with tus.
 - **`kutup versions restore` vs collab snapshots.** CLI restore re-encrypts
-  with the file key in secretstream framing, while web collab snapshots are
+  with the file key in the block format, while web collab snapshots are
   AEAD envelopes under a derived content key — CLI restore round-trips
   CLI/sync-created files, not live-collab documents. Needs the collab
   content-key path if full parity is wanted.

@@ -1,9 +1,8 @@
 import { useQueries } from '@tanstack/react-query'
 import { listVersions } from '@kutup/collab/api'
-import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
-import { sealedAt } from '@kutup/drive-core/keyring'
+import { currentContentOf, relayedVersion, versionContentOf, type RelayedState } from '@kutup/drive-core/keyring'
 import { contentPath, fileLocation, remoteStatePath, type DriveFile, type Folder } from '@kutup/drive-core/model'
-import { fromBase64 } from '@kutup/crypto'
+import { fromBase64, openDriveObject } from '@kutup/crypto'
 import { parseListJson, stateToListJson, uploadPlaceId, type Place } from '@kutup/map/list'
 import api from '@kutup/session/client'
 import type { ListEntry } from './lists'
@@ -12,10 +11,11 @@ import type { ListEntry } from './lists'
 export async function uploadedPlaces(file: DriveFile, folder?: Pick<Folder, 'source' | 'remoteShareId' | 'remoteFileShareId'>): Promise<Place[]> {
   const path = folder ? contentPath(fileLocation(folder), file.id) : `/files/${file.id}/download`
   const { data } = await api.get<ArrayBuffer>(path, { responseType: 'arraybuffer' })
-  const sealed = await sealedAt(file, file.contentKeyGeneration)
+  // The file's own content, against what its metadata commits to.
+  const opened = await currentContentOf(file)
   // A list's first content: places without an id get the same one on every
   // peer (and in the CLI), so seeds made at once are one.
-  return parseListJson(await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context), (index) =>
+  return parseListJson(await openDriveObject(new Uint8Array(data), opened.fileKey, opened.expected), (index) =>
     uploadPlaceId(file.id, index),
   )
 }
@@ -29,21 +29,22 @@ export async function savedPlaces(file: DriveFile, folder?: Pick<Folder, 'source
   // On another server: its saved state relayed through this one.
   const remote = folder ? remoteStatePath(fileLocation(folder), file.id) : null
   if (remote) {
-    let saved: { keyGeneration: number; state: string }
+    let saved: RelayedState
     try {
-      saved = (await api.get<{ keyGeneration: number; state: string }>(remote)).data
+      saved = (await api.get<RelayedState>(remote)).data
     } catch (error) {
       if ((error as { response?: { status?: number } }).response?.status === 404) return uploadedPlaces(file, folder)
       throw error
     }
-    const sealed = await sealedAt(file, saved.keyGeneration)
-    return parseListJson(stateToListJson(await decryptFileBlobV1(fromBase64(saved.state), sealed.fileKey, sealed.context)))
+    // A saved state relayed with its sealed content record.
+    const opened = await versionContentOf(file, relayedVersion(saved))
+    return parseListJson(stateToListJson(await openDriveObject(fromBase64(saved.state), opened.fileKey, opened.expected)))
   }
   const latest = (await listVersions(file.id))[0]
   if (!latest || latest.sizeBytes === 0) return uploadedPlaces(file)
   const { data } = await api.get<ArrayBuffer>(`/files/${file.id}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
-  const sealed = await sealedAt(file, latest.keyGeneration)
-  const state = await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context)
+  const opened = await versionContentOf(file, latest)
+  const state = await openDriveObject(new Uint8Array(data), opened.fileKey, opened.expected)
   return parseListJson(stateToListJson(state))
 }
 

@@ -134,6 +134,7 @@
     "zipEmpty": "Bu klasörde indirilecek dosya yok.",
     "zipTooLarge": "Bu klasör 1 GB'tan büyük. ZIP olarak indirmek için Chrome ya da Edge kullanın ya da dosyaları tek tek indirin.",
     "downloadFailed": "İndirme başarısız oldu.",
+    "fileTooLargeForBrowser": "Bu dosya bu tarayıcıda indirilemeyecek kadar büyük. Chrome ya da Edge kullanın ya da Kutup CLI ile indirin.",
     "linkFailed": "Bağlantı oluşturulamadı.",
     "dropHere": "{{name}} klasörüne yüklemek için bırakın"
   },
@@ -310,6 +311,11 @@
     "emptyTitle": "Dosya yok",
     "emptyDescription": "Bu klasörde şu anda dosya yok.",
     "footer": "Kutup · uçtan uca şifreli. Sunucu bu dosyaların içeriğini hiç görmedi.",
+    "player": {
+      "play": "Oynat",
+      "description": "Bu bağlantıdaki anahtarla çözülerek tarayıcında oynar.",
+      "loading": "Açılıyor…"
+    },
     "failure": {
       "missingKey": {
         "title": "Bu bağlantı eksik",
@@ -377,7 +383,8 @@
     "none": {
       "type": "Bu dosya türü için önizleme yok.",
       "size": "Bu dosya önizleme için çok büyük. Aç ya da indir.",
-      "failed": "Önizleme yüklenemedi."
+      "failed": "Önizleme yüklenemedi.",
+      "busy": "Bu sekmede çok fazla video ya da ses oynuyor. Bunu oynatmak için birini kapatın."
     },
     "picture": {
       "type": "Önizleme görseli. Tamamını görmek ve düzenlemek için dosyayı aç.",

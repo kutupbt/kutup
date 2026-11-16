@@ -382,27 +382,14 @@ fn a_trimmed_frame_is_still_a_replay() {
         last = body["seq"].as_i64().unwrap();
     }
     // A version of the notes through the last frame: the log is trimmed.
-    let blob = kutup_crypto::drive_object::encrypt_file_blob(
-        b"yjs state",
-        &file.key,
-        kutup_crypto::drive_object::DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-    )
-    .unwrap();
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("kind", "yjs")
-        .text("seqAtSnapshot", last.to_string())
-        .text("docKeyId", "1")
-        .part(
-            "file",
-            reqwest::blocking::multipart::Part::bytes(blob).file_name("version"),
-        );
-    let r = bearer(
-        c.post(format!("{base}/api/files/{}/versions", file.id)),
+    let seq = last.to_string();
+    let r = save_version(
+        &c,
+        &base,
         &owner.token,
-    )
-    .multipart(form)
-    .send()
-    .unwrap();
+        &Version::seal(&file.id, &file.key, 1, b"yjs state"),
+        &[("kind", "yjs"), ("seqAtSnapshot", &seq), ("docKeyId", "1")],
+    );
     assert!(r.status().is_success(), "save a version: {}", r.status());
     let page = log(&c, &base, &owner, &file.id, &mine);
     assert_eq!(page["frames"].as_array().unwrap().len(), 0, "{page}");

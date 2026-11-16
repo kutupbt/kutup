@@ -22,9 +22,11 @@
       "waveformLabel": "Audio waveform for {{filename}}",
       "previewAlt": "Preview of {{filename}}",
       "viewer": {
-        "description": "Verified locally from Kutup's encrypted cache. Closing removes the temporary view.",
+        "description": "Decrypted and checked on this device. Closing removes the temporary view.",
         "opening": "Opening attachment",
-        "openFailed": "This attachment could not be opened safely."
+        "openFailed": "This attachment could not be opened safely.",
+        "tooManyStreams": "Too many videos or songs are playing in this tab. Close one to play this.",
+        "tooLargeToPlay": "This browser can’t stream it here, and it is too large to open whole. Save it to your device instead."
       },
       "capture": "Take a photo or video",
       "attach": "Attach files",

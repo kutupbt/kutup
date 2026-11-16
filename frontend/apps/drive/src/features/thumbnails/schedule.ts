@@ -8,7 +8,7 @@ export function thumbnailAfterUpload(uploaded: UploadedFile, file: File): void {
   if (!thumbnailSourceFor(file.name, file.type)) return
   enqueueThumbnail(uploaded.fileId, async () =>
     storeThumbnails(
-      { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyGeneration: uploaded.keyGeneration },
+      { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyGeneration: uploaded.keyGeneration, revisionId: uploaded.revisionId },
       await thumbnailsOfFile(file),
       // Drawn from what was uploaded: the file, or the version it became.
       uploaded.versionId ?? 'original',

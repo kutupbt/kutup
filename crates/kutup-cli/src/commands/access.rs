@@ -17,6 +17,7 @@ use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::collection_keyring;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
+use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,12 +109,8 @@ pub fn list(profile: &str, json: bool, collection_id: &str) -> Result<()> {
 /// public link's id.
 pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bool) -> Result<()> {
     let ctx = require_session(profile)?;
-    let master_key = ctx.session.master_key_bytes()?;
-    let master: &[u8; 32] = master_key
-        .as_slice()
-        .try_into()
-        .context("master key must be 32 bytes")?;
-    let identity = ctx.session.identity()?;
+    let roots = ctx.session.roots()?;
+    let identity = AccountIdentityKeysV1::derive(&roots.identity)?;
     let cols = ctx.client.list_collections()?;
     let col: &Collection = cols
         .iter()
@@ -122,7 +119,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     if col.is_shared {
         bail!("only the owner can remove access to a folder");
     }
-    let key = crate::cryptohelpers::decrypt_collection_key(col, &master_key, &ctx.session)?;
+    let key = crate::cryptohelpers::decrypt_collection_key(col, &roots, &ctx.session)?;
     let name = crate::collection_crypto::open_name(col, &key)?;
     let access = load_access(&ctx, collection_id)?;
     if access.key_epoch != col.key_epoch || access.epoch_statement_hash != col.epoch_statement_hash
@@ -175,10 +172,10 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         &new_key,
         identity.authority_signing_key(),
     )?;
-    let owner_key_envelope = drive_envelope::seal_b64(
+    let owner_key_envelope = drive_envelope::seal_under_drive_root(
         &new_key,
-        master,
-        context(DriveEnvelopePurpose::CollectionKey, 1)?,
+        &roots.drive,
+        DriveEnvelopeContextV1::owner_collection_key(&col.id, owner, next, roots.drive_generation)?,
     )?;
     let previous_key_envelope =
         collection_keyring::seal_previous_key(&key, &new_key, &col.id, owner, next)?;
@@ -224,16 +221,10 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         .iter()
         .filter(|l| !removed_links.contains(&l.id))
         .map(|l| {
-            let link_key = drive_envelope::open_b64(
+            let link_key = drive_envelope::open_under_drive_root(
                 &l.owner_link_key_envelope,
-                master,
-                DriveEnvelopeContextV1::new(
-                    DriveEnvelopePurpose::PublicLinkKey,
-                    1,
-                    1,
-                    &l.id,
-                    owner,
-                )?,
+                &roots.drive,
+                DriveEnvelopeContextV1::owner_link_key(&l.id, owner, roots.drive_generation)?,
             )?;
             Ok(serde_json::json!({
                 "id": l.id,

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Download, ExternalLink } from 'lucide-react'
+import { Download, ExternalLink, Play } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
@@ -19,6 +19,8 @@ import { fileKind } from '@kutup/drive-core/kinds'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
+import { playsInPublicPlayer } from './playable'
+import { PublicPlayer } from './PublicPlayer'
 
 /** A document opens on Office (docs/architecture.md, "File editor route"), the link's key going along. */
 function documentUrl(token: string, file: PublicFile): string | null {
@@ -35,6 +37,7 @@ export function PublicSharePage() {
   const { token = '' } = useParams()
   const [prefs, updatePrefs] = useExplorerPrefs()
   const [selection, setSelection] = useState<Set<string>>(new Set())
+  const [playing, setPlaying] = useState<PublicFile | null>(null)
   const share = useQuery({
     queryKey: ['public-share', token],
     // The app origins first: a document's address on Office comes from them.
@@ -61,10 +64,11 @@ export function PublicSharePage() {
     }
   }
 
-  /** A document opens on Office; anything else downloads, as before. */
+  /** A document opens on Office, a video or song plays here; anything else downloads. */
   function open(file: PublicFile) {
     const url = documentUrl(token, file)
     if (url) window.location.assign(url)
+    else if (playsInPublicPlayer(file)) setPlaying(file)
     else void download(file)
   }
 
@@ -117,6 +121,7 @@ export function PublicSharePage() {
                 const url = documentUrl(token, f)
                 return [
                   ...(url ? [{ id: 'open', label: t('drive.actions.open'), icon: <ExternalLink />, onSelect: () => window.location.assign(url) }] : []),
+                  ...(playsInPublicPlayer(f) ? [{ id: 'play', label: t('public.player.play'), icon: <Play />, onSelect: () => setPlaying(f) }] : []),
                   { id: 'download', label: t('drive.actions.download'), icon: <Download />, onSelect: () => void download(f) },
                 ]
               }}
@@ -124,6 +129,7 @@ export function PublicSharePage() {
           )}
         </>
       ) : null}
+      {playing ? <PublicPlayer token={token} file={playing} onClose={() => setPlaying(null)} /> : null}
       <p className="mt-auto px-6 py-4 text-center text-xs text-muted-foreground">{t('public.footer')}</p>
     </div>
   )

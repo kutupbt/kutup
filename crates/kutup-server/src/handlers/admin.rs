@@ -861,16 +861,18 @@ pub(crate) async fn purge_chat_media(state: &AppState, target: Uuid) -> AppResul
 pub(crate) async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResult<()> {
     // Open uploads by the user anywhere, or by anyone into the user's
     // folders: their multipart parts would otherwise stay in the bucket.
-    let open_uploads: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.storage_path, u.s3_upload_id FROM uploads u
+    let open_uploads: Vec<(Uuid, String, String, bool)> = sqlx::query_as(
+        "SELECT u.id, u.storage_path, u.s3_upload_id, u.uploaded_at IS NOT NULL FROM uploads u
          WHERE u.user_id = $1
             OR u.collection_id IN (SELECT id FROM collections WHERE owner_user_id = $1)",
     )
     .bind(target)
     .fetch_all(&state.pool)
     .await?;
-    for (id, path, upload_id) in open_uploads {
-        if let Err(error) = state.storage.abort_multipart(&path, &upload_id).await {
+    for (id, path, upload_id, uploaded) in open_uploads {
+        if let Err(error) =
+            crate::drive_blob::drop_upload_bytes(&state.storage, &path, &upload_id, uploaded).await
+        {
             tracing::warn!(%error, "purge {target}: abort upload {id}");
         }
         sqlx::query("DELETE FROM uploads WHERE id = $1")

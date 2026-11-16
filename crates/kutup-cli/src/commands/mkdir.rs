@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 pub fn run(profile: &str, json: bool, name: &str, parent: Option<&str>) -> Result<()> {
     let ctx = require_session(profile)?;
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let parent = parent.filter(|p| !p.is_empty());
     let (mut req, _) = crate::collection_crypto::create_owned(
         name,
@@ -24,12 +24,13 @@ pub fn run(profile: &str, json: bool, name: &str, parent: Option<&str>) -> Resul
                 .find(|c| c.id == parent)
                 .ok_or_else(|| crate::errors::NotFound(format!("folder {parent} not found")))?;
             let keys =
-                crate::cryptohelpers::folder_keyring(&ctx.client, col, &master_key, &ctx.session)?;
+                crate::cryptohelpers::folder_keyring(&ctx.client, col, &roots, &ctx.session)?;
             crate::names::folder_hash_key(&keys, &col.id)?
         }
-        None => crate::names::top_level_hash_key(&master_key)?,
+        None => crate::names::top_level_hash_key(&roots)?,
     };
     req.name_hash = Some(crate::names::name_hash(&hash_key, name)?);
+    req.name_hash_generation = crate::names::hash_generation(&roots, parent);
 
     let resp = ctx
         .client

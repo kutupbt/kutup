@@ -254,6 +254,10 @@ pub struct CreateCollectionRequest {
     /// The name's hash in its place (docs/plans/drive-unique-names.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_hash: Option<String>,
+    /// At the top level, the Drive-root generation its hash key came from
+    /// (docs/plans/identity-rotation.md §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash_generation: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,6 +273,10 @@ pub struct RenameCollectionRequest {
     pub name_revision: u64,
     /// The new name's hash in the folder's place; none clears it.
     pub name_hash: Option<String>,
+    /// At the top level, the Drive-root generation its hash key came from
+    /// (docs/plans/identity-rotation.md §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash_generation: Option<u32>,
 }
 
 // --- Files ---
@@ -359,6 +367,10 @@ pub struct MoveCollectionRequest {
     /// Its name's hash in the new place (docs/plans/drive-unique-names.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_hash: Option<String>,
+    /// At the top level, the Drive-root generation its hash key came from
+    /// (docs/plans/identity-rotation.md §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash_generation: Option<u32>,
 }
 
 /// One generation of a file's key history: the key of `generation − 1`
@@ -372,7 +384,7 @@ pub struct FileKeyHistoryEntry {
 
 /// A file's metadata: the canonical format in `kutup-crypto` (name, type,
 /// size and a photo's details), so a rename keeps what it does not change.
-pub use kutup_crypto::file_metadata::FileMetadataV1 as FileMetadata;
+pub use kutup_crypto::file_metadata::FileMetadataV2 as FileMetadata;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

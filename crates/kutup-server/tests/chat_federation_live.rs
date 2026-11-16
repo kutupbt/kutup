@@ -17,10 +17,10 @@ use kutup_chat_proto::{
     ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest,
 };
 use kutup_crypto::account_ref::AccountRef;
-use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
+use kutup_crypto::chat_media::ChatMediaObjectContextV1;
+use kutup_crypto::chat_media_blocks;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use kutup_crypto::profile_key_share::{ProfileKeyEnvelopeV1, ProfileKeyParties};
@@ -160,10 +160,10 @@ fn chat_media_round_trip(
     let retrieval_token = [0x52; 32];
     let plaintext = b"sender-free-federated-chat-media";
     let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
-    let object = chat_media::encrypt_object(plaintext, &attachment_key, context).unwrap();
+    let object = seal_media(plaintext, &attachment_key, context).unwrap();
     let (digest, _origin_reference) =
         upload_chat_media(c, a, alice_token, attachment_id, &retrieval_token, &object);
-    assert_eq!(digest, chat_media::object_sha256(&object));
+    assert_eq!(digest, hex::encode(hash(Suite::V1, &object)));
     let operation_id = "50000000-0000-4000-8000-000000000002";
     let offer = json!({
         "version": 1,
@@ -172,7 +172,7 @@ fn chat_media_round_trip(
         "recipient": account_of(c, b, bob_token),
         "operationId": operation_id,
         "attachmentId": attachment_id,
-        "suite": 1,
+        "suite": 2,
         "ciphertextBytes": object.len(),
         "ciphertextSha256": digest,
         "retrievalToken": b64(&retrieval_token),
@@ -297,7 +297,7 @@ fn chat_media_capability_and_quota_recovery(
     let retrieval_token = [0x72; 32];
     let plaintext = b"chat-media-quota-recovery";
     let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
-    let object = chat_media::encrypt_object(plaintext, &attachment_key, context).unwrap();
+    let object = seal_media(plaintext, &attachment_key, context).unwrap();
     let (digest, _) =
         upload_chat_media(c, a, alice_token, attachment_id, &retrieval_token, &object);
     let bob = account_of(c, b, bob_token);
@@ -311,7 +311,7 @@ fn chat_media_capability_and_quota_recovery(
             "recipient": recipient,
             "operationId": operation_id,
             "attachmentId": attachment_id,
-            "suite": 1,
+            "suite": 2,
             "ciphertextBytes": object.len(),
             "ciphertextSha256": digest,
             "retrievalToken": b64(&retrieval_token),
@@ -532,7 +532,7 @@ fn media_closing_sequence_from_v1(
     let attachment_id = "50000000-0000-4000-8000-000000000016";
     let retrieval_token = [0x75; 32];
     let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
-    let object = chat_media::encrypt_object(b"behind-a-v1-refusal", &[0x76; 32], context).unwrap();
+    let object = seal_media(b"behind-a-v1-refusal", &[0x76; 32], context).unwrap();
     let (digest, _) =
         upload_chat_media(c, a, alice_token, attachment_id, &retrieval_token, &object);
     let offer = json!({
@@ -542,7 +542,7 @@ fn media_closing_sequence_from_v1(
         "recipient": bob,
         "operationId": "50000000-0000-4000-8000-000000000017",
         "attachmentId": attachment_id,
-        "suite": 1,
+        "suite": 2,
         "ciphertextBytes": object.len(),
         "ciphertextSha256": digest,
         "retrievalToken": b64(&retrieval_token),
@@ -618,6 +618,30 @@ fn media_closing_sequence_from_v1(
     println!("MEDIA V1 REFUSAL CLOSES ITS SEQUENCE");
 }
 
+/// A Chat attachment in the block format (KUTPCM2), as a client seals it.
+fn seal_media(
+    plaintext: &[u8],
+    key: &[u8; 32],
+    context: ChatMediaObjectContextV1,
+) -> Result<Vec<u8>, kutup_crypto::error::CryptoError> {
+    chat_media_blocks::seal_attachment(plaintext, key, context).map(|sealed| sealed.bytes)
+}
+
+/// Opens an attachment against its own manifest's digest: a client takes
+/// the digest from the descriptor; this test has the bytes it sealed.
+fn open_media(
+    object: &[u8],
+    key: &[u8; 32],
+    context: ChatMediaObjectContextV1,
+) -> Result<Vec<u8>, kutup_crypto::error::CryptoError> {
+    let trailer_at = object.len() - kutup_crypto::blocks::TRAILER_LEN;
+    let manifest_len = chat_media_blocks::CHAT_MEDIA_BLOCKS.parse_trailer(&object[trailer_at..])?;
+    let digest =
+        kutup_crypto::blocks::manifest_digest(&object[trailer_at - manifest_len..trailer_at]);
+    chat_media_blocks::open_attachment(object, key, context, &digest)
+        .map(|(plaintext, _)| plaintext.to_vec())
+}
+
 fn upload_chat_media(
     c: &Client,
     base: &str,
@@ -630,7 +654,7 @@ fn upload_chat_media(
     let metadata = format!(
         "attachmentId {},suite {},retrievalToken {}",
         metadata_value(attachment_id),
-        metadata_value("1"),
+        metadata_value("2"),
         metadata_value(&encoded_token),
     );
     let create = c
@@ -1262,21 +1286,30 @@ fn assert_content_once(messages: &[Value], content: &[u8]) {
     );
 }
 
+/// A new file's multipart upload: `ciphertext` is revision `revision` of
+/// it, committed inline (metadata revision 1, its content record under
+/// `file_key`).
 fn drive_upload_body(
     boundary: &str,
     file_id: &str,
     metadata_envelope: &str,
     file_key_envelope: &str,
+    file_key: &[u8; 32],
+    revision: &str,
     ciphertext: &[u8],
 ) -> Vec<u8> {
     let mut body = Vec::new();
     // Every file carries its name hash (the server refuses one without).
     let name_hash = common::test_name_hash(file_id);
+    let revision_content = common::sealed_revision_content(file_id, file_key, revision, 1);
     for (name, value) in [
         ("fileId", file_id),
         ("nameHash", name_hash.as_str()),
         ("metadataEnvelope", metadata_envelope),
+        ("metadataRevision", "1"),
         ("fileKeyEnvelope", file_key_envelope),
+        ("revisionId", revision),
+        ("revisionContentEnvelope", revision_content.as_str()),
     ] {
         body.extend_from_slice(
             format!(
@@ -1304,7 +1337,7 @@ fn drive_round_trip(
     bob_token: &str,
     admins: (&str, &str),
 ) {
-    let alice_master = test_master_key(ALICE_EMAIL);
+    let alice_roots = test_roots(ALICE_EMAIL);
     let alice_identity = AccountIdentityKeysV1::derive(&test_roots(ALICE_EMAIL).identity).unwrap();
     let bob_identity = AccountIdentityKeysV1::derive(&test_roots(BOB_EMAIL).identity).unwrap();
     let alice_me = json_response(
@@ -1317,12 +1350,11 @@ fn drive_round_trip(
     let owner_user_id = alice_me["id"].as_str().unwrap();
     let collection_id = uuid::Uuid::new_v4().to_string();
     let collection_key = [0x45; 32];
-    let owner_key_context = DriveEnvelopeContextV1::new(
-        DriveEnvelopePurpose::CollectionKey,
-        1,
-        1,
+    let owner_key_context = DriveEnvelopeContextV1::owner_collection_key(
         &collection_id,
         owner_user_id,
+        1,
+        alice_roots.drive_generation,
     )
     .unwrap();
     let name_context = DriveEnvelopeContextV1::new(
@@ -1333,8 +1365,12 @@ fn drive_round_trip(
         owner_user_id,
     )
     .unwrap();
-    let owner_key_envelope =
-        drive_envelope::seal_b64(&collection_key, &alice_master, owner_key_context).unwrap();
+    let owner_key_envelope = drive_envelope::seal_under_drive_root(
+        &collection_key,
+        &alice_roots.drive,
+        owner_key_context,
+    )
+    .unwrap();
     let name_envelope =
         drive_envelope::seal_b64(b"Federated V2 collection", &collection_key, name_context)
             .unwrap();
@@ -1356,7 +1392,8 @@ fn drive_round_trip(
                 "nameEnvelope": name_envelope,
                 "ownerKeyEnvelope": owner_key_envelope,
                 "epochStatement": epoch_statement.encode_b64(),
-                "nameHash": collection_id.replace('-', "").repeat(2)
+                "nameHash": collection_id.replace('-', "").repeat(2),
+                "nameHashGeneration": alice_roots.drive_generation.get()
             }))
             .send()
             .unwrap(),
@@ -1374,12 +1411,13 @@ fn drive_round_trip(
     assert_eq!(collection["nameRevision"], 1);
     assert_eq!(collection["epochStatementHash"], epoch_statement_hash);
     assert_eq!(
-        drive_envelope::open_b64(
+        drive_envelope::open_under_drive_root(
             collection["ownerKeyEnvelope"].as_str().unwrap(),
-            &alice_master,
+            &alice_roots.drive,
             owner_key_context,
         )
-        .unwrap(),
+        .unwrap()
+        .to_vec(),
         collection_key
     );
     assert_eq!(
@@ -1414,15 +1452,13 @@ fn drive_round_trip(
                 "shareType": "collection",
                 "targetId": collection_id,
                 "collectionKeyEnvelope": public_link_envelope,
-                "ownerLinkKeyEnvelope": drive_envelope::seal_b64(
+                "ownerLinkKeyEnvelope": drive_envelope::seal_under_drive_root(
                     &link_key,
-                    &alice_master,
-                    DriveEnvelopeContextV1::new(
-                        DriveEnvelopePurpose::PublicLinkKey,
-                        1,
-                        1,
+                    &alice_roots.drive,
+                    DriveEnvelopeContextV1::owner_link_key(
                         &public_link_id,
                         owner_user_id,
+                        alice_roots.drive_generation,
                     )
                     .unwrap(),
                 )
@@ -1686,17 +1722,15 @@ fn drive_round_trip(
         DriveEnvelopeContextV1::file_metadata(&proposed_file_id, 1, 1).unwrap(),
     )
     .unwrap();
-    let ciphertext = drive_object::encrypt_file_blob(
-        plaintext,
-        &file_key,
-        DriveFileBlobContextV1::new(&proposed_file_id, 1).unwrap(),
-    )
-    .unwrap();
+    let revision = common::uuid();
+    let ciphertext = common::block_blob(&proposed_file_id, &file_key, &revision, 1, plaintext);
     let upload_body = drive_upload_body(
         boundary,
         &proposed_file_id,
         &metadata_envelope,
         &file_key_envelope,
+        &file_key,
+        &revision,
         &ciphertext,
     );
     // Each call names itself, with how long it took, so a hang says which.
@@ -1731,6 +1765,8 @@ fn drive_round_trip(
         &uuid::Uuid::new_v4().to_string(),
         &metadata_envelope,
         &file_key_envelope,
+        &file_key,
+        &revision,
         &ciphertext,
     );
     assert_eq!(
@@ -1755,6 +1791,8 @@ fn drive_round_trip(
         &blob_relocation_id,
         &blob_relocation_metadata,
         &blob_relocation_file_key,
+        &file_key,
+        &revision,
         &ciphertext,
     );
     assert_eq!(
@@ -1882,12 +1920,8 @@ fn drive_round_trip(
     part_limit(b, admin_b, relay_part as i64);
     let big_id = uuid::Uuid::new_v4().to_string();
     let big_plain: Vec<u8> = (0..10 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
-    let big = drive_object::encrypt_file_blob(
-        &big_plain,
-        &file_key,
-        DriveFileBlobContextV1::new(&big_id, 1).unwrap(),
-    )
-    .unwrap();
+    let big_revision = common::uuid();
+    let big = common::block_blob(&big_id, &file_key, &big_revision, 1, &big_plain);
     let big_upload = drive_upload_body(
         boundary,
         &big_id,
@@ -1903,6 +1937,8 @@ fn drive_round_trip(
             DriveEnvelopeContextV1::file_key(&big_id, &collection_id, 1, 1).unwrap(),
         )
         .unwrap(),
+        &file_key,
+        &big_revision,
         &big,
     );
     // Past the share's 1 MiB upload quota: the owner stores it on her own
@@ -2038,8 +2074,9 @@ fn drive_round_trip(
             .json(&json!({
                 "fromEpoch": epoch - 1,
                 "epochStatement": statement.encode_b64(),
-                "ownerKeyEnvelope": drive_envelope::seal_b64(key, &alice_master,
-                    rotation_ctx(DriveEnvelopePurpose::CollectionKey, epoch, 1)).unwrap(),
+                "ownerKeyEnvelope": drive_envelope::seal_under_drive_root(key, &alice_roots.drive,
+                    DriveEnvelopeContextV1::owner_collection_key(&collection_id, owner_user_id, epoch,
+                        alice_roots.drive_generation).unwrap()).unwrap(),
                 "previousKeyEnvelope": kutup_crypto::collection_keyring::seal_previous_key(
                     previous_key, key, &collection_id, owner_user_id, epoch).unwrap(),
                 "nameEnvelope": drive_envelope::seal_b64(b"Federated V2 collection", key,
@@ -3298,8 +3335,7 @@ fn queue_phase(c: &Client, a: &str) {
     let attachment_key = [0x61; 32];
     let retrieval_token = [0x62; 32];
     let context = ChatMediaObjectContextV1::new(QUEUED_MEDIA_ATTACHMENT_ID).unwrap();
-    let object =
-        chat_media::encrypt_object(QUEUED_MEDIA_PLAINTEXT, &attachment_key, context).unwrap();
+    let object = seal_media(QUEUED_MEDIA_PLAINTEXT, &attachment_key, context).unwrap();
     let (digest, _) = upload_chat_media(
         c,
         a,
@@ -3321,7 +3357,7 @@ fn queue_phase(c: &Client, a: &str) {
             "recipient": bob_account(),
             "operationId": operation_id,
             "attachmentId": attachment_id,
-            "suite": 1,
+            "suite": 2,
             "ciphertextBytes": object.len(),
             "ciphertextSha256": digest,
             "retrievalToken": b64(token),
@@ -3369,7 +3405,7 @@ fn queue_phase(c: &Client, a: &str) {
     ] {
         let token = [0x63; 32];
         let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
-        let object = chat_media::encrypt_object(plaintext, &[0x61; 32], context).unwrap();
+        let object = seal_media(plaintext, &[0x61; 32], context).unwrap();
         let (digest, _) = upload_chat_media(c, a, &alice_token, attachment_id, &token, &object);
         let body = offer(
             attachment_id,
@@ -3411,9 +3447,7 @@ fn verify_queued_media_answers(c: &Client, a: &str, b: &str, alice_token: &str, 
             .unwrap();
         if response.status().is_success() {
             let context = ChatMediaObjectContextV1::new(BEHIND_MEDIA_ATTACHMENT_ID).unwrap();
-            let plaintext =
-                chat_media::decrypt_object(&response.bytes().unwrap(), &[0x61; 32], context)
-                    .unwrap();
+            let plaintext = open_media(&response.bytes().unwrap(), &[0x61; 32], context).unwrap();
             assert_eq!(plaintext, BEHIND_MEDIA_PLAINTEXT);
             break;
         }
@@ -3553,7 +3587,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
         if response.status().is_success() {
             let ciphertext = response.bytes().unwrap();
             let context = ChatMediaObjectContextV1::new(QUEUED_MEDIA_ATTACHMENT_ID).unwrap();
-            let plaintext = chat_media::decrypt_object(&ciphertext, &[0x61; 32], context).unwrap();
+            let plaintext = open_media(&ciphertext, &[0x61; 32], context).unwrap();
             assert_eq!(plaintext, QUEUED_MEDIA_PLAINTEXT);
             break;
         }

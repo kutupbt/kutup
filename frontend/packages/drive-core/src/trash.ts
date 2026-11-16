@@ -15,7 +15,8 @@ import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileKind, type ItemKind } from './kinds'
 import { folderKeyAt, type KeyringFolder } from './keyring'
 import { fileMetadataOf, type DriveFile } from './model'
-import { asNameTaken, atTopLevel, availableHashes, findAvailableName, inFolder, nameHashIn, type NamePlace } from './names'
+import { acceptFileMetadata } from './metadataGuard'
+import { asNameTaken, atTopLevel, availableHashes, findAvailableName, hashGenerationOf, inFolder, nameFieldsIn, nameHashIn, type NamePlace } from './names'
 
 interface TrashFolderRow {
   id: string
@@ -142,6 +143,11 @@ export function useTrash() {
                   )
             })
             .then((key) => openFileRecordV1(row, key))
+            // Older metadata than this device has seen of the file does not open.
+            .then(async (result) => {
+              await acceptFileMetadata(row.id, row.metadataRevision)
+              return result
+            })
             .catch(() => null)
           const metadata = opened?.metadata ?? null
           return {
@@ -222,7 +228,7 @@ function refusedName(error: unknown): 'taken' | 'needed' | null {
 async function placeOf(entry: TrashEntry, me: DriveIdentity, queryClient: QueryClient, top: boolean): Promise<NamePlace | null> {
   if (entry.type === 'file') return entry.folder ? inFolder(entry.folder) : null
   const parentId = top ? null : (entry.renamable?.parentCollectionId ?? null)
-  if (!parentId) return atTopLevel(me.masterKey)
+  if (!parentId) return atTopLevel(me.roots)
   const known = cachedFolderIndex(queryClient)?.byId.get(parentId)
   if (known?.key) return inFolder(known)
   const { data } = await api.get<CollectionRowWithTimes>(`/collections/${parentId}`)
@@ -231,7 +237,7 @@ async function placeOf(entry: TrashEntry, me: DriveIdentity, queryClient: QueryC
 }
 
 /** The rename a restore carries: the new name sealed at the next revision, with its hash. */
-async function renameBody(entry: TrashEntry, name: string, hash: string): Promise<Record<string, unknown>> {
+async function renameBody(entry: TrashEntry, place: NamePlace, name: string, hash: string): Promise<Record<string, unknown>> {
   if (entry.type === 'file') {
     const file = entry.file
     if (!file?.fileKey || !file.name) throw new Error('file is not open')
@@ -249,7 +255,7 @@ async function renameBody(entry: TrashEntry, name: string, hash: string): Promis
     folder.key,
     name,
   )
-  return { nameHash: hash, ...next }
+  return { nameHash: hash, ...hashGenerationOf(place), ...next }
 }
 
 /**
@@ -273,10 +279,14 @@ export async function restoreEntry(
   const name = entry.name
   let top = entry.type === 'folder' && entry.renamable !== undefined && entry.renamable.parentCollectionId === null
   let body: Record<string, unknown> | undefined =
-    top && name ? { nameHash: await nameHashIn(atTopLevel(me.masterKey), name) } : undefined
+    top && name ? await nameFieldsIn(atTopLevel(me.roots), name) : undefined
   for (let attempt = 0; ; attempt++) {
     try {
       await api.post(`/trash/${entry.id}/restore`, body)
+      // A rename it came back with is the file's newest metadata.
+      if (entry.type === 'file' && typeof body?.metadataRevision === 'number') {
+        await acceptFileMetadata(entry.id, body.metadataRevision).catch(() => undefined)
+      }
       return
     } catch (error) {
       const refused = refusedName(error)
@@ -288,13 +298,13 @@ export async function restoreEntry(
       if (refused === 'needed') {
         const hash = await nameHashIn(place, name)
         if ((await availableHashes(place, [hash])).has(hash)) {
-          body = { nameHash: hash }
+          body = { nameHash: hash, ...hashGenerationOf(place) }
           continue
         }
       }
       const free = await findAvailableName(place, name, { skipName: true })
       if (!ask || !(await ask({ name, suggested: free.name }))) throw new RestoreCancelled()
-      body = await renameBody(entry, free.name, free.hash)
+      body = await renameBody(entry, place, free.name, free.hash)
     }
   }
 }
