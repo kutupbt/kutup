@@ -229,9 +229,17 @@ impl ChatBackupManifestV1 {
     }
 }
 
+/// The `type` of a display record: a message or control as history shows it.
+pub const CHAT_BACKUP_RECORD_DISPLAY: &str = "display";
+/// The largest record of a type this reader doesn't know, encoded.
+pub const MAX_CHAT_BACKUP_OTHER_RECORD_BYTES: usize = 128 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatBackupDisplayRecordV1 {
+    /// Always [`CHAT_BACKUP_RECORD_DISPLAY`].
+    #[serde(rename = "type")]
+    pub record_type: String,
     pub version: u16,
     pub record_id: String,
     pub mutation_sequence: u64,
@@ -251,6 +259,9 @@ pub struct ChatBackupDisplayRecordV1 {
 
 impl ChatBackupDisplayRecordV1 {
     pub fn validate(&self) -> Result<(), String> {
+        if self.record_type != CHAT_BACKUP_RECORD_DISPLAY {
+            return Err("a display record's type is \"display\"".into());
+        }
         require_version(self.version)?;
         require_uuid("recordId", &self.record_id)?;
         if self.mutation_sequence == 0 || self.timestamp_ms <= 0 || self.sender_device_id == 0 {
@@ -291,11 +302,124 @@ impl ChatBackupDisplayRecordV1 {
     }
 }
 
+/// One backup record. Its `type` is an open enum of class *skip*
+/// (docs/plans/format-evolution.md, "Chat backup records"): a record of a
+/// type this reader doesn't know is kept as it came, carried through every
+/// reduction and compaction by its frame (`recordId`, `mutationSequence`,
+/// `tombstone`), and never shown.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChatBackupRecordV1 {
+    Display(ChatBackupDisplayRecordV1),
+    Other(ChatBackupOtherRecordV1),
+}
+
+/// A record of a type this reader doesn't know: its frame, and the record
+/// exactly as written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatBackupOtherRecordV1 {
+    pub record_type: String,
+    pub record_id: String,
+    pub mutation_sequence: u64,
+    pub tombstone: bool,
+    pub value: serde_json::Value,
+}
+
+impl ChatBackupRecordV1 {
+    pub fn record_id(&self) -> &str {
+        match self {
+            Self::Display(record) => &record.record_id,
+            Self::Other(record) => &record.record_id,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Display(record) => record.validate(),
+            Self::Other(record) => record.validate(),
+        }
+    }
+}
+
+impl ChatBackupOtherRecordV1 {
+    fn validate(&self) -> Result<(), String> {
+        if self.record_type == CHAT_BACKUP_RECORD_DISPLAY
+            || self.record_type.is_empty()
+            || self.record_type.len() > 64
+            // camelCase, as every other name in the format.
+            || !self.record_type.as_bytes()[0].is_ascii_lowercase()
+            || !self.record_type.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        {
+            return Err("backup record type is invalid".into());
+        }
+        require_uuid("recordId", &self.record_id)?;
+        if self.mutation_sequence == 0 {
+            return Err("backup record ordering metadata is invalid".into());
+        }
+        if serde_json::to_vec(&self.value)
+            .map_err(|error| error.to_string())?
+            .len()
+            > MAX_CHAT_BACKUP_OTHER_RECORD_BYTES
+        {
+            return Err("backup record is too large".into());
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for ChatBackupRecordV1 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Display(record) => record.serialize(serializer),
+            Self::Other(record) => record.value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ChatBackupRecordV1 {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| D::Error::custom("a backup record is an object"))?;
+        let record_type = object
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| D::Error::custom("a backup record has a type"))?
+            .to_owned();
+        if record_type == CHAT_BACKUP_RECORD_DISPLAY {
+            return serde_json::from_value(value)
+                .map(Self::Display)
+                .map_err(D::Error::custom);
+        }
+        let record_id = object
+            .get("recordId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| D::Error::custom("a backup record has a recordId"))?
+            .to_owned();
+        let mutation_sequence = object
+            .get("mutationSequence")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| D::Error::custom("a backup record has a mutationSequence"))?;
+        let tombstone = object
+            .get("tombstone")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| D::Error::custom("a backup record has a tombstone flag"))?;
+        Ok(Self::Other(ChatBackupOtherRecordV1 {
+            record_type,
+            record_id,
+            mutation_sequence,
+            tombstone,
+            value,
+        }))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatBackupSegmentPlaintextV1 {
     pub version: u16,
-    pub records: Vec<ChatBackupDisplayRecordV1>,
+    pub records: Vec<ChatBackupRecordV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -303,7 +427,7 @@ pub struct ChatBackupSegmentPlaintextV1 {
 pub struct ChatBackupBasePlaintextV1 {
     pub version: u16,
     pub covered_cursor: u64,
-    pub records: Vec<ChatBackupDisplayRecordV1>,
+    pub records: Vec<ChatBackupRecordV1>,
 }
 
 impl ChatBackupBasePlaintextV1 {
@@ -319,6 +443,7 @@ impl ChatBackupBasePlaintextV1 {
         {
             return Err("backup base plaintext length is invalid".into());
         }
+        peek_version(bytes)?;
         let value: Self = serde_json::from_slice(bytes)
             .map_err(|error| format!("invalid backup base plaintext: {error}"))?;
         if value.canonical_bytes()? != bytes {
@@ -344,6 +469,7 @@ impl ChatBackupSegmentPlaintextV1 {
         {
             return Err("backup segment plaintext length is invalid".into());
         }
+        peek_version(bytes)?;
         let value: Self = serde_json::from_slice(bytes)
             .map_err(|error| format!("invalid backup segment plaintext: {error}"))?;
         if value.canonical_bytes()? != bytes {
@@ -353,11 +479,26 @@ impl ChatBackupSegmentPlaintextV1 {
     }
 }
 
-fn validate_record_set(records: &[ChatBackupDisplayRecordV1]) -> Result<(), String> {
+/// Reads only the top-level `version` first, so a newer base or segment is
+/// *newer than me* even when its records changed shape.
+fn peek_version(bytes: &[u8]) -> Result<(), String> {
+    #[derive(Deserialize)]
+    struct Versioned {
+        version: u16,
+    }
+    if let Ok(Versioned { version }) = serde_json::from_slice::<Versioned>(bytes) {
+        if version > CHAT_BACKUP_PROTOCOL_VERSION {
+            return require_version(version);
+        }
+    }
+    Ok(())
+}
+
+fn validate_record_set(records: &[ChatBackupRecordV1]) -> Result<(), String> {
     let mut record_ids = std::collections::HashSet::with_capacity(records.len());
     for record in records {
         record.validate()?;
-        if !record_ids.insert(record.record_id.as_str()) {
+        if !record_ids.insert(record.record_id()) {
             return Err("duplicate backup display record".into());
         }
     }
@@ -815,6 +956,7 @@ mod tests {
 
     fn display_record() -> ChatBackupDisplayRecordV1 {
         ChatBackupDisplayRecordV1 {
+            record_type: CHAT_BACKUP_RECORD_DISPLAY.into(),
             version: 1,
             record_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
             mutation_sequence: 1,
@@ -887,12 +1029,60 @@ mod tests {
         assert!(request.validate().is_err());
     }
 
+    /// docs/plans/format-evolution.md, "Chat backup records": a record type
+    /// this reader doesn't know is kept as it came; a newer version is newer
+    /// than me.
+    #[test]
+    fn records_of_unknown_types_are_kept_and_newer_versions_named() {
+        let display = serde_json::to_value(display_record()).unwrap();
+        let other = serde_json::json!({
+            "type": "pinnedNote",
+            "recordId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "mutationSequence": 2,
+            "tombstone": false,
+            "note": {"text": "kept"}
+        });
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "records": [display, other],
+        }))
+        .unwrap();
+        let segment = ChatBackupSegmentPlaintextV1::from_canonical_bytes(&bytes).unwrap();
+        assert!(matches!(
+            &segment.records[0],
+            ChatBackupRecordV1::Display(_)
+        ));
+        let ChatBackupRecordV1::Other(kept) = &segment.records[1] else {
+            panic!("an unknown type is kept");
+        };
+        assert_eq!(kept.record_type, "pinnedNote");
+        assert_eq!(segment.canonical_bytes().unwrap(), bytes);
+        // The frame is still required, and "display" is no unknown type.
+        for bad in [
+            serde_json::json!({"type": "pinnedNote", "recordId": "x", "mutationSequence": 1, "tombstone": false}),
+            serde_json::json!({"type": "pinnedNote", "recordId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "tombstone": false}),
+            serde_json::json!({"recordId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "mutationSequence": 1, "tombstone": false}),
+            serde_json::json!({"type": "Pinned", "recordId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "mutationSequence": 1, "tombstone": false}),
+        ] {
+            let bytes =
+                serde_json::to_vec(&serde_json::json!({"version": 1, "records": [bad]})).unwrap();
+            assert!(ChatBackupSegmentPlaintextV1::from_canonical_bytes(&bytes).is_err());
+        }
+        let newer = serde_json::to_vec(&serde_json::json!({"version": 2, "records": []})).unwrap();
+        assert!(ChatBackupSegmentPlaintextV1::from_canonical_bytes(&newer)
+            .unwrap_err()
+            .starts_with(kutup_crypto::error::NEWER_FORMAT_PREFIX));
+    }
+
     #[test]
     fn archives_reject_duplicates_invalid_mutations_and_noncanonical_wrappers() {
         let record = display_record();
         let duplicate = ChatBackupSegmentPlaintextV1 {
             version: 1,
-            records: vec![record.clone(), record.clone()],
+            records: vec![
+                ChatBackupRecordV1::Display(record.clone()),
+                ChatBackupRecordV1::Display(record.clone()),
+            ],
         };
         assert!(duplicate.canonical_bytes().is_err());
 
@@ -900,14 +1090,14 @@ mod tests {
         invalid_mutation.mutation_sequence = 0;
         assert!(ChatBackupSegmentPlaintextV1 {
             version: 1,
-            records: vec![invalid_mutation],
+            records: vec![ChatBackupRecordV1::Display(invalid_mutation)],
         }
         .canonical_bytes()
         .is_err());
 
         let canonical = ChatBackupSegmentPlaintextV1 {
             version: 1,
-            records: vec![record],
+            records: vec![ChatBackupRecordV1::Display(record)],
         }
         .canonical_bytes()
         .unwrap();

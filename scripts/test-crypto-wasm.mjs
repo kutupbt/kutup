@@ -442,6 +442,7 @@ assert.equal(verifiedAuthorization.manifestDigest, undefined)
 const backupSegment = {
   version: 1,
   records: [{
+    type: 'display',
     version: 1,
     recordId: '55555555-5555-4555-8555-555555555555',
     mutationSequence: 1,
@@ -467,6 +468,21 @@ assert.deepEqual(
   crypto.decodeChatBackupPlaintext(canonicalBackupSegment, 2),
   backupSegment,
 )
+// A record type this client doesn't know is kept as it came; a newer
+// version is newer than this reader (docs/plans/format-evolution.md).
+const backupRecordVectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-chat-proto/tests/vectors/chat-backup-records-v1.json`, 'utf8'),
+)
+const segmentBase64 = Buffer.from(backupRecordVectors.segment).toString('base64')
+const decodedRecords = crypto.decodeChatBackupPlaintext(segmentBase64, 2)
+assert.deepEqual(decodedRecords.records.map((record) => record.type), backupRecordVectors.types)
+assert.equal(crypto.encodeChatBackupPlaintext(decodedRecords, 2), segmentBase64)
+for (const bad of backupRecordVectors.invalid) {
+  assert.throws(() => crypto.decodeChatBackupPlaintext(Buffer.from(bad).toString('base64'), 2), (error) => !String(error).startsWith('newer format: '))
+}
+for (const newer of backupRecordVectors.newer) {
+  assert.throws(() => crypto.decodeChatBackupPlaintext(Buffer.from(newer).toString('base64'), 2), (error) => String(error).startsWith('newer format: '))
+}
 const backupOperation = '66666666-6666-4666-8666-666666666666'
 const sealedBackupSegment = crypto.sealChatBackupObject(
   canonicalBackupSegment,

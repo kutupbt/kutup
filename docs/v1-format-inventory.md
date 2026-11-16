@@ -54,7 +54,7 @@ without another wipe. As built on `wipe/format-evolution`:
 | Block objects (`blocks`) | unknown signer kind or header suite: *newer than me* |
 | Chat bodies, provisioning message | unknown fields ignored; any emoji is a reaction |
 | Chat mailbox page | an envelope of an unknown type or suite is paged past, alone |
-| Chat backup | a newer version is *newer than me* |
+| Chat backup | records carry a `type` (*skip*: unknown types kept); a newer version, or an object of an unknown suite or purpose (a later chunked base), is *newer than me* |
 
 `AccountRecordV1` (docs/plans/w1-account-record.md) is encoded as magic
 `KUTPAR1\0`, big-endian suite ID (1), big-endian u16 purpose, the big-endian

@@ -256,6 +256,28 @@ plus parts loaded on demand for Drive blocks, account and identity work, and
 Chat. It changes no stored format, so it waits until after the wipe; each
 part then gets its own budget.
 
+### Chat backup: the reducer and content schema in Rust (after the wipe)
+
+The format already carries what this needs (docs/plans/format-evolution.md,
+"Chat backup records"): every record has a `type` (skip class: a type a
+client doesn't know is kept and carried through reduction and compaction),
+a newer version is "newer than me", and the tie-break compares UTF-8 bytes.
+Still open: the reducer (`applyRecords`, `preferBackupRecord` in
+`frontend/packages/chat-core/src/backup.ts`) and the display records'
+content schema move into `kutup-chat-proto` with checked-in vectors, so the
+browser, the CLI and the native apps reduce a backup identically.
+
+### Chat backup: a chunked base as the next version (after the wipe)
+
+The base is one object of up to 128 MiB. A chunked base comes as the next
+version of the backup object: its suite (u16) and purpose (u8) sit right
+after the magic in the authenticated header (`kutup_crypto::chat_backup`),
+and a reader refuses a suite or purpose it doesn't know as "newer than me"
+before it looks at the header's length, so today's readers ask for an
+update instead of reporting a corrupt backup. Needs: the chunk layout (the
+block format's, as Drive and Chat media), a server route for a chunked
+base and its manifest field, and the client upload and restore.
+
 ### Rotate document keys when a device is removed (after W5)
 
 Signal's practice: new sender keys after a member or device leaves. When a

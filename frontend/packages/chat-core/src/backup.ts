@@ -125,7 +125,15 @@ export interface BackupMediaSource {
   ciphertextBytes: number
 }
 
+/**
+ * A backup record. `type` is an open enum of class *skip*
+ * (docs/plans/format-evolution.md): a record of another type, from a newer
+ * client, arrives with only its frame known (`recordId`,
+ * `mutationSequence`, `tombstone`); it is reduced and compacted like any
+ * other, and never shown ({@link isDisplayRecord}).
+ */
 interface BackupDisplayRecord {
+  type: 'display'
   version: 1
   recordId: string
   mutationSequence: number
@@ -548,7 +556,7 @@ export class ChatBackupCoordinator {
       : await readBackupRecords<BackupDisplayRecord>(this.db, this.options.sealer)
     const restored: ChatHistoryEntry[] = []
     for (const { record, local } of stored) {
-      if (!local && !record.tombstone && record.content) restored.push(entryOf(record))
+      if (!local && !record.tombstone && record.content && isDisplayRecord(record)) restored.push(entryOf(record))
     }
     return restored
   }
@@ -1094,6 +1102,7 @@ export class ChatBackupCoordinator {
         // Every history entry names its sender by account; one that does not is not backed up.
         if (!sender) continue
         const record: BackupDisplayRecord = {
+          type: 'display',
           version: 1,
           recordId,
           mutationSequence: previous?.record.mutationSequence ?? 1,
@@ -1684,8 +1693,14 @@ export class ChatBackupCoordinator {
   }
 }
 
+/** Whether a record is one this client shows (not a newer client's type). */
+function isDisplayRecord(record: BackupDisplayRecord): boolean {
+  return (record as { type: string }).type === 'display'
+}
+
 /** A record a newer one of its kind replaces (conversation state, read position). */
 function isReplaceableControl(record: BackupDisplayRecord): boolean {
+  if (!isDisplayRecord(record)) return false
   const kind = record.content?.kind
   return kind === 'conversationState' || kind === 'readPosition'
 }
@@ -1703,7 +1718,7 @@ function isEligible(content: ChatContent, now: number): boolean {
 /** Keeps `mediaRecords` current for a record just stored. */
 function indexMediaRecord(collected: Collected, value: StoredRecord): void {
   const content = value.record.content
-  if (!value.record.tombstone && (content?.attachment || content?.mutation?.operation === 'delete')) {
+  if (isDisplayRecord(value.record) && !value.record.tombstone && (content?.attachment || content?.mutation?.operation === 'delete')) {
     collected.mediaRecords.add(value.id)
   } else {
     collected.mediaRecords.delete(value.id)
@@ -1822,7 +1837,7 @@ export function compareBytes(left: Uint8Array, right: Uint8Array): number {
 function restoredMedia(records: StoredRecord[]): StoredBackupMedia[] {
   const media = new Map<string, StoredBackupMedia>()
   for (const { record } of records) {
-    const attachment = record.tombstone ? undefined : record.content?.attachment
+    const attachment = record.tombstone || !isDisplayRecord(record) ? undefined : record.content?.attachment
     if (!attachment?.backupMediaId || !attachment.backupMediaReferenceId) continue
     if (!/^[0-9a-f]{64}$/.test(attachment.backupMediaId)
         || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
