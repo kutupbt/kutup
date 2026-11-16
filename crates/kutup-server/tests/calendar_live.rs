@@ -86,7 +86,15 @@ fn owner(c: &Client, base: &str) -> Owner {
 
 /// A new calendar's body, its passphrase and its key as made.
 fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase, UnlockedCalendarKey) {
-    let id = uuid::Uuid::new_v4();
+    new_calendar_with_id(owner, name, uuid::Uuid::new_v4())
+}
+
+/// A new calendar under a chosen id: its share and metadata are bound to it.
+fn new_calendar_with_id(
+    owner: &Owner,
+    name: &str,
+    id: uuid::Uuid,
+) -> (Value, Passphrase, UnlockedCalendarKey) {
     let passphrase = Passphrase::generate();
     let key = cal::generate_calendar_key(&passphrase, 1_790_000_000).unwrap();
     let share = cal::seal_own_passphrase(
@@ -270,9 +278,9 @@ fn calendars_and_events() {
     .unwrap();
     assert!(index["values"].to_string().contains(&id), "{index}");
 
-    // A second calendar with the same id: refused.
-    let (mut again, _, _) = new_calendar(&ada, "Again");
-    again["id"] = json!(id);
+    // A second calendar with the same id (its share bound to that id, so
+    // only the id clashes): refused.
+    let (again, _, _) = new_calendar_with_id(&ada, "Again", id.parse().unwrap());
     let r = bearer(
         c.post(format!("{base}/api/calendar/calendars")),
         &ada.user.token,
