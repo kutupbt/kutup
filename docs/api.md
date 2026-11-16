@@ -43,6 +43,7 @@ Specific codes, where an app does something particular (a test in
 | Code | Status | Meaning |
 |---|---|---|
 | `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
+| `unknownStreamControl` | 400 | `POST /api/fed/chat/stream-control`: a must-understand control code (`0x8000..=0xffff`) this server doesn't know; the sequence is not used up |
 | `noManifest` | 404 | `GET /api/chat/accounts/{accountId}/manifest` (and its federation route): the account has no Chat manifest, since no Chat device ever registered. Clients take only this 404 for "re-register as the account's first device"; any other 404 is an error |
 | `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber), or a manifest's `identityBinding`, not signed by the account's identity key |
 | `keysDiffer` | 409 | `POST /api/chat/keys/check`: the server holds other keys for this device; it uploads them again |
@@ -4741,16 +4742,26 @@ high-water mark commit atomically. Exact replay returns the stored response;
 device mismatch or sequence gap returns typed `409` data so the origin can
 refresh/re-encrypt or replay the missing retained transaction.
 
-### POST /api/fed/chat/withdrawn
+### POST /api/fed/chat/stream-control
 
-A sequence of the origin's plain Chat or media stream given up before its
-transaction left: the sending account turned its federation off
-(docs/plans/server-personal-data.md). Signed `FederatedWithdrawnV1`
-`{ "version": 1, "transactionId", "stream": "chat"|"media", "sequence",
-"origin", "destination" }`: no sender, recipient or payload. The receiver
-uses the sequence up exactly as a delivery would (it must be the next one;
-otherwise `409` with the `sequenceGap` data) and stores the answer, so a
-repeat of the same `transactionId` gets the same `200
+A control message on one of the origin's sequenced streams (plain Chat sends
+or media offers): it uses up one sequence with nothing delivered. Signed
+`FederatedStreamControlV1` `{ "version": 1, "control", "transactionId",
+"stream": "chat"|"media", "sequence", "origin", "destination", "data"? }`
+(at most 1 KiB), naming no sender, recipient or payload. `control` is a
+`u16` type code, so a new one needs no new version:
+
+| Code | Meaning |
+|---|---|
+| `0` | Invalid: `400 invalid` |
+| `1` | Withdrawn: the transaction never left, as its sending account turned its federation off (docs/plans/server-personal-data.md). No `data` |
+| `2..=0x7fff` | Skip-safe: a destination that doesn't know the code still uses the sequence up and answers as for a withdrawal |
+| `0x8000..=0xffff` | Must be understood: a destination that doesn't know the code answers `400 unknownStreamControl` and does not use the sequence up |
+
+`data` carries what a code needs, and is never needed to use a sequence up.
+The receiver uses the sequence up exactly as a delivery would (it must be
+the next one; otherwise `409` with the `sequenceGap` data) and stores the
+answer, so a repeat of the same `transactionId` gets the same `200
 { "acceptedSequence" }`. Required of every server: there is no fallback.
 
 ---
