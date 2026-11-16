@@ -48,7 +48,7 @@ exit_of() { set +e; "$@" >/dev/null 2>"$TMP/err"; local code=$?; set -e; echo "$
 rollback_to() {
   {
     echo "DELETE FROM account_heads WHERE sequence > $1 AND user_id = (SELECT id FROM users WHERE username = '$USERNAME');"
-    echo "DELETE FROM pass_vault_secrets WHERE user_id = (SELECT id FROM users WHERE username = '$USERNAME');"
+    echo "DELETE FROM account_records WHERE scope = 1 AND user_id = (SELECT id FROM users WHERE username = '$USERNAME');"
   } | $E2E_PSQL >/dev/null
 }
 

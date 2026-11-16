@@ -2,10 +2,11 @@
 //! secrets").
 //!
 //! Each person keeps, per vault they can open, the vault's key sealed under
-//! their master key. The server checks the envelope is that account's vault
-//! secret and that the vault is theirs to open. Every secret is listed, as
-//! the account head's index lists it, with what became of its vault: one in
-//! the trash, out of reach or purged stays until its owner forgets it
+//! their master key: the account-records scope `passSecrets`
+//! (docs/plans/account-records.md). The server checks the envelope is that
+//! account's vault secret and that the vault is theirs to open. Every secret
+//! is listed, with what became of its vault (`GET /api/pass/vault-states`):
+//! one in the trash, out of reach or purged stays until its owner forgets it
 //! (docs/plans/rollback-protection.md §9).
 //!
 //! Gated on `KUTUP_LIVE_SERVER`:
@@ -50,15 +51,15 @@ fn current_revision(c: &Client, base: &str, user: &User, file_id: &str) -> u64 {
     list(c, base, user)
         .iter()
         .find(|row| row["fileId"] == file_id)
-        .map(|row| {
-            let envelope =
-                account_record::decode_canonical_b64(row["envelope"].as_str().unwrap()).unwrap();
-            account_record::inspect(&envelope)
-                .unwrap()
-                .revision
-                .unwrap()
-        })
+        .map(|row| row["revision"].as_u64().unwrap())
         .unwrap_or(0)
+}
+
+fn batch(c: &Client, base: &str, user: &User, body: Value) -> reqwest::blocking::Response {
+    bearer(c.post(format!("{base}/api/account/records")), &user.token)
+        .json(&body)
+        .send()
+        .unwrap()
 }
 
 fn put_on(
@@ -69,19 +70,30 @@ fn put_on(
     envelope: &str,
     on: u64,
 ) -> reqwest::blocking::Response {
-    bearer(
-        c.put(format!("{base}/api/pass/vault-secrets/{file_id}")),
-        &user.token,
+    batch(
+        c,
+        base,
+        user,
+        json!({ "puts": [{ "scope": "passSecrets", "id": file_id, "baseRevision": on, "envelope": envelope }] }),
     )
-    .json(&json!({ "envelope": envelope, "baseRevision": on }))
-    .send()
-    .unwrap()
 }
 
 /// Keeps `envelope` on top of what `user` keeps now.
 fn put(c: &Client, base: &str, user: &User, file_id: &str, envelope: &str) -> StatusCode {
     let on = current_revision(c, base, user, file_id);
     put_on(c, base, user, file_id, envelope, on).status()
+}
+
+/// Forgets `user`'s key for `file_id`, read at its revision now.
+fn forget(c: &Client, base: &str, user: &User, file_id: &str) -> StatusCode {
+    let on = current_revision(c, base, user, file_id);
+    batch(
+        c,
+        base,
+        user,
+        json!({ "deletes": [{ "scope": "passSecrets", "id": file_id, "baseRevision": on }] }),
+    )
+    .status()
 }
 
 /// Removes a file for good (trash, then purge): the gates check that a purged
@@ -96,18 +108,33 @@ fn purge_file(c: &Client, base: &str, user: &User, file_id: &str) {
     assert_eq!(purged.status(), StatusCode::NO_CONTENT, "purge {file_id}");
 }
 
+/// `user`'s kept keys: `{ fileId, envelope, revision }` each.
 fn list(c: &Client, base: &str, user: &User) -> Vec<Value> {
-    let r = bearer(c.get(format!("{base}/api/pass/vault-secrets")), &user.token)
+    let r = bearer(
+        c.get(format!("{base}/api/account/records/passSecrets?after=0")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let page: Value = r.json().unwrap();
+    assert_eq!(page["more"], false);
+    page["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| json!({ "fileId": r["id"], "envelope": r["envelope"], "revision": r["revision"] }))
+        .collect()
+}
+
+/// Each kept key's vault and what became of it.
+fn states(c: &Client, base: &str, user: &User) -> Vec<(String, String)> {
+    let r = bearer(c.get(format!("{base}/api/pass/vault-states")), &user.token)
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
-    r.json().unwrap()
-}
-
-/// Each listed secret's vault and what became of it.
-fn states(c: &Client, base: &str, user: &User) -> Vec<(String, String)> {
-    list(c, base, user)
-        .into_iter()
+    let rows: Vec<Value> = r.json().unwrap();
+    rows.into_iter()
         .map(|row| {
             (
                 row["fileId"].as_str().unwrap().to_owned(),
@@ -147,7 +174,7 @@ fn vault_secrets() {
             &vault.id,
             &sealed_for(&owner, &vault.id, "o")
         ),
-        StatusCode::NO_CONTENT
+        StatusCode::OK
     );
     assert_eq!(
         put(
@@ -157,7 +184,7 @@ fn vault_secrets() {
             &vault.id,
             &sealed_for(&member, &vault.id, "m")
         ),
-        StatusCode::NO_CONTENT
+        StatusCode::OK
     );
     let mine = list(&c, &base, &owner);
     assert_eq!(mine.len(), 1);
@@ -181,7 +208,7 @@ fn vault_secrets() {
             &vault.id,
             &sealed_for(&owner, &vault.id, "o2")
         ),
-        StatusCode::NO_CONTENT
+        StatusCode::OK
     );
     assert_eq!(list(&c, &base, &owner).len(), 1);
 
@@ -205,27 +232,18 @@ fn vault_secrets() {
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
     assert_eq!(
-        statuses
-            .iter()
-            .filter(|s| **s == StatusCode::NO_CONTENT)
-            .count(),
+        statuses.iter().filter(|s| **s == StatusCode::OK).count(),
         1,
         "{statuses:?}"
     );
     assert!(statuses
         .iter()
-        .all(|s| *s == StatusCode::NO_CONTENT || *s == StatusCode::CONFLICT));
+        .all(|s| *s == StatusCode::OK || *s == StatusCode::CONFLICT));
     // Removed again, its key listed as gone until forgotten: the rest of
     // this test counts the first vault's.
     purge_file(&c, &base, &owner, &fresh.id);
     assert!(states(&c, &base, &owner).contains(&(fresh.id.clone(), "gone".to_owned())));
-    let forgot = bearer(
-        c.delete(format!("{base}/api/pass/vault-secrets/{}", fresh.id)),
-        &owner.token,
-    )
-    .send()
-    .unwrap();
-    assert_eq!(forgot.status(), StatusCode::NO_CONTENT);
+    assert_eq!(forget(&c, &base, &owner, &fresh.id), StatusCode::OK);
 
     // Kept only on top of the key the change started from: a device that
     // read the first one does not overwrite the second, nor does an older
@@ -242,7 +260,7 @@ fn vault_secrets() {
     assert_eq!(late.status(), StatusCode::CONFLICT);
     let late: Value = late.json().unwrap();
     assert_eq!(late["code"], "revision_conflict");
-    assert_eq!(late["revision"].as_u64(), Some(kept_now));
+    assert_eq!(late["conflicts"][0]["revision"].as_u64(), Some(kept_now));
     let older = b64(&seal_vault_secret(
         &owner.master_key,
         kutup_crypto::account_record::MasterKeyGeneration::FIRST,
@@ -258,7 +276,8 @@ fn vault_secrets() {
     );
 
     // Refused: someone who cannot open the vault; another account's
-    // envelope; an envelope of another purpose; not base64.
+    // envelope; an envelope of another purpose; not base64; a key sealed for
+    // another vault.
     assert_eq!(
         put(
             &c,
@@ -303,17 +322,11 @@ fn vault_secrets() {
             &uuid(),
             &sealed_for(&owner, &vault.id, "o")
         ),
-        StatusCode::NOT_FOUND
+        StatusCode::BAD_REQUEST
     );
 
     // Forgetting one leaves the other person's.
-    let forgot = bearer(
-        c.delete(format!("{base}/api/pass/vault-secrets/{}", vault.id)),
-        &member.token,
-    )
-    .send()
-    .unwrap();
-    assert_eq!(forgot.status(), StatusCode::NO_CONTENT);
+    assert_eq!(forget(&c, &base, &member, &vault.id), StatusCode::OK);
     assert_eq!(list(&c, &base, &member).len(), 0);
     assert_eq!(list(&c, &base, &owner).len(), 1);
 
@@ -369,14 +382,7 @@ fn vault_secrets() {
         states(&c, &base, &owner),
         vec![(vault.id.clone(), "gone".to_owned())]
     );
-    let forgot = bearer(
-        c.post(format!("{base}/api/pass/vault-secrets/forget")),
-        &owner.token,
-    )
-    .json(&json!({ "fileIds": [vault.id] }))
-    .send()
-    .unwrap();
-    assert_eq!(forgot.status(), StatusCode::NO_CONTENT);
+    assert_eq!(forget(&c, &base, &owner, &vault.id), StatusCode::OK);
     assert_eq!(list(&c, &base, &owner).len(), 0);
     // Nothing left stored by this test.
     assert_eq!(used(&c, &base, &owner.token), 0);
@@ -753,7 +759,7 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
             &vault.id,
             &sealed_for(&member, &vault.id, "m")
         ),
-        StatusCode::NO_CONTENT
+        StatusCode::OK
     );
     assert_eq!(list(&c, &base, &member).len(), 1);
 
@@ -764,7 +770,8 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
     let held = || -> i64 {
         rt.block_on(
             sqlx::query_scalar(
-                "SELECT count(*) FROM pass_vault_secrets WHERE file_id = $1::uuid AND user_id = $2::uuid",
+                "SELECT count(*) FROM account_records
+                  WHERE scope = 1 AND record_id = $1 AND user_id = $2::uuid",
             )
             .bind(&vault.id)
             .bind(&member.id)
@@ -821,14 +828,7 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
         states(&c, &base, &member),
         vec![(vault.id.clone(), "gone".to_owned())]
     );
-    let forgot = bearer(
-        c.post(format!("{base}/api/pass/vault-secrets/forget")),
-        &member.token,
-    )
-    .json(&json!({ "fileIds": [vault.id] }))
-    .send()
-    .unwrap();
-    assert_eq!(forgot.status(), StatusCode::NO_CONTENT);
+    assert_eq!(forget(&c, &base, &member, &vault.id), StatusCode::OK);
     assert_eq!(held(), 0, "forgotten");
     assert_eq!(used(&c, &base, &owner.token), 0);
 }

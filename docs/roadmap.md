@@ -1002,7 +1002,7 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   of the same file and merges them instead of making conflict copies
   (`scripts/verify-pass-sync.sh`).
 - **K2a** ✅: vault secrets sealed under the account key
-  (`kutup_crypto::pass_vault`, `/api/pass/vault-secrets`); `kutup sync`
+  (`kutup_crypto::pass_vault`; since W3 the account-records scope `passSecrets`); `kutup sync`
   opens vaults with the sign-in, `kutup pass keep|ls|forget`.
 - **K2b** ✅: vault editing in `kutup-pass` (KeePass semantics: history,
   recycle bin, deletions recorded) and `kutup-pass-wasm`.

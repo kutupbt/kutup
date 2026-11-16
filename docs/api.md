@@ -1601,8 +1601,8 @@ chain start names. **Auth:** Bearer JWT. Scopes and their ids:
   /api/chat/contact-list`), with the revision in each sealed entry's header;
 - `passSecrets`: the vault's file id, for every secret the account keeps, the
   vault trashed, purged or out of reach included ("unreachable but listed":
-  the secret stays until its owner forgets it, `POST
-  /api/pass/vault-secrets/forget`).
+  the secret stays until its owner forgets it). Read from the account-records
+  store (below).
 
 Any other scope is `404`: a client treats it as one with no index yet
 (`IndexCheck::Uncovered`).
@@ -3032,47 +3032,25 @@ purpose `PassVaultSecret` (6) whose payload binds the vault's file id
 `kutup sync` then open the vault with the Kutup sign-in. The server checks
 only the envelope's public header.
 
-### GET /api/pass/vault-secrets
+The kept keys are the account-records scope `passSecrets` ([the
+account-records store](#the-account-records-store)): one record per vault,
+its id the vault's file id, stored and forgotten with `POST
+/api/account/records` and the next head, and read with `GET
+/api/account/records/passSecrets`. A put is `404` for a vault that does not
+exist, is in the trash, or the caller cannot open. A key goes only when its
+owner forgets it, never with its vault: a purged or unreachable vault's key
+stays in the scope ("unreachable but listed"), since it may be the only copy
+of a generated password or a key file's element; the owner's client forgets
+it.
 
-Every one of the caller's vault secrets, as the account head's `passSecrets`
-index lists them: `[{fileId, envelope, state, revision, updatedAt}]`
-(`envelope` base64; `revision` the one in its header, the base of the next
-keep). `state` says what has become of the vault: `open` (the caller can
-open it: the only state whose key clients use), `trashed` (kept for a
-restore), `unreachable` (the vault is there but not shared with the caller
-now; `open` again if access comes back) or `gone` (purged). A read never
-deletes one, and a failed access check fails the request; a secret goes only
-when its owner forgets it (`DELETE`, or `POST …/forget` for several), since
-it may be the only copy of a generated password or a key file's element.
-Clients check the whole list, every state, against the head.
+### GET /api/pass/vault-states
 
-### PUT /api/pass/vault-secrets/:fileId
-
-**Body:** `{envelope, baseRevision}`, the envelope canonical base64 of at
-most 4608 bytes. Stores or replaces the caller's secret for that vault, on
-top of the secret it was kept at (`baseRevision`, 0 for none;
-docs/plans/sealed-revisions.md). `400` unless the envelope is a
-`PassVaultSecret` envelope for the caller's key binding and this vault, with
-a revision above `baseRevision` (at most 2^53 − 1); `404` for a vault that
-does not exist, is in the trash, or the caller cannot open; `409` with
-`{ "code": "revision_conflict", "revision": <stored> }` when another device
-kept a key first.
-**Response:** `204`.
-
-### DELETE /api/pass/vault-secrets/:fileId
-
-Forgets the caller's secret for the vault (the vault is untouched). Body
-`{ "head": "…" }` once the account keeps a head. **Response:** `204`.
-
-A secret goes only this way, never with its vault: a purged or unreachable
-vault's secret stays in the account's `passSecrets` index ("unreachable but
-listed") until the owner's client forgets it, which it does on its next Pass
-write or unlock, all such secrets under one head:
-
-### POST /api/pass/vault-secrets/forget
-
-`{ "fileIds": ["<id>", …], "head": "…" }` (1 to 1,000). **Response:** `204`
-(those there were).
+What has become of the vault of every key the caller keeps:
+`[{fileId, state}]`. `state` is `open` (the caller can open it: the only
+state whose key clients use), `trashed` (kept for a restore), `unreachable`
+(the vault is there but not shared with the caller now; `open` again if
+access comes back) or `gone` (purged). A failed access check fails the
+request. **Auth:** Bearer JWT.
 
 The PIN lock (docs/plans/pass.md, "The PIN"): six digits per account, kept
 as a bcrypt hash and checked only here. It releases no key; the server's part

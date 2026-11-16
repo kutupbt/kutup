@@ -14,6 +14,7 @@ use std::io::IsTerminal;
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use kutup_crypto::account_record;
+use kutup_crypto::account_records::RecordScope;
 use kutup_crypto::master_keys::MasterKeys;
 use kutup_pass::keepass::Database;
 use kutup_pass::{MergeReport, VaultKey};
@@ -317,9 +318,9 @@ impl VaultKeys {
     }
 }
 
-/// The vault secrets are the account head's `passSecrets` scope, one value per
-/// vault file (docs/plans/rollback-protection.md).
-const HEAD_SCOPE: &str = "passSecrets";
+/// The vault secrets are the account-records scope `passSecrets`, one
+/// record per vault file (docs/plans/account-records.md), under the head.
+const SCOPE: RecordScope = RecordScope::PassSecrets;
 /// What the revision guard calls a vault's kept key (as the web does).
 const GUARD_SCOPE: &str = "pass-vault-secret";
 
@@ -344,19 +345,11 @@ pub(crate) fn secrets_head<'a>(
     )
 }
 
-fn envelope_revision(envelope_b64: &str) -> u64 {
-    base64::engine::general_purpose::STANDARD
-        .decode(envelope_b64)
-        .ok()
-        .and_then(|envelope| kutup_crypto::account_record::inspect(&envelope).ok())
-        .and_then(|header| header.revision)
-        .unwrap_or(0)
-}
-
-/// The account's vault secrets, held to the account head: a list with one
-/// more or fewer than the head vouches for, or one at another revision, is
-/// refused (read again once first). While this device is blocked on another
-/// history, held to its own guard only.
+/// The account's vault secrets, held to the account head: every page's head
+/// verified, and the whole scope checked against it (one more or fewer, or
+/// one at another revision, is refused; read again once first). While this
+/// device is blocked on another history, read unverified and held to its
+/// own guard only. What has become of each vault the server says apart.
 pub(crate) fn verified_secrets(
     client: &Client,
     master_keys: &MasterKeys,
@@ -366,35 +359,28 @@ pub(crate) fn verified_secrets(
 ) -> Result<Vec<crate::api::pass::VaultSecretRow>> {
     let mut head = secrets_head(client, master_keys, roots, binding, dir)?;
     let guard = crate::account_head::CliHead::guard(dir, master_keys, &roots.object_id, binding)?;
-    let mut last = None;
-    for _ in 0..2 {
-        let index = match head.index(HEAD_SCOPE) {
-            Ok(index) => Some(index),
-            Err(error) if error.downcast_ref::<crate::errors::HeadBlocked>().is_some() => {
-                eprintln!("  Note: {error}");
-                None
-            }
-            Err(error) => return Err(error),
-        };
-        let rows = client.list_vault_secrets()?;
-        let checked = (|| -> Result<()> {
-            if let Some(index) = &index {
-                index.expect_listing(rows.iter().map(|row| row.file_id.as_str()))?;
-                for row in &rows {
-                    index.expect(&row.file_id, envelope_revision(&row.envelope))?;
-                }
-            }
-            for row in &rows {
-                guard.accept(GUARD_SCOPE, &row.file_id, envelope_revision(&row.envelope))?;
-            }
-            Ok(())
-        })();
-        match checked {
-            Ok(()) => return Ok(rows),
-            Err(error) => last = Some(error),
+    let copy = match head.records(SCOPE) {
+        Ok((copy, _)) => copy,
+        Err(error) if error.downcast_ref::<crate::errors::HeadBlocked>().is_some() => {
+            eprintln!("  Note: {error}");
+            crate::account_head::unverified_records(client, SCOPE)?
         }
+        Err(error) => return Err(error),
+    };
+    let states = client.vault_states()?;
+    let mut rows = Vec::with_capacity(copy.records.len());
+    for (file_id, record) in copy.records {
+        guard.accept(GUARD_SCOPE, &file_id, record.revision)?;
+        rows.push(crate::api::pass::VaultSecretRow {
+            state: states
+                .get(&file_id)
+                .copied()
+                .unwrap_or(crate::api::pass::VaultSecretState::Gone),
+            file_id,
+            envelope: record.envelope,
+        });
     }
-    Err(last.expect("two attempts"))
+    Ok(rows)
 }
 
 /// Keeps what opens vault `file_id` (whose current contents are `contents`)
@@ -426,16 +412,12 @@ pub(crate) fn keep_secret(
     let guard = crate::account_head::CliHead::guard(dir, master_keys, &roots.object_id, binding)?;
     let guard = &guard;
     let mut head = secrets_head(client, master_keys, roots, binding, dir)?;
-    let mut done: Option<String> = None;
-    let stored = head.listed_write(HEAD_SCOPE, |_index, _attempt| {
-        let now = client
-            .list_vault_secrets()?
-            .into_iter()
-            .find(|row| row.file_id == file_id);
+    let stored = head.records_write(SCOPE, |copy, _attempt| {
+        let now = copy.records.get(file_id);
         // This same key kept already (by another device, or by an earlier try
         // whose answer was lost): nothing to send.
-        if let Some(row) = &now {
-            let envelope = account_record::decode_canonical_b64(&row.envelope)?;
+        if let Some(record) = now {
+            let envelope = account_record::decode_canonical_b64(&record.envelope)?;
             if kutup_pass::kept::open(
                 &envelope,
                 master_keys.key_for(&envelope)?,
@@ -444,13 +426,14 @@ pub(crate) fn keep_secret(
             )
             .is_ok_and(|kept| kept.key.same_as(&key))
             {
-                done = Some(row.envelope.clone());
-                return Ok(None);
+                return Ok(Some(crate::account_head::RecordsEdit {
+                    puts: Vec::new(),
+                    deletes: Vec::new(),
+                    done: (record.envelope.clone(), record.revision),
+                }));
             }
         }
-        let base = now
-            .as_ref()
-            .map_or(0, |row| envelope_revision(&row.envelope));
+        let base = now.map_or(0, |record| record.revision);
         let revision = guard.next(GUARD_SCOPE, file_id, base)?;
         let sealed = kutup_pass::kept::seal(
             master_keys.current(),
@@ -462,20 +445,15 @@ pub(crate) fn keep_secret(
             kutup_pass::kept::PasswordKind::Chosen,
         )?;
         let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
-        Ok(Some(crate::account_head::Edit {
-            changes: vec![(file_id.to_owned(), Some(revision))],
-            send: Box::new(move |sealed_head: &str| {
-                if !client.put_vault_secret(file_id, &envelope, base, sealed_head)? {
-                    return Ok(None);
-                }
-                guard.accept(GUARD_SCOPE, file_id, revision)?;
-                Ok(Some(envelope))
-            }),
+        Ok(Some(crate::account_head::RecordsEdit {
+            puts: vec![(file_id.to_owned(), revision, envelope.clone())],
+            deletes: Vec::new(),
+            done: (envelope, revision),
         }))
     })?;
-    stored
-        .or(done)
-        .ok_or_else(|| anyhow!("the vault key was not kept"))
+    let (envelope, revision) = stored.ok_or_else(|| anyhow!("the vault key was not kept"))?;
+    guard.accept(GUARD_SCOPE, file_id, revision)?;
+    Ok(envelope)
 }
 
 /// Forgets the account's kept key of vault `file_id`, with the next account
@@ -489,17 +467,14 @@ pub(crate) fn forget_secret(
     file_id: &str,
 ) -> Result<()> {
     let mut head = secrets_head(client, master_keys, roots, binding, dir)?;
-    head.listed_write(HEAD_SCOPE, |index, _attempt| {
-        if index.revision(file_id).is_none() {
+    head.records_write(SCOPE, |copy, _attempt| {
+        if !copy.records.contains_key(file_id) {
             return Ok(None);
         }
-        Ok(Some(crate::account_head::Edit {
-            changes: vec![(file_id.to_owned(), None)],
-            send: Box::new(move |sealed_head: &str| {
-                Ok(client
-                    .delete_vault_secret(file_id, sealed_head)?
-                    .then_some(()))
-            }),
+        Ok(Some(crate::account_head::RecordsEdit {
+            puts: Vec::new(),
+            deletes: vec![file_id.to_owned()],
+            done: (),
         }))
     })?;
     Ok(())

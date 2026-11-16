@@ -599,7 +599,7 @@ fn every_kind_of_listed_write_takes_the_head() {
         Some(&head),
     ));
 
-    // Pass: keep a vault's key, forget it, forget several.
+    // Pass: keep a vault's key, forget it.
     let folder = create_folder(&c, &base, &user);
     let vault = seal_file(&folder, &uuid(), b"a KeePass file");
     assert!(upload(&c, &base, &user.token, &folder, &vault)
@@ -617,31 +617,18 @@ fn every_kind_of_listed_write_takes_the_head() {
         )
         .unwrap())
     };
-    let keep = json!({ "envelope": secret(1_791_633_600_001), "baseRevision": 0 });
-    let path = format!("/api/pass/vault-secrets/{}", vault.id);
-    assert_eq!(send(Method::PUT, &path, keep.clone(), None), required);
+    // In the account-records store (docs/plans/account-records.md).
+    let keep = json!({ "puts": [{ "scope": "passSecrets", "id": vault.id,
+        "baseRevision": 0, "envelope": secret(1_791_633_600_001) }] });
+    let path = "/api/account/records";
+    assert_eq!(send(Method::POST, path, keep.clone(), None), required);
     let head = chain.keep(chain.make("passSecrets", &[(&vault.id, 1_791_633_600_001)]));
-    ok(send(Method::PUT, &path, keep, Some(&head)));
-    assert_eq!(send(Method::DELETE, &path, json!({}), None), required);
+    ok(send(Method::POST, path, keep, Some(&head)));
+    let forget = json!({ "deletes": [{ "scope": "passSecrets", "id": vault.id,
+        "baseRevision": 1_791_633_600_001_u64 }] });
+    assert_eq!(send(Method::POST, path, forget.clone(), None), required);
     let head = chain.keep(chain.make("passSecrets", &[]));
-    ok(send(Method::DELETE, &path, json!({}), Some(&head)));
-    let forget = json!({ "fileIds": [vault.id] });
-    assert_eq!(
-        send(
-            Method::POST,
-            "/api/pass/vault-secrets/forget",
-            forget.clone(),
-            None
-        ),
-        required
-    );
-    let head = chain.keep(chain.make("passSecrets", &[]));
-    ok(send(
-        Method::POST,
-        "/api/pass/vault-secrets/forget",
-        forget,
-        Some(&head),
-    ));
+    ok(send(Method::POST, path, forget, Some(&head)));
     purge_accounts(&c, &base, &[&user]);
 }
 

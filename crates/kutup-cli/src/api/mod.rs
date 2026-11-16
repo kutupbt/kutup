@@ -11,6 +11,7 @@
 #![allow(dead_code)]
 
 pub mod account_head;
+pub mod account_records;
 pub mod assets;
 pub mod collab;
 pub mod devices;

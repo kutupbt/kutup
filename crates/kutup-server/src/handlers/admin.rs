@@ -3066,7 +3066,6 @@ async fn clear_account_values(
             OR forwardee_address_id IN (SELECT id FROM mail_addresses WHERE user_id = $1)",
         "DELETE FROM mail_labels WHERE user_id = $1",
         "DELETE FROM mail_filters WHERE user_id = $1",
-        "DELETE FROM pass_vault_secrets WHERE user_id = $1",
         "UPDATE mail_folders SET name_sealed = NULL WHERE user_id = $1",
         // Old names held by the old incarnation stop receiving now: no one
         // holds the keys their mail would be sealed to. They are freed on

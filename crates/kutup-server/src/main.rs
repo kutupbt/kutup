@@ -1043,20 +1043,7 @@ fn build_router(state: AppState) -> Router {
                     kutup_crypto::identity_pins::MAX_SEALED_BYTES / 3 * 4 + 64 * 1024,
                 )),
         )
-        .route(
-            "/api/pass/vault-secrets",
-            get(handlers::pass::list_vault_secrets),
-        )
-        .route(
-            "/api/pass/vault-secrets/forget",
-            post(handlers::pass::forget_vault_secrets),
-        )
-        .route(
-            "/api/pass/vault-secrets/:file_id",
-            put(handlers::pass::put_vault_secret)
-                .delete(handlers::pass::delete_vault_secret)
-                .route_layer(DefaultBodyLimit::max(16 * 1024)),
-        )
+        .route("/api/pass/vault-states", get(handlers::pass::vault_states))
         .route(
             "/api/pass/settings",
             get(handlers::pass_icons::get_settings)

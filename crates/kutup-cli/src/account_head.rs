@@ -21,6 +21,7 @@ use base64::Engine as _;
 use kutup_crypto::account_head::{
     self, HeadKeys, HeadStatus, IndexCheck, LocalHeadStateV1, VerifiedHead,
 };
+use kutup_crypto::account_records::{Merged, RecordScope, ScopeRecords};
 use kutup_crypto::revision_guard::GuardKeys;
 
 use crate::api::Client;
@@ -104,6 +105,28 @@ pub struct Edit<'a, T> {
     pub changes: Vec<(String, Option<u64>)>,
     /// Sends the write with `head`; `Ok(None)` when another device wrote first.
     pub send: Send<'a, T>,
+}
+
+/// What a records batch changes: puts as `(id, revision, envelope)` (the
+/// revision the envelope was sealed at, the envelope canonical base64), and
+/// ids to delete; `done` is what the write returns once stored.
+pub struct RecordsEdit<T> {
+    pub puts: Vec<(String, u64, String)>,
+    pub deletes: Vec<String>,
+    pub done: T,
+}
+
+/// A records scope read without the head: only while this device is
+/// blocked on another history (reads go on, held to the device's own guard).
+pub fn unverified_records(client: &Client, scope: RecordScope) -> Result<ScopeRecords> {
+    let mut copy = ScopeRecords::new(scope);
+    for _ in 0..100_000 {
+        let page = client.get_account_records(scope, copy.cursor)?;
+        if copy.merge(&page)? == Merged::Done {
+            return Ok(copy);
+        }
+    }
+    bail!("{}: the server's records did not end", scope.name())
 }
 
 /// The sealed revision guard: the highest revision this profile has seen of
@@ -621,6 +644,130 @@ impl<'a> CliHead<'a> {
             }
         }
         bail!("{scope}: another device kept writing first; try again")
+    }
+
+    /// A records scope, read from the start and checked: every page's head
+    /// verified as it comes, and once caught up the scope's index checked
+    /// against the last one (docs/plans/account-records.md, decision 5).
+    /// With the account's basis when it has no head yet. A rollback or fork
+    /// is read once more first, as [`Self::index`] does.
+    pub fn records(&mut self, scope: RecordScope) -> Result<(ScopeRecords, Option<String>)> {
+        match self.records_once(scope) {
+            Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => self.records_once(scope),
+            other => other,
+        }
+    }
+
+    fn records_once(&mut self, scope: RecordScope) -> Result<(ScopeRecords, Option<String>)> {
+        // Each page starts past the one before, so this ends; the bound only
+        // stops a server that keeps answering "more".
+        const MOST_PAGES: usize = 100_000;
+        let mut copy = ScopeRecords::new(scope);
+        let mut resyncs = 0;
+        for _ in 0..MOST_PAGES {
+            let page = self.client.get_account_records(scope, copy.cursor)?;
+            self.verify(page.head.as_deref())?;
+            match copy.merge(&page)? {
+                Merged::More => continue,
+                Merged::Resync => {
+                    resyncs += 1;
+                    if resyncs > 3 {
+                        bail!(
+                            "{}: the server kept sending this device back to the start",
+                            scope.name()
+                        );
+                    }
+                    continue;
+                }
+                Merged::Done => {}
+            }
+            if let Some(verified) = &self.verified {
+                if account_head::check_index(
+                    &self.store.keys,
+                    verified,
+                    scope.name(),
+                    &copy.index(),
+                )
+                .is_err()
+                {
+                    bail!(
+                        "{}: the server's records do not match the account's verified state",
+                        scope.name()
+                    );
+                }
+            }
+            let basis = if page.head.is_none() {
+                page.basis
+            } else {
+                None
+            };
+            return Ok((copy, basis));
+        }
+        bail!("{}: the server's records did not end", scope.name())
+    }
+
+    /// A batch of `scope`'s records with the next head: `edit` makes the
+    /// puts `(id, revision, envelope)` and deletes on the verified copy (its
+    /// second argument counts tries from 1), redone (five tries) when
+    /// another device wrote first. The chain starts first when there is
+    /// none. An edit returning `None`, or an empty batch, sends nothing.
+    pub fn records_write<T>(
+        &mut self,
+        scope: RecordScope,
+        mut edit: impl FnMut(&ScopeRecords, u32) -> Result<Option<RecordsEdit<T>>>,
+    ) -> Result<Option<T>> {
+        for attempt in 1..=5 {
+            let (copy, basis) = self.records(scope)?;
+            let writer = self.store.keys.writer(&self.load()?.device_id)?;
+            let Some(change) = edit(&copy, attempt)? else {
+                return Ok(None);
+            };
+            let plan = copy.plan(change.puts, change.deletes)?;
+            if plan.is_empty() {
+                return Ok(Some(change.done));
+            }
+            if let Some(basis) = &basis {
+                let entry = self.store.keys.scope_digest(scope.name(), &copy.index())?;
+                let (first, verified) = account_head::first(
+                    &self.store.keys,
+                    &self.store.binding,
+                    &self.store.incarnation,
+                    self.store.generations,
+                    &writer,
+                    vec![entry],
+                )?;
+                if !self
+                    .client
+                    .start_account_head(&STANDARD.encode(&first), basis)?
+                {
+                    continue;
+                }
+                self.verified = Some(verified);
+                self.advance()?;
+            }
+            let entry = self
+                .store
+                .keys
+                .scope_digest(scope.name(), &plan.index_after(&copy))?;
+            let verified = self.verified.as_ref().context("no verified account head")?;
+            let next = verified.next(&writer, vec![entry])?;
+            let sealed = account_head::seal(&self.store.keys, &self.store.binding, &next)?;
+            if self
+                .client
+                .post_account_records(&plan, Some(&STANDARD.encode(&sealed)))?
+                .is_some()
+            {
+                let committed =
+                    verified.committed(&self.store.keys, &self.store.binding, &sealed)?;
+                self.verified = Some(committed);
+                self.advance()?;
+                return Ok(Some(change.done));
+            }
+        }
+        bail!(
+            "{}: another device kept writing first; try again",
+            scope.name()
+        )
     }
 
     /// The check a sign-in makes before its session is kept and before

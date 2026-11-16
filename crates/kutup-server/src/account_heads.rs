@@ -414,17 +414,8 @@ async fn values(
                 .map(|(id, name)| Ok((id, crate::revisions::mail_name(&name)? as i64)))
                 .collect::<AppResult<_>>()?
         }
-        Scope::PassSecrets => {
-            let rows: Vec<(String, Vec<u8>)> = sqlx::query_as(
-                "SELECT file_id::text, envelope FROM pass_vault_secrets WHERE user_id = $1",
-            )
-            .bind(user_id)
-            .fetch_all(&mut *conn)
-            .await?;
-            rows.into_iter()
-                .map(|(id, envelope)| Ok((id, crate::handlers::pass::revision_of(&envelope)?)))
-                .collect::<AppResult<_>>()?
-        }
+        // In the account-records store (below) only.
+        Scope::PassSecrets => Vec::new(),
         Scope::ChatGroups => {
             sqlx::query_as("SELECT id, revision FROM chat_group_list WHERE user_id = $1")
                 .bind(user_id)

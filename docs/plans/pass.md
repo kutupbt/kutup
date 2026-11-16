@@ -397,7 +397,8 @@ one database, plus a report of what happened.
   one needs the password itself (`kept::PasswordKind`). Only a key that opened the vault is kept: the Pass
   worker keeps the key its vault was opened or made with, and the CLI opens
   the vault with the key first. Stored by the server
-  (`pass_vault_secrets`, `/api/pass/vault-secrets`), unreadable to it.
+  (the account-records scope `passSecrets`, docs/plans/account-records.md),
+  unreadable to it.
   Creating or opening a vault offers to remember it. Every record is
   listed, as the account head lists it, with what has become of its vault
   (`open`, `trashed`, `unreachable` for one not shared with its owner now,
