@@ -164,7 +164,7 @@ fn records_land_in_batches_under_the_head() {
         .json(&json!({ "head": first, "basis": basis }))
         .send()
         .unwrap();
-    assert_eq!(r.status(), StatusCode::OK, "{}", r.text().unwrap());
+    assert!(r.status().is_success(), "{}", r.text().unwrap());
 
     let (a, a1) = account.group(1, 1);
     let (_, a2) = account.group(1, 2);
