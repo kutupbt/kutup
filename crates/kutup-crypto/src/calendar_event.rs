@@ -168,6 +168,10 @@ pub struct SharedSigned {
     /// `mailto:` of the organizer (invitations, E4).
     pub organizer: Option<String>,
     pub sequence: u32,
+    /// Unfolded content lines of properties this reader doesn't know, in
+    /// order: what a newer client added, kept and signed again
+    /// (docs/plans/format-evolution.md, rule 3).
+    pub other: Vec<String>,
 }
 
 /// The shared encrypted part: what the event is (Proton's
@@ -194,6 +198,8 @@ pub struct CalendarSigned {
     pub exdates: Vec<EventTime>,
     pub status: Option<Status>,
     pub transp: Option<Transp>,
+    /// Properties this reader doesn't know, kept ([`SharedSigned::other`]).
+    pub other: Vec<String>,
 }
 
 /// The calendar encrypted part (Proton's `CALENDAR_ENCRYPTED_FIELDS`).
@@ -202,6 +208,8 @@ pub struct CalendarEncrypted {
     pub uid: String,
     pub dtstamp: Timestamp,
     pub comment: Option<String>,
+    /// Properties this reader doesn't know, kept ([`SharedSigned::other`]).
+    pub other: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,6 +332,7 @@ impl SharedSigned {
             lines.push(format!("ORGANIZER:{organizer}"));
         }
         lines.push(format!("SEQUENCE:{}", self.sequence));
+        push_other(&mut lines, &self.other)?;
         Ok(wrap(&lines))
     }
 
@@ -339,6 +348,7 @@ impl SharedSigned {
             exdates: Vec::new(),
             organizer: None,
             sequence: 0,
+            other: Vec::new(),
         };
         let mut start = None;
         for prop in &props {
@@ -352,7 +362,8 @@ impl SharedSigned {
                 "EXDATE" => part.exdates.push(read_time(prop)?),
                 "ORGANIZER" => part.organizer = Some(prop.value.clone()),
                 "SEQUENCE" => part.sequence = read_number(prop)?,
-                _ => return Err(not_in_part(prop)),
+                name if KNOWN.contains(&name) => return Err(not_in_part(prop)),
+                _ => part.other.push(prop.line.clone()),
             }
         }
         part.dtstart = start.ok_or_else(|| missing("DTSTART"))?;
@@ -379,21 +390,7 @@ impl SharedEncrypted {
             MAX_DESCRIPTION_CHARS,
         )?;
         push_text(&mut lines, "LOCATION", &self.location, MAX_LOCATION_CHARS)?;
-        if self.other.len() > MAX_OTHER_PROPERTIES {
-            return Err(CryptoError::InvalidInput(
-                "too many other properties".into(),
-            ));
-        }
-        for line in &self.other {
-            let prop = content_line(line)?;
-            if line.len() > MAX_OTHER_PROPERTY_LEN || KNOWN.contains(&prop.name.as_str()) {
-                return Err(CryptoError::InvalidInput(format!(
-                    "{} can't be kept as another property",
-                    prop.name
-                )));
-            }
-            lines.push(line.clone());
-        }
+        push_other(&mut lines, &self.other)?;
         Ok(wrap(&lines))
     }
 
@@ -431,6 +428,7 @@ impl CalendarSigned {
         if let Some(transp) = self.transp {
             lines.push(format!("TRANSP:{}", transp.as_str()));
         }
+        push_other(&mut lines, &self.other)?;
         Ok(wrap(&lines))
     }
 
@@ -442,6 +440,7 @@ impl CalendarSigned {
             exdates: Vec::new(),
             status: None,
             transp: None,
+            other: Vec::new(),
         };
         for prop in &props {
             match prop.name.as_str() {
@@ -463,7 +462,8 @@ impl CalendarSigned {
                         _ => return Err(CryptoError::InvalidInput("unknown TRANSP".into())),
                     })
                 }
-                _ => return Err(not_in_part(prop)),
+                name if KNOWN.contains(&name) => return Err(not_in_part(prop)),
+                _ => part.other.push(prop.line.clone()),
             }
         }
         canonical(text, part.build()?)?;
@@ -479,6 +479,7 @@ impl CalendarEncrypted {
             format!("DTSTAMP:{}", utc_text(self.dtstamp)),
         ];
         push_text(&mut lines, "COMMENT", &self.comment, MAX_COMMENT_CHARS)?;
+        push_other(&mut lines, &self.other)?;
         Ok(wrap(&lines))
     }
 
@@ -488,13 +489,15 @@ impl CalendarEncrypted {
             uid: String::new(),
             dtstamp: Timestamp::UNIX_EPOCH,
             comment: None,
+            other: Vec::new(),
         };
         for prop in &props {
             match prop.name.as_str() {
                 "UID" => part.uid = unescape(&prop.value)?,
                 "DTSTAMP" => part.dtstamp = read_utc(prop)?,
                 "COMMENT" => part.comment = Some(unescape(&prop.value)?),
-                _ => return Err(not_in_part(prop)),
+                name if KNOWN.contains(&name) => return Err(not_in_part(prop)),
+                _ => part.other.push(prop.line.clone()),
             }
         }
         canonical(text, part.build()?)?;
@@ -574,6 +577,15 @@ pub struct EventFieldsV1 {
     /// An outside event's other properties, as content lines.
     #[serde(default)]
     pub other: Vec<String>,
+    /// Properties a newer client put in the other parts (shared signed,
+    /// calendar signed, calendar encrypted), kept for the next seal
+    /// (docs/plans/format-evolution.md, rule 3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signed_other: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calendar_other: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comment_other: Vec<String>,
 }
 
 impl EventFieldsV1 {
@@ -611,6 +623,7 @@ impl EventFieldsV1 {
                 exdates: exdates.clone(),
                 organizer: self.organizer.clone(),
                 sequence: self.sequence,
+                other: self.signed_other.clone(),
             },
             shared_encrypted: SharedEncrypted {
                 uid: self.uid.clone(),
@@ -644,12 +657,16 @@ impl EventFieldsV1 {
                         _ => Err(CryptoError::InvalidInput("transp is invalid".into())),
                     })
                     .transpose()?,
+                other: self.calendar_other.clone(),
             },
-            calendar_encrypted: self.comment.as_ref().map(|comment| CalendarEncrypted {
-                uid: self.uid.clone(),
-                dtstamp: stamp,
-                comment: Some(comment.clone()),
-            }),
+            calendar_encrypted: (self.comment.is_some() || !self.comment_other.is_empty()).then(
+                || CalendarEncrypted {
+                    uid: self.uid.clone(),
+                    dtstamp: stamp,
+                    comment: self.comment.clone(),
+                    other: self.comment_other.clone(),
+                },
+            ),
         })
     }
 
@@ -678,6 +695,13 @@ impl EventFieldsV1 {
                 .as_ref()
                 .and_then(|part| part.comment.clone()),
             other: secret.other.clone(),
+            signed_other: shared.other.clone(),
+            calendar_other: calendar.other.clone(),
+            comment_other: parts
+                .calendar_encrypted
+                .as_ref()
+                .map(|part| part.other.clone())
+                .unwrap_or_default(),
         }
     }
 }
@@ -743,6 +767,27 @@ fn push_text(
             )));
         }
         lines.push(format!("{name}:{}", escape(value)));
+    }
+    Ok(())
+}
+
+/// Properties no part names, kept as they came: an outside event's, or a
+/// newer Kutup's (docs/plans/format-evolution.md, rule 3).
+fn push_other(lines: &mut Vec<String>, other: &[String]) -> Result<()> {
+    if other.len() > MAX_OTHER_PROPERTIES {
+        return Err(CryptoError::InvalidInput(
+            "too many other properties".into(),
+        ));
+    }
+    for line in other {
+        let prop = content_line(line)?;
+        if line.len() > MAX_OTHER_PROPERTY_LEN || KNOWN.contains(&prop.name.as_str()) {
+            return Err(CryptoError::InvalidInput(format!(
+                "{} can't be kept as another property",
+                prop.name
+            )));
+        }
+        lines.push(line.clone());
     }
     Ok(())
 }
@@ -982,6 +1027,7 @@ mod tests {
             exdates: Vec::new(),
             organizer: None,
             sequence: 0,
+            other: Vec::new(),
         }
     }
 
@@ -1033,6 +1079,59 @@ mod tests {
         };
         secret.other.push("DTSTART:20261022T063000Z".into());
         assert!(secret.build().is_err());
+    }
+
+    /// docs/plans/format-evolution.md, rule 3: a property a newer client
+    /// put in any part is kept, signed again, and carried through the fields
+    /// a client edits.
+    #[test]
+    fn a_newer_clients_properties_are_kept_in_every_part() {
+        let text = signed()
+            .build()
+            .unwrap()
+            .replace("SEQUENCE:0", "SEQUENCE:0\r\nX-KUTUP-NEW;P=1:value");
+        let parsed = SharedSigned::parse(&text).unwrap();
+        assert_eq!(parsed.other, vec!["X-KUTUP-NEW;P=1:value".to_string()]);
+        assert_eq!(parsed.build().unwrap(), text);
+        let calendar = CalendarSigned {
+            uid: "u".into(),
+            dtstamp: stamp(),
+            exdates: Vec::new(),
+            status: None,
+            transp: None,
+            other: vec!["X-LATER:1".into()],
+        };
+        let text = calendar.build().unwrap();
+        assert_eq!(CalendarSigned::parse(&text).unwrap(), calendar);
+        let comment = CalendarEncrypted {
+            uid: "u".into(),
+            dtstamp: stamp(),
+            comment: None,
+            other: vec!["X-LATER:2".into()],
+        };
+        let text = comment.build().unwrap();
+        assert_eq!(CalendarEncrypted::parse(&text).unwrap(), comment);
+        // Through the fields and back: nothing dropped.
+        let parts = crate::calendar::EventParts {
+            shared_signed: parsed,
+            shared_encrypted: SharedEncrypted {
+                uid: signed().uid,
+                dtstamp: Some(stamp()),
+                ..Default::default()
+            },
+            calendar_signed: CalendarSigned {
+                uid: signed().uid,
+                ..calendar
+            },
+            calendar_encrypted: Some(CalendarEncrypted {
+                uid: signed().uid,
+                ..comment
+            }),
+        };
+        let back = EventFieldsV1::of(&parts).to_parts().unwrap();
+        assert_eq!(back.shared_signed, parts.shared_signed);
+        assert_eq!(back.calendar_signed, parts.calendar_signed);
+        assert_eq!(back.calendar_encrypted, parts.calendar_encrypted);
     }
 
     #[test]

@@ -453,6 +453,8 @@ async fn main() -> anyhow::Result<()> {
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     site_settings::seed_mail_outside_sending(&state.pool, state.config.mail_outside_sending)
         .await?;
+    site_settings::seed_chat_group_max_members(&state.pool, state.config.chat_group_max_members)
+        .await?;
     mail::spawn_receiver(state.clone()).await?;
     // Auto-delete of old Trash and Spam, for accounts that turned it on.
     mail::retention::spawn(state.clone());

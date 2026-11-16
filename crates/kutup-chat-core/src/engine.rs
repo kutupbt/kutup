@@ -110,6 +110,9 @@ pub struct ReceiveReport {
     /// Mailbox ids that could not be decrypted and were given up on, with
     /// the sender's session refreshed where that was due.
     pub repaired: Vec<String>,
+    /// Mailbox ids of envelopes whose type or suite is newer than this
+    /// client: left on the server unread ("update Kutup").
+    pub unsupported: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1830,14 +1833,25 @@ impl Engine {
 
         loop {
             let page = transport.drain(device_id, after, DRAIN_LIMIT).await?;
+            // Envelopes of a type or suite newer than this client are paged
+            // past, not acknowledged: the server keeps them for this device
+            // once it updates (docs/plans/format-evolution.md).
+            let skipped = page.unsupported.iter().map(|item| item.cursor).max();
+            report
+                .unsupported
+                .extend(page.unsupported.iter().map(|item| item.id.clone()));
             if page.envelopes.is_empty() {
+                if page.more && skipped.is_some() {
+                    after = after.max(skipped);
+                    continue;
+                }
                 break;
             }
             let received_at = self.now_ms();
             self.session
                 .journal_envelopes(&page.envelopes, received_at)
                 .await?;
-            after = self.session.last_cursor().await?;
+            after = self.session.last_cursor().await?.max(skipped);
             let ids: Vec<String> = page.envelopes.iter().map(|item| item.id.clone()).collect();
             self.process_inbound(Some(&ids), &mut report, rng).await?;
             if !page.more {

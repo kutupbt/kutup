@@ -94,6 +94,8 @@ export interface Calendar {
   revision: number
   defaultReminders: DefaultReminders
   unlocked: UnlockedCalendar
+  /** The sealed metadata's version and a newer client's fields, sealed again on a rename. */
+  metadataRest?: Record<string, unknown>
 }
 
 /** An event as the server stores it. */
@@ -231,6 +233,7 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
             revision: row.revision,
             defaultReminders: row.defaultReminders,
             unlocked: key,
+            metadataRest: metadata.rest,
           })
         } catch (error) {
           if (error instanceof OlderThanSeenError) throw error
@@ -303,6 +306,7 @@ export async function updateCalendar(session: Session, account: MailAccount, cal
     ? sealCalendarMetadata(calendar.unlocked, account.key, calendar.id, {
         name: change.name ?? calendar.name,
         description: change.description ?? calendar.description,
+        rest: calendar.metadataRest,
       })
     : undefined
   const revision = calendar.revision + 1

@@ -643,7 +643,11 @@ impl ChatTransport for MockServer {
             .collect();
         let more = envelopes.len() > limit as usize;
         envelopes.truncate(limit as usize);
-        Ok(MailboxPage { envelopes, more })
+        Ok(MailboxPage {
+            envelopes,
+            more,
+            unsupported: Vec::new(),
+        })
     }
 
     async fn ack(&self, _device_id: u32, ids: &[String]) -> Result<()> {

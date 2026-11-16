@@ -1082,9 +1082,12 @@ impl ProvisioningLinkCodeV1 {
 
 /// The provisioning message (Signal's `ProvisionMessage`, the fields Kutup
 /// needs), canonical JSON inside a [`ProvisionEnvelopeV1`]. No master key:
-/// the new device has it from signing in.
+/// the new device has it from signing in. Fields a newer device adds are
+/// ignored, so a newer device can link an older one
+/// (docs/plans/format-evolution.md); `provisioningVersion` rises only for
+/// what an older device must understand.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatProvisionV1 {
     pub provisioning_version: u16,
     /// The new device checks it is its own account.

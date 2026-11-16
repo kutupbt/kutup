@@ -297,6 +297,7 @@ impl ChatTransport for Mailbox {
         Ok(MailboxPage {
             envelopes: items,
             more,
+            unsupported: Vec::new(),
         })
     }
     async fn ack(&self, _device_id: u32, ids: &[String]) -> Result<()> {

@@ -845,7 +845,7 @@ async fn create_outside(
             change.check_lists_exactly(None).await?;
             let follows = change.signed.list.keys.iter().all(|key| {
                 stored.iter().any(|(fingerprint, primary, flags)| {
-                    *fingerprint == hex::encode(key.fingerprint)
+                    *fingerprint == hex::encode(&key.fingerprint)
                         && *primary == key.primary
                         && key.flags as i32 == (flags | no_encrypt)
                 })

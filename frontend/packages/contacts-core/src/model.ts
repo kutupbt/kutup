@@ -111,6 +111,12 @@ export interface Contact {
   revision: number
   draft: ContactDraft
   updatedAt: string
+  /**
+   * What the signed summary holds besides the fields the draft edits: its
+   * version and a newer client's fields (docs/plans/format-evolution.md),
+   * signed again on every save so no edit here drops them.
+   */
+  summaryRest?: Record<string, unknown>
 }
 
 export interface ContactGroup {

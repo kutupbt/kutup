@@ -188,7 +188,7 @@ export interface SignedUpWith {
 }
 
 /** A whole-number setting's Server settings section (site_settings::SettingSection). */
-export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation'
+export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation' | 'mail'
 /** What a whole-number setting counts. */
 export type SettingUnit = 'bytes' | 'count' | 'seconds' | 'days'
 /** Where a value in effect comes from. */
@@ -255,6 +255,8 @@ export interface AdminSettings {
   chatGroupLinkJoinsPerRelayGroupPerMin: number
   /** The same, per minute per relay server across all groups. */
   chatGroupLinkJoinsPerRelayPerMin: number
+  /** The most members and open invitations a group hosted here may have. */
+  chatGroupMaxMembers: number
   /** Multi-recipient group sends and group send endorsements (each an administrator's setting). */
   chatMultiMaxRecipients: number
   chatMultiMaxMessageBytes: number
@@ -330,6 +332,8 @@ export interface AdminSettings {
   federationAnnounceDays: number
   federationAnnouncePeerDays: number
   chatAttachmentSendLifetimeSeconds: number
+  /** The most keys one mail address's signed list may hold. */
+  mailKeysPerAddress: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

@@ -15,13 +15,27 @@ export interface Revisioned<T> {
   revision: number
 }
 
+/**
+ * A contact's signed summary. `v` is its format version (1 when absent);
+ * Rust keeps any field a newer client added, and signs every object with its
+ * keys sorted (docs/plans/format-evolution.md).
+ */
 export interface ContactSummary {
+  v?: number
   uid: string
   name: string
   emails: { address: string; label?: string }[]
   /** Contact group ids, sorted. */
   groups: string[]
-  pinnedKeys: { address: string; fingerprint: string; encrypt: boolean; sign: boolean }[]
+  /** `keyVersion` is the OpenPGP key version: 4 (40 hex digits) or 6 (64). */
+  pinnedKeys: { address: string; keyVersion: number; fingerprint: string; encrypt: boolean; sign: boolean }[]
+}
+
+const SUMMARY_FIELDS = new Set(['uid', 'name', 'emails', 'groups', 'pinnedKeys'])
+
+/** A verified summary's version and the fields a newer client added: what a save signs again. */
+export function contactSummaryRest(summary: ContactSummary): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(summary).filter(([key]) => !SUMMARY_FIELDS.has(key)))
 }
 
 /** Canonicalizes and signs revision `revision` of a summary; returns the exact JSON text to store. */
@@ -31,7 +45,7 @@ export async function signContactSummary(
   revision: number,
   summary: ContactSummary,
 ): Promise<{ summary: string; signature: string }> {
-  return (await getCryptoWasm()).signContactSummary(identityRoot, binding, revision, JSON.stringify(summary))
+  return (await getCryptoWasm()).signContactSummary(identityRoot, binding, revision, JSON.stringify({ v: 1, ...summary }))
 }
 
 /** Verifies a stored summary against the account authority, for its card's revision, and parses it. */

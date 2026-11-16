@@ -96,6 +96,8 @@ impl TryFrom<u16> for AccountRecordSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::V1),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown account-record suite {value}"
             ))),
@@ -533,6 +535,8 @@ impl TryFrom<u16> for AccountRecordPurpose {
             24 => Ok(Self::GroupPseudonymRoot),
             25 => Ok(Self::CallLinkRoot),
             26 => Ok(Self::ObjectIdKey),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown account-record purpose {value}"
             ))),

@@ -61,12 +61,12 @@ fn set_up_address(c: &Client, base: &str, user: &User) -> Address {
         sequence: 1,
         previous_hash: None,
         issued_at: "2026-10-10T12:00:00Z".into(),
-        keys: vec![MailKeyEntryV1 {
-            fingerprint: key.fingerprint,
-            sha256_fingerprint: key.sha256_fingerprint,
-            primary: true,
-            flags: DEFAULT_FLAGS,
-        }],
+        keys: vec![MailKeyEntryV1::v4(
+            key.fingerprint,
+            key.sha256_fingerprint,
+            true,
+            DEFAULT_FLAGS,
+        )],
     }
     .sign(user.identity.authority_signing_key())
     .unwrap();
@@ -1222,7 +1222,7 @@ fn next_list(
     keys: Vec<MailKeyEntryV1>,
 ) -> Value {
     let mut keys = keys;
-    keys.sort_by_key(|key| key.fingerprint);
+    keys.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
     let list = MailKeyListV1 {
         sequence: previous.list.sequence + 1,
         previous_hash: Some(previous.hash()),
@@ -1289,12 +1289,8 @@ fn address_keys_rotate_and_change_flags() {
         &new.secret_key,
     )
     .unwrap();
-    let new_entry = MailKeyEntryV1 {
-        fingerprint: new.fingerprint,
-        sha256_fingerprint: new.sha256_fingerprint,
-        primary: true,
-        flags: DEFAULT_FLAGS,
-    };
+    let new_entry =
+        MailKeyEntryV1::v4(new.fingerprint, new.sha256_fingerprint, true, DEFAULT_FLAGS);
     let rotated = next_list(
         &user,
         &list1,
@@ -1368,7 +1364,7 @@ fn address_keys_rotate_and_change_flags() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|k| k["fingerprint"] == hex::encode(old.fingerprint))
+        .find(|k| k["fingerprint"] == hex::encode(&old.fingerprint))
         .unwrap()
         .clone();
     assert_eq!(old_row["flags"], 0);
@@ -2278,7 +2274,7 @@ fn group_list(
 ) -> mail_key::SignedMailKeyListV1 {
     let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
     let mut keys = keys;
-    keys.sort_by_key(|key| key.fingerprint);
+    keys.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
     MailKeyListV1 {
         incarnation_id: hex32(
             kutup_crypto::identity::incarnation_id_from_authority_public(&signer.public_key),
@@ -2363,12 +2359,12 @@ fn shared_mailboxes() {
     // Its key lists are signed by the group's own signing key, its owner's:
     // never by the server.
     let signer = kutup_crypto::mail_group::GroupSigningKey::generate();
-    let first_entry = MailKeyEntryV1 {
-        fingerprint: first.fingerprint,
-        sha256_fingerprint: first.sha256_fingerprint,
-        primary: true,
-        flags: DEFAULT_FLAGS,
-    };
+    let first_entry = MailKeyEntryV1::v4(
+        first.fingerprint,
+        first.sha256_fingerprint,
+        true,
+        DEFAULT_FLAGS,
+    );
     let list1 = group_list(&signer, &hr, None, vec![first_entry.clone()]);
     let incarnation = alice_user.identity.incarnation_id();
     let first_key = json!({
@@ -2710,12 +2706,12 @@ fn shared_mailboxes() {
                 flags: DEFAULT_FLAGS & !mail_key::FLAG_NOT_OBSOLETE,
                 ..first_entry
             },
-            MailKeyEntryV1 {
-                fingerprint: second.fingerprint,
-                sha256_fingerprint: second.sha256_fingerprint,
-                primary: true,
-                flags: DEFAULT_FLAGS,
-            },
+            MailKeyEntryV1::v4(
+                second.fingerprint,
+                second.sha256_fingerprint,
+                true,
+                DEFAULT_FLAGS,
+            ),
         ],
     );
     let r = set_members(
@@ -5193,12 +5189,8 @@ fn an_old_addresss_keys_stay_its_accounts_to_manage() {
         &new.secret_key,
     )
     .unwrap();
-    let new_entry = MailKeyEntryV1 {
-        fingerprint: new.fingerprint,
-        sha256_fingerprint: new.sha256_fingerprint,
-        primary: true,
-        flags: DEFAULT_FLAGS,
-    };
+    let new_entry =
+        MailKeyEntryV1::v4(new.fingerprint, new.sha256_fingerprint, true, DEFAULT_FLAGS);
     let compromised = MailKeyEntryV1 {
         primary: false,
         flags: mail_key::FLAG_NOT_OBSOLETE,
@@ -5236,7 +5228,7 @@ fn an_old_addresss_keys_stay_its_accounts_to_manage() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|key| key["fingerprint"] == hex::encode(list.list.keys[0].fingerprint))
+        .find(|key| key["fingerprint"] == hex::encode(&list.list.keys[0].fingerprint))
         .expect("the first key stays to open older mail");
     assert_eq!(
         first_key["flags"],
@@ -6278,12 +6270,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
                 primary: false,
                 ..old
             },
-            MailKeyEntryV1 {
-                fingerprint: new.fingerprint,
-                sha256_fingerprint: new.sha256_fingerprint,
-                primary: true,
-                flags: DEFAULT_FLAGS,
-            },
+            MailKeyEntryV1::v4(new.fingerprint, new.sha256_fingerprint, true, DEFAULT_FLAGS),
         ],
     );
     let r = bearer(
@@ -7080,7 +7067,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <opause-{tag}@sender.test>\
             for key in &mut keys {
                 key.flags &= !mail_key::FLAG_EMAIL_NO_ENCRYPT;
             }
-            keys.sort_by_key(|key| key.fingerprint);
+            keys.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
             let list = MailKeyListV1 {
                 sequence: signed.list.sequence + 1,
                 previous_hash: Some(signed.hash()),
@@ -7161,19 +7148,17 @@ fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str)
         .unwrap()
         .json()
         .unwrap();
-    let mut keys = vec![MailKeyEntryV1 {
-        fingerprint: key.fingerprint,
-        sha256_fingerprint: key.sha256_fingerprint,
-        primary: true,
-        flags: DEFAULT_FLAGS,
-    }];
+    let mut keys = vec![MailKeyEntryV1::v4(
+        key.fingerprint,
+        key.sha256_fingerprint,
+        true,
+        DEFAULT_FLAGS,
+    )];
     if let Some(row) = listed.as_array().unwrap().iter().find(|a| a["id"] == id) {
         for old in row["keys"].as_array().unwrap() {
             keys.push(MailKeyEntryV1 {
-                fingerprint: hex::decode(old["fingerprint"].as_str().unwrap())
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
+                key_version: mail_key::KEY_VERSION_V4,
+                fingerprint: hex::decode(old["fingerprint"].as_str().unwrap()).unwrap(),
                 sha256_fingerprint: hex32(old["sha256Fingerprint"].as_str().unwrap().to_owned()),
                 primary: false,
                 flags: old["flags"].as_u64().unwrap() as u32,
@@ -7181,7 +7166,7 @@ fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str)
         }
     }
     // The format orders a list's keys by fingerprint.
-    keys.sort_by_key(|key| key.fingerprint);
+    keys.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
     let list = MailKeyListV1 {
         incarnation_id: hex32(user.identity.incarnation_id()),
         authority_key_id: hex32(user.identity.authority_key_id()),

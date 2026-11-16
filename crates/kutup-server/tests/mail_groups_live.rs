@@ -97,12 +97,7 @@ fn signer_share(signer: &GroupSigningKey, group: &str, member: &User) -> Value {
 }
 
 fn entry(key: &GeneratedAddressKey) -> MailKeyEntryV1 {
-    MailKeyEntryV1 {
-        fingerprint: key.fingerprint,
-        sha256_fingerprint: key.sha256_fingerprint,
-        primary: true,
-        flags: DEFAULT_FLAGS,
-    }
+    MailKeyEntryV1::v4(key.fingerprint, key.sha256_fingerprint, true, DEFAULT_FLAGS)
 }
 
 /// The group's chain as a browser keeps it: its lists, to sign the next.
@@ -136,7 +131,7 @@ impl Chain {
             })
             .unwrap_or_default();
         keys.push(entry(added));
-        keys.sort_by_key(|key| key.fingerprint);
+        keys.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
         let (sequence, previous_hash) = match newest {
             Some(list) if !restart => (list.list.sequence + 1, Some(list.hash())),
             _ => (1, None),

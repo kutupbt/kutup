@@ -5,6 +5,7 @@ import {
   deriveAccountIdentityKeys,
   describeExternalMailKey,
   fromBase64,
+  contactSummaryRest,
   openContactCard,
   revisionGuard,
   sealContactCard,
@@ -126,7 +127,7 @@ async function openRow(
       summary.pinnedKeys.some((p) => p.address === key.address && p.fingerprint === key.fingerprint),
     )
     const draft = { ...card.draft, name: summary.name, groups: summary.groups, keys }
-    return { id: row.id, uid: summary.uid, revision: row.revision, draft, updatedAt: row.updatedAt }
+    return { id: row.id, uid: summary.uid, revision: row.revision, draft, updatedAt: row.updatedAt, summaryRest: contactSummaryRest(summary) }
   } catch (error) {
     if (error instanceof NotInVerifiedIndexError) throw error
     console.warn('contacts: a contact did not verify or open', row.id, error)
@@ -191,7 +192,7 @@ async function withFingerprints(keys: ContactKey[]): Promise<ContactKey[]> {
   return read.filter((key): key is ContactKey => key !== null)
 }
 
-function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
+function summaryOf(uid: string, draft: ContactDraft, rest: Record<string, unknown> = {}): ContactSummary {
   const seen = new Set<string>()
   const emails = draft.emails
     .map((email) => ({ address: email.address.trim().toLowerCase(), label: email.label?.trim() || undefined }))
@@ -201,11 +202,12 @@ function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
     .filter((key) => seen.has(key.address) && key.fingerprint)
     .map(({ address, fingerprint }) => {
       const pgp = pgpFor(draft, address)
-      return { address, fingerprint, encrypt: pgp.encrypt ?? true, sign: pgp.encrypt === true || (pgp.sign ?? true) }
+      const keyVersion = fingerprint.length === 64 ? 6 : 4
+      return { address, keyVersion, fingerprint, encrypt: pgp.encrypt ?? true, sign: pgp.encrypt === true || (pgp.sign ?? true) }
     })
     .sort((a, b) => (a.address === b.address ? a.fingerprint.localeCompare(b.fingerprint) : a.address < b.address ? -1 : 1))
     .slice(0, MAX_PINNED_KEYS)
-  return { uid, name: displayName(draft), emails, groups: [...new Set(draft.groups)].sort(), pinnedKeys }
+  return { ...rest, uid, name: displayName(draft), emails, groups: [...new Set(draft.groups)].sort(), pinnedKeys }
 }
 
 /**
@@ -213,7 +215,7 @@ function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
  * revision above every one seen and above `base` (the revision an edit
  * started from; 0 for a new contact).
  */
-async function prepare(session: Session, uid: string, input: ContactDraft, base = 0) {
+async function prepare(session: Session, uid: string, input: ContactDraft, base = 0, summaryRest?: Record<string, unknown>) {
   const masterKey = toBase64(session.masterKey)
   // Keys of addresses still among the emails, each once, in order, as many as the summary holds.
   const addresses = new Set(input.emails.map((email) => email.address.trim().toLowerCase()))
@@ -221,7 +223,7 @@ async function prepare(session: Session, uid: string, input: ContactDraft, base 
     .filter((key, i, all) => addresses.has(key.address) && all.findIndex((k) => k.address === key.address && k.fingerprint === key.fingerprint) === i)
     .slice(0, MAX_PINNED_KEYS)
   const draft = { ...input, keys }
-  const summary = summaryOf(uid, draft)
+  const summary = summaryOf(uid, draft, summaryRest)
   const revision = await revisionGuard(session).next(CONTACT_SCOPE, uid, base)
   const signed = await signContactSummary(session.roots.identityRoot, session.envelopeBinding, revision, summary)
   const card = await sealContactCard(masterKey, session.envelopeBinding, uid, revision, toVCard({ ...draft, groups: summary.groups }, uid, summary.name))
@@ -241,8 +243,8 @@ export function isRevisionConflict(error: unknown): boolean {
  * {@link ContactChangedError} if the contact itself changed. Stored already (a
  * retry after a lost answer) counts as stored.
  */
-export async function putContact(session: Session, existing: Pick<Contact, 'id' | 'uid' | 'revision'>, draft: ContactDraft): Promise<void> {
-  const { body, revision } = await prepare(session, existing.uid, draft, existing.revision)
+export async function putContact(session: Session, existing: Pick<Contact, 'id' | 'uid' | 'revision' | 'summaryRest'>, draft: ContactDraft): Promise<void> {
+  const { body, revision } = await prepare(session, existing.uid, draft, existing.revision, existing.summaryRest)
   await listedContacts(session, (index) => {
     const listed = index.revision(existing.uid)
     if (listed === revision) return Promise.resolve(null)
@@ -336,7 +338,7 @@ function useContactMutation<T, R>(fn: (input: T, session: Session) => Promise<R>
 /** Creates a contact, or saves an edit made from its `revision`. */
 export function useSaveContact() {
   return useContactMutation(
-    async (input: { draft: ContactDraft; existing?: Pick<Contact, 'id' | 'uid' | 'revision'>; uid?: string }, session) => {
+    async (input: { draft: ContactDraft; existing?: Pick<Contact, 'id' | 'uid' | 'revision' | 'summaryRest'>; uid?: string }, session) => {
       // An edit made on an older revision fails with a revision conflict:
       // the person's form is not laid over another device's change.
       if (input.existing) {

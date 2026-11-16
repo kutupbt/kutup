@@ -41,6 +41,8 @@ impl TryFrom<u16> for NamedShareSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             2 => Ok(Self::XWingHkdfSha256ChaCha20Poly1305Ed25519V2),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown named-share suite {value}"
             ))),

@@ -2008,6 +2008,7 @@ impl ChatTransport for Client {
         Ok(MailboxPage {
             envelopes: pending.into_iter().take(limit as usize).collect(),
             more,
+            unsupported: Vec::new(),
         })
     }
 

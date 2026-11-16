@@ -13,16 +13,13 @@ use common::*;
 const T: u64 = 1_791_633_600_000;
 
 fn summary(name: &str) -> ContactSummaryV1 {
-    ContactSummaryV1 {
-        uid: "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70".into(),
-        name: name.into(),
-        emails: vec![ContactEmailV1 {
-            address: "ayse@example.com".into(),
-            label: None,
-        }],
-        groups: vec![],
-        pinned_keys: vec![],
-    }
+    ContactSummaryV1::new(
+        "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        name,
+        vec![ContactEmailV1::new("ayse@example.com", None)],
+        vec![],
+        vec![],
+    )
 }
 
 /// A contact body at `card_revision`, its summary signed for `signed_revision`.

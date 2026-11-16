@@ -114,6 +114,26 @@ pub fn check_extra(what: &str, extra: &Extra) -> Result<()> {
     Ok(())
 }
 
+/// The JSON of `value` with every object's keys sorted (bytewise, by
+/// UTF-8): the encoding of signed and hashed JSON (rule 7), so a reader that
+/// doesn't know a field re-encodes exactly the bytes it verified.
+pub fn to_sorted_json<T: Serialize>(value: &T) -> serde_json::Result<Vec<u8>> {
+    fn sort(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut entries: Vec<_> = map.into_iter().collect();
+                entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+                serde_json::Value::Object(entries.into_iter().map(|(k, v)| (k, sort(v))).collect())
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.into_iter().map(sort).collect())
+            }
+            other => other,
+        }
+    }
+    serde_json::to_vec(&sort(serde_json::to_value(value)?))
+}
+
 /// What an unknown code of an open enum does to its object (rule 6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenEnumClass {
@@ -271,6 +291,15 @@ mod tests {
                 Err(CryptoError::InvalidInput(_))
             ));
         }
+    }
+
+    #[test]
+    fn sorted_json_sorts_every_object() {
+        let value = serde_json::json!({"b": 1, "a": {"z": [{"y": 1, "x": 2}], "c": 3}});
+        assert_eq!(
+            to_sorted_json(&value).unwrap(),
+            br#"{"a":{"c":3,"z":[{"x":2,"y":1}]},"b":1}"#
+        );
     }
 
     #[test]

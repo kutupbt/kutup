@@ -65,6 +65,8 @@ impl TryFrom<u16> for LocalStateSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::XChaCha20Poly1305V1),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown local-state suite {value}"
             ))),
@@ -96,6 +98,8 @@ impl TryFrom<u8> for LocalStatePurpose {
             2 => Ok(Self::SessionFork),
             3 => Ok(Self::WebSession),
             4 => Ok(Self::ManifestPins),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown local-state purpose {value}"
             ))),

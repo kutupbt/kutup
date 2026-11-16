@@ -3018,6 +3018,10 @@ pub fn armor_mail_public_key(public_key_base64: &str) -> Result<String, JsValue>
 #[derive(serde::Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MailKeyEntryView {
+    /// The OpenPGP key version (4 when absent): a list keeps entries of
+    /// versions this reader doesn't use (docs/plans/format-evolution.md).
+    #[serde(default = "v4_key")]
+    key_version: u8,
     fingerprint: String,
     sha256_fingerprint: String,
     primary: bool,
@@ -3059,6 +3063,10 @@ fn hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], JsValu
         .map_err(|_| js_error(&format!("{field} has the wrong length")))
 }
 
+fn v4_key() -> u8 {
+    kutup_crypto::mail_key::KEY_VERSION_V4
+}
+
 fn signed_list_view(signed: &kutup_crypto::mail_key::SignedMailKeyListV1) -> SignedMailKeyListView {
     let list = &signed.list;
     SignedMailKeyListView {
@@ -3073,7 +3081,8 @@ fn signed_list_view(signed: &kutup_crypto::mail_key::SignedMailKeyListV1) -> Sig
             .keys
             .iter()
             .map(|key| MailKeyEntryView {
-                fingerprint: hex::encode(key.fingerprint),
+                key_version: key.key_version,
+                fingerprint: hex::encode(&key.fingerprint),
                 sha256_fingerprint: hex::encode(key.sha256_fingerprint),
                 primary: key.primary,
                 flags: key.flags,
@@ -3091,8 +3100,13 @@ fn mail_key_list(
 ) -> Result<kutup_crypto::mail_key::MailKeyListV1, JsValue> {
     let mut keys = Vec::with_capacity(input.keys.len());
     for key in &input.keys {
+        let fingerprint = hex::decode(&key.fingerprint)
+            .ok()
+            .filter(|bytes| hex::encode(bytes) == key.fingerprint)
+            .ok_or_else(|| js_error("fingerprint must be lowercase hex"))?;
         keys.push(kutup_crypto::mail_key::MailKeyEntryV1 {
-            fingerprint: hex_array(&key.fingerprint, "fingerprint")?,
+            key_version: key.key_version,
+            fingerprint,
             sha256_fingerprint: hex_array(&key.sha256_fingerprint, "sha256Fingerprint")?,
             primary: key.primary,
             flags: key.flags,
@@ -3900,7 +3914,10 @@ pub fn verify_contact_summary(
         &authority,
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&parsed)
+    // Plain objects, unknown fields included (a flattened map would
+    // otherwise become a JavaScript Map).
+    parsed
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
         .map_err(|error| js_error(&format!("encode summary: {error}")))
 }
 

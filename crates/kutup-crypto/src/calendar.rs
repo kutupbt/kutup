@@ -32,6 +32,7 @@ use zeroize::Zeroizing;
 
 use crate::calendar_event::{CalendarEncrypted, CalendarSigned, SharedEncrypted, SharedSigned};
 use crate::error::{CryptoError, Result};
+use crate::format::Extra;
 use crate::mail_key::{
     backend, encryption_subkey, fingerprint_of, generate_key, packet_extent, parse_recipient,
     sign_detached, verify_detached, FINGERPRINT_LEN,
@@ -194,12 +195,34 @@ impl UnlockedCalendarKey {
         description: &str,
         author_secret_key: &[u8],
     ) -> Result<SealedMetadata> {
+        self.seal_metadata_keeping(
+            calendar_id,
+            name,
+            description,
+            &CalendarMetadataRest::default(),
+            author_secret_key,
+        )
+    }
+
+    /// [`Self::seal_metadata`] for a rename: the version and the fields a
+    /// newer client wrote (`rest`, from the opened metadata) are sealed again
+    /// unchanged (docs/plans/format-evolution.md, rule 3).
+    pub fn seal_metadata_keeping(
+        &self,
+        calendar_id: &str,
+        name: &str,
+        description: &str,
+        rest: &CalendarMetadataRest,
+        author_secret_key: &[u8],
+    ) -> Result<SealedMetadata> {
         let metadata = CalendarMetadataV1 {
-            version: 1,
+            version: rest.v,
+            min: rest.min,
             calendar_id: calendar_id.to_owned(),
             fingerprint: hex::encode(self.fingerprint),
             name: name.to_owned(),
             description: description.to_owned(),
+            extra: rest.extra.clone(),
         };
         seal_metadata_to(&metadata, &self.public, author_secret_key)
     }
@@ -778,17 +801,57 @@ pub struct SealedMetadata {
     pub signature: String,
 }
 
-/// A calendar's name and description.
+/// The newest calendar metadata version this reader knows.
+pub const CALENDAR_METADATA_VERSION: u16 = 1;
+
+/// A calendar's name and description: `v` first, `min` when below it, and
+/// the fields a newer client added, kept (docs/plans/format-evolution.md).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct CalendarMetadataV1 {
+    #[serde(rename = "v")]
     pub version: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u16>,
     /// The calendar it names, and the fingerprint (hex) of its key: signed
     /// with the name, so a server can't serve it under another calendar.
     pub calendar_id: String,
     pub fingerprint: String,
     pub name: String,
     pub description: String,
+    #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    pub extra: Extra,
+}
+
+/// What a rename seals again besides the name and description: the
+/// metadata's version and the fields a newer client added.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CalendarMetadataRest {
+    pub v: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u16>,
+    #[serde(flatten, default)]
+    pub extra: Extra,
+}
+
+impl Default for CalendarMetadataRest {
+    fn default() -> Self {
+        Self {
+            v: CALENDAR_METADATA_VERSION,
+            min: None,
+            extra: Extra::new(),
+        }
+    }
+}
+
+impl CalendarMetadataV1 {
+    /// Its version and unknown fields, for [`UnlockedCalendarKey::seal_metadata_keeping`].
+    pub fn rest(&self) -> CalendarMetadataRest {
+        CalendarMetadataRest {
+            v: self.version,
+            min: self.min,
+            extra: self.extra.clone(),
+        }
+    }
 }
 
 /// The longest name and description, in characters (Proton's).
@@ -797,8 +860,14 @@ pub const MAX_CALENDAR_DESCRIPTION_CHARS: usize = 255;
 
 impl CalendarMetadataV1 {
     fn check(&self) -> Result<()> {
-        if self.version != 1
-            || self.calendar_id.is_empty()
+        crate::format::check_version(
+            "calendar metadata",
+            self.version,
+            self.min,
+            CALENDAR_METADATA_VERSION,
+        )?;
+        crate::format::check_extra("calendar metadata", &self.extra)?;
+        if self.calendar_id.is_empty()
             || self.calendar_id.len() > 64
             || self.fingerprint.len() != 2 * FINGERPRINT_LEN
             || self.name.trim().is_empty()
@@ -840,6 +909,7 @@ fn open_metadata_with(
 ) -> Result<(CalendarMetadataV1, bool)> {
     let key = open_key_packet(&sealed.key_packet, calendar_secret_key)?;
     let json = decrypt_data_packet(&key, &sealed.data_packet)?;
+    crate::format::check_json_version("calendar metadata", &json, CALENDAR_METADATA_VERSION)?;
     let metadata: CalendarMetadataV1 = serde_json::from_slice(&json)
         .map_err(|_| CryptoError::InvalidInput("calendar metadata does not parse".into()))?;
     metadata.check()?;
@@ -1074,6 +1144,7 @@ mod tests {
                 exdates: Vec::new(),
                 organizer: None,
                 sequence: 0,
+                other: Vec::new(),
             },
             shared_encrypted: SharedEncrypted {
                 uid: uid.into(),
@@ -1087,6 +1158,7 @@ mod tests {
                 exdates: Vec::new(),
                 status: None,
                 transp: None,
+                other: Vec::new(),
             },
             calendar_encrypted: None,
         }

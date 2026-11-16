@@ -3560,6 +3560,8 @@ struct ReceiveReportView {
     duplicates: Vec<String>,
     /// Unreadable envelopes given up on, the sender's session refreshed.
     repaired: Vec<String>,
+    /// Envelopes newer than this client, left on the server unread.
+    unsupported: Vec<String>,
     /// Queued messages that could not be delivered on this pass.
     send_failures: Vec<SendFailureView>,
     /// Group invitations that arrived.
@@ -3605,6 +3607,7 @@ impl From<ReceiveReport> for ReceiveReportView {
                 .collect(),
             duplicates: report.duplicates,
             repaired: report.repaired,
+            unsupported: report.unsupported,
             send_failures: Vec::new(),
             group_invites: report
                 .group_invites

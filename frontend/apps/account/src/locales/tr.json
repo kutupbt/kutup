@@ -785,6 +785,8 @@
       "groupLinkJoinsRelayHint": "Burada barındırılan tüm gruplar için aynısı.",
       "multi": {
         "range": "{{min}} ile {{max}} arasında.",
+        "chatGroupMaxMembers": "Bir gruptaki üye sayısı",
+        "chatGroupMaxMembersHint": "Bu sunucuda barındırılan bir grubun en çok üye ve açık davet sayısı. Zaten daha büyük olan gruplar üyelerini korur.",
         "chatMultiMaxRecipients": "Bir grup gönderimindeki hesap sayısı",
         "chatMultiMaxRecipientsHint": "Bir grup iletisinin tek istekte ulaştığı, bu sunucudaki üye sayısı.",
         "chatMultiMaxMessageBytes": "Üye başına en büyük grup iletisi (bayt)",
@@ -928,6 +930,12 @@
         "driveStreamResponseMaxBytesHint": "Aralıklı bir indirme yanıtının taşıdığı en fazla bayt; sunucular arasında da.",
         "driveStreamBlobFallbackMaxBytes": "Bellekten oynatılan en büyük dosya (bayt)",
         "driveStreamBlobFallbackMaxBytesHint": "Tarayıcının akış yapamadığı yerde, bu boyuta kadar dosyalar oynatmak için tamamen belleğe yüklenir."
+      },
+      "mail": "Posta anahtarları",
+      "mailHint": "Bir e-posta adresinin kaç şifreleme anahtarı tutabileceği.",
+      "mailLimits": {
+        "mailKeysPerAddress": "Adres başına anahtar",
+        "mailKeysPerAddressHint": "Her adres güncel anahtarını ve eski postaları okumak için eskilerini tutar. Zaten daha çok anahtar tutan listeler onları korur."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "İlk bekleme (saniye)",

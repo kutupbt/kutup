@@ -52,6 +52,8 @@ impl TryFrom<u16> for ChatBackupSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::HkdfSha256XChaCha20Poly1305V1),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat backup suite {value}"
             ))),
@@ -84,6 +86,8 @@ impl TryFrom<u8> for ChatBackupProtectionDomainV1 {
     fn try_from(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::StandardChat),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat backup protection domain {value}"
             ))),
@@ -125,6 +129,8 @@ impl TryFrom<u8> for ChatBackupObjectPurposeV1 {
         match value {
             1 => Ok(Self::BaseSnapshot),
             2 => Ok(Self::EventSegment),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat backup object purpose {value}"
             ))),

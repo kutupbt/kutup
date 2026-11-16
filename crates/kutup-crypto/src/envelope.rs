@@ -60,6 +60,8 @@ impl TryFrom<u16> for CollabFrameSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::XChaCha20Poly1305Ed25519V1),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown collaboration frame suite {value}"
             ))),

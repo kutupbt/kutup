@@ -227,22 +227,22 @@ pub async fn publish(
         .iter()
         .map(
             |(fingerprint, sha256, flags)| -> AppResult<MailKeyEntryV1> {
-                Ok(MailKeyEntryV1 {
-                    fingerprint: hex_array(fingerprint)?,
-                    sha256_fingerprint: hex_array(sha256)?,
-                    primary: false,
-                    flags: *flags as u32 & !FLAG_NOT_OBSOLETE,
-                })
+                Ok(MailKeyEntryV1::v4(
+                    hex_array(fingerprint)?,
+                    hex_array(sha256)?,
+                    false,
+                    *flags as u32 & !FLAG_NOT_OBSOLETE,
+                ))
             },
         )
         .collect::<AppResult<Vec<_>>>()?;
-    expected.push(MailKeyEntryV1 {
-        fingerprint: info.fingerprint,
-        sha256_fingerprint: info.sha256_fingerprint,
-        primary: true,
-        flags: DEFAULT_FLAGS,
-    });
-    expected.sort_by_key(|key| key.fingerprint);
+    expected.push(MailKeyEntryV1::v4(
+        info.fingerprint,
+        info.sha256_fingerprint,
+        true,
+        DEFAULT_FLAGS,
+    ));
+    expected.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
     // An owner or manager deleted or deactivated may hold the signer's seed:
     // only a new signer publishes, and it ends that.
     let needs_new_signer: bool =

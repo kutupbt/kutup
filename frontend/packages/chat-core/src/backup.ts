@@ -1795,8 +1795,9 @@ function applyRecords(
 
 /** Deterministic reduction for concurrent authorized device chains. A
  * tombstone always dominates live content, then the highest mutation wins.
- * Equal generations prefer confirmed delivery and finally canonical JSON as
- * a stable order-independent tie-breaker. */
+ * Equal generations prefer confirmed delivery and finally the record's JSON
+ * as a stable order-independent tie-breaker, compared byte by byte in UTF-8
+ * (docs/plans/format-evolution.md, rule 10), never as JavaScript strings. */
 function preferBackupRecord(
   candidate: BackupDisplayRecord,
   current: BackupDisplayRecord,
@@ -1806,7 +1807,16 @@ function preferBackupRecord(
     return candidate.mutationSequence > current.mutationSequence
   }
   if (candidate.delivered !== current.delivered) return candidate.delivered
-  return JSON.stringify(candidate) > JSON.stringify(current)
+  return compareBytes(encoder.encode(JSON.stringify(candidate)), encoder.encode(JSON.stringify(current))) > 0
+}
+
+/** Bytewise order: the first differing byte, then the shorter first. */
+export function compareBytes(left: Uint8Array, right: Uint8Array): number {
+  const length = Math.min(left.length, right.length)
+  for (let index = 0; index < length; index++) {
+    if (left[index] !== right[index]) return left[index]! - right[index]!
+  }
+  return left.length - right.length
 }
 
 function restoredMedia(records: StoredRecord[]): StoredBackupMedia[] {

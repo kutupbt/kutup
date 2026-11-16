@@ -349,16 +349,13 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
 
 /// A contact body for `uid` at `revision`.
 fn contact(user: &User, uid: &str, revision: u64) -> Value {
-    let summary = ContactSummaryV1 {
-        uid: uid.into(),
-        name: "Ayşe".into(),
-        emails: vec![ContactEmailV1 {
-            address: "ayse@example.com".into(),
-            label: None,
-        }],
-        groups: vec![],
-        pinned_keys: vec![],
-    };
+    let summary = ContactSummaryV1::new(
+        uid,
+        "Ayşe",
+        vec![ContactEmailV1::new("ayse@example.com", None)],
+        vec![],
+        vec![],
+    );
     let (bytes, signature) = contact_card::sign_summary(
         &summary,
         &user.binding,

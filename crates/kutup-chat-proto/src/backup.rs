@@ -714,11 +714,18 @@ pub struct ChatBackupDeviceHeadV1 {
     pub digest: String,
 }
 
+/// A version above this reader's is *newer than me*, not a failed segment
+/// (docs/plans/format-evolution.md, rule 5): its error starts with
+/// [`kutup_crypto::error::NEWER_FORMAT_PREFIX`], so a client keeps the
+/// object and asks for an update instead of repairing anything.
 fn require_version(version: u16) -> Result<(), String> {
-    if version == CHAT_BACKUP_PROTOCOL_VERSION {
-        Ok(())
-    } else {
-        Err("unsupported Chat backup version".into())
+    match version {
+        CHAT_BACKUP_PROTOCOL_VERSION => Ok(()),
+        newer if newer > CHAT_BACKUP_PROTOCOL_VERSION => Err(format!(
+            "{}Chat backup version {newer}",
+            kutup_crypto::error::NEWER_FORMAT_PREFIX
+        )),
+        _ => Err("unsupported Chat backup version".into()),
     }
 }
 

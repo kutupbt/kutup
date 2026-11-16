@@ -5,7 +5,7 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use kutup_crypto::calendar::{
-    self, Passphrase, SealedEventV1, SealedMetadataV1, UnlockedCalendarKey,
+    self, CalendarMetadataRest, Passphrase, SealedEventV1, SealedMetadataV1, UnlockedCalendarKey,
 };
 use kutup_crypto::calendar_event::{self, EventFieldsV1};
 use kutup_crypto::calendar_recurrence;
@@ -54,12 +54,15 @@ struct SealedPassphrase {
     key_packet: String,
 }
 
-/// A calendar's name and description, as a client gives them.
+/// A calendar's name and description, as a client gives them; for a rename,
+/// with the `rest` its opened metadata gave (docs/plans/format-evolution.md).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Names {
     name: String,
     description: String,
+    #[serde(default)]
+    rest: Option<CalendarMetadataRest>,
 }
 
 /// Makes a calendar owned by the signed-in member's address key, under the
@@ -164,6 +167,8 @@ struct OpenedMetadata {
     name: String,
     description: String,
     verified: bool,
+    /// The version and a newer client's fields: passed back with a rename.
+    rest: CalendarMetadataRest,
 }
 
 #[wasm_bindgen(js_class = UnlockedCalendar)]
@@ -216,6 +221,7 @@ impl UnlockedCalendarJs {
             )
             .map_err(crypto_error)?;
         to_js(&OpenedMetadata {
+            rest: metadata.rest(),
             name: metadata.name,
             description: metadata.description,
             verified,
@@ -277,7 +283,13 @@ impl UnlockedCalendarJs {
         let names: Names = from_js(names, "names")?;
         let sealed = self
             .key
-            .seal_metadata(calendar_id, &names.name, &names.description, &author_secret)
+            .seal_metadata_keeping(
+                calendar_id,
+                &names.name,
+                &names.description,
+                &names.rest.unwrap_or_default(),
+                &author_secret,
+            )
             .map_err(crypto_error)?;
         to_js(&SealedMetadataV1::of(&sealed))
     }
