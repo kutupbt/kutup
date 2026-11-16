@@ -91,19 +91,32 @@ MK (random, generation mk_gen, wrapped by password and recovery)
 - **Identity rotation** (a device lost or stolen, since every device holds
   the identity root): a new identity root, `id_gen + 1`, and always a new MK
   as well. Contacts see a safety-number change, as on Signal. Continuity for
-  the account itself comes from a succession statement: the new authority's
-  public key signed by the old authority and the reverse, kept in the
-  manifest history. A thief holds the old authority too, so the statement
-  proves nothing to a contact on its own; its use is that the owner's other
-  devices and old signatures (epoch chains, block manifests) stay verifiable
-  under "an authority of this account at the time".
+  the account comes from successions in the account manifest
+  (`successions`, newest last, at most 16). Each entry names the account id,
+  the previous authority and its identity-root generation, the new authority
+  and its generation, and the hash of the last manifest the previous
+  authority signed. The previous authority signs the entry under
+  `kutup/account/succession/by-previous/v1`, the new one under
+  `kutup/account/succession/by-new/v1`. Readers verify every entry, that the
+  entries chain (authority to authority, generation to the next), and that
+  the newest ends at the manifest's own authority. They never trust more
+  because of it: a thief holds the old authority too, so contacts still see
+  a safety-number change. Its use is that the owner's other devices, and old
+  signatures (epoch chains, block manifests), stay verifiable under an
+  authority this account had at the time, and that a device whose pin is
+  several rotations old can follow the chain. No writer adds one before the
+  identity rotation flow exists; a manifest without any signs the same bytes
+  as before the field existed (field added before the wipe, 2026-11-16).
 - **Releasing escrow is an identity rotation.** An escrow holds the MK and
   the identity root, and through the MK the other stored roots, so an
   organization that gave up escrow could still sign as the member and link
   the member's group pseudonyms, call links and record ids. Releasing escrow
-  therefore rotates all five stored roots (identity, Drive, pseudonym,
-  call-link, object-id key), each to its next generation, together with a
-  new MK. Every root record carries its generation for this reason (decided
+  therefore rotates the MK (the organization held it) and the identity,
+  Drive and object-id roots, each to its next generation. Whether the
+  pseudonym and call-link roots rotate too is open: rotating is a visible
+  leave-and-join in every group, keeping them lets the former admin link the
+  member's pseudonyms; the format allows both and the post-wipe flow
+  decides. Every root record carries its generation for this reason (decided
   2026-11-14, after the identity-root review); the flow itself is built
   with the identity rotation after the wipe.
 
