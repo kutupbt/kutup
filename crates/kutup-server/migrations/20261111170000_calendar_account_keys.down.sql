@@ -1,13 +1,6 @@
 -- Back to passphrases on address keys: the shares can't be turned back into
--- key packets, so the calendars go, their storage refunded.
-WITH charged AS (
-    SELECT c.owner_id,
-           SUM(c.bytes + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e
-                                    WHERE e.calendar_id = c.id), 0)) AS bytes
-      FROM calendars c GROUP BY c.owner_id
-)
-UPDATE users u SET storage_used_bytes = GREATEST(u.storage_used_bytes - charged.bytes, 0)
-  FROM charged WHERE u.id = charged.owner_id;
+-- key packets, so the calendars go (the quota reconciler gives the storage
+-- back).
 DELETE FROM calendars;
 
 ALTER TABLE calendar_members

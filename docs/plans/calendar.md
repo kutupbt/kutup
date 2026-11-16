@@ -407,8 +407,8 @@ manifest), so the passphrase goes there:
   signatures remain address-bound and not post-quantum until Mail's keys
   move).
 - **Migration** `20261111170000_calendar_account_keys`: the calendars made
-  before go (their passphrases can't be converted on the server), their
-  storage refunded. kutup.dev is wiped with this release.
+  before go (their passphrases can't be converted on the server); the quota
+  reconciler gives the storage back. kutup.dev is wiped with this release.
 - **E3** shares with other members through the same envelope
   (`calendar::seal_passphrase`), checking the owner's signing key and the
   member's HPKE key against their verified manifests.

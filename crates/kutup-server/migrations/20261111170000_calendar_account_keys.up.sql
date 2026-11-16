@@ -10,15 +10,8 @@
 -- name an address; events and the sealed name stay signed by address keys.
 --
 -- No passphrase can be converted on the server, so the calendars made
--- before go, their storage refunded (kutup.dev is wiped with this release).
-WITH charged AS (
-    SELECT c.owner_id,
-           SUM(c.bytes + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e
-                                    WHERE e.calendar_id = c.id), 0)) AS bytes
-      FROM calendars c GROUP BY c.owner_id
-)
-UPDATE users u SET storage_used_bytes = GREATEST(u.storage_used_bytes - charged.bytes, 0)
-  FROM charged WHERE u.id = charged.owner_id;
+-- before go (kutup.dev is wiped with this release); the quota reconciler
+-- gives their owners the storage back, as only `storage_pool` charges.
 DELETE FROM calendars;
 
 ALTER TABLE calendars
