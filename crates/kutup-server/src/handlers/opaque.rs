@@ -581,6 +581,9 @@ pub async fn register_start(
                     Purpose::Recovery,
                     Purpose::Rotate,
                     Purpose::AdminReset,
+                    // A master-key rotation registers the same password again;
+                    // its finish is the rotation itself (`master_key::rotate`).
+                    Purpose::MasterKeyRotation,
                 ],
             )
             .await?

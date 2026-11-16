@@ -158,8 +158,11 @@ pub async fn rotate(
 
     // Each root at the newest generation the account keeps of it, once.
     let newest: Vec<(i16, Vec<u8>)> = sqlx::query_as(
-        "SELECT purpose, max(object) FROM account_roots
-          WHERE user_id = $1 AND purpose BETWEEN 22 AND 26 GROUP BY purpose",
+        // The object is the generation, 4 bytes big-endian: byte order is
+        // number order (no max() for bytea).
+        "SELECT DISTINCT ON (purpose) purpose, object FROM account_roots
+          WHERE user_id = $1 AND purpose BETWEEN 22 AND 26
+          ORDER BY purpose, object DESC",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)

@@ -122,39 +122,38 @@ pub fn generate() -> (Zeroizing<[u8; 32]>, Vec<u8>, KeyId) {
     (seed, public, id)
 }
 
-/// Someone a document names: their account and its incarnation (32 bytes,
-/// `AccountIdentityKeysV1::incarnation_id` in hex).
+/// Someone a document names: their account's permanent id (16 bytes, never
+/// its server's name, which is routing and can change) and its incarnation
+/// (32 bytes, `AccountIdentityKeysV1::incarnation_id` in hex).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Party {
-    pub account: AccountRef,
+    pub account_id: [u8; 16],
     pub incarnation_id: [u8; 32],
 }
 
 impl Party {
     pub fn new(account: &AccountRef, incarnation_id: &str) -> Result<Self> {
         Ok(Self {
-            account: account.clone(),
+            account_id: crate::drive_object::parse_canonical_uuid(&account.account_id, "party")?,
             incarnation_id: hex_32(incarnation_id, "incarnation")?,
         })
     }
 
+    /// Whether `account` is this party's account (by its id).
+    pub fn is_account(&self, account: &AccountRef) -> bool {
+        crate::drive_object::parse_canonical_uuid(&account.account_id, "party")
+            .is_ok_and(|id| id == self.account_id)
+    }
+
     fn put(&self, out: &mut Vec<u8>) -> Result<()> {
-        put(out, &self.account.bytes())?;
+        out.extend_from_slice(&self.account_id);
         out.extend_from_slice(&self.incarnation_id);
         Ok(())
     }
 
     fn take(reader: &mut Reader<'_>) -> Result<Self> {
-        let bytes = reader.prefixed()?;
-        let (account, used) = AccountRef::read(bytes)
-            .map_err(|_| CryptoError::InvalidInput("organization document: account".into()))?;
-        if used != bytes.len() {
-            return Err(CryptoError::InvalidInput(
-                "organization document: account has trailing bytes".into(),
-            ));
-        }
         Ok(Self {
-            account,
+            account_id: reader.array()?,
             incarnation_id: reader.array()?,
         })
     }
@@ -455,7 +454,7 @@ impl KeyShareV1 {
         granter: &Party,
         granter_keys: &AccountIdentityKeysV1,
     ) -> Result<Vec<u8>> {
-        if recipient_key.account != recipient.account
+        if !recipient.is_account(&recipient_key.account)
             || !recipient.is_authority(&recipient_key.authority)?
             || !granter.is_authority(&granter_keys.authority_public_key())?
         {
