@@ -1370,12 +1370,25 @@ fn signed(
         .map_err(|error| js_error(&format!("encode account manifest: {error}")))
 }
 
+/// A manifest that didn't parse: a newer one's error as it is (it starts
+/// with the *newer than me* prefix, which the web checks), any other named.
+fn manifest_error(what: &str, error: impl std::fmt::Display) -> JsValue {
+    let error = error.to_string();
+    // serde-wasm-bindgen shows its message as a JS `Error` ("Error: …").
+    let message = error.strip_prefix("Error: ").unwrap_or(&error);
+    if message.starts_with(kutup_crypto::error::NEWER_FORMAT_PREFIX) {
+        js_error(message)
+    } else {
+        js_error(&format!("{what}: {error}"))
+    }
+}
+
 fn head_manifest(head: JsValue) -> Result<Option<kutup_chat_proto::AccountManifestV3>, JsValue> {
     if head.is_null() || head.is_undefined() {
         return Ok(None);
     }
     let head: kutup_chat_proto::AccountManifestV3 = serde_wasm_bindgen::from_value(head)
-        .map_err(|error| js_error(&format!("account manifest: {error}")))?;
+        .map_err(|error| manifest_error("account manifest", error))?;
     head.verify().map_err(|error| js_error(&error))?;
     Ok(Some(head))
 }
@@ -1393,8 +1406,12 @@ pub fn list_device_in_manifest(
     identity_root_base64: &str,
     account: &str,
 ) -> Result<JsValue, JsValue> {
-    let entry: kutup_chat_proto::AccountManifestDeviceV3 = serde_wasm_bindgen::from_value(entry)
-        .map_err(|error| js_error(&format!("manifest entry: {error}")))?;
+    let mut entry: kutup_chat_proto::AccountManifestDeviceV3 =
+        serde_wasm_bindgen::from_value(entry)
+            .map_err(|error| js_error(&format!("manifest entry: {error}")))?;
+    // The entry is this device's: it lists what this build reads.
+    entry.capabilities =
+        kutup_chat_proto::Capability::of_this_build(&entry.kind, entry.chat.is_some());
     entry.validate().map_err(|error| js_error(&error))?;
     let keys = account_keys(identity_root_base64)?;
     let head = head_manifest(head)?;
@@ -1416,6 +1433,15 @@ pub fn list_device_in_manifest(
         ),
     };
     signed(next, head.as_ref(), &keys)
+}
+
+/// The capability codes a device of `kind` of this build lists in its
+/// manifest entry (`chat`: it takes Chat): a device whose entry lists others
+/// lists itself again.
+#[wasm_bindgen(js_name = deviceCapabilities)]
+pub fn device_capabilities(kind: &str, chat: bool) -> Result<Vec<u16>, JsValue> {
+    let kind = kutup_chat_proto::DeviceKind::parse(kind).map_err(|error| js_error(&error))?;
+    Ok(kutup_chat_proto::Capability::of_this_build(&kind, chat))
 }
 
 /// Checks `head`, the account's head as its server gave it (null: it has
@@ -1449,7 +1475,7 @@ pub fn check_own_manifest_head(
     } else {
         Some(
             serde_wasm_bindgen::from_value(head)
-                .map_err(|error| js_error(&format!("account manifest: {error}")))?,
+                .map_err(|error| manifest_error("account manifest", error))?,
         )
     };
     let next = kutup_chat_proto::AccountManifestPinV1::check(
@@ -4328,13 +4354,13 @@ impl CollabSender {
         new_incarnation: bool,
     ) -> Result<(), JsValue> {
         let head: kutup_chat_proto::AccountManifestV3 = serde_wasm_bindgen::from_value(head)
-            .map_err(|error| js_error(&format!("account manifest: {error}")))?;
+            .map_err(|error| manifest_error("account manifest", error))?;
         let history: Vec<kutup_chat_proto::AccountManifestV3> =
             if history.is_null() || history.is_undefined() {
                 Vec::new()
             } else {
                 serde_wasm_bindgen::from_value(history)
-                    .map_err(|error| js_error(&format!("manifest history: {error}")))?
+                    .map_err(|error| manifest_error("manifest history", error))?
             };
         self.inner
             .take_head(head, &history, new_incarnation)
@@ -4346,7 +4372,7 @@ impl CollabSender {
     #[wasm_bindgen(js_name = takeHistory)]
     pub fn take_history(&mut self, run: JsValue) -> Result<(), JsValue> {
         let run: Vec<kutup_chat_proto::AccountManifestV3> = serde_wasm_bindgen::from_value(run)
-            .map_err(|error| js_error(&format!("manifest history: {error}")))?;
+            .map_err(|error| manifest_error("manifest history", error))?;
         self.inner
             .take_history(&run)
             .map_err(|error| js_error(&error))

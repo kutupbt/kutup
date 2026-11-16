@@ -55,6 +55,7 @@ without another wipe. As built on `wipe/format-evolution`:
 | Chat bodies, provisioning message | unknown fields ignored; any emoji is a reaction |
 | Chat mailbox page | an envelope of an unknown type or suite is paged past, alone |
 | Chat backup | records carry a `type` (*skip*: unknown types kept); a newer version, or an object of an unknown suite or purpose (a later chunked base), is *newer than me* |
+| Account manifest (`AccountManifestV3`) | `manifestVersion` and `minVersion` read before the fields (rule 4: a newer one is *newer than me*); per device a signed list of capability codes (`u16`, ascending, unknown kept and ignored; registry `kutup_chat_proto::capabilities`); a signed manifest-level `extensions` list (code and bytes, unknown kept); a device kind this build doesn't know is kept when it carries no Chat keys and *newer than me* when it does. Vector: `account-manifest-v3.json` |
 
 `AccountRecordV1` (docs/plans/w1-account-record.md) is encoded as magic
 `KUTPAR1\0`, big-endian suite ID (1), big-endian u16 purpose, the big-endian

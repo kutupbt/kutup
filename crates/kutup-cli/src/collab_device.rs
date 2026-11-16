@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountManifestDeviceV3, AccountManifestPinV1, AccountManifestV3, DeviceKind,
+    AccountManifestDeviceV3, AccountManifestPinV1, AccountManifestV3, Capability, DeviceKind,
     RegisterDeviceRequestV1,
 };
 use kutup_crypto::account_ref::AccountRef;
@@ -165,16 +165,36 @@ impl<'a> Signer<'a> {
             return Ok(None);
         };
         let key = STANDARD.encode(frame_key(&seed));
-        let listed = head
+        let Some(entry) = head
             .device(kept.device_id)
-            .is_some_and(|entry| entry.frame_key.as_deref() == Some(key.as_str()));
-        Ok(listed.then(|| Device {
+            .filter(|entry| entry.frame_key.as_deref() == Some(key.as_str()))
+        else {
+            return Ok(None);
+        };
+        let mut device = Device {
             id: kept.device_id,
             seed: Zeroizing::new(seed),
             credential: Zeroizing::new(credential),
             account: self.account.clone(),
             manifest_sequence: head.sequence,
-        }))
+        };
+        // An update that reads something new lists itself again with it
+        // (docs/plans/format-evolution.md, rule 8).
+        let own = Capability::of_this_build(&entry.kind, entry.chat.is_some());
+        if entry.capabilities != own {
+            let id = device.id;
+            device.manifest_sequence = self
+                .publish(&device.header(), |devices| {
+                    let entry = devices
+                        .iter_mut()
+                        .find(|listed| listed.device_id == id)
+                        .ok_or_else(|| anyhow!("the account no longer lists this CLI"))?;
+                    entry.capabilities = own.clone();
+                    Ok(())
+                })
+                .context("list this CLI's capabilities in the account's manifest")?;
+        }
+        Ok(Some(device))
     }
 
     /// Registers a new device, lists it in the account's manifest, and keeps
@@ -201,13 +221,8 @@ impl<'a> Signer<'a> {
             account: self.account.clone(),
             manifest_sequence: 0,
         };
-        let entry = AccountManifestDeviceV3 {
-            device_id: device.id,
-            kind: DeviceKind::Cli,
-            chat: None,
-            frame_key: Some(key),
-            session: registered.session,
-        };
+        let entry =
+            AccountManifestDeviceV3::editing(device.id, DeviceKind::Cli, key, registered.session);
         let id = device.id;
         device.manifest_sequence = self
             .publish(&device.header(), |devices| {
@@ -284,13 +299,12 @@ mod tests {
     use super::*;
 
     fn editor(device_id: u32, byte: u8) -> AccountManifestDeviceV3 {
-        AccountManifestDeviceV3 {
+        AccountManifestDeviceV3::editing(
             device_id,
-            kind: DeviceKind::Cli,
-            chat: None,
-            frame_key: Some(STANDARD.encode(frame_key(&[byte; 32]))),
-            session: "ab".repeat(32),
-        }
+            DeviceKind::Cli,
+            STANDARD.encode(frame_key(&[byte; 32])),
+            "ab".repeat(32),
+        )
     }
 
     /// The heads a server could serve the CLI to have it sign their

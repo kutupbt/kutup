@@ -1252,6 +1252,32 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   assert.equal(signIn(record, 'browser password').openMasterKey(envelope, v.keyBinding), v.masterKey)
 }
 
+// The account manifest (kutup-chat-proto account_identity,
+// docs/plans/format-evolution.md): capabilities, extensions and a device kind
+// this build doesn't know verify and are kept; a newer version is *newer than
+// me*, not corrupt; the same signing bytes as Rust (the pin's hash).
+{
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-chat-proto/tests/vectors/account-manifest-v3.json`, 'utf8'))
+  const isNewer = (error) => String(error).startsWith('newer format: ')
+  for (const [name, c] of Object.entries(v)) {
+    const account = `aci:${c.manifest.account.accountId}@${c.manifest.account.server}`
+    const sender = new crypto.CollabSender(account, null)
+    try {
+      if (c.outcome === 'ok') {
+        sender.takeHead(c.manifest, null, false)
+        assert.equal(sender.pin().hash, c.manifestHash, name)
+      } else {
+        assert.throws(() => sender.takeHead(c.manifest, null, false), (error) => isNewer(error) === (c.outcome === 'newer'), name)
+      }
+    } finally {
+      sender.free()
+    }
+  }
+  assert.deepEqual(Array.from(crypto.deviceCapabilities('chat', true)), [1])
+  assert.deepEqual(Array.from(crypto.deviceCapabilities('editor', false)), [2])
+  assert.throws(() => crypto.deviceCapabilities('watch', false))
+}
+
 // The account head (kutup-crypto account_head, docs/plans/rollback-protection.md):
 // the browser computes the same scope digests and heads, tells the same
 // outcomes apart, and checks indexes only against a head it verified.

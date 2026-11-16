@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 mod account_identity;
 mod backup;
 mod calls;
+pub mod capabilities;
 pub mod contact_list;
 pub mod content;
 mod extras;
@@ -40,16 +41,17 @@ pub use account_identity::{
     decode_provisioning_address, device_session_hash, format_device_header, identity_binding_bytes,
     parse_device_header, repeated_use_keys_digest, reregistration_device_id, AccountDeviceV1,
     AccountIdentityBody, AccountIdentityDistributionRequest, AccountManifestDeviceV3,
-    AccountManifestHistoryPageV3, AccountManifestPinV1, AccountManifestPublicationV3,
-    AccountManifestV3, AccountPreKeyBundlesResponse, ChatDeviceKeysV3, ChatKeysCheckRequest,
-    ChatLinkTokenResponse, ChatProvisionV1, DeviceKind, DevicePreKeyBundleV2, DeviceRegistrationV1,
-    DistributedDeviceKeysV1, DistributionError, ProvisionEnvelopeV1, ProvisioningLinkCodeV1,
-    ProvisioningRelayRequest, ProvisioningSocketMessage, RegisterChatDeviceRequestV2,
-    RegisterDeviceRequestV1, RegisterDeviceResponseV1, ACCOUNT_MANIFEST_V3_VERSION,
-    DEVICE_CREDENTIAL_LEN, DEVICE_HEADER, IDENTITY_BINDING_LEN, LINK_TOKEN_LEN, LINK_URI_PREFIX,
-    MAX_ACCOUNT_MANIFEST_DEVICES, MAX_DEVICE_NAME_CHARS, MAX_PREKEY_RECORD_BYTES,
-    MAX_PROVISION_BODY_BYTES, PROVISIONING_ADDRESS_LEN, PROVISIONING_VERSION,
-    REREGISTRATION_DEVICE_ID,
+    AccountManifestExtensionV1, AccountManifestHistoryPageV3, AccountManifestPinV1,
+    AccountManifestPublicationV3, AccountManifestV3, AccountPreKeyBundlesResponse,
+    ChatDeviceKeysV3, ChatKeysCheckRequest, ChatLinkTokenResponse, ChatProvisionV1, DeviceKind,
+    DevicePreKeyBundleV2, DeviceRegistrationV1, DistributedDeviceKeysV1, DistributionError,
+    ProvisionEnvelopeV1, ProvisioningLinkCodeV1, ProvisioningRelayRequest,
+    ProvisioningSocketMessage, RegisterChatDeviceRequestV2, RegisterDeviceRequestV1,
+    RegisterDeviceResponseV1, ACCOUNT_MANIFEST_V3_VERSION, DEVICE_CREDENTIAL_LEN, DEVICE_HEADER,
+    IDENTITY_BINDING_LEN, LINK_TOKEN_LEN, LINK_URI_PREFIX, MAX_ACCOUNT_MANIFEST_DEVICES,
+    MAX_DEVICE_KIND_LEN, MAX_DEVICE_NAME_CHARS, MAX_MANIFEST_EXTENSIONS,
+    MAX_MANIFEST_EXTENSION_BYTES, MAX_PREKEY_RECORD_BYTES, MAX_PROVISION_BODY_BYTES,
+    PROVISIONING_ADDRESS_LEN, PROVISIONING_VERSION, REREGISTRATION_DEVICE_ID,
 };
 pub use backup::{
     chat_backup_media_reference_set_digest, AppendChatBackupSegmentRequestV1,
@@ -71,6 +73,7 @@ pub use calls::{
     GroupCallBody, GroupCallEventV1, HangupReasonV1, IceCandidateV1, MAX_CALL_ICE_CANDIDATES,
     MAX_CALL_SDP_BYTES,
 };
+pub use capabilities::{Capability, MAX_DEVICE_CAPABILITIES};
 pub use content::{
     ChatContent, ContactControlBody, ContactState, ConversationStateBody, DeleteForMeBody,
     DisappearingExpiryStartBody, DisappearingTimerBody, GroupRemovalBody, GroupUpdateBody,

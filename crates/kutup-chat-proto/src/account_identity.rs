@@ -173,34 +173,40 @@ fn check_registration_id(registration_id: u32) -> Result<(), String> {
 
 /// What a device of the account is: a Chat app instance, an editing app
 /// instance (Drive, Office, Maps, Pass), or the CLI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
+///
+/// In the manifest an open enum of class *skip*
+/// (docs/plans/format-evolution.md, rule 6): a kind a newer writer added is
+/// kept as [`DeviceKind::Other`], signed by its name as received, and
+/// ignored, as long as its entry carries no Chat keys. An unknown kind with
+/// Chat keys is *newer than me*: a sender must know what it encrypts to.
+/// Registration and the server's `devices.kind` column take only the kinds
+/// this build knows ([`DeviceKind::parse`]); a new kind ships server first.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DeviceKind {
     Chat,
     Editor,
     Cli,
+    /// A kind this build doesn't know: its name, 1-32 bytes of `a-z`, `0-9`
+    /// and `-`, never one of the known names.
+    Other(String),
 }
 
-impl DeviceKind {
-    /// The byte the manifest signs.
-    pub fn as_u8(self) -> u8 {
-        match self {
-            Self::Chat => 1,
-            Self::Editor => 2,
-            Self::Cli => 3,
-        }
-    }
+/// The longest device kind name, in bytes.
+pub const MAX_DEVICE_KIND_LEN: usize = 32;
 
-    /// The name the server's `devices.kind` column holds.
-    pub fn as_str(self) -> &'static str {
+impl DeviceKind {
+    /// The name the manifest signs and the server's `devices.kind` column
+    /// holds.
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Chat => "chat",
             Self::Editor => "editor",
             Self::Cli => "cli",
+            Self::Other(name) => name,
         }
     }
 
+    /// One of the kinds this build knows; anything else is refused.
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "chat" => Ok(Self::Chat),
@@ -209,7 +215,58 @@ impl DeviceKind {
             _ => Err(format!("unknown device kind {value:?}")),
         }
     }
+
+    /// A kind as a manifest lists it: a known one, or a well-formed name a
+    /// newer writer used ([`Self::Other`]).
+    pub fn parse_listed(value: &str) -> Result<Self, String> {
+        if let Ok(kind) = Self::parse(value) {
+            return Ok(kind);
+        }
+        if value.is_empty()
+            || value.len() > MAX_DEVICE_KIND_LEN
+            || !value
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err("a device kind is 1-32 bytes of a-z, 0-9 and -".into());
+        }
+        Ok(Self::Other(value.to_owned()))
+    }
+
+    /// Whether this build knows the kind.
+    pub fn is_known(&self) -> bool {
+        !matches!(self, Self::Other(_))
+    }
 }
+
+impl Serialize for DeviceKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DeviceKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Self::parse_listed(&name).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for DeviceKind {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::String)
+            .enum_values(Some(["chat", "editor", "cli"]))
+            .description(Some(
+                "The device's kind. A manifest may list a kind a newer client added; readers keep and ignore it.",
+            ))
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for DeviceKind {}
 
 /// What a device that takes Chat messages carries in the manifest: its
 /// suite and the registration id the authority vouches for.
@@ -242,10 +299,18 @@ pub struct AccountManifestDeviceV3 {
     /// [`device_session_hash`] of the device's sign-in, lowercase hex: the
     /// account's devices group by sign-in without naming it.
     pub session: String,
+    /// What the device reads ([`crate::capabilities`], rule 8 of
+    /// docs/plans/format-evolution.md): capability codes, strictly
+    /// ascending, at most [`crate::capabilities::MAX_DEVICE_CAPABILITIES`].
+    /// Codes this build doesn't know are kept, signed and ignored. Empty is
+    /// a device that lists none.
+    #[serde(default)]
+    pub capabilities: Vec<u16>,
 }
 
 impl AccountManifestDeviceV3 {
-    /// A Chat device of `suite` and `registration_id`.
+    /// A Chat device of `suite` and `registration_id`, listing what a Chat
+    /// device of this build reads.
     pub fn chat(
         device_id: u32,
         suite: DirectChatSuiteId,
@@ -261,13 +326,36 @@ impl AccountManifestDeviceV3 {
             }),
             frame_key: None,
             session,
+            capabilities: crate::Capability::of_this_build(&DeviceKind::Chat, true),
         }
     }
 
-    /// The id, the kind's required and allowed keys, and their encodings.
+    /// An editor device (or, with `kind` [`DeviceKind::Cli`], the CLI
+    /// without Chat) of `frame_key`, listing what such a device of this build
+    /// reads.
+    pub fn editing(device_id: u32, kind: DeviceKind, frame_key: String, session: String) -> Self {
+        Self {
+            device_id,
+            capabilities: crate::Capability::of_this_build(&kind, false),
+            kind,
+            chat: None,
+            frame_key: Some(frame_key),
+            session,
+        }
+    }
+
+    /// Whether the device lists `capability`.
+    pub fn lists(&self, capability: crate::Capability) -> bool {
+        self.capabilities.binary_search(&capability.code()).is_ok()
+    }
+
+    /// The id, the kind's required and allowed keys, their encodings and the
+    /// capability list. A kind this build doesn't know is kept when its
+    /// entry carries no Chat keys (its frame key optional), and *newer than
+    /// me* when it does.
     pub fn validate(&self) -> Result<(), String> {
         check_device_id(self.device_id)?;
-        match (self.kind, &self.chat, &self.frame_key) {
+        match (&self.kind, &self.chat, &self.frame_key) {
             (DeviceKind::Chat, None, _) => return Err("a chat device carries chat keys".into()),
             (DeviceKind::Editor | DeviceKind::Cli, _, None) => {
                 return Err("an editor or CLI device carries a frame key".into())
@@ -275,8 +363,15 @@ impl AccountManifestDeviceV3 {
             (DeviceKind::Editor, Some(_), _) => {
                 return Err("an editor device carries no chat keys".into())
             }
+            (DeviceKind::Other(name), Some(_), _) => {
+                return Err(format!(
+                    "{}a device of kind {name:?} takes Chat",
+                    kutup_crypto::error::NEWER_FORMAT_PREFIX
+                ))
+            }
             _ => {}
         }
+        crate::capabilities::check_capabilities(&self.capabilities)?;
         if let Some(chat) = &self.chat {
             check_registration_id(chat.registration_id)?;
         }
@@ -311,8 +406,14 @@ pub const MAX_DEVICE_NAME_CHARS: usize = 120;
 
 impl RegisterDeviceRequestV1 {
     pub fn validate(&self) -> Result<(), String> {
-        if self.kind == DeviceKind::Chat {
-            return Err("a Chat device registers through /api/chat/device".into());
+        match self.kind {
+            DeviceKind::Chat => {
+                return Err("a Chat device registers through /api/chat/device".into())
+            }
+            DeviceKind::Other(_) => {
+                return Err(format!("unknown device kind {:?}", self.kind.as_str()))
+            }
+            DeviceKind::Editor | DeviceKind::Cli => {}
         }
         if self.name.chars().count() > MAX_DEVICE_NAME_CHARS {
             return Err("a device name is at most 120 characters".into());
@@ -383,11 +484,23 @@ pub fn device_session_hash(root_session_id: &[u8; 16]) -> String {
 /// device list (Chat, editing and CLI devices), signed by the account
 /// authority. The wipe that brought V3 cleared every V2 manifest, so its
 /// chain starts at sequence 1.
+///
+/// How it grows (docs/plans/format-evolution.md): per device, signed
+/// capability codes; account-wide, signed `extensions`; both keep codes this
+/// build doesn't know and ignore them. A change older readers must
+/// understand bumps `manifestVersion`; one they may ignore bumps it and
+/// writes `minVersion` (rule 4), and then signs this version's layout, its
+/// additions in `extensions`. The version is read before the fields, so a
+/// newer manifest is *newer than me*, never corrupt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, remote = "Self")]
 pub struct AccountManifestV3 {
     pub manifest_version: u16,
+    /// The oldest reader version that may act on this manifest, written only
+    /// when below `manifestVersion` (`kutup_crypto::format::check_version`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_version: Option<u16>,
     #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
     pub account: AccountRef,
     pub incarnation_id: String,
@@ -428,7 +541,105 @@ pub struct AccountManifestV3 {
     /// change). Covered by `signature`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub successions: Vec<AccountSuccessionV1>,
+    /// Account-wide fields a newer writer adds without a new version: by
+    /// code, strictly ascending, at most [`MAX_MANIFEST_EXTENSIONS`]. This
+    /// build defines no code yet; it keeps and ignores every one, signed as
+    /// received. Empty when there are none.
+    #[serde(default)]
+    pub extensions: Vec<AccountManifestExtensionV1>,
     pub signature: String,
+}
+
+impl Serialize for AccountManifestV3 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        AccountManifestV3::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AccountManifestV3 {
+    /// `manifestVersion` and `minVersion` first (rule 4): a manifest of a
+    /// version this build can't read is *newer than me* whatever its fields.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let number = |field: &str| -> Result<Option<u16>, D::Error> {
+            match value.get(field) {
+                None => Ok(None),
+                Some(number) => number
+                    .as_u64()
+                    .and_then(|n| u16::try_from(n).ok())
+                    .map(Some)
+                    .ok_or_else(|| {
+                        D::Error::custom(format!("account manifest {field} is invalid"))
+                    }),
+            }
+        };
+        let version = number("manifestVersion")?
+            .ok_or_else(|| D::Error::custom("account manifest has no manifestVersion"))?;
+        check_manifest_version(version, number("minVersion")?).map_err(D::Error::custom)?;
+        AccountManifestV3::deserialize(value).map_err(D::Error::custom)
+    }
+}
+
+/// Rule 4 for the manifest: a reader of [`ACCOUNT_MANIFEST_V3_VERSION`]
+/// opens `version` and `min`, or refuses it as *newer than me* (an error
+/// starting with `kutup_crypto::error::NEWER_FORMAT_PREFIX`) or corrupt.
+fn check_manifest_version(version: u16, min: Option<u16>) -> Result<(), String> {
+    kutup_crypto::format::check_version(
+        "account manifest",
+        version,
+        min,
+        ACCOUNT_MANIFEST_V3_VERSION,
+    )
+    .map_err(|error| error.to_string())?;
+    if version < ACCOUNT_MANIFEST_V3_VERSION {
+        return Err("unsupported account manifest version".into());
+    }
+    Ok(())
+}
+
+/// The most extensions one manifest carries.
+pub const MAX_MANIFEST_EXTENSIONS: usize = 16;
+
+/// The largest extension value, in bytes.
+pub const MAX_MANIFEST_EXTENSION_BYTES: usize = 1024;
+
+/// One account-wide extension of an [`AccountManifestV3`]: a code (an open
+/// enum of class *skip*; 0 is never one) and its value, canonical base64 of
+/// 1 to [`MAX_MANIFEST_EXTENSION_BYTES`] bytes whose meaning the code
+/// defines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountManifestExtensionV1 {
+    pub code: u16,
+    pub value: String,
+}
+
+fn push_extensions(
+    out: &mut Vec<u8>,
+    extensions: &[AccountManifestExtensionV1],
+) -> Result<(), String> {
+    if extensions.len() > MAX_MANIFEST_EXTENSIONS {
+        return Err("a manifest carries at most 16 extensions".into());
+    }
+    out.push(extensions.len() as u8);
+    let mut prior = 0u16;
+    for extension in extensions {
+        if extension.code <= prior {
+            return Err("manifest extensions must be strictly ordered by code, none 0".into());
+        }
+        prior = extension.code;
+        let value = decode_canonical_base64_bounded(
+            "extension value",
+            &extension.value,
+            MAX_MANIFEST_EXTENSION_BYTES,
+        )?;
+        out.extend_from_slice(&extension.code.to_be_bytes());
+        out.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        out.extend_from_slice(&value);
+    }
+    Ok(())
 }
 
 /// The most identity rotations a manifest lists.
@@ -625,6 +836,8 @@ impl AccountManifestV3 {
         let mut out = Vec::with_capacity(320 + self.devices.len() * 80);
         out.extend_from_slice(DOMAIN);
         out.extend_from_slice(&self.manifest_version.to_be_bytes());
+        // 0: no `minVersion` (never a valid one).
+        out.extend_from_slice(&self.min_version.unwrap_or(0).to_be_bytes());
         // The account id alone, never the server's name: `account.server` is
         // where the manifest is fetched from, not what it says
         // (docs/plans/identity-rotation.md §6).
@@ -676,7 +889,8 @@ impl AccountManifestV3 {
             prior = Some(device.device_id);
             device.validate()?;
             out.extend_from_slice(&device.device_id.to_be_bytes());
-            out.push(device.kind.as_u8());
+            // By name, so a kind a newer writer added is signed as received.
+            push_string(&mut out, device.kind.as_str())?;
             match &device.chat {
                 Some(chat) => {
                     out.push(1);
@@ -693,7 +907,15 @@ impl AccountManifestV3 {
                 None => out.push(0),
             }
             out.extend_from_slice(&decode_lower_hex_32("session", &device.session)?);
+            // Checked by `validate`: at most 64, so the count is one byte;
+            // always written, so an empty list signs one zero byte.
+            out.push(device.capabilities.len() as u8);
+            for code in &device.capabilities {
+                out.extend_from_slice(&code.to_be_bytes());
+            }
         }
+        // Always written: no extensions sign one zero byte.
+        push_extensions(&mut out, &self.extensions)?;
         // Last, and only when there are any: a manifest without one signs
         // the same bytes as before the field existed.
         if !self.successions.is_empty() {
@@ -762,6 +984,7 @@ impl AccountManifestV3 {
         devices.sort_by_key(|device| device.device_id);
         Self {
             manifest_version: ACCOUNT_MANIFEST_V3_VERSION,
+            min_version: None,
             account,
             incarnation_id: keys.incarnation_id(),
             sequence: 1,
@@ -778,13 +1001,17 @@ impl AccountManifestV3 {
             authority_key_id: hex::encode(Sha256::digest(public)),
             self_authority_key: b64(&public),
             successions: Vec::new(),
+            extensions: Vec::new(),
             signature: String::new(),
         }
     }
 
     /// The head's successor, unsigned: the same account, authority, identity
     /// and Drive keys, the next sequence linked by hash, listing `devices`
-    /// (ordered here). Sign it with [`Self::sign`].
+    /// (ordered here). Sign it with [`Self::sign`]. It is this build's
+    /// version (a head a newer writer marked readable here with
+    /// `minVersion` gets this build's successor), and it keeps the head's
+    /// extensions, known or not (rule 3).
     pub fn successor(
         &self,
         mut devices: Vec<AccountManifestDeviceV3>,
@@ -797,6 +1024,8 @@ impl AccountManifestV3 {
                 .checked_add(1)
                 .ok_or("manifest sequence is exhausted")?,
             previous_hash: Some(self.manifest_hash()?),
+            manifest_version: ACCOUNT_MANIFEST_V3_VERSION,
+            min_version: None,
             devices,
             issued_at: issued_at.into(),
             signature: String::new(),
@@ -830,6 +1059,25 @@ impl AccountManifestV3 {
             .filter_map(|device| Some((device.device_id, device.chat.as_ref()?)))
     }
 
+    /// Whether every device that takes Chat lists `capability` (rule 8): a
+    /// sender uses a Chat format or action gated by it toward this account
+    /// only then. True for an account with no Chat device.
+    pub fn chat_devices_list(&self, capability: crate::Capability) -> bool {
+        self.devices
+            .iter()
+            .filter(|device| device.chat.is_some())
+            .all(|device| device.lists(capability))
+    }
+
+    /// Whether every device that edits (an editor, or the CLI) lists
+    /// `capability`: the Drive counterpart of [`Self::chat_devices_list`].
+    pub fn editing_devices_list(&self, capability: crate::Capability) -> bool {
+        self.devices
+            .iter()
+            .filter(|device| matches!(device.kind, DeviceKind::Editor | DeviceKind::Cli))
+            .all(|device| device.lists(capability))
+    }
+
     /// Verify the authority binding, the chain shape, the device bounds and
     /// order, and the Ed25519 signature. Continuity against a manifest seen
     /// before is the caller's (client pins, server head).
@@ -837,9 +1085,7 @@ impl AccountManifestV3 {
         use ed25519_dalek::{Signature, VerifyingKey};
         use sha2::{Digest, Sha256};
 
-        if self.manifest_version != ACCOUNT_MANIFEST_V3_VERSION {
-            return Err("unsupported account manifest version".into());
-        }
+        check_manifest_version(self.manifest_version, self.min_version)?;
         if self.sequence == 0 {
             return Err("manifest sequence must be positive".into());
         }

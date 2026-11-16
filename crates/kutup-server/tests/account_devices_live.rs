@@ -93,13 +93,12 @@ impl Live {
                 .execute(&self.pool),
             )
             .unwrap();
-        let entry = AccountManifestDeviceV3 {
+        let entry = AccountManifestDeviceV3::editing(
             device_id,
-            kind: DeviceKind::Editor,
-            chat: None,
-            frame_key: Some(STANDARD.encode(frame_key)),
-            session: account.session.clone(),
-        };
+            DeviceKind::Editor,
+            STANDARD.encode(frame_key),
+            account.session.clone(),
+        );
         (entry, credential)
     }
 }

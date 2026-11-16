@@ -1436,13 +1436,12 @@ pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
     assert_eq!(r.status(), StatusCode::OK, "register a device");
     let body: Value = r.json().unwrap();
     let id = body["deviceId"].as_u64().unwrap() as u32;
-    let entry = kutup_chat_proto::AccountManifestDeviceV3 {
-        device_id: id,
-        kind: kutup_chat_proto::DeviceKind::Editor,
-        chat: None,
-        frame_key: Some(STANDARD.encode(key)),
-        session: body["session"].as_str().unwrap().to_owned(),
-    };
+    let entry = kutup_chat_proto::AccountManifestDeviceV3::editing(
+        id,
+        kutup_chat_proto::DeviceKind::Editor,
+        STANDARD.encode(key),
+        body["session"].as_str().unwrap().to_owned(),
+    );
     let manifest = next_manifest(c, base, user, |devices| {
         devices.retain(|device| device.device_id != id);
         devices.push(entry);

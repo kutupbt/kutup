@@ -19,13 +19,12 @@ fn editor(device_id: u32, seed: u8) -> AccountManifestDeviceV3 {
     let key = SigningKey::from_seed(Suite::V1, &[seed; 32])
         .verifying_key()
         .to_array::<32>();
-    AccountManifestDeviceV3 {
+    AccountManifestDeviceV3::editing(
         device_id,
-        kind: DeviceKind::Editor,
-        chat: None,
-        frame_key: Some(STANDARD.encode(key)),
-        session: "ab".repeat(32),
-    }
+        DeviceKind::Editor,
+        STANDARD.encode(key),
+        "ab".repeat(32),
+    )
 }
 
 fn chain(

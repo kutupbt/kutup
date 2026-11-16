@@ -307,6 +307,7 @@ impl AccountAuthority {
         devices.sort_by_key(|device| device.device_id);
         let mut manifest = AccountManifestV3 {
             manifest_version: ACCOUNT_MANIFEST_V3_VERSION,
+            min_version: None,
             account,
             incarnation_id: self.incarnation_id(),
             sequence,
@@ -319,12 +320,36 @@ impl AccountAuthority {
             authority_key_id: self.key_id(),
             self_authority_key: self.public_key_base64(),
             successions: Vec::new(),
+            extensions: Vec::new(),
             signature: String::new(),
         };
         let bytes = manifest.signing_bytes().map_err(ChatError::Invalid)?;
         manifest.signature = STANDARD.encode(self.identity.authority_signing_key().sign(&bytes));
         manifest.verify().map_err(ChatError::Protocol)?;
         Ok(manifest)
+    }
+
+    /// `next`, a successor of `head` this authority signed, with what the
+    /// head carries that this device doesn't write itself, signed again: its
+    /// extensions, known or not (docs/plans/format-evolution.md, rule 3),
+    /// and its successions (kept in every later manifest).
+    pub fn keep_from_head(
+        &self,
+        mut next: AccountManifestV3,
+        head: Option<&AccountManifestV3>,
+    ) -> Result<AccountManifestV3> {
+        let Some(head) = head else {
+            return Ok(next);
+        };
+        if next.extensions == head.extensions && next.successions == head.successions {
+            return Ok(next);
+        }
+        next.extensions = head.extensions.clone();
+        next.successions = head.successions.clone();
+        let bytes = next.signing_bytes().map_err(ChatError::Invalid)?;
+        next.signature = STANDARD.encode(self.identity.authority_signing_key().sign(&bytes));
+        next.verify().map_err(ChatError::Protocol)?;
+        Ok(next)
     }
 }
 

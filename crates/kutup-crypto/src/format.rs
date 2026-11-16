@@ -200,6 +200,12 @@ pub const OPEN_ENUMS: &[(&str, OpenEnumClass)] = &[
     ("kutup_chat_proto::content::kind (ChatContent.kind)", Skip),
     ("kutup_chat_proto::backup (record type)", Skip),
     ("kutup_chat_proto::group (change actions)", Refuse),
+    ("kutup_chat_proto::capabilities::Capability", Skip),
+    (
+        "kutup_chat_proto::DeviceKind (manifest, no Chat keys)",
+        Skip,
+    ),
+    ("kutup_chat_proto::AccountManifestExtensionV1 (code)", Skip),
 ];
 
 use OpenEnumClass::{Refuse, Skip};

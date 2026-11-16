@@ -8,7 +8,10 @@ import type { MasterKeys } from './masterKeys'
 import type { IdentityRoot } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
 
-/** What kind of app instance a device is. */
+/**
+ * What kind of app instance a device is. A manifest may list a kind a newer
+ * client added (without Chat keys); Rust keeps it and the browser ignores it.
+ */
 export type DeviceKind = 'chat' | 'editor' | 'cli'
 
 /** One device as the manifest lists it (`AccountManifestDeviceV3`). */
@@ -22,6 +25,11 @@ export interface ManifestDevice {
   frameKey?: string
   /** The hash of the sign-in it belongs to, lowercase hex. */
   session: string
+  /**
+   * What it reads: capability codes, ascending (docs/plans/format-evolution.md,
+   * rule 8). Rust sets this device's own when it lists it; unknown codes are kept.
+   */
+  capabilities?: number[]
 }
 
 /**
@@ -51,6 +59,11 @@ export async function listDeviceInManifest(
   account: string,
 ): Promise<AccountManifest> {
   return (await getCryptoWasm()).listDeviceInManifest(head, entry, issuedAt, identityRoot, account) as AccountManifest
+}
+
+/** The capability codes a device of `kind` of this build lists (`chat`: it takes Chat). */
+export async function deviceCapabilities(kind: DeviceKind, chat: boolean): Promise<number[]> {
+  return Array.from((await getCryptoWasm()).deviceCapabilities(kind, chat))
 }
 
 /**

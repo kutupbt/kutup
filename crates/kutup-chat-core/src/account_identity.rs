@@ -357,13 +357,16 @@ impl Engine {
                     registration_id,
                     device_session.clone(),
                 ));
-                let manifest = authority.sign_manifest(
-                    account.clone(),
-                    sequence,
-                    previous_hash.clone(),
-                    identity,
-                    devices,
-                    issued_at.clone(),
+                let manifest = authority.keep_from_head(
+                    authority.sign_manifest(
+                        account.clone(),
+                        sequence,
+                        previous_hash.clone(),
+                        identity,
+                        devices,
+                        issued_at.clone(),
+                    )?,
+                    head.as_ref(),
                 )?;
                 manifest
                     .verify_successor(head.as_ref())
@@ -624,15 +627,19 @@ impl Engine {
                 listed.push(entry);
                 private.push((device.device_id, registration_id, rotation));
             }
-            let manifest = self.group_keys()?.authority.sign_manifest(
-                account.clone(),
-                head.sequence
-                    .checked_add(1)
-                    .ok_or_else(|| ChatError::Trust("manifest sequence is exhausted".into()))?,
-                Some(head.manifest_hash().map_err(ChatError::Trust)?),
-                &identity,
-                listed,
-                issued_at.clone(),
+            let authority = &self.group_keys()?.authority;
+            let manifest = authority.keep_from_head(
+                authority.sign_manifest(
+                    account.clone(),
+                    head.sequence
+                        .checked_add(1)
+                        .ok_or_else(|| ChatError::Trust("manifest sequence is exhausted".into()))?,
+                    Some(head.manifest_hash().map_err(ChatError::Trust)?),
+                    &identity,
+                    listed,
+                    issued_at.clone(),
+                )?,
+                Some(&head),
             )?;
             manifest
                 .verify_successor(Some(&head))
@@ -1341,6 +1348,7 @@ mod tests {
                 ),
             ),
             session: "52".repeat(32),
+            capabilities: Vec::new(),
         };
         let editors_only = authority
             .sign_manifest_with_binding(

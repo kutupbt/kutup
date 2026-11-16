@@ -240,6 +240,7 @@ fn a_reregistration_keeps_the_accounts_other_devices() {
                 .to_bytes(),
         )),
         session: "52".repeat(32),
+        capabilities: Vec::new(),
     };
     // The account's manifest from before it had Chat: an Office instance,
     // and no Chat identity.
@@ -291,8 +292,8 @@ fn a_reregistration_keeps_the_accounts_other_devices() {
     assert_eq!(manifest.devices[0], editor);
     let chat = &manifest.devices[1];
     assert_eq!(
-        (chat.device_id, chat.kind, chat.session.as_str()),
-        (2, DeviceKind::Chat, DEVICE_SESSION)
+        (chat.device_id, &chat.kind, chat.session.as_str()),
+        (2, &DeviceKind::Chat, DEVICE_SESSION)
     );
     manifest.verify_successor(Some(&head)).unwrap();
 }

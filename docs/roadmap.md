@@ -277,6 +277,22 @@ update instead of reporting a corrupt backup. Needs: the chunk layout (the
 block format's, as Drive and Chat media), a server route for a chunked
 base and its manifest field, and the client upload and restore.
 
+### Chat groups: gate new actions by capability (after the wipe)
+
+The account manifest carries each device's capabilities
+(docs/plans/format-evolution.md, rule 8; `kutup_chat_proto::Capability`),
+every group action names the one its readers need
+(`GroupActionV1::capability`, all `GroupChangesV1` at the wipe), and
+`kutup_chat_proto::group::missing_capabilities` checks a change against the
+member accounts' manifests. Nothing calls the check yet, since every action
+of the wipe's release is readable by every device that takes Chat. With the
+first new action (its own capability code, added to the registry), the Chat
+core checks the members' verified manifests before submitting a change that
+carries it and refuses it (or offers the old way) while a member's device
+doesn't list the code. The same applies to Drive: a share of a format newer
+than `DriveBlocksV2` checks the recipient's editing devices
+(`AccountManifestV3::editing_devices_list`).
+
 ### Rotate document keys when a device is removed (after W5)
 
 Signal's practice: new sender keys after a member or device leaves. When a

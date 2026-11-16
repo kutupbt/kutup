@@ -200,6 +200,7 @@ impl ChatAccount {
         listed.sort_by_key(|device| device.device_id);
         let mut manifest = AccountManifestV3 {
             manifest_version: kutup_chat_proto::ACCOUNT_MANIFEST_V3_VERSION,
+            min_version: None,
             account: self.account.clone(),
             incarnation_id: hex::encode(incarnation.finish()),
             sequence: self.head.as_ref().map_or(1, |head| head.sequence + 1),
@@ -214,6 +215,7 @@ impl ChatAccount {
             authority_key_id: hex::encode(hash(Suite::V1, public.to_bytes())),
             self_authority_key: b64(&public.to_bytes()),
             successions: Vec::new(),
+            extensions: Vec::new(),
             signature: String::new(),
         };
         self.bind(&mut manifest);

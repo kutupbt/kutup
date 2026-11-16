@@ -16,13 +16,12 @@ fn editor(device_id: u32, seed: u8) -> AccountManifestDeviceV3 {
     let key = SigningKey::from_seed(Suite::V1, &[seed; 32])
         .verifying_key()
         .to_array::<32>();
-    AccountManifestDeviceV3 {
+    AccountManifestDeviceV3::editing(
         device_id,
-        kind: DeviceKind::Editor,
-        chat: None,
-        frame_key: Some(base64::engine::general_purpose::STANDARD.encode(key)),
-        session: "ab".repeat(32),
-    }
+        DeviceKind::Editor,
+        base64::engine::general_purpose::STANDARD.encode(key),
+        "ab".repeat(32),
+    )
 }
 
 /// A frame of `device_id` under `manifest_sequence`, signed with `seed`'s key.

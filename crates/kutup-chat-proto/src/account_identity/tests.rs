@@ -1,5 +1,5 @@
 use super::*;
-use crate::{AccountIdentitySuiteId, EnvelopeType};
+use crate::{AccountIdentitySuiteId, Capability, EnvelopeType};
 use base64::Engine as _;
 use ed25519_dalek::Signer as _;
 use sha2::{Digest, Sha256};
@@ -38,13 +38,12 @@ fn frame_key(byte: u8) -> String {
 }
 
 fn editor(device_id: u32) -> AccountManifestDeviceV3 {
-    AccountManifestDeviceV3 {
+    AccountManifestDeviceV3::editing(
         device_id,
-        kind: DeviceKind::Editor,
-        chat: None,
-        frame_key: Some(frame_key(device_id as u8)),
-        session: session(0x51),
-    }
+        DeviceKind::Editor,
+        frame_key(device_id as u8),
+        session(0x51),
+    )
 }
 
 /// Signs the manifest; one with no signing bytes (a bad device) is left
@@ -63,6 +62,7 @@ fn manifest(devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
     let drive_signing = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
     let mut manifest = AccountManifestV3 {
         manifest_version: ACCOUNT_MANIFEST_V3_VERSION,
+        min_version: None,
         account: AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap(),
         incarnation_id: hex::encode(incarnation.finalize()),
         sequence: 1,
@@ -79,6 +79,7 @@ fn manifest(devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
         authority_key_id: hex::encode(Sha256::digest(public)),
         self_authority_key: b64(&public),
         successions: Vec::new(),
+        extensions: Vec::new(),
         signature: String::new(),
     };
     sign(&mut manifest);
@@ -167,6 +168,7 @@ fn each_kind_carries_its_keys() {
         chat,
         frame_key: frame,
         session: session(0x51),
+        capabilities: Vec::new(),
     };
     let keys = Some(ChatDeviceKeysV3 {
         direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
@@ -209,7 +211,7 @@ fn each_kind_carries_its_keys() {
     }
     // The kinds' names, on the wire and in the server's column.
     for kind in [DeviceKind::Chat, DeviceKind::Editor, DeviceKind::Cli] {
-        let json = serde_json::to_value(kind).unwrap();
+        let json = serde_json::to_value(&kind).unwrap();
         assert_eq!(json, kind.as_str());
         assert_eq!(DeviceKind::parse(kind.as_str()).unwrap(), kind);
     }
@@ -868,21 +870,15 @@ fn history_page_pagination_and_authority() {
 fn manifest_v3_vector_is_pinned() {
     // The signing bytes and hash of the fixed test manifest: a change to the
     // encoding is a deliberate format change, never an accident.
-    let mut cli = editor(3);
-    cli.kind = DeviceKind::Cli;
-    cli.chat = Some(ChatDeviceKeysV3 {
-        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-        registration_id: 30,
-    });
-    let manifest = manifest(vec![device(1, 10), editor(2), cli]);
+    let manifest = three_kinds();
     let bytes = manifest.signing_bytes().unwrap();
     assert_eq!(hex::encode(Sha256::digest(&bytes)), SIGNING_BYTES_SHA256);
     assert_eq!(manifest.manifest_hash().unwrap(), MANIFEST_HASH);
 }
 
 const SIGNING_BYTES_SHA256: &str =
-    "4744709b5233fd5c6b21473f02e29f7c5697e865fa83684142270ee6e941911a";
-const MANIFEST_HASH: &str = "050a72415c4582c9700a6d211f5c7690f0e814355cf7f82e19ee27c80f99756b";
+    "a989fd8d3abca6f044c613944e26defefd18ea17827d541b73df4be318584fea";
+const MANIFEST_HASH: &str = "1a26a7cb7cf09e4b17351f5775a5df4918ea662839b624aa4e93db4ad19f3db0";
 
 #[test]
 fn account_identity_sync_body() {
@@ -1176,4 +1172,304 @@ fn a_manifest_relabelled_with_another_server_verifies_but_is_refused_for_the_add
         manifest: other,
     };
     assert!(bundles.check_against_manifest().is_err());
+}
+
+// --- capabilities, extensions, kinds and the version (format-evolution) -----
+
+const MANIFEST_VECTORS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/vectors/account-manifest-v3.json"
+);
+
+fn is_newer(error: &str) -> bool {
+    error.starts_with(kutup_crypto::error::NEWER_FORMAT_PREFIX)
+}
+
+/// The pinned vector's devices: a Chat device, an editor and a CLI that
+/// takes Chat, each listing what this build lists.
+fn three_kinds() -> AccountManifestV3 {
+    let mut cli = AccountManifestDeviceV3::editing(3, DeviceKind::Cli, frame_key(3), session(0x51));
+    cli.chat = Some(ChatDeviceKeysV3 {
+        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        registration_id: 30,
+    });
+    cli.capabilities = Capability::of_this_build(&DeviceKind::Cli, true);
+    manifest(vec![device(1, 10), editor(2), cli])
+}
+
+/// What a newer writer lists that this build doesn't know: a device of an
+/// unknown kind without Chat keys, an unknown capability code and an
+/// unknown extension.
+fn with_unknowns() -> AccountManifestV3 {
+    let mut manifest = three_kinds();
+    manifest.devices[0].capabilities.push(999);
+    manifest.devices.push(AccountManifestDeviceV3 {
+        device_id: 9,
+        kind: DeviceKind::Other("watch".into()),
+        chat: None,
+        frame_key: None,
+        session: session(0x52),
+        capabilities: vec![1, 4000],
+    });
+    manifest.extensions = vec![
+        AccountManifestExtensionV1 {
+            code: 7,
+            value: b64(b"seven"),
+        },
+        AccountManifestExtensionV1 {
+            code: 300,
+            value: b64(&[0xee; 40]),
+        },
+    ];
+    sign(&mut manifest);
+    manifest
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestCase {
+    /// `ok`, `newer` or `corrupt`.
+    outcome: String,
+    manifest: serde_json::Value,
+    /// For `ok`: SHA-256 of the signing bytes, and the manifest hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signing_bytes_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manifest_hash: Option<String>,
+}
+
+fn ok_case(manifest: &AccountManifestV3) -> ManifestCase {
+    ManifestCase {
+        outcome: "ok".into(),
+        manifest: serde_json::to_value(manifest).unwrap(),
+        signing_bytes_sha256: Some(hex::encode(Sha256::digest(
+            manifest.signing_bytes().unwrap(),
+        ))),
+        manifest_hash: Some(manifest.manifest_hash().unwrap()),
+    }
+}
+
+fn case(outcome: &str, manifest: serde_json::Value) -> ManifestCase {
+    ManifestCase {
+        outcome: outcome.into(),
+        manifest,
+        signing_bytes_sha256: None,
+        manifest_hash: None,
+    }
+}
+
+fn manifest_vectors() -> std::collections::BTreeMap<String, ManifestCase> {
+    let mut cases = std::collections::BTreeMap::new();
+    // Every device lists what this build lists.
+    cases.insert("listed".into(), ok_case(&three_kinds()));
+    // No capabilities, no extensions: each signs a zero count.
+    let mut empty = three_kinds();
+    for device in &mut empty.devices {
+        device.capabilities.clear();
+    }
+    sign(&mut empty);
+    cases.insert("empty".into(), ok_case(&empty));
+    // Unknown kind, capability and extension: kept, verified, ignored.
+    cases.insert("unknownsSkipped".into(), ok_case(&with_unknowns()));
+    // A later version older readers may read (`minVersion` 3).
+    let mut readable = three_kinds();
+    readable.manifest_version = 4;
+    readable.min_version = Some(3);
+    sign(&mut readable);
+    cases.insert("newerReadable".into(), ok_case(&readable));
+    // A later version with a field this build doesn't know: newer, not
+    // corrupt, though the field doesn't fit.
+    let mut newer = serde_json::to_value(three_kinds()).unwrap();
+    newer["manifestVersion"] = 4.into();
+    newer["laterField"] = serde_json::json!({"x": 1});
+    cases.insert("newerVersion".into(), case("newer", newer));
+    // A kind this build doesn't know that takes Chat: newer.
+    let mut chat_kind = serde_json::to_value(three_kinds()).unwrap();
+    chat_kind["devices"][0]["kind"] = "watch".into();
+    cases.insert("unknownKindTakesChat".into(), case("newer", chat_kind));
+    // A capability added after signing: corrupt.
+    let mut changed = serde_json::to_value(three_kinds()).unwrap();
+    changed["devices"][1]["capabilities"] = serde_json::json!([2, 3]);
+    cases.insert("capabilityChanged".into(), case("corrupt", changed));
+    // An extension dropped after signing: corrupt.
+    let mut dropped = serde_json::to_value(with_unknowns()).unwrap();
+    dropped["extensions"] = serde_json::json!([]);
+    cases.insert("extensionDropped".into(), case("corrupt", dropped));
+    // Unordered capabilities: corrupt.
+    let mut unordered = serde_json::to_value(three_kinds()).unwrap();
+    unordered["devices"][2]["capabilities"] = serde_json::json!([2, 1]);
+    cases.insert("capabilitiesUnordered".into(), case("corrupt", unordered));
+    // `minVersion` not below `manifestVersion`: corrupt.
+    let mut min_equal = serde_json::to_value(three_kinds()).unwrap();
+    min_equal["minVersion"] = 3.into();
+    cases.insert("minNotBelow".into(), case("corrupt", min_equal));
+    cases
+}
+
+/// Parses and verifies a vector's manifest: `ok`, `newer` or `corrupt`.
+fn outcome(manifest: &serde_json::Value) -> &'static str {
+    let result = serde_json::from_value::<AccountManifestV3>(manifest.clone())
+        .map_err(|error| error.to_string())
+        .and_then(|manifest| manifest.verify());
+    match result {
+        Ok(()) => "ok",
+        Err(error) if is_newer(&error) => "newer",
+        Err(_) => "corrupt",
+    }
+}
+
+#[test]
+#[ignore = "writes the vectors file"]
+fn write_manifest_vectors() {
+    if std::env::var("KUTUP_WRITE_MANIFEST_VECTORS").as_deref() != Ok("1") {
+        return;
+    }
+    std::fs::write(
+        MANIFEST_VECTORS,
+        serde_json::to_string_pretty(&manifest_vectors()).unwrap() + "\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn manifest_vectors_have_three_outcomes() {
+    let pinned: std::collections::BTreeMap<String, ManifestCase> =
+        serde_json::from_str(&std::fs::read_to_string(MANIFEST_VECTORS).unwrap()).unwrap();
+    let made = manifest_vectors();
+    assert_eq!(
+        pinned.keys().collect::<Vec<_>>(),
+        made.keys().collect::<Vec<_>>()
+    );
+    for (name, case) in &pinned {
+        assert_eq!(outcome(&case.manifest), case.outcome, "{name}");
+        assert_eq!(case.manifest, made[name].manifest, "{name}");
+        if case.outcome == "ok" {
+            let manifest: AccountManifestV3 =
+                serde_json::from_value(case.manifest.clone()).unwrap();
+            assert_eq!(
+                Some(hex::encode(Sha256::digest(
+                    manifest.signing_bytes().unwrap()
+                ))),
+                case.signing_bytes_sha256,
+                "{name}"
+            );
+            assert_eq!(
+                Some(manifest.manifest_hash().unwrap()),
+                case.manifest_hash,
+                "{name}"
+            );
+            // What was received is what is written back, unknowns included.
+            assert_eq!(
+                serde_json::to_value(&manifest).unwrap(),
+                case.manifest,
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unknowns_are_kept_and_ignored() {
+    let manifest = with_unknowns();
+    manifest.verify().unwrap();
+    // The unknown kind is no Chat device and no editing device.
+    assert_eq!(manifest.chat_devices().count(), 2);
+    assert!(manifest.chat_devices_list(Capability::GroupChangesV1));
+    assert!(manifest.editing_devices_list(Capability::DriveBlocksV2));
+    assert!(!manifest.chat_devices_list(Capability::DriveBlocksV2));
+    // A successor keeps them; the unknown kind's entry stays as it was.
+    let next = manifest
+        .successor(manifest.devices.clone(), "2026-10-22T12:01:00Z")
+        .unwrap();
+    assert_eq!(next.extensions, manifest.extensions);
+    assert_eq!(next.devices[3].kind, DeviceKind::Other("watch".into()));
+    // Registration takes only kinds this build knows.
+    assert!(DeviceKind::parse("watch").is_err());
+    assert_eq!(
+        DeviceKind::parse_listed("watch").unwrap(),
+        DeviceKind::Other("watch".into())
+    );
+    for bad in ["", "Watch", "a b", &"w".repeat(33)] {
+        assert!(DeviceKind::parse_listed(bad).is_err(), "{bad:?}");
+    }
+    let request = RegisterDeviceRequestV1 {
+        kind: DeviceKind::Other("watch".into()),
+        name: String::new(),
+        frame_key: frame_key(1),
+        credential: b64url_encode(&[1; 32]),
+    };
+    assert!(request.validate().is_err());
+}
+
+#[test]
+fn extensions_are_bounded_and_ordered() {
+    let with = |extensions: Vec<(u16, Vec<u8>)>| {
+        let mut manifest = three_kinds();
+        manifest.extensions = extensions
+            .into_iter()
+            .map(|(code, value)| AccountManifestExtensionV1 {
+                code,
+                value: b64(&value),
+            })
+            .collect();
+        manifest.signing_bytes()
+    };
+    with(vec![(1, vec![1]), (2, vec![2; 1024])]).unwrap();
+    for bad in [
+        vec![(0, vec![1])],
+        vec![(2, vec![1]), (1, vec![1])],
+        vec![(1, vec![1]), (1, vec![1])],
+        vec![(1, vec![])],
+        vec![(1, vec![0; 1025])],
+        (1..=17).map(|code| (code, vec![1])).collect(),
+    ] {
+        assert!(with(bad).is_err());
+    }
+}
+
+#[test]
+fn a_successor_is_this_builds_version() {
+    let mut readable = three_kinds();
+    readable.manifest_version = 4;
+    readable.min_version = Some(3);
+    sign(&mut readable);
+    readable.verify().unwrap();
+    let next = successor(&readable, readable.devices.clone());
+    assert_eq!(next.manifest_version, ACCOUNT_MANIFEST_V3_VERSION);
+    assert_eq!(next.min_version, None);
+    next.verify_successor(Some(&readable)).unwrap();
+    // An older version is corrupt, a newer one without `minVersion` newer.
+    let mut older = three_kinds();
+    older.manifest_version = 2;
+    sign(&mut older);
+    let error = older.verify().unwrap_err();
+    assert!(!is_newer(&error), "{error}");
+    let mut newer = three_kinds();
+    newer.manifest_version = 4;
+    sign(&mut newer);
+    assert!(is_newer(&newer.verify().unwrap_err()));
+}
+
+#[test]
+fn the_group_gate_reads_every_chat_device() {
+    use crate::group::{missing_capabilities, GroupActionV1};
+    let listed = three_kinds();
+    let mut lacking = three_kinds();
+    lacking.devices[2].capabilities = vec![Capability::DriveBlocksV2.code()];
+    sign(&mut lacking);
+    let actions = [GroupActionV1::Leave];
+    assert_eq!(
+        GroupActionV1::Leave.capability(),
+        Capability::GroupChangesV1
+    );
+    assert!(missing_capabilities(&actions, [&listed]).is_empty());
+    assert_eq!(
+        missing_capabilities(&actions, [&listed, &lacking]),
+        vec![Capability::GroupChangesV1.code()]
+    );
+    // An editor lacking it doesn't matter: it doesn't read groups.
+    let mut editor_lacking = three_kinds();
+    editor_lacking.devices[1].capabilities.clear();
+    sign(&mut editor_lacking);
+    assert!(missing_capabilities(&actions, [&editor_lacking]).is_empty());
 }

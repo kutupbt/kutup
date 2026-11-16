@@ -1244,9 +1244,12 @@ impl Engine {
                     // Unchanged, unless the account's Drive keys moved on (an
                     // upgrade to X-Wing, docs/plans/pq-shares.md): then the
                     // next manifest carries them.
+                    // So are what it reads: an update that reads something
+                    // new lists itself again with it (format-evolution rule 8).
                     Ok(index)
                         if devices[index].kind == local.kind
                             && devices[index].chat == local.chat
+                            && devices[index].capabilities == local.capabilities
                             && current.drive == authority.drive_keys() =>
                     {
                         current
@@ -1254,20 +1257,26 @@ impl Engine {
                     location => {
                         match location {
                             // Its Chat keys renewed; a frame key it holds stays.
-                            Ok(index) => devices[index].chat = local.chat,
+                            Ok(index) => {
+                                devices[index].chat = local.chat;
+                                devices[index].capabilities = local.capabilities;
+                            }
                             Err(index) => devices.insert(index, local),
                         }
                         let next_sequence = current.sequence.checked_add(1).ok_or_else(|| {
                             ChatError::Trust("manifest sequence is exhausted".into())
                         })?;
-                        let next = authority.sign_manifest_with_binding(
-                            canonical_self.clone(),
-                            next_sequence,
-                            Some(current.manifest_hash().map_err(ChatError::Trust)?),
-                            current.identity_key.clone(),
-                            current.identity_binding.clone(),
-                            devices,
-                            issued_at,
+                        let next = authority.keep_from_head(
+                            authority.sign_manifest_with_binding(
+                                canonical_self.clone(),
+                                next_sequence,
+                                Some(current.manifest_hash().map_err(ChatError::Trust)?),
+                                current.identity_key.clone(),
+                                current.identity_binding.clone(),
+                                devices,
+                                issued_at,
+                            )?,
+                            Some(&current),
                         )?;
                         next.verify_successor(Some(&current))
                             .map_err(ChatError::Trust)?;
@@ -1345,14 +1354,17 @@ impl Engine {
             .sequence
             .checked_add(1)
             .ok_or_else(|| ChatError::Trust("manifest sequence is exhausted".into()))?;
-        let candidate = authority.sign_manifest_with_binding(
-            canonical_self.clone(),
-            next_sequence,
-            Some(current.manifest_hash().map_err(ChatError::Trust)?),
-            current.identity_key.clone(),
-            current.identity_binding.clone(),
-            devices,
-            issued_at,
+        let candidate = authority.keep_from_head(
+            authority.sign_manifest_with_binding(
+                canonical_self.clone(),
+                next_sequence,
+                Some(current.manifest_hash().map_err(ChatError::Trust)?),
+                current.identity_key.clone(),
+                current.identity_binding.clone(),
+                devices,
+                issued_at,
+            )?,
+            Some(&current),
         )?;
         candidate
             .verify_successor(Some(&current))

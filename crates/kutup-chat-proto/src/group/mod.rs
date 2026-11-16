@@ -24,6 +24,7 @@ pub mod link;
 #[cfg(test)]
 mod tests;
 
+use crate::capabilities::Capability;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_crypto::chat_group::{
@@ -438,6 +439,39 @@ pub enum GroupActionV1 {
 }
 
 impl GroupActionV1 {
+    /// The capability every Chat device of every member account lists before
+    /// a change carrying this action goes to the group
+    /// (docs/plans/format-evolution.md, rule 8; check with
+    /// [`crate::AccountManifestV3::chat_devices_list`]). Every action of the
+    /// wipe's release is [`Capability::GroupChangesV1`]; an action added
+    /// later is *refuse* to a reader that doesn't know it, so it names a
+    /// capability of its own here (the match has no wildcard for that).
+    pub fn capability(&self) -> Capability {
+        match self {
+            Self::Genesis { .. }
+            | Self::AddSlot { .. }
+            | Self::RevokeSlot { .. }
+            | Self::Claim { .. }
+            | Self::JoinFromLink { .. }
+            | Self::RequestToJoin { .. }
+            | Self::CancelRequest
+            | Self::ApproveRequest { .. }
+            | Self::DenyRequest { .. }
+            | Self::RemoveMember { .. }
+            | Self::Leave
+            | Self::ModifyRole { .. }
+            | Self::ModifyOwnEntry { .. }
+            | Self::ModifyAttribute { .. }
+            | Self::ModifyAccess { .. }
+            | Self::ModifyAnnouncementsOnly { .. }
+            | Self::ModifyInviteLink { .. }
+            | Self::Ban { .. }
+            | Self::Unban { .. }
+            | Self::ModifyBanList { .. }
+            | Self::Terminate => Capability::GroupChangesV1,
+        }
+    }
+
     /// Actions by a pseudonym that isn't yet a member; such a change carries
     /// exactly one action.
     pub fn is_by_newcomer(&self) -> bool {
@@ -450,6 +484,29 @@ impl GroupActionV1 {
                 | Self::CancelRequest
         )
     }
+}
+
+/// Whether a change of `actions` may go to a group whose member accounts'
+/// verified manifests are `members` (rule 8): every Chat device of every
+/// member lists each action's capability. The capabilities missing, by code,
+/// when not.
+pub fn missing_capabilities<'a>(
+    actions: &[GroupActionV1],
+    members: impl IntoIterator<Item = &'a crate::AccountManifestV3>,
+) -> Vec<u16> {
+    let mut needed: Vec<Capability> = actions.iter().map(GroupActionV1::capability).collect();
+    needed.sort_unstable();
+    needed.dedup();
+    let mut missing = Vec::new();
+    for manifest in members {
+        for capability in &needed {
+            if !manifest.chat_devices_list(*capability) && !missing.contains(&capability.code()) {
+                missing.push(capability.code());
+            }
+        }
+    }
+    missing.sort_unstable();
+    missing
 }
 
 /// A change: revision `n + 1` of the group, signed by its actor's pseudonym.

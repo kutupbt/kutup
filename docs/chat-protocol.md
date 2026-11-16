@@ -165,9 +165,57 @@ normative in
 - 1-127 strictly ordered device records, one per device of the account of
   every kind: device id; kind (`chat`, `editor`, `cli`); for a device that
   takes Chat, its Direct Chat suite and registration id; for one that edits,
-  its Ed25519 frame key; and the hash of its sign-in (`session`). Messages go
-  to the devices with Chat keys only;
+  its Ed25519 frame key; the hash of its sign-in (`session`); and its
+  capabilities, the codes of what it reads. Messages go to the devices with
+  Chat keys only;
+- the account's identity rotations (`successions`), when there are any;
+- account-wide `extensions`, each a code and its bytes;
 - Ed25519 signature by the account self-authority.
+
+**How the manifest grows** (docs/plans/format-evolution.md). The reader reads
+`manifestVersion` and `minVersion` before anything else: a version it can't
+read (no `minVersion` at or below its own) is *newer than me* ("update
+Kutup"), never corrupt. A later version that older readers may read writes
+`minVersion` and signs this layout, its additions in `extensions`; a
+successor a reader signs is its own version and keeps the head's extensions.
+Three things are open enums of class *skip*, kept, signed as received and
+ignored when unknown:
+
+- **Capabilities** (rule 8): per device, strictly ascending `u16` codes, at
+  most 64, never 0. A sender uses a new format or action toward an account
+  only when every device that must read it lists the code
+  (`AccountManifestV3::chat_devices_list`, `editing_devices_list`). A device
+  lists what its build reads and lists itself again after an update that
+  reads something new. Registry (`kutup_chat_proto::Capability`):
+
+  | Code | Name | Listed by | Means |
+  |---|---|---|---|
+  | 1 | `GroupChangesV1` | Chat devices, a CLI that takes Chat | reads `GroupChangeV1` with every action of the wipe's release |
+  | 2 | `DriveBlocksV2` | editors, the CLI | reads Drive's block format (file metadata `v` 2, block manifests and blocks) |
+
+  Every group action names its capability (`GroupActionV1::capability`;
+  today all are `GroupChangesV1`); `group::missing_capabilities` checks a
+  change against the members' manifests.
+- **Extensions**: account-wide, strictly ascending codes (never 0), at most
+  16, each value 1-1024 bytes (canonical base64). No code is defined yet.
+- **Device kinds**: a kind this build doesn't know (a name of 1-32 bytes of
+  `a-z`, `0-9`, `-`) is kept when its entry carries no Chat keys; one with
+  Chat keys is *newer than me*. Registration and the server take only the
+  kinds they know: a new kind ships server first.
+
+The signing bytes are the domain `kutup/account/manifest/v3\0`;
+`manifestVersion` (u16); `minVersion` (u16, 0 when absent); the account id
+(16 bytes, never the server); incarnation id (32); sequence (u64);
+`previousHash` (presence byte, u32 length, text); `issuedAt` (u32 length,
+text); authority key id (32); self-authority key (32); identity key and
+binding (presence byte, 33 and 64 bytes); Drive suite (u16), HPKE and signing
+keys; the device count (u32) and per device its id (u32), kind name (u32
+length, text), Chat keys (presence byte, suite u16, registration id u32),
+frame key (presence byte, 32 bytes), session (32), and capability count (u8)
+with each code (u16); the extension count (u8) with each code (u16), length
+(u16) and bytes; then, only when there are any, the succession count (u8) and
+each succession. All integers are big-endian; empty capability and extension
+lists sign one zero byte each.
 
 A bundle, or a server's `409`/`410`, that disagrees with the verified
 manifest's registration ids is refused, never answered with a new session.

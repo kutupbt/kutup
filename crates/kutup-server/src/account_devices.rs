@@ -149,7 +149,7 @@ pub(crate) async fn check_listed_rows(
             },
             _ => false,
         };
-        if DeviceKind::parse(kind).ok() != Some(listed.kind)
+        if DeviceKind::parse(kind).ok().as_ref() != Some(&listed.kind)
             || session_hash(*session_id) != listed.session
             || frame_key_listed.as_ref().map(|key| key.as_slice()) != frame_key.as_deref()
             || !chat_holds
