@@ -74,18 +74,20 @@ describe('securityEventLabel for names', () => {
 })
 
 describe('securityEventDevice', () => {
-  const firefox = 'Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0'
-
-  it('names the device as the session list does', () => {
-    expect(securityEventDevice({ client: 'web-account', userAgent: firefox })).toEqual({
+  it('names the device as the session list does, with the major version', () => {
+    expect(securityEventDevice({ client: 'web-account', browser: 'Firefox', browserMajor: 131, os: 'Linux' })).toEqual({
       key: 'settings.sessions.browserOn',
-      values: { browser: 'Firefox', os: 'Linux' },
+      values: { browser: 'Firefox 131', os: 'Linux' },
     })
-    expect(securityEventDevice({ client: 'cli', userAgent: 'kutup-cli/0.1' })).toEqual({ key: 'settings.sessions.cli' })
-    expect(securityEventDevice({ client: 'web-pass', userAgent: null })).toEqual({ key: 'settings.sessions.unknownBrowser' })
+    expect(securityEventDevice({ client: 'web-account', os: 'Linux' })).toEqual({
+      key: 'settings.security.events.device',
+      values: { device: 'Linux' },
+    })
+    expect(securityEventDevice({ client: 'cli', browser: 'Kutup CLI', browserMajor: 0 })).toEqual({ key: 'settings.sessions.cli' })
+    expect(securityEventDevice({ client: 'web-pass' })).toEqual({ key: 'settings.sessions.unknownBrowser' })
   })
 
   it('names none when no session made it (a recovery, an administrator)', () => {
-    expect(securityEventDevice({ client: null, userAgent: null })).toBeNull()
+    expect(securityEventDevice({ client: null })).toBeNull()
   })
 })

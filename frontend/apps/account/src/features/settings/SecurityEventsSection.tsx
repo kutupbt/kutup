@@ -21,6 +21,7 @@ export function SecurityEventsSection() {
   const { t, i18n } = useTranslation()
   const events = useSecurityEvents()
   const list = events.data?.pages.flatMap((page) => page.events) ?? []
+  const retentionDays = events.data?.pages[0]?.retentionDays
   // A cursor the server no longer knows (400): start again from the newest.
   const staleCursor =
     events.isFetchNextPageError && isAxiosError(events.error) && events.error.response?.status === 400
@@ -54,6 +55,7 @@ export function SecurityEventsSection() {
                 <li key={event.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-sm first:pt-0 last:pb-0">
                   <span className="font-medium">{label(event)}</span>
                   {device(event) ? <span className="text-muted-foreground">{device(event)}</span> : null}
+                  {event.count > 1 ? <Badge variant="neutral">{t('settings.security.events.times', { count: event.count })}</Badge> : null}
                   {event.byAdmin ? <Badge variant="warn">{t('settings.security.events.byAdmin')}</Badge> : null}
                   {event.thisSession ? <Badge variant="neutral">{t('settings.security.events.thisDevice')}</Badge> : null}
                   <time className="ml-auto text-muted-foreground" dateTime={event.at}>
@@ -67,6 +69,9 @@ export function SecurityEventsSection() {
             <Button variant="outline" size="sm" className="mt-3" loading={events.isFetchingNextPage} onClick={() => void events.fetchNextPage()}>
               {t('settings.security.events.older')}
             </Button>
+          ) : null}
+          {retentionDays ? (
+            <p className="mt-3 text-xs text-muted-foreground">{t('settings.security.events.kept', { count: retentionDays })}</p>
           ) : null}
         </CardContent>
       </Card>

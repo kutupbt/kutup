@@ -10,6 +10,7 @@ import { mediaKindOf } from '@kutup/files/media'
 import type { MediaMetadataV1 } from '@kutup/crypto'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import api from '@kutup/session/client'
+import { getAccessToken } from '@kutup/session/store'
 import type { FileRow } from '@kutup/session/api-types'
 import { joinLivePhotos, type Photo } from '../library/library'
 import { newestFirst } from '../library/timeline'
@@ -18,7 +19,18 @@ import { newestFirst } from '../library/timeline'
 // a link key that lives only in the URL fragment, so the server never holds
 // it; the page opens the album and its photos in the browser.
 
-export type PublicFailure = 'missingKey' | 'notFound' | 'expired' | 'removed' | 'badKey' | 'notAlbum' | 'other'
+export type PublicFailure =
+  | 'missingKey'
+  | 'notFound'
+  | 'expired'
+  | 'removed'
+  | 'blocked'
+  | 'blockedLegal'
+  | 'sharingOff'
+  | 'signInRequired'
+  | 'badKey'
+  | 'notAlbum'
+  | 'other'
 
 export class PublicAlbumError extends Error {
   constructor(public readonly failure: PublicFailure) {
@@ -80,8 +92,13 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
   } catch (error) {
     const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
     const status = response?.status
+    const code = response?.data?.code
+    // The server's controls on public links (docs/plans/server-personal-data.md, A11).
+    if (code === 'link_blocked') throw new PublicAlbumError(status === 451 ? 'blockedLegal' : 'blocked')
+    if (code === 'sharing_off') throw new PublicAlbumError('sharingOff')
+    if (code === 'sign_in_required') throw new PublicAlbumError('signInRequired')
     // Taken down by the server's administrators: `410` `link_removed`.
-    const gone = response?.data?.code === 'link_removed' ? 'removed' : 'expired'
+    const gone = code === 'link_removed' ? 'removed' : 'expired'
     throw new PublicAlbumError(status === 404 ? 'notFound' : status === 410 ? gone : 'other')
   }
   if (share.collectionKind !== 'album' || !share.nameEnvelope || !share.nameRevision) throw new PublicAlbumError('notAlbum')
@@ -157,7 +174,7 @@ export async function readPublicOriginal(token: string, photo: PublicPhoto, sign
   const key = await fileKeyAt(file, file.contentKeyGeneration)
   const url = `${await resolveApiBase()}${base(token)}/download/${file.id}`
   const parts: BlobPart[] = []
-  for await (const { plain } of fetchDecryptedChunks(url, key, { fileId: file.id, generation: file.contentKeyGeneration }, '', signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, key, { fileId: file.id, generation: file.contentKeyGeneration }, getAccessToken() ?? '', signal)) {
     parts.push(new Blob([plain as BlobPart]))
   }
   return new Blob(parts, { type: file.mimeType })

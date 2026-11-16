@@ -14,21 +14,21 @@ Needs the wipe (every format is persistent); goes into `wipe-2`.
 
 ## Today (surveyed on wipe-2, 2026-11-04)
 
-| # | Value | Format | Binds | Size | Chain | Server reads |
-|---|---|---|---|---|---|---|
-| 1 | Contact card | `KUTCC2` | binding, UID (≤200 chars), rev | Bucket(256), ≤512 KiB | – | rev (+ a signed summary) |
-| 2 | Mail folder/label/filter name | `KUTMN2` | binding, kind, id16, rev | Bucket(256), ≤400 B | – | rev (CAS) |
-| 3 | Identity pins | `KUTIP3` | binding, rev; **no list id** | Bucket(256), ≤4 MiB | anchors in plaintext | rev (CAS) |
-| 4 | Chat group list entry | `KUTPGL1` | binding, HMAC entry id, rev | fixed 4032 B | – | rev (CAS) |
-| 5 | Chat contact list entry | `KUTPCC1` | binding, HMAC entry id, rev | fixed 2048 B | – | rev (CAS) |
-| 6 | Photos library | `KUTPPL1` | incarnation, rev, previous; **no binding** | none, ≤4 MiB | header digest chain | header: incarnation, rev, previous |
-| 7 | Chat attachment ledger | `KUTPCL1` | incarnation, entity16, rev, previous; **no binding** | none, ≤16 KiB | header digest chain | header: entity, incarnation, rev, previous |
-| 8a | Account head | `KUTAH1` | binding, sequence | none, ≤16 KiB | `previous` in plaintext | sequence (CAS) |
-| 8b | Local anchor (device only) | `KUTAL1` | binding, incarnation | none, ≤16 KiB | – | – |
-| 9 | Revision-guard seen record (device only) | none, 48 B | HMAC entry; **no header** | fixed | – | – |
-| 10 | Mail search store-key wrap (device only) | `KUTMSW1` | **nothing** | fixed 82 B | – | – |
-| 11 | Joined meetings | none | **nothing** (constant AAD) | fixed 1024 B | – | length only |
-| 12 | Chat profile key, own copy | `KUTPPE1` purpose 3 | address, version, rev, device | fixed | – | whole header |
+| # | Value | Format | Binds | Size | Chain | Server reads | Now |
+|---|---|---|---|---|---|---|---|
+| 1 | Contact card | `KUTCC2` | binding, UID (≤200 chars), rev | Bucket(256), ≤512 KiB | – | rev (+ a signed summary) | `ContactCard` (8), slice 2 |
+| 2 | Mail folder/label/filter name | `KUTMN2` | binding, kind, id16, rev | Bucket(256), ≤400 B | – | rev (CAS) | `MailName` (9), slice 2 |
+| 3 | Identity pins | `KUTIP3` | binding, rev; **no list id** | Bucket(256), ≤4 MiB | anchors in plaintext | rev (CAS) | `IdentityPins` (10), slice 2 |
+| 4 | Chat group list entry | `KUTPGL1` | binding, HMAC entry id, rev | fixed 4032 B | – | rev (CAS) | `ChatGroupListEntry` (11), slice 3a |
+| 5 | Chat contact list entry | `KUTPCC1` | binding, HMAC entry id, rev | fixed 2048 B | – | rev (CAS) | `ChatContactListEntry` (12), slice 3a |
+| 6 | Photos library | `KUTPPL1` | incarnation, rev, previous; **no binding** | none, ≤4 MiB | header digest chain | header: incarnation, rev, previous | `PhotosLibrary` (13), slice 4a |
+| 7 | Chat attachment ledger | `KUTPCL1` | incarnation, entity16, rev, previous; **no binding** | none, ≤16 KiB | header digest chain | header: entity, incarnation, rev, previous | `ChatAttachmentLedger` (14), slice 4a |
+| 8a | Account head | `KUTAH1` | binding, sequence | none, ≤16 KiB | `previous` in plaintext | sequence (CAS) | `AccountHead` (17), slice 4b |
+| 8b | Local anchor (device only) | `KUTAL1` | binding, incarnation | none, ≤16 KiB | – | – | `AccountLocalAnchor` (18), slice 4b |
+| 9 | Revision-guard seen record (device only) | none, 48 B | HMAC entry; **no header** | fixed | – | – | `RevisionSeen` (19), slice 5 |
+| 10 | Mail search store-key wrap (device only) | `KUTMSW1` | **nothing** | fixed 82 B | – | – | `MailSearchStoreKey` (20), slice 5 |
+| 11 | Joined meetings | none | **nothing** (constant AAD) | fixed 1024 B | – | length only | `JoinedMeeting` (15), slice 3b |
+| 12 | Chat profile key, own copy | `KUTPPE1` purpose 3 | address, version, rev, device | fixed | – | whole header | `ChatProfileKeyWrap` (16), slice 3b |
 
 None binds the master-key generation. Every one is "an AEAD under an MK
 subkey with some AAD": the differences are what each forgot to bind.

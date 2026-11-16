@@ -270,6 +270,7 @@ pub enum SettingSection {
     TwoFactor,
     Drive,
     Federation,
+    Privacy,
 }
 
 /// A whole-number setting administrators set: its key, its field in
@@ -877,6 +878,121 @@ pub const WEBAUTHN_CEREMONY_SECONDS: NumericSetting = NumericSetting {
     unit: SettingUnit::Seconds,
     per_account: false,
 };
+/// How long the separate dump of the account data keys is kept, in days
+/// (docs/plans/server-personal-data.md, A2): a deleted account's key is in no
+/// copy after this long, so its sealed fields are unreadable in every backup.
+/// `scripts/backup-postgres.sh` reads it.
+pub const KEY_BACKUP_KEEP_DAYS: NumericSetting = NumericSetting {
+    key: "key_backup_keep_days",
+    field: "keyBackupKeepDays",
+    default: 7,
+    min: 1,
+    max: 90,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// How long an account's security events are kept, in days (its newest 500
+/// at most; docs/plans/server-personal-data.md, A8). The account's security
+/// page says it.
+pub const SECURITY_EVENT_RETENTION_DAYS: NumericSetting = NumericSetting {
+    key: "security_event_retention_days",
+    field: "securityEventRetentionDays",
+    default: 365,
+    min: 30,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// How long the admin log is kept, in days.
+pub const ADMIN_AUDIT_RETENTION_DAYS: NumericSetting = NumericSetting {
+    key: "admin_audit_retention_days",
+    field: "adminAuditRetentionDays",
+    default: 730,
+    min: 90,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// How long a session that ended (signed out, ended elsewhere, or expired)
+/// is kept, with its sealed browser, in days (A10).
+pub const SESSION_RECORD_GRACE_DAYS: NumericSetting = NumericSetting {
+    key: "session_record_grace_days",
+    field: "sessionRecordGraceDays",
+    default: 30,
+    min: 1,
+    max: 365,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// How long an account asked to be deleted waits, closing, before it is
+/// deleted, in days (A5). Its owner can keep it until then.
+pub const ACCOUNT_CLOSING_DAYS: NumericSetting = NumericSetting {
+    key: "account_closing_days",
+    field: "accountClosingDays",
+    default: 14,
+    min: 1,
+    max: 90,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// How long the destruction log keeps a row, in days (A7): longer than any
+/// backup is kept, so a restore can replay it.
+pub const DESTRUCTION_EVENT_RETENTION_DAYS: NumericSetting = NumericSetting {
+    key: "destruction_event_retention_days",
+    field: "destructionEventRetentionDays",
+    default: 1095,
+    min: 365,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// The most security-log events kept per account of each kind (A8): a kind
+/// that repeats (a wrong password) can't push out the rare ones (a password
+/// change, a recovery).
+pub const SECURITY_EVENTS_KEPT_PER_KIND: NumericSetting = NumericSetting {
+    key: "security_events_kept_per_kind",
+    field: "securityEventsKeptPerKind",
+    default: 100,
+    min: 10,
+    max: 1000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+/// A failed sign-in (or an admin's view) within this many seconds of the same
+/// kind's last one is counted into it instead of a row of its own (A8).
+pub const SECURITY_EVENT_FOLD_SECONDS: NumericSetting = NumericSetting {
+    key: "security_event_fold_seconds",
+    field: "securityEventFoldSeconds",
+    default: 600,
+    min: 60,
+    max: 86400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// How long a finished held send (undo send, scheduled) is kept, its sealed
+/// outcome with it, before it goes (A2: what names correspondents goes when
+/// it has done its job).
+pub const MAIL_OUTBOX_KEEP_SECONDS: NumericSetting = NumericSetting {
+    key: "mail_outbox_keep_seconds",
+    field: "mailOutboxKeepSeconds",
+    default: 86400,
+    min: 600,
+    max: 30 * 86400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+pub const PRIVACY_SETTINGS: [NumericSetting; 9] = [
+    KEY_BACKUP_KEEP_DAYS,
+    SECURITY_EVENT_RETENTION_DAYS,
+    SECURITY_EVENTS_KEPT_PER_KIND,
+    SECURITY_EVENT_FOLD_SECONDS,
+    ADMIN_AUDIT_RETENTION_DAYS,
+    SESSION_RECORD_GRACE_DAYS,
+    ACCOUNT_CLOSING_DAYS,
+    DESTRUCTION_EVENT_RETENTION_DAYS,
+    MAIL_OUTBOX_KEEP_SECONDS,
+];
+
 pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [
     TWO_FACTOR_RECOVERY_CODES,
     SECURITY_KEYS_PER_ACCOUNT,
@@ -1122,6 +1238,7 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
         .chain(section(SettingSection::TwoFactor, &TWO_FACTOR_SETTINGS))
         .chain(section(SettingSection::Drive, &DRIVE_SETTINGS))
         .chain(section(SettingSection::Federation, &FEDERATION_SETTINGS))
+        .chain(section(SettingSection::Privacy, &PRIVACY_SETTINGS))
 }
 
 /// The multi-recipient limits now.

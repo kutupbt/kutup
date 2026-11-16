@@ -3199,7 +3199,64 @@ fn calls_phase(c: &Client, a: &str, b: &str) {
     println!("GROUP CALL TOKENS ACROSS SERVERS VERIFIED");
 }
 
+/// The queued plain send of an account on A whose federation went off
+/// before B came back (docs/plans/server-personal-data.md, the switch).
+const WITHDRAWN_ROW_ID: &str = "10000000-0000-4000-8000-0000000000aa";
+
+/// While B is down: an account on A queues a plain send to Bob ahead of
+/// Alice's, then turns its federation off. Made in A's database (the account
+/// needs no Chat device for it): A's outbox is all the withdrawal reads.
+fn queue_withdrawn_send(a_db: &str) {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool = runtime.block_on(sqlx::PgPool::connect(a_db)).unwrap();
+    runtime.block_on(async {
+        let user = uuid::Uuid::new_v4();
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                public_key, account_authority_public_key, account_authority_key_id,
+                account_incarnation_id, drive_signing_public_key, federation)
+             VALUES ($1, $2, '', '', '', '', '', '', '', 'off')",
+        )
+        .bind(user)
+        .bind(format!("withdrawn{}", &user.simple().to_string()[..10]))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        let sequence: i64 = sqlx::query_scalar(
+            "INSERT INTO federation_sequences (kind, destination, next_sequence)
+             VALUES ('chat', 'b.test', 2)
+             ON CONFLICT (kind, destination) DO UPDATE SET
+                 next_sequence = federation_sequences.next_sequence + 1
+             RETURNING next_sequence - 1",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        let bob: uuid::Uuid = bob_account().account_id.parse().unwrap();
+        sqlx::query(
+            "INSERT INTO federation_outbox (id, kind, destination, sequence, idempotency_key,
+                 sender_user_id, recipient_account_id, payload)
+             VALUES ($1, 'chat', 'b.test', $2, $3, $4, $5, $6)",
+        )
+        .bind(uuid::Uuid::parse_str(WITHDRAWN_ROW_ID).unwrap())
+        .bind(sequence)
+        .bind(format!("{user}:1:withdrawn"))
+        .bind(user)
+        .bind(bob)
+        .bind(json!({ "sender": user, "request": { "envelopes": [] } }))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    });
+}
+
 fn queue_phase(c: &Client, a: &str) {
+    // Ahead of Alice's queued send: one that must never leave.
+    if let Ok(a_db) = std::env::var("KUTUP_FEDERATION_DB_A") {
+        queue_withdrawn_send(&a_db);
+    }
     let alice_token = login(c, a, ALICE_USERNAME);
     let response = send(
         c,
@@ -3381,6 +3438,27 @@ fn verify_queued_media_answers(c: &Client, a: &str, b: &str, alice_token: &str, 
     println!("QUEUED MEDIA REFUSAL AND REPEATS VERIFIED");
 }
 
+/// A's pending and settled plain sends to B, for a failure's message.
+fn outbox_to_b() -> String {
+    let Ok(db_a) = std::env::var("KUTUP_FEDERATION_DB_A") else {
+        return "(no database)".into();
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let pool = sqlx::PgPool::connect(&db_a).await.unwrap();
+        type Row = (uuid::Uuid, i64, String, i32, Option<String>, Option<String>);
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT id, sequence, state, attempts, error_class, last_error
+                   FROM federation_outbox WHERE kind = 'chat' AND destination = 'b.test'
+                  ORDER BY sequence DESC LIMIT 5",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        format!("{rows:?}")
+    })
+}
+
 fn verify_retry_phase(c: &Client, a: &str, b: &str) {
     let bob_token = login(c, b, BOB_USERNAME);
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -3397,9 +3475,50 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
         }
         assert!(
             Instant::now() < deadline,
-            "durably queued federation send was not retried"
+            "durably queued federation send was not retried; A's queue to B: {}",
+            outbox_to_b()
         );
         std::thread::sleep(Duration::from_millis(500));
+    }
+
+    // Alice's send went behind the off account's: that one was withdrawn,
+    // never sent; B used its sequence up and went on with no gap.
+    if let (Ok(db_a), Ok(db_b)) = (
+        std::env::var("KUTUP_FEDERATION_DB_A"),
+        std::env::var("KUTUP_FEDERATION_DB_B"),
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (settled, used_up) = runtime.block_on(async {
+            let pool_a = sqlx::PgPool::connect(&db_a).await.unwrap();
+            let pool_b = sqlx::PgPool::connect(&db_b).await.unwrap();
+            let settled: (String, Option<String>, Option<serde_json::Value>) = sqlx::query_as(
+                "SELECT state, error_class, answer FROM federation_outbox WHERE id = $1",
+            )
+            .bind(uuid::Uuid::parse_str(WITHDRAWN_ROW_ID).unwrap())
+            .fetch_one(&pool_a)
+            .await
+            .unwrap();
+            let used_up: Option<serde_json::Value> = sqlx::query_scalar(
+                "SELECT answer FROM federation_inbound
+                  WHERE kind = 'chat' AND origin = 'a.test' AND transaction_id = $1",
+            )
+            .bind(WITHDRAWN_ROW_ID)
+            .fetch_optional(&pool_b)
+            .await
+            .unwrap();
+            (settled, used_up)
+        });
+        assert_eq!(
+            (settled.0.as_str(), settled.1.as_deref()),
+            ("rejected", Some("federation_off")),
+            "the off account's queued send is withdrawn: {:?}",
+            settled.2
+        );
+        assert_eq!(
+            used_up.as_ref().map(|answer| answer["withdrawn"].clone()),
+            Some(json!(true)),
+            "B used the withdrawn sequence up"
+        );
     }
 
     let media_deadline = Instant::now() + Duration::from_secs(30);

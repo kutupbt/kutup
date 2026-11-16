@@ -6,8 +6,15 @@ vi.mock('axios', async (importOriginal) => {
   const actual = await importOriginal<typeof import('axios')>()
   return { ...actual, default: { ...actual.default, post: (...a: unknown[]) => post(...a) } }
 })
-vi.mock('@kutup/session/client', () => ({ default: { post: (...a: unknown[]) => post(...a) } }))
+vi.mock('@kutup/session/client', () => ({
+  default: {
+    post: (...a: unknown[]) => post(...a),
+    // The account's switch: this account talks to other servers.
+    get: (url: string) => Promise.resolve({ data: url === '/user/me' ? { federation: 'on' } : {} }),
+  },
+}))
 vi.mock('@kutup/session/apiBase', () => ({ apiBase: () => '/api' }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', address: 'me@home.test' }) }))
 
 import { ApiChatTransport, PEER_UNSUPPORTED } from './transport'
 

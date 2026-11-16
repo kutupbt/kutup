@@ -43,6 +43,7 @@ Specific codes, where an app does something particular (a test in
 | Code | Status | Meaning |
 |---|---|---|
 | `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
+| `unknownStreamControl` | 400 | `POST /api/fed/chat/stream-control`: a must-understand control code (`0x8000..=0xffff`) this server doesn't know; the sequence is not used up |
 | `noManifest` | 404 | `GET /api/chat/accounts/{accountId}/manifest` (and its federation route): the account has no Chat manifest, since no Chat device ever registered. Clients take only this 404 for "re-register as the account's first device"; any other 404 is an error |
 | `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber), or a manifest's `identityBinding`, not signed by the account's identity key |
 | `keysDiffer` | 409 | `POST /api/chat/keys/check`: the server holds other keys for this device; it uploads them again |
@@ -54,6 +55,7 @@ Specific codes, where an app does something particular (a test in
 | `devicesMismatch` | 409 | A manifest whose entries the server can't back: a listed device that isn't a live row of the account with the entry's kind, sign-in (`session`), frame key and Chat keys; or a re-registration that changes the account's non-Chat entries |
 | `identityMismatch` | 409 | A Chat registration or manifest naming another identity than the account's (it changes only by a distribution or a re-registration) |
 | `invalidCredentials` | 401 | A sign-in that does not finish: a wrong password, a name that is no account, a used or expired login id, a password changed since the sign-in started (not an expired session). At `login/2fa`: a wrong code, the token still good |
+| `authenticatorLost` | 401 / 409 | The authenticator app's secret can't be read any more (its account data key is gone, as after a restore without it): at `login/2fa`, sign in with a recovery code or a security key; at `2fa/verify`, set the app up again. An administrator can turn two-step sign-in off |
 | `preAuthInvalid` | 401 | `login/2fa`: the second step's token is expired, not one, or from a password the account no longer has: back to the password step |
 | `setupTokenInvalid` | 401 | `complete-setup` (and `register/start` under it): the setup token is expired, not one, already used, or from a temporary password since replaced: sign in again |
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
@@ -76,6 +78,10 @@ Specific codes, where an app does something particular (a test in
 | `idTaken` | 409 | Creating a group: the id the browser drew is some group's: draw another |
 | `noAccountKey` | 400 | A shared mailbox's key share for an account not set up yet (no account keys to seal it to) |
 | `grantInvalid` | 403 | A one-time grant that does not fit: unknown, used, expired, for another purpose, account or session (one answer for all): prove the password again |
+| `lastAdmin` | 403 | The last usable administrator can't close their own account: make someone else an administrator first |
+| `accountClosing` | 409 | The account is closing (docs/plans/server-personal-data.md, A5): keep it before suspending it, or it is closing already |
+| `accountDeleting` | 409 | A closing account past its date is being deleted and can't be kept |
+| `legalHold` | 409 | The account is under a legal hold: nothing of it is deleted until the hold is lifted |
 | `opaqueKeyStale` | 409 | An OPAQUE record made against a setup that is no longer the server's current one: register again |
 | `opaqueKeyMissing` | 500 | The account's record names an OPAQUE setup whose key is not in `OPAQUE_SETUP_KEYS`: the operator restores the key (the account can recover with its phrase meanwhile) |
 | `keyBindingTaken` | 409 | The key binding drawn for a new record is another account's: draw another |
@@ -155,6 +161,15 @@ Specific codes, where an app does something particular (a test in
 | `deviceNotAuthorized` | 403 | A collaboration device the account has not vouched for (an unanswered, used or expired challenge, a statement that does not verify, a revoked device or one of an earlier incarnation): register one again, do not sign out |
 | `tooManyDevices` | 409 | The account has 20 collaboration devices in use (trusted, renewed within 30 days): the user removes one under Account → Devices; nothing is removed for them |
 | `link_removed` | 404/410 | The shared link was removed |
+| `link_blocked` | 451/410 | An operator blocked the public link: `451` for a legal order, `410` otherwise; `reason` is `legal_order`, `abuse` or `other` |
+| `sharing_off` | 403/410 | Public links are off, for the whole server or the link owner's account: `403` when making one (with `scope`: `site` or `account`), `410` when opening one (no scope: a link's holder isn't told whose switch it was) |
+| `targetBlocked` | 409 | Making a public link to what an operator blocked links to (`reason`) |
+| `federationOff` | 403 | This account doesn't talk to other servers (Settings → Privacy): a request that would reach one is refused |
+| `consentRequired` | 409 | Turning on talking to other servers needs the `federation_abroad` consent: a text for it is published (`purpose` names it) |
+| `acknowledgementsRequired` | 400 | Sign-up without confirming the current version of every required document (`kinds` names those missing); see `GET /api/legal/documents` |
+| `documentNotCurrent` | 400 | A document named that is not the current version (an acknowledgement, or the text a consent is given under) |
+| `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
+| `sign_in_required` | 403 | Public links on this server open only for someone signed in to it |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `keysPendingUpgrade` | 409 | The person's Drive key is still X25519 (identity suite 1): share with them once they have signed in again (docs/plans/pq-shares.md) |
 | `peerOutdated` | 502 | The other server runs an older version without post-quantum Drive keys and must upgrade before sharing |
@@ -212,7 +227,11 @@ every session of the account.
 **Passwords are OPAQUE** (RFC 9807, docs/plans/opaque.md): the server keeps a
 record per account that is useless without an online exchange, and never sees
 the password or anything to test a guess against offline. Sign-in is
-`login/start` then `login/finish`; a new password is `opaque/register/start`
+`login/start` then `login/finish`. A wrong password fails on the client (the
+server's answer does not open), which then sends `POST /api/auth/login/abort`
+`{"loginId"}` (always `204`, no auth) instead of a finish; the account's
+security log counts it, and counts a sign-in left unfinished the same way when
+it expires (two minutes) or newer ones push it out. A new password is `opaque/register/start`
 then `opaque/register/finish` (or the request that creates the account). Every
 binary value is canonical base64 of the `opaque-ke` messages; suite 1 is
 ristretto255, Triple-DH and Argon2id (64 MiB, t = 3, p = 1).
@@ -703,7 +722,12 @@ all Kutup web apps on that browser; they notice on their next request.
 ### GET /api/auth/sessions
 
 The account's live sessions, most recently used first. `current` marks the
-caller's own sign-in (its root and the sessions forked from it).
+caller's own sign-in (its root and the sessions forked from it). `browser`,
+`browserMajor` and `os` are what the server parsed from the sign-in's
+`User-Agent`; the header itself is never stored, and the parsed family is
+sealed under the account's data key (docs/plans/server-personal-data.md, A10).
+Each is absent when unknown. A session that ended is kept for **Keep ended
+sessions** (a site setting, default 30 days), then deleted.
 
 **Auth:** Bearer
 
@@ -713,7 +737,9 @@ caller's own sign-in (its root and the sessions forked from it).
     "id": "<uuid>",
     "clientType": "web-drive",
     "parentId": "<uuid of the web-account session>",
-    "userAgent": "Mozilla/5.0 …",
+    "browser": "Firefox",
+    "browserMajor": 128,
+    "os": "Linux",
     "createdAt": "2026-09-23T14:07:00Z",
     "lastUsedAt": "2026-09-23T14:12:00Z",
     "current": true
@@ -1108,12 +1134,86 @@ receiving nothing.
   `POST /api/admin/names/:name/free` (free now) → `204`; recorded on the
   account as `nameClosed` / `nameFreed`.
 
+### POST /api/user/close
+
+Ask for this account to be deleted (docs/plans/server-personal-data.md, A5).
+It is `closing` for `account_closing_days` (default 14), then deleted with
+everything in it; every sign-in, this one included, ends now. A sign-in before
+then is offered to keep it (`POST /api/auth/keep`). Recorded as
+`accountClosing`.
+
+**Auth:** Bearer JWT
+
+**Request body:** `{"grant": "kg1_…"}`: a reauth grant for `close`.
+
+**Response:** `200 OK` `{"closesAt": "2026-11-20T10:00:00Z"}`. `403
+grantInvalid`; `403` for the break-glass admin; `403 lastAdmin` for the last
+usable admin.
+
+### POST /api/auth/keep
+
+A sign-in of a closing account that passed every step answers (`409
+accountDeleting` once its date has passed; a closing account that was
+suspended doesn't sign in at all), instead of a session, `{"userId", "username", "closing": {"closesAt", "grant"}}`: the grant
+(purpose `keep`, minutes, once) keeps the account here. The account is active
+again (`accountKept`), and the answer is the sign-in's, with the session.
+
+**Request body:** `{"grant": "kg1_…"}`, with `X-Kutup-Client`.
+
+**Response:** `200 OK`, as a sign-in; `403 grantInvalid`, also once the
+account's date has passed (it is being deleted).
+
+### Legal documents, acknowledgements and consents
+
+docs/plans/server-personal-data.md, A3 and A4. The operator publishes its
+documents (the text lives at their `url`; the server keeps the SHA-256 of the
+exact text shown). Nothing published means nothing is asked.
+
+- `GET /api/legal/documents` (anyone): the current version of each kind, in
+  every language it was published in: `[{ id, kind, version, language, url,
+  sha256, requiredAtSignup, publishedAt }]`.
+- Sign-up (`POST /api/auth/register`) takes `acknowledgements: [<document
+  id>]`: the current version of each `requiredAtSignup` kind (any language),
+  recorded with the account; `400 acknowledgementsRequired` otherwise.
+- `GET /api/user/legal/pending`: the required documents whose current version
+  the caller hasn't confirmed (shown at the next sign-in);
+  `POST /api/user/legal/acknowledge` `{ documentIds }` confirms them (`204`;
+  `400 documentNotCurrent`).
+- `GET /api/user/consents`: `{ consents: [{ purpose, given, documentId, at }],
+  documents }`, each purpose's latest state and its current text.
+  `PUT /api/user/consents` `{ purpose, given, documentId? }` (`purpose`:
+  `federation_abroad` or `marketing`): giving one names the current document of
+  the purpose's kind when one is published (`400 documentNotCurrent`). Each
+  change is a new row; the records are append-only for the server.
+- `PUT /api/user/federation` `{ on, documentId? }`: whether this account's
+  Chat and Drive talk to other Kutup servers (`federation` in `/user/me`).
+  Turning it on, when a `federation_abroad` text is published, gives that
+  consent under `documentId` (or needs it given before: `409
+  consentRequired`); withdrawing the consent turns it off. While off, the
+  account's requests that would reach another server are `403
+  federationOff`, and to other servers it is no account (each of their
+  lookups, deliveries and share reads answers as for an unknown one); its
+  groups and shares stay, quiet. The apps refuse anonymous sealed sends to
+  other servers themselves (the server can't tell whose they are). Mail is
+  email, not federation, and isn't covered. A new account starts from the
+  site setting `federationDefault` (`GET`/`PUT /api/admin/settings`); an
+  administrator sets one account's with `federation` in
+  `PUT /api/admin/users/:id`.
+- Admin: `GET /api/admin/legal/documents` (every version);
+  `POST /api/admin/legal/documents` `{ kind, version, language, url, sha256,
+  requiredAtSignup }` publishes one (`201`; `400` for a malformed field;
+  `409 documentExists`), logged as `legal.publish`. A version is never edited.
+
 ### GET /api/user/security-events
 
 What changed the caller's sign-in, newest first: a new password, a recovery, a
-move to the server's current sign-in setup, an administrator's reset. Kept a
-year, or the newest 500. No IP addresses. An account reset keeps the earlier
-events.
+move to the server's current sign-in setup, an administrator's reset, a
+sign-in, a wrong password or second step, a sign-out, a session ended, an
+administrator opening the account's details. Kept `retentionDays` (a site
+setting, default 365), and of each kind at most the newest a second setting
+says (default 100), so repeated failures can't push out a password change. No
+IP addresses. An account reset keeps the earlier events. The log is append-only for the server when it
+runs as its own database role (docs/plans/server-personal-data.md, A8).
 
 **Auth:** Bearer JWT
 
@@ -1130,19 +1230,35 @@ one that is not one of the caller's events is `400`: start from the first page)
       "at": "2026-10-14T09:00:00Z",
       "thisSession": true,
       "client": "web-account",
-      "userAgent": "Mozilla/5.0 …",
-      "byAdmin": false
+      "browser": "Firefox",
+      "browserMajor": 128,
+      "os": "Linux",
+      "byAdmin": false,
+      "count": 1
     }
   ],
-  "next": "<uuid or null>"
+  "next": "<uuid or null>",
+  "retentionDays": 365
 }
 ```
 
 - `kind`: `passwordChange`, `recovery`, `rotate`, `adminReset`,
-  `accountReset`. More kinds will come; show an unknown one generally.
+  `accountReset`, the name and two-step kinds, and `signIn`,
+  `signInFailedPassword` (a sign-in that named this account and did not
+  finish: the client found the password wrong and ended it with
+  `login/abort`, or it was dropped unfinished),
+  `signInFailed2fa`, `signOut`, `sessionRevoked`, `allSessionsRevoked`,
+  `adminAccess`, `accountClosing` (the owner asked for the account to be
+  deleted), `accountKept`. More kinds will come; show an unknown one
+  generally.
+- `count`: how many times it happened. A wrong password, a wrong second step
+  and an administrator's view within ten minutes of the same kind's last one
+  are counted into it.
 - `thisSession`: made from the caller's own sign-in.
-- `client`, `userAgent`: what made it, as the session list shows it (absent
-  for a recovery or an administrator's reset).
+- `client`, `browser`, `browserMajor`, `os`: what made it, as the session list
+  shows it (absent for a recovery or an administrator's reset, and each
+  absent when unknown). Sealed for this event's own row, so it stays after the
+  session is deleted.
 - `byAdmin`: an administrator's reset.
 
 ---
@@ -2202,8 +2318,16 @@ draft's attachments go with it), and frees their storage.
 `counts`: `[{ "folder", "unread", "total" }]`, one per folder in use plus
 `starred`. `threads/:id`: the thread's messages, oldest first, as in the list.
 
-`GET /api/mail/messages` also takes `q` (subjects and addresses) and the
-folders `starred` and `all` (everything but Spam and Trash). Each message
+`GET /api/mail/messages` also takes `q` (subjects, senders and To/Cc), and
+advanced search's `from` (the sender) and `to` (To, Cc or Bcc), and the
+folders `starred` and `all` (everything but Spam and Trash). Searches match
+**whole words**, every word of the query, folded (case, accents, Turkish
+dotted and dotless I): `fatura ekim` finds "Ekim faturası" only if both words
+are there whole, so `fatur` finds nothing. An address matches whole, by its
+local part or domain (`ali@ornek.com`, `@ornek.com`), or by its words. The
+server keeps headers sealed and only keyed hashes of their words
+(docs/plans/server-personal-data.md, L7), so substring search is gone; body
+search runs in the browser (docs/plans/mail-body-search.md). Each message
 carries `direction` (`inbound` or `outbound`), `bcc` (your sent copies
 only), `inReplyTo` and `references`.
 
@@ -3552,6 +3676,24 @@ The client builds the share URL as
 `<SERVER_URL>/s/<token>#key=<base64-link-key>`; the server returns only the
 token.
 
+`403 sharing_off` while public links are off for the server or the caller's
+account (docs/plans/server-personal-data.md, A11).
+
+**Every public route** (`/api/share/:token…`) answers, before anything else:
+while the server's public sharing is `signed_in`, `403 sign_in_required`
+without a signed-in caller (`401` when a sign-in is sent but no longer holds,
+so the page refreshes it; the web pages send their sign-in when they have
+one); `451`/`410 link_blocked` when an operator blocked what the link
+reaches (any link to the same target, or for a file, to its folder);
+`410 link_removed` for one taken down, or whose owner's account isn't
+active; `410 sharing_off` while public links are off for the server or the
+owner's account. Its answers are never cached (`Cache-Control: no-store`).
+
+A block belongs to what a link reaches: no new link to it is made
+(`409 targetBlocked`), and an owner who removes a blocked link (in a folder's
+or file's access change) only hides it from themselves; the block stays
+until an operator lifts it. Owners' link lists carry `blockedReason`.
+
 ---
 
 ### GET /api/share/:token
@@ -4608,6 +4750,28 @@ high-water mark commit atomically. Exact replay returns the stored response;
 device mismatch or sequence gap returns typed `409` data so the origin can
 refresh/re-encrypt or replay the missing retained transaction.
 
+### POST /api/fed/chat/stream-control
+
+A control message on one of the origin's sequenced streams (plain Chat sends
+or media offers): it uses up one sequence with nothing delivered. Signed
+`FederatedStreamControlV1` `{ "version": 1, "control", "transactionId",
+"stream": "chat"|"media", "sequence", "origin", "destination", "data"? }`
+(at most 1 KiB), naming no sender, recipient or payload. `control` is a
+`u16` type code, so a new one needs no new version:
+
+| Code | Meaning |
+|---|---|
+| `0` | Invalid: `400 invalid` |
+| `1` | Withdrawn: the transaction never left, as its sending account turned its federation off (docs/plans/server-personal-data.md). No `data` |
+| `2..=0x7fff` | Skip-safe: a destination that doesn't know the code still uses the sequence up and answers as for a withdrawal |
+| `0x8000..=0xffff` | Must be understood: a destination that doesn't know the code answers `400 unknownStreamControl` and does not use the sequence up |
+
+`data` carries what a code needs, and is never needed to use a sequence up.
+The receiver uses the sequence up exactly as a delivery would (it must be
+the next one; otherwise `409` with the `sequenceGap` data) and stores the
+answer, so a repeat of the same `transactionId` gets the same `200
+{ "acceptedSequence" }`. Required of every server: there is no fallback.
+
 ---
 
 ## Drive Federation — Local Authenticated Endpoints
@@ -4987,6 +5151,24 @@ close every open report on it. `204`; `404` for no such open report. Logged as
 `share.remove`. Disabling the owner (`PUT /api/admin/users/:id` with
 `isActive: false`) takes every link of theirs down and closes their reports.
 
+### POST /api/admin/shares/:id/block · DELETE /api/admin/shares/:id/block
+
+An operator's block on one public link (by its id, `shareId` in a report):
+`{ "reason": "legal_order" | "abuse" | "other", "reference"?: "…" }`
+(the reference, at most 200 characters, is for the administrators). The link
+answers `451 link_blocked` for a legal order and `410 link_blocked` otherwise,
+as does every other link to what it reaches, and its open reports close as
+`blocked` (keeping the reported link, which may be evidence). The block and
+its record are one transaction. `DELETE` lifts the block. `204`;
+`400` for another reason; `404` for no such link. Logged as `share.block` and
+`share.unblock`. Reports carry the link's `shareBlockedReason`.
+
+Public sharing for the whole server is `publicSharing` in
+`GET`/`PUT /api/admin/settings` (`on`, `off`, `signed_in`; also in the public
+`GET /api/auth/settings`), and for one account `publicSharing` (`on`, `off`)
+in `PUT /api/admin/users/:id` (also in the user list and the account's
+`GET /api/user/me`).
+
 ### GET /api/admin/feedback
 
 Feedback: open items oldest first (default, `?status=open`), or the latest 100
@@ -5024,12 +5206,22 @@ List all registered users.
     "storageUsedBytes": 524288000,
     "isAdmin": false,
     "isActive": true,
+    "state": "closing",
+    "closesAt": "2026-11-20T10:00:00Z",
+    "legalHoldReference": "case 2026/17",
+    "legalHoldAt": "2026-11-06T09:00:00Z",
     "totpEnabled": false,
     "createdAt": "2026-03-14T12:00:00Z",
     "isProtected": false
   }
 ]
 ```
+
+`state` is `active`, `suspended` (with `suspendedReason`: `admin`,
+`operator_order` or `security`) or `closing` (with `closesAt`, when it is
+deleted); `isActive` is `state == "active"` (docs/plans/server-personal-data.md,
+A5). `legalHoldReference` and `legalHoldAt` are present while a legal hold is
+set.
 
 `isProtected` is `true` for the break-glass admin (the account from the `ADMIN_ACCOUNT` env var, known by its username). Protected users cannot be demoted, disabled, or deleted — the relevant mutations below return `403`.
 
@@ -5073,12 +5265,18 @@ Update a user. All fields are optional; only the ones present in the request are
 ```json
 {
   "storageQuotaBytes": 21474836480,
-  "isActive": true,
+  "isActive": false,
+  "suspendedReason": "operator_order",
   "isAdmin": false
 }
 ```
 
-`isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
+`isActive: false` suspends the account (`suspendedReason`, default `admin`);
+its sign-ins end. A closing account is `409 accountClosing`: keep it first.
+`isActive: true` makes a suspended account active again, and keeps a closing
+one (as it was before it closed: a suspended account is suspended again, with
+its reason, and records `accountKept`) until its date (`409 accountDeleting` after: the closing job may be
+deleting it; a held account can still be kept). `isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
 
 **Response:** `200 OK` `{"message": "updated"}`. `403` if the request would demote or disable the break-glass admin; `400` if it would leave zero usable admins.
 
@@ -5086,17 +5284,52 @@ Update a user. All fields are optional; only the ones present in the request are
 
 ### DELETE /api/admin/users/:id
 
-Delete a user and all their data.
+Delete a user and all their data, now: everything it holds, bytes included,
+then its row, with its account data key. A destruction event names it only by
+keyed hashes (docs/plans/server-personal-data.md, A7).
 
 **Auth:** Bearer JWT (admin)
 
-**Response:** `204 No Content`. `403` if the target is the break-glass admin.
+**Response:** `204 No Content`. `403` if the target is the break-glass admin;
+`409 legalHold` while the account is under a legal hold.
+
+---
+
+### POST /api/admin/users/:id/close
+
+Close the account: every sign-in ends, and it is deleted after
+`account_closing_days` (a Privacy and retention setting, default 14) unless it
+is kept, by its owner at sign-in or here (`PUT` with `isActive: true`).
+Recorded as `user.close`.
+
+**Auth:** Bearer JWT (admin)
+
+**Response:** `200 OK` `{"closesAt": "2026-11-20T10:00:00Z"}`. `403` for the
+break-glass admin; `400` for the last usable admin; `409 accountClosing` if it
+is closing already.
+
+---
+
+### PUT /api/admin/users/:id/legal-hold · DELETE /api/admin/users/:id/legal-hold
+
+Set (or change) and lift a legal hold. While it is set nothing deletes the
+account or anything of it: the closing job waits, an admin delete or reset is
+`409 legalHold`, and the retention jobs pass its sessions, security events and
+admin-log rows by. Recorded as `user.legalHold.set` / `user.legalHold.clear`,
+with the reference.
+
+**Auth:** Bearer JWT (admin)
+
+**Request body (PUT):** `{"reference": "case 2026/17"}` (1–200 characters).
+
+**Response:** `204 No Content`; `400` for an empty or long reference; `404`
+for an unknown account; `409 accountDeleting` once its deletion has begun.
 
 ---
 
 ### DELETE /api/admin/users/:id/2fa
 
-Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears `totp_secret` and `totp_enabled` and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
+Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears the sealed authenticator secret, `totp_enabled` and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
 
 **Auth:** Bearer JWT (admin)
 
@@ -5210,6 +5443,27 @@ Export the same filtered audit stream as spreadsheet-safe UTF-8 CSV. It accepts
 `before`, `actionPrefix`, and `domain`; `limit` is clamped to 1–5000 and defaults
 to 1000. Cells beginning with spreadsheet formula markers are neutralized and
 the response is downloaded as `kutup-admin-audit.csv`.
+
+---
+
+### GET /api/admin/activity/verify
+
+The admin log's integrity (docs/plans/server-personal-data.md, A8): each row
+stores the previous row's hash and its own, over its admin, action, target,
+time and payload. This walks the chain from the oldest row kept.
+
+**Auth:** Bearer JWT (admin)
+
+**Response:** `{ "checked": 120, "brokenAt": null, "appendOnly": true }`:
+`brokenAt` is the first row whose hash or link is wrong, or that has none. The
+walk starts where the retention job last cut the chain (the last row it
+deleted and its hash, which only the database owner writes), so deleting more
+of the oldest rows breaks it too; `appendOnly` is false
+while the server runs as the database's owner (`DATABASE_OWNER_URL` unset).
+
+Opening one account's limits, mail-domain overrides or mail-sending state
+writes an `admin.view` row here, and `adminAccess` in that account's security
+log.
 
 ---
 

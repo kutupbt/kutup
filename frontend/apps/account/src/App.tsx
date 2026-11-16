@@ -14,6 +14,7 @@ import { LoginPage } from './features/auth/LoginPage'
 import { RegisterPage } from './features/auth/RegisterPage'
 import { LauncherPage } from './features/home/LauncherPage'
 import { AccountSettingsPage } from './features/settings/AccountSettingsPage'
+import { PrivacyPage } from './features/settings/PrivacyPage'
 import { StoragePage } from './features/settings/StoragePage'
 import { EncryptionKeysPage } from './features/keys/EncryptionKeysPage'
 import { ProfilePage } from './features/settings/ProfilePage'
@@ -50,6 +51,7 @@ const MapsSettingsPage = page(() => import('./features/admin/MapsSettingsPage').
 const RateLimitsPage = page(() => import('./features/admin/RateLimitsPage').then((m) => ({ default: m.RateLimitsPage })))
 const ReportsPage = page(() => import('./features/admin/ReportsPage').then((m) => ({ default: m.ReportsPage })))
 const FeedbackPage = page(() => import('./features/admin/FeedbackPage').then((m) => ({ default: m.FeedbackPage })))
+const LegalDocumentsPage = page(() => import('./features/admin/LegalDocumentsPage').then((m) => ({ default: m.LegalDocumentsPage })))
 const RegistrationCodesPage = page(() => import('./features/admin/RegistrationCodesPage').then((m) => ({ default: m.RegistrationCodesPage })))
 const ServerSettingsPage = page(() => import('./features/admin/ServerSettingsPage').then((m) => ({ default: m.ServerSettingsPage })))
 const UserPage = page(() => import('./features/admin/UserPage').then((m) => ({ default: m.UserPage })))
@@ -96,6 +98,7 @@ export function App() {
               <Route path="/settings/storage" element={<StoragePage />} />
               <Route path="/settings/keys" element={<EncryptionKeysPage />} />
               <Route path="/settings/security" element={<SecurityPage />} />
+              <Route path="/settings/privacy" element={<PrivacyPage />} />
               <Route path="/settings/sessions" element={<Navigate to="/settings/devices" replace />} />
               <Route path="/settings/devices" element={<DevicesSessionsPage />} />
               <Route path="/settings/maps" element={<MapsPage />} />
@@ -111,6 +114,7 @@ export function App() {
               <Route path="/admin/settings" element={<RequireAdmin><ServerSettingsPage /></RequireAdmin>} />
               <Route path="/admin/rate-limits" element={<RequireAdmin><RateLimitsPage /></RequireAdmin>} />
               <Route path="/admin/codes" element={<RequireAdmin><RegistrationCodesPage /></RequireAdmin>} />
+              <Route path="/admin/legal" element={<RequireAdmin><LegalDocumentsPage /></RequireAdmin>} />
               <Route path="/admin/maps" element={<RequireAdmin><MapsSettingsPage /></RequireAdmin>} />
               <Route path="/admin/mail" element={<RequireAdmin><MailSendingPage /></RequireAdmin>} />
               <Route path="/admin/mail/groups" element={<RequireAdmin><MailGroupsPage /></RequireAdmin>} />

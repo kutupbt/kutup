@@ -632,6 +632,7 @@ pub async fn publish(
             &state.pool,
             &format!("{username}@{}", federation.server_name()),
             incarnation.as_deref(),
+            true,
         )
         .await
     }
@@ -721,7 +722,9 @@ pub async fn announce(
 /// this server has pinned, not quarantined, and been in touch with in the
 /// last `federationAnnouncePeerDays`, in the rename's transaction: rows of
 /// the one federation outbox (docs/plans/federation-outbox.md), without a
-/// transport sequence (applying a chain is idempotent).
+/// transport sequence (applying a chain is idempotent). An account whose
+/// federation is off announces nothing (docs/plans/server-personal-data.md,
+/// the federation switch).
 pub async fn enqueue(
     conn: &mut sqlx::PgConnection,
     server_name: &str,
@@ -738,6 +741,9 @@ pub async fn enqueue(
            FROM federation_peer_identities
           WHERE trust_state <> 'quarantined' AND domain <> $3
             AND last_seen_at > now() - make_interval(days => $4)
+            AND EXISTS (SELECT 1 FROM users u
+                         WHERE u.account_incarnation_id = $1
+                           AND kutup_account_federates(u.id))
          ON CONFLICT DO NOTHING",
     )
     .bind(incarnation)
@@ -827,6 +833,19 @@ async fn deliver_one(
             .map_err(AppError::from)
         }
     };
+    // An account whose federation went off since this was queued: never
+    // sent (docs/plans/server-personal-data.md, the federation switch).
+    let federates: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM users u
+                         WHERE u.account_incarnation_id = $1
+                           AND kutup_account_federates(u.id))",
+    )
+    .bind(&incarnation)
+    .fetch_one(&state.pool)
+    .await?;
+    if !federates {
+        return settle(false, Some("federation_off"), json!({})).await;
+    }
     let rows: Vec<(Value, String, String)> = sqlx::query_as(
         "SELECT statement, authority_public_key, current FROM account_renames
           WHERE incarnation_id = $1 ORDER BY sequence",

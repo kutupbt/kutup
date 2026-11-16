@@ -11,6 +11,8 @@
     "failedDescription": "Sunucu yanıt vermedi. Bağlantınızı kontrol edip yeniden deneyin. Oturumunuz açık kalır."
   },
   "nav": {
+    "legal": "Yasal belgeler",
+    "privacy": "Gizlilik",
     "apps": "Uygulamalar",
     "settings": "Ayarlar",
     "account": "Hesap",
@@ -52,6 +54,7 @@
       "usernameRequired": "Kullanıcı adınızı girin."
     },
     "errors": {
+      "authenticatorLost": "Bu hesap için kimlik doğrulama uygulaması artık denetlenemiyor. Bir kurtarma kodu kullanın ya da bir yöneticiden iki adımlı oturum açmayı kapatmasını isteyin.",
       "locked": "Çok fazla deneme. Birkaç dakika bekleyip yeniden deneyin.",
       "network": "Sunucuya ulaşılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
       "signInFailed": "Giriş yapılamadı. Kullanıcı adınızı ve parolanızı kontrol edin.",
@@ -75,6 +78,22 @@
       "veryStrong": "çok güçlü"
     }
   },
+  "legal": {
+    "confirm": "{{name}} metnini okudum (sürüm {{version}}).",
+    "read": "Oku",
+    "readNamed": "{{name}} metnini oku (sürüm {{version}})",
+    "confirmAll": "Devam etmek için her belgeyi onaylayın.",
+    "confirmFailed": "Onayınız kaydedilemedi. Yeniden deneyin.",
+    "updatedTitle": "Güncellenen belgeler",
+    "updatedDescription": "Kabul ettiğiniz bir belgenin yeni sürümü var. Devam etmek için okuyup onaylayın.",
+    "continue": "Devam et",
+    "kinds": {
+      "terms": "Hizmet Koşulları",
+      "privacy_notice": "Aydınlatma Metni",
+      "federation_abroad": "diğer sunucularla iletişim rıza metni",
+      "marketing": "haber ve teklif rıza metni"
+    }
+  },
   "login": {
     "title": "Kutup'a giriş yapın",
     "description": "Dosyalarınız ve mesajlarınız bu cihazda açılır.",
@@ -88,6 +107,12 @@
     "totpCode": "Doğrulama kodu",
     "verify": "Doğrula",
     "useAnotherAccount": "Başka bir hesap kullan",
+    "closing": {
+      "title": "Bu hesap kapanıyor",
+      "description": "Silinmesini istediniz. {{date}} tarihinde içindeki her şeyle birlikte silinecek. Hesabı tutarsanız olduğu gibi kalır.",
+      "keep": "Hesabımı tut",
+      "keepFailed": "Hesap tutulamadı. Yeniden deneyin."
+    },
     "nameHint": "Kullanıcı adınız veya Kutup adresiniz.",
     "recoveryCode": "Kurtarma kodu",
     "recoveryCodeDescription": "İki adımlı doğrulamayı açarken kaydettiğiniz kurtarma kodlarından birini girin. Her kod bir kez çalışır.",
@@ -173,11 +198,55 @@
     "calendar": "Etkinlikleriniz ve takvimleriniz, şifreli; sunucunuz yalnızca hatırlatmak için gereken saatleri bilir."
   },
   "settings": {
+    "privacy": {
+      "federation": {
+        "title": "Diğer sunucular",
+        "description": "Kutup sunucuları birbiriyle konuşur; böylece hesabı başka bir sunucuda olan kişilerle sohbet edip paylaşım yapabilirsiniz. E-postanız etkilenmez: her adrese her zaman ulaşır.",
+        "on": "Diğer sunucularla iletişim: açık",
+        "off": "Diğer sunucularla iletişim: kapalı",
+        "hint": "Kapalıyken başka bir sunucudaki hiç kimse size ulaşamaz, siz de onlara ulaşamazsınız. Onlarla sohbetleriniz ve paylaşımlarınız sessizce kalır: başka bir sunucuda barındırılan gruplar ve aramalar da siz yeniden açana kadar sizin için sessizleşir (üyeliğiniz sürer). Kapalıyken oralarda size gönderilen mesajlar daha sonra iletilmez. Hiçbir şey silinmez.",
+        "turnOn": "Aç",
+        "turnOff": "Kapat",
+        "consentTitle": "Diğer sunucularla iletişim kurulsun mu?",
+        "agree": "Sohbet ve Drive'ımın diğer Kutup sunucularındaki kişilere ulaşmasını kabul ediyorum."
+      },
+      "title": "Gizlilik",
+      "description": "Rızalarınız: her biri ayrı ayrı, istediğiniz zaman verilir ya da geri alınır.",
+      "consents": "Rızalar",
+      "give": "Ver",
+      "withdraw": "Geri al",
+      "givenAt": "{{date}} tarihinde verildi",
+      "withdrawnAt": "{{date}} tarihinde geri alındı",
+      "failed": "Seçiminiz kaydedilemedi. Yeniden deneyin.",
+      "purposes": {
+        "federation_abroad": {
+          "title": "Diğer sunucularla iletişim",
+          "description": "Sohbet ve Drive'ınızın, başka ülkelerde olabilecek diğer Kutup sunucularındaki kişilere ulaşmasına izin verin. Geri alırsanız bu durur."
+        },
+        "marketing": {
+          "title": "Haberler ve teklifler",
+          "description": "Bu sunucunun size haber ve teklif gönderip gönderemeyeceği. Yalnızca seçiminiz kaydedilir."
+        }
+      }
+    },
     "account": {
       "title": "Hesap",
       "description": "Bu sunucuda kim olduğunuz ve ne kadar alan kullandığınız.",
       "profile": "Profil",
       "noUsername": "Belirlenmedi",
+      "delete": {
+        "title": "Hesabı sil",
+        "description": "Hesabınız içindeki her şeyle birlikte silinir: dosyalar, e-postalar, sohbetler, takvimler, kişiler ve parolalar. Yöneticiler dahil kimse geri getiremez.",
+        "keepHint": "Silme önce bir süre bekler: o zamana kadar oturum açarsanız hesabı tutabilirsiniz.",
+        "action": "Hesabı sil…",
+        "dialogTitle": "Hesabınız silinsin mi?",
+        "dialogDescription": "Tüm cihazlardaki oturumlar şimdi kapanır. Oturum açıp tutmazsanız hesap bekleme süresinin sonunda silinir.",
+        "understand": "Bu hesaptaki her şeyin kalıcı olarak silineceğini anlıyorum.",
+        "confirm": "Hesabı sil",
+        "done": "Hesabınız kapanıyor. {{date}} tarihinde silinecek.",
+        "lastAdmin": "Son yönetici sizsiniz: önce başka birini yönetici yapın.",
+        "failed": "Hesap kapatılamadı. Yeniden deneyin."
+      },
       "storage": "Depolama alanı",
       "usage": "{{total}} alanın {{used}} kadarı",
       "colour": "Varlık rengi",
@@ -284,6 +353,9 @@
         "byAdmin": "Bir yönetici tarafından",
         "thisDevice": "Bu cihaz",
         "device": "{{device}}",
+        "times_one": "bir kez",
+        "times_other": "{{count}} kez",
+        "kept": "{{count}} gün saklanır, en fazla son 500.",
         "kind": {
           "passwordChange": "Parola değiştirildi",
           "recovery": "Parola kurtarma ifadesiyle sıfırlandı",
@@ -303,7 +375,16 @@
           "securityKeyRemoved": "“{{oldName}}” güvenlik anahtarı kaldırıldı",
           "securityKeyCompromised": "“{{oldName}}” güvenlik anahtarı kopyalanmış olabilir (artık kullanılmıyor)",
           "authenticatorOn": "Doğrulama uygulaması açıldı",
-          "authenticatorOff": "Doğrulama uygulaması kapatıldı"
+          "authenticatorOff": "Doğrulama uygulaması kapatıldı",
+          "signIn": "Giriş yapıldı",
+          "signInFailedPassword": "Girişte yanlış parola",
+          "signInFailed2fa": "Girişte yanlış ikinci adım",
+          "signOut": "Çıkış yapıldı",
+          "sessionRevoked": "Bir oturum sonlandırıldı",
+          "allSessionsRevoked": "Diğer tüm oturumlar sonlandırıldı",
+          "adminAccess": "Bir yönetici hesabınızın ayrıntılarını açtı",
+          "accountClosing": "Hesabın silinmesini istediniz",
+          "accountKept": "Hesap tutuldu: artık kapanmıyor"
         }
       },
       "recovery": "Kurtarma ifadesi",
@@ -572,6 +653,29 @@
     }
   },
   "admin": {
+    "legal": {
+      "title": "Yasal belgeler",
+      "description": "Koşullarınız, aydınlatma metniniz ve rıza metinleriniz, sürüm sürüm. Metin kendi adresinde durur; sunucu gösterilen metnin parmak izini saklar.",
+      "publishTitle": "Sürüm yayımla",
+      "publishHint": "Yayımlanan bir sürüm hiç değiştirilmez: yenisini yayımlayın. Zorunlu yeni bir sürüm herkese bir sonraki oturum açışında gösterilir.",
+      "kind": "Tür",
+      "kindHint": "terms, privacy_notice, bir rıza amacı (federation_abroad, marketing) ya da kendi türünüz.",
+      "version": "Sürüm",
+      "language": "Dil",
+      "languageHint": "en, tr ya da pt-BR gibi bir kod.",
+      "url": "Metnin adresi",
+      "sha256": "Metnin SHA-256 değeri",
+      "sha256Hint": "Adresteki metnin tam hâlinin 64 onaltılık karakteri (örneğin: sha256sum terms.html).",
+      "required": "Kayıtta zorunlu (yeni sürüm yayımlandığında yeniden onaylanır)",
+      "publish": "Yayımla",
+      "published": "Yayımlandı",
+      "failed": "Belge yayımlanamadı.",
+      "incomplete": "Her alanı doldurun; SHA-256 64 onaltılık karakterdir.",
+      "versions": "Sürümler",
+      "requiredBadge": "Zorunlu",
+      "noneTitle": "Yayımlanmış belge yok",
+      "noneDescription": "Zorunlu bir belge yayımlayana kadar kayıt hiçbir belge sormaz."
+    },
     "forbiddenTitle": "Yalnızca yöneticiler",
     "forbidden": "Hesabınız yönetim sayfalarını açamaz.",
     "overview": {
@@ -596,6 +700,7 @@
       "admin": "Yönetici",
       "active": "Etkin",
       "disabled": "Devre dışı",
+      "closing": "Kapanıyor",
       "awaitingSetup": "İlk giriş bekleniyor",
       "on": "Açık",
       "off": "Kapalı",
@@ -675,6 +780,44 @@
       "newTempPassword": "Yeni geçici parola",
       "delete": "Hesabı sil",
       "deleteHint": "Hesabı ve sahip olduğu her şeyi kaldırır.",
+      "federationOn": "Diğer sunucularla iletişim: açık",
+      "federationOff": "Diğer sunucularla iletişim: kapalı",
+      "federationHint": "Kapalıyken Sohbet ve Drive'ı hiçbir sunucuya ulaşmaz, diğer sunucular da böyle bir hesap görmez. Normalde kişinin kendi seçimidir (Ayarlar → Gizlilik).",
+      "publicLinksOn": "Herkese açık bağlantılar: izinli",
+      "publicLinksOff": "Herkese açık bağlantılar: kapalı",
+      "publicLinksHint": "Kapalıyken bu hesap herkese açık bağlantı oluşturamaz ve oluşturdukları açılmaz.",
+      "publicLinksAllow": "İzin ver",
+      "publicLinksStop": "Kapat",
+      "deleteHeldHint": "Hesap yasal saklama altındayken silinemez.",
+      "close": "Hesabı kapat",
+      "closeHint": "Hesabı bekleme süresinden sonra siler; o zamana kadar sahibi oturum açıp hesabı tutabilir.",
+      "closeTitle": "Bu hesap kapatılsın mı?",
+      "closeDescription": "{{name}} hesabının tüm oturumları şimdi kapanır. Tutulmazsa hesap ve sahip olduğu her şey bekleme süresinden sonra silinir.",
+      "dataKeyLost": "{{date}} tarihinden beri bu hesabın sunucu tarafı veri anahtarı sunucu anahtar listesiyle açılamıyor: uygulamayla iki adımlı oturum açması ve diğer mühürlü ayrıntıları kayboldu. Sunucu anahtar listesinin (OPAQUE_SETUP_KEYS) bu sunucuya ait olduğunu denetleyin; hesap çalışmaya devam eder ve yeniden mühürler.",
+      "deletionFailing_one": "Bu hesabın silinmesi bir kez başarısız oldu; sunucu daha sonra yeniden dener. Nedeni sunucu günlüğündedir.",
+      "deletionFailing_other": "Bu hesabın silinmesi {{count}} kez başarısız oldu; sunucu giderek seyrekleşen aralıklarla denemeyi sürdürür. Nedeni sunucu günlüğündedir.",
+      "closesAt": "Silinme tarihi",
+      "keep": "Hesabı tut",
+      "keepHint": "Hesap kapanıyor. Tutulursa yeniden etkin olur.",
+      "keepDescription": "{{name}} etkin kalır ve silinmez.",
+      "suspendedReason": "Devre dışı bırakılma nedeni",
+      "suspendedReasons": {
+        "admin": "Yönetici kararı",
+        "operator_order": "İşletmeciye verilen bir karar",
+        "security": "Bir güvenlik kaygısı"
+      },
+      "legalHold": "Yasal saklama",
+      "legalHoldHint": "Saklama sürerken hesabın hiçbir verisi silinmez: sahibinin kapatmasıyla, bir yöneticiyle, sıfırlamayla ya da saklama süresi işleriyle.",
+      "notHeld": "Saklama yok",
+      "notHeldHint": "Bir dava ya da karar hesabın verilerinin saklanmasını gerektirdiğinde koyun.",
+      "heldSince": "{{date}} tarihinden beri saklamada",
+      "hold": "Saklama koy",
+      "holdTitle": "Bu hesap yasal saklamaya alınsın mı?",
+      "holdDescription": "Saklama kaldırılana kadar {{name}} hesabının hiçbir verisi silinmez. Saklama ve referansı etkinlik günlüğüne kaydedilir.",
+      "holdReference": "Referans (dava ya da karar)",
+      "release": "Saklamayı kaldır",
+      "releaseTitle": "Yasal saklama kaldırılsın mı?",
+      "releaseDescription": "{{name}} için bekleyen silmeler, örneğin süresi geçmiş bir kapanma, gerçekleşir.",
       "deleteTitle": "Bu hesap silinsin mi?",
       "deleteDescription": "{{name}} ve sahip olduğu her şey bu sunucudan kaldırılır.",
       "deleteWarning": "Bu geri alınamaz.",
@@ -685,6 +828,25 @@
       "noReferralCode": "Davet kodu yok"
     },
     "reports": {
+      "block": "Bağlantıyı engelle",
+      "blockTitle": "Bu bağlantı engellensin mi?",
+      "blockDescription": "{{name}} kullanıcısının paylaştığı bağlantı artık açılmaz. Yasal karar seçilirse “hukuki nedenlerle kullanılamıyor”, başka bir neden seçilirse “engellendi” yanıtını verir. Açık şikâyetleri kapatılır. Engeli daha sonra kaldırabilirsiniz.",
+      "blockReason": "Neden",
+      "blockReasons": {
+        "legal_order": "Yasal karar",
+        "abuse": "Kötüye kullanım",
+        "other": "Başka bir neden"
+      },
+      "blockReference": "Referans (isteğe bağlı)",
+      "blockReferenceHint": "Bir kararın numarası ya da not; yalnızca yöneticiler görür.",
+      "blocked": "Bağlantı engellendi",
+      "unblock": "Engeli kaldır",
+      "unblocked": "Engel kaldırıldı",
+      "blockedAs": {
+        "legal_order": "yasal karar üzerine engellendi",
+        "abuse": "kötüye kullanım nedeniyle engellendi",
+        "other": "engellendi"
+      },
       "title": "Bildirimler",
       "description": "İnsanların bildirdiği herkese açık bağlantılar. Sunucu bir bağlantının gösterdiğini göremez: bildiren eklediyse bağlantıyı açın, ardından bildirimi kapatın, bağlantıyı kaldırın ya da onu oluşturan hesabı devre dışı bırakın (bu, hesabın tüm bağlantılarını kaldırır).",
       "open": "Açık",
@@ -713,6 +875,7 @@
       "disabled": "Hesap devre dışı bırakıldı",
       "actionFailed": "Bu işe yaramadı. Yeniden deneyin.",
       "resolution": {
+        "blocked": "Bağlantı engellendi",
         "dismissed": "Kapatıldı",
         "removed": "Bağlantı kaldırıldı",
         "disabled": "Hesap devre dışı"
@@ -723,6 +886,10 @@
       "description": "Yöneticilerin yaptığı değişiklikler, en yenisi önce.",
       "export": "CSV olarak dışa aktar",
       "exportFailed": "Dışa aktarma başarısız oldu.",
+      "notAppendOnly": "Sunucu veritabanının sahibi olarak çalışıyor (DATABASE_OWNER_URL ayarlı değil), bu yüzden bu kayıt ve hesapların güvenlik kayıtları yalnızca eklemeli değil: sunucu bunları değiştirebilir ya da silebilir. İki veritabanı rolünü kurun (kendi sunucunu barındırma kılavuzu, \"Veritabanı rolleri\").",
+      "chainHolds_one": "Kaydın özet zinciri sağlam ({{count}} giriş denetlendi).",
+      "chainHolds_other": "Kaydın özet zinciri sağlam ({{count}} giriş denetlendi).",
+      "chainBroken": "Kaydın özet zinciri {{id}} numaralı girişte kopuyor: orada bir giriş değiştirilmiş ya da silinmiş.",
       "federationOnly": "Yalnızca federasyon",
       "domain": "Sunucuya göre filtrele",
       "older": "Daha eskileri yükle",
@@ -737,6 +904,10 @@
         "user2faDisable": "{{admin}}, {{target}} için 2FA'yı kapattı",
         "userRotateTempPassword": "{{admin}}, {{target}} için geçici parolayı değiştirdi",
         "userWipe": "{{admin}}, {{target}} hesabını sıfırladı",
+        "userClose": "{{admin}}, {{target}} hesabını kapattı: bekleme süresinden sonra silinecek",
+        "userLegalHoldSet": "{{admin}}, {{target}} hesabına yasal saklama koydu ({{reference}})",
+        "userLegalHoldClear": "{{admin}}, {{target}} hesabındaki yasal saklamayı kaldırdı ({{reference}})",
+        "adminView": "{{admin}}, {{target}} hesabının ayrıntılarını açtı",
         "settingsUpdate": "{{admin}} sunucu ayarlarını değiştirdi",
         "mapsSettingsUpdate": "{{admin}} harita ayarlarını değiştirdi",
         "federationPolicyUpdate": "{{admin}}, {{feature}} federasyonunu {{mode}} olarak ayarladı",
@@ -754,6 +925,10 @@
         "unknown": "{{admin}}: {{action}}",
         "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
         "reportDismiss": "{{admin}}, {{target}} kullanıcısının bir bağlantısıyla ilgili bildirimi kapattı",
+        "legalPublish": "{{admin}}, {{kind}} belgesinin {{version}} sürümünü yayımladı",
+        "userPublicSharing": "{{admin}}, {{target}} için herkese açık bağlantıları {{state}} yaptı",
+        "shareBlock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantıyı engelledi",
+        "shareUnblock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantının engelini kaldırdı",
         "shareRemove": "{{admin}}, {{target}} kullanıcısının herkese açık bir bağlantısını kaldırdı",
         "mailOutsideSendingUpdate": "{{admin}}, dış adreslere kimin gönderebileceğini {{from}} yerine {{to}} yaptı",
         "registrationCodeCreated": "{{admin}} bir davet kodu oluşturdu (…{{hint}})",
@@ -824,6 +999,19 @@
       "saveFailed": "Ayarlar kaydedilemedi.",
       "defaultQuota": "Varsayılan depolama kotası (GiB)",
       "defaultQuotaHint": "Yeni hesapların aldığı alan. Mevcut hesaplar kendi kotalarını korur; birini kullanıcı sayfasından değiştirin.",
+      "publicSharing": "Herkese açık bağlantılar",
+      "federationDefault": "Yeni hesaplar diğer sunucularla iletişim kurar",
+      "federationDefaultHint": "Yeni bir hesabın başlangıç ayarı; herkes Ayarlar → Gizlilik'ten, siz de kişinin sayfasından değiştirebilirsiniz.",
+      "federationDefaultMode": {
+        "on": "Evet",
+        "off": "Hayır"
+      },
+      "publicSharingHint": "“Bağlantıya sahip herkes” ile paylaşılan bağlantıları kimlerin açabileceği. Yalnızca oturum açanlar seçeneği bir deneme sunucusunun bağlantılarını kendi hesaplarıyla sınırlar.",
+      "publicSharingMode": {
+        "on": "Bağlantıya sahip herkes",
+        "signed_in": "Yalnızca burada oturum açanlar",
+        "off": "Kapalı: herkese açık bağlantı yok"
+      },
       "registrationMode": {
         "on": "Herkese açık",
         "code": "Davet koduyla",
@@ -900,6 +1088,8 @@
       "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları ve güvenlik anahtarları.",
       "federation": "Federasyon",
       "federationHint": "Bir sunucu yanıt vermediğinde diğer Kutup sunucularına teslimatların yeniden nasıl deneneceği.",
+      "privacy": "Gizlilik ve saklama",
+      "privacyHint": "Sunucunun kendisi için tuttuğu kişisel verilerin, yedekler dahil, ne kadar saklandığı.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Hesap başına kurtarma kodu",
         "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu.",
@@ -927,6 +1117,26 @@
         "driveStreamResponseMaxBytesHint": "Aralıklı bir indirme yanıtının taşıdığı en fazla bayt; sunucular arasında da.",
         "driveStreamBlobFallbackMaxBytes": "Bellekten oynatılan en büyük dosya (bayt)",
         "driveStreamBlobFallbackMaxBytesHint": "Tarayıcının akış yapamadığı yerde, bu boyuta kadar dosyalar oynatmak için tamamen belleğe yüklenir."
+      },
+      "privacyLimits": {
+        "keyBackupKeepDays": "Hesap anahtarı yedeklerini sakla (gün)",
+        "keyBackupKeepDaysHint": "Her hesabın sunucudaki verisini mühürleyen anahtarların yedeği. Bu sürenin sonunda silinmiş bir hesabın verisi hiçbir yedekten okunamaz.",
+        "securityEventRetentionDays": "Güvenlik olaylarını sakla (gün)",
+        "securityEventRetentionDaysHint": "Her hesabın girişleri ve güvenlik değişiklikleri. Hesap sahibi bu süreyi görür.",
+        "securityEventsKeptPerKind": "Türüne göre saklanan güvenlik olayları",
+        "securityEventsKeptPerKindHint": "Her hesap için her türün en yenileri; böylece tekrarlanan başarısız girişler bir parola değişikliğini silemez.",
+        "securityEventFoldSeconds": "Tekrarları birlikte say (saniye)",
+        "securityEventFoldSecondsHint": "Aynı türden son olaydan bu kadar kısa süre sonra gelen başarısız giriş ya da yönetici görüntülemesi yeni bir olay yerine sayıya eklenir.",
+        "mailOutboxKeepSeconds": "Tamamlanan gönderimleri sakla (saniye)",
+        "mailOutboxKeepSecondsHint": "Gönderilmiş, başarısız olmuş ya da geri alınmış bekleyen bir gönderim (gönderimi geri alma, zamanlanmış e-posta), alıcılarını adlandıran mühürlü sonucuyla birlikte, tamamlandıktan bu kadar süre sonra silinir.",
+        "adminAuditRetentionDays": "Yönetici kaydını sakla (gün)",
+        "adminAuditRetentionDaysHint": "Yöneticilerin yaptıkları, bir hesabın verisini açmak dahil.",
+        "sessionRecordGraceDays": "Biten oturumları sakla (gün)",
+        "sessionRecordGraceDaysHint": "Çıkış yapılmış, başka yerden sonlandırılmış ya da süresi dolmuş oturumlar, kullandıkları tarayıcıyla birlikte.",
+        "accountClosingDays": "Kapatılan hesabı silmeden önce bekle (gün)",
+        "accountClosingDaysHint": "Silinmesi istenen hesap bu süre boyunca kapanıyor durumundadır; bu süre içinde oturum açılırsa hesap tutulur.",
+        "destructionEventRetentionDays": "İmha günlüğünü sakla (gün)",
+        "destructionEventRetentionDaysHint": "Neyin, ne zaman, kim tarafından silindiği; kimsenin adını vermeden. Her yedekten uzun tutun: geri yükleme bu günlüğü yeniden uygular."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "İlk bekleme (saniye)",

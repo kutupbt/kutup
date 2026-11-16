@@ -13,7 +13,7 @@ import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant, formatRelative } from '@kutup/ui/lib/format'
 import { useRevokeOtherSessions, useRevokeSession, useSessions, type SessionView } from './api'
-import { describeUserAgent } from './userAgent'
+import { clientName } from './securityEvents'
 
 /** One sign-in: a root session (account. or a CLI) and the app sessions forked from it. */
 interface SignIn {
@@ -89,7 +89,7 @@ export function SessionsSection() {
         <Card className="divide-y divide-border p-0">
           {groups.map((group) => {
             const cli = group.root.clientType === 'cli'
-            const { browser, os } = describeUserAgent(group.root.userAgent)
+            const { browser, os } = clientName(group.root)
             const name = cli
               ? t('settings.sessions.cli')
               : browser && os

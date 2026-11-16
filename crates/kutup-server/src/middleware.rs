@@ -65,6 +65,45 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
+/// Who opens a public route: someone signed in to this server, or nobody.
+/// A sign-in that is sent but no longer holds (expired, ended) is `401`, not
+/// "nobody", so the page refreshes it and asks again instead of being told
+/// it isn't signed in (docs/plans/server-personal-data.md, A11).
+pub struct Viewer {
+    pub signed_in: bool,
+}
+
+#[axum::async_trait]
+impl FromRequestParts<AppState> for Viewer {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let Some(token) = bearer_token(parts) else {
+            return Ok(Viewer { signed_in: false });
+        };
+        authenticate_access_token(state, &token).await?;
+        Ok(Viewer { signed_in: true })
+    }
+}
+
+/// What a public link serves is never kept by a browser or a proxy: a link an
+/// operator blocks, or its owner turns off, must stop serving at once
+/// (docs/plans/server-personal-data.md, A11).
+pub async fn no_store(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
 static SESSION_VERSION_KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();
 
 /// The header's value: an HMAC of the account's state digest under a key

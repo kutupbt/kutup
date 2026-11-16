@@ -3729,6 +3729,7 @@ dependencies = [
  "kutup-crypto",
  "kutup-federation-proto",
  "kutup-group-send",
+ "kutup-search",
  "libsignal-protocol",
  "mail-parser",
  "multer",

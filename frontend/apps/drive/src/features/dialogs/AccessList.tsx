@@ -182,11 +182,14 @@ export function AccessList({ folder }: { folder: Folder }) {
             key={l.id}
             icon={<Link2 className="size-4" aria-hidden />}
             name={t('dialogs.access.link')}
-            detail={
+            detail={[
               l.expiresAt
                 ? t('dialogs.access.linkExpires', { created: date(l.createdAt), expires: date(l.expiresAt) })
-                : t('dialogs.access.linkCreated', { created: date(l.createdAt) })
-            }
+                : t('dialogs.access.linkCreated', { created: date(l.createdAt) }),
+              l.blockedReason ? t(`publicSharing.blocked.${l.blockedReason}`) : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
             onCopy={() => void copy(l.id)}
             control={
               <Button

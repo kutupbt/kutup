@@ -104,6 +104,41 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test mail_groups_live -- --nocapture --test-threads 1
+# The security log (docs/plans/server-personal-data.md, A8): sign-ins, sign-outs
+# and folded wrong passwords (a sign-in left unfinished counts); and, as the owner, the logs append-only for the
+# server's role.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test security_log_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server -- db::tests::live_ audit_log::tests::live_ \
+    grants::tests::live_ --nocapture
+# Each account's data key (docs/plans/server-personal-data.md, A2): the
+# authenticator secret sealed under it, and the key gone with the account.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test account_data_live -- --nocapture
+# An account's end (docs/plans/server-personal-data.md, A5 and A7): closing,
+# keeping, the legal hold, the destruction log; and a restore replaying it.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test account_closing_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server destruction_events::tests::live_ -- --nocapture
+# Share-link controls (docs/plans/server-personal-data.md, A11): an operator's
+# block, the per-account and site-wide switches.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test share_controls_live -- --nocapture --test-threads 1
+# Notices and consents (A3, A4): the federation switch follows its consent.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test consents_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server -- legal::tests::live_ federation_switch::tests::live_ \
+    mail::sealed::tests::live_ federation_stream_control::tests::live_ --nocapture
 # The Photos library record (docs/plans/photos.md): this account's chain only.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test photos_library_live -- --nocapture

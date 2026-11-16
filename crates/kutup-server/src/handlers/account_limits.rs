@@ -224,10 +224,11 @@ async fn account_name(state: &AppState, id: Uuid) -> AppResult<Option<String>> {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<AccountLimitsResponse>> {
     account_name(&state, id).await?;
+    crate::handlers::admin::viewed(&state, &admin, id, "limits").await?;
     let site = ratelimit::reload(&state.pool).await?;
     let own = own_values(&state, id).await?;
     let mut settings = Vec::new();

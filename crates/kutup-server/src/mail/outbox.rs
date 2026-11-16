@@ -145,7 +145,7 @@ pub fn spawn(state: AppState) {
         if let Err(error) = sqlx::query(
             "WITH failed AS (
                  UPDATE mail_outbox SET state = 'failed', finished_at = now(),
-                        result = '{\"error\": \"interrupted\"}'
+                        result_sealed = NULL
                   WHERE state = 'sending'
                   RETURNING draft_id
              )
@@ -162,6 +162,9 @@ pub fn spawn(state: AppState) {
             tick.tick().await;
             if let Err(error) = send_due(&state).await {
                 tracing::warn!(error = %error, "mail: outbox pass failed");
+            }
+            if let Err(error) = sweep_finished(&state.pool).await {
+                tracing::warn!(error = %error, "mail: finished sends not swept");
             }
         }
     });
@@ -185,14 +188,32 @@ async fn send_due(state: &AppState) -> anyhow::Result<()> {
         let (final_state, result) = match outcome {
             Ok(result) => ("sent", json!({ "recipients": result.recipients })),
             Err(error) => {
-                tracing::info!(error = %error, "mail: a held send failed");
+                // Its status and code only: an error's text may name a
+                // recipient.
+                tracing::info!(
+                    status = %error["status"],
+                    code = %error["code"],
+                    "mail: a held send failed"
+                );
                 ("failed", error)
             }
         };
+        // The outcome names the recipients: sealed under the account's data
+        // key (docs/plans/server-personal-data.md, A2), the row's id its row.
+        let result = crate::account_data::seal(
+            &state.pool,
+            &state.config.opaque_setup_keys,
+            user_id,
+            result_field(&id.to_string()),
+            &serde_json::to_vec(&result)?,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?;
         // A send that failed leaves its draft in Drafts, scheduled or not.
         sqlx::query(
             "WITH done AS (
-                 UPDATE mail_outbox SET state = $2, result = $3, finished_at = now() WHERE id = $1
+                 UPDATE mail_outbox SET state = $2, result_sealed = $3, finished_at = now()
+                  WHERE id = $1
                  RETURNING draft_id
              )
              UPDATE mail_messages SET folder = 'drafts', folder_changed_at = now()
@@ -207,6 +228,26 @@ async fn send_due(state: &AppState) -> anyhow::Result<()> {
             tracing::warn!(error = %error, "mail: a sent message's held parts left for the sweep");
         }
     }
+}
+
+/// Where a held send's outcome is sealed: its row.
+pub(crate) fn result_field(id: &str) -> (&'static str, &'static str, &str) {
+    ("mail_outbox", "result", id)
+}
+
+/// Deletes held sends finished longer ago than `mail_outbox_keep_seconds`.
+async fn sweep_finished(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    let keep = crate::site_settings::MAIL_OUTBOX_KEEP_SECONDS
+        .load(pool)
+        .await?;
+    sqlx::query(
+        "DELETE FROM mail_outbox
+          WHERE finished_at IS NOT NULL AND finished_at < now() - make_interval(secs => $1)",
+    )
+    .bind(keep as f64)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Sends one held message; a failure as the send's error body would be

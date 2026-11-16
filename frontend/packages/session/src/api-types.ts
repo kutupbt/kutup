@@ -68,13 +68,33 @@ export interface FileRow {
   contentHash?: string
 }
 
+export type SuspendedReason = 'admin' | 'operator_order' | 'security'
+
 export interface UserRow {
   id: string
   username: string
   storageQuotaBytes: number
   storageUsedBytes: number
   isAdmin: boolean
+  /** The state is `active`. */
   isActive: boolean
+  /** `active`, `suspended` or `closing` (docs/plans/server-personal-data.md, A5). */
+  state: 'active' | 'suspended' | 'closing'
+  /** Why a suspended account is. */
+  suspendedReason?: SuspendedReason
+  /** When a closing account is deleted. */
+  closesAt?: string
+  /** A legal hold's reference: while set, nothing deletes the account. */
+  legalHoldReference?: string
+  legalHoldAt?: string
+  /** Failed tries at deleting this closing account past its date; 0 when none. */
+  /** Whether it may share by public link, as an administrator set it. */
+  publicSharing: 'on' | 'off'
+  /** Whether its Chat and Drive talk to other servers. */
+  federation: 'on' | 'off'
+  deletionAttempts: number
+  /** When its data key was found not to open: what was sealed under it is lost. */
+  dataKeyLostAt?: string
   totpEnabled: boolean
   /**
    * Still on the admin-issued temp password — no key material yet. Gates the
@@ -184,7 +204,7 @@ export interface SignedUpWith {
 }
 
 /** A whole-number setting's Server settings section (site_settings::SettingSection). */
-export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation'
+export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation' | 'privacy'
 /** What a whole-number setting counts. */
 export type SettingUnit = 'bytes' | 'count' | 'seconds' | 'days'
 /** Where a value in effect comes from. */
@@ -241,8 +261,14 @@ export interface AccountLimits {
   rateLimits: AccountRateLimitLimit[]
 }
 
+/** Who may open public links (docs/plans/server-personal-data.md, A11). */
+export type PublicSharing = 'on' | 'off' | 'signed_in'
+
 export interface AdminSettings {
   registrationMode: RegistrationMode
+  publicSharing: PublicSharing
+  /** Whether a new account talks to other servers. */
+  federationDefault: boolean
   /** The storage quota new accounts get; existing accounts keep theirs. */
   defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number

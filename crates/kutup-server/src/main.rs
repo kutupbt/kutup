@@ -6,11 +6,14 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod account_closing;
+mod account_data;
 mod account_devices;
 mod account_heads;
 mod account_ids;
 mod account_names;
 mod albums;
+mod audit_log;
 mod auth_check;
 mod calendar_alarms;
 mod calendar_reminders;
@@ -22,10 +25,12 @@ mod chat_group_send;
 mod chat_groups;
 mod chat_hub;
 mod chat_media_federation;
+mod client_family;
 mod collab_federation;
 mod config;
 mod content_range;
 mod db;
+mod destruction_events;
 mod drive_blob;
 mod drive_federation;
 mod drive_federation_albums;
@@ -37,12 +42,15 @@ mod drive_writes;
 mod error;
 mod federation;
 mod federation_outbox;
+mod federation_stream_control;
+mod federation_switch;
 mod file_content;
 mod grants;
 mod handlers;
 mod hub;
 mod jobs;
 mod jwt;
+mod legal;
 mod live_locations;
 mod mail;
 mod maps;
@@ -53,6 +61,7 @@ mod openapi;
 mod organizations;
 mod photos;
 mod public_fetch;
+mod public_sharing;
 mod ratelimit;
 mod registration;
 mod remote_manifests;
@@ -200,12 +209,40 @@ async fn main() -> anyhow::Result<()> {
     // database, no migrations). Exit 0, or 2 with every problem listed (from
     // `Config::load`); deploys run it against the new image first.
     if args.get(1..).is_some_and(|rest| rest == ["check-config"]) {
+        if config.database_owner_url.is_none() {
+            eprintln!("kutup-server: warning: {SINGLE_ROLE_WARNING}");
+        }
         println!("kutup-server: the configuration is valid");
         return Ok(());
     }
     let pool = db::connect(&config.database_url).await?;
-    db::migrate(&pool).await?;
+    // With an owner role, migrations and the app role's grants run as it, and
+    // the security and admin logs are append-only for the server
+    // (docs/plans/server-personal-data.md, A8).
+    let owner_pool = match &config.database_owner_url {
+        Some(url) => Some(db::connect(url).await?),
+        None => None,
+    };
+    db::migrate(owner_pool.as_ref().unwrap_or(&pool)).await?;
     tracing::info!("migrations applied");
+    match &owner_pool {
+        Some(owner) => db::grant_app_role(owner, &config.database_url).await?,
+        None => tracing::warn!("{SINGLE_ROLE_WARNING}"),
+    }
+    // The retention job: the only deletions the logs see, as the owner when
+    // there is one (A8).
+    {
+        let pool = owner_pool.clone().unwrap_or_else(|| pool.clone());
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+            loop {
+                tick.tick().await;
+                if let Err(error) = prune_logs(&pool).await {
+                    tracing::warn!("log retention: {}", error.message);
+                }
+            }
+        });
+    }
     if args
         .get(1)
         .is_some_and(|value| value == "federation-identity")
@@ -340,6 +377,47 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(anyhow::Error::msg)?,
     );
+    // Every server key list entry still wrapping an account data key must be
+    // there (docs/plans/server-personal-data.md, A2); keys under an older
+    // entry move to the current one in batches.
+    account_data::install(&config.opaque_setup_keys, &pool);
+    account_data::check_cascade(&pool)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    account_data::check_entries(&pool, &config.opaque_setup_keys)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    // A restore: the accounts the destruction log destroyed after the dump
+    // lose their data keys before anything is served, and close at once
+    // (A2, A7).
+    destruction_events::check_entries(&pool, &config.opaque_setup_keys)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let replayed = destruction_events::replay(&pool, &config.opaque_setup_keys)
+        .await
+        .map_err(|error| anyhow::anyhow!("replay the destruction log: {}", error.message))?;
+    if replayed > 0 {
+        tracing::warn!(
+            replayed,
+            "restored accounts the destruction log had destroyed: their data keys are gone, \
+             and they are deleted again"
+        );
+    }
+    {
+        let (pool, keys) = (pool.clone(), config.opaque_setup_keys.clone());
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            // One batch a minute, in account order, starting over at the end.
+            let mut after = account_data::REWRAP_START;
+            loop {
+                tick.tick().await;
+                match account_data::rewrap_some(&pool, &keys, after).await {
+                    Ok((_, next)) => after = next.unwrap_or(account_data::REWRAP_START),
+                    Err(error) => tracing::warn!("account data key rewrap: {}", error.message),
+                }
+            }
+        });
+    }
     bootstrap_admin(
         &pool,
         &opaque,
@@ -447,6 +525,7 @@ async fn main() -> anyhow::Result<()> {
     }
     // Old addresses past their receiving, names past their hold.
     account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
+    account_closing::spawn(state.clone());
     federation_outbox::spawn_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
@@ -720,6 +799,7 @@ fn build_router(state: AppState) -> Router {
         )
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
         .route("/api/auth/settings", get(auth::get_public_settings))
+        .route("/api/legal/documents", get(legal::get_documents))
         .route(
             "/api/auth/register",
             post(auth::register).route_layer(from_fn(middleware::rate_limit_register)),
@@ -741,6 +821,10 @@ fn build_router(state: AppState) -> Router {
             post(handlers::opaque::login_finish).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
+            "/api/auth/login/abort",
+            post(handlers::opaque::login_abort).route_layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
             "/api/auth/login/2fa",
             post(auth::login_two_fa).route_layer(from_fn(middleware::rate_limit_login)),
         )
@@ -756,6 +840,11 @@ fn build_router(state: AppState) -> Router {
             post(handlers::security_keys::login_finish)
                 .route_layer(from_fn(middleware::rate_limit_login))
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        // Keeping a closing account: one try per grant, limited as a sign-in.
+        .route(
+            "/api/auth/keep",
+            post(handlers::closing::keep).route_layer(from_fn(middleware::rate_limit_login)),
         )
         .route(
             "/api/auth/recover/preflight",
@@ -814,6 +903,17 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/user/rename/check", get(handlers::renames::check))
         .route("/api/user/rename", post(handlers::renames::rename))
+        .route("/api/user/close", post(handlers::closing::close))
+        .route("/api/user/legal/pending", get(legal::get_pending))
+        .route("/api/user/legal/acknowledge", post(legal::post_acknowledge))
+        .route(
+            "/api/user/consents",
+            get(legal::get_consents).put(legal::put_consent),
+        )
+        .route(
+            "/api/user/federation",
+            put(federation_switch::put_federation),
+        )
         .route("/api/user/names", get(handlers::renames::names))
         .route(
             "/api/user/names/:name",
@@ -1835,20 +1935,29 @@ fn build_router(state: AppState) -> Router {
         // --- Public shares. Create is authenticated; the read/download endpoints are
         // anonymous (the token is the capability). ---
         .route("/api/share", post(shares::create_public_share))
-        .route("/api/share/:token", get(shares::get_public_share))
+        .route(
+            "/api/share/:token",
+            get(shares::get_public_share).route_layer(from_fn(middleware::no_store)),
+        )
         .route(
             "/api/share/:token/files",
-            get(shares::list_public_share_files),
+            get(shares::list_public_share_files).route_layer(from_fn(middleware::no_store)),
         )
-        .route("/api/share/:token/epochs", get(shares::public_share_epochs))
-        .route("/api/share/:token/album", get(shares::public_album_items))
+        .route(
+            "/api/share/:token/epochs",
+            get(shares::public_share_epochs).route_layer(from_fn(middleware::no_store)),
+        )
+        .route(
+            "/api/share/:token/album",
+            get(shares::public_album_items).route_layer(from_fn(middleware::no_store)),
+        )
         .route(
             "/api/share/:token/thumbnails/:fileId/:variant",
-            get(shares::public_thumbnail),
+            get(shares::public_thumbnail).route_layer(from_fn(middleware::no_store)),
         )
         .route(
             "/api/share/:token/state/:fileId",
-            get(shares::public_share_state),
+            get(shares::public_share_state).route_layer(from_fn(middleware::no_store)),
         )
         .route(
             "/api/share/:token/report",
@@ -1857,11 +1966,11 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/share/:token/files/:fileId/assets/:assetId",
-            get(shares::public_share_asset),
+            get(shares::public_share_asset).route_layer(from_fn(middleware::no_store)),
         )
         .route(
             "/api/share/:token/download/:fileId",
-            get(shares::download_public_share_file),
+            get(shares::download_public_share_file).route_layer(from_fn(middleware::no_store)),
         )
         // --- Server-to-server endpoints. Every feature uses the shared v2
         // identity, discovery, policy, pinning, replay, and signed transport. ---
@@ -1931,6 +2040,12 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/fed/chat/accounts/:account_id/manifest",
             get(chat_federation::get_manifest)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            federation_stream_control::PATH,
+            post(federation_stream_control::receive)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -2259,6 +2374,11 @@ fn build_router(state: AppState) -> Router {
                     post(admin::rotate_temp_password),
                 )
                 .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
+                .route("/api/admin/users/:id/close", post(admin::close_user))
+                .route(
+                    "/api/admin/users/:id/legal-hold",
+                    put(admin::set_legal_hold).delete(admin::clear_legal_hold),
+                )
                 .route("/api/admin/users/:id/reset-grant", post(admin::reset_grant))
                 .route("/api/admin/reports", get(link_reports::list_reports))
                 .route(
@@ -2268,6 +2388,14 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/reports/:id/remove-link",
                     post(link_reports::remove_reported_link),
+                )
+                .route(
+                    "/api/admin/legal/documents",
+                    get(legal::admin_documents).post(legal::publish),
+                )
+                .route(
+                    "/api/admin/shares/:id/block",
+                    post(link_reports::block_link).delete(link_reports::unblock_link),
                 )
                 .route("/api/admin/feedback", get(feedback::list_feedback))
                 .route(
@@ -2330,6 +2458,7 @@ fn build_router(state: AppState) -> Router {
                 )
                 .route("/api/admin/activity", get(admin::activity))
                 .route("/api/admin/activity/export", get(admin::activity_export))
+                .route("/api/admin/activity/verify", get(admin::activity_verify))
                 .route(
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
@@ -2591,6 +2720,46 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static(middleware::SESSION_VERSION_HEADER),
             axum::http::header::LOCATION,
         ])
+}
+
+/// What the server, `check-config` and the admin console say while one role
+/// does everything.
+const SINGLE_ROLE_WARNING: &str = "DATABASE_OWNER_URL is not set: the server runs as the \
+    database's owner, so the security and admin logs are NOT append-only (it could change \
+    or delete them). Set up the two roles (docs/self-hosting.md, \"Database roles\").";
+
+/// Deletes the security events, admin-log rows and ended sessions past their
+/// Privacy and retention settings.
+async fn prune_logs(pool: &sqlx::PgPool) -> error::AppResult<()> {
+    use destruction_events::{record_bulk, Category};
+    let days = site_settings::SECURITY_EVENT_RETENTION_DAYS
+        .load(pool)
+        .await?;
+    let kept_per_kind = site_settings::SECURITY_EVENTS_KEPT_PER_KIND
+        .load(pool)
+        .await?;
+    let events = security_events::prune(pool, days, kept_per_kind).await?;
+    record_bulk(pool, Category::SecurityEvents, events, "retention").await?;
+    let days = site_settings::ADMIN_AUDIT_RETENTION_DAYS.load(pool).await?;
+    let audit = audit_log::prune(pool, days).await?;
+    record_bulk(pool, Category::AdminAudit, audit, "retention").await?;
+    let days = site_settings::SESSION_RECORD_GRACE_DAYS.load(pool).await?;
+    let sessions = sessions::prune_ended(pool, days).await?;
+    record_bulk(pool, Category::Sessions, sessions, "retention").await?;
+    let days = site_settings::DESTRUCTION_EVENT_RETENTION_DAYS
+        .load(pool)
+        .await?;
+    let destructions = destruction_events::prune(pool, days).await?;
+    if events + audit + sessions + destructions > 0 {
+        tracing::info!(
+            events,
+            audit,
+            sessions,
+            destructions,
+            "retention: rows past their period deleted"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

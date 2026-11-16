@@ -47,7 +47,7 @@ and its [environment reference](https://ente.com/help/self-hosting/installation/
    | `CHAT_SERVER_NAME` | The name after the `@` in every address; set once | — |
    | `POSTGRES_PASSWORD` | The database password | `openssl rand -hex 32` |
    | `JWT_SECRET` | Signs sessions | `openssl rand -hex 64` |
-   | `OPAQUE_SETUP_KEYS` | The keys sign-in is sealed under; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
+   | `OPAQUE_SETUP_KEYS` | The server key list: sign-in, group send keys and every account's data key are sealed under it; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
    | `S3_SECRET_KEY` | The bundled object store's secret | `openssl rand -hex 32` |
    | `MAIL_FORWARDING_KEYS` | Mail forwarding's keys; forwarding stays off until it's set; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
    | `ADMIN_ACCOUNT` | The break-glass administrator, `username:password` | — |
@@ -662,9 +662,73 @@ durable operator backups.
 
 ## Database backups
 
-The database backups below do not hold `OPAQUE_SETUP_KEYS` (it is in `.env`),
-and must not: back that key up on its own, somewhere else. A database restored
-without it signs no one in (see the security notes).
+The database backups below do not hold `OPAQUE_SETUP_KEYS`, the server key
+list (it is in `.env`), and must not: back it up on its own, somewhere else. A
+database restored without it signs no one in, and the server-side personal
+fields sealed under the account data keys (the authenticator secret, mail
+headers and signatures, docs/plans/server-personal-data.md) can't be read (see
+the security notes).
+
+Each account's data key lives in the schema `account_keys`, which the database
+dump leaves out; so does each shared mailbox's (a mail group's), which its
+messages' headers are sealed under. `scripts/backup-postgres.sh` dumps it apart, under
+`database-backups-keys/`, and keeps those dumps only for **Keep account key
+backups** (Server settings → Privacy and retention, default 7 days). An
+account deleted, or reset, more than that long ago has its key in no backup,
+so what the server sealed for it can't be read from any copy.
+
+The same schema holds the **destruction log** (docs/plans/server-personal-data.md,
+A7): what was deleted, when and by whom, naming each account only by keyed
+hashes of its id under the server key list's entries. A restore takes it
+from the newest key dump, and before serving anything the server finds the
+restored accounts it names, destroys their keys and closes them at once, so
+the closing job deletes them again. Restore the current server key list with
+it, not an older one: the hashes are made under the entries in use when the
+account was deleted. The log is kept **Keep the destruction log** days
+(default 1095), longer than any backup.
+
+## Public links
+
+Whether "anyone with the link" works is yours to set (docs/plans/server-personal-data.md,
+A11). **Server settings → Accounts → Public links**: anyone with the link,
+only people signed in to this server (a test server keeps its links among
+its own accounts), or off. An administrator turns them off for one account
+on its user page. A link that breaks the rules can be blocked from the
+Reports page: under a legal order it answers `451 Unavailable For Legal
+Reasons`, otherwise `410`; the reference you give (an order's number) is
+seen only by administrators, and the block can be lifted.
+
+## Notices, consents and other servers
+
+Publish your terms, privacy notice and consent texts in **Administration →
+Legal documents** (docs/plans/server-personal-data.md, A3 and A4): the text
+stays at its address; the server keeps a fingerprint of the exact text. A
+document required at sign-up is confirmed there, and a new version of it at
+each account's next sign-in. Nothing published, nothing asked. People give
+and withdraw consents in Settings → Privacy.
+
+Whether an account's Chat and Drive talk to other Kutup servers is its own
+switch (Settings → Privacy); new accounts start as **Server settings →
+Accounts → New accounts talk to other servers** says, and an administrator
+can set one account's. When you publish a `federation_abroad` text, turning
+it on asks for that consent, and withdrawing the consent turns it off. Mail
+is email, not federation: it isn't covered.
+
+## Closing and deleting accounts
+
+An account's owner deletes it in Settings → Account → Delete account (after
+their password), and an administrator in the admin console (Close account,
+or Delete account at once). A closed account is **closing** for **Wait before
+deleting a closed account** days (Privacy and retention, default 14): its
+sign-ins end, and a sign-in before then is offered to keep it. Then the
+server deletes it with everything in it, its row and its data key, and
+writes a destruction event.
+
+A **legal hold** (admin console → the account → Legal hold, with a
+reference) stops every deletion of the account and of anything of it: the
+closing job waits, an administrator's delete or reset is refused, and the
+retention jobs pass its sessions, security events and admin-log rows by.
+Setting and lifting a hold are in the admin activity log.
 
 The same goes for `MAIL_FORWARDING_KEYS`, when Mail's end-to-end forwarding
 is on (docs/plans/mail-forwarding.md): the proxy factors in the database are
@@ -745,16 +809,74 @@ To restore onto a fresh server: set up `.env` with the same store, the same
 
 ```sh
 docker compose up -d --wait postgres
+scripts/backup-postgres.sh --list                  # database dumps, then "keys: …"
 scripts/backup-postgres.sh --fetch <name> kutup.dump
 docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < kutup.dump
+# The account data keys and the destruction log: always the NEWEST key dump,
+# whichever database dump you restored. Keys of accounts deleted since are in
+# it no more, so their sealed fields stay unreadable; at start the server
+# deletes those accounts again (their rows came back with the database dump).
+# It may hold keys of accounts made after the database dump: those go before
+# the foreign key is added back, which would fail on them (and leave the keys
+# without their cascade).
+scripts/backup-postgres.sh --fetch keys:<newest key dump> keys.dump
+docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner \
+  --section=pre-data --section=data < keys.dump
+docker compose exec -T postgres psql -U kutup -d kutup -v ON_ERROR_STOP=1 \
+  -c "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = k.user_id)" \
+  -c "DELETE FROM account_keys.mail_group_data_keys k WHERE NOT EXISTS (SELECT 1 FROM mail_groups g WHERE g.id = k.group_id)"
+docker compose exec -T postgres pg_restore -U kutup -d kutup --no-owner --exit-on-error \
+  --section=post-data < keys.dump
 docker compose up -d --wait
 ```
+
+The server refuses to start while the account data keys have lost their
+foreign key to the accounts, or a shared mailbox's keys theirs to the mail
+groups (a restore that skipped the step above): without it, deleting an
+account or a group would no longer destroy its key.
 
 The dump holds accounts, key envelopes and object references; the files'
 ciphertext stays in the object store. A restore therefore returns to the
 moment of the dump: files deleted since then are listed but gone, and files
 added since then are in the store but no longer listed (`kutup-server
 orphan-sweep` finds those).
+
+## Database roles
+
+The server can run as its own database role, apart from the owner that holds
+the tables (docs/plans/server-personal-data.md, A8). Then the security and
+admin logs are **append-only for the server**: it may add rows (and count a
+repeated failed sign-in into one), but not change or delete them, so a
+compromised server can't rewrite what it did. The owner role runs the
+migrations, grants the server's role its rights at each start, and deletes
+log rows past their retention (Server settings → Privacy and retention). The
+admin log is also hash-chained; Activity says whether the chain holds.
+
+With one role, everything works, but those logs are not append-only: the
+server says so at start, in `kutup-server check-config`, and on the admin
+Activity page.
+
+With the bundled compose, name the role in `.env`:
+
+```
+POSTGRES_APP_USER=kutup_app
+POSTGRES_APP_PASSWORD=<openssl rand -hex 32>
+```
+
+A new database gets the role when it is created (`postgres/initdb`). For a
+database that already exists, create it once by hand:
+
+```sh
+docker compose exec -T postgres psql -U kutup -d kutup \
+  -c "CREATE ROLE kutup_app LOGIN PASSWORD '<openssl rand -hex 32>'"
+```
+
+Then `docker compose up -d --wait`: the server connects as `kutup_app`, and
+as `POSTGRES_USER` only for migrations, grants and pruning
+(`DATABASE_OWNER_URL`, set from it). Outside the bundled compose, set
+`DATABASE_URL` to the server's role and `DATABASE_OWNER_URL` to the owner's.
+The owner must own the tables: start with two roles on a fresh database, or
+move an existing database's objects to the owner first (`REASSIGN OWNED BY`).
 
 ## Updating
 
@@ -1145,8 +1267,9 @@ if any.
 - **Change all defaults** in `.env` before first start. The defaults are intentionally weak placeholders.
 - **Firewall:** Only expose ports 80 and 443 (TCP), and UDP 443 for HTTP/3. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet. Without UDP 443 browsers stay on HTTP/2 over TCP; nothing breaks, it is only slower on lossy mobile links.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
-- **OPAQUE_SETUP_KEYS:** the keys sign-in's OPAQUE setups are sealed under
-  (docs/plans/opaque.md). The server keeps each account's OPAQUE record, which
+- **OPAQUE_SETUP_KEYS, the server key list:** the keys sign-in's OPAQUE
+  setups are sealed under (docs/plans/opaque.md), and, below, the group send
+  keys and every account's data key. The server keeps each account's OPAQUE record, which
   is useless for guessing passwords offline as long as the setup's secrets are
   out of reach; they are stored sealed under this key, so a database dump or
   backup alone gives nothing to attack.
@@ -1172,6 +1295,27 @@ if any.
     under the current key, so after adding a key, start the server once
     before you remove the old id; a key whose id is gone stops the server at
     start.
+  - **Every account's data key is wrapped under it too**
+    (docs/plans/server-personal-data.md, A2): the key the server seals that
+    account's server-side personal fields under. Each wrapped key names the
+    entry it is wrapped under. After you add an entry, keys move to it when
+    they are next used and in batches of 500 a minute; an entry can be
+    removed once no key uses it:
+
+    ```sh
+    docker compose exec -T postgres psql -U kutup -d kutup -c \
+      "SELECT sealing_key_id, count(*) FROM (SELECT sealing_key_id FROM account_keys.account_data_keys
+         UNION ALL SELECT sealing_key_id FROM account_keys.mail_group_data_keys) k GROUP BY 1"
+    ```
+
+    The server refuses to start without an entry that still wraps keys,
+    naming each such entry and how many keys it wraps.
+  - **The destruction log names deleted accounts under it** (A7): each event
+    holds a keyed hash of the account under every entry in the list at the
+    time, so a restore can find accounts deleted since its dump. Keep an
+    entry while events made only under it (or older entries) are kept
+    (Keep the destruction log, default 1095 days): the server refuses to
+    start while a kept event names no entry of the list.
 - **Group send endorsement keys:** made on first start when `CHAT_GROUPS`
   and federation are on, stored sealed (above). `kutup-server chat-zk-keys
   rotate` makes a new key that issues from then on; the old one keeps

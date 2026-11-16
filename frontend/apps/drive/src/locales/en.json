@@ -327,6 +327,22 @@
         "title": "This link was removed",
         "description": "The server's administrators took it down. What it showed is no longer available here."
       },
+      "blocked": {
+        "title": "This link was blocked",
+        "description": "The server's operators blocked this link. What it showed is no longer available here."
+      },
+      "blockedLegal": {
+        "title": "This link is unavailable for legal reasons",
+        "description": "The server's operators blocked it under a legal order."
+      },
+      "sharingOff": {
+        "title": "Public links are turned off",
+        "description": "Links like this one don't open on this server at the moment."
+      },
+      "signInRequired": {
+        "title": "Sign in to open this link",
+        "description": "On this server, public links open only for people signed in to it. Sign in, then open the link again."
+      },
       "badKey": {
         "title": "This link's key does not fit",
         "description": "The link was changed or copied incompletely. Ask for the whole link again."

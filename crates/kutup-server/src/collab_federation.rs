@@ -167,6 +167,33 @@ impl CollabFederation {
         }
     }
 
+    /// The account's federation went off (crate::federation_switch): its
+    /// editors' rooms on other servers' files close (their bridges release
+    /// with no one left), and other servers' subscriptions to the files it
+    /// owns close now rather than at their lease's end.
+    pub async fn close_account(&self, state: &AppState, user_id: Uuid) -> AppResult<()> {
+        let suffix = format!(":{user_id}");
+        state
+            .hub
+            .close_rooms_where(|key| key.starts_with("remote:") && key.ends_with(&suffix));
+        let subscribed: Vec<Uuid> = self.home.lock().unwrap().keys().copied().collect();
+        if subscribed.is_empty() {
+            return Ok(());
+        }
+        let owned: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT f.id FROM files f JOIN collections c ON c.id = f.collection_id
+              WHERE c.owner_user_id = $1 AND f.id = ANY($2)",
+        )
+        .bind(user_id)
+        .bind(&subscribed)
+        .fetch_all(&state.pool)
+        .await?;
+        for file_id in owned {
+            self.close_file(state, file_id);
+        }
+        Ok(())
+    }
+
     fn subscribers(&self, file_id: Uuid) -> Vec<Arc<Subscriber>> {
         self.home
             .lock()
@@ -236,7 +263,10 @@ async fn remote_access(
          FROM federated_outgoing_file_shares s
          JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND s.file_id = $3",
+         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND s.file_id = $3
+           -- An owner that doesn't talk to other servers has, to them, no
+           -- shares (crate::federation_switch).
+           AND kutup_account_federates(c.owner_user_id)",
     )
     .bind(&hash)
     .bind(authenticated.origin())
@@ -256,7 +286,10 @@ async fn remote_access(
          FROM federated_outgoing_shares s
          JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
          JOIN files f ON f.collection_id = c.id AND f.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND f.id = $3",
+         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND f.id = $3
+           -- An owner that doesn't talk to other servers has, to them, no
+           -- shares (crate::federation_switch).
+           AND kutup_account_federates(c.owner_user_id)",
     )
     .bind(&hash)
     .bind(authenticated.origin())
@@ -1581,6 +1614,10 @@ async fn target_for(
     user_id: Uuid,
     route: &RemoteRoute,
 ) -> AppResult<RemoteTarget> {
+    // Editing another server's file reaches it: not for an account whose
+    // federation is off (crate::federation_switch). Open bridges re-check
+    // this, and close.
+    crate::federation_switch::ensure_federates(&state.pool, user_id).await?;
     match route {
         RemoteRoute::Folder { share_id, file_id } => {
             let row: Option<(String, String)> = sqlx::query_as(

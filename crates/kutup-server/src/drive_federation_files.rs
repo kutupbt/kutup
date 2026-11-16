@@ -146,6 +146,13 @@ pub async fn create_federated_file_share(
     Path(id): Path<String>,
     Json(request): Json<CreateFederatedFileShareRequest>,
 ) -> AppResult<Response> {
+    // Another server: only for an account that talks to them
+    // (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     let federation = configured_stack(&state)?;
     let recipient_domain = canonical_domain(&request.recipient_server)?;
     if recipient_domain == federation.server_name() {
@@ -264,7 +271,10 @@ async fn outgoing_file_share(
          FROM federated_outgoing_file_shares s
          JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_domain = $2",
+         WHERE s.capability_hash = $1 AND s.recipient_domain = $2
+           -- An owner that doesn't talk to other servers has, to them, no
+           -- shares (crate::federation_switch).
+           AND kutup_account_federates(c.owner_user_id)",
     )
     .bind(capability_hash(capability))
     .bind(authenticated.origin())
@@ -594,6 +604,13 @@ pub async fn accept_file_share(
     user: AuthUser,
     Json(request): Json<AcceptFederatedFileShareRequest>,
 ) -> AppResult<Response> {
+    // Another server: only for an account that talks to them
+    // (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     let federation = configured_stack(&state)?;
     let server = canonical_domain(&request.server)?;
     validate_capability(&request.capability)?;
@@ -773,6 +790,13 @@ pub async fn proxy_file_content(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
+    // Another server: only for an account that talks to them
+    // (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     let share = incoming(&state, &user, &id).await?;
     crate::drive_federation_ranges::relay(
         &state,
@@ -799,6 +823,13 @@ pub async fn proxy_file_state(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
+    // Another server: only for an account that talks to them
+    // (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     let share = incoming(&state, &user, &id).await?;
     let response = configured_stack(&state)?
         .send(
@@ -940,6 +971,13 @@ pub async fn proxy_folder_file_state(
     user: AuthUser,
     Path((share_id, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
+    // Another server: only for an account that talks to them
+    // (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     let share = crate::drive_federation::incoming_share(&state, &user, &share_id).await?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
     let response = configured_stack(&state)?

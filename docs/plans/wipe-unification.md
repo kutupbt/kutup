@@ -69,6 +69,11 @@ construction: XChaCha20-Poly1305, a 24-byte nonce, an HKDF subkey of the MK,
 AAD over some mix of magic, suite, label, key binding, id and revision, and
 padding to a bucket. Yet no two are the same:
 
+The table is the survey from before W1 (its file:line pointers are of that
+time). Every row but the Pass vault secret, which already was one, is an account
+record now; [`w1-account-record.md`](w1-account-record.md) "Today", column
+"Now", gives each one's purpose and slice.
+
 | Value | Format | Where | Differences |
 |---|---|---|---|
 | Contact card | `KUTCC2` suite 2 | `crypto/contact_card.rs:43,309` | binding and UID in the AAD, not in the header |

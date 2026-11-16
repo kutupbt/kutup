@@ -70,6 +70,11 @@ pub struct RegisterRequest {
     account_id: Option<String>,
     #[serde(default)]
     account_id_proof: Option<String>,
+    /// The documents shown and confirmed at sign-up (`GET /api/legal/documents`,
+    /// those `requiredAtSignup`): the current version of each required kind
+    /// (docs/plans/server-personal-data.md, A3).
+    #[serde(default)]
+    acknowledgements: Vec<Uuid>,
 }
 
 /// Mirrors `auth.LoginResponse`. Non-omitempty fields are always present (empty/zero on
@@ -118,6 +123,22 @@ pub struct LoginResponse {
     requires_setup: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     setup_token: Option<String>,
+    /// The account is closing: no session, but `grant` (purpose `keep`, no
+    /// session, minutes) keeps it at `POST /api/auth/keep`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    closing: Option<Closing>,
+}
+
+/// A closing account's sign-in answer (docs/plans/server-personal-data.md, A5).
+/// No Debug: it carries a one-time grant.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Closing {
+    /// When the account is deleted.
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String)]
+    closes_at: time::OffsetDateTime,
+    grant: String,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -627,6 +648,7 @@ pub async fn get_public_settings(
         name_hold_days,
         old_address_receive_days,
         pass_vault_max_bytes: crate::site_settings::pass_vault_max_bytes(&state.pool).await?,
+        public_sharing: crate::public_sharing::site(&state.pool).await?,
     })
     .into_response();
     // A signed-in caller's answer holds its own limits: no shared cache.
@@ -692,6 +714,7 @@ pub async fn register(
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
     let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
+    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     // The account id this server minted for the sign-up (register/start),
     // never one in use or ever used.
@@ -768,6 +791,11 @@ pub async fn register(
             .ok_or_else(crate::registration::invalid)?;
         crate::registration::record_use(&mut tx, code_id, user_id).await?;
     }
+    // The notices it was shown, recorded with the account: no account lacks
+    // the record of what it confirmed.
+    crate::legal::acknowledge(&mut tx, user_id, &req.acknowledgements, "signup").await?;
+    // Whether it talks to other servers starts as the site says.
+    crate::federation_switch::start_account(&mut tx, user_id, federation_default).await?;
     // The account's mail address comes with it (a GET never makes one).
     if !crate::handlers::mail_keys::create_own_address(
         &mut tx,
@@ -812,8 +840,8 @@ pub(crate) async fn signed_in_answer(
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT master_key_envelope, public_key,
-                  totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
-                  is_first_login,
+                  totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes,
+                  (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), is_first_login,
                   COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, ''),
                   COALESCE(substring(sha256(opaque_record) from 1 for 16) = $2, false)
            FROM users WHERE id = $1"#,
@@ -934,8 +962,8 @@ pub async fn login_two_fa(
 
     // The authenticator app's secret, only once it is turned on: a secret
     // still being set up never signs anyone in.
-    let row: Option<(Option<String>, bool)> = sqlx::query_as(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret END, is_active
+    let row: Option<(Option<Vec<u8>>, bool)> = sqlx::query_as(
+        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END, (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
          FROM users WHERE id = $1",
     )
     .bind(Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
@@ -949,6 +977,14 @@ pub async fn login_two_fa(
     }
 
     let account = Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+    let had_secret = totp_secret.is_some();
+    let totp_secret = match totp_secret {
+        Some(sealed) => open_totp_secret(&state, account, &sealed).await?,
+        None => None,
+    };
+    // A secret the account has but nobody can read: only a recovery code (or
+    // a security key) signs in.
+    let lost = had_secret && totp_secret.is_none();
     let valid = totp_secret
         .as_deref()
         .map(|s| totp::validate_totp(s, &req.code))
@@ -977,10 +1013,26 @@ pub async fn login_two_fa(
         spent
     };
     if !valid {
-        if !ratelimit::record_totp_attempt(&req.pre_auth_token, false) {
+        // Counted first: a log that can't be written never spares an attempt.
+        let counted = ratelimit::record_totp_attempt(&req.pre_auth_token, false);
+        if let Err(error) = crate::security_events::record_folded(
+            &state.pool,
+            account,
+            crate::security_events::Kind::SignInFailed2fa,
+        )
+        .await
+        {
+            tracing::warn!("security log: {}", error.message);
+        }
+        if !counted {
             return Err(AppError::too_many_requests(
                 "too many failed attempts, please log in again",
             ));
+        }
+        // The app's secret is gone: say so, so the person uses a recovery
+        // code (the token still holds).
+        if lost {
+            return Err(authenticator_lost());
         }
         // A wrong code: try the code again (the token still holds).
         return Err(AppError::unauthorized("invalid TOTP code")
@@ -1003,7 +1055,7 @@ pub(crate) async fn issue_after_second_step(
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT master_key_envelope, public_key,
                   is_admin, storage_quota_bytes, storage_used_bytes,
-                  COALESCE(username, ''), is_active, COALESCE(color, ''),
+                  COALESCE(username, ''), (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), COALESCE(color, ''),
                   COALESCE(key_binding, '')
            FROM users WHERE id = $1"#,
     )
@@ -1116,7 +1168,11 @@ pub async fn recover_grant(
     let stored: Option<String> = match account {
         Some(id) => {
             sqlx::query_scalar(
-                "SELECT recovery_key_verifier FROM users WHERE id = $1 AND is_active",
+                // A closing account recovers too, to keep it at the sign-in after.
+                &format!(
+                    "SELECT recovery_key_verifier FROM users WHERE id = $1 AND {}",
+                    crate::account_closing::SIGNS_IN
+                ),
             )
             .bind(id)
             .fetch_optional(&state.pool)
@@ -1134,11 +1190,12 @@ pub async fn recover_grant(
     // Only while the phrase checked is still the account's: a wipe (or a new
     // setup) in between replaces the verifier, and leaves no grant behind.
     let mut tx = state.pool.begin().await?;
-    let still: Option<Uuid> = sqlx::query_scalar(
+    let still: Option<Uuid> = sqlx::query_scalar(&format!(
         "SELECT id FROM users
-         WHERE id = $1 AND is_active AND recovery_key_verifier = $2
+         WHERE id = $1 AND {} AND recovery_key_verifier = $2
          FOR SHARE",
-    )
+        crate::account_closing::SIGNS_IN
+    ))
     .bind(user_id)
     .bind(&stored_verifier)
     .fetch_optional(&mut *tx)
@@ -1245,11 +1302,14 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         bool,
         String,
         i32,
+        String,
+        String,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, COALESCE(key_binding, ''), COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
-                  is_admin, COALESCE(color, ''), version_retention_days
+                  is_admin, COALESCE(color, ''), version_retention_days, public_sharing,
+                  federation
            FROM users WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
@@ -1267,6 +1327,8 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
+        public_sharing,
+        federation,
     )) = row
     else {
         return Err(AppError::not_found("user not found"));
@@ -1300,6 +1362,8 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
+        public_sharing,
+        federation,
         renames: crate::models::RenameAnchor {
             sequence: anchor.as_ref().map_or(0, |a| a.0),
             digest: anchor.map(|a| a.1),
@@ -1394,6 +1458,13 @@ pub async fn get_user_by_address(
 ) -> AppResult<Response> {
     if let Some((name, server)) = address.trim().rsplit_once('@') {
         if !server.eq_ignore_ascii_case(&state.config.chat_server_name) {
+            // Another server: only for an account that talks to them
+            // (crate::federation_switch).
+            crate::federation_switch::ensure_federates(
+                &state.pool,
+                crate::handlers::trusted_uuid(&user.user_id)?,
+            )
+            .await?;
             let remote = crate::drive_federation::remote_user_by_name(
                 &state,
                 &user.user_id,
@@ -1417,7 +1488,7 @@ pub async fn get_user_by_address(
         None => None,
     };
     let found = match id {
-        Some(id) => crate::handlers::accounts::local_identity(&state, id).await?,
+        Some(id) => crate::handlers::accounts::local_identity(&state, id, false).await?,
         None => None,
     };
     match (found, local) {
@@ -1463,11 +1534,14 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
 
     // Never while it is on: the secret in use is replaced only by turning it
     // off (with the password) and on again.
-    let set = sqlx::query("UPDATE users SET totp_secret = $1 WHERE id = $2 AND NOT totp_enabled")
-        .bind(&secret)
-        .bind(parse_uuid(&user.user_id)?)
-        .execute(&state.pool)
-        .await?;
+    let user_id = parse_uuid(&user.user_id)?;
+    let sealed = seal_totp_secret(&state, user_id, &secret).await?;
+    let set =
+        sqlx::query("UPDATE users SET totp_secret_sealed = $1 WHERE id = $2 AND NOT totp_enabled")
+            .bind(&sealed)
+            .bind(user_id)
+            .execute(&state.pool)
+            .await?;
     if set.rows_affected() != 1 {
         return Err(AppError::conflict("two-step sign-in is already on"));
     }
@@ -1491,13 +1565,19 @@ pub async fn verify_totp(
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
-    let secret: Option<String> = sqlx::query_scalar("SELECT totp_secret FROM users WHERE id = $1")
-        .bind(parse_uuid(&user.user_id)?)
-        .fetch_optional(&state.pool)
-        .await?
-        .flatten();
-    let Some(secret) = secret else {
+    let sealed: Option<Vec<u8>> =
+        sqlx::query_scalar("SELECT totp_secret_sealed FROM users WHERE id = $1")
+            .bind(parse_uuid(&user.user_id)?)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
+    let Some(sealed) = sealed else {
         return Err(AppError::bad_request("TOTP not set up"));
+    };
+    // A secret being set up whose key is gone: set it up again.
+    let Some(secret) = open_totp_secret(&state, parse_uuid(&user.user_id)?, &sealed).await? else {
+        return Err(AppError::conflict("set the authenticator app up again")
+            .with_details(serde_json::json!({ "code": "authenticatorLost" })));
     };
 
     if !totp::validate_totp(&secret, &req.code) {
@@ -1520,12 +1600,13 @@ pub async fn verify_totp(
         req.security_key.as_ref(),
     )
     .await?;
-    let enabled =
-        sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret = $2")
-            .bind(user_id)
-            .bind(&secret)
-            .execute(&mut *tx)
-            .await?;
+    let enabled = sqlx::query(
+        "UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret_sealed = $2",
+    )
+    .bind(user_id)
+    .bind(&sealed)
+    .execute(&mut *tx)
+    .await?;
     // A new setup or a turn-off landed since the secret was read.
     if enabled.rows_affected() != 1 {
         return Err(AppError::conflict("two-step sign-in changed meanwhile"));
@@ -1688,12 +1769,17 @@ pub(crate) async fn prove_second_factor(
             SecondFactor::Wrong
         });
     }
-    let secret: Option<String> = sqlx::query_scalar(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret END FROM users WHERE id = $1",
+    let sealed: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut **tx)
     .await?;
+    // A destroyed secret checks no code; a recovery code still does.
+    let secret = match sealed {
+        Some(sealed) => open_totp_secret(state, user_id, &sealed).await?,
+        None => None,
+    };
     if code.is_empty()
         || !(secret.is_some_and(|secret| totp::validate_totp(&secret, code))
             || crate::two_factor::spend(tx, &state.pool, user_id, code).await?)
@@ -1819,10 +1905,12 @@ pub async fn disable_totp(
     // With security keys left, two-step sign-in stays on (and its recovery
     // codes): only the authenticator app goes.
     let kind = if factors.keys > 0 {
-        sqlx::query("UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1")
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE users SET totp_enabled = false, totp_secret_sealed = NULL WHERE id = $1",
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
         crate::security_events::Kind::AuthenticatorOff
     } else {
         crate::two_factor::turn_off(&mut tx, user_id).await?;
@@ -1973,6 +2061,16 @@ pub async fn complete_setup(
         sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
         return Err(setup_token_invalid());
     }
+    let mut tx = state.pool.begin().await?;
+    crate::security_events::record(
+        &mut tx,
+        uid,
+        crate::security_events::Kind::SignIn,
+        Some(issued.session_id),
+        None,
+    )
+    .await?;
+    tx.commit().await?;
     let access = jwt::generate_access_token(
         &user_id,
         is_admin,
@@ -2082,6 +2180,37 @@ async fn issue_tokens_and_respond(
     stale: fn() -> AppError,
 ) -> AppResult<Response> {
     let uid = parse_uuid(user_id)?;
+    // Every step passed, for an account asked to close: no session, but the
+    // offer to keep it (docs/plans/server-personal-data.md, A5).
+    let closing: Option<(time::OffsetDateTime, bool)> = sqlx::query_as(
+        "SELECT closes_at, closes_at > now() OR kutup_account_held(id)
+           FROM users WHERE id = $1 AND state = 'closing'",
+    )
+    .bind(uid)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some((closes_at, keepable)) = closing {
+        // Past its date it is being deleted: nothing to keep any more.
+        if !keepable {
+            return Err(crate::account_closing::deleting());
+        }
+        let grant = crate::grants::issue(
+            &state.pool,
+            crate::grants::Purpose::Keep,
+            uid,
+            None,
+            None,
+            crate::grants::GRANT_MINUTES,
+        )
+        .await?;
+        return Ok(Json(LoginResponse {
+            user_id: user_id.to_owned(),
+            username: username.to_owned(),
+            closing: Some(Closing { closes_at, grant }),
+            ..Default::default()
+        })
+        .into_response());
+    }
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(headers)).await?;
     let mut tx = state.pool.begin().await?;
     // Still the password that was proved: a change or recovery that landed
@@ -2107,6 +2236,15 @@ async fn issue_tokens_and_respond(
         ),
         _ => None,
     };
+    // The account's security log (docs/plans/server-personal-data.md, A8).
+    crate::security_events::record(
+        &mut tx,
+        uid,
+        crate::security_events::Kind::SignIn,
+        Some(issued.session_id),
+        None,
+    )
+    .await?;
     tx.commit().await?;
     let access = jwt::generate_access_token(
         user_id,
@@ -2278,6 +2416,58 @@ fn deterministic_fake_account_record(secret: &[u8], binding: &str) -> String {
     )
     .expect("fake recovery envelope inputs are valid");
     STANDARD.encode(envelope)
+}
+
+/// Where the authenticator app's secret is sealed: the account's own row.
+fn totp_field(user_id: &str) -> (&'static str, &'static str, &str) {
+    ("users", "totp_secret", user_id)
+}
+
+/// The authenticator app's secret, sealed under the account's data key
+/// (docs/plans/server-personal-data.md, A2): it goes with the account.
+async fn seal_totp_secret(state: &AppState, user_id: Uuid, secret: &str) -> AppResult<Vec<u8>> {
+    let row = user_id.to_string();
+    crate::account_data::seal(
+        &state.pool,
+        &state.config.opaque_setup_keys,
+        user_id,
+        totp_field(&row),
+        secret.as_bytes(),
+    )
+    .await
+}
+
+/// The authenticator app's secret; None when it is destroyed (its account
+/// data key is gone: a restore brought the sealed secret back without it).
+/// Then no code of the app can be checked: the account signs in with a
+/// recovery code or a security key, or an administrator turns two-step
+/// sign-in off ([`authenticator_lost`]).
+async fn open_totp_secret(
+    state: &AppState,
+    user_id: Uuid,
+    sealed: &[u8],
+) -> AppResult<Option<String>> {
+    let row = user_id.to_string();
+    let Some(plain) = crate::account_data::open(
+        &state.pool,
+        &state.config.opaque_setup_keys,
+        user_id,
+        totp_field(&row),
+        sealed,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    String::from_utf8(plain.to_vec())
+        .map(Some)
+        .map_err(|_| AppError::internal("the sealed authenticator secret is not text"))
+}
+
+/// The authenticator app's secret is destroyed: its codes can't be checked.
+fn authenticator_lost() -> AppError {
+    AppError::unauthorized("the authenticator app's secret can't be read")
+        .with_details(serde_json::json!({ "code": "authenticatorLost" }))
 }
 
 #[cfg(test)]

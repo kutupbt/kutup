@@ -155,7 +155,7 @@ pub(crate) async fn turn_off(
 ) -> AppResult<bool> {
     let was_on = factors_locked(tx, user_id).await?.on();
     sqlx::query(
-        "UPDATE users SET totp_enabled = false, totp_secret = NULL,
+        "UPDATE users SET totp_enabled = false, totp_secret_sealed = NULL,
                           security_keys_require_uv = false
          WHERE id = $1",
     )

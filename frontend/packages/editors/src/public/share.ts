@@ -14,6 +14,7 @@ import { isListName, stateToListJson } from '@kutup/map/list'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
 import api from '@kutup/session/client'
+import { getAccessToken } from '@kutup/session/store'
 import { apiErrorCode } from '@kutup/ui/lib/apiError'
 
 interface ShareInfo {
@@ -65,7 +66,18 @@ export interface PublicShare {
   files: PublicFile[]
 }
 
-export type PublicFailure = 'missingKey' | 'notFound' | 'expired' | 'removed' | 'badKey' | 'waiting' | 'other'
+export type PublicFailure =
+  | 'missingKey'
+  | 'notFound'
+  | 'expired'
+  | 'removed'
+  | 'blocked'
+  | 'blockedLegal'
+  | 'sharingOff'
+  | 'signInRequired'
+  | 'badKey'
+  | 'waiting'
+  | 'other'
 
 export class PublicLinkError extends Error {
   constructor(readonly failure: PublicFailure) {
@@ -94,13 +106,27 @@ export function linkKey(): Uint8Array | null {
  * administrator, or with its owner's account: `410` `link_removed`).
  */
 export function linkFailure(error: unknown): PublicFailure {
-  if (apiErrorCode(error) === 'not_found') return 'notFound'
   const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
+  // The server's controls on public links (docs/plans/server-personal-data.md, A11).
+  const code = response?.data?.code
+  if (code === 'link_blocked') return response?.status === 451 ? 'blockedLegal' : 'blocked'
+  if (code === 'sharing_off') return 'sharingOff'
+  if (code === 'sign_in_required') return 'signInRequired'
+  if (apiErrorCode(error) === 'not_found') return 'notFound'
   if (response?.status !== 410) return 'other'
   return response.data?.code === 'link_removed' ? 'removed' : 'expired'
 }
 
 const shareBase = (token: string) => `/share/${encodeURIComponent(token)}`
+
+/**
+ * The viewer's own sign-in, when they have one here: a server whose links
+ * open only for signed-in viewers asks for it on every request
+ * (docs/plans/server-personal-data.md, A11). Anyone else is anonymous.
+ */
+export function viewerToken(): string {
+  return getAccessToken() ?? ''
+}
 
 export async function loadShare(token: string): Promise<PublicShare> {
   const key = linkKey()
@@ -245,7 +271,7 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
   const url = `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`
   const parts: Uint8Array[] = []
   let length = 0
-  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, { fileId: file.row.id, generation: file.row.contentKeyGeneration }, '', signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, { fileId: file.row.id, generation: file.row.contentKeyGeneration }, viewerToken(), signal)) {
     parts.push(plain)
     length += plain.length
   }
@@ -274,7 +300,7 @@ export async function downloadPublicFile(token: string, file: PublicFile): Promi
     filename: file.name,
     mimeType: file.mimeType,
     expectedPlainSize: file.size,
-    accessToken: '',
+    accessToken: viewerToken(),
   })
 }
 

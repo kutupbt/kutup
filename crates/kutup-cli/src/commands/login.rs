@@ -93,9 +93,10 @@ pub(crate) fn reauth_grant(client: &Client, password: &str, grant_for: &str) -> 
     let started = client
         .login_start(None, &request, "reauth", Some(grant_for))
         .context("reauth")?;
-    let signed_in = signing_in
-        .finish(&started.response()?)
-        .map_err(|_| anyhow::anyhow!("the password is wrong"))?;
+    let signed_in = signing_in.finish(&started.response()?).map_err(|_| {
+        client.login_abort(&started.login_id);
+        anyhow::anyhow!("the password is wrong")
+    })?;
     client
         .reauth_finish(&started.login_id, &signed_in.finalization)
         .context("reauth")
@@ -128,9 +129,10 @@ pub(crate) fn login_with_password(
     let started = client
         .login_start(Some(name), &request, "session", None)
         .context("login")?;
-    let signed_in = signing_in
-        .finish(&started.response()?)
-        .map_err(|_| anyhow::anyhow!("wrong username or password"))?;
+    let signed_in = signing_in.finish(&started.response()?).map_err(|_| {
+        client.login_abort(&started.login_id);
+        anyhow::anyhow!("wrong username or password")
+    })?;
     let mut resp = client
         .login_finish(&started.login_id, &signed_in.finalization)
         .context("login")?;
@@ -175,6 +177,20 @@ pub(crate) fn login_with_password(
 
     if resp.requires_setup {
         bail!("account requires first-login setup — use the web UI to complete setup first");
+    }
+    // Asked to be deleted: kept only when the person says so.
+    if let Some(closing) = resp.closing.take() {
+        super::confirm(
+            &format!(
+                "This account is closing and will be deleted on {}. Keep it?",
+                closing.closes_at
+            ),
+            false,
+        )
+        .context("the account is closing; sign in again to keep it")?;
+        resp = client
+            .keep_account(&closing.grant)
+            .context("keep the account")?;
     }
     // What the account's keys are bound to (its key binding), told only with
     // the session.

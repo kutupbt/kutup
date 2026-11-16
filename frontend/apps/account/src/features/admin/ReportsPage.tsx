@@ -13,9 +13,23 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { Tabs, TabsList, TabsTrigger } from '@kutup/ui/components/tabs'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
-import { useDismissReport, useLinkReports, useRemoveReportedLink, useUpdateUser, type LinkReport } from './api'
+import { Field } from '@kutup/ui/components/field'
+import { Input } from '@kutup/ui/components/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
+import {
+  useBlockLink,
+  useDismissReport,
+  useLinkReports,
+  useRemoveReportedLink,
+  useUnblockLink,
+  useUpdateUser,
+  type BlockReason,
+  type LinkReport,
+} from './api'
 
-type Pending = { kind: 'remove' | 'disable'; report: LinkReport }
+const BLOCK_REASONS: BlockReason[] = ['legal_order', 'abuse', 'other']
+
+type Pending = { kind: 'remove' | 'disable' | 'block'; report: LinkReport }
 
 /**
  * Reports on public links, from anyone who opened one (docs/architecture.md,
@@ -31,12 +45,19 @@ export function ReportsPage() {
   const dismiss = useDismissReport()
   const remove = useRemoveReportedLink()
   const update = useUpdateUser()
+  const block = useBlockLink()
+  const unblock = useUnblockLink()
   const [pending, setPending] = useState<Pending | null>(null)
+  const [blockReason, setBlockReason] = useState<BlockReason>('legal_order')
+  const [blockReference, setBlockReference] = useState('')
 
   const close = () => {
     setPending(null)
     remove.reset()
     update.reset()
+    block.reset()
+    setBlockReason('legal_order')
+    setBlockReference('')
   }
 
   return (
@@ -70,6 +91,14 @@ export function ReportsPage() {
               }
               onRemove={() => setPending({ kind: 'remove', report })}
               onDisable={() => setPending({ kind: 'disable', report })}
+              onBlock={() => setPending({ kind: 'block', report })}
+              unblocking={unblock.isPending && unblock.variables === report.shareId}
+              onUnblock={() =>
+                unblock.mutate(report.shareId, {
+                  onSuccess: () => toast.success(t('admin.reports.unblocked')),
+                  onError: (error) => toast.error(apiErrorMessage(error, t('admin.reports.actionFailed'))),
+                })
+              }
             />
           </li>
         ))}
@@ -91,6 +120,48 @@ export function ReportsPage() {
                 close()
               },
             })
+          }
+        />
+      ) : null}
+      {pending?.kind === 'block' ? (
+        <ConfirmDestructive
+          open
+          onOpenChange={(o) => !o && close()}
+          title={t('admin.reports.blockTitle')}
+          description={
+            <div className="space-y-3">
+              <p>{t('admin.reports.blockDescription', { name: pending.report.ownerUsername })}</p>
+              <Select value={blockReason} onValueChange={(value) => setBlockReason(value as BlockReason)}>
+                <SelectTrigger aria-label={t('admin.reports.blockReason')}>
+                  <SelectValue placeholder={t('admin.reports.blockReason')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {BLOCK_REASONS.map((reason) => (
+                    <SelectItem key={reason} value={reason}>
+                      {t(`admin.reports.blockReasons.${reason}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Field label={t('admin.reports.blockReference')} description={t('admin.reports.blockReferenceHint')}>
+                {(field) => <Input {...field} value={blockReference} maxLength={200} onChange={(e) => setBlockReference(e.target.value)} />}
+              </Field>
+            </div>
+          }
+          submit={t('admin.reports.block')}
+          pending={block.isPending}
+          error={block.error}
+          errorFallback={t('admin.reports.actionFailed')}
+          onConfirm={() =>
+            block.mutate(
+              { shareId: pending.report.shareId, reason: blockReason, reference: blockReference },
+              {
+                onSuccess: () => {
+                  toast.success(t('admin.reports.blocked'))
+                  close()
+                },
+              },
+            )
           }
         />
       ) : null}
@@ -127,12 +198,18 @@ function ReportCard({
   onDismiss,
   onRemove,
   onDisable,
+  onBlock,
+  unblocking,
+  onUnblock,
 }: {
   report: LinkReport
   dismissing: boolean
   onDismiss: () => void
   onRemove: () => void
   onDisable: () => void
+  onBlock: () => void
+  unblocking: boolean
+  onUnblock: () => void
 }) {
   const { t, i18n } = useTranslation()
   const open = report.resolvedAt === null
@@ -165,8 +242,16 @@ function ReportCard({
             date: formatInstant(report.shareCreatedAt, i18n.language),
           })}
           {report.shareRemovedAt ? ` · ${t('admin.reports.linkRemoved')}` : ''}
+          {report.shareBlockedReason ? ` · ${t(`admin.reports.blockedAs.${report.shareBlockedReason}`)}` : ''}
         </dd>
       </dl>
+      {report.shareBlockedReason ? (
+        <div className="flex border-t border-border pt-3">
+          <Button size="sm" variant="outline" className="ml-auto" loading={unblocking} onClick={onUnblock}>
+            {t('admin.reports.unblock')}
+          </Button>
+        </div>
+      ) : null}
       {open ? (
         <div className="flex flex-wrap gap-2 border-t border-border pt-3">
           {report.link ? (
@@ -186,6 +271,11 @@ function ReportCard({
             {report.shareRemovedAt ? null : (
               <Button size="sm" variant="outline" onClick={onRemove}>
                 {t('admin.reports.remove')}
+              </Button>
+            )}
+            {report.shareBlockedReason ? null : (
+              <Button size="sm" variant="outline" onClick={onBlock}>
+                {t('admin.reports.block')}
               </Button>
             )}
             {report.ownerIsActive ? (

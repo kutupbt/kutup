@@ -14,8 +14,17 @@ services:
   # A suite run creates dozens of accounts from one address. Production limits
   # stay in nginx (the fixtures wait them out); the backend's own per-address
   # ceilings are raised as in docker-compose.chat-federation.yml.
+  postgres:
+    environment:
+      POSTGRES_APP_USER: kutup_app
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:-isolated-app-role-password}
+
   backend:
     environment:
+      # The server runs as its own role, as kutup.dev does: the logs are
+      # append-only for it (docs/self-hosting.md, "Database roles").
+      DATABASE_URL: postgres://kutup_app:${POSTGRES_APP_PASSWORD:-isolated-app-role-password}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
+      DATABASE_OWNER_URL: postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
       # Groups are off by default (until the pairwise design); the group
       # specs (36, 38, 48) still run here. Spec 39 covers them off.
       CHAT_GROUPS: "true"

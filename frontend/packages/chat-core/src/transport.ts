@@ -6,6 +6,7 @@ import { accountHead, NotInVerifiedIndexError } from '@kutup/session/accountHead
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 import { apiBase } from '@kutup/session/apiBase'
+import { loadServerSettings } from '@kutup/session/apps'
 import { setChatDeviceAuth } from './device-auth'
 import type { ChatDevice, ChatTransportPort } from './types'
 
@@ -28,6 +29,50 @@ function signedIn() {
   const session = getSession()
   if (!session) throw new Error('not signed in')
   return session
+}
+
+/**
+ * This account doesn't talk to other servers (Settings → Privacy;
+ * docs/plans/server-personal-data.md, A4): a send or a fetch that would reach
+ * one is refused here. The server refuses the signed-in ones itself; the
+ * sealed ones are anonymous to it, so this is where they stop.
+ */
+export class FederationOffError extends Error {
+  constructor() {
+    super('this account does not talk to other servers')
+    this.name = 'FederationOffError'
+  }
+}
+
+const FEDERATION_CHECK_MS = 60_000
+let federationCache: { userId: string; on: boolean; at: number } | null = null
+
+/** Forgets what {@link federationOn} learnt: the next check asks again. */
+export function forgetFederationState(): void {
+  federationCache = null
+}
+
+/** Whether the signed-in account talks to other servers, asked at most once a minute. */
+async function federationOn(): Promise<boolean> {
+  const session = signedIn()
+  const now = Date.now()
+  if (federationCache && federationCache.userId === session.userId && now - federationCache.at < FEDERATION_CHECK_MS) {
+    return federationCache.on
+  }
+  const { data } = await api.get<{ federation?: 'on' | 'off' }>('/user/me')
+  const on = data.federation !== 'off'
+  federationCache = { userId: session.userId, on, at: now }
+  return on
+}
+
+/** Refuses with {@link FederationOffError} a request to another server while this account's federation is off. */
+async function ensureMayReach(server: string): Promise<void> {
+  // This server is the one the account's Chat lives on: its Chat name, not
+  // the address's domain (a custom-domain address names another).
+  const settings = await loadServerSettings<{ chat?: { serverName?: string | null } }>()
+  const own = settings.chat?.serverName?.toLowerCase()
+  if (own && server.toLowerCase() === own) return
+  if (!(await federationOn())) throw new FederationOffError()
 }
 
 /** Authenticated REST adapter consumed by the Rust engine. */
@@ -165,6 +210,7 @@ export class ApiChatTransport implements ChatTransportPort {
     capability: string,
   ): Promise<unknown> {
     const { path, server } = accountRoute(account, '/keys', '/chat/anonymous')
+    await ensureMayReach(server)
     return axios
       .post(
         `${apiBase()}${path}`,
@@ -449,6 +495,7 @@ export class ApiChatTransport implements ChatTransportPort {
     | { kind: 'refused' }
   > {
     const { path, server } = accountRoute(account, '/messages', '/chat/anonymous')
+    await ensureMayReach(server)
     try {
       const response = await axios.post(
         `${apiBase()}${path}`,
@@ -479,6 +526,7 @@ export class ApiChatTransport implements ChatTransportPort {
    * (`SealedBatchSubmissionV1`): one result per recipient, in order.
    */
   async sendSealedBatch(server: string, request: unknown): Promise<unknown> {
+    await ensureMayReach(server)
     try {
       const response = await axios.post(
         `${apiBase()}/chat/anonymous/messages/batch`,
@@ -511,6 +559,7 @@ export class ApiChatTransport implements ChatTransportPort {
     | { kind: 'rateLimited' }
     | { kind: 'tokenInvalid' }
   > {
+    await ensureMayReach(server)
     try {
       const response = await axios.post(`${apiBase()}/chat/anonymous/messages/multi`, request, {
         params: { server },
@@ -635,6 +684,11 @@ export class ApiChatTransport implements ChatTransportPort {
             return { kind: 'unreachable' }
           case 404:
             return { kind: 'groupsOff' }
+          // This account's federation is off: a group homed elsewhere is
+          // quiet for it until the switch is on again (it stays a member).
+          case 403:
+            if ((error.response.data as { code?: string } | undefined)?.code === 'federationOff') return { kind: 'groupsOff' }
+            break
         }
       }
       throw error

@@ -318,6 +318,10 @@
       "notFound": "The link does not exist, or the album was deleted or the link removed.",
       "expired": "The link has expired.",
       "removed": "The server's administrators removed this link.",
+      "blocked": "The server's operators blocked this link.",
+      "blockedLegal": "This link is unavailable for legal reasons: the server's operators blocked it under a legal order.",
+      "sharingOff": "Public links are turned off on this server at the moment.",
+      "signInRequired": "On this server, public links open only for people signed in to it. Sign in, then open the link again.",
       "badKey": "The link's key does not open this album. Ask for the whole link.",
       "notAlbum": "This link is not to an album.",
       "other": "Something went wrong. Try again."

@@ -150,6 +150,10 @@ pub struct AccessLink {
     pub expires_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// Why an operator blocked what the link reaches (`legal_order`,
+    /// `abuse`, `other`): it doesn't open, and stays until they lift it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -244,10 +248,20 @@ pub async fn access(
     .bind(collection_id)
     .fetch_all(&state.pool)
     .await?;
-    type LinkRow = (Uuid, String, String, Option<OffsetDateTime>, OffsetDateTime);
+    type LinkRow = (
+        Uuid,
+        String,
+        String,
+        Option<OffsetDateTime>,
+        OffsetDateTime,
+        Option<String>,
+    );
     let links: Vec<LinkRow> = sqlx::query_as(
-        "SELECT id, token, owner_link_key_envelope, expires_at, created_at
-             FROM public_shares WHERE target_id = $1 AND share_type = 'collection' ORDER BY created_at",
+        "SELECT id, token, owner_link_key_envelope, expires_at, created_at,
+                kutup_target_blocked(share_type, target_id)
+           FROM public_shares
+          WHERE target_id = $1 AND share_type = 'collection' AND owner_removed_at IS NULL
+          ORDER BY created_at",
     )
     .bind(collection_id)
     .fetch_all(&state.pool)
@@ -308,12 +322,15 @@ pub async fn access(
         public_links: links
             .into_iter()
             .map(
-                |(id, token, owner_link_key_envelope, expires_at, created_at)| AccessLink {
-                    id,
-                    token,
-                    owner_link_key_envelope,
-                    expires_at,
-                    created_at,
+                |(id, token, owner_link_key_envelope, expires_at, created_at, blocked_reason)| {
+                    AccessLink {
+                        id,
+                        token,
+                        owner_link_key_envelope,
+                        expires_at,
+                        created_at,
+                        blocked_reason,
+                    }
                 },
             )
             .collect(),
@@ -601,7 +618,8 @@ pub async fn rotate(
     .fetch_all(&mut *tx)
     .await?;
     let links: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM public_shares WHERE target_id = $1 AND share_type = 'collection'",
+        "SELECT id FROM public_shares
+          WHERE target_id = $1 AND share_type = 'collection' AND owner_removed_at IS NULL",
     )
     .bind(collection_id)
     .fetch_all(&mut *tx)
@@ -762,11 +780,26 @@ pub async fn rotate(
         .execute(&mut *tx)
         .await?;
     }
-    sqlx::query("DELETE FROM public_shares WHERE target_id = $1 AND share_type = 'collection' AND id = ANY($2)")
-        .bind(collection_id)
-        .bind(&req.removed.public_links)
-        .execute(&mut *tx)
-        .await?;
+    // A blocked link is kept, hidden from its owner: the block outlives it
+    // until an operator lifts it (crate::public_sharing).
+    sqlx::query(
+        "UPDATE public_shares SET owner_removed_at = now()
+          WHERE target_id = $1 AND share_type = 'collection' AND id = ANY($2)
+            AND blocked_at IS NOT NULL",
+    )
+    .bind(collection_id)
+    .bind(&req.removed.public_links)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM public_shares
+          WHERE target_id = $1 AND share_type = 'collection' AND id = ANY($2)
+            AND blocked_at IS NULL",
+    )
+    .bind(collection_id)
+    .bind(&req.removed.public_links)
+    .execute(&mut *tx)
+    .await?;
     for share in &req.federated_shares {
         // The new wrap names the recipient's incarnation as well (checked
         // with the rest of the envelope above): a re-share after their

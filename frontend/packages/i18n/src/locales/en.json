@@ -46,6 +46,18 @@
     "light": "Light theme",
     "system": "Match system theme"
   },
+  "publicSharing": {
+    "blocked": {
+      "legal_order": "Blocked by the server's operators under a legal order",
+      "abuse": "Blocked by the server's operators for abuse",
+      "other": "Blocked by the server's operators"
+    },
+    "targetBlocked": "The server's operators blocked links to this: no new one can be made.",
+    "off": {
+      "site": "Public links are turned off on this server.",
+      "account": "An administrator turned public links off for your account."
+    }
+  },
   "fileShare": {
     "title": "Share “{{name}}”",
     "description": "They get this file's own key, never its folder's. They see only this file.",

@@ -25,9 +25,9 @@ use crate::jobs;
 use crate::middleware::AdminUser;
 use crate::AppState;
 
-/// Best-effort audit-log write. The payload snapshots human-readable identities
-/// (usernames) at action time so the trail stays meaningful after the
-/// referenced users are deleted.
+/// Best-effort audit-log write, chained (`crate::audit_log`). The payload
+/// snapshots human-readable identities (usernames) at action time so the trail
+/// stays meaningful after the referenced users are deleted.
 pub(crate) async fn audit(
     pool: &PgPool,
     admin_user_id: &str,
@@ -38,19 +38,43 @@ pub(crate) async fn audit(
     let Ok(admin_uuid) = Uuid::parse_str(admin_user_id) else {
         return;
     };
-    if let Err(e) = sqlx::query(
-        "INSERT INTO admin_audit_log (admin_user_id, action, target_user_id, payload) \
-         VALUES ($1, $2, $3, $4)",
-    )
-    .bind(admin_uuid)
-    .bind(action)
-    .bind(target_user_id)
-    .bind(payload)
-    .execute(pool)
-    .await
+    if let Err(e) =
+        crate::audit_log::append(pool, admin_uuid, action, target_user_id, &payload).await
     {
-        tracing::warn!("audit log write failed ({action}): {e}");
+        tracing::warn!("audit log write failed ({action}): {}", e.message);
     }
+}
+
+/// An administrator opened one account's details (`view`): an `admin.view`
+/// row in the admin log, and `adminAccess` in the account's own security log
+/// (repeats within minutes folded; docs/plans/server-personal-data.md, A8).
+pub(crate) async fn viewed(
+    state: &AppState,
+    admin: &AdminUser,
+    target: Uuid,
+    view: &str,
+) -> AppResult<()> {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+        .bind(target)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(AppError::not_found("no such user"));
+    }
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "admin.view",
+        Some(target),
+        serde_json::json!({ "view": view }),
+    )
+    .await;
+    crate::security_events::record_folded(
+        &state.pool,
+        target,
+        crate::security_events::Kind::AdminAccess,
+    )
+    .await
 }
 
 /// `^[a-z0-9_-]{3,32}$` — mirrors `adminUsernameRegexp`.
@@ -74,7 +98,7 @@ async fn is_break_glass(state: &AppState, id: Uuid) -> AppResult<bool> {
     )
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 #[schema(as = AdminUserRow)]
 #[serde(rename_all = "camelCase")]
 struct UserRow {
@@ -83,13 +107,51 @@ struct UserRow {
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
     is_admin: bool,
+    /// The state is `active`.
     is_active: bool,
+    /// `active`, `suspended` or `closing` (docs/plans/server-personal-data.md, A5).
+    state: String,
+    /// Why a suspended account is: `admin`, `operator_order` or `security`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suspended_reason: Option<String>,
+    /// When a closing account is deleted.
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<String>)]
+    closes_at: Option<OffsetDateTime>,
+    /// The legal hold's reference; none when there is no hold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    legal_hold_reference: Option<String>,
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<String>)]
+    legal_hold_at: Option<OffsetDateTime>,
+    /// Failed tries at deleting a closing account past its date (the job
+    /// keeps trying, further apart); 0 when none.
+    deletion_attempts: i32,
+    /// When its data key was found not to open: what was sealed under it is
+    /// lost (docs/plans/server-personal-data.md, A2).
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<String>)]
+    data_key_lost_at: Option<OffsetDateTime>,
+    /// Whether it may share by public link: `on` or `off`.
+    public_sharing: String,
+    /// Whether it talks to other servers: `on` or `off`.
+    federation: String,
     #[serde(rename = "totpEnabled")]
     totp_enabled: bool,
     /// Still on the admin-issued temp password (no key material yet). Gates the
     /// admin "rotate temp password" action.
     is_first_login: bool,
     #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String)]
     created_at: OffsetDateTime,
     /// Marks the break-glass admin — the UI disables demote/disable/delete for this user.
     is_protected: bool,
@@ -104,57 +166,17 @@ struct UserRow {
     responses((status = 200, description = "All user accounts", body = Vec<UserRow>))
 )]
 pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
-    type Row = (
-        Uuid,
-        String,
-        i64,
-        i64,
-        bool,
-        bool,
-        bool,
-        bool,
-        OffsetDateTime,
-        bool,
-    );
-    let rows: Vec<Row> = sqlx::query_as(
+    let users: Vec<UserRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
-                  is_admin, is_active, totp_enabled, is_first_login, created_at, is_break_glass
+                  is_admin, is_active, state, suspended_reason, closes_at,
+                  legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
+                  public_sharing, federation,
+                  totp_enabled, is_first_login, created_at, is_break_glass AS is_protected
            FROM users ORDER BY created_at DESC"#,
     )
     .fetch_all(&state.pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
-
-    let users: Vec<UserRow> = rows
-        .into_iter()
-        .map(
-            |(
-                id,
-                username,
-                quota,
-                used,
-                is_admin,
-                is_active,
-                totp,
-                first,
-                created,
-                is_protected,
-            )| {
-                UserRow {
-                    id,
-                    username,
-                    storage_quota_bytes: quota,
-                    storage_used_bytes: used,
-                    is_admin,
-                    is_active,
-                    totp_enabled: totp,
-                    is_first_login: first,
-                    created_at: created,
-                    is_protected,
-                }
-            },
-        )
-        .collect();
     Ok(Json(users).into_response())
 }
 
@@ -247,6 +269,7 @@ pub async fn create_user(
         return Err(AppError::bad_request("storage quota must be positive"));
     }
 
+    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     // One account per folded name (docs/plans/username-renames.md). The
     // break-glass account itself is made by `bootstrap_admin`, not here.
@@ -284,6 +307,8 @@ pub async fn create_user(
         Err(e) => return Err(map_insert_conflict(e)),
     };
     crate::account_names::claim(&mut tx, &req.username, new_id, None).await?;
+    // Whether it talks to other servers starts as the site says.
+    crate::federation_switch::start_account(&mut tx, new_id, federation_default).await?;
     if !crate::handlers::mail_keys::create_own_address(
         &mut tx,
         &state.config.chat_server_name,
@@ -318,6 +343,9 @@ pub async fn create_user(
 pub struct UpdateUserRequest {
     storage_quota_bytes: Option<i64>,
     is_active: Option<bool>,
+    suspended_reason: Option<String>,
+    public_sharing: Option<String>,
+    federation: Option<String>,
     is_admin: Option<bool>,
 }
 
@@ -351,6 +379,12 @@ pub async fn update_user(
 
     let wants_demote = req.is_admin == Some(false);
     let wants_disable = req.is_active == Some(false);
+    let suspended_reason = req.suspended_reason.as_deref().unwrap_or("admin");
+    if !["admin", "operator_order", "security"].contains(&suspended_reason) {
+        return Err(AppError::bad_request(
+            "suspendedReason must be admin, operator_order or security",
+        ));
+    }
 
     // Break-glass admin is immutable: never demote or disable it.
     if is_break_glass(&state, target).await? && (wants_demote || wants_disable) {
@@ -383,17 +417,57 @@ pub async fn update_user(
     }
     if let Some(a) = req.is_active {
         let mut tx = state.pool.begin().await?;
-        if !a {
+        if a {
+            // Active again: a suspension lifted, or a closing account kept
+            // while it still can be.
+            let suspension = sqlx::query(
+                "UPDATE users SET state = 'active', suspended_reason = NULL,
+                        state_changed_at = now()
+                  WHERE id = $1 AND state = 'suspended'",
+            )
+            .bind(target)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            let closing: bool =
+                sqlx::query_scalar("SELECT state = 'closing' FROM users WHERE id = $1")
+                    .bind(target)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if suspension == 0 && closing {
+                // Kept as it was before it closed (a suspension stays).
+                if !crate::account_closing::keep(&mut tx, target).await? {
+                    return Err(crate::account_closing::deleting());
+                }
+                crate::security_events::record(
+                    &mut tx,
+                    target,
+                    crate::security_events::Kind::AccountKept,
+                    None,
+                    Some(crate::handlers::trusted_uuid(&admin.user_id)?),
+                )
+                .await?;
+            }
+        } else {
             // The shared mailboxes it signs for need a new signer: it may
             // still hold the seed (docs/plans/mail-groups.md).
             crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
-        }
-        sqlx::query("UPDATE users SET is_active = $1 WHERE id = $2")
-            .bind(a)
+            let suspended = sqlx::query(
+                "UPDATE users SET state = 'suspended', suspended_reason = $2,
+                        state_changed_at = now()
+                  WHERE id = $1 AND state <> 'closing'",
+            )
             .bind(target)
+            .bind(suspended_reason)
             .execute(&mut *tx)
-            .await
-            .map_err(|_| AppError::internal("internal error"))?;
+            .await?
+            .rows_affected();
+            // A closing account is kept first, or left to close.
+            if suspended == 0 {
+                return Err(AppError::conflict("the account is closing")
+                    .with_details(json!({ "code": "accountClosing" })));
+            }
+        }
         tx.commit().await?;
         // A disabled account keeps no live sign-in anywhere.
         if !a {
@@ -409,6 +483,56 @@ pub async fn update_user(
                 .await?;
             }
         }
+    }
+    if let Some(federation) = req.federation.as_deref() {
+        // An administrator's switch. The consent is the user's to give: with
+        // a `federation_abroad` text published, on needs the user's own
+        // consent already given (`409 consentRequired`; a transfer abroad
+        // rests on it), and records none.
+        if !["on", "off"].contains(&federation) {
+            return Err(AppError::bad_request("federation must be on or off"));
+        }
+        let on = federation == "on";
+        let mut tx = state.pool.begin().await?;
+        if on {
+            crate::federation_switch::turn_on(&mut tx, target, None, "admin").await?;
+        } else {
+            crate::federation_switch::turn_off(&mut tx, target).await?;
+        }
+        crate::audit_log::append_in(
+            &mut tx,
+            crate::handlers::trusted_uuid(&admin.user_id)?,
+            "user.federation",
+            Some(target),
+            &json!({ "username": target_username, "federation": federation }),
+        )
+        .await?;
+        tx.commit().await?;
+        if !on {
+            crate::federation_switch::after_off(&state, target).await?;
+        }
+    }
+    if let Some(sharing) = req.public_sharing.as_deref() {
+        if !["on", "off"].contains(&sharing) {
+            return Err(AppError::bad_request("publicSharing must be on or off"));
+        }
+        // With its own record, in one transaction: a switch that turns an
+        // account's links off is evidence of who did it.
+        let mut tx = state.pool.begin().await?;
+        sqlx::query("UPDATE users SET public_sharing = $1 WHERE id = $2")
+            .bind(sharing)
+            .bind(target)
+            .execute(&mut *tx)
+            .await?;
+        crate::audit_log::append_in(
+            &mut tx,
+            crate::handlers::trusted_uuid(&admin.user_id)?,
+            "user.publicSharing",
+            Some(target),
+            &json!({ "username": target_username, "publicSharing": sharing }),
+        )
+        .await?;
+        tx.commit().await?;
     }
     if let Some(a) = req.is_admin {
         sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2")
@@ -426,9 +550,18 @@ pub async fn update_user(
     }
     if let Some(a) = req.is_active {
         changes.insert("isActive".into(), json!(a));
+        if !a {
+            changes.insert("suspendedReason".into(), json!(suspended_reason));
+        }
     }
     if let Some(a) = req.is_admin {
         changes.insert("isAdmin".into(), json!(a));
+    }
+    if let Some(sharing) = &req.public_sharing {
+        changes.insert("publicSharing".into(), json!(sharing));
+    }
+    if let Some(federation) = &req.federation {
+        changes.insert("federation".into(), json!(federation));
     }
     audit(
         &state.pool,
@@ -468,61 +601,204 @@ pub async fn delete_user(
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
-    // Everything the account holds goes with it, bytes included (a bare
-    // row delete would cascade the rows and leave every object in the
-    // bucket), while what it added to other people's folders stays theirs.
-    super::chat_backup::purge_for_account(&state, target).await?;
-    purge_chat_media(&state, target).await?;
-    purge_owned_drive(&state, target).await?;
-    purge_mail(&state, target).await?;
-    hand_over_contributions(&state.pool, target).await?;
+    // Everything it holds goes, then its row and its data key; refused under
+    // a legal hold (docs/plans/server-personal-data.md, A5).
+    crate::account_closing::destroy(
+        &state,
+        target,
+        crate::destruction_events::Actor::Admin,
+        "user.delete",
+        false,
+    )
+    .await?;
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "user.delete",
+        Some(target),
+        json!({
+            "username": target_username.unwrap_or_default(),
+        }),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
 
-    // Its names stay held, receiving nothing, until the hold ends: nobody
-    // takes a deleted person's name, nor their mail, before then
-    // (docs/plans/username-renames.md).
-    let (hold_days, _) = crate::site_settings::name_holds(&state.pool, &state.config).await?;
-    let mut tx = state.pool.begin().await?;
-    sqlx::query(
-        "UPDATE account_names SET state = 'held', receive_until = now(),
-                free_at = now() + make_interval(days => $2::int)
-          WHERE user_id = $1",
+/// `POST /api/admin/users/{id}/close` — closes the account: deleted after
+/// `account_closing_days`, unless kept (by its owner at sign-in, or here with
+/// `isActive: true`) (docs/plans/server-personal-data.md, A5).
+#[utoipa::path(
+    post,
+    path = "/api/admin/users/{id}/close",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    responses((status = 200, description = "Closing; when it is deleted", body = crate::handlers::closing::Closed))
+)]
+pub async fn close_user(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let (username, is_admin, is_active): (String, bool, bool) = sqlx::query_as(
+        "SELECT COALESCE(username, ''), is_admin, is_active FROM users WHERE id = $1",
     )
     .bind(target)
-    .bind(hold_days as i32)
-    .execute(&mut *tx)
-    .await?;
-    // Its account id is never given to anyone again (docs/plans/account-ids.md).
-    crate::account_ids::retire(&mut tx, target).await?;
-    // The shared mailboxes it signed for need a new signer: its signing
-    // shares go with it, but it may still hold the seed.
-    crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
-    let res = sqlx::query("DELETE FROM users WHERE id = $1")
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("not found"))?;
+    if is_break_glass(&state, target).await? {
+        return Err(AppError::forbidden("break-glass admin is protected"));
+    }
+    if is_admin && is_active {
+        let other_usable: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM users WHERE is_admin AND is_active AND id != $1",
+        )
         .bind(target)
-        .execute(&mut *tx)
-        .await;
-    if res.as_ref().is_ok_and(|r| r.rows_affected() > 0) {
-        tx.commit().await?;
-    }
-    match res {
-        Ok(r) if r.rows_affected() > 0 => {
-            audit(
-                &state.pool,
-                &admin.user_id,
-                "user.delete",
-                Some(target),
-                json!({
-                    "username": target_username.unwrap_or_default(),
-                }),
-            )
-            .await;
-            Ok(StatusCode::NO_CONTENT.into_response())
+        .fetch_one(&state.pool)
+        .await?;
+        if other_usable == 0 {
+            return Err(AppError::bad_request("cannot remove the last admin"));
         }
-        _ => Err(AppError::not_found("not found")),
     }
+    let days = crate::site_settings::ACCOUNT_CLOSING_DAYS
+        .load(&state.pool)
+        .await?;
+    let mut tx = state.pool.begin().await?;
+    let closes_at = crate::account_closing::close(
+        &mut tx,
+        target,
+        crate::account_closing::ClosingBy::Admin,
+        days,
+    )
+    .await?
+    .ok_or_else(|| {
+        AppError::conflict("the account is closing")
+            .with_details(json!({ "code": "accountClosing" }))
+    })?;
+    tx.commit().await?;
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "user.close",
+        Some(target),
+        json!({ "username": username, "closesAt": closes_at.unix_timestamp() }),
+    )
+    .await;
+    Ok(Json(crate::handlers::closing::Closed::new(closes_at)).into_response())
+}
+
+/// `PUT /api/admin/users/{id}/legal-hold` body.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LegalHoldRequest {
+    /// What the hold is for: a case or order reference (1–200 characters).
+    reference: String,
+}
+
+/// `PUT /api/admin/users/{id}/legal-hold` — sets (or changes) a legal hold
+/// (docs/plans/server-personal-data.md, A5): while it is set nothing deletes
+/// the account or anything of it.
+#[utoipa::path(
+    put,
+    path = "/api/admin/users/{id}/legal-hold",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    request_body = LegalHoldRequest,
+    responses((status = 204, description = "Hold set"))
+)]
+pub async fn set_legal_hold(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+    Json(req): Json<LegalHoldRequest>,
+) -> AppResult<Response> {
+    let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let reference = req.reference.trim();
+    if reference.is_empty() || reference.chars().count() > 200 {
+        return Err(AppError::bad_request(
+            "a hold needs a reference of 1 to 200 characters",
+        ));
+    }
+    let admin_id = crate::handlers::trusted_uuid(&admin.user_id)?;
+    let set = sqlx::query(
+        "UPDATE users SET legal_hold_reference = $2, legal_hold_at = now(), legal_hold_by = $3
+          WHERE id = $1 AND deleting_at IS NULL",
+    )
+    .bind(target)
+    .bind(reference)
+    .bind(admin_id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if set == 0 {
+        // A deletion under way can't be held any more: its purges have begun.
+        let deleting: Option<bool> =
+            sqlx::query_scalar("SELECT deleting_at IS NOT NULL FROM users WHERE id = $1")
+                .bind(target)
+                .fetch_optional(&state.pool)
+                .await?;
+        return Err(match deleting {
+            Some(true) => crate::account_closing::deleting(),
+            _ => AppError::not_found("not found"),
+        });
+    }
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "user.legalHold.set",
+        Some(target),
+        json!({ "reference": reference }),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// `DELETE /api/admin/users/{id}/legal-hold` — ends a legal hold; deletions
+/// that waited (a closing account past its date) go ahead.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/users/{id}/legal-hold",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    responses((status = 204, description = "Hold cleared"))
+)]
+pub async fn clear_legal_hold(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let cleared: Option<Option<String>> = sqlx::query_scalar(
+        "UPDATE users u SET legal_hold_reference = NULL, legal_hold_at = NULL, legal_hold_by = NULL
+           FROM users old
+          WHERE u.id = $1 AND old.id = u.id
+          RETURNING old.legal_hold_reference",
+    )
+    .bind(target)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(previous) = cleared else {
+        return Err(AppError::not_found("not found"));
+    };
+    if let Some(reference) = previous {
+        audit(
+            &state.pool,
+            &admin.user_id,
+            "user.legalHold.clear",
+            Some(target),
+            json!({ "reference": reference }),
+        )
+        .await;
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// Removes a user's stored mail; the rows go with the account.
-async fn purge_mail(state: &AppState, target: Uuid) -> AppResult<()> {
+pub(crate) async fn purge_mail(state: &AppState, target: Uuid) -> AppResult<()> {
     state
         .storage
         .delete_prefix(&crate::mail::object_prefix(target))
@@ -532,7 +808,7 @@ async fn purge_mail(state: &AppState, target: Uuid) -> AppResult<()> {
 
 /// Removes a user's Chat media: aborts their open uploads, drops their
 /// references and deletes every object no one else references.
-async fn purge_chat_media(state: &AppState, target: Uuid) -> AppResult<()> {
+pub(crate) async fn purge_chat_media(state: &AppState, target: Uuid) -> AppResult<()> {
     let media_uploads: Vec<(Uuid, String, String)> = sqlx::query_as(
         "SELECT id,storage_path,s3_upload_id FROM chat_media_uploads WHERE user_id=$1",
     )
@@ -582,7 +858,7 @@ async fn purge_chat_media(state: &AppState, target: Uuid) -> AppResult<()> {
 /// own, trashed or not, with each file's blobs, versions, assets and
 /// thumbnails and the charges they hold (whoever pays them) — plus the
 /// uploads in flight into it and the public links onto it.
-async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResult<()> {
+pub(crate) async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResult<()> {
     // Open uploads by the user anywhere, or by anyone into the user's
     // folders: their multipart parts would otherwise stay in the bucket.
     let open_uploads: Vec<(Uuid, String, String)> = sqlx::query_as(
@@ -639,7 +915,7 @@ async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResult<()> {
 /// so deleting the account neither deletes their data nor leaves bytes that
 /// no one pays for. (A folder may go over its owner's quota; they can store
 /// nothing more until they free space, as after any quota cut.)
-async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppResult<()> {
+pub(crate) async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppResult<()> {
     let mut tx = pool.begin().await?;
     let moved: Vec<(Uuid, i64)> = sqlx::query_as(
         r#"WITH moved AS (
@@ -811,6 +1087,8 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
 )]
 pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
     let registration_mode = crate::registration::mode(&state).await?;
+    let public_sharing = crate::public_sharing::site(&state.pool).await?;
+    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -838,6 +1116,8 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     }
     let mut settings = json!({
         "registrationMode": registration_mode,
+        "publicSharing": public_sharing,
+        "federationDefault": federation_default,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
@@ -860,6 +1140,8 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateSettingsRequest {
     registration_mode: Option<crate::registration::RegistrationMode>,
+    public_sharing: Option<crate::public_sharing::PublicSharing>,
+    federation_default: Option<bool>,
     default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
@@ -906,6 +1188,8 @@ pub async fn update_settings(
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
     if req.registration_mode.is_none()
+        && req.public_sharing.is_none()
+        && req.federation_default.is_none()
         && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
@@ -1022,6 +1306,12 @@ pub async fn update_settings(
     if let Some(mode) = req.registration_mode {
         crate::registration::set_mode(&mut transaction, mode).await?;
     }
+    if let Some(sharing) = req.public_sharing {
+        crate::public_sharing::set_site(&mut transaction, sharing).await?;
+    }
+    if let Some(on) = req.federation_default {
+        crate::federation_switch::set_site_default(&mut transaction, on).await?;
+    }
     for (key, value) in [
         (
             crate::storage_pool::DEFAULT_QUOTA_SETTING,
@@ -1109,6 +1399,8 @@ pub async fn update_settings(
         None,
         json!({
             "registrationMode": req.registration_mode,
+            "publicSharing": req.public_sharing,
+            "federationDefault": req.federation_default,
             "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
@@ -2333,6 +2625,10 @@ pub async fn wipe_user(
     if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
+    // A reset destroys what the account holds: not under a legal hold, and
+    // the account claimed while it runs, so a hold set meanwhile is refused
+    // rather than overrun (let go when this ends).
+    let _claim = crate::account_closing::ResetClaim::take(&state, target).await?;
 
     // 0. Nobody signed in to it watches the purges below, nor acts on a grant
     //    meanwhile: its sign-ins and grants end first (and again, with the
@@ -2415,7 +2711,7 @@ pub async fn wipe_user(
                recovery_key_verifier = '', drive_key_binding = NULL,
                key_binding = $1, opaque_record = $3, opaque_suite = $4,
                opaque_server_key_id = $5,
-               totp_secret = NULL, totp_enabled = false,
+               totp_secret_sealed = NULL, totp_enabled = false,
                is_first_login = true, updated_at = NOW()
            WHERE id = $2"#,
     )
@@ -2427,6 +2723,13 @@ pub async fn wipe_user(
     .execute(&mut *tx)
     .await
     .map_err(map_insert_conflict)?;
+    // The account's data key goes too: whatever the old incarnation sealed
+    // under it is unreadable everywhere, backups included
+    // (docs/plans/server-personal-data.md, A2); the next seal makes a new one.
+    sqlx::query("DELETE FROM account_keys.account_data_keys WHERE user_id = $1")
+        .bind(target)
+        .execute(&mut *tx)
+        .await?;
     crate::grants::end_all(&mut tx, target).await?;
     crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
     crate::security_events::record(
@@ -2500,6 +2803,36 @@ struct ActivityResponse {
     entries: Vec<ActivityEntry>,
     /// Pass as `?before=` to fetch the next (older) page; `null` = no more pages.
     next_before: Option<i64>,
+}
+
+/// The admin log's integrity: its hash chain checked, and whether the server
+/// can change it at all (docs/plans/server-personal-data.md, A8).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityIntegrity {
+    #[serde(flatten)]
+    pub chain: crate::audit_log::Verification,
+    /// False while the server runs as the database's owner
+    /// (`DATABASE_OWNER_URL` unset): it could change or delete log rows.
+    pub append_only: bool,
+}
+
+/// `GET /api/admin/activity/verify` — walks the admin log's hash chain.
+#[utoipa::path(
+    get,
+    path = "/api/admin/activity/verify",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "The chain checked, and whether the logs are append-only", body = ActivityIntegrity))
+)]
+pub async fn activity_verify(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> AppResult<Json<ActivityIntegrity>> {
+    Ok(Json(ActivityIntegrity {
+        chain: crate::audit_log::verify(&state.pool).await?,
+        append_only: state.config.database_owner_url.is_some(),
+    }))
 }
 
 /// `GET /api/admin/activity?limit=50&before=<id>` — the filterable audit-log feed.

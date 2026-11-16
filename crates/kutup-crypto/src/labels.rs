@@ -480,6 +480,31 @@ pub const SEALED_ORIGIN_RATE_V1: &[u8] = b"kutup/sealed-origin-rate/v1\0";
 /// `kutup-server/src/handlers/chat.rs`
 pub const SEALED_RECIPIENT_RATE_V1: &[u8] = b"kutup/sealed-recipient-rate/v1\0";
 
+// --- server ------------------------------------------------------------------
+
+/// `kutup-server/src/audit_log.rs` (`CHAIN_DOMAIN`)
+pub const SERVER_ADMIN_AUDIT_CHAIN_V1: &[u8] = b"kutup/server/admin-audit-chain/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`SALT`)
+pub const SERVER_DATA_V1: &[u8] = b"kutup/server/data/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`KEK_INFO`)
+pub const SERVER_DATA_KEK_V1: &[u8] = b"kutup/server/data-kek/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`WRAP_AAD`)
+pub const SERVER_DATA_KEY_WRAP_V1: &[u8] = b"kutup/server/data-key-wrap/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`FIELD_KEY_INFO`)
+pub const SERVER_DATA_FIELD_KEY_V1: &[u8] = b"kutup/server/data-field-key/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`FIELD_AAD`)
+pub const SERVER_DATA_FIELD_V1: &[u8] = b"kutup/server/data-field/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`SUBJECT_INFO`)
+pub const SERVER_DESTRUCTION_SUBJECT_V1: &[u8] = b"kutup/server/destruction-subject/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`Lookup::MailThread`)
+pub const SERVER_DATA_MAIL_THREAD_V1: &[u8] = b"kutup/server/mail-thread/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`Lookup::MailSearchToken`)
+pub const SERVER_DATA_MAIL_SEARCH_TOKEN_V1: &[u8] = b"kutup/server/mail-search-token/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`Lookup::MailAutoReplySender`): a
+/// correspondent an auto-reply answered
+pub const SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1: &[u8] =
+    b"kutup/server/mail-auto-reply-sender/v1\0";
+
 // --- session-version ---------------------------------------------------------
 
 /// `kutup-server/src/middleware.rs`
@@ -535,7 +560,8 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 163] = [
+pub const ALL: [&[u8]; 173] = [
+    SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -683,6 +709,15 @@ pub const ALL: [&[u8]; 163] = [
     SEALED_DELIVERY_CAPABILITY_V1,
     SEALED_ORIGIN_RATE_V1,
     SEALED_RECIPIENT_RATE_V1,
+    SERVER_ADMIN_AUDIT_CHAIN_V1,
+    SERVER_DATA_V1,
+    SERVER_DATA_KEK_V1,
+    SERVER_DATA_KEY_WRAP_V1,
+    SERVER_DATA_FIELD_KEY_V1,
+    SERVER_DATA_FIELD_V1,
+    SERVER_DESTRUCTION_SUBJECT_V1,
+    SERVER_DATA_MAIL_THREAD_V1,
+    SERVER_DATA_MAIL_SEARCH_TOKEN_V1,
     SESSION_VERSION_V1,
     YJS_SEED_V1,
     CHAT_PROFILE_ACCESS_V1,

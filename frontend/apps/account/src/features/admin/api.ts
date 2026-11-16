@@ -2,6 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClie
 import { conflictCode, opaqueRegister } from '@kutup/session/opaque'
 import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import api from '@kutup/session/client'
+import type { LegalDocument } from '../auth/legal'
 import type {
   AdminActivityResponse,
   AdminFederationPolicy,
@@ -17,6 +18,7 @@ import type {
   RegistrationCode,
   RegistrationCodeUse,
   SignedUpWith,
+  SuspendedReason,
   UserRow,
 } from '@kutup/session/api-types'
 
@@ -105,7 +107,13 @@ export function useCreateUser() {
 }
 
 export type UserPatch = Partial<{
+  /** False suspends (with `suspendedReason`); true makes a suspended or closing account active. */
   isActive: boolean
+  suspendedReason: SuspendedReason
+  /** Whether it may share by public link. */
+  publicSharing: 'on' | 'off'
+  /** Whether it talks to other servers. */
+  federation: 'on' | 'off'
   isAdmin: boolean
   storageQuotaBytes: number
 }>
@@ -146,6 +154,22 @@ export function useWipeUser() {
   })
 }
 
+/** Closes the account: deleted after the waiting period unless kept. */
+export function useCloseUser() {
+  return useAdminMutation(async (id: string) => {
+    await api.post(`/admin/users/${encodeURIComponent(id)}/close`)
+  })
+}
+
+/** Sets (or, with `reference` null, clears) a legal hold. */
+export function useLegalHold() {
+  return useAdminMutation(async ({ id, reference }: { id: string; reference: string | null }) => {
+    const path = `/admin/users/${encodeURIComponent(id)}/legal-hold`
+    if (reference === null) await api.delete(path)
+    else await api.put(path, { reference })
+  })
+}
+
 export function useDeleteUser() {
   return useAdminMutation(async (id: string) => {
     await api.delete(`/admin/users/${encodeURIComponent(id)}`)
@@ -176,6 +200,22 @@ export function useAdminActivity(filter: ActivityFilter) {
         .data,
     getNextPageParam: (last) => last.nextBefore ?? undefined,
     placeholderData: keepPreviousData,
+  })
+}
+
+/** The admin log's integrity: its hash chain, and whether the server can change it at all. */
+export interface ActivityIntegrity {
+  checked: number
+  /** The first row whose hash or link is wrong; null when the chain holds. */
+  brokenAt: number | null
+  /** False while the server runs as the database's owner (no DATABASE_OWNER_URL). */
+  appendOnly: boolean
+}
+
+export function useActivityIntegrity() {
+  return useQuery({
+    queryKey: [...adminKey, 'activity', 'integrity'],
+    queryFn: async () => (await api.get<ActivityIntegrity>('/admin/activity/verify')).data,
   })
 }
 
@@ -331,8 +371,10 @@ export interface LinkReport {
   link: string | null
   createdAt: string
   resolvedAt: string | null
-  resolution: 'dismissed' | 'removed' | 'disabled' | null
+  resolution: 'dismissed' | 'removed' | 'disabled' | 'blocked' | null
   shareId: string
+  /** Why an operator blocked the link; null while it isn't blocked. */
+  shareBlockedReason: BlockReason | null
   shareType: 'collection' | 'file'
   shareCreatedAt: string
   shareRemovedAt: string | null
@@ -398,8 +440,52 @@ export function useDismissReport() {
   })
 }
 
+/** Why an operator blocks a link (docs/plans/server-personal-data.md, A11). */
+export type BlockReason = 'legal_order' | 'abuse' | 'other'
+
+/** Blocks a public link: 451 for a legal order, 410 otherwise; its open reports close. */
+export function useBlockLink() {
+  return useAdminMutation(async ({ shareId, reason, reference }: { shareId: string; reason: BlockReason; reference: string }) => {
+    await api.post(`/admin/shares/${encodeURIComponent(shareId)}/block`, { reason, reference: reference.trim() || undefined })
+  })
+}
+
+export function useUnblockLink() {
+  return useAdminMutation(async (shareId: string) => {
+    await api.delete(`/admin/shares/${encodeURIComponent(shareId)}/block`)
+  })
+}
+
 export function useRemoveReportedLink() {
   return useAdminMutation(async (id: string) => {
     await api.post(`/admin/reports/${encodeURIComponent(id)}/remove-link`)
+  })
+}
+
+// --- legal documents ----------------------------------------------------
+
+const legalKey = [...adminKey, 'legal'] as const
+
+/** Every published version (docs/plans/server-personal-data.md, A3). */
+export function useLegalDocuments() {
+  return useQuery({
+    queryKey: legalKey,
+    queryFn: async () => (await api.get<LegalDocument[]>('/admin/legal/documents')).data,
+  })
+}
+
+export interface PublishDocumentInput {
+  kind: string
+  version: string
+  language: string
+  url: string
+  sha256: string
+  requiredAtSignup: boolean
+}
+
+/** Publishes a version; never edited after. */
+export function usePublishDocument() {
+  return useAdminMutation(async (input: PublishDocumentInput) => {
+    await api.post('/admin/legal/documents', input)
   })
 }

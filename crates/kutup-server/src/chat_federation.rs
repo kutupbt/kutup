@@ -48,9 +48,11 @@ pub(crate) const JSON_CONTENT_TYPE: &str = "application/json";
 const MAX_DIRECTORY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_FEDERATION_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 
-/// The active user an inbound path's `:accountId` is, on this server.
+/// The active user an inbound path's `:accountId` is, on this server: none
+/// for one that doesn't talk to other servers (crate::federation_switch).
 async fn inbound_user(state: &AppState, account: &AccountRef) -> AppResult<Option<Uuid>> {
-    crate::account_ids::local_user(&state.pool, &state.config.chat_server_name, account).await
+    crate::account_ids::local_user_for_peer(&state.pool, &state.config.chat_server_name, account)
+        .await
 }
 
 fn configured_stack(state: &AppState) -> AppResult<&FederationStack> {
@@ -361,6 +363,9 @@ pub enum FederatedSendOutcome {
     /// Queued, but the recipient's server does not speak this Chat wire
     /// (`chat.v2`): it goes once that server upgrades.
     PeerUnsupported,
+    /// Never sent: its account's federation went off after it was queued;
+    /// its sequence was withdrawn (crate::federation_stream_control).
+    Withdrawn,
 }
 
 pub enum FederatedSealedOutcome {
@@ -1590,7 +1595,17 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
 
     // Only the destination's head goes: the sends behind it keep their order.
     if plain_head(&state.pool, &row.destination).await? != Some(row.sequence) {
-        return Ok(FederatedSendOutcome::Pending);
+        // A head that is an off account's send is withdrawn now, whatever
+        // its wait: it must not hold the others up (crate::federation_stream_control).
+        withdraw_off_head(state, &row.destination).await?;
+        if plain_head(&state.pool, &row.destination).await? != Some(row.sequence) {
+            return Ok(FederatedSendOutcome::Pending);
+        }
+    }
+    // Its account's federation went off since it was queued: it never leaves;
+    // its sequence is withdrawn instead (crate::federation_stream_control).
+    if sender_is_off(&state.pool, row.sender).await? {
+        return withdraw_plain(state, &row).await;
     }
 
     let message: SendMessagesRequest = serde_json::from_value(row.request.clone())
@@ -1792,6 +1807,99 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
     )
     .await?;
     Ok(FederatedSendOutcome::Pending)
+}
+
+/// Whether `sender` is an account here whose federation is off (a deleted
+/// one's queued sends still go, as they always did).
+pub(crate) async fn sender_is_off(pool: &sqlx::PgPool, sender: Uuid) -> AppResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND federation = 'off')",
+    )
+    .bind(sender)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// The destination's head, withdrawn now when its account's federation is
+/// off (one try; it waits as any send when the destination doesn't answer).
+async fn withdraw_off_head(state: &AppState, destination: &str) -> AppResult<()> {
+    let head: Option<Uuid> = sqlx::query_scalar(
+        "SELECT o.id FROM federation_outbox o JOIN users u ON u.id = (o.payload->>'sender')::uuid
+          WHERE o.kind = 'chat' AND o.destination = $1 AND o.state = 'pending'
+            AND u.federation = 'off'
+            AND o.sequence = (SELECT MIN(sequence) FROM federation_outbox
+                               WHERE kind = 'chat' AND destination = $1 AND state = 'pending')",
+    )
+    .bind(destination)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some(id) = head {
+        if let Some(row) = load_outbox(state, id).await? {
+            withdraw_plain(state, &row).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Withdraws a queued plain send's sequence: used up at the destination,
+/// nothing of it sent, the row settled as `federation_off`.
+async fn withdraw_plain(
+    state: &AppState,
+    row: &FederationOutboxRow,
+) -> AppResult<FederatedSendOutcome> {
+    use crate::federation_stream_control::{withdraw, Withdrawal};
+    match withdraw(
+        state,
+        kutup_chat_proto::FederationStreamV1::Chat,
+        &row.destination,
+        row.sequence,
+        row.id,
+    )
+    .await?
+    {
+        Withdrawal::Accepted => {
+            federation_outbox::settle(
+                &state.pool,
+                row.id,
+                Some(row.sequence),
+                false,
+                Some("federation_off"),
+                &serde_json::json!({ "withdrawn": true }),
+            )
+            .await?;
+            Ok(FederatedSendOutcome::Withdrawn)
+        }
+        Withdrawal::Gap { expected } => {
+            // What the destination waits for goes first, as for a send.
+            if expected < row.sequence {
+                sqlx::query(
+                    "UPDATE federation_outbox
+                         SET state = 'pending', next_attempt_at = now(),
+                             last_error = 'remote requested replay after a sequence gap',
+                             updated_at = now()
+                         WHERE kind = 'chat' AND destination = $1
+                           AND sequence >= $2 AND sequence < $3",
+                )
+                .bind(&row.destination)
+                .bind(expected)
+                .bind(row.sequence)
+                .execute(&state.pool)
+                .await?;
+            }
+            retry_plain(
+                state,
+                row,
+                "sequence_gap",
+                &format!("remote expects federation sequence {expected}"),
+            )
+            .await?;
+            Ok(FederatedSendOutcome::Pending)
+        }
+        Withdrawal::Retry(error) => {
+            retry_plain(state, row, "transport", &error).await?;
+            Ok(FederatedSendOutcome::Pending)
+        }
+    }
 }
 
 async fn retry_plain(
@@ -2797,15 +2905,17 @@ pub async fn deliver_messages(
         );
     }
 
-    let recipient_id: Option<Uuid> = match Uuid::parse_str(&transaction.recipient.account_id) {
-        Ok(id) => {
-            sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active = true FOR SHARE")
-                .bind(id)
-                .fetch_optional(&mut *tx)
-                .await?
-        }
-        Err(_) => None,
-    };
+    let recipient_id: Option<Uuid> =
+        match Uuid::parse_str(&transaction.recipient.account_id) {
+            Ok(id) => sqlx::query_scalar(
+                "SELECT id FROM users WHERE id = $1 AND is_active AND kutup_account_federates(id)
+                  FOR SHARE",
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?,
+            Err(_) => None,
+        };
     let Some(recipient_id) = recipient_id else {
         let response = FederationDeliveryResponse {
             stored: 0,

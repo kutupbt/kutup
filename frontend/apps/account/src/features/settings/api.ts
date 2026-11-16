@@ -21,6 +21,8 @@ export interface Me {
   color: string
   /** How long file versions are kept, in days (docs/plans/drive-versions-v2.md). */
   versionRetentionDays: number
+  /** Whether Chat and Drive talk to other servers (docs/plans/server-personal-data.md, A4). */
+  federation: 'on' | 'off'
 }
 
 
@@ -137,7 +139,10 @@ export interface SessionView {
   id: string
   clientType: string
   parentId: string | null
-  userAgent: string | null
+  /** The browser, parsed at sign-in: family, major version, system. */
+  browser?: string
+  browserMajor?: number
+  os?: string
   createdAt: string
   lastUsedAt: string
   current: boolean
@@ -244,20 +249,26 @@ export interface SecurityEvent {
   thisSession: boolean
   /** The kind of session that made it (`web-account`, `cli`, …), as the session list has it; null for a recovery or an administrator's reset. */
   client: string | null
-  /** That session's User-Agent; null as `client` is. */
-  userAgent: string | null
+  /** That session's browser: family, major version, system; absent as `client` is, or when unknown. */
+  browser?: string
+  browserMajor?: number
+  os?: string
   /** Done by an administrator. */
   byAdmin: boolean
   /** For a name event: the name it was about (the old one, for a rename). */
   oldName?: string
   /** For a rename: the new name. */
   newName?: string
+  /** How many times it happened: repeats within ten minutes (a failed sign-in, an administrator's view) are one event. */
+  count: number
 }
 
 interface SecurityEventsPage {
   events: SecurityEvent[]
   /** Older events; null when there are none. */
   next: string | null
+  /** How many days events are kept (the newest 500 at most). */
+  retentionDays: number
 }
 
 export const securityEventsKey = ['security-events'] as const

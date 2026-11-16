@@ -15,8 +15,16 @@ const ACTION_KEYS: Record<string, string> = {
   'user.2fa_disable': 'user2faDisable',
   'user.rotate_temp_password': 'userRotateTempPassword',
   'user.wipe': 'userWipe',
+  'user.close': 'userClose',
+  'user.legalHold.set': 'userLegalHoldSet',
+  'user.legalHold.clear': 'userLegalHoldClear',
+  'admin.view': 'adminView',
   'report.dismiss': 'reportDismiss',
   'share.remove': 'shareRemove',
+  'share.block': 'shareBlock',
+  'share.unblock': 'shareUnblock',
+  'legal.publish': 'legalPublish',
+  'user.publicSharing': 'userPublicSharing',
   'settings.update': 'settingsUpdate',
   'settings.rate_limit': 'rateLimitUpdate',
   'user.rate_limit': 'userRateLimitUpdate',
@@ -81,6 +89,13 @@ export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
     // (none: reset).
     limit: limitName(e, t),
     value: text(e.payload.value),
+    // A legal hold's reference.
+    reference: text(e.payload.reference),
+    // A published document's kind and version.
+    kind: text(e.payload.kind),
+    version: text(e.payload.version),
+    // An account's public links: `on` or `off`.
+    state: text(e.payload.publicSharing),
   }
   if (key === 'rateLimitUpdate' && values.value === '') return t('admin.activity.actions.rateLimitReset', values)
   if (key === 'userRateLimitUpdate' && values.value === '') return t('admin.activity.actions.userRateLimitReset', values)

@@ -21,6 +21,9 @@ use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 
+/// Salts the locator key the database's name comes from. The label's bytes
+/// say "wrap" from when it also salted the store key's wrap (now an account
+/// record); they stay, so a store keeps its name.
 const ACCOUNT_SALT: &[u8] = crate::labels::MAIL_SEARCH_WRAP_V1;
 const LOCATOR_KEY_INFO: &[u8] = crate::labels::MAIL_SEARCH_LOCATOR_KEY_V1;
 const STORE_SALT: &[u8] = crate::labels::MAIL_SEARCH_V1;

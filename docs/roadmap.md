@@ -437,6 +437,15 @@ account recovery; it does not claim that an authenticated session can display
 or rotate the stored phrase. A future phrase-rotation product needs a separate
 security design, backend contract, and word-by-word confirmation flow.
 
+### Mail · bounces of shared-mailbox sends
+
+A bounce is matched to the message it answers by the Message-ID's keyed hash
+under the sender's own mailbox key (docs/plans/server-personal-data.md, As
+built L7). A message sent as a shared mailbox is sealed under the group's
+key, so a bounce of it matches nothing and is filed as ordinary mail.
+Matching it needs the bounce check to hash under the keys of the groups the
+account sends for as well.
+
 ### Backup / restore CLI
 
 The database half exists: `scripts/backup-postgres.sh` stores encrypted dumps in the object store and restores them (`docs/self-hosting.md`, "Database backups"). Still open: copying the object store's blobs elsewhere (a second copy of the ciphertext), a point-in-time-consistent pair of database and blobs, and `kutup backup` / `kutup restore` subcommands in the Rust CLI (`crates/kutup-cli`) to wrap both.

@@ -9,7 +9,7 @@ vi.mock('@kutup/session/client', () => ({ default: { get } }))
 
 const { SecurityEventsSection } = await import('./SecurityEventsSection')
 
-const event = (id: string, kind = 'passwordChange') => ({ id, kind, at: '2026-10-14T10:00:00Z', thisSession: false, client: null, userAgent: null, byAdmin: false })
+const event = (id: string, kind = 'passwordChange') => ({ id, kind, at: '2026-10-14T10:00:00Z', thisSession: false, client: null, byAdmin: false, count: 1 })
 
 function badCursor(): AxiosError {
   const response = { status: 400, data: { error: 'unknown cursor' }, headers: {}, config: { headers: new AxiosHeaders() }, statusText: '' } as AxiosResponse

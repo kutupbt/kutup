@@ -1,6 +1,6 @@
 import { FeedbackButton } from '@kutup/ui/components/feedback'
 import { feedbackServices } from '@kutup/session/feedback'
-import { Activity, BookUser, CalendarDays, ChartPie, CircleUser, FileType, Flag, Gauge, Globe, Globe2, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessageSquareText, MessagesSquare, MonitorSmartphone, Send, Settings2, ShieldCheck, Ticket, UserRound, Users } from 'lucide-react'
+import { Activity, BookUser, CalendarDays, ChartPie, CircleUser, FileText, FileType, Flag, Gauge, Globe, Globe2, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessageSquareText, MessagesSquare, MonitorSmartphone, ScrollText, Send, Settings2, ShieldCheck, Ticket, UserRound, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
@@ -63,6 +63,7 @@ export function AccountShell() {
           <SidebarNavLink to="/settings/account" icon={<UserRound />} label={t('nav.account')} />
           <SidebarNavLink to="/settings/storage" icon={<ChartPie />} label={t('nav.storage')} />
           <SidebarNavLink to="/settings/security" icon={<ShieldCheck />} label={t('nav.security')} />
+          <SidebarNavLink to="/settings/privacy" icon={<ScrollText />} label={t('nav.privacy')} />
           <SidebarNavLink to="/settings/keys" icon={<KeyRound />} label={t('nav.keys')} />
           <SidebarNavLink to="/settings/devices" icon={<MonitorSmartphone />} label={t('nav.devicesSessions')} />
           <GroupMembershipNavLink />
@@ -73,6 +74,7 @@ export function AccountShell() {
               <SidebarNavLink to="/admin/users" icon={<Users />} label={t('nav.users')} />
               <SidebarNavLink to="/admin/codes" icon={<Ticket />} label={t('nav.referralCodes')} />
               <SidebarNavLink to="/admin/reports" icon={<Flag />} label={t('nav.reports')} />
+              <SidebarNavLink to="/admin/legal" icon={<FileText />} label={t('nav.legal')} />
               <SidebarNavLink to="/admin/feedback" icon={<MessageSquareText />} label={t('nav.feedback')} />
               <SidebarNavLink to="/admin/activity" icon={<Activity />} label={t('nav.activity')} />
               <SidebarNavLink to="/admin/federation" icon={<Globe />} label={t('nav.federation')} />

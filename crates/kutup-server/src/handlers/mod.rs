@@ -16,6 +16,7 @@ pub mod chat_link_preview;
 pub mod chat_media;
 pub mod chat_multi;
 pub mod chat_provisioning;
+pub mod closing;
 pub mod collab;
 pub mod collections;
 pub mod contacts;

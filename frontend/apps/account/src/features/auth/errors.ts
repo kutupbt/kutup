@@ -31,6 +31,8 @@ export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: stri
   if (code === 'network') return t('auth.errors.network')
   // The first step's token ran out, or the password changed since.
   if (code === 'unauthenticated' && bodyCode(error) === 'preAuthInvalid') return t('auth.errors.signInAgain')
+  // The authenticator's secret can't be read (docs/plans/server-personal-data.md, A2).
+  if (bodyCode(error) === 'authenticatorLost') return t('auth.errors.authenticatorLost')
   if (code === 'unauthenticated' && bodyCode(error) === 'setupTokenInvalid') return t('auth.errors.setupExpired')
   if (code === 'unauthenticated') return t(fallbackKey)
   if (code === 'conflict') {

@@ -22,6 +22,8 @@ crates/kutup-federation-proto/src/http_signatures.rs	"kutup-federation-version	H
 crates/kutup-federation-proto/src/http_signatures.rs	"kutup-origin	HTTP header names (RFC 9421 covered components) / test of the registry tag
 crates/kutup-server/src/auth_check.rs	"kutup-timing-only	bcrypt timing dummy
 crates/kutup-server/src/auth_check.rs	"kutup-timing-only-not	bcrypt timing dummy
+crates/kutup-server/src/client_family.rs	"kutup-cli/	the CLI's User-Agent prefix (parsed, not a label)
+crates/kutup-server/src/client_family.rs	"kutup-cli/0.0.7	test User-Agent
 crates/kutup-server/src/config.rs	"kutup-files	log prefix / default bucket / test path
 crates/kutup-server/src/config.rs	"kutup-opaque-	log prefix / default bucket / test path
 crates/kutup-server/src/config.rs	"kutup-server:	log prefix / default bucket / test path

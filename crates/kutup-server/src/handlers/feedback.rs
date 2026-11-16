@@ -65,6 +65,17 @@ fn clean_details(details: Option<Map<String, Value>>) -> AppResult<Option<Value>
         if text.chars().count() > MAX_DETAIL_CHARS {
             return Err(AppError::bad_request("a detail is too long"));
         }
+        // The browser only as its parsed family (docs/plans/server-personal-data.md,
+        // A10): an older client's whole User-Agent is parsed here, and a text
+        // that names no known browser or system is dropped.
+        if key == "browser" {
+            if let Some(family) = crate::client_family::from_client(&text)
+                .and_then(|family| crate::client_family::describe(&family))
+            {
+                kept.insert(key, Value::String(family));
+            }
+            continue;
+        }
         kept.insert(key, Value::String(text));
     }
     Ok((!kept.is_empty()).then_some(Value::Object(kept)))

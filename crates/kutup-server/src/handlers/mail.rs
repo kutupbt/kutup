@@ -11,8 +11,10 @@ use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use crate::account_data::KeyOwner;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{octet_stream_response, trusted_uuid};
+use crate::mail::sealed::{self, Opener};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
@@ -161,11 +163,13 @@ pub struct MailListQuery {
     /// `all` (everything but Spam and Trash); or `folder:<id>` for one of the
     /// account's folders, or `label:<id>` for a label (outside Spam and Trash).
     pub folder: String,
-    /// Searches subjects and addresses.
+    /// Searches subjects, senders and To/Cc: every word, whole
+    /// (`crate::mail::sealed`).
     pub q: Option<String>,
-    /// Advanced search (Proton's): the sender's address or name contains this.
+    /// Advanced search (Proton's): the sender's address or name has every
+    /// word of this.
     pub from: Option<String>,
-    /// A recipient's (To, Cc or Bcc) address or name contains this.
+    /// A recipient's (To, Cc or Bcc) address or name has every word of this.
     pub to: Option<String>,
     /// Arrived at or after this moment (RFC 3339).
     pub since: Option<String>,
@@ -263,48 +267,39 @@ pub(crate) struct Row {
     size_bytes: i64,
     received_at: OffsetDateTime,
     sent_at: Option<OffsetDateTime>,
-    subject: String,
-    from_address: String,
-    from_name: String,
-    to_list: serde_json::Value,
-    cc_list: serde_json::Value,
-    reply_to: serde_json::Value,
-    bcc_list: serde_json::Value,
-    message_id: Option<String>,
-    in_reply_to: Option<String>,
-    references_list: Vec<String>,
+    /// The sealed headers (`crate::mail::sealed`).
+    headers: Option<Vec<u8>>,
     attachment_count: i32,
     unsubscribed: bool,
     unsubscribable: bool,
     receipt_sent: bool,
-    attachments: sqlx::types::Json<Vec<crate::mail::headers::AttachmentMeta>>,
     scheduled_at: Option<OffsetDateTime>,
     outbox_id: Option<Uuid>,
     snoozed_until: Option<OffsetDateTime>,
     expires_at: Option<OffsetDateTime>,
     group_address: Option<String>,
     sent_by_name: Option<String>,
-    forwarded_from: Option<String>,
 }
 
 /// The columns a [`Row`] reads.
 pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_folder,
     ARRAY(SELECT l.label_id FROM mail_message_labels l WHERE l.message_id = mail_messages.id) AS labels,
     seen, starred, protection,
-    size_bytes, received_at, sent_at, subject, from_address, from_name, to_list, cc_list,
-    reply_to, bcc_list, message_id, in_reply_to, references_list, attachment_count, unsubscribed,
-    unsubscribable, receipt_sent, attachments,
+    size_bytes, received_at, sent_at, headers, attachment_count, unsubscribed,
+    unsubscribable, receipt_sent,
     (SELECT o.deliver_at FROM mail_outbox o WHERE o.draft_id = mail_messages.id AND o.scheduled
         AND o.state = 'pending') AS scheduled_at,
     (SELECT o.id FROM mail_outbox o WHERE o.draft_id = mail_messages.id AND o.scheduled
         AND o.state = 'pending') AS outbox_id,
     snoozed_until, expires_at,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
-    (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name,
-    forwarded_from";
+    (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
 
-impl From<Row> for MailMessage {
-    fn from(row: Row) -> Self {
+impl Row {
+    /// The message, its headers opened with its mailbox's keys.
+    pub(crate) fn into_message(self, opener: &Opener) -> MailMessage {
+        let row = self;
+        let headers = opener.open(row.id, row.headers.as_deref());
         MailMessage {
             id: row.id.to_string(),
             thread_id: row.thread_id.to_string(),
@@ -318,30 +313,33 @@ impl From<Row> for MailMessage {
             size: row.size_bytes,
             received_at: row.received_at,
             sent_at: row.sent_at,
-            subject: row.subject,
-            from: (!row.from_address.is_empty()).then_some(MailMailbox {
-                address: row.from_address,
-                name: row.from_name,
-            }),
-            to: row.to_list,
-            cc: row.cc_list,
-            reply_to: row.reply_to,
-            bcc: row.bcc_list,
-            message_id: row.message_id,
-            in_reply_to: row.in_reply_to,
-            references: row.references_list,
+            subject: headers.subject,
+            from: headers
+                .from
+                .filter(|m| !m.address.is_empty())
+                .map(|m| MailMailbox {
+                    address: m.address,
+                    name: m.name,
+                }),
+            to: serde_json::json!(headers.to),
+            cc: serde_json::json!(headers.cc),
+            reply_to: serde_json::json!(headers.reply_to),
+            bcc: serde_json::json!(headers.bcc),
+            message_id: headers.message_id,
+            in_reply_to: headers.in_reply_to,
+            references: headers.references,
             attachment_count: row.attachment_count,
             unsubscribed: row.unsubscribed,
             unsubscribable: row.unsubscribable,
             receipt_sent: row.receipt_sent,
-            attachments: row.attachments.0,
+            attachments: headers.attachments,
             scheduled_at: row.scheduled_at,
             outbox_id: row.outbox_id.map(|id| id.to_string()),
             snoozed_until: row.snoozed_until,
             expires_at: row.expires_at,
             group_address: row.group_address,
             sent_by: row.sent_by_name,
-            forwarded_from: row.forwarded_from,
+            forwarded_from: headers.forwarded_from,
             conversation: None,
         }
     }
@@ -361,6 +359,19 @@ impl Mailbox {
         match self {
             Mailbox::Own(id) | Mailbox::Shared(id) => id,
         }
+    }
+
+    /// Whose data key its headers are sealed under.
+    pub(crate) fn key_owner(self) -> KeyOwner {
+        match self {
+            Mailbox::Own(id) => KeyOwner::Account(id),
+            Mailbox::Shared(id) => KeyOwner::MailGroup(id),
+        }
+    }
+
+    /// Its keys, to open rows with and search by.
+    pub(crate) async fn opener(self, state: &AppState) -> AppResult<Opener> {
+        Opener::load(&state.pool, self.key_owner()).await
     }
 }
 
@@ -538,10 +549,11 @@ pub async fn search_index(
         None
     };
     let more = rows.len() as i64 > limit;
+    let opener = Mailbox::Own(user_id).opener(&state).await?;
     let messages: Vec<MailMessage> = rows
         .into_iter()
         .take(limit as usize)
-        .map(MailMessage::from)
+        .map(|row| row.into_message(&opener))
         .collect();
     let next = more.then(|| messages.last()).flatten().map(|last| {
         cursor(
@@ -656,8 +668,12 @@ pub async fn search_index_changes(
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
+    let opener = Mailbox::Own(user_id).opener(&state).await?;
     Ok(Json(SearchChanges {
-        changed: rows.into_iter().map(MailMessage::from).collect(),
+        changed: rows
+            .into_iter()
+            .map(|row| row.into_message(&opener))
+            .collect(),
         gone: gone
             .into_iter()
             .map(|(id, received_at)| GoneMessage {
@@ -692,9 +708,9 @@ async fn list_page(
     query: MailListQuery,
 ) -> AppResult<Json<MailMessagePage>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let owner = mailbox(state, user_id, query.group.as_deref())
-        .await?
-        .owner();
+    let mailbox = mailbox(state, user_id, query.group.as_deref()).await?;
+    let owner = mailbox.owner();
+    let opener = mailbox.opener(state).await?;
     let folder = query.folder.as_str();
     // One of the account's folders or labels: `folder:<id>`, `label:<id>`.
     let (place, place_id) = match folder.split_once(':') {
@@ -732,20 +748,21 @@ async fn list_page(
         attachments: query.attachments,
         sort,
     };
-    let search = contains(query.q.as_deref());
     let listing = Listing {
         owner,
         place,
         place_id,
         almost_all,
-        search,
+        search: sealed::search(opener.keys(), query.q.as_deref(), sealed::QUICK)?,
+        sender: sealed::search(opener.keys(), criteria.from.as_deref(), sealed::SENDER)?,
+        recipient: sealed::search(opener.keys(), criteria.to.as_deref(), sealed::RECIPIENT)?,
         criteria,
         before,
         filters,
         place_filter: PLACE_WHERE,
     };
     if query.conversations {
-        return list_conversations(state, &listing, limit, page).await;
+        return list_conversations(state, &listing, &opener, limit, page).await;
     }
     let (mut rows, mut total) = message_rows(state, &listing, limit, page.unwrap_or(0)).await?;
     // Past the end (mail moved away since): the total still answers.
@@ -759,7 +776,7 @@ async fn list_page(
     let messages: Vec<MailMessage> = rows
         .into_iter()
         .take(limit as usize)
-        .map(MailMessage::from)
+        .map(|row| row.into_message(&opener))
         .collect();
     let next = more.then(|| messages.last()).flatten().map(|last| {
         let key = if sort.by_size() {
@@ -776,18 +793,10 @@ async fn list_page(
     }))
 }
 
-/// A `LIKE` pattern for "contains", escaped; none for an empty value.
-fn contains(value: Option<&str>) -> Option<String> {
+/// A search value, trimmed; none for an empty one.
+fn searched(value: Option<&str>) -> Option<String> {
     let value = value.map(str::trim).filter(|v| !v.is_empty())?;
-    let escaped: String = value
-        .chars()
-        .take(200)
-        .flat_map(|c| match c {
-            '%' | '_' | '\\' => vec!['\\', c],
-            c => vec![c],
-        })
-        .collect();
-    Some(format!("%{escaped}%"))
+    Some(value.chars().take(200).collect())
 }
 
 /// Proton's advanced search beyond the keyword: sender, recipient, dates.
@@ -813,8 +822,8 @@ impl Criteria {
                 .transpose()
         };
         let criteria = Criteria {
-            from: contains(query.from.as_deref()),
-            to: contains(query.to.as_deref()),
+            from: searched(query.from.as_deref()),
+            to: searched(query.to.as_deref()),
             since: moment(query.since.as_deref())?,
             until: moment(query.until.as_deref())?,
             address: query
@@ -840,12 +849,20 @@ impl Criteria {
     }
 }
 
-/// The advanced search over `mail_messages`: $13 sender, $14 recipient,
-/// $15 since, $16 until, $17 the address it came to or went from (one of
-/// the mailbox's own, or a distribution list it came through).
-const CRITERIA_WHERE: &str = "($13::text IS NULL OR from_address ILIKE $13 OR from_name ILIKE $13)
-        AND ($14::text IS NULL OR to_list::text ILIKE $14 OR cc_list::text ILIKE $14
-             OR bcc_list::text ILIKE $14)
+/// The advanced search over `mail_messages`: $13 sender's tokens ($19 a
+/// word), $14 recipient's ($20 a word) (`sealed::search_where`), $15 since,
+/// $16 until, $17 the address it came to or went from (one of the mailbox's
+/// own, or a distribution list it came through).
+const CRITERIA_WHERE: &str = "($13::bytea[] IS NULL OR (
+            search_tokens && $13[1:$19]
+            AND NOT EXISTS (
+                SELECT 1 FROM generate_series(0, cardinality($13) / $19 - 1) AS w(i)
+                 WHERE NOT (search_tokens && $13[w.i * $19 + 1:(w.i + 1) * $19]))))
+        AND ($14::bytea[] IS NULL OR (
+            search_tokens && $14[1:$20]
+            AND NOT EXISTS (
+                SELECT 1 FROM generate_series(0, cardinality($14) / $20 - 1) AS w(i)
+                 WHERE NOT (search_tokens && $14[w.i * $20 + 1:(w.i + 1) * $20]))))
         AND ($15::timestamptz IS NULL OR received_at >= $15)
         AND ($16::timestamptz IS NULL OR received_at < $16)
         AND ($17::text IS NULL OR EXISTS (
@@ -904,7 +921,10 @@ struct Listing<'a> {
     place: &'a str,
     place_id: Option<Uuid>,
     almost_all: bool,
-    search: Option<String>,
+    /// Quick search, sender and recipient, as tokens (`sealed::search`).
+    search: Option<sealed::Search>,
+    sender: Option<sealed::Search>,
+    recipient: Option<sealed::Search>,
     criteria: Criteria,
     before: Option<Cursor>,
     filters: Filters,
@@ -947,18 +967,21 @@ async fn message_rows(
     .bind(listing.before.and_then(|c| c.time))
     .bind(listing.before.map(|c| c.id))
     .bind(limit + 1)
-    .bind(listing.search.as_deref())
+    .bind(listing.search.as_ref().map(|s| &s.tokens))
     .bind(listing.place_id)
     .bind(listing.almost_all)
     .bind(listing.before.and_then(|c| c.size))
     .bind(listing.filters.unread)
     .bind(listing.filters.attachments)
     .bind(page * limit)
-    .bind(listing.criteria.from.as_deref())
-    .bind(listing.criteria.to.as_deref())
+    .bind(listing.sender.as_ref().map(|s| &s.tokens))
+    .bind(listing.recipient.as_ref().map(|s| &s.tokens))
     .bind(listing.criteria.since)
     .bind(listing.criteria.until)
     .bind(listing.criteria.address.as_deref())
+    .bind(listing.search.as_ref().map_or(1, |s| s.per_word))
+    .bind(listing.sender.as_ref().map_or(1, |s| s.per_word))
+    .bind(listing.recipient.as_ref().map_or(1, |s| s.per_word))
     .fetch_all(&state.pool)
     .await?;
     let total = rows.first().map_or(0, |r| r.full_count);
@@ -966,7 +989,8 @@ async fn message_rows(
 }
 
 /// The place and the search, shared by the listings and batch changes: $1
-/// owner, $2 place, $6 search, $7 the folder or label, $8 almost all mail.
+/// owner, $2 place, $6 search tokens ($18 a word: `sealed::search_where`),
+/// $7 the folder or label, $8 almost all mail.
 const PLACE_WHERE: &str = "owner = $1
         AND CASE $2
               WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
@@ -977,8 +1001,11 @@ const PLACE_WHERE: &str = "owner = $1
                    WHERE l.message_id = mail_messages.id AND l.label_id = $7)
               ELSE folder = $2
             END
-        AND ($6::text IS NULL OR subject ILIKE $6 OR from_address ILIKE $6
-             OR from_name ILIKE $6 OR to_list::text ILIKE $6 OR cc_list::text ILIKE $6)";
+        AND ($6::bytea[] IS NULL OR (
+            search_tokens && $6[1:$18]
+            AND NOT EXISTS (
+                SELECT 1 FROM generate_series(0, cardinality($6) / $18 - 1) AS w(i)
+                 WHERE NOT (search_tokens && $6[w.i * $18 + 1:(w.i + 1) * $18]))))";
 
 /// The list's filters and order beyond the place and the search.
 #[derive(Clone, Copy, Debug)]
@@ -994,12 +1021,41 @@ type ConversationRow = (
     sqlx::types::Json<Vec<ConversationMember>>,
     i64,
     bool,
-    sqlx::types::Json<Vec<MailMailbox>>,
+    // Its messages in the place, oldest first, and their sealed headers.
+    Vec<Uuid>,
     i64,
     i64,
     i64,
-    sqlx::types::Json<Vec<crate::mail::headers::AttachmentMeta>>,
+    Vec<Vec<u8>>,
 );
+
+/// A conversation's senders (each address once, by its first message, with
+/// that message's name) and attached files (each with its message), from its
+/// messages' headers, oldest first.
+fn senders_and_files(
+    opener: &Opener,
+    ids: &[Uuid],
+    sealed: &[Vec<u8>],
+) -> (Vec<MailMailbox>, Vec<crate::mail::headers::AttachmentMeta>) {
+    let mut senders: Vec<MailMailbox> = Vec::new();
+    let mut files = Vec::new();
+    for (id, sealed) in ids.iter().zip(sealed) {
+        let headers = opener.open(*id, Some(sealed));
+        if let Some(from) = headers.from.filter(|m| !m.address.is_empty()) {
+            if !senders.iter().any(|s| s.address == from.address) {
+                senders.push(MailMailbox {
+                    address: from.address,
+                    name: from.name,
+                });
+            }
+        }
+        files.extend(headers.attachments.into_iter().map(|mut file| {
+            file.message = Some(id.to_string());
+            file
+        }));
+    }
+    (senders, files)
+}
 
 /// [`list_messages`] by conversation: each thread's newest message in the
 /// place, in the sort's order (by its newest arrival, or by its messages'
@@ -1008,6 +1064,7 @@ type ConversationRow = (
 async fn list_conversations(
     state: &AppState,
     listing: &Listing<'_>,
+    opener: &Opener,
     limit: i64,
     page: Option<i64>,
 ) -> AppResult<Json<MailMessagePage>> {
@@ -1041,16 +1098,17 @@ async fn list_conversations(
     let messages = threads
         .into_iter()
         .filter_map(
-            |(id, _, members, unread, starred, senders, attachments, _, _, files)| {
+            |(id, _, members, unread, starred, ids, attachments, _, _, sealed)| {
                 // Moved or deleted between the two reads: left for the next refresh.
-                let mut message = MailMessage::from(by_id.remove(&id)?);
+                let mut message = by_id.remove(&id)?.into_message(opener);
+                let (senders, files) = senders_and_files(opener, &ids, &sealed);
                 message.conversation = Some(MailConversation {
                     members: members.0,
                     unread,
                     starred,
-                    senders: senders.0,
+                    senders,
                     attachment_count: attachments,
-                    attachments: files.0,
+                    attachments: files,
                 });
                 Some(message)
             },
@@ -1078,8 +1136,7 @@ async fn conversation_rows(
     let threads: Vec<ConversationRow> = sqlx::query_as(&format!(
         "WITH here AS (
              SELECT id, thread_id, folder, direction, custom_folder, received_at, seen, starred,
-                    from_address, from_name, attachment_count, size_bytes, unsubscribable,
-                    attachments
+                    headers, attachment_count, size_bytes, unsubscribable
                FROM mail_messages
               WHERE {place_filter}
                 AND {CRITERIA_WHERE}
@@ -1098,16 +1155,11 @@ async fn conversation_rows(
                FROM here GROUP BY thread_id
          )
          SELECT t.latest, t.last_at, t.members, t.unread, t.starred,
-                COALESCE((SELECT jsonb_agg(jsonb_build_object('address', s.from_address, 'name', s.from_name)
-                                           ORDER BY s.first_at)
-                            FROM (SELECT from_address, (array_agg(from_name ORDER BY received_at))[1] AS from_name,
-                                         min(received_at) AS first_at
-                                    FROM here h WHERE h.thread_id = t.thread_id AND h.from_address <> ''
-                                   GROUP BY from_address) s), '[]'::jsonb),
+                ARRAY(SELECT h.id FROM here h WHERE h.thread_id = t.thread_id
+                       ORDER BY h.received_at, h.id),
                 t.attachments, t.total_size, count(*) OVER (),
-                COALESCE((SELECT jsonb_agg(e.a || jsonb_build_object('message', h.id) ORDER BY h.received_at, h.id, e.n)
-                            FROM here h, jsonb_array_elements(h.attachments) WITH ORDINALITY AS e(a, n)
-                           WHERE h.thread_id = t.thread_id), '[]'::jsonb)
+                ARRAY(SELECT COALESCE(h.headers, ''::bytea) FROM here h
+                       WHERE h.thread_id = t.thread_id ORDER BY h.received_at, h.id)
            FROM threads t
           WHERE ($10::bool IS NULL OR (t.unread > 0) = $10)
             AND (NOT $11 OR t.attachments > 0)
@@ -1120,18 +1172,21 @@ async fn conversation_rows(
     .bind(listing.before.and_then(|c| c.time))
     .bind(listing.before.map(|c| c.id))
     .bind(limit + 1)
-    .bind(listing.search.as_deref())
+    .bind(listing.search.as_ref().map(|s| &s.tokens))
     .bind(listing.place_id)
     .bind(listing.almost_all)
     .bind(listing.before.and_then(|c| c.size))
     .bind(listing.filters.unread)
     .bind(listing.filters.attachments)
     .bind(page * limit)
-    .bind(listing.criteria.from.as_deref())
-    .bind(listing.criteria.to.as_deref())
+    .bind(listing.sender.as_ref().map(|s| &s.tokens))
+    .bind(listing.recipient.as_ref().map(|s| &s.tokens))
     .bind(listing.criteria.since)
     .bind(listing.criteria.until)
     .bind(listing.criteria.address.as_deref())
+    .bind(listing.search.as_ref().map_or(1, |s| s.per_word))
+    .bind(listing.sender.as_ref().map_or(1, |s| s.per_word))
+    .bind(listing.recipient.as_ref().map_or(1, |s| s.per_word))
     .fetch_all(&state.pool)
     .await?;
     let total = threads.first().map_or(0, |t| t.8);
@@ -1635,19 +1690,22 @@ pub async fn batch_messages(
         }
         _ => return Err(AppError::bad_request("unknown place")),
     };
-    // $6 search, $7 place id, $8 almost all, renumbered for this query.
+    // $6 search, $7 place id, $8 almost all, $18 the search's run,
+    // renumbered for this query.
     let place_filter = PLACE_WHERE
         .replace("$6", "$3")
         .replace("$7", "$4")
-        .replace("$8", "$5");
+        .replace("$8", "$5")
+        .replace("$18", "$6");
     let ids: Vec<Uuid> = sqlx::query_scalar(&format!(
         "SELECT id FROM mail_messages WHERE {place_filter}"
     ))
     .bind(owner)
     .bind(place)
-    .bind(None::<String>)
+    .bind(None::<Vec<Vec<u8>>>)
     .bind(place_id)
     .bind(true)
+    .bind(1i32)
     .fetch_all(&state.pool)
     .await?;
     let change = UpdateMailMessages {
@@ -1875,9 +1933,8 @@ pub async fn thread(
     Query(scope): Query<MailboxQuery>,
 ) -> AppResult<Json<Vec<MailMessage>>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let owner = mailbox(&state, user_id, scope.group.as_deref())
-        .await?
-        .owner();
+    let mailbox = mailbox(&state, user_id, scope.group.as_deref()).await?;
+    let owner = mailbox.owner();
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT {ROW_COLUMNS} FROM mail_messages
@@ -1892,7 +1949,12 @@ pub async fn thread(
     if rows.is_empty() {
         return Err(AppError::not_found("not found"));
     }
-    Ok(Json(rows.into_iter().map(MailMessage::from).collect()))
+    let opener = mailbox.opener(&state).await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| row.into_message(&opener))
+            .collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -1915,6 +1977,14 @@ mod tests {
         );
         assert!(parse_cursor("nope", Sort::Newest).is_err());
         assert!(parse_cursor("1_notauuid", Sort::Oldest).is_err());
+    }
+
+    #[test]
+    fn search_clauses_are_sealed_searches() {
+        let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(squash(PLACE_WHERE).contains(&squash(&sealed::search_where("$6", "$18"))));
+        assert!(squash(CRITERIA_WHERE).contains(&squash(&sealed::search_where("$13", "$19"))));
+        assert!(squash(CRITERIA_WHERE).contains(&squash(&sealed::search_where("$14", "$20"))));
     }
 
     #[test]

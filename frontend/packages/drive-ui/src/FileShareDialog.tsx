@@ -18,6 +18,7 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { isAxiosError } from 'axios'
 import { AccessChanged, RecipientChanged } from '@kutup/drive-core/access'
 import { CannotShareWithSelf, OnlyOwnersShareAcross, fileLinkUrl, useCreateFileLink, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useSetFileRole, useShareFile, type FileAccessMember, type ShareRole } from '@kutup/drive-core/fileShares'
+import { isTargetBlocked, sharingOffScope, usePublicSharing } from '@kutup/drive-core/publicSharing'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
@@ -183,6 +184,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   // A removal that would also take people not yet upgraded: asked again.
   const [upgrade, setUpgrade] = useState<{ removal: Removal; error: MembersPendingUpgrade } | null>(null)
   const createLink = useCreateFileLink()
+  const sharingOff = usePublicSharing().data ?? null
   const identity = useDriveIdentity()
   const [newLink, setNewLink] = useState<string | null>(null)
 
@@ -340,6 +342,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                       {[
                         t('fileShare.linkCreated', { date: new Date(link.createdAt).toLocaleDateString() }),
                         link.keyGeneration < access.data.keyGeneration ? t('fileShare.updating') : null,
+                        link.blockedReason ? t(`publicSharing.blocked.${link.blockedReason}`) : null,
                       ]
                         .filter(Boolean)
                         .join(' · ')}
@@ -373,6 +376,8 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 {t('fileShare.copy')}
               </Button>
             </div>
+          ) : sharingOff ? (
+            <p className="text-sm text-muted-foreground">{t(`publicSharing.off.${sharingOff}`)}</p>
           ) : (
             <Button
               type="button"
@@ -388,7 +393,15 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
               <Link2 /> {t('fileShare.createLink')}
             </Button>
           )}
-          {createLink.error ? <Alert variant="error">{t('fileShare.linkFailed')}</Alert> : null}
+          {createLink.error ? (
+            <Alert variant="error">
+              {sharingOffScope(createLink.error)
+                ? t(`publicSharing.off.${sharingOffScope(createLink.error)}`)
+                : isTargetBlocked(createLink.error)
+                  ? t('publicSharing.targetBlocked')
+                  : t('fileShare.linkFailed')}
+            </Alert>
+          ) : null}
         </div>
       ) : null}
       {upgrade ? (

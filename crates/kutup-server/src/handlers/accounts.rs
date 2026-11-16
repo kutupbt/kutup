@@ -38,6 +38,7 @@ pub struct ByIdQuery {
 pub(crate) async fn local_identity(
     state: &AppState,
     id: Uuid,
+    for_peer: bool,
 ) -> AppResult<Option<AccountLookupResponse>> {
     type Row = (
         String,
@@ -53,9 +54,13 @@ pub(crate) async fn local_identity(
         "SELECT username, public_key, account_incarnation_id, drive_signing_public_key,
                 account_authority_public_key, drive_key_binding, identity_suite,
                 drive_key_binding_epoch
-           FROM users WHERE id = $1 AND is_active AND NOT is_first_login AND username IS NOT NULL",
+           FROM users WHERE id = $1 AND is_active AND NOT is_first_login AND username IS NOT NULL
+            -- To another server, an account that doesn't talk to other
+            -- servers is no account (crate::federation_switch).
+            AND (NOT $2 OR kutup_account_federates(id))",
     )
     .bind(id)
+    .bind(for_peer)
     .fetch_optional(&state.pool)
     .await?;
     let server = state.config.chat_server_name.clone();
@@ -161,11 +166,18 @@ pub async fn by_id(
     let person = crate::account_ids::remote(&server, &account_id)?;
     if person.server == local_server {
         let id = Uuid::parse_str(&person.account_id).expect("canonical");
-        return local_identity(&state, id)
+        return local_identity(&state, id, false)
             .await?
             .map(|found| Json(found).into_response())
             .ok_or_else(|| AppError::not_found("no such account"));
     }
+    // Another server: only for an account that talks to them
+    // (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     remote_account(&state, &user.user_id, &person)
         .await?
         .map(|found| Json(found).into_response())
@@ -278,6 +290,7 @@ pub async fn fed_by_id(
         local_identity(
             &state,
             Uuid::parse_str(&person.account_id).expect("canonical"),
+            true,
         )
         .await?
         .ok_or_else(|| AppError::not_found("no such account"))

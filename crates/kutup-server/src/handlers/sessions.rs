@@ -35,6 +35,9 @@ fn user_uuid(user: &AuthUser) -> AppResult<Uuid> {
     responses((status = 200, description = "Signed out", body = OkResponse))
 )]
 pub async fn logout(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+    // Recorded first: the session's client and browser are copied from it.
+    // Best effort: a log that can't be written never keeps anyone signed in.
+    log(&state, &user, crate::security_events::Kind::SignOut).await;
     sessions::sign_out(&state.pool, user.session.session_id).await?;
     let body = Json(OkResponse { ok: true });
     if user.session.client.uses_cookie() {
@@ -65,7 +68,10 @@ pub struct SessionView {
     client_type: String,
     /// The sign-in this session was forked from (drive/chat under account).
     parent_id: Option<String>,
-    user_agent: Option<String>,
+    /// Its browser: family, major version and system, as parsed at sign-in
+    /// (never the raw `User-Agent`).
+    #[serde(flatten)]
+    client: crate::client_family::ClientFamily,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
     created_at: time::OffsetDateTime,
@@ -99,7 +105,7 @@ pub async fn list_sessions(State(state): State<AppState>, user: AuthUser) -> App
             id: r.id.to_string(),
             client_type: r.client_type,
             parent_id: r.parent_session_id.map(|p| p.to_string()),
-            user_agent: r.user_agent,
+            client: r.client,
             created_at: r.created_at,
             last_used_at: r.last_used_at,
         })
@@ -126,6 +132,7 @@ pub async fn revoke_session(
     if !sessions::revoke_owned(&state.pool, user_uuid(&user)?, id).await? {
         return Err(AppError::not_found("session not found"));
     }
+    log(&state, &user, crate::security_events::Kind::SessionRevoked).await;
     Ok(Json(OkResponse { ok: true }).into_response())
 }
 
@@ -148,7 +155,36 @@ pub async fn revoke_other_sessions(
         Some(user.session.session_id),
     )
     .await?;
+    log(
+        &state,
+        &user,
+        crate::security_events::Kind::AllSessionsRevoked,
+    )
+    .await;
     Ok(Json(OkResponse { ok: true }).into_response())
+}
+
+/// `kind` in the account's security log, made by the calling session
+/// (docs/plans/server-personal-data.md, A8). Best effort: what it records
+/// goes on whether or not the log could be written (a failure is logged).
+async fn log(state: &AppState, user: &AuthUser, kind: crate::security_events::Kind) {
+    let written: AppResult<()> = async {
+        let mut tx = state.pool.begin().await?;
+        crate::security_events::record(
+            &mut tx,
+            user_uuid(user)?,
+            kind,
+            Some(user.session.session_id),
+            None,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = written {
+        tracing::warn!("security log: {}", error.message);
+    }
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]

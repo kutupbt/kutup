@@ -250,6 +250,13 @@ pub async fn proxy_album_items(
     user: AuthUser,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
+    // Another server: only for an account that talks to them
+    // (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
     let response = configured_stack(&state)?
         .send(
@@ -288,6 +295,13 @@ pub async fn proxy_thumbnail(
     user: AuthUser,
     Path((share_id, file_id, variant)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
+    // Another server: only for an account that talks to them
+    // (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
     let variant = ThumbnailVariant::try_from(variant.as_str())

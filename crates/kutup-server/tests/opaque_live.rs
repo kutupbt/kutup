@@ -398,10 +398,16 @@ fn security_events_record_changes_for_their_owner_only() {
     let c = client();
     let mut user = register(&c, &base);
     let other = register(&c, &base);
-    assert_eq!(
-        security_events(&c, &base, &user.token, "")["events"],
-        json!([])
-    );
+    // A new account's log holds its first sign-in only (registration signs in).
+    let kinds = |token: &str| -> Vec<String> {
+        security_events(&c, &base, token, "")["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(kinds(&user.token), ["signIn"]);
     // A password change from this session, then a recovery from none.
     let grant = reauth_grant(&c, &base, &user, "passwordChange");
     let changed = "evented-password-112233";
@@ -437,24 +443,45 @@ fn security_events_record_changes_for_their_owner_only() {
         .as_str()
         .unwrap()
         .to_owned();
-    // Newest first, a page at a time.
-    let first = security_events(&c, &base, &user.token, "?limit=1");
-    assert_eq!(first["events"][0]["kind"], "recovery");
-    assert_eq!(first["events"][0]["thisSession"], false);
-    assert_eq!(first["events"][0]["client"], Value::Null);
-    let next = first["next"].as_str().expect("a second page");
-    let second = security_events(&c, &base, &user.token, &format!("?limit=1&cursor={next}"));
-    assert_eq!(second["events"][0]["kind"], "passwordChange");
-    assert_eq!(second["events"][0]["client"], "cli");
-    assert_eq!(second["events"][0]["byAdmin"], false);
-    assert_eq!(second["next"], Value::Null);
-    // Nobody else's, and nobody else sees them.
+    // Newest first, a page at a time; the account changes among the
+    // sign-ins (and the sessions they ended).
+    let mut pages = Vec::new();
+    let mut cursor = String::new();
+    loop {
+        let page = security_events(&c, &base, &user.token, &format!("?limit=1{cursor}"));
+        assert_eq!(page["events"].as_array().unwrap().len(), 1, "{page}");
+        pages.push(page["events"][0].clone());
+        match page["next"].as_str() {
+            Some(next) => cursor = format!("&cursor={next}"),
+            None => break,
+        }
+    }
+    let changes: Vec<&Value> = pages
+        .iter()
+        .filter(|event| ["recovery", "passwordChange"].contains(&event["kind"].as_str().unwrap()))
+        .collect();
+    assert_eq!(changes.len(), 2, "{pages:?}");
+    assert_eq!(changes[0]["kind"], "recovery");
+    assert_eq!(changes[0]["thisSession"], false);
+    assert_eq!(changes[0]["client"], Value::Null);
+    assert_eq!(changes[1]["kind"], "passwordChange");
+    assert_eq!(changes[1]["client"], "cli");
+    assert_eq!(changes[1]["byAdmin"], false);
+    assert_eq!(pages[0]["kind"], "signIn", "the newest is the last sign-in");
     assert_eq!(
-        security_events(&c, &base, &other.token, "")["events"],
-        json!([])
+        pages.last().unwrap()["kind"],
+        "signIn",
+        "the oldest is the first"
     );
+    // Nobody else's, and nobody else sees them: the other account's log
+    // holds its own sign-in only.
+    assert_eq!(kinds(&other.token), ["signIn"]);
+    let next = security_events(&c, &base, &user.token, "?limit=1")["next"]
+        .as_str()
+        .expect("a second page")
+        .to_owned();
     // A cursor is one of the caller's own events: another's, or none, is 400.
-    for cursor in [next.to_owned(), uuid::Uuid::new_v4().to_string()] {
+    for cursor in [next, uuid::Uuid::new_v4().to_string()] {
         let r = bearer(
             c.get(format!("{base}/api/user/security-events?cursor={cursor}")),
             &other.token,

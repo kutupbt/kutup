@@ -194,6 +194,9 @@ enum MediaAnswer {
     Receipt { receipt: ChatMediaOfferResponseV1 },
     /// The destination refused the offer for good.
     Refused { status: u16, message: String },
+    /// Never sent: the sender's federation went off after it was queued; its
+    /// sequence was withdrawn (crate::federation_stream_control).
+    Withdrawn,
 }
 
 impl MediaAnswer {
@@ -206,6 +209,7 @@ impl MediaAnswer {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!("the recipient's server refused the attachment: {message}"),
             )),
+            MediaAnswer::Withdrawn => Err(crate::federation_switch::federation_off()),
         }
     }
 
@@ -220,6 +224,7 @@ impl MediaAnswer {
             MediaAnswer::Receipt { .. } => ("delivered", true, None),
             MediaAnswer::Refused { status: 404, .. } => ("unavailable", false, Some("unavailable")),
             MediaAnswer::Refused { .. } => ("rejected", false, Some("remote_rejection")),
+            MediaAnswer::Withdrawn => ("withdrawn", false, Some("federation_off")),
         }
     }
 }
@@ -278,10 +283,11 @@ struct MediaRow {
     state: String,
     answer: Option<Value>,
     attempts: i32,
+    sender_user_id: Option<Uuid>,
 }
 
 const MEDIA_ROW: &str = "id, destination, sequence, payload->'transaction' AS transaction, state,
-     answer, attempts";
+     answer, attempts, sender_user_id";
 
 /// Stage an authenticated local sender's remote delivery, or answer a repeat
 /// of it (Signal's model: the client sends its attachment message only once
@@ -471,6 +477,53 @@ async fn attempt_media(
             .map_err(|_| AppError::internal("stored Chat-media transaction is malformed"))?;
     let operation_id = canonical_uuid(&transaction.offer.operation_id)
         .ok_or_else(|| AppError::internal("stored Chat-media operation is malformed"))?;
+    // Its sender's federation went off since it was queued: the offer never
+    // leaves; its sequence is withdrawn instead (crate::federation_stream_control).
+    if let Some(sender) = row.sender_user_id {
+        if crate::chat_federation::sender_is_off(&state.pool, sender).await? {
+            use crate::federation_stream_control::{withdraw, Withdrawal};
+            match withdraw(
+                state,
+                kutup_chat_proto::FederationStreamV1::Media,
+                &row.destination,
+                row.sequence,
+                row.id,
+            )
+            .await?
+            {
+                Withdrawal::Accepted => {
+                    let answer = MediaAnswer::Withdrawn;
+                    settle_media(state, &row, operation_id, &answer).await?;
+                    crate::telemetry::chat_media_event(telemetry, answer.outcome().0);
+                    return Ok(Some(answer));
+                }
+                Withdrawal::Gap { expected } => {
+                    federation_outbox::retry_later(
+                        &state.pool,
+                        row.id,
+                        Some(row.sequence),
+                        row.attempts,
+                        "sequence_gap",
+                        &format!("remote expects media sequence {expected}"),
+                    )
+                    .await?;
+                    return Ok(None);
+                }
+                Withdrawal::Retry(error) => {
+                    federation_outbox::retry_later(
+                        &state.pool,
+                        row.id,
+                        Some(row.sequence),
+                        row.attempts,
+                        "transport",
+                        &error,
+                    )
+                    .await?;
+                    return Ok(None);
+                }
+            }
+        }
+    }
     let answer = match send_offer(state, &row.destination, &transaction).await? {
         Ok(receipt) => MediaAnswer::Receipt { receipt },
         Err(OfferFailure::Unsupported(error)) => {
@@ -770,11 +823,14 @@ async fn reserve_inbound_offer(
         .ok()
         .and_then(|bytes| bytes.try_into().ok());
     let capability_digest = capability.as_ref().map(capability_hash).unwrap_or([0; 32]);
-    let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active=true")
-            .bind(recipient)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let recipient_user_id: Option<Uuid> = sqlx::query_scalar(
+        // An account that doesn't talk to other servers is, to them, no
+        // account (crate::federation_switch).
+        "SELECT id FROM users WHERE id = $1 AND is_active AND kutup_account_federates(id)",
+    )
+    .bind(recipient)
+    .fetch_optional(&mut *tx)
+    .await?;
     let capability_matches = if let Some(recipient_user_id) = recipient_user_id {
         capability.is_some()
             && chat_media::match_delivery_capability(&mut tx, recipient_user_id, &capability_digest)
@@ -1468,7 +1524,10 @@ async fn serve_object_inner(
          JOIN chat_media_objects o ON o.attachment_id=g.attachment_id
          WHERE g.destination=$1 AND g.recipient_account_id=$2 AND g.operation_id=$3
            AND g.attachment_id=$4 AND g.expires_at>now()
-           AND o.origin_domain=$5 AND o.origin_user_id=g.origin_user_id",
+           AND o.origin_domain=$5 AND o.origin_user_id=g.origin_user_id
+           -- A sender whose federation is off serves nothing to another
+           -- server, its grants from before included (crate::federation_switch).
+           AND kutup_account_federates(g.origin_user_id)",
     )
     .bind(authenticated.origin())
     .bind(recipient_account_id(&transaction.offer).map_err(|_| chat_media::unavailable())?)

@@ -52,12 +52,23 @@ each copy.
 - **Format.** A sealed field is `suite (u16) ‖ key generation (u32) ‖ nonce
   (24) ‖ XChaCha20-Poly1305(value)`. The AAD binds the table, the column, the
   row's id and the account id, so a value can't be moved to another row or
-  account. This is Rust in `kutup-crypto` (`server_field`, with vectors), used
+  account. This is Rust in `kutup-crypto` (`server_data`, with vectors), used
   only by the server.
-- **Where the key lives.** `account_data_keys(user_id, generation, wrapped,
-  created_at)`. Each key is wrapped under a server key-encryption key from an
-  env key list, `SERVER_DATA_KEYS` (versioned like `OPAQUE_SETUP_KEYS`, so it
-  can rotate). A database dump without that env value opens nothing.
+- **Where the key lives.** `account_keys.account_data_keys(user_id,
+  sealing_key_id, generation, wrapped, created_at)`. Each key is wrapped under
+  a key-encryption key derived (HKDF, its own label) from an entry of the
+  server key list, `OPAQUE_SETUP_KEYS`. The list already seals the OPAQUE
+  setups and the group send keys, is kept out of the dumps and is backed up
+  apart, so a second list would add nothing (decided in L1, 2026-11-06). A
+  database dump without the list opens nothing.
+  - Each row names the entry that wraps it (`sealing_key_id`). After an entry
+    is added, keys move to it when next used and in batches of 500 a minute;
+    never all at start.
+  - The server refuses to start without an entry that still wraps keys,
+    naming the entry and the count; self-hosting.md says how to check before
+    removing one.
+  - A key is made when the account first has something to seal, and goes with
+    the account (the foreign key cascades) and at an account reset.
 - **Backups.** Deleting the key row is not enough while 30 days of dumps still
   hold it. Two measures together:
   1. `account_data_keys` lives in its own schema, which the database dump
@@ -143,6 +154,44 @@ append-only (A8's rules):
 Retention is a site setting, default 3 years. The core emits these events and
 keeps them; reports on them are operator tooling.
 
+**As built (L4, A5 and A7):**
+- `users.state` (`active`, `suspended` with `suspended_reason`, `closing` with
+  `closing_by` and `closes_at`), `state_changed_at`, `purpose_ended_at` (set
+  when closing, cleared when kept). `is_active` stays, generated as
+  `state = 'active'`, for the queries that route, deliver and sign in;
+  nothing writes it.
+- Closing: `POST /api/user/close` with a reauth grant (`close`), or an
+  admin's `POST /api/admin/users/{id}/close`. Every sign-in and grant ends. A
+  sign-in that passes every step gets no session but a grant (`keep`, no
+  session, minutes); `POST /api/auth/keep` makes the account active again and
+  answers as the sign-in. An admin keeps it with `isActive: true`. Either
+  only before `closes_at` (or under a hold): after it the job may be deleting
+  the account, and a keep would leave it active and emptied. The
+  closing job (`crate::account_closing`, every five minutes, 20 at a time)
+  deletes accounts past `closes_at` (`account_closing_days`, default 14).
+- Deletion (`account_closing::destroy`, for the job and an admin's delete):
+  the purges, names held, account id retired, the row deleted (its data key
+  cascades), and the destruction event, in one transaction that checks the
+  hold again.
+- Legal hold: `legal_hold_reference`, `_at`, `_by`; set and lifted by an admin
+  (`user.legalHold.set` / `.clear` in the admin log). It refuses an admin's
+  delete and reset (`409 legalHold`), holds the closing job back, and the
+  retention jobs pass the account's sessions and security events by; the
+  admin log is pruned only up to its oldest row about a held account, so the
+  chain stays whole.
+- The log is `account_keys.destruction_events`, not in `public`: the key dump
+  holds it, so a restore replays a log as new as its keys. Subjects:
+  `kutup_crypto::server_data::destruction_subject`, HKDF of a server key list
+  entry over the account id, one per entry present (`subject_key_ids`,
+  `subjects`), so a rotation later still matches. Bulk deletions (security
+  events, admin log, sessions, the log itself, by retention) are one row with
+  a `count` and no subject. `share_link` and `backup` come with L5 and with a
+  backup job that records its pruning.
+- Replay: at start, before serving, every account whose subject the log holds
+  loses its data key and is closed at once (`closing_by = 'restore'`), for
+  the closing job to delete it again.
+- No email notice yet: it comes with the recovery email.
+
 ## A8. Append-only security and admin logs
 
 - **Two logs stay two:**
@@ -173,7 +222,9 @@ keeps them; reports on them are operator tooling.
   by count.
 - **What is logged, added to today's kinds:**
   - **Sign-ins:** `signIn`, `signInFailedPassword` (only when the pending
-    OPAQUE login names a real account), `signInFailed2fa`, `signOut`,
+    OPAQUE login names a real account; OPAQUE finds a wrong password on the
+    client, so a session sign-in that never finishes counts: the client's
+    `login/abort`, or the sign-in dropped by expiry or by newer ones), `signInFailed2fa`, `signOut`,
     `sessionRevoked`, `allSessionsRevoked`. These are the kinds from
     `security-log.md`, with repeated failures folded into one row with a
     `count`.
@@ -195,6 +246,36 @@ keeps them; reports on them are operator tooling.
 - **`security-log.md`:** this note takes over the draft. It keeps the draft's
   events and folding and drops its `advanced` mode and `ip` column (no table
   stores IPs).
+
+**As built (L2):**
+- The owner role is `DATABASE_OWNER_URL`; with the bundled compose,
+  `POSTGRES_APP_USER` and `POSTGRES_APP_PASSWORD` make the server's role.
+- At each start the owner grants that role every table, then takes back UPDATE,
+  DELETE and TRUNCATE on the two logs and gives `UPDATE (count)` on the security
+  events, the one updatable column, so failures fold.
+- Foreign-key cascades still delete an account's events: Postgres runs them as
+  the table's owner.
+- The retention job runs hourly on the owner's connection.
+- `GET /api/admin/activity/verify` walks the chain and says whether the logs
+  are append-only.
+- Admin access means opening one account's limits, mail-domain overrides or
+  mail-sending state: account content is end-to-end encrypted, so these are
+  what an admin sees of an account.
+- After review: every admin-log row, the federation ones included, goes
+  through `audit_log::append_in` (in the transaction of what it records). A
+  row is timed after the chain's lock, so id order is time order; one without
+  hashes reads as broken. The retention job deletes by id from the oldest end
+  and records the last row it deleted, with its hash, in `admin_audit_anchor`
+  (the app role may only read it); verification starts there. The app role
+  can't name an admin-log id or move its sequence, a security event's count
+  only grows by one (a trigger), and payloads hold integers only.
+- The security log keeps, per account, the newest of each kind
+  (`security_events_kept_per_kind`, default 100), so repeated failures can't
+  push out a password change; the fold window is `security_event_fold_seconds`
+  (600). A wrong password is recorded off the answer's path, so a real account
+  doesn't answer later than a name that is none.
+- The test stacks (live backup gate, isolated e2e) run as the app role; the
+  bundled compose makes it with a new database (`postgres/initdb`).
 
 ## A10. User agents: a parsed family, sealed, with retention
 
@@ -222,6 +303,18 @@ keeps them; reports on them are operator tooling.
   (`$proxy_protocol_addr`, `$proxy_protocol_port`) and never removes the
   `proxy_protocol` listeners; any edge log format is operator configuration.
 
+**As built (L3):**
+- `crate::client_family::parse` names Firefox, Chrome, Edge, Safari, Opera,
+  Samsung Internet and the CLI, with the major version, and Windows, macOS,
+  Linux, Android, iOS and ChromeOS.
+- The family is sealed as `client_sealed` on `auth_sessions` and
+  `account_security_events`, for each row. An event opens its session's family
+  and re-seals it for itself, so it outlives the session.
+- Ended sessions go after `session_record_grace_days` (default 30), unless a
+  session forked from one still lives.
+- Feedback sends the family the browser parses ("Firefox on Linux"), not
+  `navigator.userAgent`.
+
 ## A11. Share-link controls
 
 - **Operator block:** `public_shares` gains `blocked_at`, `blocked_reason`
@@ -240,6 +333,23 @@ keeps them; reports on them are operator tooling.
   - `signed_in` keeps a test deployment's links among its own accounts.
 - **Meeting call links:** a way into a call, not a publication. They aren't
   covered.
+
+**As built (L5):**
+- `crate::public_sharing` holds the three controls and the one check every
+  public route makes first (`ensure_link_up`): `451`/`410 link_blocked`,
+  `410 link_removed`, `410 sharing_off` (with `scope`: `site` or
+  `account`), `403 sign_in_required`. Making a link answers `403
+  sharing_off` while either switch is off; `signed_in` still makes links.
+- The site switch is the site setting `public_sharing` (default `on`), set in
+  Server settings → Accounts and shown in the public settings. The account
+  switch is `users.public_sharing`, on the admin's user page and in
+  `/user/me`.
+- Blocks: `POST`/`DELETE /api/admin/shares/:id/block` (reason `legal_order`,
+  `abuse`, `other`; an admin-only reference), from the Reports page; open
+  reports close as `blocked`. Audited as `share.block`/`share.unblock`.
+- The public pages (Drive folder, Office file, Photos album) say why a link
+  doesn't open, and send the viewer's sign-in when they have one, downloads
+  included; the share dialogs say why links are off instead of offering one.
 
 ## A3 and A4. Notice acknowledgements and consents (separate records)
 
@@ -276,11 +386,98 @@ keeps them; reports on them are operator tooling.
     withdrawing the consent turns it off. Built in L6.
   - `marketing` is recorded only: there are no marketing messages.
 
+**As built (L6):**
+- `legal_documents` (never edited; the current version of a kind is its
+  latest), `document_acknowledgements` (sign-up in the creating transaction,
+  `update` after a sign-in that found a new required version; first logins
+  too) and `consents` (a row per change, ordered by a sequence) are
+  append-only for the app role. A purpose's text is the current document of
+  the purpose's kind.
+- The federation switch (`users.federation`, default from the site setting
+  `federation_default`): off, the account is no account to other servers by
+  the same code path an unknown one takes (`kutup_account_federates` in each
+  peer-facing query: Chat lookups, deliveries, the sealed store, multi-sends,
+  media offers; Drive account lookups, rename chains, profile keys, and
+  every share a peer reads by capability, by its owner), and its own
+  signed-in requests to other servers are `403 federationOff`. Anonymous
+  sealed sends and bundle fetches can't name their sender to this server:
+  the apps refuse them (chat-core's transport asks `/user/me`). Groups and
+  shares stay, quiet. Mail isn't covered.
+- After review (2026-11-14): off means no transfer at all (the user's
+  decision). The outbound side is gated too: rename announces (not queued,
+  and given up when queued before), live edits of other servers' files
+  (bridges close at once; other servers' subscriptions to its files close at
+  once), Chat media offers and pulls, profile keys, live-location reads both
+  ways (streams record their sharer), and groups and calls homed on another
+  server (the relay, its key and call tokens answer `403 federationOff`; the
+  account stays a member and the group is quiet for it until the switch is
+  on again; the Privacy page says so). An administrator's switch needs the
+  user's own consent when a `federation_abroad` text is published, and is
+  in the admin log. Queued plain chat sends and media offers of an off
+  account never leave: each holds a transport sequence the peer must see,
+  so the origin sends a signed withdrawal in its place
+  (a `FederatedStreamControlV1` with the withdrawn code,
+  `POST /api/fed/chat/stream-control`: no sender, recipient or payload); the
+  peer uses the sequence up and answers a repeat the same, and the stream
+  goes on with no gap. Required of every server (no fallback: all are
+  deployed together before v1).
+- The privacy boundary of a withdrawal: a peer that already has a sequence
+  of the stream (a send or offer was queued for it) learns that an account
+  withdrew a slot: one queued for it never comes, and by timing it may tell
+  whose. That can't be avoided, as the sequence must be used up. It learns
+  no more (the withdrawal names no sender, recipient or payload), and a new
+  lookup of an off account stays indistinguishable from an unknown account.
+- The one exception: sealed-sender sends queued before the switch may still
+  leave. They name no one to this server (the sender is sealed), so it
+  can't tell they are the account's; the client's own check
+  (`ensureMayReach`) stops new ones while it is off.
+
+**As built (L7):**
+- A message's headers (subject, From, To, Cc, Reply-To, Bcc, Message-ID,
+  In-Reply-To, References, attached files' names, types and sizes) are one
+  JSON value (`"v": 1`) sealed under its mailbox's data key
+  (`mail_messages.headers`, `kutup-server/src/mail/sealed.rs`). A shared
+  mailbox has its own key, `account_keys.mail_group_data_keys`, going with
+  its group; `account_data::KeyOwner` names whose key, and the rewrap job,
+  the entry check and the cascade check cover both tables. Rows from before
+  the slice keep no headers (it lands with the wipe).
+- Lookups are keyed hashes (`server_data::Lookup`, HMAC under a subkey of the
+  data key, vectors in `server-data-lookup-v1.json`): `message_id_hash`,
+  `in_reply_to_hash`, `references_hashes` for threading, duplicate delivery
+  (`(address_id, message_id_hash)` unique) and the bounce check;
+  `search_tokens` (GIN) for search. Each lookup hashes under every
+  generation of the mailbox's key.
+- Search stays on the server, as Proton's header search: subject, sender's
+  name and address, and To/Cc/Bcc names and addresses are folded words
+  (kutup-search's folding; an address also whole, as local part and as
+  domain), each hashed with its field's tag. A query matches every word,
+  whole; `q` searches subject, sender and To/Cc, `from` the sender, `to`
+  To/Cc/Bcc. Substring search is gone (docs/api.md). Conversation rows'
+  senders and files are put together after opening.
+- Filters, auto-reply, forwarding and the sender lists run at delivery on the
+  plaintext before it is sealed; re-running filters on old mail opens them.
+  An address's signature (`mail_identities.signature_sealed`) is sealed
+  under the account's key, the account as its row, so it moves with a
+  rename.
+- The address mail was forwarded from is in the headers too (`forwarded`
+  stays in clear: such mail is never forwarded again). Not sealed: the
+  mail groups' own signature (it lands with the main session's batch; it
+  seals the same way, under the group's key).
+
+- After review (2026-11-14): a held send's outcome (undo send, scheduled
+  mail), which names its recipients, is sealed under the account's data key
+  (`mail_outbox.result_sealed`) and the row goes `mail_outbox_keep_seconds`
+  (a site setting, a day by default) after it finished; a failure is logged
+  by its status and code only. The addresses an auto-reply answered are kept
+  as keyed hashes under the account's key (`Lookup::MailAutoReplySender`,
+  `mail_auto_reply_sent.sender_hash`). A bounce of a shared-mailbox send
+  matching nothing is on the roadmap.
+
 ## Slices (after review, in this order)
 
 | Slice | Contents | Size |
 |---|---|---|
-| L1 | A2: `server_field` format and vectors, `account_data_keys`, `SERVER_DATA_KEYS`, key schema and its own dump, restore replay hook; TOTP secret sealed | M |
+| L1 | A2: `server_data` format and vectors, `account_data_keys` under the server key list, key schema and its own dump; TOTP secret sealed (the restore replay comes with A7, L4) | M |
 | L2 | A8: two roles, retention job, append-only grants, hash chain on the admin log, sign-in events, admin-access events, retention settings | M |
 | L3 | A10: UA family parser, sealed client columns, API and Account app, feedback, session retention | S–M |
 | L4 | A5 and A7: states, closing job, legal hold, self-service deletion, destruction events, restore replay | M |

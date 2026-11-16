@@ -518,7 +518,10 @@ async fn row(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<MailMessage
     .bind(id)
     .fetch_one(&state.pool)
     .await?;
-    Ok(MailMessage::from(row))
+    let opener = crate::handlers::mail::Mailbox::Own(user_id)
+        .opener(state)
+        .await?;
+    Ok(row.into_message(&opener))
 }
 
 /// `POST /api/mail/drafts` — a new draft: multipart `meta` (JSON, the
@@ -662,16 +665,19 @@ pub async fn update_draft(
             return Err(quota_exceeded());
         }
         let readable = &checked.readable;
-        let (from_address, from_name) = readable
-            .from
-            .as_ref()
-            .map(|m| (m.address.clone(), m.name.clone()))
-            .unwrap_or_default();
+        let owner = crate::account_data::KeyOwner::Account(user_id);
+        let data_key = crate::mail::sealed::key(&mut tx, owner).await?;
+        let sealed = crate::mail::sealed::seal(
+            &data_key,
+            owner,
+            id,
+            &crate::mail::sealed::Headers::of(readable, &checked.bcc),
+        )?;
         sqlx::query(
             "UPDATE mail_messages SET object_key = $3, object_version = $4, size_bytes = $5,
-                    subject = $6, from_address = $7, from_name = $8, to_list = $9, cc_list = $10,
-                    bcc_list = $11, message_id = $12, in_reply_to = $13, references_list = $14,
-                    attachment_count = $15, attachments = $16, sent_at = now(), received_at = now()
+                    headers = $6, message_id_hash = $7, in_reply_to_hash = $8,
+                    references_hashes = $9, search_tokens = $10,
+                    attachment_count = $11, sent_at = now(), received_at = now()
               WHERE id = $1 AND user_id = $2",
         )
         .bind(id)
@@ -679,17 +685,12 @@ pub async fn update_draft(
         .bind(&key)
         .bind(&version)
         .bind(size)
-        .bind(&readable.subject)
-        .bind(from_address)
-        .bind(from_name)
-        .bind(json!(readable.to))
-        .bind(json!(readable.cc))
-        .bind(json!(checked.bcc))
-        .bind(&readable.message_id)
-        .bind(&readable.in_reply_to)
-        .bind(&readable.references)
+        .bind(&sealed.headers)
+        .bind(&sealed.message_id_hash)
+        .bind(&sealed.in_reply_to_hash)
+        .bind(&sealed.references_hashes)
+        .bind(&sealed.search_tokens)
         .bind(readable.attachment_count)
-        .bind(sqlx::types::Json(&readable.attachments))
         .execute(&mut *tx)
         .await?;
         crate::storage_pool::charge(

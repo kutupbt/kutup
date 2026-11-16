@@ -197,21 +197,27 @@ pub async fn record(pool: &PgPool, user_id: Uuid, event: Event, count: u32) -> s
 }
 
 /// Counts a delivery report among `user_id`'s mail as bounces, but only
-/// when it names a message this account sent outside through Kutup: anyone
-/// can mail a forged report.
+/// when it names a message this account sent outside through Kutup from its
+/// own mailbox (found by the keyed hash of its Message-ID): anyone can mail
+/// a forged report. A report about mail sent as a shared mailbox goes to
+/// that mailbox's address, not here.
 pub async fn record_bounce(
     pool: &PgPool,
     user_id: Uuid,
     original_message_id: &str,
     failures: u32,
-) -> sqlx::Result<bool> {
+) -> crate::error::AppResult<bool> {
+    let opener =
+        crate::mail::sealed::Opener::load(pool, crate::account_data::KeyOwner::Account(user_id))
+            .await?;
+    let hashes = crate::mail::sealed::thread_hashes(opener.keys(), &[original_message_id])?;
     let ours: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM mail_messages
-                         WHERE sender_account = $1 AND message_id = $2 AND direction = 'outbound'
-                           AND external_recipients > 0)",
+                         WHERE sender_account = $1 AND message_id_hash = ANY($2)
+                           AND direction = 'outbound' AND external_recipients > 0)",
     )
     .bind(user_id)
-    .bind(original_message_id)
+    .bind(&hashes)
     .fetch_one(pool)
     .await?;
     if ours {

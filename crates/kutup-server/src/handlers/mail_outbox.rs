@@ -44,14 +44,35 @@ pub async fn status(
     Path(id): Path<String>,
 ) -> AppResult<Json<MailOutboxStatus>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let row: Option<(String, Option<serde_json::Value>)> =
-        sqlx::query_as("SELECT state, result FROM mail_outbox WHERE id = $1 AND user_id = $2")
-            .bind(id_of(&id)?)
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let (state, result) = row.ok_or_else(|| AppError::not_found("not found"))?;
-    Ok(Json(MailOutboxStatus { state, result }))
+    let outbox = id_of(&id)?;
+    let row: Option<(String, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT state, result_sealed FROM mail_outbox WHERE id = $1 AND user_id = $2",
+    )
+    .bind(outbox)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (send_state, sealed) = row.ok_or_else(|| AppError::not_found("not found"))?;
+    // Sealed under the account's data key; one that doesn't open (its key
+    // destroyed) is no outcome. A send a stopped server left half-done has
+    // none: interrupted.
+    let result = match sealed {
+        Some(sealed) => crate::account_data::open(
+            &state.pool,
+            &state.config.opaque_setup_keys,
+            user_id,
+            crate::mail::outbox::result_field(&outbox.to_string()),
+            &sealed,
+        )
+        .await?
+        .and_then(|plain| serde_json::from_slice(&plain).ok()),
+        None if send_state == "failed" => Some(serde_json::json!({ "error": "interrupted" })),
+        None => None,
+    };
+    Ok(Json(MailOutboxStatus {
+        state: send_state,
+        result,
+    }))
 }
 
 /// `POST /api/mail/outbox/{id}/cancel` — Undo: the send does not go, its

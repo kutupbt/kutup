@@ -300,19 +300,7 @@ fn automated_sender(address: &str) -> bool {
         || local.starts_with("bounce")
 }
 
-type MessageRow = (
-    String,
-    String,
-    String,
-    sqlx::types::Json<Vec<Mailbox>>,
-    sqlx::types::Json<Vec<Mailbox>>,
-    String,
-    Option<String>,
-    Vec<String>,
-    String,
-    bool,
-    String,
-);
+type MessageRow = (String, String, Option<Vec<u8>>, String, bool, String);
 
 async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     let Some(saved) = load(&state.pool, delivered.user_id).await? else {
@@ -324,8 +312,7 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     let row: Option<MessageRow> = sqlx::query_as(
         // Mail to an old (receiving) address is answered too, always from
         // the account's current one: the old address sends nothing.
-        "SELECT a.address, m.folder, m.from_address, m.to_list, m.cc_list, m.subject,
-                m.message_id, m.references_list,
+        "SELECT a.address, m.folder, m.headers,
                 COALESCE(NULLIF(i.display_name, ''), u.username), u.is_admin, cur.address
            FROM mail_messages m
            JOIN mail_addresses a ON a.id = m.address_id
@@ -339,20 +326,32 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     .fetch_optional(&state.pool)
     .await?;
     // Blocked meanwhile, or deleted already.
-    let Some((own, folder, from, to, cc, subject, message_id, references, name, is_admin, current)) =
-        row
-    else {
+    let Some((own, folder, sealed, name, is_admin, current)) = row else {
         return Ok(());
     };
+    let opener = super::sealed::Opener::load(
+        &state.pool,
+        crate::account_data::KeyOwner::Account(delivered.user_id),
+    )
+    .await?;
+    let headers = opener.open(delivered.message, sealed.as_deref());
+    let from = headers.from.map(|m| m.address).unwrap_or_default();
+    let (to, cc, subject, message_id, references) = (
+        headers.to,
+        headers.cc,
+        headers.subject,
+        headers.message_id,
+        headers.references,
+    );
     // Compared as senders are: this server's addresses in any spelling.
     let key = |address: &str| super::sender_key(&state.config.chat_server_name, address);
     // Answered at the address as written; remembered as compared.
     let sender = from.trim().to_ascii_lowercase();
     let sender_key = key(&sender);
-    let named =
-        to.0.iter()
-            .chain(cc.0.iter())
-            .any(|m| key(&m.address) == key(&own));
+    let named = to
+        .iter()
+        .chain(cc.iter())
+        .any(|m| key(&m.address) == key(&own));
     if matches!(folder.as_str(), "spam" | "trash")
         || !named
         || sender.is_empty()
@@ -378,15 +377,31 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     {
         return Ok(());
     }
-    // Once per sender every RESEND_AFTER_DAYS: the claim is the record.
-    let claimed: Option<String> = sqlx::query_scalar(
-        "INSERT INTO mail_auto_reply_sent (user_id, sender) VALUES ($1, $2)
-         ON CONFLICT (user_id, sender) DO UPDATE SET sent_at = now()
+    // Once per sender every RESEND_AFTER_DAYS: the claim is the record. The
+    // sender is kept as a keyed hash under the account's data key, never its
+    // address (docs/plans/server-personal-data.md, A2).
+    let sender_hash = {
+        let mut conn = state.pool.acquire().await?;
+        super::sealed::key(
+            &mut conn,
+            crate::account_data::KeyOwner::Account(delivered.user_id),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?
+        .lookup_hash(
+            kutup_crypto::server_data::Lookup::MailAutoReplySender,
+            sender_key.as_bytes(),
+        )?
+        .to_vec()
+    };
+    let claimed: Option<Vec<u8>> = sqlx::query_scalar(
+        "INSERT INTO mail_auto_reply_sent (user_id, sender_hash) VALUES ($1, $2)
+         ON CONFLICT (user_id, sender_hash) DO UPDATE SET sent_at = now()
           WHERE mail_auto_reply_sent.sent_at < now() - make_interval(days => $3)
-         RETURNING sender",
+         RETURNING sender_hash",
     )
     .bind(delivered.user_id)
-    .bind(&sender_key)
+    .bind(&sender_hash)
     .bind(RESEND_AFTER_DAYS)
     .fetch_optional(&state.pool)
     .await?;
@@ -435,9 +450,9 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     };
     if let Err(error) = sent {
         // Not answered: the next message from them may try again.
-        sqlx::query("DELETE FROM mail_auto_reply_sent WHERE user_id = $1 AND sender = $2")
+        sqlx::query("DELETE FROM mail_auto_reply_sent WHERE user_id = $1 AND sender_hash = $2")
             .bind(delivered.user_id)
-            .bind(&sender_key)
+            .bind(&sender_hash)
             .execute(&state.pool)
             .await?;
         return Err(error);

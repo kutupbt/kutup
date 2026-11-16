@@ -46,6 +46,18 @@
     "light": "Açık tema",
     "system": "Sistem temasını kullan"
   },
+  "publicSharing": {
+    "blocked": {
+      "legal_order": "Sunucunun işletmecileri bir yasal karar üzerine engelledi",
+      "abuse": "Sunucunun işletmecileri kötüye kullanım nedeniyle engelledi",
+      "other": "Sunucunun işletmecileri engelledi"
+    },
+    "targetBlocked": "Sunucunun işletmecileri buna giden bağlantıları engelledi: yeni bağlantı oluşturulamaz.",
+    "off": {
+      "site": "Herkese açık bağlantılar bu sunucuda kapalı.",
+      "account": "Bir yönetici hesabınız için herkese açık bağlantıları kapattı."
+    }
+  },
   "fileShare": {
     "title": "“{{name}}” paylaş",
     "description": "Bu dosyanın kendi anahtarını alırlar, klasörünkini asla. Yalnızca bu dosyayı görürler.",

@@ -146,6 +146,10 @@ pub struct FileLink {
     pub expires_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// Why an operator blocked what the link reaches (`legal_order`,
+    /// `abuse`, `other`): it doesn't open, and stays until they lift it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -566,10 +570,13 @@ async fn file_links(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FileLink>> {
         i32,
         Option<OffsetDateTime>,
         OffsetDateTime,
+        Option<String>,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, token, owner_link_key_envelope, collection_key_epoch, expires_at, created_at
+        "SELECT id, token, owner_link_key_envelope, collection_key_epoch, expires_at, created_at,
+                kutup_target_blocked(share_type, target_id)
          FROM public_shares WHERE share_type = 'file' AND target_id = $1
+           AND owner_removed_at IS NULL
            AND (expires_at IS NULL OR expires_at > now())
          ORDER BY created_at",
     )
@@ -579,15 +586,22 @@ async fn file_links(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FileLink>> {
     Ok(rows
         .into_iter()
         .map(
-            |(id, token, owner_link_key_envelope, key_generation, expires_at, created_at)| {
-                FileLink {
-                    id,
-                    token,
-                    owner_link_key_envelope,
-                    key_generation,
-                    expires_at,
-                    created_at,
-                }
+            |(
+                id,
+                token,
+                owner_link_key_envelope,
+                key_generation,
+                expires_at,
+                created_at,
+                blocked_reason,
+            )| FileLink {
+                id,
+                token,
+                owner_link_key_envelope,
+                key_generation,
+                expires_at,
+                created_at,
+                blocked_reason,
             },
         )
         .collect())
@@ -834,7 +848,8 @@ pub async fn rotate(
             .await?;
     let kept: Vec<Uuid> = req.members.iter().map(|m| m.user_id).collect();
     let current_links: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM public_shares WHERE share_type = 'file' AND target_id = $1",
+        "SELECT id FROM public_shares
+          WHERE share_type = 'file' AND target_id = $1 AND owner_removed_at IS NULL",
     )
     .bind(file_id)
     .fetch_all(&mut *tx)
@@ -906,8 +921,19 @@ pub async fn rotate(
         .bind(&req.removed)
         .execute(&mut *tx)
         .await?;
+    // A blocked link is kept, hidden from its owner: the block outlives it
+    // until an operator lifts it (crate::public_sharing).
     sqlx::query(
-        "DELETE FROM public_shares WHERE share_type = 'file' AND target_id = $1 AND id = ANY($2)",
+        "UPDATE public_shares SET owner_removed_at = now()
+          WHERE share_type = 'file' AND target_id = $1 AND id = ANY($2) AND blocked_at IS NOT NULL",
+    )
+    .bind(file_id)
+    .bind(&req.removed_links)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM public_shares
+          WHERE share_type = 'file' AND target_id = $1 AND id = ANY($2) AND blocked_at IS NULL",
     )
     .bind(file_id)
     .bind(&req.removed_links)
@@ -1078,6 +1104,7 @@ pub async fn pending(
                           AND (fs.key_generation < f.key_generation OR f.key_epoch < c.key_epoch))
              OR EXISTS (SELECT 1 FROM public_shares ps
                         WHERE ps.share_type = 'file' AND ps.target_id = f.id
+                          AND ps.owner_removed_at IS NULL
                           AND (ps.collection_key_epoch < f.key_generation OR f.key_epoch < c.key_epoch))
              OR EXISTS (SELECT 1 FROM federated_outgoing_file_shares fo
                         WHERE fo.file_id = f.id
@@ -1136,6 +1163,7 @@ pub async fn shared_by_me(
                 (SELECT count(*) FROM federated_outgoing_shares fo WHERE fo.collection_id = c.id),
                 (SELECT count(*) FROM public_shares ps
                   WHERE ps.share_type = 'collection' AND ps.target_id = c.id
+                    AND ps.owner_removed_at IS NULL
                     AND (ps.expires_at IS NULL OR ps.expires_at > now()))
          FROM collections c
          WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
@@ -1145,11 +1173,14 @@ pub async fn shared_by_me(
                 (SELECT count(*) FROM federated_outgoing_file_shares fo WHERE fo.file_id = f.id),
                 (SELECT count(*) FROM public_shares ps
                   WHERE ps.share_type = 'file' AND ps.target_id = f.id
+                    AND ps.owner_removed_at IS NULL
                     AND (ps.expires_at IS NULL OR ps.expires_at > now()))
          FROM files f JOIN collections c ON c.id = f.collection_id
          WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL AND f.deleted_at IS NULL
            AND (EXISTS (SELECT 1 FROM file_shares fs WHERE fs.file_id = f.id)
-             OR EXISTS (SELECT 1 FROM public_shares ps WHERE ps.share_type = 'file' AND ps.target_id = f.id)
+             OR EXISTS (SELECT 1 FROM public_shares ps
+                         WHERE ps.share_type = 'file' AND ps.target_id = f.id
+                           AND ps.owner_removed_at IS NULL)
              OR EXISTS (SELECT 1 FROM federated_outgoing_file_shares fo WHERE fo.file_id = f.id))",
     )
     .bind(user_id)

@@ -20,6 +20,7 @@ pub mod outbox;
 pub mod outside_keys;
 pub mod retention;
 pub mod safety;
+pub mod sealed;
 pub mod sender_rules;
 pub mod snooze;
 pub mod submit;
@@ -423,12 +424,19 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     .await??;
 
     if let Some(message_id) = &readable.message_id {
+        let opener = sealed::Opener::load(
+            &state.pool,
+            crate::account_data::KeyOwner::Account(recipient.user_id),
+        )
+        .await?;
+        let hashes = sealed::thread_hashes(opener.keys(), &[message_id.as_str()])?;
         let seen: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM mail_messages
-                             WHERE address_id = $1 AND message_id = $2 AND direction = 'inbound')",
+                             WHERE address_id = $1 AND message_id_hash = ANY($2)
+                               AND direction = 'inbound')",
         )
         .bind(recipient.address_id)
-        .bind(message_id)
+        .bind(&hashes)
         .fetch_one(&state.pool)
         .await?;
         if seen {
@@ -518,6 +526,12 @@ impl From<sqlx::Error> for Recorded {
     }
 }
 
+impl From<crate::error::AppError> for Recorded {
+    fn from(error: crate::error::AppError) -> Self {
+        Recorded::Failed(anyhow::anyhow!(error.message))
+    }
+}
+
 /// Inserts the row and charges the pool under its lock. `Ok(None)` when the
 /// same message arrived meanwhile.
 async fn record(
@@ -604,12 +618,13 @@ pub(crate) struct NewMessage<'a> {
 }
 
 /// The thread of the newest message in the mailbox of `owner` (an account,
-/// or a shared mailbox's group) that `readable` replies to.
+/// or a shared mailbox's group) that `readable` replies to, found by the
+/// keyed hashes of its Message-IDs under every key of the mailbox.
 pub(crate) async fn ancestor_thread(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    owner: Uuid,
+    owner: crate::account_data::KeyOwner,
     readable: &Readable,
-) -> sqlx::Result<Option<Uuid>> {
+) -> crate::error::AppResult<Option<Uuid>> {
     let ancestors: Vec<&str> = readable
         .in_reply_to
         .iter()
@@ -619,15 +634,17 @@ pub(crate) async fn ancestor_thread(
     if ancestors.is_empty() {
         return Ok(None);
     }
-    sqlx::query_scalar(
+    let opener = sealed::Opener::load_in(tx, owner).await?;
+    let hashes = sealed::thread_hashes(opener.keys(), &ancestors)?;
+    Ok(sqlx::query_scalar(
         "SELECT thread_id FROM mail_messages
-          WHERE owner = $1 AND message_id = ANY($2)
+          WHERE owner = $1 AND message_id_hash = ANY($2)
           ORDER BY received_at DESC LIMIT 1",
     )
-    .bind(owner)
-    .bind(&ancestors)
+    .bind(owner.id())
+    .bind(&hashes)
     .fetch_optional(&mut **tx)
-    .await
+    .await?)
 }
 
 /// Inserts `message` and charges its owner's pool (a list member's copy is
@@ -637,23 +654,33 @@ pub(crate) async fn ancestor_thread(
 pub(crate) async fn insert_message(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     message: NewMessage<'_>,
-) -> sqlx::Result<bool> {
+) -> crate::error::AppResult<bool> {
     let readable = message.readable;
-    let owner = message
-        .user_id
-        .or(message.group_id)
-        .expect("a message belongs to an account or a group");
+    let key_owner = sealed::owner_of(message.user_id, message.group_id);
+    let owner = key_owner.id();
+    // The mailbox's key, made now if it has none, before the thread is
+    // looked for under every key it has.
+    let key = sealed::key(tx, key_owner).await?;
     let thread = match message.thread_id {
         Some(thread) => Some(thread),
-        None => ancestor_thread(tx, owner, readable).await?,
+        None => ancestor_thread(tx, key_owner, readable).await?,
     };
+    let sealed = sealed::seal(
+        &key,
+        key_owner,
+        message.id,
+        &sealed::Headers {
+            forwarded_from: message.forwarded_from.map(str::to_owned),
+            ..sealed::Headers::of(readable, message.bcc)
+        },
+    )?;
     let sent_at = readable
         .sent_at
         .and_then(|secs| time::OffsetDateTime::from_unix_timestamp(secs).ok());
-    let (from_address, from_name) = readable
+    let from_address = readable
         .from
         .as_ref()
-        .map(|m| (m.address.as_str(), m.name.as_str()))
+        .map(|m| m.address.as_str())
         .unwrap_or_default();
     // The account's block, spam and allow lists come first
     // (docs/plans/mail-filters.md, F3); a blocked message is not stored.
@@ -671,14 +698,15 @@ pub(crate) async fn insert_message(
     let inserted: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO mail_messages
             (id, user_id, address_id, thread_id, direction, folder, seen, protection, object_key,
-             object_version, size_bytes, sent_at, subject, from_address, from_name, to_list,
-             cc_list, reply_to, bcc_list, message_id, in_reply_to, references_list,
+             object_version, size_bytes, sent_at, headers, message_id_hash, in_reply_to_hash,
+             references_hashes, search_tokens,
              attachment_count, external_recipients, group_id, key_packet, sent_by, unsubscribable,
-             attachments, expires_at, notify_at, forwarded_from)
+             expires_at, notify_at, forwarded)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END, $31)
-         ON CONFLICT (address_id, message_id) WHERE direction = 'inbound' AND message_id IS NOT NULL
+                 $18, $19, $20, $21, $22, $23, $24,
+                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END, $25)
+         ON CONFLICT (address_id, message_id_hash)
+             WHERE direction = 'inbound' AND message_id_hash IS NOT NULL
          DO NOTHING
          RETURNING id",
     )
@@ -694,25 +722,19 @@ pub(crate) async fn insert_message(
     .bind(message.object_version)
     .bind(message.size)
     .bind(sent_at)
-    .bind(&readable.subject)
-    .bind(from_address)
-    .bind(from_name)
-    .bind(json!(readable.to))
-    .bind(json!(readable.cc))
-    .bind(json!(readable.reply_to))
-    .bind(json!(message.bcc))
-    .bind(&readable.message_id)
-    .bind(&readable.in_reply_to)
-    .bind(&readable.references)
+    .bind(&sealed.headers)
+    .bind(&sealed.message_id_hash)
+    .bind(&sealed.in_reply_to_hash)
+    .bind(&sealed.references_hashes)
+    .bind(&sealed.search_tokens)
     .bind(readable.attachment_count)
     .bind(message.external_recipients)
     .bind(message.group_id)
     .bind(message.key_packet)
     .bind(message.sent_by)
     .bind(readable.list_unsubscribe)
-    .bind(sqlx::types::Json(&readable.attachments))
     .bind(readable.expires_at)
-    .bind(message.forwarded_from)
+    .bind(message.forwarded_from.is_some())
     .fetch_optional(&mut **tx)
     .await?;
     if inserted.is_none() {
