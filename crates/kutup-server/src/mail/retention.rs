@@ -14,18 +14,26 @@ const INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// Runs once soon after start, then hourly.
 pub fn spawn(state: AppState) {
+    crate::job_health::register("mail.retention", INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(INTERVAL);
         loop {
             tick.tick().await;
+            let mut ok = true;
             if let Err(error) = once(&state).await {
                 tracing::warn!(error = %error, "mail: auto-delete failed");
+                ok = false;
             }
             if let Err(error) = super::auto_reply::forget_old(&state.pool).await {
                 tracing::warn!(error = %error, "mail: forgetting auto-reply senders failed");
+                ok = false;
             }
             if let Err(error) = crate::handlers::mail::forget_old_tombstones(&state.pool).await {
                 tracing::warn!(error = %error, "mail: forgetting body search tombstones failed");
+                ok = false;
+            }
+            if ok {
+                crate::job_health::beat(&state.pool, "mail.retention").await;
             }
         }
     });

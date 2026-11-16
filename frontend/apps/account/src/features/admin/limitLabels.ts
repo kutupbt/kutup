@@ -12,6 +12,7 @@ export const SETTING_LABELS: Record<SettingSection, string> = {
   drive: 'admin.settings.driveLimits',
   federation: 'admin.settings.federationLimits',
   privacy: 'admin.settings.privacyLimits',
+  backups: 'admin.settings.backupLimits',
 }
 
 type TFunction = ReturnType<typeof useTranslation>['t']

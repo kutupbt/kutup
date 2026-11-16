@@ -56,13 +56,15 @@ pub fn spawn(state: AppState) {
     if !configured(&state) {
         return;
     }
+    let every = Duration::from_secs(state.config.mail_domains_sweep_seconds);
+    crate::job_health::register("mail.domains_sweep", every);
     tokio::spawn(async move {
-        let mut tick =
-            tokio::time::interval(Duration::from_secs(state.config.mail_domains_sweep_seconds));
+        let mut tick = tokio::time::interval(every);
         loop {
             tick.tick().await;
-            if let Err(error) = run(&state).await {
-                tracing::warn!(error = %error, "mail: custom domains sweep failed");
+            match run(&state).await {
+                Ok(()) => crate::job_health::beat(&state.pool, "mail.domains_sweep").await,
+                Err(error) => tracing::warn!(error = %error, "mail: custom domains sweep failed"),
             }
         }
     });

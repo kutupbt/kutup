@@ -208,7 +208,7 @@ export interface SignedUpWith {
 }
 
 /** A whole-number setting's Server settings section (site_settings::SettingSection). */
-export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation' | 'privacy'
+export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation' | 'privacy' | 'backups'
 /** What a whole-number setting counts. */
 export type SettingUnit = 'bytes' | 'count' | 'seconds' | 'days'
 /** Where a value in effect comes from. */
@@ -356,6 +356,12 @@ export interface AdminSettings {
   federationAnnounceDays: number
   federationAnnouncePeerDays: number
   chatAttachmentSendLifetimeSeconds: number
+  /** Backups and health (docs/plans/restore-drill-and-alerting.md), in seconds. */
+  storageDeletedBlobRetentionSeconds: number
+  storageDeletedBlobSweepSeconds: number
+  healthBackupMaxAgeSeconds: number
+  healthJobGraceSeconds: number
+  healthProbeTimeoutSeconds: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

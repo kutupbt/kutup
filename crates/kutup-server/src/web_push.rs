@@ -123,6 +123,7 @@ impl WebPush {
         topic: &str,
         ttl: u32,
     ) -> anyhow::Result<StatusCode> {
+        crate::outbound::check("a push notification")?;
         if !self.allowed_endpoint(endpoint) {
             return Ok(StatusCode::GONE);
         }
@@ -268,6 +269,7 @@ async fn send(
         sent.retain(|_, at| now.duration_since(*at) < MIN_INTERVAL);
         sent.insert((user_id, device_id), now);
     }
+    crate::outbound::check("a push notification")?;
     let url = reqwest::Url::parse(&endpoint)?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp() as u64;
     let response = client

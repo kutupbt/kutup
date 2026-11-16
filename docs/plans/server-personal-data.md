@@ -82,6 +82,14 @@ each copy.
 
   Both, so restoring any older backup can never bring back a deleted
   account's key (decision 2).
+- **Deleted blobs wait before they leave the object store.** A blob deleted
+  for any reason (a file emptied from the trash, an account's data at its
+  deletion) is queued in `storage_pending_deletions` and purged only after
+  the site setting `storage_deleted_blob_retention_seconds` (default 2 days,
+  docs/plans/restore-drill-and-alerting.md), so a database dump restored
+  from before the delete never names a purged blob. For those 2 days a
+  deleted account's ciphertext is still in the object store, unreadable
+  without keys that went with the account; after them it is gone.
 - **What is sealed:**
   - the parsed user-agent family in sessions and security events (A10);
   - the TOTP secret (today plaintext);

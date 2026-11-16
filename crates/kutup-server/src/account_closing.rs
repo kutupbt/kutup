@@ -401,6 +401,7 @@ const CLOSING_TICK: std::time::Duration = std::time::Duration::from_secs(5 * 60)
 
 /// Runs [`run_due`] every few minutes.
 pub fn spawn(state: AppState) {
+    crate::job_health::register("accounts.closing", CLOSING_TICK);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(CLOSING_TICK);
         loop {
@@ -409,7 +410,10 @@ pub fn spawn(state: AppState) {
             loop {
                 match run_due(&state).await {
                     Ok(deleted) if deleted >= DUE_BATCH as u64 => continue,
-                    Ok(_) => break,
+                    Ok(_) => {
+                        crate::job_health::beat(&state.pool, "accounts.closing").await;
+                        break;
+                    }
                     Err(error) => {
                         tracing::warn!("account closing: {}", error.message);
                         break;

@@ -185,13 +185,15 @@ const RELOAD_EVERY: Duration = Duration::from_secs(30);
 
 /// Rereads the values administrators set every [`RELOAD_EVERY`].
 pub fn spawn_reload(pool: sqlx::PgPool) {
+    crate::job_health::register("rate_limits.reload", RELOAD_EVERY);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(RELOAD_EVERY);
         tick.tick().await;
         loop {
             tick.tick().await;
-            if let Err(error) = reload(&pool).await {
-                tracing::warn!("rate limits not reloaded: {error}");
+            match reload(&pool).await {
+                Ok(_) => crate::job_health::beat(&pool, "rate_limits.reload").await,
+                Err(error) => tracing::warn!("rate limits not reloaded: {error}"),
             }
         }
     });

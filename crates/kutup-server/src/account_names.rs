@@ -310,11 +310,17 @@ pub async fn sweep(pool: &sqlx::PgPool) -> AppResult<(u64, u64)> {
 
 /// Runs [`sweep`] every `seconds`, for as long as the server runs.
 pub fn spawn_sweep(pool: sqlx::PgPool, seconds: i64) {
+    let every = std::time::Duration::from_secs(seconds as u64);
+    crate::job_health::register("accounts.name_sweep", every);
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(seconds as u64));
+        let mut tick = tokio::time::interval(every);
         loop {
             tick.tick().await;
-            match sweep(&pool).await {
+            let swept = sweep(&pool).await;
+            if swept.is_ok() {
+                crate::job_health::beat(&pool, "accounts.name_sweep").await;
+            }
+            match swept {
                 Ok((0, 0)) => {}
                 Ok((closed, freed)) => tracing::info!(closed, freed, "account names swept"),
                 Err(error) => tracing::warn!("account name sweep failed: {error:?}"),

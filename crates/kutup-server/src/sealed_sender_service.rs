@@ -223,6 +223,10 @@ impl SealedSenderService {
             return;
         }
         let service = Arc::clone(self);
+        crate::job_health::register(
+            "sealed_sender.maintenance",
+            crate::sealed_sender_provision::MAINTENANCE_INTERVAL,
+        );
         tokio::spawn(async move {
             let mut tick =
                 tokio::time::interval(crate::sealed_sender_provision::MAINTENANCE_INTERVAL);
@@ -242,6 +246,7 @@ impl SealedSenderService {
                             .active
                             .write()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::new(active);
+                        crate::job_health::beat(&pool, "sealed_sender.maintenance").await;
                     }
                     Err(error) => {
                         tracing::warn!(%error, "self-provisioned sealed sender maintenance failed");

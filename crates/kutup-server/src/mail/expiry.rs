@@ -27,12 +27,14 @@ const ALL_FOLDERS: [&str; 9] = [
 
 /// Deletes expired mail every 30 seconds.
 pub fn spawn(state: AppState) {
+    crate::job_health::register("mail.expiry", TICK);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(TICK);
         loop {
             tick.tick().await;
-            if let Err(error) = once(&state).await {
-                tracing::warn!(error = %error, "mail: deleting expired mail failed");
+            match once(&state).await {
+                Ok(_) => crate::job_health::beat(&state.pool, "mail.expiry").await,
+                Err(error) => tracing::warn!(error = %error, "mail: deleting expired mail failed"),
             }
         }
     });

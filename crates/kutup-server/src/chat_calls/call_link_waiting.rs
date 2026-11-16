@@ -509,11 +509,12 @@ pub(crate) async fn decide(
 /// Forget knocks whose knocker stopped asking `FORGET_SECONDS` ago, across
 /// every meeting: a sealed name is not kept longer than the wait needs.
 pub(crate) fn spawn_sweeper(pool: sqlx::PgPool) {
+    crate::job_health::register("chat.meeting_knock_sweep", SWEEP_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(SWEEP_INTERVAL);
         loop {
             tick.tick().await;
-            if let Err(error) = sqlx::query(
+            match sqlx::query(
                 "DELETE FROM chat_call_link_knocks
                  WHERE last_seen_at < NOW() - make_interval(secs => $1)",
             )
@@ -521,7 +522,8 @@ pub(crate) fn spawn_sweeper(pool: sqlx::PgPool) {
             .execute(&pool)
             .await
             {
-                tracing::warn!(%error, "meeting knock sweep failed");
+                Ok(_) => crate::job_health::beat(&pool, "chat.meeting_knock_sweep").await,
+                Err(error) => tracing::warn!(%error, "meeting knock sweep failed"),
             }
         }
     });

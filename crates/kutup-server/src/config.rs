@@ -133,6 +133,17 @@ pub struct Config {
     /// `NAME_SWEEP_SECONDS`: how often old addresses are closed and held
     /// names freed on their dates (an hour; seconds on test stacks).
     pub name_sweep_seconds: i64,
+    /// `BACKGROUND_JOBS` (on by default): whether this process runs its
+    /// background jobs (purges, sweeps, retention, the federation and mail
+    /// outboxes). A restore drill starts with them off, so nothing in the
+    /// restored stack deletes or sends before it has been checked
+    /// (scripts/restore-drill.sh).
+    pub background_jobs: bool,
+    /// `OUTBOUND_DELIVERY` (on by default): whether this server sends
+    /// anything to another host under its own identity: federation
+    /// requests, mail, push notifications (`outbound.rs`). A restore drill
+    /// always runs with it off.
+    pub outbound_delivery: bool,
     pub mail_labels_per_account: i64,
     /// Filters an account may have switched on (`MAIL_FILTERS_PER_ACCOUNT`).
     pub mail_filters_per_account: i64,
@@ -622,6 +633,8 @@ impl Config {
             name_hold_days: get_env_i64("NAME_HOLD_DAYS", 180),
             old_address_receive_days: get_env_i64("OLD_ADDRESS_RECEIVE_DAYS", 90),
             name_sweep_seconds: get_env_i64("NAME_SWEEP_SECONDS", 3600).clamp(1, 86_400),
+            background_jobs: get_env_bool("BACKGROUND_JOBS", true),
+            outbound_delivery: get_env_bool("OUTBOUND_DELIVERY", true),
             mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             mail_filters_per_account: get_env_i64("MAIL_FILTERS_PER_ACCOUNT", 200),
             mail_sender_rules_per_account: get_env_i64("MAIL_SENDER_RULES_PER_ACCOUNT", 5000),
@@ -1346,8 +1359,15 @@ mod env_example {
             "KUTUP_STALWART_SETUP_IMAGE",
             "docker-compose.mail-images.yml",
         ),
-        ("KUTUP_BACKUP_PASSPHRASE", "scripts/backup-postgres.sh"),
+        ("BACKUP_S3_ENDPOINT", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_BUCKET", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_ACCESS_KEY", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_SECRET_KEY", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_REGION", "scripts/backup-lib.sh"),
+        ("KUTUP_BACKUP_AGE_RECIPIENT", "scripts/backup-lib.sh"),
         ("KUTUP_BACKUP_KEEP_DAYS", "scripts/backup-postgres.sh"),
+        ("KUTUP_BACKUP_PREFIX", "scripts/backup-postgres.sh"),
+        ("KUTUP_MAIL_BACKUP_PREFIX", "scripts/backup-stalwart.sh"),
     ];
 
     /// Read by the server, but not from `.env` under Compose: it builds or

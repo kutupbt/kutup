@@ -469,7 +469,7 @@ account sends for as well.
 
 ### Backup / restore CLI
 
-The database half exists: `scripts/backup-postgres.sh` stores encrypted dumps in the object store and restores them (`docs/self-hosting.md`, "Database backups"). Still open: copying the object store's blobs elsewhere (a second copy of the ciphertext), a point-in-time-consistent pair of database and blobs, and `kutup backup` / `kutup restore` subcommands in the Rust CLI (`crates/kutup-cli`) to wrap both.
+The database half exists: `scripts/backup-postgres.sh` and `scripts/backup-stalwart.sh` store age-encrypted backups (to an offline key) in a bucket of their own and restore them after checking them (`docs/self-hosting.md`, "Backups"). Deleted blobs stay in the store for `storageDeletedBlobRetentionSeconds` (two days at first), so a dump younger than that restores with every blob it names, and `GET /api/health/ready` reports the newest backup's age. Still open: the blob bucket's second copy is the provider's versioning or replica (not set up by Kutup), the restore drill has not been run (`docs/self-hosting.md`, "Restore drill"), the watcher that alerts on readiness (docs/plans/restore-drill-and-alerting.md, Part 2 B) is deferred, and `kutup backup` / `kutup restore` subcommands in the Rust CLI (`crates/kutup-cli`) to wrap both.
 
 ---
 

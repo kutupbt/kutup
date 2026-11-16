@@ -16,6 +16,7 @@ mod account_roots;
 mod albums;
 mod audit_log;
 mod auth_check;
+mod blob_purge;
 mod calendar_alarms;
 mod calendar_reminders;
 mod calls;
@@ -49,6 +50,7 @@ mod file_content;
 mod grants;
 mod handlers;
 mod hub;
+mod job_health;
 mod jobs;
 mod jwt;
 mod legal;
@@ -60,10 +62,12 @@ mod models;
 mod opaque_setup;
 mod openapi;
 mod organizations;
+mod outbound;
 mod photos;
 mod public_fetch;
 mod public_sharing;
 mod ratelimit;
+mod readiness;
 mod registration;
 mod remote_manifests;
 mod remote_renames;
@@ -351,13 +355,16 @@ async fn main() -> anyhow::Result<()> {
         &config.s3_bucket,
         &config.s3_region,
         config.s3_timeouts,
-    );
+    )
+    // Deletes wait out storage_deleted_blob_retention_seconds before they
+    // reach the store (blob_purge.rs), the orphan sweep's included.
+    .with_deferred_deletes(pool.clone());
 
     // Subcommand dispatch — admin tooling that reuses the DB pool + storage without starting
     // the HTTP server. Mirrors the `os.Args[1]` switch in main.go (orphan-sweep). Runs to
     // completion and exits.
     if args.len() > 1 && args[1] == "storage-check" {
-        std::process::exit(storage_check::run(&storage).await);
+        std::process::exit(storage_check::run(&storage.immediate()).await);
     }
     if args.len() > 1 && args[1] == "orphan-sweep" {
         let code = run_orphan_sweep_cmd(&pool, &storage, &args[2..]).await;
@@ -434,21 +441,44 @@ async fn main() -> anyhow::Result<()> {
     ratelimit::reload(&pool).await?;
     ratelimit::spawn_reload(pool.clone());
 
+    // BACKGROUND_JOBS=false (a restore drill's first start): none of the
+    // periodic jobs below runs, so nothing deletes, purges or sends until an
+    // operator has checked the restored data and restarts with them on.
+    let background_jobs = config.background_jobs;
+    // OUTBOUND_DELIVERY=false (a restore drill, always): nothing is sent to
+    // another host under this server's identity (outbound.rs), and the
+    // workers that send do not start, so their queues stay as they are.
+    let outbound_delivery = config.outbound_delivery;
+    outbound::set_enabled(outbound_delivery);
+    if !outbound_delivery {
+        tracing::warn!(
+            "OUTBOUND_DELIVERY is off: no federation request, sent mail or push notification leaves this server"
+        );
+    }
+    if !background_jobs {
+        tracing::warn!(
+            "BACKGROUND_JOBS is off: no purges, sweeps, retention or outbox deliveries run"
+        );
+    }
     // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper /
     // trash retention).
     let chat_hub = chat_hub::ChatHub::default();
-    jobs::spawn_all(
-        pool.clone(),
-        storage.clone(),
-        config.trash_retention_days,
-        jobs::ChatMaintenancePolicy {
-            mailbox_retention_days: config.chat_mailbox_retention_days,
-            media_delivery_retention_days: config.chat_media_delivery_retention_days,
-            send_retention_days: config.chat_send_retention_days,
-            device_expiry_days: config.chat_device_expiry_days,
-        },
-        chat_hub.clone(),
-    );
+    if background_jobs {
+        jobs::spawn_all(
+            pool.clone(),
+            storage.clone(),
+            config.trash_retention_days,
+            jobs::ChatMaintenancePolicy {
+                mailbox_retention_days: config.chat_mailbox_retention_days,
+                media_delivery_retention_days: config.chat_media_delivery_retention_days,
+                send_retention_days: config.chat_send_retention_days,
+                device_expiry_days: config.chat_device_expiry_days,
+            },
+            chat_hub.clone(),
+        );
+        // Deleted blobs past their wait leave the store.
+        blob_purge::spawn(pool.clone(), storage.immediate());
+    }
 
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
@@ -475,8 +505,10 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
-    live_locations::spawn_sweeper(pool.clone());
-    chat_calls::call_link_waiting::spawn_sweeper(pool.clone());
+    if background_jobs {
+        live_locations::spawn_sweeper(pool.clone());
+        chat_calls::call_link_waiting::spawn_sweeper(pool.clone());
+    }
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     // Group send endorsement keys: made on first start, and every stored one
@@ -518,30 +550,41 @@ async fn main() -> anyhow::Result<()> {
         web_push,
         maps,
     };
-    if let Some(federation) = state.federation.as_ref() {
+    if let (true, Some(federation)) = (background_jobs, state.federation.as_ref()) {
         federation.spawn_maintenance();
         if let Some(sealed_sender) = state.sealed_sender.as_ref() {
             sealed_sender.spawn_maintenance(state.pool.clone(), Arc::clone(federation));
         }
     }
-    // Old addresses past their receiving, names past their hold.
-    account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
-    account_closing::spawn(state.clone());
-    federation_outbox::spawn_worker(state.clone());
-    drive_federation::spawn_digest_backfill(state.clone());
+    if background_jobs {
+        // Old addresses past their receiving, names past their hold.
+        account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
+        // Closing accounts past their wait (it deletes, so a restore drill's
+        // first start leaves it off like the other purges).
+        account_closing::spawn(state.clone());
+    }
+    if background_jobs && outbound_delivery {
+        federation_outbox::spawn_worker(state.clone());
+        drive_federation::spawn_digest_backfill(state.clone());
+    }
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     site_settings::seed_mail_outside_sending(&state.pool, state.config.mail_outside_sending)
         .await?;
     mail::spawn_receiver(state.clone()).await?;
-    // Auto-delete of old Trash and Spam, for accounts that turned it on.
-    mail::retention::spawn(state.clone());
-    mail::outbox::spawn(state.clone());
-    mail::snooze::spawn(state.clone());
-    mail::forwarding::spawn(state.clone());
     mail::domains::set_time_scale(state.config.mail_domains_time_scale);
-    mail::domains::sweep::spawn(state.clone());
-    mail::expiry::spawn(state.clone());
-    calendar_alarms::spawn(state.clone());
+    if background_jobs {
+        // Auto-delete of old Trash and Spam, for accounts that turned it on.
+        mail::retention::spawn(state.clone());
+        mail::snooze::spawn(state.clone());
+        mail::expiry::spawn(state.clone());
+        calendar_alarms::spawn(state.clone());
+    }
+    if background_jobs && outbound_delivery {
+        // Held and scheduled sends, forwarding, and the custom domains' DNS checks.
+        mail::outbox::spawn(state.clone());
+        mail::forwarding::spawn(state.clone());
+        mail::domains::sweep::spawn(state.clone());
+    }
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -756,6 +799,7 @@ fn build_router(state: AppState) -> Router {
         // docs/roadmap.md) — the machine-readable spec lives here meanwhile.
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/api/health", get(health))
+        .route("/api/health/ready", get(readiness::ready))
         .route(
             "/.well-known/kutup/federation.json",
             get(crate::federation::public_discovery)
