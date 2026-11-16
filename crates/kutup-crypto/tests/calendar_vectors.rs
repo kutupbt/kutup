@@ -1,8 +1,10 @@
-//! Checked-in vectors for calendars (docs/plans/calendar.md, E1): a fixed
-//! owner key, calendar key and passphrase, the sealed passphrase, metadata
-//! and an event that must open as written, and refused cases. OpenPGP
-//! output is random, so the vectors are fixed ciphertexts that must open
-//! (in Rust here and in the browser through `scripts/test-crypto-wasm.mjs`).
+//! Checked-in vectors for calendars (docs/plans/calendar.md, E1;
+//! docs/plans/wipe-unification.md, W4): a fixed owner (account, identity
+//! root and address key), calendar key and passphrase, the owner's share of
+//! the passphrase on its account key, metadata and an event that must open
+//! as written, and refused cases. OpenPGP and HPKE output is random, so the
+//! vectors are fixed ciphertexts that must open (in Rust here and in the
+//! browser through `scripts/test-crypto-wasm.mjs`).
 //! Regenerate only for a deliberate format change:
 //! `KUTUP_WRITE_CALENDAR_VECTORS=1 cargo test -p kutup-crypto --features calendar --test calendar_vectors -- --ignored`
 
@@ -10,15 +12,18 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
+use kutup_crypto::account_ref::AccountRef;
+use kutup_crypto::account_roots::IdentityRoot;
 use kutup_crypto::calendar::{
-    check_signed_parts, generate_calendar_key, inspect_calendar_public_key, open_passphrase,
-    seal_passphrase, unlock_calendar_key, EventPart, EventParts, Passphrase, SealedEvent,
-    SealedMetadata, SessionKey,
+    check_signed_parts, generate_calendar_key, inspect_calendar_public_key, open_own_passphrase,
+    seal_own_passphrase, unlock_calendar_key, CalendarShareEnvelopeV1, EventPart, EventParts,
+    Passphrase, SealedEvent, SealedMetadata, SessionKey, FIRST_KEY_GENERATION,
 };
 use kutup_crypto::calendar_event::{
     CalendarEncrypted, CalendarSigned, EventFieldsV1, EventTime, SharedEncrypted, SharedSigned,
     Status, Transp,
 };
+use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::mail_key::{generate_address_key, sign_detached};
 
 const PATH: &str = concat!(
@@ -29,17 +34,24 @@ const PATH: &str = concat!(
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Vectors {
-    /// The calendar the metadata names.
+    /// The calendar the metadata and the share name.
     calendar_id: String,
-    owner_secret_key: String,
+    /// The owner: `aci:<uuid>@<server>`, its identity root (base64) and the
+    /// public address key that signed the metadata and the event (the mail
+    /// vectors' key).
+    owner_account: String,
+    owner_identity_root: String,
     owner_public_key: String,
     passphrase: String,
     calendar_public_key: String,
     calendar_locked_secret_key: String,
     calendar_fingerprint: String,
-    passphrase_data_packet: String,
-    passphrase_signature: String,
-    passphrase_key_packet: String,
+    key_generation: u32,
+    /// The owner's own copy of the passphrase (`CalendarShareEnvelopeV1`,
+    /// base64).
+    passphrase_share: String,
+    /// Shares the owner must refuse.
+    refused_shares: Vec<RefusedShare>,
     metadata: Metadata,
     event: Event,
     /// The parts' texts, as the event must open.
@@ -83,12 +95,26 @@ struct Part {
     signature: String,
 }
 
+/// A share the owner must refuse, and why.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RefusedShare {
+    why: String,
+    share: String,
+}
+
 /// An event a server or client must refuse, and why.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Refused {
     why: String,
     event: Event,
+}
+
+const OWNER_ACCOUNT: &str = "aci:3b0f6a52-7c1e-4d8a-9f2b-5e6c7d8a9b0c@kutup.dev";
+
+fn owner_identity(root: &[u8]) -> AccountIdentityKeysV1 {
+    AccountIdentityKeysV1::derive(&IdentityRoot::from_bytes(root.try_into().unwrap())).unwrap()
 }
 
 fn b64(value: &str) -> Vec<u8> {
@@ -197,8 +223,44 @@ fn write_vectors() {
     let stranger = generate_address_key("eve@kutup.dev", 1_790_000_000).unwrap();
     let passphrase = Passphrase::generate();
     let calendar = generate_calendar_key(&passphrase, 1_790_000_000).unwrap();
-    let sealed = seal_passphrase(&passphrase, &owner_secret).unwrap();
     let calendar_id = "6f1d3c2a-8b4e-4f7a-9c1d-2e3f4a5b6c7d";
+    let owner_root = [0x5au8; 32];
+    let owner: AccountRef = OWNER_ACCOUNT.parse().unwrap();
+    let identity = owner_identity(&owner_root);
+    let seal = |id: &str, generation: u32, account: &AccountRef, keys: &AccountIdentityKeysV1| {
+        seal_own_passphrase(&passphrase, id, generation, account, keys)
+            .unwrap()
+            .encode_b64()
+            .unwrap()
+    };
+    let share = seal(calendar_id, FIRST_KEY_GENERATION, &owner, &identity);
+    let someone: AccountRef = "aci:3b0f6a52-7c1e-4d8a-9f2b-5e6c7d8a9b0d@kutup.dev"
+        .parse()
+        .unwrap();
+    let refused_shares = vec![
+        RefusedShare {
+            why: "another calendar's share".into(),
+            share: seal(
+                "7f1d3c2a-8b4e-4f7a-9c1d-2e3f4a5b6c7d",
+                FIRST_KEY_GENERATION,
+                &owner,
+                &identity,
+            ),
+        },
+        RefusedShare {
+            why: "another key generation's share".into(),
+            share: seal(calendar_id, FIRST_KEY_GENERATION + 1, &owner, &identity),
+        },
+        RefusedShare {
+            why: "another account's own share".into(),
+            share: seal(
+                calendar_id,
+                FIRST_KEY_GENERATION,
+                &someone,
+                &owner_identity(&[0xa5; 32]),
+            ),
+        },
+    ];
     let sealed_metadata = calendar
         .unlocked
         .seal_metadata(calendar_id, "Ev", "Family, İstanbul", &owner_secret)
@@ -249,15 +311,16 @@ fn write_vectors() {
     let text = |part: &EventPart| String::from_utf8(part.data.clone()).unwrap();
     let vectors = Vectors {
         calendar_id: calendar_id.into(),
-        owner_secret_key: STANDARD.encode(&owner_secret),
+        owner_account: OWNER_ACCOUNT.into(),
+        owner_identity_root: STANDARD.encode(owner_root),
         owner_public_key: STANDARD.encode(&owner_public),
         passphrase: passphrase.as_str().to_owned(),
         calendar_public_key: STANDARD.encode(&calendar.public_key),
         calendar_locked_secret_key: STANDARD.encode(&calendar.locked_secret_key),
         calendar_fingerprint: hex::encode(calendar.fingerprint),
-        passphrase_data_packet: STANDARD.encode(&sealed.data_packet),
-        passphrase_signature: sealed.signature,
-        passphrase_key_packet: STANDARD.encode(&sealed.key_packets[0]),
+        key_generation: FIRST_KEY_GENERATION,
+        passphrase_share: share,
+        refused_shares,
         metadata: Metadata {
             key_packet: STANDARD.encode(&sealed_metadata.key_packet),
             data_packet: STANDARD.encode(&sealed_metadata.data_packet),
@@ -298,7 +361,6 @@ fn vectors() -> Vectors {
 #[test]
 fn calendar_vectors_open() {
     let v = vectors();
-    let owner_secret = b64(&v.owner_secret_key);
     let owner_public = b64(&v.owner_public_key);
     let calendar_public = b64(&v.calendar_public_key);
     assert_eq!(
@@ -306,16 +368,24 @@ fn calendar_vectors_open() {
         v.calendar_fingerprint
     );
 
-    // The passphrase: opened by the member, signed by the owner.
-    let passphrase = open_passphrase(
-        &b64(&v.passphrase_key_packet),
-        &b64(&v.passphrase_data_packet),
-        v.passphrase_signature.as_bytes(),
-        &owner_secret,
-        &[&owner_public],
-    )
-    .unwrap();
+    // The passphrase: the owner's own share, opened with its identity.
+    let owner: AccountRef = v.owner_account.parse().unwrap();
+    let identity = owner_identity(&b64(&v.owner_identity_root));
+    let open = |share: &str| {
+        open_own_passphrase(
+            &CalendarShareEnvelopeV1::decode_b64(share)?,
+            &v.calendar_id,
+            v.key_generation,
+            &owner,
+            &identity,
+        )
+    };
+    let passphrase = open(&v.passphrase_share).unwrap();
     assert_eq!(passphrase.as_str(), v.passphrase);
+    assert!(!v.refused_shares.is_empty());
+    for case in &v.refused_shares {
+        assert!(open(&case.share).is_err(), "{} was accepted", case.why);
+    }
     let unlocked = unlock_calendar_key(&b64(&v.calendar_locked_secret_key), &passphrase).unwrap();
     assert_eq!(hex::encode(unlocked.fingerprint()), v.calendar_fingerprint);
 

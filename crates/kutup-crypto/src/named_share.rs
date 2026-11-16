@@ -14,6 +14,13 @@ const HPKE_INFO: &[u8] = crate::labels::DRIVE_NAMED_SHARE_HPKE_V1;
 /// file's current key, bound to the file and its key generation.
 const FILE_MAGIC: &[u8; 8] = b"KUTPFS1\0";
 const FILE_HPKE_INFO: &[u8] = crate::labels::DRIVE_FILE_SHARE_HPKE_V1;
+/// A calendar's passphrase to one member (docs/plans/wipe-unification.md
+/// W4): bound to the calendar and its key generation. The owner's own copy
+/// is a share to itself.
+#[cfg(feature = "calendar")]
+const CALENDAR_MAGIC: &[u8; 8] = b"KUTPCS1\0";
+#[cfg(feature = "calendar")]
+const CALENDAR_HPKE_INFO: &[u8] = crate::labels::CALENDAR_SHARE_HPKE_V1;
 /// The AAD before the two people, plus their two server-length prefixes.
 const FIXED_AAD_LEN: usize = 8 + 2 + 2 + 16 + 4 + 32 + 32 + 2 + 2;
 const ENCAPSULATED_KEY_LEN: usize = crate::hpke_xwing::ENCAPSULATED_KEY_LEN;
@@ -53,9 +60,12 @@ impl TryFrom<u16> for NamedShareSuiteId {
 /// generation), both incarnations, both people as (server, account id)
 /// (docs/plans/account-ids.md: never their names), the HPKE-sealed 32-byte
 /// key and the sender's signature. Each object kind has its own magic and HPKE
-/// info, so an envelope for one can never open as the other.
+/// info, so an envelope for one can never open as the other. `$self_shares`
+/// says whether a person may share with themselves (same account and
+/// incarnation): a calendar's owner holds its own copy that way, a Drive
+/// owner never does.
 macro_rules! share_envelope {
-    ($name:ident, $id:ident, $number:ident, $magic:expr, $info:expr, $label:literal, $what:literal, $what_space:literal) => {
+    ($name:ident, $id:ident, $number:ident, $magic:expr, $info:expr, $label:literal, $what:literal, $what_space:literal, $self_shares:literal) => {
         #[derive(Clone, Debug, PartialEq, Eq)]
         pub struct $name {
             pub suite: NamedShareSuiteId,
@@ -71,6 +81,9 @@ macro_rules! share_envelope {
         }
 
         impl $name {
+            /// Whether sender and recipient may be one person.
+            const SELF_SHARES: bool = $self_shares;
+
             #[allow(clippy::too_many_arguments)]
             pub fn seal(
                 object_key: &[u8],
@@ -109,7 +122,8 @@ macro_rules! share_envelope {
                     ciphertext: [0u8; COLLECTION_KEY_CIPHERTEXT_LEN],
                     signature: [0u8; SIGNATURE_LEN],
                 };
-                if envelope.sender == envelope.recipient
+                if !Self::SELF_SHARES
+                    && envelope.sender == envelope.recipient
                     && envelope.sender_incarnation_id == envelope.recipient_incarnation_id
                 {
                     return Err(CryptoError::InvalidInput(
@@ -205,7 +219,10 @@ macro_rules! share_envelope {
                 let mut cursor = 96usize;
                 let sender = read_person(bytes, &mut cursor)?;
                 let recipient = read_person(bytes, &mut cursor)?;
-                if sender == recipient && sender_incarnation_id == recipient_incarnation_id {
+                if !Self::SELF_SHARES
+                    && sender == recipient
+                    && sender_incarnation_id == recipient_incarnation_id
+                {
                     return Err(CryptoError::InvalidInput(
                         concat!($what_space, " sender and recipient must differ").into(),
                     ));
@@ -352,7 +369,8 @@ share_envelope!(
     HPKE_INFO,
     "collection",
     "named-share",
-    "named share"
+    "named share",
+    false
 );
 
 share_envelope!(
@@ -363,7 +381,21 @@ share_envelope!(
     FILE_HPKE_INFO,
     "file",
     "file-share",
-    "file share"
+    "file share",
+    false
+);
+
+#[cfg(feature = "calendar")]
+share_envelope!(
+    CalendarShareEnvelopeV1,
+    calendar_id,
+    key_generation,
+    CALENDAR_MAGIC,
+    CALENDAR_HPKE_INFO,
+    "calendar",
+    "calendar-share",
+    "calendar share",
+    true
 );
 
 pub(crate) fn canonical_account(value: &str) -> Result<String> {
