@@ -125,7 +125,9 @@ Moves onto `account_records`:
   holds the colour, the display flag and the default reminders, under the
   format-evolution rule, and replaces the plaintext `revision` and those
   columns of `calendar_members`. The member row keeps what the server needs:
-  permissions and the passphrase key packet.
+  permissions and, after W4, the member's `passphrase_share`. The record id is
+  `hashed_object` of the calendar id, so the server can't tie a settings
+  record to its calendar.
 
 Stays:
 - **Contacts:** the server pages, sorts, counts, autocompletes and charges
