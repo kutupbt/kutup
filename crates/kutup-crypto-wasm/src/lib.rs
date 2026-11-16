@@ -1318,7 +1318,7 @@ pub fn open_collab_frame(
     .map_err(|error| js_error(&format!("encode collaboration frame: {error}")))
 }
 
-fn account_keys(
+pub(crate) fn account_keys(
     identity_root_base64: &str,
 ) -> Result<kutup_crypto::identity::AccountIdentityKeysV1, JsValue> {
     let identity_root: [u8; 32] = decode_canonical_base64(identity_root_base64, "identity root")?

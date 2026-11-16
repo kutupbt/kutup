@@ -93,11 +93,12 @@ with less trust in the server (marked **D-n** for the user's decision).
 
 **1. Keys.** As Proton: a calendar key per calendar (rPGP in `kutup-crypto`,
 as Mail's address keys; post-quantum once Mail's keys are,
-[`mail-pq-openpgp.md`](mail-pq-openpgp.md)), a random passphrase, one data
-packet and a key packet per member wrapped to their address key, signed. Reset
-and reactivation as Proton's. On a member's removal the passphrase and key are
-rotated (Proton shows none; Kutup does it, so a removed member can't read new
-events with a key it kept).
+[`mail-pq-openpgp.md`](mail-pq-openpgp.md)) and a random passphrase. Unlike
+Proton, the passphrase is shared with each member on their **account key**,
+not their address key (wipe-unification.md W4, built 2026-11-16; see "W4"
+below). Reset and reactivation as Proton's. On a member's removal the
+passphrase and key are rotated (Proton shows none; Kutup does it, so a
+removed member can't read new events with a key it kept).
 
 **2. Events.** Proton's split exactly: what is readable is what the server
 needs for reminders, busy/free, the time-window queries and invitations. The
@@ -220,11 +221,9 @@ except where marked.
   Curve25519 ECDH subkey, AES-256), its secret armored and **locked with a
   passphrase** (iterated S2K, AES-256; Mail's export path). Post-quantum when
   Mail's address keys move (`mail-pq-openpgp.md`), as Proton.
-- *Passphrase:* 32 random bytes. Stored as Proton's `CalendarPassphrase`: one
-  data packet (SEIPD under a session key) and one key packet per member
-  (PKESK to that member's primary address key), plus the owner's detached
-  signature over the passphrase. A member verifies the signature against the
-  owner's address keys (`mail-core` key lists) before using it.
+- *Passphrase:* 32 random bytes. Built first as Proton's `CalendarPassphrase`
+  (a data packet, a key packet per member's address key, the owner's
+  signature); since W4 a share per member on their account key (below).
 - *Calendar metadata (D-1):* name and description, as one JSON object, signed
   and encrypted to the calendar key (`encrypt_split` with the calendar key as
   recipient: key packet and data packet stored apart). Colour is the
@@ -252,8 +251,8 @@ except where marked.
   beside `encrypt_split`.
 - *WASM and JS:* `frontend/packages/crypto/src/calendar.ts`, the calendar
   secret held inside WASM as Mail's address keys are: the browser passes the
-  locked key and the passphrase (opened with the member's address key) on
-  each call.
+  locked key and the member's share of the passphrase (opened with the keys
+  its identity root derives) when it unlocks a calendar.
 - *Vectors:* `calendar-key-v1.json`, `calendar-event-v1.json` (fixed keys
   and ciphertexts that must open; refused cases: a part with a property of
   another part, a bad signature, a wrong key packet), run in Rust and WASM.
@@ -261,11 +260,11 @@ except where marked.
 **Server.**
 - Tables (one migration, above master and open PRs when built):
   - `calendars`: id, owner, key (armored public key; the locked secret),
-    passphrase data packet and owner's signature, metadata key packet and
-    data packet, created/updated;
-  - `calendar_members`: calendar, user, address id the key packet is to,
-    permissions (Proton's bit flags; E1 writes the owner only), passphrase key
-    packet, colour, display flag;
+    its key generation (W4), metadata key packet and data packet,
+    created/updated;
+  - `calendar_members`: calendar, user, permissions (Proton's bit flags; E1
+    writes the owner only), the member's passphrase share (W4), colour,
+    display flag;
   - `calendar_events`: id, calendar, uid, author address, the parts (type,
     data, signature) and the two key packets, and the readable columns the
     server derives: `start_utc`, `end_utc`, `start_tz`, `end_tz`, `full_day`,
@@ -376,6 +375,43 @@ data exists.**
 - L4: deleting a calendar removes the members' rows without their account
   heads naming the change. E1 has owners only; E3 (sharing) makes the delete
   tell each member's client, which then drops the calendar from its head.
+
+## W4: the passphrase on account keys (2026-11-16)
+
+Built on `wipe/calendar-keys`, option (a) of
+[`wipe-unification.md`](wipe-unification.md) W4. Proton wraps a calendar's
+passphrase to address keys because, in Proton, the address key is the only
+account key a peer sees. Kutup's peers verify an account-level key (the
+X-Wing Drive HPKE key the identity root derives, under the authority in the
+manifest), so the passphrase goes there:
+
+- **Format.** `CalendarShareEnvelopeV1` (`KUTPCS1`, HPKE info
+  `kutup/calendar/share-hpke/v1`): the named-share layout of
+  `named_share.rs` (Drive's folder and file shares). The 32 passphrase bytes
+  are sealed with X-Wing HPKE to the member's account key and signed by the
+  owner's account signing key (Ed25519). The calendar id, its **key
+  generation** (`calendars.key_generation`, 1 for a new calendar; a new key
+  in E3 takes the next) and both accounts are bound, each as (server, account
+  id) and incarnation, never an address.
+- **The owner's own copy** is a share to itself, sealed to and checked
+  against the keys its identity derives, never a key the server hands over.
+  Unlike Drive shares, the calendar envelope allows sender and recipient to
+  be one person.
+- **The server** takes only the owner's own share at create: it must name
+  the calendar, generation 1 and the caller's current account and
+  incarnation, and verify under the caller's account signing key.
+  `calendar_members` no longer names an address, so a removed or renamed
+  address orphans no one.
+- **Unchanged:** the calendar key and its OpenPGP packets; events and the
+  sealed name stay signed by the author's address key, as Proton's (their
+  signatures remain address-bound and not post-quantum until Mail's keys
+  move).
+- **Migration** `20261111170000_calendar_account_keys`: the calendars made
+  before go (their passphrases can't be converted on the server), their
+  storage refunded. kutup.dev is wiped with this release.
+- **E3** shares with other members through the same envelope
+  (`calendar::seal_passphrase`), checking the owner's signing key and the
+  member's HPKE key against their verified manifests.
 
 ## E2: build note (second session, 2026-10-21)
 

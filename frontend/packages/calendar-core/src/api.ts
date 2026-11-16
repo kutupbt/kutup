@@ -1,7 +1,8 @@
 // Calendars and events (docs/plans/calendar.md, E1) as the Calendar app
-// reads and writes them. Every calendar opens from the member's copy of its
-// passphrase (the owner's signature checked), and its name, description and
-// events through its key, which stays in WASM. The calendars the account
+// reads and writes them. Every calendar opens from the member's share of its
+// passphrase on the account's own keys (the owner's account signature
+// checked; docs/plans/wipe-unification.md, W4), and its name, description
+// and events through its key, which stays in WASM. The calendars the account
 // holds are the account head's `calendars` scope: the list read is checked
 // against the verified head, and every change of one carries the next head.
 
@@ -16,15 +17,15 @@ import {
   type CalendarTime,
   type EventFields,
   type SealedEvent,
+  type CalendarAccount,
   type SealedMetadata,
-  type SealedPassphrase,
   type UnlockedCalendar,
 } from '@kutup/crypto/calendar'
-import type { SealedMailKey } from '@kutup/crypto/mailKey'
 import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
 import { useMailAccount, type MailAccount } from '@kutup/mail-core/api'
 import { accountHead, HeadBlockedError, NotInVerifiedIndexError, type ListedEdit, type VerifiedIndex } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
+import { ownAccount } from '@kutup/session/devices'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 
 /** The account head's scope of the calendars the account holds. */
@@ -66,12 +67,15 @@ export interface DefaultReminders {
 /** A calendar as the server lists it for its member. */
 export interface CalendarRow {
   id: string
-  ownerAddress: string
+  /** The owner's account id (on this server): who shared the passphrase. */
+  ownerId: string
   publicKey: string
   fingerprint: string
   lockedSecretKey: string
-  passphrase: SealedPassphrase
-  addressId: string
+  /** The calendar key's generation, which the share names. */
+  keyGeneration: number
+  /** This member's share of the passphrase, on its account key. */
+  passphraseShare: string
   metadata: SealedMetadata
   permissions: number
   color: string
@@ -140,37 +144,32 @@ export const calendarsKey = ['calendar', 'calendars'] as const
 /** Calendars unlocked in this tab, by id and key: WASM objects, kept, never cloned. */
 const unlocked = new Map<string, Promise<UnlockedCalendar>>()
 
-/** The keys a member's own copy of a passphrase may be to: the address's primary first. */
-function ownKeys(account: MailAccount): SealedMailKey[] {
-  return [account.key, ...account.olderKeys]
+/** The signed-in account as its calendars' shares name it. */
+async function calendarAccount(session: Session): Promise<CalendarAccount> {
+  return { identityRoot: session.roots.identityRoot, account: await ownAccount(session) }
 }
 
-async function unlock(account: MailAccount, row: CalendarRow): Promise<UnlockedCalendar> {
-  const cacheKey = `${row.id}/${row.fingerprint}/${row.passphrase.keyPacket}`
+async function unlock(session: Session, row: CalendarRow): Promise<UnlockedCalendar> {
+  const cacheKey = `${row.id}/${row.fingerprint}/${row.keyGeneration}/${row.passphraseShare}`
   let found = unlocked.get(cacheKey)
   if (!found) {
     found = (async () => {
-      if (!account.isOwnAddress(row.ownerAddress)) {
+      if (row.ownerId !== session.userId) {
         // Shared calendars come in E3, with their owners' verified keys.
         throw new Error('a calendar of another account')
       }
-      let last: unknown = null
-      for (const key of ownKeys(account)) {
-        let opened: UnlockedCalendar
-        try {
-          opened = await unlockCalendar(key, row.passphrase, account.ownPublicKeys, row.lockedSecretKey)
-        } catch (error) {
-          last = error
-          continue
-        }
-        // The key unlocked is the one listed, or the listing is not the calendar's.
-        if (opened.fingerprint !== row.fingerprint.toLowerCase()) {
-          opened.free()
-          throw new Error('the calendar key is not the one listed')
-        }
-        return opened
+      const opened = await unlockCalendar(await calendarAccount(session), {
+        calendarId: row.id,
+        keyGeneration: row.keyGeneration,
+        passphraseShare: row.passphraseShare,
+        lockedSecretKey: row.lockedSecretKey,
+      })
+      // The key unlocked is the one listed, or the listing is not the calendar's.
+      if (opened.fingerprint !== row.fingerprint.toLowerCase()) {
+        opened.free()
+        throw new Error('the calendar key is not the one listed')
       }
-      throw last instanceof Error ? last : new Error('no key opens this calendar')
+      return opened
     })()
     found.catch(() => unlocked.delete(cacheKey))
     unlocked.set(cacheKey, found)
@@ -213,7 +212,7 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
       const calendars: Calendar[] = []
       for (const row of data.calendars) {
         try {
-          const key = await unlock(account, row)
+          const key = await unlock(session, row)
           // The id the metadata must name is the one the verified head lists
           // (`expectListing` and `expect` above refuse any other listing).
           const metadata = key.openMetadata(row.metadata, row.id, account.ownPublicKeys)
@@ -245,7 +244,7 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
   }
 }
 
-/** The account's mail address and its row id: what a calendar's passphrase and events are bound to. */
+/** The account's mail address and its row id: the address whose key signs its events. */
 export async function activeAddressId(account: MailAccount): Promise<string> {
   const { data } = await api.get<{ id: string; address: string; state: string }[]>('/mail/addresses')
   const row = data.find((address) => address.state === 'active' && account.isOwnAddress(address.address))
@@ -259,10 +258,9 @@ export const CALENDAR_COLORS = ['#8080ff', '#db60d6', '#415df0', '#179fd9', '#1d
 /** Makes a calendar under a fresh id; the head that lists it is made before the create. */
 export async function createCalendar(session: Session, account: MailAccount, name: string, color: string): Promise<string> {
   const id = crypto.randomUUID()
-  const addressId = await activeAddressId(account)
-  const made = await makeCalendar(account.key, id, { name, description: '' })
+  const made = await makeCalendar(await calendarAccount(session), account.key, id, { name, description: '' })
   // The fingerprint is the server's to read from the key, not to be told.
-  const body = { publicKey: made.publicKey, lockedSecretKey: made.lockedSecretKey, passphrase: made.passphrase, metadata: made.metadata }
+  const body = { publicKey: made.publicKey, lockedSecretKey: made.lockedSecretKey, passphraseShare: made.passphraseShare, metadata: made.metadata }
   await listed(session, (index) =>
     Promise.resolve(
       index.revision(id) !== undefined
@@ -270,7 +268,7 @@ export async function createCalendar(session: Session, account: MailAccount, nam
         : {
             changes: [[id, 1]] as const,
             send: async (head: string) => {
-              await api.post('/calendar/calendars', { id, addressId, ...body, color, head })
+              await api.post('/calendar/calendars', { id, ...body, color, head })
             },
           },
     ),

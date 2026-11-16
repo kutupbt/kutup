@@ -912,10 +912,11 @@ at the server and add it to the certificate; with `docker-compose.acme.yml`
 the name is requested automatically.
 
 The Calendar app (`KUTUP_CALENDAR_URL`, e.g. `calendar.example.org`, the
-same frontend image) keeps each calendar as Proton Calendar does: its own
-OpenPGP key, the passphrase sealed to each member's mail address key, and
-events encrypted but for their times (`docs/plans/calendar.md`). It needs a
-Mail address key, which the account makes at its first sign-in. Calendars
+same frontend image) keeps each calendar much as Proton Calendar does: its
+own OpenPGP key, the passphrase shared with each member on their account key
+(post-quantum, and kept through renames), and events encrypted but for their
+times (`docs/plans/calendar.md`). It needs a Mail address key, which signs
+the events and which the account makes at its first sign-in. Calendars
 and events count against the owner's storage quota; the calendars per
 account, events per calendar and the changes one sync carries are
 administrators' settings (Server settings). An existing deployment that names
