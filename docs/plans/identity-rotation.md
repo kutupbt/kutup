@@ -196,6 +196,11 @@ resets, rotations and servers.
    profile vectors regenerate (second session, W5).
 3. Drive: collection keys and link owner copies under the Drive root; the
    signer kind 2; group id digest (main session, in the block slices).
+   *Built (local, 2026-11-16):* owner copies (purposes 1 and 9) and the
+   top-level name hash key under the Drive root, with
+   `collections.name_hash_generation` (branch `wipe/drive-root`); signer
+   kind 2 in the block slices; the group id digest without the server name
+   in the AccountRef split (`wipe/account-ref-split`).
 4. The rotation exercise: MK rotation end to end in Rust with vectors and one
    live test, no UI. Identity rotation as a written walk-through against the
    checklist, built after the wipe.
