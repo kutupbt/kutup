@@ -190,6 +190,15 @@ Opaque relays may preserve bytes they are explicitly designed not to
 interpret, but must not advertise, validate, transform, or claim support for an
 unknown suite.
 
+A suite or purpose code a reader doesn't know is reported as
+`CryptoError::NewerThanMe` ("newer format: …"), distinct from a corrupt
+object: the client keeps the bytes and asks for an update, and never runs a
+repair or history-loss path for it. Code point 0 stays corrupt. Adding a
+field or enum value without a new suite follows
+[`plans/format-evolution.md`](plans/format-evolution.md): a `v` and a minimum
+reader version (`min`) per JSON plaintext, unknown fields kept, and each enum
+classed *skip* or *refuse* in `kutup_crypto::format::OPEN_ENUMS`.
+
 ## Migration protocol
 
 A suite change is an explicit authenticated protocol operation, not an error
