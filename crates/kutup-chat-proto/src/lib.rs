@@ -85,9 +85,10 @@ pub use extras::{
     LinkPreviewImageV1, LinkPreviewV1, MentionV1, StickerMarkV1, VisibleMessageExtrasV1,
 };
 pub use federation::{
-    FederatedChatTransaction, FederatedWithdrawnV1, FederationDeliveryError,
-    FederationDeliveryRejection, FederationDeliveryResponse, FederationWithdrawnResponseV1,
-    WithdrawnStreamV1, FEDERATED_CHAT_FEATURE, FEDERATION_WITHDRAWN_VERSION,
+    FederatedChatTransaction, FederatedStreamControlV1, FederationDeliveryError,
+    FederationDeliveryRejection, FederationDeliveryResponse, FederationStreamControlResponseV1,
+    FederationStreamV1, StreamControlRange, FEDERATED_CHAT_FEATURE,
+    FEDERATION_STREAM_CONTROL_VERSION, STREAM_CONTROL_MUST_UNDERSTAND, STREAM_CONTROL_WITHDRAWN,
 };
 #[cfg(feature = "openapi")]
 pub use identity::AccountRefSchema;

@@ -364,7 +364,7 @@ pub enum FederatedSendOutcome {
     /// (`chat.v2`): it goes once that server upgrades.
     PeerUnsupported,
     /// Never sent: its account's federation went off after it was queued;
-    /// its sequence was withdrawn (crate::federation_withdrawn).
+    /// its sequence was withdrawn (crate::federation_stream_control).
     Withdrawn,
 }
 
@@ -1596,14 +1596,14 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
     // Only the destination's head goes: the sends behind it keep their order.
     if plain_head(&state.pool, &row.destination).await? != Some(row.sequence) {
         // A head that is an off account's send is withdrawn now, whatever
-        // its wait: it must not hold the others up (crate::federation_withdrawn).
+        // its wait: it must not hold the others up (crate::federation_stream_control).
         withdraw_off_head(state, &row.destination).await?;
         if plain_head(&state.pool, &row.destination).await? != Some(row.sequence) {
             return Ok(FederatedSendOutcome::Pending);
         }
     }
     // Its account's federation went off since it was queued: it never leaves;
-    // its sequence is withdrawn instead (crate::federation_withdrawn).
+    // its sequence is withdrawn instead (crate::federation_stream_control).
     if sender_is_off(&state.pool, row.sender).await? {
         return withdraw_plain(state, &row).await;
     }
@@ -1847,10 +1847,10 @@ async fn withdraw_plain(
     state: &AppState,
     row: &FederationOutboxRow,
 ) -> AppResult<FederatedSendOutcome> {
-    use crate::federation_withdrawn::{withdraw, Withdrawal};
+    use crate::federation_stream_control::{withdraw, Withdrawal};
     match withdraw(
         state,
-        kutup_chat_proto::WithdrawnStreamV1::Chat,
+        kutup_chat_proto::FederationStreamV1::Chat,
         &row.destination,
         row.sequence,
         row.id,

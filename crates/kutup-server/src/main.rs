@@ -42,8 +42,8 @@ mod drive_writes;
 mod error;
 mod federation;
 mod federation_outbox;
+mod federation_stream_control;
 mod federation_switch;
-mod federation_withdrawn;
 mod file_content;
 mod grants;
 mod handlers;
@@ -2043,8 +2043,8 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            federation_withdrawn::PATH,
-            post(federation_withdrawn::receive)
+            federation_stream_control::PATH,
+            post(federation_stream_control::receive)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )

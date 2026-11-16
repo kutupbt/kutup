@@ -416,10 +416,17 @@ keeps them; reports on them are operator tooling.
   in the admin log. Queued plain chat sends and media offers of an off
   account never leave: each holds a transport sequence the peer must see,
   so the origin sends a signed withdrawal in its place
-  (`FederatedWithdrawnV1`, `POST /api/fed/chat/withdrawn`: no sender,
-  recipient or payload); the peer uses the sequence up and answers a repeat
-  the same, and the stream goes on with no gap. Required of every server
-  (no fallback: all are deployed together before v1).
+  (a `FederatedStreamControlV1` with the withdrawn code,
+  `POST /api/fed/chat/stream-control`: no sender, recipient or payload); the
+  peer uses the sequence up and answers a repeat the same, and the stream
+  goes on with no gap. Required of every server (no fallback: all are
+  deployed together before v1).
+- The privacy boundary of a withdrawal: a peer that already has a sequence
+  of the stream (a send or offer was queued for it) learns that an account
+  withdrew a slot: one queued for it never comes, and by timing it may tell
+  whose. That can't be avoided, as the sequence must be used up. It learns
+  no more (the withdrawal names no sender, recipient or payload), and a new
+  lookup of an off account stays indistinguishable from an unknown account.
 - The one exception: sealed-sender sends queued before the switch may still
   leave. They name no one to this server (the sender is sealed), so it
   can't tell they are the account's; the client's own check

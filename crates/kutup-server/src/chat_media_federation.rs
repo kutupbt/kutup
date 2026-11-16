@@ -195,7 +195,7 @@ enum MediaAnswer {
     /// The destination refused the offer for good.
     Refused { status: u16, message: String },
     /// Never sent: the sender's federation went off after it was queued; its
-    /// sequence was withdrawn (crate::federation_withdrawn).
+    /// sequence was withdrawn (crate::federation_stream_control).
     Withdrawn,
 }
 
@@ -478,13 +478,13 @@ async fn attempt_media(
     let operation_id = canonical_uuid(&transaction.offer.operation_id)
         .ok_or_else(|| AppError::internal("stored Chat-media operation is malformed"))?;
     // Its sender's federation went off since it was queued: the offer never
-    // leaves; its sequence is withdrawn instead (crate::federation_withdrawn).
+    // leaves; its sequence is withdrawn instead (crate::federation_stream_control).
     if let Some(sender) = row.sender_user_id {
         if crate::chat_federation::sender_is_off(&state.pool, sender).await? {
-            use crate::federation_withdrawn::{withdraw, Withdrawal};
+            use crate::federation_stream_control::{withdraw, Withdrawal};
             match withdraw(
                 state,
-                kutup_chat_proto::WithdrawnStreamV1::Media,
+                kutup_chat_proto::FederationStreamV1::Media,
                 &row.destination,
                 row.sequence,
                 row.id,

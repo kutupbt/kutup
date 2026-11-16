@@ -138,7 +138,7 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test consents_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server -- legal::tests::live_ federation_switch::tests::live_ \
-    mail::sealed::tests::live_ --nocapture
+    mail::sealed::tests::live_ federation_stream_control::tests::live_ --nocapture
 # The Photos library record (docs/plans/photos.md): this account's chain only.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test photos_library_live -- --nocapture
