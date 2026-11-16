@@ -357,7 +357,12 @@ impl Scope {
         Scope::Calendars,
     ];
 
-    fn name(self) -> &'static str {
+    /// The account-records scope this head scope is, if it is one.
+    pub fn records(self) -> Option<kutup_crypto::account_records::RecordScope> {
+        kutup_crypto::account_records::RecordScope::by_name(self.name())
+    }
+
+    pub fn name(self) -> &'static str {
         match self {
             Scope::Contacts => "contacts",
             Scope::MailNames => "mailNames",
@@ -441,8 +446,34 @@ async fn values(
             .await?
         }
     };
+    // The account-records store (docs/plans/account-records.md): a scope
+    // reads both stores until its clients move, and then only this one.
+    if let Some(records) = scope.records() {
+        let stored: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT record_id, revision FROM account_records WHERE user_id = $1 AND scope = $2",
+        )
+        .bind(user_id)
+        .bind(records.info().number)
+        .fetch_all(&mut *conn)
+        .await?;
+        values.extend(stored);
+    }
     values.sort();
     Ok(values)
+}
+
+/// The newest head and, before the account's first head, the basis to start
+/// the chain on, as one snapshot reads them (the caller's transaction).
+pub(crate) async fn head_and_basis(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+) -> AppResult<(Option<Vec<u8>>, Option<String>)> {
+    let head = latest(&mut **tx, user_id).await?.map(|(_, sealed)| sealed);
+    let basis = match head {
+        Some(_) => None,
+        None => Some(basis(&mut *tx, user_id).await?),
+    };
+    Ok((head, basis))
 }
 
 /// What an account holds before its first head, as the server sees it: the
@@ -472,12 +503,8 @@ pub async fn index(
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *tx)
         .await?;
-    let head = latest(&mut *tx, user_id).await?.map(|(_, sealed)| sealed);
     let values = values(&mut tx, user_id, scope).await?;
-    let basis = match head {
-        Some(_) => None,
-        None => Some(basis(&mut tx, user_id).await?),
-    };
+    let (head, basis) = head_and_basis(&mut tx, user_id).await?;
     tx.commit().await?;
     Ok((head, values, basis))
 }

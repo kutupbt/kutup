@@ -577,6 +577,7 @@ async fn main() -> anyhow::Result<()> {
     if background_jobs {
         // Auto-delete of old Trash and Spam, for accounts that turned it on.
         mail::retention::spawn(state.clone());
+        handlers::account_records::spawn(state.clone());
         mail::snooze::spawn(state.clone());
         mail::expiry::spawn(state.clone());
         calendar_alarms::spawn(state.clone());
@@ -979,6 +980,21 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/account/index/:scope",
             get(handlers::account_heads::index),
+        )
+        // The account-records store (docs/plans/account-records.md).
+        .route(
+            "/api/account/records",
+            post(handlers::account_records::batch).route_layer(DefaultBodyLimit::max(
+                handlers::account_records::MAX_BATCH_BODY_BYTES,
+            )),
+        )
+        .route(
+            "/api/account/records/:scope",
+            get(handlers::account_records::feed),
+        )
+        .route(
+            "/api/account/records/:scope/:id",
+            get(handlers::account_records::get_one),
         )
         .route(
             "/api/user/security-events",

@@ -3040,7 +3040,8 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
 /// The account head chain starts again with the new incarnation, and no
 /// listed value sealed under the old keys stays to be listed in it
 /// (docs/plans/rollback-protection.md, "Account reset"): contacts, the
-/// group list, the Chat contact list, calendars, labels, filters and Pass secrets go; custom folders keep
+/// group list, the Chat contact list, calendars, labels, filters, Pass secrets
+/// and every account record go; custom folders keep
 /// their mail and lose their names, until their owner names them again;
 /// custom-domain addresses close until rekeyed. The
 /// identity pins were sealed under the old master key too: nothing can open
@@ -3096,6 +3097,8 @@ async fn clear_account_values(
             .execute(&mut **tx)
             .await?;
     }
+    // The account-records store: every record was sealed under the old keys.
+    crate::handlers::account_records::clear(tx, target).await?;
     Ok(())
 }
 

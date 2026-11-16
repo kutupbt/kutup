@@ -228,6 +228,12 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test account_heads_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server account_heads::tests::live_ -- --nocapture
+# The account-records store (docs/plans/account-records.md): batches under
+# the head, compare-and-swap, the counter feed, forgotten tombstones' floor.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  cargo test -p kutup-server --test account_records_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server account_records::tests::live_ -- --nocapture
 
 # Username renames (docs/plans/username-renames.md): folded names, the held
 # name's fake answer and shared lockout, 409 renamed, holds and freeing.

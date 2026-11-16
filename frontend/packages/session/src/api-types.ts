@@ -1,31 +1,31 @@
 // TypeScript interfaces matching backend handlers/models.go
 
 export interface CollectionRow {
-  id: string
-  ownerUserId: string
-  nameEnvelope: string
-  ownerKeyEnvelope?: string
-  namedShareEnvelope?: string
-  keyEpoch: number
-  nameRevision: number
-  epochStatement: string
-  epochStatementHash: string
+  id: string;
+  ownerUserId: string;
+  nameEnvelope: string;
+  ownerKeyEnvelope?: string;
+  namedShareEnvelope?: string;
+  keyEpoch: number;
+  nameRevision: number;
+  epochStatement: string;
+  epochStatementHash: string;
   /** A shared folder's owner's server; with `ownerUserId`, the owner. */
-  ownerServer?: string
+  ownerServer?: string;
   /** Shown only: the owner's address now. */
-  ownerAccount?: string
-  ownerIncarnationId?: string
-  ownerDriveSigningPublicKey?: string
-  ownerAuthorityPublicKey?: string
-  parentCollectionId: string | null
-  color: string | null
-  canUpload: boolean
-  canDelete: boolean
-  uploadQuotaBytes: number | null
-  uploadUsedBytes: number
-  isShared: boolean
+  ownerAccount?: string;
+  ownerIncarnationId?: string;
+  ownerDriveSigningPublicKey?: string;
+  ownerAuthorityPublicKey?: string;
+  parentCollectionId: string | null;
+  color: string | null;
+  canUpload: boolean;
+  canDelete: boolean;
+  uploadQuotaBytes: number | null;
+  uploadUsedBytes: number;
+  isShared: boolean;
   /** Its name's hash in its place (docs/plans/drive-unique-names.md); absent until filled in. */
-  nameHash?: string
+  nameHash?: string;
 }
 
 /**
@@ -33,450 +33,472 @@ export interface CollectionRow {
  * of `generation − 1`, sealed under the key of `generation`.
  */
 export interface FileKeyHistoryEntry {
-  generation: number
-  previousKeyEnvelope: string
+  generation: number;
+  previousKeyEnvelope: string;
 }
 
 export interface FileRow {
-  id: string
-  collectionId: string
-  uploaderUserId: string
-  metadataEnvelope: string
-  fileKeyEnvelope: string
+  id: string;
+  collectionId: string;
+  uploaderUserId: string;
+  metadataEnvelope: string;
+  fileKeyEnvelope: string;
   /** The folder epoch the file key is wrapped at. */
-  keyEpoch: number
+  keyEpoch: number;
   /** The generation of the file's current key. */
-  keyGeneration: number
-  metadataRevision: number
-  encryptedSizeBytes: number
-  createdAt: string
-  updatedAt: string
+  keyGeneration: number;
+  metadataRevision: number;
+  encryptedSizeBytes: number;
+  createdAt: string;
+  updatedAt: string;
   /** When each thumbnail variant was stored (docs/plans/drive-thumbnails.md), and the key generation it was sealed under. */
-  thumbnails?: { sm?: string; lg?: string; smKeyGeneration?: number; lgKeyGeneration?: number }
+  thumbnails?: {
+    sm?: string;
+    lg?: string;
+    smKeyGeneration?: number;
+    lgKeyGeneration?: number;
+  };
   /** A thumbnail exists but was drawn from other than the latest version. */
-  thumbnailStale?: boolean
+  thumbnailStale?: boolean;
   /** The key generation the upload was sealed under. */
-  originalKeyGeneration: number
+  originalKeyGeneration: number;
   /** The key generation of what a download serves (latest whole-file version, else the upload). */
-  contentKeyGeneration: number
+  contentKeyGeneration: number;
   /** The file's older keys, generations 2 to `keyGeneration` in order. */
-  keyHistory?: FileKeyHistoryEntry[]
+  keyHistory?: FileKeyHistoryEntry[];
   /** Shared with someone by itself; only its owner is told. */
-  shared?: boolean
+  shared?: boolean;
   /** Its name's and content's hashes in its folder (docs/plans/drive-unique-names.md); absent until known. */
-  nameHash?: string
-  contentHash?: string
+  nameHash?: string;
+  contentHash?: string;
 }
 
-export type SuspendedReason = 'admin' | 'operator_order' | 'security'
+export type SuspendedReason = "admin" | "operator_order" | "security";
 
 export interface UserRow {
-  id: string
-  username: string
-  storageQuotaBytes: number
-  storageUsedBytes: number
-  isAdmin: boolean
+  id: string;
+  username: string;
+  storageQuotaBytes: number;
+  storageUsedBytes: number;
+  isAdmin: boolean;
   /** The state is `active`. */
-  isActive: boolean
+  isActive: boolean;
   /** `active`, `suspended` or `closing` (docs/plans/server-personal-data.md, A5). */
-  state: 'active' | 'suspended' | 'closing'
+  state: "active" | "suspended" | "closing";
   /** Why a suspended account is. */
-  suspendedReason?: SuspendedReason
+  suspendedReason?: SuspendedReason;
   /** When a closing account is deleted. */
-  closesAt?: string
+  closesAt?: string;
   /** A legal hold's reference: while set, nothing deletes the account. */
-  legalHoldReference?: string
-  legalHoldAt?: string
+  legalHoldReference?: string;
+  legalHoldAt?: string;
   /** Failed tries at deleting this closing account past its date; 0 when none. */
   /** Whether it may share by public link, as an administrator set it. */
-  publicSharing: 'on' | 'off'
+  publicSharing: "on" | "off";
   /** Whether its Chat and Drive talk to other servers. */
-  federation: 'on' | 'off'
-  deletionAttempts: number
+  federation: "on" | "off";
+  deletionAttempts: number;
   /** When its data key was found not to open: what was sealed under it is lost. */
-  dataKeyLostAt?: string
-  totpEnabled: boolean
+  dataKeyLostAt?: string;
+  totpEnabled: boolean;
   /**
    * Still on the admin-issued temp password — no key material yet. Gates the
    * admin "Rotate temp password" action (safe only in this state).
    */
-  isFirstLogin: boolean
-  createdAt: string
+  isFirstLogin: boolean;
+  createdAt: string;
   /**
    * True for the break-glass admin (the account from the `ADMIN_ACCOUNT`
    * env var). The UI disables demote / disable / delete for this user —
    * the backend rejects those mutations with 403.
    */
-  isProtected: boolean
+  isProtected: boolean;
 }
 
 export interface LoginResponse {
-  accessToken: string
-  userId: string
-  username: string
-  masterKeyEnvelope: string
+  accessToken: string;
+  userId: string;
+  username: string;
+  masterKeyEnvelope: string;
   /** The account's root records (docs/plans/identity-root.md), with the session only. */
-  accountRoots?: string[]
+  accountRoots?: string[];
   /** The authority the newest identity root must derive, with the session only. */
-  accountAuthorityPublicKey?: string
-  publicKey: string
-  isAdmin: boolean
-  storageQuotaBytes: number
-  storageUsedBytes: number
-  totpEnabled?: boolean
+  accountAuthorityPublicKey?: string;
+  publicKey: string;
+  isAdmin: boolean;
+  storageQuotaBytes: number;
+  storageUsedBytes: number;
+  totpEnabled?: boolean;
 }
 
 export interface IncomingShare {
-  id: string
-  remoteDomain: string
-  remoteCollectionId: string
-  namedShareEnvelope: string
-  nameEnvelope: string
-  keyEpoch: number
-  nameRevision: number
-  epochStatement: string
-  epochStatementHash: string
-  ownerUserId: string
-  ownerAccount: string
-  ownerIncarnationId: string
-  ownerSigningPublicKey: string
-  ownerAuthorityPublicKey: string
-  canUpload: boolean
-  canDelete: boolean
-  uploadQuotaBytes: number | null
-  createdAt: string
+  id: string;
+  remoteDomain: string;
+  remoteCollectionId: string;
+  namedShareEnvelope: string;
+  nameEnvelope: string;
+  keyEpoch: number;
+  nameRevision: number;
+  epochStatement: string;
+  epochStatementHash: string;
+  ownerUserId: string;
+  ownerAccount: string;
+  ownerIncarnationId: string;
+  ownerSigningPublicKey: string;
+  ownerAuthorityPublicKey: string;
+  canUpload: boolean;
+  canDelete: boolean;
+  uploadQuotaBytes: number | null;
+  createdAt: string;
 }
 
 export interface AdminStats {
-  totalUsers: number
-  activeUsers: number
-  totalFiles: number
-  totalStorageUsedBytes: number
-  totalCollections: number
+  totalUsers: number;
+  activeUsers: number;
+  totalFiles: number;
+  totalStorageUsedBytes: number;
+  totalCollections: number;
   /**
    * Total storage capacity of the storage backend (S3 bucket / volume size).
    * `0` means "unknown" — the admin UI hides the capacity readout in that case.
    * Resolved from the live SeaweedFS probe (`SEAWEEDFS_MASTER_URL`); falls
    * back to the `STORAGE_TOTAL_BYTES` env var.
    */
-  storageTotalBytes: number
+  storageTotalBytes: number;
   /**
    * Real on-disk bytes used by the storage backend, from the SeaweedFS
    * probe. `0` when no probe is available. Distinct from
    * `totalStorageUsedBytes`, which is the DB sum of per-account usage.
    */
-  storageBackendUsedBytes: number
+  storageBackendUsedBytes: number;
 }
 
 /** Who may register (docs/plans/registration-codes.md). */
-export type RegistrationMode = 'on' | 'code' | 'off'
+export type RegistrationMode = "on" | "code" | "off";
 
 /** A referral code as an administrator sees it: its hint, never the code. */
 export interface RegistrationCode {
-  id: string
+  id: string;
   /** The code's last four characters. */
-  hint: string
-  note: string
-  createdBy: string | null
-  createdAt: string
-  expiresAt: string | null
+  hint: string;
+  note: string;
+  createdBy: string | null;
+  createdAt: string;
+  expiresAt: string | null;
   /** `null`: unlimited. */
-  maxUses: number | null
-  uses: number
-  revokedAt: string | null
-  state: 'active' | 'expired' | 'usedUp' | 'revoked'
+  maxUses: number | null;
+  uses: number;
+  revokedAt: string | null;
+  state: "active" | "expired" | "usedUp" | "revoked";
 }
 
 /** A code just made: the only time its text comes back. */
 export interface CreatedRegistrationCode extends RegistrationCode {
-  code: string
+  code: string;
 }
 
 export interface RegistrationCodeUse {
-  userId: string
-  username: string
-  usedAt: string
+  userId: string;
+  username: string;
+  usedAt: string;
 }
 
 /** The code an account signed up with. */
 export interface SignedUpWith {
-  codeId: string
-  hint: string
-  note: string
-  createdBy: string | null
-  usedAt: string
+  codeId: string;
+  hint: string;
+  note: string;
+  createdBy: string | null;
+  usedAt: string;
 }
 
 /** A whole-number setting's Server settings section (site_settings::SettingSection). */
-export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation' | 'privacy' | 'backups' | 'mail'
+export type SettingSection =
+  | "chatMulti"
+  | "calendar"
+  | "chatLinking"
+  | "twoFactor"
+  | "drive"
+  | "federation"
+  | "privacy"
+  | "backups"
+  | "mail"
+  | "accountRecords";
 /** What a whole-number setting counts. */
-export type SettingUnit = 'bytes' | 'count' | 'seconds' | 'days'
+export type SettingUnit = "bytes" | "count" | "seconds" | "days";
 /** Where a value in effect comes from. */
-export type ValueSource = 'account' | 'site' | 'default'
+export type ValueSource = "account" | "site" | "default";
 
 /** One whole-number setting, as `GET /api/admin/settings/registry` lists it. */
 export interface RegistrySetting {
-  key: string
+  key: string;
   /** Its field in `/api/admin/settings`. */
-  field: keyof AdminSettings
-  section: SettingSection
-  unit: SettingUnit
-  default: number
-  min: number
-  max: number
+  field: keyof AdminSettings;
+  section: SettingSection;
+  unit: SettingUnit;
+  default: number;
+  min: number;
+  max: number;
   /** Whether one account may have its own value. */
-  perAccount: boolean
-  value: number
-  set: boolean
+  perAccount: boolean;
+  value: number;
+  set: boolean;
 }
 
 /** A setting that limits one account, as it stands for one account. */
 export interface AccountSettingLimit {
-  key: string
-  field: keyof AdminSettings
-  section: SettingSection
-  unit: SettingUnit
-  value: number
-  source: ValueSource
-  siteValue: number
-  min: number
-  max: number
+  key: string;
+  field: keyof AdminSettings;
+  section: SettingSection;
+  unit: SettingUnit;
+  value: number;
+  source: ValueSource;
+  siteValue: number;
+  min: number;
+  max: number;
 }
 
 /** A rate limit counted per account, as it stands for one account. */
 export interface AccountRateLimitLimit {
   /** `rate_limit.<key>`. */
-  key: string
+  key: string;
   /** The rate limit's own key. */
-  limit: string
-  section: string
-  unit: 'events' | 'attempts' | 'minutes' | 'bytes' | 'atOnce' | 'bytesAtOnce'
-  windowSeconds: number | null
-  value: number
-  source: ValueSource
-  siteValue: number
-  min: number
-  max: number
+  limit: string;
+  section: string;
+  unit: "events" | "attempts" | "minutes" | "bytes" | "atOnce" | "bytesAtOnce";
+  windowSeconds: number | null;
+  value: number;
+  source: ValueSource;
+  siteValue: number;
+  min: number;
+  max: number;
 }
 
 /** `GET /api/admin/users/{id}/limits`. */
 export interface AccountLimits {
-  settings: AccountSettingLimit[]
-  rateLimits: AccountRateLimitLimit[]
+  settings: AccountSettingLimit[];
+  rateLimits: AccountRateLimitLimit[];
 }
 
 /** Who may open public links (docs/plans/server-personal-data.md, A11). */
-export type PublicSharing = 'on' | 'off' | 'signed_in'
+export type PublicSharing = "on" | "off" | "signed_in";
 
 export interface AdminSettings {
-  registrationMode: RegistrationMode
-  publicSharing: PublicSharing
+  registrationMode: RegistrationMode;
+  publicSharing: PublicSharing;
   /** Whether a new account talks to other servers. */
-  federationDefault: boolean
+  federationDefault: boolean;
   /** The storage quota new accounts get; existing accounts keep theirs. */
-  defaultStorageQuotaBytes: number
-  chatMailboxRetentionDays: number
-  chatMediaDeliveryRetentionDays: number
+  defaultStorageQuotaBytes: number;
+  chatMailboxRetentionDays: number;
+  chatMediaDeliveryRetentionDays: number;
   /** Joins and requests through group links, per minute per relay server and group. */
-  chatGroupLinkJoinsPerRelayGroupPerMin: number
+  chatGroupLinkJoinsPerRelayGroupPerMin: number;
   /** The same, per minute per relay server across all groups. */
-  chatGroupLinkJoinsPerRelayPerMin: number
+  chatGroupLinkJoinsPerRelayPerMin: number;
   /** The most members and open invitations a group hosted here may have. */
-  chatGroupMaxMembers: number
+  chatGroupMaxMembers: number;
   /** Multi-recipient group sends and group send endorsements (each an administrator's setting). */
-  chatMultiMaxRecipients: number
-  chatMultiMaxMessageBytes: number
-  chatMultiBaseBytes: number
-  chatMultiIpBytesPerMin: number
-  chatMultiPerRecipientPerMin: number
-  chatMultiPerTokenPerMin: number
-  chatGroupSendEndorsementsPerDay: number
-  chatGroupEndorsementUploadsPerDay: number
-  chatGroupEndorsementPageSize: number
-  chatMultiOriginRequestsPerMin: number
-  chatMultiOriginBytesPerMin: number
+  chatMultiMaxRecipients: number;
+  chatMultiMaxMessageBytes: number;
+  chatMultiBaseBytes: number;
+  chatMultiIpBytesPerMin: number;
+  chatMultiPerRecipientPerMin: number;
+  chatMultiPerTokenPerMin: number;
+  chatGroupSendEndorsementsPerDay: number;
+  chatGroupEndorsementUploadsPerDay: number;
+  chatGroupEndorsementPageSize: number;
+  chatMultiOriginRequestsPerMin: number;
+  chatMultiOriginBytesPerMin: number;
   /** The largest group avatar blob hosted groups take (one of the avatar lengths). */
-  chatGroupAvatarMaxBytes: number
+  chatGroupAvatarMaxBytes: number;
   /** The most a hosted group's avatars may take, in bytes (at least twice the largest). */
-  chatGroupAvatarStoragePerGroupBytes: number
+  chatGroupAvatarStoragePerGroupBytes: number;
   /** How long an avatar upload waits for a change to name it, in seconds. */
-  chatGroupAvatarPendingSeconds: number
+  chatGroupAvatarPendingSeconds: number;
   /** The largest `.kdbx` file Kutup Pass takes in an upload, in bytes (1 MiB to 1 GiB). */
-  passVaultMaxBytes: number
+  passVaultMaxBytes: number;
   /** Calendars (site_settings::CALENDAR_SETTINGS). */
-  calendarsPerAccount: number
-  calendarEventsPerCalendar: number
-  calendarSyncBatch: number
-  calendarMaxCount: number
-  calendarRemindersPerEvent: number
-  calendarDefaultReminders: number
-  calendarReminderLatenessSeconds: number
-  calendarAlarmsPage: number
-  calendarAlarmTickSeconds: number
-  calendarAlarmBatch: number
-  calendarAlarmBatchPerAccount: number
-  calendarAlarmSends: number
-  calendarAlarmsPerAccount: number
-  calendarRecomputeBatch: number
-  calendarPushSubscriptionsPerAccount: number
-  calendarWindowDays: number
-  calendarEventsPage: number
+  calendarsPerAccount: number;
+  calendarEventsPerCalendar: number;
+  calendarSyncBatch: number;
+  calendarMaxCount: number;
+  calendarRemindersPerEvent: number;
+  calendarDefaultReminders: number;
+  calendarReminderLatenessSeconds: number;
+  calendarAlarmsPage: number;
+  calendarAlarmTickSeconds: number;
+  calendarAlarmBatch: number;
+  calendarAlarmBatchPerAccount: number;
+  calendarAlarmSends: number;
+  calendarAlarmsPerAccount: number;
+  calendarRecomputeBatch: number;
+  calendarPushSubscriptionsPerAccount: number;
+  calendarWindowDays: number;
+  calendarEventsPage: number;
   /** Every device of an account, of every app (site_settings::DEVICES_PER_ACCOUNT). */
-  devicesPerAccount: number
+  devicesPerAccount: number;
   /** How long a new device's row waits to be listed (site_settings::DEVICE_LISTING_GRACE_SECONDS). */
-  deviceListingGraceSeconds: number
+  deviceListingGraceSeconds: number;
   /** How long a cached manifest of another server's account is trusted (site_settings::REMOTE_MANIFEST_MAX_AGE_SECONDS). */
-  remoteManifestMaxAgeSeconds: number
+  remoteManifestMaxAgeSeconds: number;
   /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
-  chatLinkTokenSeconds: number
+  chatLinkTokenSeconds: number;
   /** How many two-factor recovery codes are made at once. */
-  twoFactorRecoveryCodes: number
-  securityKeysPerAccount: number
-  webauthnCeremonySeconds: number
-  chatLinkTokensPerAccount: number
-  chatProvisionBodyBytes: number
-  chatMaxActiveDevices: number
-  chatProvisioningTicketSeconds: number
-  chatProvisioningSocketsPerAccount: number
-  chatDistributionMessageBytes: number
+  twoFactorRecoveryCodes: number;
+  securityKeysPerAccount: number;
+  webauthnCeremonySeconds: number;
+  chatLinkTokensPerAccount: number;
+  chatProvisionBodyBytes: number;
+  chatMaxActiveDevices: number;
+  chatProvisioningTicketSeconds: number;
+  chatProvisioningSocketsPerAccount: number;
+  chatDistributionMessageBytes: number;
   /** Drive uploads and streaming (site_settings::DRIVE_SETTINGS), sizes in bytes. */
-  driveUploadMaxBytes: number
-  driveVersionMaxBytes: number
-  driveStreamMaxBytes: number
-  driveStreamCacheBlocks: number
-  driveStreamReadaheadBlocks: number
-  driveStreamMaxConcurrent: number
-  driveStreamResponseMaxBytes: number
-  driveStreamBlobFallbackMaxBytes: number
+  driveUploadMaxBytes: number;
+  driveVersionMaxBytes: number;
+  driveStreamMaxBytes: number;
+  driveStreamCacheBlocks: number;
+  driveStreamReadaheadBlocks: number;
+  driveStreamMaxConcurrent: number;
+  driveStreamResponseMaxBytes: number;
+  driveStreamBlobFallbackMaxBytes: number;
   /** How old an incomplete multipart upload no upload names gets before it is aborted, in seconds. */
-  storageIncompleteMultipartMaxAgeSeconds: number
+  storageIncompleteMultipartMaxAgeSeconds: number;
   /** Federation deliveries (docs/plans/federation-outbox.md): backoff and worker in seconds, records and announces in days. */
-  federationRetryBaseSeconds: number
-  federationRetryMaxSeconds: number
-  federationPeerUpgradeSeconds: number
-  federationWorkerSeconds: number
-  federationHeadsPerTick: number
-  federationRecordDays: number
-  federationAnnounceDays: number
-  federationAnnouncePeerDays: number
-  chatAttachmentSendLifetimeSeconds: number
+  federationRetryBaseSeconds: number;
+  federationRetryMaxSeconds: number;
+  federationPeerUpgradeSeconds: number;
+  federationWorkerSeconds: number;
+  federationHeadsPerTick: number;
+  federationRecordDays: number;
+  federationAnnounceDays: number;
+  federationAnnouncePeerDays: number;
+  chatAttachmentSendLifetimeSeconds: number;
   /** Backups and health (docs/plans/restore-drill-and-alerting.md), in seconds. */
-  storageDeletedBlobRetentionSeconds: number
-  storageDeletedBlobSweepSeconds: number
-  healthBackupMaxAgeSeconds: number
-  healthJobGraceSeconds: number
-  healthProbeTimeoutSeconds: number
+  storageDeletedBlobRetentionSeconds: number;
+  storageDeletedBlobSweepSeconds: number;
+  healthBackupMaxAgeSeconds: number;
+  healthJobGraceSeconds: number;
+  healthProbeTimeoutSeconds: number;
   /** The most keys one mail address's signed list may hold. */
-  mailKeysPerAddress: number
+  mailKeysPerAddress: number;
+  /** The account-records store (site_settings::ACCOUNT_RECORDS_SETTINGS). */
+  accountRecordsPassSecrets: number;
+  accountRecordsChatGroups: number;
+  accountRecordsChatContacts: number;
+  accountRecordsBatchItems: number;
+  accountRecordsPage: number;
+  accountRecordsTombstoneDays: number;
 }
 
-export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'
-export type FederationRuleAction = 'inherit' | 'allow' | 'block'
-export type FederationMinimumTrust = 'tofu' | 'verified'
-export type FederationTrustRequirement = 'inherit' | FederationMinimumTrust
+export type FederationMode = "disabled" | "allowlist" | "blocklist" | "open";
+export type FederationRuleAction = "inherit" | "allow" | "block";
+export type FederationMinimumTrust = "tofu" | "verified";
+export type FederationTrustRequirement = "inherit" | FederationMinimumTrust;
 
 export interface FederationFeaturePolicy {
-  feature: 'chat' | 'drive'
-  mode: FederationMode
-  minimumTrust: FederationMinimumTrust
+  feature: "chat" | "drive";
+  mode: FederationMode;
+  minimumTrust: FederationMinimumTrust;
 }
 
 export interface FederationDomainRule {
-  domain: string
-  feature: 'chat' | 'drive'
-  inbound: FederationRuleAction
-  outbound: FederationRuleAction
-  trustRequirement: FederationTrustRequirement
-  createdAt: string
-  updatedAt: string
+  domain: string;
+  feature: "chat" | "drive";
+  inbound: FederationRuleAction;
+  outbound: FederationRuleAction;
+  trustRequirement: FederationTrustRequirement;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface FederationPeer {
-  domain: string
-  trust: 'tofu' | 'verified' | 'quarantined'
-  sequence: number
-  fingerprint: string
-  fingerprintDisplay: string
-  apiBase: string | null
-  capabilities: string[]
-  firstSeenAt: string
-  lastSeenAt: string
-  verifiedAt: string | null
-  discoveryExpiresAt: string | null
-  quarantineReason: string | null
-  pendingFingerprint: string | null
-  lastDiscoveryError: string | null
+  domain: string;
+  trust: "tofu" | "verified" | "quarantined";
+  sequence: number;
+  fingerprint: string;
+  fingerprintDisplay: string;
+  apiBase: string | null;
+  capabilities: string[];
+  firstSeenAt: string;
+  lastSeenAt: string;
+  verifiedAt: string | null;
+  discoveryExpiresAt: string | null;
+  quarantineReason: string | null;
+  pendingFingerprint: string | null;
+  lastDiscoveryError: string | null;
   diagnostics: {
-    chatPendingTransactions: number
-    chatMismatchesLastDay: number
-    driveIncomingShares: number
-    driveOutgoingShares: number
-    deliveries: FederationDeliveryCounts[]
-  }
+    chatPendingTransactions: number;
+    chatMismatchesLastDay: number;
+    driveIncomingShares: number;
+    driveOutgoingShares: number;
+    deliveries: FederationDeliveryCounts[];
+  };
 }
 
 /** One kind of delivery to other servers (docs/plans/federation-outbox.md). */
 export interface FederationDeliveryCounts {
-  kind: 'chat' | 'sealed' | 'media' | 'rename'
-  pending: number
+  kind: "chat" | "sealed" | "media" | "rename";
+  pending: number;
   /** Refused for good in the last day. */
-  rejectedLastDay: number
-  oldestPendingAt: string | null
+  rejectedLastDay: number;
+  oldestPendingAt: string | null;
 }
 
 export interface FederationPeerEvidenceDocument {
-  sequence: number
-  documentHash: string
-  fingerprint: string
-  fingerprintDisplay: string
-  acceptance: 'accepted' | 'quarantined' | 'superseded'
-  document: Record<string, unknown>
-  recordedAt: string
+  sequence: number;
+  documentHash: string;
+  fingerprint: string;
+  fingerprintDisplay: string;
+  acceptance: "accepted" | "quarantined" | "superseded";
+  document: Record<string, unknown>;
+  recordedAt: string;
 }
 
 export interface FederationPeerEvidence {
-  domain: string
-  trust: FederationPeer['trust']
-  currentDocumentHash: string
-  pendingDocumentHash: string | null
-  quarantineReason: string | null
-  documents: FederationPeerEvidenceDocument[]
-  truncated: boolean
+  domain: string;
+  trust: FederationPeer["trust"];
+  currentDocumentHash: string;
+  pendingDocumentHash: string | null;
+  quarantineReason: string | null;
+  documents: FederationPeerEvidenceDocument[];
+  truncated: boolean;
 }
 
 export interface BulkFederationPeerRetryResponse {
   results: Array<{
-    domain: string
-    refreshed: boolean
-    error: string | null
-  }>
+    domain: string;
+    refreshed: boolean;
+    error: string | null;
+  }>;
 }
 
 export interface AdminFederationPolicy {
   /** False when the server has no persistent FEDERATION_SIGNING_KEY. */
-  configured: boolean
-  serverName: string | null
-  fingerprint: string | null
-  fingerprintDisplay: string | null
-  identitySequence: number | null
-  capabilities: string[]
-  globalEnabled: boolean
-  features: FederationFeaturePolicy[]
-  rules: FederationDomainRule[]
-  peers: FederationPeer[]
+  configured: boolean;
+  serverName: string | null;
+  fingerprint: string | null;
+  fingerprintDisplay: string | null;
+  identitySequence: number | null;
+  capabilities: string[];
+  globalEnabled: boolean;
+  features: FederationFeaturePolicy[];
+  rules: FederationDomainRule[];
+  peers: FederationPeer[];
   operational: {
-    peerTotal: number
-    tofuPeers: number
-    verifiedPeers: number
-    quarantinedPeers: number
-    chatPendingTransactions: number
-    chatMismatchesLastDay: number
-    oldestChatPendingAt: string | null
-    driveIncomingShares: number
-    driveOutgoingShares: number
-    activeReplayReservations: number
-    deliveries: FederationDeliveryCounts[]
-  }
+    peerTotal: number;
+    tofuPeers: number;
+    verifiedPeers: number;
+    quarantinedPeers: number;
+    chatPendingTransactions: number;
+    chatMismatchesLastDay: number;
+    oldestChatPendingAt: string | null;
+    driveIncomingShares: number;
+    driveOutgoingShares: number;
+    activeReplayReservations: number;
+    deliveries: FederationDeliveryCounts[];
+  };
 }
 
 /**
@@ -485,41 +507,41 @@ export interface AdminFederationPolicy {
  * deleted; `payload` keeps the at-action-time snapshot (`payload.username`).
  */
 export interface AdminActivityEntry {
-  id: number
+  id: number;
   /** User, settings, and `federation.*` mutation action identifiers. */
-  action: string
-  adminUserId: string
-  adminUsername: string | null
-  targetUserId: string | null
-  targetUsername: string | null
-  payload: Record<string, unknown>
-  occurredAt: string
+  action: string;
+  adminUserId: string;
+  adminUsername: string | null;
+  targetUserId: string | null;
+  targetUsername: string | null;
+  payload: Record<string, unknown>;
+  occurredAt: string;
 }
 
 export interface AdminActivityResponse {
-  entries: AdminActivityEntry[]
+  entries: AdminActivityEntry[];
   /** Pass as `?before=` for the next (older) page; `null` = no more pages. */
-  nextBefore: number | null
+  nextBefore: number | null;
 }
 
 export interface UserByAddressResponse {
-  userId: string
-  account: string
-  driveHpkePublicKey: string
-  accountIncarnationId: string
-  driveSigningPublicKey: string
+  userId: string;
+  account: string;
+  driveHpkePublicKey: string;
+  accountIncarnationId: string;
+  driveSigningPublicKey: string;
 }
 
 export interface PublicShareData {
-  id: string
-  shareType: string
-  targetId: string
-  collectionKeyEnvelope: string
-  collectionKeyEpoch: number
-  ownerUserId: string
-  expiresAt?: string
+  id: string;
+  shareType: string;
+  targetId: string;
+  collectionKeyEnvelope: string;
+  collectionKeyEpoch: number;
+  ownerUserId: string;
+  expiresAt?: string;
 }
 
 export interface ErrorResponse {
-  error: string
+  error: string;
 }

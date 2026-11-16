@@ -1146,6 +1146,22 @@
       },
       "mail": "Posta anahtarları",
       "mailHint": "Bir e-posta adresinin kaç şifreleme anahtarı tutabileceği.",
+      "accountRecords": "Eşitlenen hesap verileri",
+      "accountRecordsHint": "Her hesabın, cihazlarının eşit tuttuğu şifreli listeleri (Pass kasa anahtarları, Chat grupları ve kişileri, güvenilen anahtarlar). Sunucu bunları okuyamaz; yalnızca sayar ve sayfalar.",
+      "accountRecordsLimits": {
+        "accountRecordsPassSecrets": "Hesap başına Pass kasa anahtarı",
+        "accountRecordsPassSecretsHint": "Bir hesabın cihazları arasında eşit tuttuğu en fazla kasa anahtarı sayısı.",
+        "accountRecordsChatGroups": "Hesap başına Chat grubu",
+        "accountRecordsChatGroupsHint": "Bir hesabın listesinin yeni cihazları için tuttuğu en fazla Chat grubu sayısı.",
+        "accountRecordsChatContacts": "Hesap başına Chat kişisi",
+        "accountRecordsChatContactsHint": "Bir hesabın listesinin yeni cihazları için tuttuğu en fazla Chat kişisi sayısı.",
+        "accountRecordsBatchItems": "Kayıt başına değişiklik",
+        "accountRecordsBatchItemsHint": "Bir cihazın tek seferde eklediği, değiştirdiği ya da sildiği en fazla kayıt sayısı.",
+        "accountRecordsPage": "Sayfa başına değişiklik",
+        "accountRecordsPageHint": "Bir cihazın geride kalanı yakalarken tek istekte okuduğu en fazla değişiklik sayısı.",
+        "accountRecordsTombstoneDays": "Silinenleri hatırla (gün)",
+        "accountRecordsTombstoneDaysHint": "Bundan uzun süre eşitlenmemiş bir cihaz listelerini baştan okur."
+      },
       "mailLimits": {
         "mailKeysPerAddress": "Adres başına anahtar",
         "mailKeysPerAddressHint": "Her adres güncel anahtarını ve eski postaları okumak için eskilerini tutar. Zaten daha çok anahtar tutan listeler onları korur."

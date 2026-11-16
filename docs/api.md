@@ -1608,10 +1608,59 @@ Any other scope is `404`: a client treats it as one with no index yet
 
 **An account reset** (an administrator's wipe) deletes the head chain with the
 old incarnation, and every listed value sealed under the old keys: contacts,
-the group list, labels, filters and Pass secrets. Custom folders keep their mail and lose their
+the group list, labels, filters, Pass secrets and every account record (whose
+older cursors then start over). Custom folders keep their mail and lose their
 names (`name: null` in `GET /api/mail/places`; "Unnamed folder" until renamed
 with `baseNameRevision: 0`). The new incarnation's first write makes its first
 head.
+
+### The account-records store
+
+One store for the account's synced private records
+([plans/account-records.md](plans/account-records.md)), under the account
+head. The server keeps the records opaque. Scopes (`kutup_crypto::account_records`)
+are `passSecrets` (id: the vault's file id), `pins` (id: `pins`),
+`chatGroups` and `chatContacts` (id: 43-character base64url of a keyed hash).
+Each record is an account record sealed for its own id. Until a scope's
+clients move here, `GET /api/account/index/:scope` lists its old store and
+this one. **Auth:** Bearer JWT on all three.
+
+#### GET /api/account/records/:scope?after=<seq>
+
+A page of the scope's changes after the cursor, in the account's change
+order, with the head of the same snapshot:
+`{ "records": [{ "id", "revision", "envelope", "seq" }], "deleted": [{ "id",
+"seq" }], "next": <seq>, "more": bool, "resync": bool, "head": "<base64>" |
+null, "basis": "<hex>" | null }`. Read from `next` while `more`; check the
+head against the device's anchor before applying a page, and the scope's
+index against the head after the last. `after=0` (or none) lists every record
+and no deletions. `resync: true` (the cursor is older than the removals the
+server keeps, a site setting, or was never given): read from 0 again. `404`
+for an unknown scope.
+
+#### GET /api/account/records/:scope/:id
+
+One record: `{ "id", "revision", "envelope", "seq" }`, or `404`.
+
+#### POST /api/account/records
+
+`{ "head": "<base64>"?, "puts": [{ "scope", "id", "baseRevision",
+"envelope" }], "deletes": [{ "scope", "id", "baseRevision" }] }`, applied
+all or nothing with the next head (required once the account keeps one).
+- Every item names the revision it read (0: a new record; a delete at least
+  1), and the stored revision must still be it.
+- A put's new revision is the one in its envelope's header, above
+  `baseRevision`. The envelope must be this account's, of the scope's purpose
+  and sealed for the item's id.
+- Each record at most once per batch; at most a site-set number of items;
+  each scope's count is a per-account site setting.
+- A Pass secret's vault must be a live file the caller can open (`404`).
+
+`200 { "seq" }`. `409 revision_conflict` with `conflicts: [{ "scope", "id",
+"revision" }]` (the stored revision, 0 for none) for every item not at its
+base; a batch that already landed and is sent again gets this, and the client
+reads again. `409 head_conflict`, `head_required`, `masterKeyStale` as for any
+listed write. `400 scopeFull` past a scope's count.
 
 ---
 

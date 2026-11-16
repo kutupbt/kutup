@@ -273,6 +273,7 @@ pub enum SettingSection {
     Privacy,
     Backups,
     Mail,
+    AccountRecords,
 }
 
 /// A whole-number setting administrators set: its key, its field in
@@ -1267,6 +1268,76 @@ pub const MAIL_KEYS_PER_ADDRESS: NumericSetting = NumericSetting {
 };
 pub const MAIL_SETTINGS: [NumericSetting; 1] = [MAIL_KEYS_PER_ADDRESS];
 
+/// The account-records store (docs/plans/account-records.md): the most
+/// records one account keeps in a scope, per scope (a single-record scope
+/// has none), and how the store pages and forgets.
+pub const ACCOUNT_RECORDS_PASS_SECRETS: NumericSetting = NumericSetting {
+    key: "account_records_pass_secrets",
+    field: "accountRecordsPassSecrets",
+    default: 1000,
+    min: 1,
+    max: 100_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+pub const ACCOUNT_RECORDS_CHAT_GROUPS: NumericSetting = NumericSetting {
+    key: "account_records_chat_groups",
+    field: "accountRecordsChatGroups",
+    default: 1024,
+    min: 1,
+    max: 100_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+pub const ACCOUNT_RECORDS_CHAT_CONTACTS: NumericSetting = NumericSetting {
+    key: "account_records_chat_contacts",
+    field: "accountRecordsChatContacts",
+    default: 10_000,
+    min: 1,
+    max: 100_000,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
+/// The most puts and deletes one batch carries.
+pub const ACCOUNT_RECORDS_BATCH_ITEMS: NumericSetting = NumericSetting {
+    key: "account_records_batch_items",
+    field: "accountRecordsBatchItems",
+    default: 256,
+    min: 1,
+    max: 1000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+/// The most changes one page of a scope's feed carries.
+pub const ACCOUNT_RECORDS_PAGE: NumericSetting = NumericSetting {
+    key: "account_records_page",
+    field: "accountRecordsPage",
+    default: 500,
+    min: 10,
+    max: 5000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+/// How long a deleted record's tombstone is kept: a device that last synced
+/// longer ago than this reads its scopes again from the start.
+pub const ACCOUNT_RECORDS_TOMBSTONE_DAYS: NumericSetting = NumericSetting {
+    key: "account_records_tombstone_days",
+    field: "accountRecordsTombstoneDays",
+    default: 90,
+    min: 1,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+pub const ACCOUNT_RECORDS_SETTINGS: [NumericSetting; 6] = [
+    ACCOUNT_RECORDS_PASS_SECRETS,
+    ACCOUNT_RECORDS_CHAT_GROUPS,
+    ACCOUNT_RECORDS_CHAT_CONTACTS,
+    ACCOUNT_RECORDS_BATCH_ITEMS,
+    ACCOUNT_RECORDS_PAGE,
+    ACCOUNT_RECORDS_TOMBSTONE_DAYS,
+];
+
 pub const FEDERATION_SETTINGS: [NumericSetting; 9] = [
     FEDERATION_RETRY_BASE_SECONDS,
     FEDERATION_RETRY_MAX_SECONDS,
@@ -1369,6 +1440,10 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
         .chain(section(SettingSection::Privacy, &PRIVACY_SETTINGS))
         .chain(section(SettingSection::Backups, &BACKUP_SETTINGS))
         .chain(section(SettingSection::Mail, &MAIL_SETTINGS))
+        .chain(section(
+            SettingSection::AccountRecords,
+            &ACCOUNT_RECORDS_SETTINGS,
+        ))
 }
 
 /// The multi-recipient limits now.

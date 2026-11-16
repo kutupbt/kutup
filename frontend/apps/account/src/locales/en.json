@@ -1146,6 +1146,22 @@
       },
       "mail": "Mail keys",
       "mailHint": "How many encryption keys one email address may keep.",
+      "accountRecords": "Synced account data",
+      "accountRecordsHint": "Each account's encrypted lists that its devices keep in step (Pass vault keys, Chat groups and contacts, trusted keys). The server can't read them; it only counts and pages them.",
+      "accountRecordsLimits": {
+        "accountRecordsPassSecrets": "Pass vault keys per account",
+        "accountRecordsPassSecretsHint": "How many vaults' keys one account keeps in step across its devices.",
+        "accountRecordsChatGroups": "Chat groups per account",
+        "accountRecordsChatGroupsHint": "How many Chat groups one account's list keeps for its new devices.",
+        "accountRecordsChatContacts": "Chat contacts per account",
+        "accountRecordsChatContactsHint": "How many Chat contacts one account's list keeps for its new devices.",
+        "accountRecordsBatchItems": "Changes per save",
+        "accountRecordsBatchItemsHint": "The most records a device adds, changes or removes in one save.",
+        "accountRecordsPage": "Changes per page",
+        "accountRecordsPageHint": "The most changes a device reads in one request while it catches up.",
+        "accountRecordsTombstoneDays": "Remember removals for (days)",
+        "accountRecordsTombstoneDaysHint": "A device that hasn't caught up for longer than this reads its lists again from the start."
+      },
       "mailLimits": {
         "mailKeysPerAddress": "Keys per address",
         "mailKeysPerAddressHint": "Each address keeps its current key and older ones to read old mail. Lists that already hold more keep them."

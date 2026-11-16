@@ -2,6 +2,7 @@
 
 pub mod account_heads;
 pub mod account_limits;
+pub mod account_records;
 pub mod accounts;
 pub mod admin;
 pub mod auth;

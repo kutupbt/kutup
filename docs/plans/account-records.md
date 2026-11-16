@@ -233,6 +233,8 @@ parallel.
    exception to decision 4. The server already knows the id (a Drive row),
    and today's table is keyed by it. What it reveals is that this file is a
    vault the account holds a key for, the same as today. It keeps the
-   server's check that the file is live and the caller's, and the key's
-   removal when the file is deleted. Every other scope's id is
+   server's check that the file is live and the caller's. (The server never
+   removes a key with its file: a record removed by anyone but the account
+   would break the head. As today, a key stays until its owner forgets it.)
+   Every other scope's id is
    `hashed_object` or random. The registry states the exception and why.
