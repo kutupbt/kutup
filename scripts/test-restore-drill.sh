@@ -69,6 +69,9 @@ for expected in \
   "scripts/backup-postgres.sh --restore kutup-\\<newest\\>.dump.age $tmp/backup.key" \
   "s3 sync --only-show-errors --delete s3://kutup-files s3://kutup-drill-files" \
   "echo BACKGROUND_JOBS=... >> $tmp/state/kutup-restore-drill/l2/drill.env" \
+  "echo OUTBOUND_DELIVERY=... >> $tmp/state/kutup-restore-drill/l2/drill.env" \
+  "Stalwart: STALWART_RECOVERY_MODE=1, its queue held" \
+  "Outbound delivery:   held (OUTBOUND_DELIVERY=false, Stalwart in recovery mode)" \
   "== 4. Stalwart's volume" \
   "scripts/backup-stalwart.sh --restore stalwart-\\<newest\\>.tar.gz.age $tmp/backup.key" \
   "== Background jobs on" \
@@ -108,6 +111,8 @@ refuses "the backup bucket as scratch" "${base[@]}" --set BACKUP_S3_BUCKET=kutup
 desc="names the backup bucket"; check grep -qF "is BACKUP_S3_BUCKET" <<<"$out"
 refuses "--set S3_BUCKET" "${base[@]}" --set S3_BUCKET=kutup-files
 refuses "--set BACKGROUND_JOBS" "${base[@]}" --set BACKGROUND_JOBS=true
+refuses "--set OUTBOUND_DELIVERY" "${base[@]}" --set OUTBOUND_DELIVERY=true
+refuses "--set STALWART_RECOVERY_MODE" "${base[@]}" --set STALWART_RECOVERY_MODE=0
 status=0
 out="$(PATH="$tmp/bin:$PATH" KUTUP_LANES_DIR="$tmp/lanes" XDG_STATE_HOME="$tmp/state" \
   DOCKER_HOST=ssh://prod.example "$drill" "${base[@]}" 2>&1)" || status=$?

@@ -133,6 +133,11 @@ pub struct Config {
     /// restored stack deletes or sends before it has been checked
     /// (scripts/restore-drill.sh).
     pub background_jobs: bool,
+    /// `OUTBOUND_DELIVERY` (on by default): whether this server sends
+    /// anything to another host under its own identity: federation
+    /// requests, mail, push notifications (`outbound.rs`). A restore drill
+    /// always runs with it off.
+    pub outbound_delivery: bool,
     pub mail_labels_per_account: i64,
     /// Filters an account may have switched on (`MAIL_FILTERS_PER_ACCOUNT`).
     pub mail_filters_per_account: i64,
@@ -622,6 +627,7 @@ impl Config {
             old_address_receive_days: get_env_i64("OLD_ADDRESS_RECEIVE_DAYS", 90),
             name_sweep_seconds: get_env_i64("NAME_SWEEP_SECONDS", 3600).clamp(1, 86_400),
             background_jobs: get_env_bool("BACKGROUND_JOBS", true),
+            outbound_delivery: get_env_bool("OUTBOUND_DELIVERY", true),
             mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             mail_filters_per_account: get_env_i64("MAIL_FILTERS_PER_ACCOUNT", 200),
             mail_sender_rules_per_account: get_env_i64("MAIL_SENDER_RULES_PER_ACCOUNT", 5000),

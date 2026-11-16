@@ -17,6 +17,8 @@ const BODY: &str = "List-Unsubscribe=One-Click";
 /// (`APP_ENV=test` and `MAIL_TEST_KEY_ORIGIN`) it goes to that origin, as
 /// `{origin}/{host}{path}?{query}`, as key lookups do.
 pub async fn one_click(state: &AppState, url: &str) -> Result<(), Unusable> {
+    // It acts on the reader's real subscription: held with the rest.
+    crate::outbound::check("an unsubscribe request").map_err(|_| Unusable)?;
     let config = &state.config;
     if config.app_env == "test" && !config.mail_test_key_origin.is_empty() {
         let original = url::Url::parse(url).map_err(|_| Unusable)?;

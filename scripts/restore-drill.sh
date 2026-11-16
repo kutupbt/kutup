@@ -19,6 +19,9 @@
 #      BACKGROUND_JOBS=false, then
 #   4. restores Stalwart's volume (scripts/backup-stalwart.sh --restore), and
 #      restarts the server with its background jobs on.
+# Throughout, nothing is delivered to the outside world under the
+# production identity: the server runs with OUTBOUND_DELIVERY=false and
+# Stalwart in its recovery mode (no listeners but its HTTP API, no queue).
 # Then it asks /api/health/ready, runs kutup-server check-config, compares
 # the migrations table with the release's migrations, and prints the
 # timings and the newest dump's age (the data-loss window).
@@ -71,18 +74,24 @@ Options:
                          \${KUTUP_IMAGE_REGISTRY:-ghcr.io/kutupbt}).
   --set KEY=VALUE        change one setting in the drill's copy of the .env
                          (repeatable), e.g. --set S3_ACCESS_KEY=... for a key
-                         scoped to the scratch bucket. S3_BUCKET and
-                         BACKGROUND_JOBS are the drill's own.
+                         scoped to the scratch bucket. S3_BUCKET,
+                         BACKGROUND_JOBS and OUTBOUND_DELIVERY are the
+                         drill's own.
   --work-dir DIR         where the drill's settings and certificate go
                          (default \${XDG_STATE_HOME:-~/.local/state}/kutup-restore-drill/l<lane>).
-  --jobs-stay-off        leave BACKGROUND_JOBS off at the end. With them on,
-                         the restored federation and mail outboxes deliver
-                         what the dump had queued, and Stalwart its queue.
+  --jobs-stay-off        leave BACKGROUND_JOBS off at the end.
   --dry-run              print every step and run nothing.
   --down                 remove the drill's stack (its containers, volumes
                          and network) and its work directory. The scratch
                          bucket stays; empty or delete it at the provider.
   -h, --help             this text.
+
+Nothing leaves the drill's stack under the production identity, with no
+way to turn it on: the server runs with OUTBOUND_DELIVERY=false (no
+federation request, mail handed to Stalwart or push notification; the
+outbox workers do not start), and Stalwart runs in its recovery mode
+(STALWART_RECOVERY_MODE=1: no SMTP listeners and no outbound queue, so its
+restored queue stays held).
 
 Needs on this machine: docker (with Compose), age, jq, openssl, git.
 EOF
@@ -271,6 +280,8 @@ for entry in "${overrides[@]}"; do
   case "$key" in
     S3_BUCKET) usage_error "--set S3_BUCKET: the stack's bucket is --scratch-bucket" ;;
     BACKGROUND_JOBS) usage_error "--set BACKGROUND_JOBS: the drill turns the jobs off and on itself" ;;
+    OUTBOUND_DELIVERY) usage_error "--set OUTBOUND_DELIVERY: a drill never delivers anything to the outside world" ;;
+    STALWART_*) usage_error "--set $key: Stalwart runs held (recovery mode) in a drill" ;;
     COMPOSE_*|KUTUP_SERVER_IMAGE|KUTUP_WEB_IMAGE|KUTUP_STALWART_SETUP_IMAGE)
       usage_error "--set $key: set by the drill (--images, --registry, --lane)" ;;
   esac
@@ -382,6 +393,17 @@ note "blobs: s3://$source_bucket (read only) -> s3://$scratch_bucket at $s3_endp
 guard_project
 guard_local_docker
 
+# Before every start of a container: nothing may be delivered outside.
+guard_held() {
+  [ "$dry_run" -eq 0 ] || return 0
+  [ "$(setting_in "$drill_env" OUTBOUND_DELIVERY)" = false ] \
+    || die "refusing: OUTBOUND_DELIVERY is not false in $drill_env"
+  if [ "$mail" -eq 1 ]; then
+    grep -qF 'STALWART_RECOVERY_MODE: "1"' "$override_file" \
+      || die "refusing: $override_file does not hold Stalwart in recovery mode"
+  fi
+}
+
 # ---- Step 1: an empty stack -------------------------------------------------
 
 step "1. An empty stack: $project from $images"
@@ -407,6 +429,7 @@ drill_set KUTUP_WEB_IMAGE "$web_image"
 drill_set KUTUP_STALWART_SETUP_IMAGE "$stalwart_setup_image"
 drill_set MAIL_SMTP_PORT "$mail_smtp_port"
 drill_set BACKGROUND_JOBS false
+drill_set OUTBOUND_DELIVERY false
 for entry in "${overrides[@]}"; do
   drill_set "${entry%%=*}" "${entry#*=}"
 done
@@ -416,7 +439,7 @@ run openssl req -x509 -nodes -newkey rsa:2048 -days 7 \
   -keyout "$work_dir/certs/privkey.pem" -out "$work_dir/certs/fullchain.pem" \
   -subj /CN=localhost -addext "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1"
 if [ "$dry_run" -eq 1 ]; then
-  printf '+ %s\n' "write $override_file (nginx certs from $work_dir/certs)"
+  printf '+ %s\n' "write $override_file (nginx certs from $work_dir/certs$([ "$mail" -eq 0 ] || echo '; Stalwart: STALWART_RECOVERY_MODE=1, its queue held'))"
 else
   cat > "$override_file" <<EOF
 # Written by scripts/restore-drill.sh: the drill's certificate.
@@ -424,10 +447,16 @@ services:
   nginx:
     volumes:
       - $work_dir/certs:/etc/nginx/certs:ro
+  # Recovery mode: only the HTTP API listens, and the outbound queue (and
+  # DMARC/TLS reports) never starts, so the restored queue stays held.
+  stalwart:
+    environment:
+      STALWART_RECOVERY_MODE: "1"
 EOF
 fi
 run docker compose config --quiet
 timed "pull the images" run docker compose pull --quiet
+guard_held
 timed "start PostgreSQL" run docker compose up --detach --wait postgres
 
 # ---- Step 2: the database ---------------------------------------------------
@@ -472,6 +501,7 @@ if [ "$dry_run" -eq 0 ]; then
     || die "refusing: BACKGROUND_JOBS is not off in $drill_env"
 fi
 guard_project
+guard_held
 timed "start the stack, jobs off" run docker compose up --detach --wait
 
 # ---- Step 4: Stalwart -------------------------------------------------------
@@ -489,6 +519,7 @@ if [ "$mail" -eq 1 ]; then
   fi
   note "restoring $mail_backup"
   guard_project
+  guard_held
   timed "restore Stalwart (fetch, check, untar)" run scripts/backup-stalwart.sh --restore "$mail_backup" "$identity"
 else
   step "4. Stalwart's volume: skipped (--no-mail)"
@@ -500,6 +531,7 @@ if [ "$jobs_on" -eq 1 ]; then
   step "Background jobs on"
   guard_project
   drill_set BACKGROUND_JOBS true
+  guard_held
   timed "restart the server, jobs on" run docker compose up --detach --wait --no-deps --force-recreate backend
 else
   step "Background jobs stay off (--jobs-stay-off)"
@@ -527,6 +559,20 @@ else
   case "$ready_code:$failing" in
     200:) ready_status="ok" ;;
     503:backups) ready_status="ok but backups (expected: no backup has run from this stack)" ;;
+    503:mail,backups)
+      if [ "$mail" -eq 1 ]; then
+        ready_status="ok but mail and backups (expected: Stalwart is held in recovery mode, and no backup has run from this stack)"
+      else
+        ready_status="FAIL (503: mail,backups)"; failed=1
+      fi
+      ;;
+    503:mail)
+      if [ "$mail" -eq 1 ]; then
+        ready_status="ok but mail (expected: Stalwart is held in recovery mode)"
+      else
+        ready_status="FAIL (503: mail)"; failed=1
+      fi
+      ;;
     *) ready_status="FAIL ($ready_code${failing:+: $failing})"; failed=1 ;;
   esac
 fi
@@ -606,6 +652,7 @@ echo "Readiness:           $ready_status"
 echo "check-config:        $config_status"
 echo "Migrations:          $migrations_status"
 echo "Background jobs:     $([ "$jobs_on" -eq 1 ] && echo on || echo off)"
+echo "Outbound delivery:   held (OUTBOUND_DELIVERY=false$([ "$mail" -eq 0 ] || echo ", Stalwart in recovery mode"))"
 echo
 echo "Next: the checks as a user and as the operator (docs/self-hosting.md, \"Restore drill\", steps 5-7)."
 echo "Remove it after: scripts/restore-drill.sh --down --lane $lane"

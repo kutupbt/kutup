@@ -852,7 +852,11 @@ the newest dump, a scratch copy of the blob bucket, the server started with
 `BACKGROUND_JOBS=false` and then with its jobs on, Stalwart's volume), then
 the readiness, `check-config` and migrations checks, and prints the timings
 and the data-loss window; `--help` lists what it needs, `--dry-run` prints
-every step, and `scripts/test-restore-drill.sh` tests it offline.
+every step, and `scripts/test-restore-drill.sh` tests it offline. The
+restored stack never delivers anything under the production identity: the
+server runs with `OUTBOUND_DELIVERY=false` (no federation requests, sent
+mail or push notifications) and Stalwart in its recovery mode, so its
+restored queue stays held. A drill by hand should do the same.
 
 1. **Start an empty stack** from the release images
    ([Running published images](#running-published-images)), with `.env`

@@ -546,6 +546,7 @@ impl FederationStack {
             headers.insert(name, value);
         }
 
+        crate::outbound::check("a federation request")?;
         let client = bound_client(&target, self.config.allow_private_test_network).await?;
         let response = client
             .request(spec.method, target)
@@ -859,6 +860,7 @@ impl FederationStack {
         body: reqwest::Body,
         limit: usize,
     ) -> anyhow::Result<BoundedHttpResponse> {
+        crate::outbound::check("a federation request")?;
         let client = bound_client(&url, self.config.allow_private_test_network).await?;
         let response = client
             .request(method, url)

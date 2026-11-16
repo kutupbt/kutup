@@ -53,6 +53,7 @@ mod models;
 mod opaque_setup;
 mod openapi;
 mod organizations;
+mod outbound;
 mod photos;
 mod public_fetch;
 mod ratelimit;
@@ -365,6 +366,16 @@ async fn main() -> anyhow::Result<()> {
     // periodic jobs below runs, so nothing deletes, purges or sends until an
     // operator has checked the restored data and restarts with them on.
     let background_jobs = config.background_jobs;
+    // OUTBOUND_DELIVERY=false (a restore drill, always): nothing is sent to
+    // another host under this server's identity (outbound.rs), and the
+    // workers that send do not start, so their queues stay as they are.
+    let outbound_delivery = config.outbound_delivery;
+    outbound::set_enabled(outbound_delivery);
+    if !outbound_delivery {
+        tracing::warn!(
+            "OUTBOUND_DELIVERY is off: no federation request, sent mail or push notification leaves this server"
+        );
+    }
     if !background_jobs {
         tracing::warn!(
             "BACKGROUND_JOBS is off: no purges, sweeps, retention or outbox deliveries run"
@@ -469,6 +480,8 @@ async fn main() -> anyhow::Result<()> {
     if background_jobs {
         // Old addresses past their receiving, names past their hold.
         account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
+    }
+    if background_jobs && outbound_delivery {
         federation_outbox::spawn_worker(state.clone());
         drive_federation::spawn_digest_backfill(state.clone());
     }
@@ -480,12 +493,15 @@ async fn main() -> anyhow::Result<()> {
     if background_jobs {
         // Auto-delete of old Trash and Spam, for accounts that turned it on.
         mail::retention::spawn(state.clone());
-        mail::outbox::spawn(state.clone());
         mail::snooze::spawn(state.clone());
-        mail::forwarding::spawn(state.clone());
-        mail::domains::sweep::spawn(state.clone());
         mail::expiry::spawn(state.clone());
         calendar_alarms::spawn(state.clone());
+    }
+    if background_jobs && outbound_delivery {
+        // Held and scheduled sends, forwarding, and the custom domains' DNS checks.
+        mail::outbox::spawn(state.clone());
+        mail::forwarding::spawn(state.clone());
+        mail::domains::sweep::spawn(state.clone());
     }
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
