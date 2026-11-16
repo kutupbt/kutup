@@ -22,7 +22,10 @@
           "directChatSuite": 1,
           "registrationId": 10
         },
-        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+        "session": "5151515151515151515151515151515151515151515151515151515151515151",
+        "capabilities": [
+          1
+        ]
       },
       {
         "deviceId": 2,
@@ -31,13 +34,17 @@
           "directChatSuite": 1,
           "registrationId": 20
         },
-        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+        "session": "5151515151515151515151515151515151515151515151515151515151515151",
+        "capabilities": [
+          1
+        ]
       }
     ],
     "issuedAt": "2026-10-22T12:00:00Z",
     "authorityKeyId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
     "selfAuthorityKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
-    "signature": "i6rjFBMQEHJncwPEazuOhAM0kebaMD9I2HbWwpaW1ZjH3jYHqIwF+P7HT446nfzoHIUFSoii0MqVtmN2/H/pCw=="
+    "extensions": [],
+    "signature": "mykNVCjHGV7fFIRMtiUEv/W3lkyzsoSCNsn2F/5WPGlKauZ4+ZsI6qsFieITAUC6vmdyLcFVSj5moSIzo4meCQ=="
   },
   "present": {
     "manifestVersion": 3,
@@ -62,7 +69,10 @@
           "directChatSuite": 1,
           "registrationId": 10
         },
-        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+        "session": "5151515151515151515151515151515151515151515151515151515151515151",
+        "capabilities": [
+          1
+        ]
       },
       {
         "deviceId": 2,
@@ -71,7 +81,10 @@
           "directChatSuite": 1,
           "registrationId": 20
         },
-        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+        "session": "5151515151515151515151515151515151515151515151515151515151515151",
+        "capabilities": [
+          1
+        ]
       }
     ],
     "issuedAt": "2026-10-22T12:00:00Z",
@@ -99,7 +112,8 @@
         "signedByNew": "S9wHxEONsvDNfvBeOzip8rIfIMAlo8OGvrnB9W71Y5hGyJr+kAFcwB8nTG9zLcy8T6laQMSH4dgWnaAZARbgCA=="
       }
     ],
-    "signature": "4rkgTBfbRmcBMMFV9QNNHBYcxHSYkvVT0A8wpX1J95jO3XJi2vV5NqDwCe0+CqWUCovuZp7D50EWLYjumahZDw=="
+    "extensions": [],
+    "signature": "QyMUTHQB3j92FhX9OnP9gnuouoeTGeKpfwJI5nr4GBYwnBT3dT6oXlWGWVFxoFRgilDs3ZXFCS9lVvYSlYVhBQ=="
   },
   "wrongSignature": {
     "manifestVersion": 3,
@@ -124,7 +138,10 @@
           "directChatSuite": 1,
           "registrationId": 10
         },
-        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+        "session": "5151515151515151515151515151515151515151515151515151515151515151",
+        "capabilities": [
+          1
+        ]
       },
       {
         "deviceId": 2,
@@ -133,7 +150,10 @@
           "directChatSuite": 1,
           "registrationId": 20
         },
-        "session": "5151515151515151515151515151515151515151515151515151515151515151"
+        "session": "5151515151515151515151515151515151515151515151515151515151515151",
+        "capabilities": [
+          1
+        ]
       }
     ],
     "issuedAt": "2026-10-22T12:00:00Z",
@@ -161,6 +181,7 @@
         "signedByNew": "S9wHxEONsvDNfvBeOzip8rIfIMAlo8OGvrnB9W71Y5hGyJr+kAFcwB8nTG9zLcy8T6laQMSH4dgWnaAZARbgCA=="
       }
     ],
-    "signature": "iUIe2Y7tYweyBBV78/Mow8hucTGJBfXSL/q7W2SORBe9t4FsdiezrQeKjFnNoOAuT5oMCGPEMN/f2NvITddQAw=="
+    "extensions": [],
+    "signature": "rBlfXVs0fgu0hz4/BRjMsyY0YsGRPQLDFQySbonicK0k9IxiXmVzEs4pbqrqnoEnYZ4hB3Ucny/EmwInzskhDQ=="
   }
 }
