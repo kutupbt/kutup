@@ -37,7 +37,7 @@
     "issuedAt": "2026-10-22T12:00:00Z",
     "authorityKeyId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
     "selfAuthorityKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
-    "signature": "VFFe94ne94NUyb1FbxInx5836EtFYwZegQr7dPnqQRTKgKAFcsvvdoAAClGIvt30rusqNdwvxj2D7y+7D5QbCw=="
+    "signature": "i6rjFBMQEHJncwPEazuOhAM0kebaMD9I2HbWwpaW1ZjH3jYHqIwF+P7HT446nfzoHIUFSoii0MqVtmN2/H/pCw=="
   },
   "present": {
     "manifestVersion": 3,
@@ -99,7 +99,7 @@
         "signedByNew": "S9wHxEONsvDNfvBeOzip8rIfIMAlo8OGvrnB9W71Y5hGyJr+kAFcwB8nTG9zLcy8T6laQMSH4dgWnaAZARbgCA=="
       }
     ],
-    "signature": "gIEJwbZHWWmVtv8imxpcoHiVNzOFnNfYqXMw0OQob4dhpXY4lywlnIufL74aHmX1B+78t+U/p20xFAZ80OeHAQ=="
+    "signature": "4rkgTBfbRmcBMMFV9QNNHBYcxHSYkvVT0A8wpX1J95jO3XJi2vV5NqDwCe0+CqWUCovuZp7D50EWLYjumahZDw=="
   },
   "wrongSignature": {
     "manifestVersion": 3,
@@ -161,6 +161,6 @@
         "signedByNew": "S9wHxEONsvDNfvBeOzip8rIfIMAlo8OGvrnB9W71Y5hGyJr+kAFcwB8nTG9zLcy8T6laQMSH4dgWnaAZARbgCA=="
       }
     ],
-    "signature": "Ft3mMLwoYPodWVrWq6DggqQvfxZnNgw6vB6jcc9CQiRr0d7wjcmiSgSE1tI09ek1x/PZgdlMawTd9QeFYBvgBw=="
+    "signature": "iUIe2Y7tYweyBBV78/Mow8hucTGJBfXSL/q7W2SORBe9t4FsdiezrQeKjFnNoOAuT5oMCGPEMN/f2NvITddQAw=="
   }
 }
