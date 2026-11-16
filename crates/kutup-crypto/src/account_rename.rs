@@ -237,7 +237,8 @@ mod tests {
     const T: i64 = 1_790_000_000_000;
 
     fn identity(seed: u8) -> AccountIdentityKeysV1 {
-        AccountIdentityKeysV1::derive(&[seed; 32]).unwrap()
+        AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes([seed; 32]))
+            .unwrap()
     }
 
     fn chain(id: &AccountIdentityKeysV1) -> Vec<AccountRenameV1> {

@@ -73,8 +73,21 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         .context("the server's registration answer")?;
     let recovery_proof = kdf::derive_recovery_auth_proof(&*recovery_entropy, &key_binding)
         .context("derive recovery authorization proof")?;
+    // The account's roots (docs/plans/identity-root.md): random, sealed
+    // under the master key; its identity comes from the identity root.
+    let roots = kutup_crypto::account_roots::AccountRoots::generate();
+    let account_roots = roots
+        .seal(
+            &master_key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &key_binding,
+        )
+        .context("seal the account's roots")?
+        .iter()
+        .map(|record| b64.encode(record))
+        .collect();
     let account_identity =
-        AccountIdentityKeysV1::derive(&master_key).context("derive account identity")?;
+        AccountIdentityKeysV1::derive(&roots.identity).context("derive account identity")?;
 
     let master_key_envelope = registered
         .export_key
@@ -118,6 +131,7 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         opaque_server_key_id: started.server_key_id,
         master_key_envelope,
         recovery_key_envelope,
+        account_roots,
         public_key: b64.encode(account_identity.drive_hpke_public_key()),
         account_authority_public_key: b64.encode(account_identity.authority_public_key()),
         account_authority_key_id: account_identity.authority_key_id(),

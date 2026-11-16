@@ -94,6 +94,14 @@ fn a_rotation_moves_the_record_once_and_shows() {
     let bytes = |key: &str| -> [u8; 32] { b64_decode(&text(key)).try_into().unwrap() };
     let master_key = bytes("masterKey");
     let first = sign_in(&c, &base, &text("username"), &text("password"));
+    // The account's roots, as its session gets them.
+    let roots = fetch_roots(
+        &c,
+        &base,
+        first["accessToken"].as_str().unwrap(),
+        &master_key,
+        &text("binding"),
+    );
     let mut user = User {
         id: text("id"),
         binding: text("binding"),
@@ -101,8 +109,9 @@ fn a_rotation_moves_the_record_once_and_shows() {
         password: text("password"),
         recovery_entropy: bytes("recoveryEntropy"),
         token: first["accessToken"].as_str().unwrap().to_owned(),
-        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap(),
+        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity).unwrap(),
         master_key,
+        roots,
         person: kutup_crypto::account_ref::AccountRef::new(&server_domain(&c, &base), &text("id"))
             .unwrap(),
         account: text("account"),

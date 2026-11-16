@@ -54,6 +54,9 @@ mod group_send;
 mod group_settings;
 mod keys;
 pub use keys::PublishedKeys;
+/// The account's stored roots (docs/plans/identity-root.md), as native
+/// apps hand them over.
+pub use kutup_crypto::account_roots::AccountRoots;
 mod manifest;
 mod media_wait;
 mod multi_seal;

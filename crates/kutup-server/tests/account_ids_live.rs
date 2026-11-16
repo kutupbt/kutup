@@ -94,8 +94,10 @@ fn sign_up_takes_only_the_id_minted_for_it() {
     let (status, _) = refused(
         sign_up(&c, &base, true, name(), None, None, |body| {
             // The sign-up's own keys (the body's), bound to another account.
-            let identity =
-                kutup_crypto::identity::AccountIdentityKeysV1::derive(&[7u8; 32]).unwrap();
+            let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+                &kutup_crypto::account_roots::IdentityRoot::from_bytes([7u8; 32]),
+            )
+            .unwrap();
             body["accountAuthorityPublicKey"] = json!(b64(&identity.authority_public_key()));
             body["accountAuthorityKeyId"] = json!(identity.authority_key_id());
             body["accountIncarnationId"] = json!(identity.incarnation_id());

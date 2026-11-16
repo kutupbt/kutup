@@ -258,19 +258,19 @@ impl BlockEncryptorJs {
     }
 
     /// A Drive object's sealed manifest and trailer, signed with the
-    /// uploader's Drive signing key (from the account master key) and naming
-    /// the uploader's account id.
+    /// uploader's Drive signing key (from the account's identity root) and
+    /// naming the uploader's account id.
     #[wasm_bindgen(js_name = finishSigned)]
     pub fn finish_signed(
         &mut self,
-        master_key_base64: &str,
+        identity_root_base64: &str,
         uploader_account_id: &str,
     ) -> Result<Vec<u8>, JsValue> {
-        let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
-            .try_into()
-            .map_err(|_| js_error("master key must be 32 bytes"))?;
+        let identity_root = decode_canonical_base64(identity_root_base64, "identity root")?;
+        let identity_root = kutup_crypto::account_roots::IdentityRoot::from_slice(&identity_root)
+            .map_err(crypto_error)?;
         let account = account_id(uploader_account_id)?;
-        let identity = AccountIdentityKeysV1::derive(&master_key).map_err(crypto_error)?;
+        let identity = AccountIdentityKeysV1::derive(&identity_root).map_err(crypto_error)?;
         let sealer = self
             .sealer
             .take()

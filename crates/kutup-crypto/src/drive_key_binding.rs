@@ -121,8 +121,14 @@ mod tests {
 
     #[test]
     fn a_binding_verifies_only_for_its_account_and_keys() {
-        let alice = AccountIdentityKeysV1::derive(&[1u8; 32]).unwrap();
-        let mallory = AccountIdentityKeysV1::derive(&[2u8; 32]).unwrap();
+        let alice = AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes(
+            [1u8; 32],
+        ))
+        .unwrap();
+        let mallory = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([2u8; 32]),
+        )
+        .unwrap();
         let account = person("00000000-0000-4000-8000-0000000000a1");
         let signature = sign(&alice, &account, 1).unwrap();
         let (authority, hpke, signing) = (

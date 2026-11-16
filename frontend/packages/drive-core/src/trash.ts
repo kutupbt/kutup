@@ -77,11 +77,10 @@ export function useTrash() {
     enabled: identity.isSuccess,
     queryFn: async (): Promise<TrashEntry[]> => {
       const me = identity.data!
-      const masterKey = me.masterKey
       const { data } = await api.get<{ folders: TrashFolderRow[]; files: TrashFileRow[] }>('/trash')
       const folders = await Promise.all(
         data.folders.map(async (row): Promise<TrashEntry> => {
-          const opened = await openOwnedCollectionV1(row, masterKey).catch(() => null)
+          const opened = await openOwnedCollectionV1(row, me).catch(() => null)
           return {
             type: 'folder',
             id: row.id,
@@ -114,7 +113,7 @@ export function useTrash() {
               epochStatement: row.collectionEpochStatement,
               epochStatementHash: row.collectionEpochStatementHash,
             },
-            masterKey,
+            me,
           )
             // A file not re-keyed since its folder rotated is wrapped under an older key.
             .then((key) => {

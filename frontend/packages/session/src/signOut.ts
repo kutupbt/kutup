@@ -1,5 +1,4 @@
 import { removeDevicesFromManifest } from '@kutup/crypto/accountManifest'
-import { toBase64 } from '@kutup/crypto/base64'
 import api from './client'
 import { deviceHeader, ownAccount, publishNextManifest } from './devices'
 import { clearPersisted } from './persistedStore'
@@ -21,10 +20,10 @@ async function revokeOwnDevice(): Promise<void> {
   const session = getSession()
   const device = session?.device
   if (!session || !device || device.manifestSequence === 0n) return
-  const masterKey = toBase64(session.masterKey)
+  const identityRoot = session.roots.identityRoot
   await publishNextManifest(await ownAccount(session), deviceHeader(device), async (head) => {
     if (!head?.devices.some((d) => d.deviceId === device.id) || head.devices.length < 2) return null
-    return removeDevicesFromManifest(head, [device.id], new Date().toISOString(), masterKey)
+    return removeDevicesFromManifest(head, [device.id], new Date().toISOString(), identityRoot)
   })
 }
 

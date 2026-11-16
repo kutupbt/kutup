@@ -322,7 +322,7 @@ pub fn sync(
         .ok_or_else(|| crate::errors::NotFound(format!("collection {collection_id} not found")))?;
     let root_key =
         decrypt_collection_key(root_col, &master_key, sess).context("decrypt collection key")?;
-    let root_keys = crate::keyring::Keyring::load(client, root_col, &root_key, &master_key)?;
+    let root_keys = crate::keyring::Keyring::load(client, root_col, &root_key, sess)?;
 
     let mut children: BTreeMap<&str, Vec<&crate::api::Collection>> = BTreeMap::new();
     for c in &cols {
@@ -350,7 +350,7 @@ pub fn sync(
                 result.errors.push(format!("decrypt folder key {}", sub.id));
                 continue;
             };
-            let Ok(keys) = crate::keyring::Keyring::load(client, sub, &key, &master_key) else {
+            let Ok(keys) = crate::keyring::Keyring::load(client, sub, &key, sess) else {
                 result.errors.push(format!("folder key history {}", sub.id));
                 continue;
             };
@@ -528,7 +528,7 @@ pub fn sync(
                         &parent.collection_id,
                         &parent.hash_key,
                         &sess.user_id,
-                        &master_key,
+                        sess,
                     ) {
                         Ok((id, key)) => {
                             let _ = store.put_sync_dir(

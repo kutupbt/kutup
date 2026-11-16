@@ -222,6 +222,8 @@ pub(crate) struct StateStore {
     keys: HeadKeys,
     binding: String,
     incarnation: String,
+    /// The account's root generations in use, which the head must record.
+    generations: account_head::RootGenerations,
     dir: PathBuf,
 }
 
@@ -230,12 +232,14 @@ impl StateStore {
         master_key: &[u8; 32],
         binding: &str,
         incarnation: &str,
+        generations: account_head::RootGenerations,
         dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
             keys: HeadKeys::derive(master_key)?,
             binding: binding.to_owned(),
             incarnation: incarnation.to_owned(),
+            generations,
             dir,
         })
     }
@@ -350,11 +354,12 @@ impl<'a> CliHead<'a> {
         master_key: &[u8; 32],
         binding: &str,
         incarnation: &str,
+        generations: account_head::RootGenerations,
         dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
             client,
-            store: StateStore::new(master_key, binding, incarnation, dir)?,
+            store: StateStore::new(master_key, binding, incarnation, generations, dir)?,
             verified: None,
             blocked: None,
         })
@@ -362,9 +367,14 @@ impl<'a> CliHead<'a> {
 
     /// This profile's sealed revision guard, taking over the older plaintext
     /// `identity-pins-revision` once (its value becomes the pin list's).
-    pub fn guard(dir: &Path, master_key: &[u8; 32], binding: &str) -> Result<Guard> {
+    pub fn guard(
+        dir: &Path,
+        master_key: &[u8; 32],
+        object_id_key: &kutup_crypto::account_roots::ObjectIdKey,
+        binding: &str,
+    ) -> Result<Guard> {
         let guard = Guard {
-            keys: GuardKeys::derive(master_key, binding)?,
+            keys: GuardKeys::derive(master_key, object_id_key, binding)?,
             path: dir.join("revisions.json"),
         };
         let old = dir.join("identity-pins-revision");
@@ -443,6 +453,7 @@ impl<'a> CliHead<'a> {
             &self.store.keys,
             &self.store.binding,
             &self.store.incarnation,
+            self.store.generations,
             state.anchor.as_ref(),
             &current,
             segment.as_deref(),
@@ -460,6 +471,7 @@ impl<'a> CliHead<'a> {
                     &self.store.keys,
                     &self.store.binding,
                     &self.store.incarnation,
+                    self.store.generations,
                     &anchor,
                     &current,
                     segment.as_deref(),
@@ -561,6 +573,7 @@ impl<'a> CliHead<'a> {
                     &self.store.keys,
                     &self.store.binding,
                     &self.store.incarnation,
+                    self.store.generations,
                     &writer,
                     vec![entry],
                 )?;
@@ -597,6 +610,43 @@ impl<'a> CliHead<'a> {
             }
         }
         bail!("{scope}: another device kept writing first; try again")
+    }
+
+    /// The check a sign-in makes before its session is kept and before
+    /// anything signs or seals with the roots: the server's head checked,
+    /// roots' generations included, so a rolled-back identity or Drive root
+    /// is never used. With no head yet, the chain is started on what the
+    /// account holds, covering no scope, with the generations it registered.
+    /// A rollback or fork is [`HeadBlocked`], as for any other check.
+    pub fn at_sign_in(&mut self) -> Result<()> {
+        for _ in 1..=5 {
+            // Any scope's index answers with the head and, before the first, the basis.
+            let index = self.index("contacts")?;
+            if self.verified.is_some() {
+                return Ok(());
+            }
+            let basis = index
+                .basis
+                .context("the server has no account head and no basis to start one on")?;
+            let writer = self.store.keys.writer(&self.load()?.device_id)?;
+            let (first, verified) = account_head::first(
+                &self.store.keys,
+                &self.store.binding,
+                &self.store.incarnation,
+                self.store.generations,
+                &writer,
+                Vec::new(),
+            )?;
+            // Another device started it first: check that one.
+            if self
+                .client
+                .start_account_head(&STANDARD.encode(&first), &basis)?
+            {
+                self.verified = Some(verified);
+                return self.advance();
+            }
+        }
+        bail!("another device kept starting the account's history; try again")
     }
 
     /// Where this device stands: checks the head now.
@@ -656,6 +706,7 @@ impl<'a> CliHead<'a> {
                     &store.keys,
                     &store.binding,
                     &store.incarnation,
+                    store.generations,
                     &anchor,
                     current,
                     segment.as_deref(),
@@ -707,7 +758,13 @@ mod tests {
     fn the_guard_is_sealed_and_only_moves_forward() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path();
-        let guard = CliHead::guard(dir, &[7u8; 32], GUARD_BINDING).unwrap();
+        let guard = CliHead::guard(
+            dir,
+            &[7u8; 32],
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING,
+        )
+        .unwrap();
         assert_eq!(guard.seen("s", "x").unwrap(), 0);
         guard.accept("s", "x", 5).unwrap();
         assert!(guard.accept("s", "x", 4).is_err());
@@ -715,10 +772,15 @@ mod tests {
         assert!(guard.next("s", "x", 0).unwrap() > 5);
         // Another account's keys read nothing; an altered entry reads as none.
         assert_eq!(
-            CliHead::guard(dir, &[8u8; 32], GUARD_BINDING)
-                .unwrap()
-                .seen("s", "x")
-                .unwrap(),
+            CliHead::guard(
+                dir,
+                &[8u8; 32],
+                &kutup_crypto::account_roots::ObjectIdKey::from_bytes([8u8; 32]),
+                GUARD_BINDING
+            )
+            .unwrap()
+            .seen("s", "x")
+            .unwrap(),
             0
         );
         // Entries are named by an HMAC: the file says nothing of what they are about.
@@ -731,7 +793,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path();
         std::fs::write(dir.join("identity-pins-revision"), "1790000000000").unwrap();
-        let guard = CliHead::guard(dir, &[7u8; 32], GUARD_BINDING).unwrap();
+        let guard = CliHead::guard(
+            dir,
+            &[7u8; 32],
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING,
+        )
+        .unwrap();
         assert_eq!(
             guard
                 .seen(
@@ -755,8 +823,18 @@ mod tests {
             keys.scope_digest("pins", &[("pins".to_string(), i)])
                 .unwrap()
         };
-        let (_, first) =
-            account_head::first(&keys, BINDING, INCARNATION, &writer, vec![entry(1)]).unwrap();
+        let (_, first) = account_head::first(
+            &keys,
+            BINDING,
+            INCARNATION,
+            account_head::RootGenerations {
+                identity: 1,
+                drive: 1,
+            },
+            &writer,
+            vec![entry(1)],
+        )
+        .unwrap();
         let mut heads = vec![first];
         for i in 2..=n as u64 {
             let last = heads.last().unwrap();
@@ -768,7 +846,17 @@ mod tests {
     }
 
     fn store(dir: &Path) -> StateStore {
-        StateStore::new(&[7u8; 32], BINDING, INCARNATION, dir.to_path_buf()).unwrap()
+        StateStore::new(
+            &[7u8; 32],
+            BINDING,
+            INCARNATION,
+            account_head::RootGenerations {
+                identity: 1,
+                drive: 1,
+            },
+            dir.to_path_buf(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -782,7 +870,13 @@ mod tests {
                 std::thread::spawn(move || {
                     // Each its own handles, as another process would have.
                     let store = store(&dir);
-                    let guard = CliHead::guard(&dir, &[7u8; 32], GUARD_BINDING).unwrap();
+                    let guard = CliHead::guard(
+                        &dir,
+                        &[7u8; 32],
+                        &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+                        GUARD_BINDING,
+                    )
+                    .unwrap();
                     for (i, head) in heads.iter().enumerate() {
                         // Out of order across threads: some go back to older heads.
                         let pick = if (i + t) % 3 == 0 {
@@ -809,7 +903,13 @@ mod tests {
             40,
             "the anchor never moved back"
         );
-        let guard = CliHead::guard(temp.path(), &[7u8; 32], GUARD_BINDING).unwrap();
+        let guard = CliHead::guard(
+            temp.path(),
+            &[7u8; 32],
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING,
+        )
+        .unwrap();
         for t in 0..4 {
             for i in 0..40 {
                 assert_eq!(guard.seen("s", &format!("{t}-{i}")).unwrap(), 1 + i as u64);
@@ -862,7 +962,13 @@ mod tests {
         std::fs::write(dir.join("identity-pins-revision"), "1790000000000").unwrap();
         // The guard's file cannot be written (a directory stands in its place).
         std::fs::create_dir(dir.join("revisions.json")).unwrap();
-        assert!(CliHead::guard(dir, &[7u8; 32], GUARD_BINDING).is_err());
+        assert!(CliHead::guard(
+            dir,
+            &[7u8; 32],
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING
+        )
+        .is_err());
         assert!(dir.join("identity-pins-revision").exists());
     }
 }

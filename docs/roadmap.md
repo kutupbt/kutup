@@ -246,6 +246,16 @@ log for remote lookups. Needs no format change: it logs the already-signed
 account ids, key bindings and `AccountRenameV1` chains
 (docs/plans/account-ids.md).
 
+### Split the crypto WASM (after the wipe)
+
+The crypto runtime is one module every app loads, and it is close to its size
+budget (`frontend/wasm-budgets.json`, raised 2026-11-16 for the identity root,
+the block format and the master-key rotation). Split it so each app loads only
+what it uses: a core (account records, master keys, roots, the account head)
+plus parts loaded on demand for Drive blocks, account and identity work, and
+Chat. It changes no stored format, so it waits until after the wipe; each
+part then gets its own budget.
+
 ### Rotate document keys when a device is removed (after W5)
 
 Signal's practice: new sender keys after a member or device leaves. When a
@@ -359,6 +369,17 @@ client:
 - the verified index checked on reads;
 - the chain started on the index basis;
 - a blocked state shown in the app.
+
+`start_client` also does not check the account head yet. The web and the
+CLI check it at sign-in (docs/plans/identity-root.md, "After review"), and
+`start_client` must do the same before a native app ships: read the head
+fresh, check it with the roots' generations before anything signs or seals
+with them, start the chain when there is none, and give a typed blocked
+error plus a "continue with the server's data" call. The intended way is to
+move the IO-free core of the CLI's `CliHead` (verify with segments, too-old
+re-anchoring, continuing) into `kutup-crypto` and share it, rather than
+write a third copy. The head format is already fixed, so this needs no
+format change.
 
 ### Native desktop apps
 

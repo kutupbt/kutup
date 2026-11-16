@@ -536,7 +536,16 @@ mod tests {
         let writer = keys.writer("window").unwrap();
         let total = RETENTION + 5;
         let mut sealed: Vec<Vec<u8>> = Vec::new();
-        let mut head = AccountHeadV1::first(&incarnation, &writer, vec![]).unwrap();
+        let mut head = AccountHeadV1::first(
+            &incarnation,
+            kutup_crypto::account_head::RootGenerations {
+                identity: 1,
+                drive: 1,
+            },
+            &writer,
+            vec![],
+        )
+        .unwrap();
         for sequence in 1..=total {
             if sequence > 1 {
                 head = head.next(sealed.last().unwrap(), &writer, vec![]).unwrap();
@@ -567,6 +576,10 @@ mod tests {
                 &keys,
                 BINDING,
                 &incarnation,
+                kutup_crypto::account_head::RootGenerations {
+                    identity: 1,
+                    drive: 1,
+                },
                 None,
                 &sealed[sequence as usize - 1],
                 None,
@@ -585,6 +598,10 @@ mod tests {
             &keys,
             BINDING,
             &incarnation,
+            kutup_crypto::account_head::RootGenerations {
+                identity: 1,
+                drive: 1,
+            },
             Some(&anchored_at(at)),
             current,
             Some(&segment),
@@ -598,6 +615,10 @@ mod tests {
             &keys,
             BINDING,
             &incarnation,
+            kutup_crypto::account_head::RootGenerations {
+                identity: 1,
+                drive: 1,
+            },
             Some(&anchored_at(at)),
             current,
             None,

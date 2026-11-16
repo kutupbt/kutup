@@ -11,7 +11,7 @@ pub fn run(profile: &str, json: bool, name: &str, parent: Option<&str>) -> Resul
         name,
         parent.map(String::from),
         &ctx.session.user_id,
-        &master_key,
+        &ctx.session,
     )
     .context("encrypt collection")?;
     // Its name's hash in its place: the parent's hash key, or the account's

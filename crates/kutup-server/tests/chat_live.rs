@@ -228,6 +228,7 @@ fn chat_backup_lifecycle(
     owner_token: &str,
     foreign_token: &str,
     master_key: &[u8; 32],
+    identity_root: &kutup_crypto::account_roots::IdentityRoot,
     authority: &SigningKey,
     owner: &ChatDevice,
     foreign: &ChatDevice,
@@ -255,7 +256,7 @@ fn chat_backup_lifecycle(
     assert_eq!(initial["provisioned"], false);
     assert_eq!(initial["currentCursor"], 0);
 
-    let identity = AccountIdentityKeysV1::derive(master_key).unwrap();
+    let identity = AccountIdentityKeysV1::derive(identity_root).unwrap();
     let backup_id = Uuid::new_v4();
     let backup_root = [0x91; 32];
     let account_incarnation_id: [u8; 32] = hex::decode(identity.incarnation_id())
@@ -1168,6 +1169,7 @@ fn chat_v1_contract() {
         &ta,
         &tb,
         &user_a.master_key,
+        &user_a.roots.identity,
         &chat_a.authority,
         &dev_a,
         &dev_b,

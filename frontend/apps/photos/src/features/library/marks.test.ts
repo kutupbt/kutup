@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 // The library record as this browser reads it: what the server says of the
 // record must be what the record says, and an older record than this
@@ -19,7 +20,7 @@ vi.mock('@kutup/drive-core/identity', () => ({ useDriveIdentity: vi.fn() }))
 const { loadMarks } = await import('./marks')
 const { resetLocalChainPinsForTesting } = await import('@kutup/crypto/localChainPins')
 
-const me = { userId: 'u', binding: 'b', incarnationId: 'aa'.repeat(32), masterKey: new Uint8Array(32) } as never
+const me = { userId: 'u', binding: 'b', incarnationId: 'aa'.repeat(32), masterKey: new Uint8Array(32), roots: testRoots(0) } as never
 const stored = (revision: number, envelopeDigest = '22'.repeat(32)) => ({ data: { envelope: 'ZW52', revision, envelopeDigest } })
 const notFound = () => Object.assign(new Error('404'), { isAxiosError: true, response: { status: 404 } })
 

@@ -3,7 +3,6 @@ import api from '@kutup/session/client'
 import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import { broadcastColor } from '@kutup/session/sessionSync'
 import { getSession, updateSession } from '@kutup/session/store'
-import { toBase64 } from '@kutup/crypto/base64'
 import { removeDevicesFromManifest } from '@kutup/crypto/accountManifest'
 import { listAccountDevices, ownAccount, publishNextManifest, type AccountDevice } from '@kutup/session/devices'
 
@@ -210,12 +209,12 @@ export function useRevokeDevice() {
     mutationFn: async (device: EditorDevice) => {
       const session = getSession()
       if (!session) throw new Error('not signed in')
-      const masterKey = toBase64(session.masterKey)
+      const identityRoot = session.roots.identityRoot
       await publishNextManifest(await ownAccount(session), null, async (head) =>
         // Listed: the next manifest leaves it out. Not listed (yet, or any
         // more): nothing to sign; the next publication drops its row.
         head?.devices.some((listed) => listed.deviceId === device.deviceId)
-          ? removeDevicesFromManifest(head, [device.deviceId], new Date().toISOString(), masterKey)
+          ? removeDevicesFromManifest(head, [device.deviceId], new Date().toISOString(), identityRoot)
           : null,
       )
     },

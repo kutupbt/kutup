@@ -40,6 +40,9 @@ pub struct RegisterRequest {
     pub opaque_server_key_id: u16,
     pub master_key_envelope: String,
     pub recovery_key_envelope: String,
+    /// The account's root records, sealed under its master key
+    /// (docs/plans/identity-root.md).
+    pub account_roots: Vec<String>,
     pub public_key: String,
     pub account_authority_public_key: String,
     pub account_authority_key_id: String,
@@ -71,6 +74,12 @@ pub struct LoginResponse {
     pub storage_used_bytes: i64,
     #[serde(default)]
     pub master_key_envelope: String,
+    /// The account's root records and the authority its newest identity
+    /// root must derive (docs/plans/identity-root.md); with the session.
+    #[serde(default)]
+    pub account_roots: Vec<String>,
+    #[serde(default)]
+    pub account_authority_public_key: String,
     #[serde(default)]
     pub public_key: String,
     /// What the account's sealed keys are bound to; only with a session.

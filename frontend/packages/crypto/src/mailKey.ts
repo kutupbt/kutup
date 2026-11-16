@@ -1,3 +1,4 @@
+import type { IdentityRoot } from './accountRoots'
 import type { AccountRef } from './accountRef'
 import { getCryptoWasm } from './rustWasm'
 import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
@@ -101,9 +102,9 @@ export async function armorMailPublicKey(publicKeyBase64: string): Promise<strin
   return (await getCryptoWasm()).armorMailPublicKey(publicKeyBase64)
 }
 
-/** Signs a key list with the account authority derived from the master key. */
-export async function signMailKeyList(masterKeyBase64: string, list: MailKeyListInput): Promise<SignedMailKeyList> {
-  return (await getCryptoWasm()).signMailKeyList(masterKeyBase64, list)
+/** Signs a key list with the account authority (from its identity root). */
+export async function signMailKeyList(identityRoot: IdentityRoot, list: MailKeyListInput): Promise<SignedMailKeyList> {
+  return (await getCryptoWasm()).signMailKeyList(identityRoot, list)
 }
 
 /**

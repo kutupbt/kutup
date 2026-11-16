@@ -56,7 +56,10 @@ fn key32(value: &str) -> [u8; 32] {
 }
 
 fn identity(master_key: &str) -> AccountIdentityKeysV1 {
-    AccountIdentityKeysV1::derive(&key32(master_key)).unwrap()
+    AccountIdentityKeysV1::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+        key32(master_key),
+    ))
+    .unwrap()
 }
 
 /// The same server, another account id: never the same person.

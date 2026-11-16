@@ -194,12 +194,7 @@ fn share_folder(
         &recipient.account_incarnation_id,
         share_anyway,
     )?;
-    let master_key = ctx.session.master_key_bytes()?;
-    let master_key_array: &[u8; 32] = master_key
-        .as_slice()
-        .try_into()
-        .context("master key must be 32 bytes")?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key_array)?;
+    let identity = ctx.session.identity()?;
     // The address led to this account (server-asserted): the share is to it.
     let person = AccountRef::new(&recipient.server, &recipient.account_id)
         .context("the lookup answered no account")?;
@@ -309,12 +304,7 @@ fn share_federated(
         .into_iter()
         .find(|collection| collection.id == collection_id)
         .ok_or_else(|| NotFound(format!("collection {collection_id} not found")))?;
-    let master_key = ctx.session.master_key_bytes()?;
-    let master_key_array: &[u8; 32] = master_key
-        .as_slice()
-        .try_into()
-        .context("master key must be 32 bytes")?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key_array)?;
+    let identity = ctx.session.identity()?;
     // The address led to this account on its server (server-asserted).
     let person = AccountRef::new(&remote.server, &remote.account_id)
         .context("the lookup answered no account")?;

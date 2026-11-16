@@ -112,12 +112,12 @@ async function standing(device: DeviceKeys, account: string): Promise<Standing |
  * registers another.
  */
 async function listed(session: Session, device: DeviceKeys, account: string, sessionHash: string): Promise<DeviceKeys | null> {
-  const masterKey = toBase64(session.masterKey)
+  const identityRoot = session.roots.identityRoot
   const entry = { deviceId: device.id, kind: 'editor' as const, frameKey: toBase64(device.publicKey), session: sessionHash }
   let head: AccountManifest | null
   try {
     head = await publishNextManifest(account, deviceHeader(device), (current) =>
-      listDeviceInManifest(current, entry, new Date().toISOString(), masterKey, account),
+      listDeviceInManifest(current, entry, new Date().toISOString(), identityRoot, account),
     )
   } catch (error) {
     if (isDeviceLimit(error)) throw new TooManyDevicesError()

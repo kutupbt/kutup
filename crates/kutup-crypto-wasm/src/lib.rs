@@ -231,22 +231,24 @@ pub fn open_local_state(
 
 #[wasm_bindgen(js_name = createChatBackupSignerAuthorization)]
 pub fn create_chat_backup_signer_authorization(
-    master_key_base64: &str,
+    identity_root_base64: &str,
     backup_root_base64: &str,
     backup_incarnation_id: &str,
     created_at_unix: i64,
 ) -> Result<JsValue, JsValue> {
-    let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
+    let identity_root: [u8; 32] = decode_canonical_base64(identity_root_base64, "identity root")?
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let root: [u8; 32] = decode_canonical_base64(backup_root_base64, "backup root")?
         .try_into()
         .map_err(|_| js_error("backup root must be 32 bytes"))?;
     if created_at_unix <= 0 {
         return Err(js_error("backup authorization time is invalid"));
     }
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let context = chat_backup_context(&identity.incarnation_id(), backup_incarnation_id)?;
     let signer_seed = chat_backup::derive_manifest_signing_seed(&root, context)
         .map_err(|error| js_error(&error.to_string()))?;
@@ -279,21 +281,23 @@ pub fn create_chat_backup_signer_authorization(
 pub fn verify_chat_backup_metadata(
     signer_authorization: JsValue,
     manifest: JsValue,
-    master_key_base64: &str,
+    identity_root_base64: &str,
     backup_root_base64: &str,
     expected_backup_incarnation_id: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
+    let identity_root: [u8; 32] = decode_canonical_base64(identity_root_base64, "identity root")?
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let root: [u8; 32] = decode_canonical_base64(backup_root_base64, "backup root")?
         .try_into()
         .map_err(|_| js_error("backup root must be 32 bytes"))?;
     let authorization: ChatBackupSignerAuthorizationV1 =
         serde_wasm_bindgen::from_value(signer_authorization)
             .map_err(|error| js_error(&format!("decode backup authorization: {error}")))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let context = chat_backup_context(&identity.incarnation_id(), expected_backup_incarnation_id)?;
     if authorization.backup_incarnation_id != expected_backup_incarnation_id
         || authorization.account_incarnation_id != identity.incarnation_id()
@@ -587,22 +591,89 @@ pub fn derive_recovery_auth_proof(
     Ok(STANDARD.encode(proof.as_slice()))
 }
 
-/// Derive the purpose-separated V1 account identity. The Drive private key is
-/// returned only so the existing account-private wrap can be created during
-/// the pre-tag format cutover; it is never sent in plaintext to the server.
-#[wasm_bindgen(js_name = deriveAccountIdentityKeys)]
-pub fn derive_account_identity_keys(master_key_base64: &str) -> Result<JsValue, JsValue> {
-    let master_key = STANDARD
-        .decode(master_key_base64)
-        .map_err(|_| js_error("master key must be canonical base64"))?;
-    if STANDARD.encode(&master_key) != master_key_base64 {
-        return Err(js_error("master key must be canonical base64"));
-    }
-    let master_key: [u8; 32] = master_key
+#[derive(Serialize)]
+struct SealedAccountRoots {
+    roots: kutup_crypto::account_roots::AccountRootsJson,
+    /// The five root records for the server, canonical base64.
+    envelopes: Vec<String>,
+}
+
+fn roots_error(error: kutup_crypto::error::CryptoError) -> JsValue {
+    js_error(&error.to_string())
+}
+
+/// The account's roots (docs/plans/identity-root.md) sealed under its master
+/// key (of `generation`) for the key `binding`, with the roots: `roots` as
+/// `openAccountRoots` gave them (a sign-up whose binding was drawn again, a
+/// master-key rotation re-wrapping every root at once), or `null` for a new
+/// account's, made now.
+#[wasm_bindgen(js_name = sealAccountRoots)]
+pub fn seal_account_roots(
+    master_key_base64: &str,
+    generation: u32,
+    binding: &str,
+    roots: JsValue,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::account_roots::{AccountRoots, AccountRootsJson};
+    let roots = if roots.is_null() {
+        AccountRoots::generate()
+    } else {
+        let json: AccountRootsJson = serde_wasm_bindgen::from_value(roots)
+            .map_err(|_| js_error("account roots malformed"))?;
+        AccountRoots::try_from(&json).map_err(roots_error)?
+    };
+    let master_key = master_key_32(master_key_base64)?;
+    let envelopes = roots
+        .seal(&master_key, master_key_generation(generation)?, binding)
+        .map_err(roots_error)?;
+    serde_wasm_bindgen::to_value(&SealedAccountRoots {
+        roots: (&roots).into(),
+        envelopes: envelopes.iter().map(|e| STANDARD.encode(e)).collect(),
+    })
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Opens the account's roots from its root records (`accountRoots` of the
+/// sign-in answer, or `GET /api/account/roots`). The newest identity root
+/// must derive `registered_authority_base64` (the account's authority public
+/// key); otherwise the error is `identityRootMismatch`, and no older root
+/// stands in.
+#[wasm_bindgen(js_name = openAccountRoots)]
+pub fn open_account_roots(
+    master_key_base64: &str,
+    binding: &str,
+    envelopes: Vec<String>,
+    registered_authority_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let authority: [u8; 32] = decode_canonical_base64(registered_authority_base64, "authority")?
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+        .map_err(|_| js_error("authority length"))?;
+    let envelopes = envelopes
+        .iter()
+        .map(|e| decode_canonical_base64(e, "account root"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let roots = kutup_crypto::account_roots::AccountRoots::open(
+        &envelopes,
+        &master_key,
+        binding,
+        &authority,
+    )
+    .map_err(roots_error)?;
+    serde_wasm_bindgen::to_value(&kutup_crypto::account_roots::AccountRootsJson::from(&roots))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Derive the purpose-separated V1 account identity from the account's
+/// identity root (`roots.identityRoot`). The Drive private key is returned
+/// for the page's own use; it is never sent to the server.
+#[wasm_bindgen(js_name = deriveAccountIdentityKeys)]
+pub fn derive_account_identity_keys(identity_root_base64: &str) -> Result<JsValue, JsValue> {
+    let identity_root = identity_root_32(identity_root_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&AccountIdentityKeysView {
         authority_public_key: STANDARD.encode(identity.authority_public_key()),
         authority_key_id: identity.authority_key_id(),
@@ -687,8 +758,8 @@ pub fn inspect_account_record(envelope_base64: &str) -> Result<JsValue, JsValue>
 /// Purposes with typed exports (mail address keys, Pass vault secrets,
 /// organization keys, contact cards, mail names, identity pins, Chat list
 /// entries, joined meetings, the profile key's own copy, the account head, a
-/// device's head state, its revisions seen, its mail-search store key and its
-/// chain pins): the generic
+/// device's head state, its revisions seen, its mail-search store key, its
+/// chain pins and its stored roots): the generic
 /// account-record path never hands their secrets to JavaScript.
 fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> {
     match AccountRecordPurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
@@ -708,7 +779,14 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::AccountLocalAnchor
         | AccountRecordPurpose::RevisionSeen
         | AccountRecordPurpose::MailSearchStoreKey
-        | AccountRecordPurpose::LocalChainPin => Err(js_error(
+        | AccountRecordPurpose::LocalChainPin
+        // The account's roots: `generateAccountRoots`, `openAccountRoots`,
+        // `sealAccountRoots` (docs/plans/identity-root.md).
+        | AccountRecordPurpose::IdentityRoot
+        | AccountRecordPurpose::DriveRoot
+        | AccountRecordPurpose::GroupPseudonymRoot
+        | AccountRecordPurpose::CallLinkRoot
+        | AccountRecordPurpose::ObjectIdKey => Err(js_error(
             "this account-record purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -1191,12 +1269,12 @@ pub fn open_collab_frame(
 }
 
 fn account_keys(
-    master_key_base64: &str,
+    identity_root_base64: &str,
 ) -> Result<kutup_crypto::identity::AccountIdentityKeysV1, JsValue> {
-    let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
+    let identity_root: [u8; 32] = decode_canonical_base64(identity_root_base64, "identity root")?
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
-    kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
+    kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(&identity_root[..])?)
         .map_err(|error| js_error(&error.to_string()))
 }
 
@@ -1348,20 +1426,22 @@ pub fn collab_frame_key_generation(frame_base64: &str) -> Result<u32, JsValue> {
 #[wasm_bindgen(js_name = createCollectionEpochStatement)]
 #[allow(clippy::too_many_arguments)]
 pub fn create_collection_epoch_statement(
-    master_key_base64: &str,
+    identity_root_base64: &str,
     collection_key_base64: &str,
     collection_id: &str,
     owner_user_id: &str,
     epoch: u32,
     previous_statement_hash: &str,
 ) -> Result<String, JsValue> {
-    let master_key = decode_canonical_base64(master_key_base64, "master key")?;
-    let master_key: [u8; 32] = master_key
+    let identity_root = decode_canonical_base64(identity_root_base64, "identity root")?;
+    let identity_root: [u8; 32] = identity_root
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let statement = kutup_crypto::collection_epoch::CollectionEpochStatementV1::create(
         collection_id,
         owner_user_id,
@@ -1538,7 +1618,7 @@ pub fn file_key_at(
 #[allow(clippy::too_many_arguments)]
 pub fn seal_named_share_envelope(
     collection_key_base64: &str,
-    sender_master_key_base64: &str,
+    sender_identity_root_base64: &str,
     recipient_hpke_public_key_base64: &str,
     collection_id: &str,
     epoch: u32,
@@ -1548,16 +1628,19 @@ pub fn seal_named_share_envelope(
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
-    let sender_master_key = decode_canonical_base64(sender_master_key_base64, "master key")?;
-    let sender_master_key: [u8; 32] = sender_master_key
+    let sender_identity_root =
+        decode_canonical_base64(sender_identity_root_base64, "identity root")?;
+    let sender_identity_root: [u8; 32] = sender_identity_root
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
         recipient_hpke_public_key_base64,
         "recipient HPKE public key",
     )?;
-    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &sender_identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     kutup_crypto::named_share::NamedShareEnvelopeV1::seal(
         &collection_key,
         collection_id,
@@ -1617,7 +1700,7 @@ pub fn open_named_share_envelope(
 #[allow(clippy::too_many_arguments)]
 pub fn seal_file_share_envelope(
     file_key_base64: &str,
-    sender_master_key_base64: &str,
+    sender_identity_root_base64: &str,
     recipient_hpke_public_key_base64: &str,
     file_id: &str,
     generation: u32,
@@ -1627,16 +1710,19 @@ pub fn seal_file_share_envelope(
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let sender_master_key = decode_canonical_base64(sender_master_key_base64, "master key")?;
-    let sender_master_key: [u8; 32] = sender_master_key
+    let sender_identity_root =
+        decode_canonical_base64(sender_identity_root_base64, "identity root")?;
+    let sender_identity_root: [u8; 32] = sender_identity_root
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
         recipient_hpke_public_key_base64,
         "recipient HPKE public key",
     )?;
-    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &sender_identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     kutup_crypto::named_share::FileShareEnvelopeV1::seal(
         &file_key,
         file_id,
@@ -1695,7 +1781,7 @@ pub fn open_file_share_envelope(
 #[wasm_bindgen(js_name = sealProfileKeyEnvelope)]
 pub fn seal_profile_key_envelope(
     profile_key_base64: &str,
-    sender_master_key_base64: &str,
+    sender_identity_root_base64: &str,
     recipient_hpke_public_key_base64: &str,
     sender: JsValue,
     sender_incarnation_id: &str,
@@ -1703,16 +1789,18 @@ pub fn seal_profile_key_envelope(
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let profile_key = decode_canonical_base64(profile_key_base64, "profile key")?;
-    let sender_master_key: [u8; 32] =
-        decode_canonical_base64(sender_master_key_base64, "master key")?
+    let sender_identity_root: [u8; 32] =
+        decode_canonical_base64(sender_identity_root_base64, "identity root")?
             .try_into()
-            .map_err(|_| js_error("master key must be 32 bytes"))?;
+            .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
         recipient_hpke_public_key_base64,
         "recipient HPKE public key",
     )?;
-    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &sender_identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     kutup_crypto::profile_key_share::ProfileKeyEnvelopeV1::seal(
         &profile_key,
         &kutup_crypto::profile_key_share::ProfileKeyParties {
@@ -2181,6 +2269,34 @@ struct MailAddressKeyView {
 
 /// A 32-byte key from canonical base64, wiped when dropped (as is the decoded
 /// copy).
+/// The identity root a page passes (canonical base64 of 32 bytes): every
+/// export that signs or seals as the account takes it, never the master key
+/// (docs/plans/identity-root.md).
+fn identity_root_32(identity_root_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
+    let bytes = decode_canonical_base64(identity_root_base64, "identity root")?;
+    let root: [u8; 32] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
+    Ok(zeroize::Zeroizing::new(root))
+}
+
+/// The account's object-id key a page passes (canonical base64 of 32 bytes).
+fn object_id_key_of(
+    object_id_key_base64: &str,
+) -> Result<kutup_crypto::account_roots::ObjectIdKey, JsValue> {
+    kutup_crypto::account_roots::ObjectIdKey::from_slice(&decode_canonical_base64(
+        object_id_key_base64,
+        "object-id key",
+    )?)
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+fn identity_root_of(bytes: &[u8]) -> Result<kutup_crypto::account_roots::IdentityRoot, JsValue> {
+    kutup_crypto::account_roots::IdentityRoot::from_slice(bytes)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 fn master_key_32(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
     let decoded =
         zeroize::Zeroizing::new(decode_canonical_base64(master_key_base64, "master key")?);
@@ -3005,12 +3121,14 @@ fn mail_key_list(
 /// Signs an address's key list with the account authority derived from the
 /// master key; the authority and incarnation ids are filled in here.
 #[wasm_bindgen(js_name = signMailKeyList)]
-pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+pub fn sign_mail_key_list(identity_root_base64: &str, list: JsValue) -> Result<JsValue, JsValue> {
+    let identity_root = identity_root_32(identity_root_base64)?;
     let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
         .map_err(|error| js_error(&format!("key list: {error}")))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let list = mail_key_list(input, &identity.authority_public_key())?;
     let signed = list
         .sign(identity.authority_signing_key())
@@ -3324,13 +3442,15 @@ fn drive_hpke_key(
 /// (`{ server, accountId }`).
 #[wasm_bindgen(js_name = signDriveKeyBinding)]
 pub fn sign_drive_key_binding(
-    master_key_base64: &str,
+    identity_root_base64: &str,
     account: JsValue,
     binding_epoch: u32,
 ) -> Result<String, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity_root = identity_root_32(identity_root_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let signature = kutup_crypto::drive_key_binding::sign(
         &identity,
         &account_arg(account, "account account")?,
@@ -3731,16 +3851,18 @@ struct SignedContactSummaryView {
 /// the account's key binding.
 #[wasm_bindgen(js_name = signContactSummary)]
 pub fn sign_contact_summary(
-    master_key_base64: &str,
+    identity_root_base64: &str,
     binding: &str,
     revision: f64,
     summary_json: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let identity_root = identity_root_32(identity_root_base64)?;
     let summary: kutup_crypto::contact_card::ContactSummaryV1 = serde_json::from_str(summary_json)
         .map_err(|error| js_error(&format!("contact summary: {error}")))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let (bytes, signature) = kutup_crypto::contact_card::sign_summary(
         &summary,
         binding,
@@ -3895,13 +4017,24 @@ pub struct RevisionGuardKeys {
 
 #[wasm_bindgen]
 impl RevisionGuardKeys {
-    /// The keys of the account bound by `binding` (`session.envelopeBinding`).
+    /// The keys of the account bound by `binding` (`session.envelopeBinding`):
+    /// records sealed under its master key, named under its object-id key
+    /// (a stored root, `session.roots.objectIdKey`).
     #[wasm_bindgen(constructor)]
-    pub fn new(master_key_base64: &str, binding: &str) -> Result<RevisionGuardKeys, JsValue> {
+    pub fn new(
+        master_key_base64: &str,
+        object_id_key_base64: &str,
+        binding: &str,
+    ) -> Result<RevisionGuardKeys, JsValue> {
         let master_key = master_key_32(master_key_base64)?;
+        let object_id_key = object_id_key_of(object_id_key_base64)?;
         Ok(Self {
-            keys: kutup_crypto::revision_guard::GuardKeys::derive(&master_key, binding)
-                .map_err(|error| js_error(&error.to_string()))?,
+            keys: kutup_crypto::revision_guard::GuardKeys::derive(
+                &master_key,
+                &object_id_key,
+                binding,
+            )
+            .map_err(|error| js_error(&error.to_string()))?,
         })
     }
 
@@ -3956,13 +4089,24 @@ struct OpenedChainPin {
 
 #[wasm_bindgen]
 impl LocalChainPins {
-    /// The keys of the account bound by `binding` (`session.envelopeBinding`).
+    /// The keys of the account bound by `binding` (`session.envelopeBinding`):
+    /// records sealed under its master key, named under its object-id key
+    /// (a stored root, `session.roots.objectIdKey`).
     #[wasm_bindgen(constructor)]
-    pub fn new(master_key_base64: &str, binding: &str) -> Result<LocalChainPins, JsValue> {
+    pub fn new(
+        master_key_base64: &str,
+        object_id_key_base64: &str,
+        binding: &str,
+    ) -> Result<LocalChainPins, JsValue> {
         let master_key = master_key_32(master_key_base64)?;
+        let object_id_key = object_id_key_of(object_id_key_base64)?;
         Ok(Self {
-            keys: kutup_crypto::local_chain_pin::PinKeys::derive(&master_key, binding)
-                .map_err(|error| js_error(&error.to_string()))?,
+            keys: kutup_crypto::local_chain_pin::PinKeys::derive(
+                &master_key,
+                &object_id_key,
+                binding,
+            )
+            .map_err(|error| js_error(&error.to_string()))?,
         })
     }
 
@@ -4534,21 +4678,32 @@ pub struct AccountHeadKeys {
     keys: kutup_crypto::account_head::HeadKeys,
     binding: String,
     incarnation_id: String,
+    /// The account's root generations in use, which the head must record.
+    generations: kutup_crypto::account_head::RootGenerations,
 }
 
 #[wasm_bindgen]
 impl AccountHeadKeys {
     #[wasm_bindgen(constructor)]
+    /// `identity_generation`, `drive_generation`: the generations of the
+    /// account's roots in use (`roots.identityGeneration`,
+    /// `roots.driveGeneration`), which a head must record.
     pub fn new(
         master_key_base64: &str,
         binding: &str,
         incarnation_id: &str,
+        identity_generation: u32,
+        drive_generation: u32,
     ) -> Result<AccountHeadKeys, JsValue> {
         let master_key = master_key_32(master_key_base64)?;
         Ok(Self {
             keys: kutup_crypto::account_head::HeadKeys::derive(&master_key).map_err(head_err)?,
             binding: binding.to_owned(),
             incarnation_id: incarnation_id.to_owned(),
+            generations: kutup_crypto::account_head::RootGenerations {
+                identity: identity_generation,
+                drive: drive_generation,
+            },
         })
     }
 
@@ -4672,6 +4827,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             anchor_arg(anchor_json)?.as_ref(),
             &sealed_head(current_base64)?,
             segment.as_deref(),
@@ -4701,6 +4857,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             &anchor,
             &sealed_head(current_base64)?,
             segment.as_deref(),
@@ -4759,6 +4916,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             writer,
             scopes,
         )
@@ -4790,6 +4948,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             None,
             &sealed,
             None,
@@ -4827,15 +4986,17 @@ struct RenameChainJs {
 /// (docs/plans/username-renames.md). Returns the statement as JSON.
 #[wasm_bindgen(js_name = signAccountRename)]
 pub fn sign_account_rename(
-    master_key_base64: &str,
+    identity_root_base64: &str,
     sequence: f64,
     previous: &str,
     current: &str,
     issued_at_ms: f64,
 ) -> Result<String, JsValue> {
-    let master = master_key_32(master_key_base64)?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity_root = identity_root_32(identity_root_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     if sequence.fract() != 0.0 || !(1.0..=1000.0).contains(&sequence) {
         return Err(js_error("invalid rename sequence"));
     }

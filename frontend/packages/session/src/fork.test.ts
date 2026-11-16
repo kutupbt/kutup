@@ -23,10 +23,12 @@ vi.mock('@kutup/crypto/localState', () => ({
 import { encodeKeys, decodeKeys } from './keys'
 import { consumeFork, hasForkInLocation, produceFork, requestFork, UnrequestedForkError } from './fork'
 import { clearSession, setSession } from './store'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const keys = {
   userId: 'u1',
   masterKey: new Uint8Array(32).fill(1),
+  roots: testRoots(1),
   privateKey: new Uint8Array(32).fill(2),
   publicKey: 'cHVi',
   keyBinding: '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90',

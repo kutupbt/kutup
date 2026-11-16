@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { deriveAccountIdentityKeys, toBase64 } from '@kutup/crypto'
+import { deriveAccountIdentityKeys, type AccountRoots } from '@kutup/crypto'
 import type { AccountRef } from '@kutup/crypto/accountRef'
 import { loadServerSettings } from '@kutup/session/apps'
 import { useRequiredSession, type Session } from '@kutup/session/store'
@@ -14,6 +14,8 @@ export interface DriveIdentity {
   binding: string
   incarnationId: string
   masterKey: Uint8Array
+  /** The account's stored roots: its identity (and so its signatures) comes from `roots.identityRoot`. */
+  roots: AccountRoots
   privateKey: Uint8Array
   /** This account's authority, which signs its folders' key histories. */
   authorityPublicKey: string
@@ -28,7 +30,7 @@ export interface DriveIdentity {
 export async function driveIdentityOf(session: Session): Promise<DriveIdentity> {
   const [data, identity] = await Promise.all([
     loadServerSettings<{ chat?: { serverName?: string } }>(),
-    deriveAccountIdentityKeys(toBase64(session.masterKey)),
+    deriveAccountIdentityKeys(session.roots.identityRoot),
   ])
   const serverName = data.chat?.serverName
   if (!serverName) throw new Error('the server did not publish its name')
@@ -40,6 +42,7 @@ export async function driveIdentityOf(session: Session): Promise<DriveIdentity> 
     binding: session.envelopeBinding,
     incarnationId: identity.incarnationId,
     masterKey: session.masterKey,
+    roots: session.roots,
     privateKey: session.privateKey,
     authorityPublicKey: identity.authorityPublicKey,
   }

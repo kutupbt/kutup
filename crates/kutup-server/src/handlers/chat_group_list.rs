@@ -293,6 +293,7 @@ mod tests {
         let key = GroupListKey::new(
             &[3u8; 32],
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([3u8; 32]),
         );
         let id = key.entry_id(&[5u8; 32]);
         let text_id = encode_entry_id(&id);

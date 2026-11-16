@@ -58,7 +58,7 @@ export async function openRow(row: CollectionRowWithTimes, me: DriveIdentity): P
   const owned = row.ownerUserId === me.userId
   const result = owned
     ? await openOnce(`o:${row.ownerKeyEnvelope}:${row.nameEnvelope}`, () =>
-        openOwnedCollectionV1(row, me.masterKey),
+        openOwnedCollectionV1(row, me),
       )
     : await openOnce(`s:${row.namedShareEnvelope}:${row.nameEnvelope}`, () =>
         openSharedCollectionV1(
@@ -197,7 +197,7 @@ async function loadFolders(me: DriveIdentity): Promise<FolderIndex> {
   let folders = await fetchAll()
   if (!folders.some((f) => f.isRoot)) {
     // First visit: every account keeps its top-level files in one root folder.
-    const created = await createOwnedCollectionV1(me.masterKey, me.userId, ROOT_NAME, null)
+    const created = await createOwnedCollectionV1(me, me.userId, ROOT_NAME, null)
     try {
       await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(atTopLevel(me.masterKey), ROOT_NAME) })
     } catch (error) {

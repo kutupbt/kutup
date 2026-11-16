@@ -324,9 +324,11 @@ mod tests {
 
     fn authority(seed: u8) -> String {
         STANDARD.encode(
-            kutup_crypto::identity::AccountIdentityKeysV1::derive(&[seed; 32])
-                .unwrap()
-                .authority_public_key(),
+            kutup_crypto::identity::AccountIdentityKeysV1::derive(
+                &kutup_crypto::account_roots::IdentityRoot::from_bytes([seed; 32]),
+            )
+            .unwrap()
+            .authority_public_key(),
         )
     }
 

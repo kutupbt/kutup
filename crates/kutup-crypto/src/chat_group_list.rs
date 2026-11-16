@@ -33,6 +33,7 @@ pub const SEALED_LEN: usize = match account_record::exact_record_len(PURPOSE) {
 pub struct GroupListKey {
     master_key: Zeroizing<[u8; 32]>,
     generation: MasterKeyGeneration,
+    object_id_key: crate::account_roots::ObjectIdKey,
 }
 
 /// An opened entry: its revision (from the authenticated header) and plaintext.
@@ -42,16 +43,23 @@ pub struct OpenedEntry {
 }
 
 impl GroupListKey {
-    pub fn new(master_key: &[u8; 32], generation: MasterKeyGeneration) -> Self {
+    /// Entries sealed under `master_key` (of `generation`), their ids
+    /// hashed under the account's `object_id_key`.
+    pub fn new(
+        master_key: &[u8; 32],
+        generation: MasterKeyGeneration,
+        object_id_key: &crate::account_roots::ObjectIdKey,
+    ) -> Self {
         Self {
             master_key: Zeroizing::new(*master_key),
             generation,
+            object_id_key: object_id_key.clone(),
         }
     }
 
     /// The entry id of `group_id` in this account's list.
     pub fn entry_id(&self, group_id: &[u8; GROUP_ID_LEN]) -> [u8; ENTRY_ID_LEN] {
-        account_record::hashed_object(&self.master_key, PURPOSE, group_id)
+        account_record::hashed_object(&self.object_id_key, PURPOSE, group_id)
     }
 
     /// Seals an entry's plaintext for `entry_id` at `revision`, bound to the
@@ -168,14 +176,30 @@ mod tests {
 
     #[test]
     fn an_entry_opens_only_for_its_id_and_account() {
-        let key = GroupListKey::new(&[1u8; 32], FIRST);
-        let other = GroupListKey::new(&[2u8; 32], FIRST);
+        let key = GroupListKey::new(
+            &[1u8; 32],
+            FIRST,
+            &crate::account_roots::ObjectIdKey::from_bytes([1u8; 32]),
+        );
+        let other = GroupListKey::new(
+            &[2u8; 32],
+            FIRST,
+            &crate::account_roots::ObjectIdKey::from_bytes([2u8; 32]),
+        );
         let group = [7u8; GROUP_ID_LEN];
         let id = key.entry_id(&group);
         // The id is per account and is never the group id itself.
         assert_ne!(id, other.entry_id(&group));
         assert_ne!(id, group);
-        assert_eq!(id, GroupListKey::new(&[1u8; 32], FIRST).entry_id(&group));
+        assert_eq!(
+            id,
+            GroupListKey::new(
+                &[1u8; 32],
+                FIRST,
+                &crate::account_roots::ObjectIdKey::from_bytes([1u8; 32])
+            )
+            .entry_id(&group)
+        );
 
         let sealed = key.seal(BINDING, &id, 3, b"entry").unwrap();
         assert_eq!(sealed.len(), SEALED_LEN);
@@ -203,7 +227,11 @@ mod tests {
 
     #[test]
     fn every_entry_has_one_size() {
-        let key = GroupListKey::new(&[1u8; 32], FIRST);
+        let key = GroupListKey::new(
+            &[1u8; 32],
+            FIRST,
+            &crate::account_roots::ObjectIdKey::from_bytes([1u8; 32]),
+        );
         let id = key.entry_id(&[7u8; GROUP_ID_LEN]);
         let mut sizes = std::collections::BTreeSet::new();
         for len in [0, 1, 400, MAX_PLAIN_LEN] {
@@ -224,7 +252,12 @@ mod tests {
 
     #[test]
     fn entry_ids_are_canonical_base64url() {
-        let id = GroupListKey::new(&[1u8; 32], FIRST).entry_id(&[7u8; GROUP_ID_LEN]);
+        let id = GroupListKey::new(
+            &[1u8; 32],
+            FIRST,
+            &crate::account_roots::ObjectIdKey::from_bytes([1u8; 32]),
+        )
+        .entry_id(&[7u8; GROUP_ID_LEN]);
         let text = encode_entry_id(&id);
         assert_eq!(text.len(), 43);
         assert_eq!(decode_entry_id(&text).unwrap(), id);

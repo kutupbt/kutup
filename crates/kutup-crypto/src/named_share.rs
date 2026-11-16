@@ -451,8 +451,14 @@ mod tests {
 
     #[test]
     fn named_share_round_trip_is_signature_identity_and_incarnation_bound() {
-        let sender = AccountIdentityKeysV1::derive(&[1u8; 32]).unwrap();
-        let recipient = AccountIdentityKeysV1::derive(&[2u8; 32]).unwrap();
+        let sender = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([1u8; 32]),
+        )
+        .unwrap();
+        let recipient = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([2u8; 32]),
+        )
+        .unwrap();
         let envelope = NamedShareEnvelopeV1::seal(
             &[0x55; 32],
             "11111111-1111-4111-8111-111111111111",
@@ -510,8 +516,14 @@ mod tests {
 
     #[test]
     fn parser_rejects_tamper_trailing_unknown_and_self_shares() {
-        let sender = AccountIdentityKeysV1::derive(&[1u8; 32]).unwrap();
-        let recipient = AccountIdentityKeysV1::derive(&[2u8; 32]).unwrap();
+        let sender = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([1u8; 32]),
+        )
+        .unwrap();
+        let recipient = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([2u8; 32]),
+        )
+        .unwrap();
         // A share to oneself (same person, same incarnation) is refused.
         assert!(NamedShareEnvelopeV1::seal(
             &[0x55; 32],
@@ -564,8 +576,14 @@ mod tests {
 
     #[test]
     fn a_file_share_opens_only_for_its_file_generation_and_recipient() {
-        let sender = AccountIdentityKeysV1::derive(&[1u8; 32]).unwrap();
-        let recipient = AccountIdentityKeysV1::derive(&[2u8; 32]).unwrap();
+        let sender = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([1u8; 32]),
+        )
+        .unwrap();
+        let recipient = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([2u8; 32]),
+        )
+        .unwrap();
         let file = "22222222-2222-4222-8222-222222222222";
         let envelope = FileShareEnvelopeV1::seal(
             &[0x66; 32],

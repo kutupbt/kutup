@@ -1,8 +1,10 @@
 //! Deterministic, purpose-separated account identity keys.
 //!
-//! The recoverable account master key is the only root. Independent HKDF
-//! labels derive an account self-authority, a Drive HPKE key and a Drive
-//! share-signing Ed25519 key. Public keys may appear together in an account
+//! The account's identity root (`account_roots::IdentityRoot`, a random
+//! secret stored under the master key, docs/plans/identity-root.md) is the
+//! only input: a new master key leaves the identity as it is. Independent
+//! HKDF labels derive an account self-authority, a Drive HPKE key and a
+//! Drive share-signing Ed25519 key. Public keys may appear together in an account
 //! manifest; private keys and signing purposes are never shared.
 //!
 //! The Drive HPKE key is X-Wing (identity suite 2, docs/plans/pq-shares.md):
@@ -26,7 +28,7 @@ const INCARNATION_DOMAIN: &[u8] = crate::labels::ACCOUNT_INCARNATION_V1;
 /// Ed25519 signing keys.
 pub const IDENTITY_SUITE: u16 = 2;
 
-/// Complete account identity derived locally from the master key.
+/// Complete account identity derived locally from the identity root.
 pub struct AccountIdentityKeysV1 {
     authority: SigningKey,
     drive_hpke_public: [u8; hpke_xwing::PUBLIC_KEY_LEN],
@@ -35,8 +37,8 @@ pub struct AccountIdentityKeysV1 {
 }
 
 impl AccountIdentityKeysV1 {
-    pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let hkdf = Kdf::new(Suite::V1, ACCOUNT_IDENTITY_SALT, master_key);
+    pub fn derive(identity_root: &crate::account_roots::IdentityRoot) -> Result<Self> {
+        let hkdf = Kdf::new(Suite::V1, ACCOUNT_IDENTITY_SALT, identity_root.as_bytes());
         let mut authority_seed = Zeroizing::new([0u8; 32]);
         let mut hpke_seed = Zeroizing::new([0u8; 32]);
         let mut signing_seed = Zeroizing::new([0u8; 32]);
@@ -71,9 +73,9 @@ impl AccountIdentityKeysV1 {
         authority_key_id_from_public(&self.authority_public_key())
     }
 
-    /// Stable identity for one cryptographic lifetime of the human-readable
-    /// account address. Administrative wipe derives a different value because
-    /// it creates a new master key and authority.
+    /// Stable identity for one cryptographic lifetime of the account. A
+    /// reset (or an identity rotation) makes a new identity root, so a new
+    /// authority and a different value; a new master key does not.
     pub fn incarnation_id(&self) -> String {
         incarnation_id_from_authority_public(&self.authority_public_key())
     }
@@ -114,8 +116,8 @@ mod tests {
 
     #[test]
     fn identity_is_deterministic_and_purpose_separated() {
-        let first = AccountIdentityKeysV1::derive(&[7u8; 32]).unwrap();
-        let second = AccountIdentityKeysV1::derive(&[7u8; 32]).unwrap();
+        let first = AccountIdentityKeysV1::derive(&root(7)).unwrap();
+        let second = AccountIdentityKeysV1::derive(&root(7)).unwrap();
         assert_eq!(first.authority_public_key(), second.authority_public_key());
         assert_eq!(first.incarnation_id(), second.incarnation_id());
         assert_eq!(
@@ -136,10 +138,14 @@ mod tests {
         );
     }
 
+    fn root(byte: u8) -> crate::account_roots::IdentityRoot {
+        crate::account_roots::IdentityRoot::from_bytes([byte; 32])
+    }
+
     #[test]
-    fn a_new_master_key_is_a_new_incarnation() {
-        let first = AccountIdentityKeysV1::derive(&[1u8; 32]).unwrap();
-        let second = AccountIdentityKeysV1::derive(&[2u8; 32]).unwrap();
+    fn a_new_identity_root_is_a_new_incarnation() {
+        let first = AccountIdentityKeysV1::derive(&root(1)).unwrap();
+        let second = AccountIdentityKeysV1::derive(&root(2)).unwrap();
         assert_ne!(first.authority_key_id(), second.authority_key_id());
         assert_ne!(first.incarnation_id(), second.incarnation_id());
     }

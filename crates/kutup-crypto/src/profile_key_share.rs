@@ -267,8 +267,14 @@ mod tests {
             recipient: &bob_ref,
             recipient_incarnation_id: BOB_INC,
         };
-        let alice = AccountIdentityKeysV1::derive(&[1u8; 32]).unwrap();
-        let bob = AccountIdentityKeysV1::derive(&[2u8; 32]).unwrap();
+        let alice = AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes(
+            [1u8; 32],
+        ))
+        .unwrap();
+        let bob = AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes(
+            [2u8; 32],
+        ))
+        .unwrap();
         let key = [9u8; 32];
         let envelope = ProfileKeyEnvelopeV1::seal(
             &key,
@@ -289,7 +295,10 @@ mod tests {
         );
 
         // Another reader, another claimed sender, or other parties fail.
-        let carol = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
+        let carol = AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes(
+            [3u8; 32],
+        ))
+        .unwrap();
         assert!(decoded
             .open(&parties, &alice_signing, carol.drive_hpke_private_key())
             .is_err());

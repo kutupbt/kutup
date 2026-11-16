@@ -242,11 +242,13 @@ fn identity_of(
 }
 
 impl Engine {
-    /// Keeps this account's contacts in its contact list, under keys from its
-    /// `master_key`, bound to its key `binding`, timed as `timing` says.
+    /// Keeps this account's contacts in its contact list, sealed under its
+    /// `master_key` and named under its `object_id_key` (a stored root),
+    /// bound to its key `binding`, timed as `timing` says.
     pub fn enable_contact_list(
         &mut self,
         master_key: &[u8; 32],
+        object_id_key: &kutup_crypto::account_roots::ObjectIdKey,
         binding: &str,
         timing: ContactListTiming,
     ) -> Result<()> {
@@ -258,6 +260,7 @@ impl Engine {
             key: ContactListKey::new(
                 master_key,
                 kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                object_id_key,
             ),
             binding: binding.to_string(),
             timing,

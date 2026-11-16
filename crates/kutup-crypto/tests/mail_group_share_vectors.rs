@@ -53,7 +53,11 @@ fn group_key() -> (Vec<u8>, [u8; 20]) {
 }
 
 fn member_keys(master: &str) -> AccountIdentityKeysV1 {
-    AccountIdentityKeysV1::derive(&STANDARD.decode(master).unwrap().try_into().unwrap()).unwrap()
+    AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_slice(&STANDARD.decode(master).unwrap())
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 #[test]

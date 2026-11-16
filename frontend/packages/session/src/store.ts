@@ -7,8 +7,8 @@
 // this module.
 
 import { useSyncExternalStore } from 'react'
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import type { DeviceKeys } from './keys'
-
 export interface Session {
   /** The server-side session (auth_sessions.id) this app origin holds. */
   sessionId: string
@@ -29,6 +29,8 @@ export interface Session {
   color: string | null
   publicKey: string
   masterKey: Uint8Array
+  /** The account's stored roots (docs/plans/identity-root.md), opened at sign-in: its identity derives from `roots.identityRoot`. */
+  roots: AccountRoots
   privateKey: Uint8Array
   currentDeviceId: number | null
   /** This sign-in's device on this origin, once registered (persisted with the keys). */

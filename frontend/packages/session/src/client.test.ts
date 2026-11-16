@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import api, { configureClient, setUnauthenticatedHandler } from './client'
 import { clearSession, getAccessToken, getSession, setSession } from './store'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 // Tests for the axios wrapper at frontend/src/api/client.ts.
 // Strategy: install a tiny in-memory adapter on the api instance via
@@ -63,6 +64,7 @@ const seedAuth = (token: string | null) => {
     address: 'a@b.c', envelopeBinding: 'a@b.c',
     username: null,
     masterKey: new Uint8Array(0),
+    roots: testRoots(0),
     privateKey: new Uint8Array(0),
     publicKey: '',
     isAdmin: false,
