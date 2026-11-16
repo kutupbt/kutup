@@ -32,7 +32,7 @@ use crate::AppState;
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CommitRevisionRequest {
-    /// The file's next metadata (`FileMetadataV2`, committing to this
+    /// The file's next metadata (`FileMetadata`, committing to this
     /// revision and its manifest's digest), sealed at `metadataRevision`.
     metadata_envelope: String,
     /// Exactly the file's current metadata revision + 1; 1 for a new file.

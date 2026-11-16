@@ -156,50 +156,66 @@
     "envelope": "S1VUUExMMQAAAAAAAAAAB8jJysvMzc7P0NHS09TV1tfY2drb3N3e3zksqYjw55WEGJeMzizhV2kY1MX+p5srEee+Gg/jvp44PAtsismAeBj6xAxWXKKKPw=="
   },
   "fileMetadata": {
-    "description": "A Drive file's metadata plaintext (kutup-crypto/src/file_metadata.rs, FileMetadataV2): canonical JSON; decoding refuses unknown fields and out-of-range values. The content commitment is required and encoded right after size; originalRevisionId (the first upload's revision, never changed) and stateRevisionId (the latest saved Yjs state) are optional canonical lowercase UUIDs, encoded after content. sha256 is the canonical base64 SHA-256 of the content (32 bytes, no other spelling). Every invalid case but the first carries a well-formed content commitment.",
+    "description": "A Drive file's metadata plaintext (kutup-crypto/src/file_metadata.rs, FileMetadata): canonical JSON, \"v\" first (docs/plans/format-evolution.md); the version is 2 (the block format): version 1, a whole-file blob, is refused. The content commitment is required and encoded right after size; originalRevisionId (the first upload's revision, never changed) and stateRevisionId (the latest saved Yjs state) are optional canonical lowercase UUIDs, encoded after content. Unknown fields are kept and written back sorted after the known ones; a minimum reader (\"min\", else \"v\") above 2 is newer than this reader (its error starts \"newer format: \"); out-of-range values are refused. sha256 is the canonical base64 SHA-256 of the content (32 bytes, no other spelling).",
     "canonical": [
       {
-        "input": "{\"size\":0,\"mimeType\":\"text/plain\",\"name\":\"a.txt\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-        "output": "{\"name\":\"a.txt\",\"mimeType\":\"text/plain\",\"size\":0,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}"
+        "input": "{\"v\":2,\"size\":0,\"mimeType\":\"text/plain\",\"name\":\"a.txt\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+        "output": "{\"v\":2,\"name\":\"a.txt\",\"mimeType\":\"text/plain\",\"size\":0,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}"
       },
       {
-        "input": "{\"media\":{\"camera\":\"Apple iPhone 15\",\"height\":3024,\"width\":4032,\"lon\":28.9784,\"lat\":41.0082,\"takenFrom\":\"exif\",\"takenOffset\":180,\"takenAt\":1719835200000},\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"size\":2345678,\"mimeType\":\"image/jpeg\",\"name\":\"IMG_0001.jpg\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-        "output": "{\"name\":\"IMG_0001.jpg\",\"mimeType\":\"image/jpeg\",\"size\":2345678,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"media\":{\"takenAt\":1719835200000,\"takenOffset\":180,\"takenFrom\":\"exif\",\"lat\":41.0082,\"lon\":28.9784,\"width\":4032,\"height\":3024,\"camera\":\"Apple iPhone 15\"}}"
+        "input": "{\"v\":2,\"media\":{\"camera\":\"Apple iPhone 15\",\"height\":3024,\"width\":4032,\"lon\":28.9784,\"lat\":41.0082,\"takenFrom\":\"exif\",\"takenOffset\":180,\"takenAt\":1719835200000},\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"size\":2345678,\"mimeType\":\"image/jpeg\",\"name\":\"IMG_0001.jpg\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+        "output": "{\"v\":2,\"name\":\"IMG_0001.jpg\",\"mimeType\":\"image/jpeg\",\"size\":2345678,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"media\":{\"takenAt\":1719835200000,\"takenOffset\":180,\"takenFrom\":\"exif\",\"lat\":41.0082,\"lon\":28.9784,\"width\":4032,\"height\":3024,\"camera\":\"Apple iPhone 15\"}}"
       },
       {
-        "input": "{\"name\":\"clip.mov\",\"mimeType\":\"video/quicktime\",\"size\":10,\"media\":{\"takenAt\":-1000,\"takenFrom\":\"video\",\"durationMs\":61500,\"width\":1920,\"height\":1080,\"caption\":\"Doğum günü\"},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-        "output": "{\"name\":\"clip.mov\",\"mimeType\":\"video/quicktime\",\"size\":10,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"media\":{\"takenAt\":-1000,\"takenFrom\":\"video\",\"width\":1920,\"height\":1080,\"durationMs\":61500,\"caption\":\"Doğum günü\"}}"
+        "input": "{\"v\":2,\"name\":\"clip.mov\",\"mimeType\":\"video/quicktime\",\"size\":10,\"media\":{\"takenAt\":-1000,\"takenFrom\":\"video\",\"durationMs\":61500,\"width\":1920,\"height\":1080,\"caption\":\"Doğum günü\"},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+        "output": "{\"v\":2,\"name\":\"clip.mov\",\"mimeType\":\"video/quicktime\",\"size\":10,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"media\":{\"takenAt\":-1000,\"takenFrom\":\"video\",\"width\":1920,\"height\":1080,\"durationMs\":61500,\"caption\":\"Doğum günü\"}}"
       },
       {
-        "input": "{\"name\":\"IMG_0001.MOV\",\"mimeType\":\"video/quicktime\",\"size\":3,\"media\":{\"liveOf\":\"22222222-2222-4222-8222-222222222222\",\"durationMs\":2900,\"takenFrom\":\"video\",\"takenAt\":1719835200000},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-        "output": "{\"name\":\"IMG_0001.MOV\",\"mimeType\":\"video/quicktime\",\"size\":3,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"media\":{\"takenAt\":1719835200000,\"takenFrom\":\"video\",\"durationMs\":2900,\"liveOf\":\"22222222-2222-4222-8222-222222222222\"}}"
+        "input": "{\"v\":2,\"name\":\"IMG_0001.MOV\",\"mimeType\":\"video/quicktime\",\"size\":3,\"media\":{\"liveOf\":\"22222222-2222-4222-8222-222222222222\",\"durationMs\":2900,\"takenFrom\":\"video\",\"takenAt\":1719835200000},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+        "output": "{\"v\":2,\"name\":\"IMG_0001.MOV\",\"mimeType\":\"video/quicktime\",\"size\":3,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"media\":{\"takenAt\":1719835200000,\"takenFrom\":\"video\",\"durationMs\":2900,\"liveOf\":\"22222222-2222-4222-8222-222222222222\"}}"
       },
       {
-        "input": "{\"stateRevisionId\":\"44444444-4444-4444-8444-444444444444\",\"originalRevisionId\":\"33333333-3333-4333-8333-333333333333\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"size\":5,\"mimeType\":\"text/markdown\",\"name\":\"note.md\"}",
-        "output": "{\"name\":\"note.md\",\"mimeType\":\"text/markdown\",\"size\":5,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"originalRevisionId\":\"33333333-3333-4333-8333-333333333333\",\"stateRevisionId\":\"44444444-4444-4444-8444-444444444444\"}"
+        "input": "{\"v\":2,\"stateRevisionId\":\"44444444-4444-4444-8444-444444444444\",\"originalRevisionId\":\"33333333-3333-4333-8333-333333333333\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"size\":5,\"mimeType\":\"text/markdown\",\"name\":\"note.md\"}",
+        "output": "{\"v\":2,\"name\":\"note.md\",\"mimeType\":\"text/markdown\",\"size\":5,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"originalRevisionId\":\"33333333-3333-4333-8333-333333333333\",\"stateRevisionId\":\"44444444-4444-4444-8444-444444444444\"}"
       },
       {
-        "input": "{\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"originalRevisionId\":\"22222222-2222-4222-8222-222222222222\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"size\":1,\"mimeType\":\"\",\"name\":\"a\"}",
-        "output": "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"originalRevisionId\":\"22222222-2222-4222-8222-222222222222\",\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}"
+        "input": "{\"v\":2,\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\",\"originalRevisionId\":\"22222222-2222-4222-8222-222222222222\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"size\":1,\"mimeType\":\"\",\"name\":\"a\"}",
+        "output": "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"originalRevisionId\":\"22222222-2222-4222-8222-222222222222\",\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}"
+      },
+      {
+        "input": "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"tags\":[\"x\"],\"media\":{\"zz\":1,\"takenAt\":1,\"takenFrom\":\"satellite\"},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"colour\":\"red\"}",
+        "output": "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"media\":{\"takenAt\":1,\"takenFrom\":\"satellite\",\"zz\":1},\"colour\":\"red\",\"tags\":[\"x\"]}"
+      },
+      {
+        "input": "{\"v\":3,\"min\":1,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-2222-2222-222222222222\",\"manifestSha256\":\"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=\"}}",
+        "output": "{\"v\":3,\"min\":1,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-2222-2222-222222222222\",\"manifestSha256\":\"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=\"}}"
       }
     ],
     "invalid": [
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"originalRevisionId\":\"not-a-uuid\"}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"originalRevisionId\":\"33333333-3333-4333-8333-33333333333A\"}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"stateRevisionId\":\"\"}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"stateRevisionId\":1}",
+      "{\"v\":2,\"name\":\"\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":9007199254740992,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"lat\":0,\"lon\":0},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"takenAt\":1},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"width\":10},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"sha256\":\"AAAA\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwd=\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"liveOf\":\"not-a-uuid\"},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "garbage",
       "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"originalRevisionId\":\"not-a-uuid\"}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"originalRevisionId\":\"33333333-3333-4333-8333-33333333333A\"}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"stateRevisionId\":\"\"}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"stateRevisionId\":1}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"extra\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":9007199254740992,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"lat\":0,\"lon\":0},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"takenAt\":1},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"width\":10},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"sha256\":\"AAAA\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"sha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwd=\",\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"hash\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
-      "{\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"media\":{\"liveOf\":\"not-a-uuid\"},\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}"
+      "{\"v\":2,\"min\":2,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":0,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}",
+      "{\"v\":1,\"name\":\"a\",\"mimeType\":\"\",\"size\":1}",
+      "{\"v\":1,\"name\":\"a\",\"mimeType\":\"\",\"size\":1,\"content\":{\"revisionId\":\"22222222-2222-4222-8222-222222222222\",\"manifestSha256\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\"}}"
+    ],
+    "newer": [
+      "{\"v\":3,\"name\":\"a\",\"mimeType\":\"\",\"size\":1}",
+      "{\"v\":4,\"min\":3,\"name\":{\"parts\":[\"a\"]}}"
     ],
     "contentHash": {
       "chunks": [
@@ -216,17 +232,17 @@
     "accountIncarnationId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
     "first": {
       "revision": 1,
-      "plaintext": "{\"favourites\":[\"22222222-2222-4222-8222-222222222222\"],\"archived\":[],\"hidden\":[\"33333333-3333-4333-8333-333333333333\"]}",
+      "plaintext": "{\"v\":1,\"favourites\":[\"22222222-2222-4222-8222-222222222222\"],\"archived\":[],\"hidden\":[\"33333333-3333-4333-8333-333333333333\"]}",
       "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH",
-      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABzhCdu4+78eJTo+FG+h4NCIGESJO8T6ac4U7uzCzMvBBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHAAABEEgiWc0cXSkNAv0XLop55p9L5+zNKCUf2U2rCMXz/sCKV0cSHv+ZMIr9As7QdUBtu0hJp6fBPadOCmlPYV5v4jnm/LnaZh27Wt9EgD7sHLANisW4oNGPzyfjP79lU5aU6AWnnlE9V3MRs/GnIroF9b5qW8s1IEHdthXVSFd+yOCRRcztSWxqHfdVB/Y2VAsP9tRj3X0b/1KV7o7XoSYafuWHKuU0gPDXpjQj/BVo6gVVua+azlcojcYkCtpfur47be3VlibVdMDbRbxsdrosN9v697LtAVzEMsXWW5bmz81w5/M1FyNA2HyPjp5q80dCW9dZhabjlvQDSJU4NvKPjBtYk1T60K9Y+40WuKnq/hbk",
-      "digest": "f6efd0cd0c53eb8f01b2de53e8cdfdb69820a68618ccdee32eee42aa5e825689"
+      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABzhCdu4+78eJTo+FG+h4NCIGESJO8T6ac4U7uzCzMvBBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHAAABEEgiSY5QA3BdDegEMt0x1MkcpvzFQTUf2VKrCMXz4dmKV0cNC/mZMJXiCM7QdV9tu0hJp6fRUrleWSkOVBs75i+nrovxL1vxCeB9yXKmT49L3Jipqbmezyf9P79lU4iN6AWngEQ6V3MPrfqnIrob9b5qW8s1MS+TBSbmagoDSOCRRcztSWxqHfdVB/Y2VAsP9tRj3X0b/1KV7o7XoSYafuWHKuU0gPDXpjQj/BVo6gVVua+azlcojcYkCtpfur47be3VlibVdMDbRbxsdrosN9v697LtAVzEMsXWW5bmz81w5/M1FyNA2HyPjp5q80dCW9dZhabjlvQDSJU4NvKPjBv3NUX/uIoqJvcUeP1XSk1R",
+      "digest": "08c20f481af9cf4d394bb60757e0b19c6692f8f85fc911413da6af82fb458d6d"
     },
     "second": {
       "revision": 2,
-      "previousDigest": "f6efd0cd0c53eb8f01b2de53e8cdfdb69820a68618ccdee32eee42aa5e825689",
-      "plaintext": "{\"favourites\":[],\"archived\":[],\"hidden\":[]}",
+      "previousDigest": "08c20f481af9cf4d394bb60757e0b19c6692f8f85fc911413da6af82fb458d6d",
+      "plaintext": "{\"v\":1,\"favourites\":[],\"archived\":[],\"hidden\":[]}",
       "nonce": "CAgICAgICAgICAgICAgICAgICAgICAgI",
-      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAL279DNDFPrjwGy3lPozf22mCCmhhjM3uMu7kKqXoJWiXUpYuG6oBhH/MoY0+Clt2XruZAkH4lGJlCrOk2tuDV7CAgICAgICAgICAgICAgICAgICAgICAgIAAABEEzb79UkSgBXe7wQnJBGOpMIpguWBe/PuuLt3p1R3pJd+PZtvjfz+Fy5nxZoq0ph9CzlQyF2Ej7eV0jOKNtNG6wPgi1yZ/YJAMuB9OVdB4IKegNYhsIbqx+/pwjQ7f9BxlmIH9k+4TqsPPFngU2eNuH36sbY43UT96X29gX7ps0NcLv5jz/n6VzvBSdjwjZhPtMzqFk8e0nwdW7SNwavRZBcnYNxlBOqV1LPli7UyZWAX1YHNCtjKOpj3DQ7jBgU0bdjPJ6m+wkMig7QdRSAT4ozqe8QLJrqF/lLI3oCagvFupEoGeAZClfjeElZ+/u1rrMgqcHHwQ++/mmiyyCZkdeW8uor5K2yLAFD3dPVt/oL"
+      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAIIwg9IGvnPTTlLtgdX4LGcZpL4+F/JEUE9pq+C+0WNbZchxxiD5hRumLne9fA6dz14WXvrjkf5Rr6UJ57ISmVqCAgICAgICAgICAgICAgICAgICAgICAgIAAABEIEZwPE7lZpQBlsGVNdR4Szit/srphU07toHqgxeR9dQRnopDmMBTVEDBwkVnaI0idz7x8kIzlac6VJ+LjFkGWlbWpasHOf/QMG7bSW8O2lTzyE20pDdwLh6rHjBN2fyoJrY2EMVXQORlxy1g2o27jmYWkZ9zcNX4eKZDOMNyPkjgoRoQ/crecujOi83bMULw8bcC3CBjyFlcraXrbAFgP/khYeep9oqKleR9wNb6htHF2krmL64oDSc3grFfE4E/RzxeDWDJiVZLFtyJ52FsmKcPoDOfCMCy38WHtPUspnLPWuah6g7PEL4HFRhungo7V+OWnCNXNklGdLkPW5manL+2H5IfhnCOAmreDTGjFBX"
     }
   },
   "driveNames": {

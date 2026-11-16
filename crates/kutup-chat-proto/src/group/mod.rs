@@ -62,8 +62,11 @@ pub const MAX_ACTIONS_PER_CHANGE: usize = 64;
 /// The largest canonical change: what one request to the home carries
 /// (`group_route::MAX_REQUEST_BODY`).
 pub const MAX_CHANGE_BYTES: usize = crate::group_route::MAX_REQUEST_BODY;
-/// The hard ceiling for `GroupLimits::max_members` (§7).
-pub const MAX_GROUP_MEMBERS: usize = 256;
+/// The format's ceiling for `GroupLimits::max_members` (§7): Signal's hard
+/// limit, so a state a home with a higher working limit serves still reads
+/// on every client (docs/plans/format-evolution.md, group row). The working
+/// limit is each home's site setting (`chat_group_max_members`).
+pub const MAX_GROUP_MEMBERS: usize = 1000;
 pub const INVITE_LINK_PASSWORD_LEN: usize = 16;
 
 /// A member's role: Signal's two (`Groups.proto` `Member.Role`).

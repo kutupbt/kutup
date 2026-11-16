@@ -448,6 +448,7 @@ assert.equal(verifiedAuthorization.manifestDigest, undefined)
 const backupSegment = {
   version: 1,
   records: [{
+    type: 'display',
     version: 1,
     recordId: '55555555-5555-4555-8555-555555555555',
     mutationSequence: 1,
@@ -473,6 +474,21 @@ assert.deepEqual(
   crypto.decodeChatBackupPlaintext(canonicalBackupSegment, 2),
   backupSegment,
 )
+// A record type this client doesn't know is kept as it came; a newer
+// version is newer than this reader (docs/plans/format-evolution.md).
+const backupRecordVectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-chat-proto/tests/vectors/chat-backup-records-v1.json`, 'utf8'),
+)
+const segmentBase64 = Buffer.from(backupRecordVectors.segment).toString('base64')
+const decodedRecords = crypto.decodeChatBackupPlaintext(segmentBase64, 2)
+assert.deepEqual(decodedRecords.records.map((record) => record.type), backupRecordVectors.types)
+assert.equal(crypto.encodeChatBackupPlaintext(decodedRecords, 2), segmentBase64)
+for (const bad of backupRecordVectors.invalid) {
+  assert.throws(() => crypto.decodeChatBackupPlaintext(Buffer.from(bad).toString('base64'), 2), (error) => !String(error).startsWith('newer format: '))
+}
+for (const newer of backupRecordVectors.newer) {
+  assert.throws(() => crypto.decodeChatBackupPlaintext(Buffer.from(newer).toString('base64'), 2), (error) => String(error).startsWith('newer format: '))
+}
 const backupOperation = '66666666-6666-4666-8666-666666666666'
 const sealedBackupSegment = crypto.sealChatBackupObject(
   canonicalBackupSegment,
@@ -732,7 +748,11 @@ for (const { input, output } of metadataVector.canonical) {
   assert.equal(crypto.canonicalFileMetadata(output), output)
 }
 for (const bad of metadataVector.invalid) {
-  assert.throws(() => crypto.canonicalFileMetadata(bad))
+  assert.throws(() => crypto.canonicalFileMetadata(bad), (error) => !String(error).startsWith('newer format: '))
+}
+// Newer than this reader: refused as such, not as corrupt (format-evolution, rule 5).
+for (const newer of metadataVector.newer) {
+  assert.throws(() => crypto.canonicalFileMetadata(newer), (error) => String(error).startsWith('newer format: '))
 }
 const contentHasher = new crypto.ContentHasher()
 for (const chunk of metadataVector.contentHash.chunks) contentHasher.update(Buffer.from(chunk, 'base64'))
@@ -754,13 +774,13 @@ assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, maste
 // The generic account-record path refuses the purpose.
 assert.throws(() => crypto.openAccountRecord(libraryVector.first.envelope, libraryVector.masterKey, 13, libraryVector.binding))
 const resealed = crypto.sealPhotosLibrary(
-  JSON.stringify({ favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [] }),
+  JSON.stringify({ v: 1, favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [], albums: [1] }),
   masterKeySet(libraryVector.masterKey), libraryVector.binding, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope),
 )
 assert.equal(crypto.photosLibraryDigest(resealed.envelope), resealed.digest)
 assert.equal(
   crypto.openPhotosLibrary(resealed.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope)),
-  '{"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[]}',
+  '{"v":1,"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[],"albums":[1]}',
 )
 
 // What one Drive revision is (docs/plans/drive-block-format.md §2): the
@@ -1008,7 +1028,7 @@ const contactVectors = JSON.parse(
 const contactIdentity = crypto.deriveAccountIdentityKeys(contactVectors.masterKey)
 // Signing a reordered summary gives the canonical bytes and the vector signature.
 const reordered = JSON.parse(contactVectors.summary)
-const shuffled = JSON.stringify({ pinnedKeys: reordered.pinnedKeys, groups: reordered.groups, emails: reordered.emails, name: reordered.name, uid: reordered.uid })
+const shuffled = JSON.stringify({ pinnedKeys: reordered.pinnedKeys, groups: reordered.groups, emails: reordered.emails, name: reordered.name, uid: reordered.uid, v: reordered.v })
 const signedContact = crypto.signContactSummary(contactVectors.masterKey, contactVectors.binding, contactVectors.revision, shuffled)
 assert.equal(signedContact.summary, contactVectors.summary)
 assert.equal(signedContact.signature, contactVectors.signature)
@@ -1021,6 +1041,14 @@ for (const refused of contactVectors.refusedSignatures) {
   assert.throws(() => crypto.verifyContactSummary(contactVectors.summary, refused.signature, refused.binding, contactVectors.revision, contactIdentity.authorityPublicKey), undefined, refused.case)
 }
 assert.throws(() => crypto.signContactSummary(contactVectors.masterKey, 'alice@kutup.dev', contactVectors.revision, shuffled))
+// A newer client's field is kept, signed in its sorted place, and given back
+// (docs/plans/format-evolution.md, rule 3).
+const newerSummary = crypto.signContactSummary(contactVectors.masterKey, contactVectors.binding, contactVectors.revision, JSON.stringify({ ...reordered, birthday: '1990-01-01' }))
+assert.ok(newerSummary.summary.startsWith('{"birthday":"1990-01-01",'))
+assert.equal(
+  crypto.verifyContactSummary(newerSummary.summary, newerSummary.signature, contactVectors.binding, contactVectors.revision, contactIdentity.authorityPublicKey).birthday,
+  '1990-01-01',
+)
 assert.deepEqual(
   crypto.openContactCard(masterKeySet(contactVectors.masterKey), contactVectors.binding, contactVectors.uid, contactVectors.sealed),
   { value: contactVectors.vcard, revision: contactVectors.revision },
@@ -1326,7 +1354,7 @@ if (build === 'crypto') {
   assert.deepEqual(opened.fields, v.fields)
   const sealedMetadata = { keyPacket: v.metadata.keyPacket, dataPacket: v.metadata.dataPacket, signature: v.metadata.signature }
   const metadata = unlocked.openMetadata(sealedMetadata, v.calendarId, [v.ownerPublicKey])
-  assert.deepEqual(metadata, { name: v.metadata.name, description: v.metadata.description, verified: true })
+  assert.deepEqual(metadata, { name: v.metadata.name, description: v.metadata.description, verified: true, rest: { v: 1 } })
   // Bound to its calendar: under another id, refused.
   assert.throws(() => unlocked.openMetadata(sealedMetadata, 'another-calendar', [v.ownerPublicKey]))
   assert.equal(unlocked.fingerprint, v.calendarFingerprint)
@@ -1349,6 +1377,9 @@ if (build === 'crypto') {
   assert.deepEqual(unlocked.openEvent(sealed, [v.ownerPublicKey]).fields, v.fields)
   const renamed = unlocked.sealMetadata(...owner, v.calendarId, { name: 'Ev', description: '' })
   assert.equal(unlocked.openMetadata(renamed, v.calendarId, [v.ownerPublicKey]).name, 'Ev')
+  // A rename keeps what a newer client wrote (docs/plans/format-evolution.md).
+  const kept = unlocked.sealMetadata(...owner, v.calendarId, { name: 'Ev', description: '', rest: { v: 1, colourHint: 'teal' } })
+  assert.deepEqual(unlocked.openMetadata(kept, v.calendarId, [v.ownerPublicKey]).rest, { v: 1, colourHint: 'teal' })
   // A new calendar, under the id the client drew.
   const made = crypto.createCalendar(...owner, 'c-new', { name: 'İş', description: '' }, 1790000000)
   const opened2 = crypto.unlockCalendar(...owner, made.passphrase, [v.ownerPublicKey], made.lockedSecretKey)

@@ -8,8 +8,10 @@ import type { Session } from '@kutup/session/store'
 vi.mock('@kutup/crypto', async () => {
   const guard = await vi.importActual<typeof import('@kutup/crypto/revisionGuard')>('@kutup/crypto/revisionGuard')
   const base64 = await vi.importActual<typeof import('@kutup/crypto/base64')>('@kutup/crypto/base64')
+  const contactCard = await vi.importActual<typeof import('@kutup/crypto/contactCard')>('@kutup/crypto/contactCard')
   return {
     ...base64,
+    contactSummaryRest: contactCard.contactSummaryRest,
     revisionGuard: guard.revisionGuard,
     deriveAccountIdentityKeys: () => Promise.resolve({ authorityPublicKey: 'A' }),
     describeExternalMailKey: () => Promise.reject(new Error('no keys here')),

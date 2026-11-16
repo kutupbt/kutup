@@ -272,6 +272,7 @@ pub enum SettingSection {
     Federation,
     Privacy,
     Backups,
+    Mail,
 }
 
 /// A whole-number setting administrators set: its key, its field in
@@ -507,8 +508,40 @@ pub const CHAT_MULTI_ORIGIN_BYTES_PER_MIN: NumericSetting = NumericSetting {
     unit: SettingUnit::Bytes,
     per_account: false,
 };
+/// The most members (and open invitations) a group hosted here may have:
+/// the working limit under the format's ceiling
+/// (`kutup_chat_proto::group::MAX_GROUP_MEMBERS`). At most 256 until larger
+/// groups are measured (docs/plans/pairwise-groups.md §7: a key change is
+/// up to ten distributions per member); `CHAT_GROUP_MAX_MEMBERS` only seeds
+/// it.
+pub const CHAT_GROUP_MAX_MEMBERS: NumericSetting = NumericSetting {
+    key: "chat_group_max_members",
+    field: "chatGroupMaxMembers",
+    default: 256,
+    min: 1,
+    max: 256,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+const _: () =
+    assert!(CHAT_GROUP_MAX_MEMBERS.max as usize <= kutup_chat_proto::group::MAX_GROUP_MEMBERS);
+
+/// Writes `initial` (from `CHAT_GROUP_MAX_MEMBERS`) as the group member
+/// limit when none is stored yet; the administrators' value wins after.
+pub async fn seed_chat_group_max_members(pool: &PgPool, initial: usize) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO site_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING",
+    )
+    .bind(CHAT_GROUP_MAX_MEMBERS.key)
+    .bind(initial.to_string())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Every multi-recipient setting, as `/api/admin/settings` lists them.
-pub const CHAT_MULTI_SETTINGS: [NumericSetting; 11] = [
+pub const CHAT_MULTI_SETTINGS: [NumericSetting; 12] = [
+    CHAT_GROUP_MAX_MEMBERS,
     CHAT_MULTI_MAX_MESSAGE_BYTES,
     CHAT_MULTI_BASE_BYTES,
     CHAT_MULTI_MAX_RECIPIENTS,
@@ -1219,6 +1252,21 @@ pub const CHAT_ATTACHMENT_SEND_LIFETIME_SECONDS: NumericSetting = NumericSetting
     unit: SettingUnit::Seconds,
     per_account: false,
 };
+/// The most keys one mail address's signed list may hold (current and older
+/// ones kept to decrypt): the working limit. The key-list format reads up
+/// to `kutup_crypto::mail_key::MAX_LIST_KEYS`, so raising this needs no
+/// client update (docs/plans/format-evolution.md, mail key list row).
+pub const MAIL_KEYS_PER_ADDRESS: NumericSetting = NumericSetting {
+    key: "mail_keys_per_address",
+    field: "mailKeysPerAddress",
+    default: kutup_crypto::mail_key::MAX_KEYS_PER_ADDRESS as i64,
+    min: 2,
+    max: kutup_crypto::mail_key::MAX_LIST_KEYS as i64,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const MAIL_SETTINGS: [NumericSetting; 1] = [MAIL_KEYS_PER_ADDRESS];
+
 pub const FEDERATION_SETTINGS: [NumericSetting; 9] = [
     FEDERATION_RETRY_BASE_SECONDS,
     FEDERATION_RETRY_MAX_SECONDS,
@@ -1320,6 +1368,7 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
         .chain(section(SettingSection::Federation, &FEDERATION_SETTINGS))
         .chain(section(SettingSection::Privacy, &PRIVACY_SETTINGS))
         .chain(section(SettingSection::Backups, &BACKUP_SETTINGS))
+        .chain(section(SettingSection::Mail, &MAIL_SETTINGS))
 }
 
 /// The multi-recipient limits now.

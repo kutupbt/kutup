@@ -14,7 +14,7 @@ use base64::Engine as _;
 use kutup_crypto::blocks::SignerIdentity;
 use kutup_crypto::drive_blocks::{self, DriveBlobContextV2};
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1};
-use kutup_crypto::file_metadata::{encode_v2, ContentCommitmentV1, FileMetadataV2};
+use kutup_crypto::file_metadata::{encode, ContentCommitmentV1, FileMetadata};
 use reqwest::blocking::{multipart, Client, Response};
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -43,7 +43,7 @@ fn sealed(user: &User, file: &Sealed, revision: &str, plain: &[u8]) -> (Vec<u8>,
     (object.bytes, object.manifest_sha256)
 }
 
-/// `FileMetadataV2` committing to `revision`, sealed at `metadata_revision`.
+/// `FileMetadata` committing to `revision`, sealed at `metadata_revision`.
 fn metadata_v2(
     file: &Sealed,
     revision: &str,
@@ -51,19 +51,12 @@ fn metadata_v2(
     size: u64,
     metadata_revision: u64,
 ) -> String {
-    let plain = encode_v2(&FileMetadataV2 {
-        name: "a.txt".into(),
-        mime_type: "text/plain".into(),
+    let plain = encode(&FileMetadata::new(
+        "a.txt",
+        "text/plain",
         size,
-        content: ContentCommitmentV1::new(
-            *uuid::Uuid::parse_str(revision).unwrap().as_bytes(),
-            manifest,
-        ),
-        original_revision_id: None,
-        state_revision_id: None,
-        sha256: None,
-        media: None,
-    })
+        ContentCommitmentV1::new(*uuid::Uuid::parse_str(revision).unwrap().as_bytes(), manifest),
+    ))
     .unwrap();
     drive_envelope::seal_b64(
         &plain,

@@ -25,16 +25,13 @@ const UID: &str = "urn:uuid:7a1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f01";
 
 /// A contact `UID` at `revision`, its card sealed under `keys`' current key.
 fn contact(user: &User, keys: &MasterKeys, revision: u64) -> Value {
-    let summary = ContactSummaryV1 {
-        uid: UID.into(),
-        name: "Ayşe".into(),
-        emails: vec![ContactEmailV1 {
-            address: "ayse@example.com".into(),
-            label: None,
-        }],
-        groups: vec![],
-        pinned_keys: vec![],
-    };
+    let summary = ContactSummaryV1::new(
+        UID,
+        "Ayşe",
+        vec![ContactEmailV1::new("ayse@example.com", None)],
+        vec![],
+        vec![],
+    );
     let (bytes, signature) = contact_card::sign_summary(
         &summary,
         &user.binding,

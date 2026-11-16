@@ -1,22 +1,34 @@
 //! A Drive file's metadata: the plaintext sealed in its metadata envelope
 //! (`drive_envelope`, purpose `FileMetadata`, under the file key).
 //!
-//! JSON, one object: `name`, `mimeType`, `size`, the content it commits to
-//! (`content`, docs/plans/drive-block-format.md §2), the SHA-256 of the
-//! content (`sha256`, so a move can recompute the folder's content hash
-//! without reading the file), and for photos and videos an optional `media` object
-//! (docs/plans/photos.md) with when and where it was taken, its size on
-//! screen, its length and a caption.
-//! Encoding is canonical (fixed field order, absent fields omitted); decoding
-//! is strict (unknown fields and out-of-range values are refused), so every
-//! client reads and writes the same thing.
+//! JSON, one object: `v` first (docs/plans/format-evolution.md), then
+//! `name`, `mimeType`, `size`, the content it commits to (`content`,
+//! docs/plans/drive-block-format.md §2), the other revisions a reader asks
+//! for by what the response names (`originalRevisionId`, `stateRevisionId`),
+//! the SHA-256 of the content (`sha256`, so a move can recompute the
+//! folder's content hash without reading the file), and for photos and
+//! videos an optional `media` object (docs/plans/photos.md) with when and
+//! where it was taken, its size on screen, its length and a caption.
+//!
+//! Encoding is canonical: known fields in a fixed order, absent fields
+//! omitted, then any fields a newer writer added, sorted by name. Decoding
+//! keeps those unknown fields ([`FileMetadata::extra`], and the same in
+//! `media`) so a rewrite by an older client never drops them; a minimum
+//! reader above [`FILE_METADATA_VERSION`] is *newer than me*; out-of-range
+//! values of known fields are refused, so every client reads and writes the
+//! same thing.
 
+use crate::format::{self, Extra};
 use crate::primitives::{Hasher, Suite};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{CryptoError, Result};
 
+/// The newest metadata version this reader knows: 2, the block format (a
+/// content commitment). Version 1 named a whole-file blob, which went with
+/// the block format (drive-block-format.md, suite 2 only): it is refused.
+pub const FILE_METADATA_VERSION: u16 = 2;
 /// The largest encoded metadata accepted.
 pub const MAX_METADATA_BYTES: usize = 16 * 1024;
 /// A file name, in Unicode scalar values.
@@ -36,9 +48,10 @@ pub const MAX_DURATION_MS: u64 = 10 * 24 * 3600 * 1000;
 /// JavaScript's largest exact integer: sizes must survive a browser.
 pub const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 
-/// Where a photo's date came from, best first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// Where a photo's date came from, best first. An open enum of class
+/// *skip* (`format::OPEN_ENUMS`): a source a newer client names is kept as
+/// [`TakenFrom::Other`] and shown as an unknown source.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TakenFrom {
     /// The image's own EXIF, XMP or IPTC date.
     Exif,
@@ -50,11 +63,58 @@ pub enum TakenFrom {
     File,
     /// Set by a person.
     Edited,
+    /// A source this reader does not know: lowercase ASCII letters, at most
+    /// 32, kept as written.
+    Other(String),
+}
+
+impl TakenFrom {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Exif => "exif",
+            Self::Video => "video",
+            Self::Filename => "filename",
+            Self::File => "file",
+            Self::Edited => "edited",
+            Self::Other(other) => other,
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "exif" => Self::Exif,
+            "video" => Self::Video,
+            "filename" => Self::Filename,
+            "file" => Self::File,
+            "edited" => Self::Edited,
+            other
+                if !other.is_empty()
+                    && other.len() <= 32
+                    && other.bytes().all(|b| b.is_ascii_lowercase()) =>
+            {
+                Self::Other(other.to_owned())
+            }
+            _ => return None,
+        })
+    }
+}
+
+impl Serialize for TakenFrom {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for TakenFrom {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).ok_or_else(|| serde::de::Error::custom("takenFrom is invalid"))
+    }
 }
 
 /// When and where a photo or video was taken, and what it is.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaMetadataV1 {
     /// UTC milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,6 +143,75 @@ pub struct MediaMetadataV1 {
     /// A live photo's video names its still (a file id): shown as one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_of: Option<String>,
+    /// Fields a newer writer added, kept and written back.
+    #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    pub extra: Extra,
+}
+
+/// A Drive file's metadata: its descriptive fields and the content it
+/// commits to, which is required, and the other revisions a reader asks for
+/// by what the response names (docs/plans/drive-block-format.md §2):
+/// - `originalRevisionId`: the original upload's revision, set by the first
+///   commit (equal to `content.revisionId` then) and carried unchanged by
+///   every later metadata revision, so `/original` is refused when the
+///   server serves another revision;
+/// - `stateRevisionId`: a note's or place list's latest saved Yjs state,
+///   named by the metadata revision each state commits with, so a reader
+///   asks for that state and refuses any other.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMetadata {
+    /// The format version: 2 (the block format); a newer one opens only
+    /// with a `min` this reader meets.
+    pub v: u16,
+    /// The oldest reader version that may open it, when below `v`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u16>,
+    pub name: String,
+    pub mime_type: String,
+    pub size: u64,
+    /// The content revision this metadata commits to.
+    pub content: ContentCommitmentV1,
+    /// A canonical lowercase UUID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_revision_id: Option<String>,
+    /// A canonical lowercase UUID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_revision_id: Option<String>,
+    /// SHA-256 of the plaintext content, canonical base64 (`ContentHasher`).
+    /// Absent only where the writer never saw the whole content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaMetadataV1>,
+    /// Fields a newer writer added, kept and written back.
+    #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    pub extra: Extra,
+}
+
+impl FileMetadata {
+    /// Metadata of this version committing to `content`, with nothing
+    /// optional.
+    pub fn new(
+        name: impl Into<String>,
+        mime_type: impl Into<String>,
+        size: u64,
+        content: ContentCommitmentV1,
+    ) -> Self {
+        Self {
+            v: FILE_METADATA_VERSION,
+            min: None,
+            name: name.into(),
+            mime_type: mime_type.into(),
+            size,
+            content,
+            original_revision_id: None,
+            state_revision_id: None,
+            sha256: None,
+            media: None,
+            extra: Extra::new(),
+        }
+    }
 }
 
 fn invalid(what: &str) -> CryptoError {
@@ -155,7 +284,7 @@ impl MediaMetadataV1 {
             crate::drive_object::parse_canonical_uuid(still, "live photo still")
                 .map_err(|_| invalid("liveOf"))?;
         }
-        Ok(())
+        format::check_extra("file metadata media", &self.extra)
     }
 
     fn is_empty(&self) -> bool {
@@ -163,7 +292,7 @@ impl MediaMetadataV1 {
     }
 }
 
-/// The descriptive fields, checked.
+/// The fields every metadata version shares, checked once.
 fn validate_fields(
     name: &str,
     mime_type: &str,
@@ -259,39 +388,9 @@ impl ContentCommitmentV1 {
     }
 }
 
-/// A Drive file's metadata: its descriptive fields and the content it
-/// commits to, which is required, and the other revisions a reader asks for
-/// by what the response names (docs/plans/drive-block-format.md §2):
-/// - `originalRevisionId`: the original upload's revision, set by the first
-///   commit (equal to `content.revisionId` then) and carried unchanged by
-///   every later metadata revision, so `/original` is refused when the
-///   server serves another revision;
-/// - `stateRevisionId`: a note's or place list's latest saved Yjs state,
-///   named by the metadata revision each state commits with, so a reader
-///   asks for that state and refuses any other.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FileMetadataV2 {
-    pub name: String,
-    pub mime_type: String,
-    pub size: u64,
-    pub content: ContentCommitmentV1,
-    /// A canonical lowercase UUID.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub original_revision_id: Option<String>,
-    /// A canonical lowercase UUID.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state_revision_id: Option<String>,
-    /// SHA-256 of the plaintext content, canonical base64; kept only for
-    /// Photos' duplicate check.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub media: Option<MediaMetadataV1>,
-}
-
-impl FileMetadataV2 {
+impl FileMetadata {
     pub fn validate(&self) -> Result<()> {
+        format::check_version("file metadata", self.v, self.min, FILE_METADATA_VERSION)?;
         validate_fields(
             &self.name,
             &self.mime_type,
@@ -299,6 +398,10 @@ impl FileMetadataV2 {
             self.sha256.as_deref(),
             self.media.as_ref(),
         )?;
+        // Version 1 (a whole-file blob) went with the block format.
+        if self.v < 2 {
+            return Err(invalid("v 1 (a whole-file blob) is no longer read"));
+        }
         self.content.validate()?;
         if let Some(original) = &self.original_revision_id {
             crate::drive_object::parse_canonical_uuid(original, "original revision")
@@ -308,12 +411,12 @@ impl FileMetadataV2 {
             crate::drive_object::parse_canonical_uuid(state, "state revision")
                 .map_err(|_| invalid("stateRevisionId"))?;
         }
-        Ok(())
+        format::check_extra("file metadata", &self.extra)
     }
 }
 
 /// The canonical bytes of `metadata`, after checking it.
-pub fn encode_v2(metadata: &FileMetadataV2) -> Result<Vec<u8>> {
+pub fn encode(metadata: &FileMetadata) -> Result<Vec<u8>> {
     metadata.validate()?;
     let bytes = serde_json::to_vec(metadata).map_err(|_| invalid("encode"))?;
     if bytes.len() > MAX_METADATA_BYTES {
@@ -322,17 +425,19 @@ pub fn encode_v2(metadata: &FileMetadataV2) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Metadata as stored, checked strictly.
-pub fn decode_v2(bytes: &[u8]) -> Result<FileMetadataV2> {
+/// Metadata as stored: [`CryptoError::NewerThanMe`] when its minimum reader
+/// is above this one, refused when corrupt, its unknown fields kept.
+pub fn decode(bytes: &[u8]) -> Result<FileMetadata> {
     if bytes.len() > MAX_METADATA_BYTES {
         return Err(invalid("too large"));
     }
-    let metadata: FileMetadataV2 = serde_json::from_slice(bytes).map_err(|_| invalid("decode"))?;
+    format::check_json_version("file metadata", bytes, FILE_METADATA_VERSION)?;
+    let metadata: FileMetadata = serde_json::from_slice(bytes).map_err(|_| invalid("decode"))?;
     metadata.validate()?;
     Ok(metadata)
 }
 
-/// A content hash, fed as the content streams past (`FileMetadataV2::sha256`).
+/// A content hash, fed as the content streams past (`FileMetadata::sha256`).
 #[derive(Clone)]
 pub struct ContentHasher(Hasher);
 
@@ -362,15 +467,14 @@ mod tests {
     use super::*;
 
     const REVISION: [u8; 16] = [0x22; 16];
+    const CONTENT: &str = r#""content":{"revisionId":"22222222-2222-2222-2222-222222222222","manifestSha256":"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk="}"#;
 
-    fn photo() -> FileMetadataV2 {
-        FileMetadataV2 {
-            name: "IMG_0001.jpg".into(),
-            mime_type: "image/jpeg".into(),
-            size: 2_345_678,
-            content: ContentCommitmentV1::new(REVISION, [9; 32]),
-            original_revision_id: None,
-            state_revision_id: None,
+    fn content() -> ContentCommitmentV1 {
+        ContentCommitmentV1::new(REVISION, [9; 32])
+    }
+
+    fn photo() -> FileMetadata {
+        FileMetadata {
             sha256: Some(STANDARD.encode([7u8; 32])),
             media: Some(MediaMetadataV1 {
                 taken_at: Some(1_719_835_200_000),
@@ -383,50 +487,49 @@ mod tests {
                 camera: Some("Apple iPhone 15".into()),
                 ..Default::default()
             }),
+            ..FileMetadata::new("IMG_0001.jpg", "image/jpeg", 2_345_678, content())
         }
     }
 
-    const CONTENT: &str = r#""content":{"revisionId":"22222222-2222-2222-2222-222222222222","manifestSha256":"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk="}"#;
-
     #[test]
     fn round_trips_canonically() {
-        let bytes = encode_v2(&photo()).unwrap();
+        let bytes = encode(&photo()).unwrap();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
             format!(
-                r#"{{"name":"IMG_0001.jpg","mimeType":"image/jpeg","size":2345678,{CONTENT},"sha256":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","media":{{"takenAt":1719835200000,"takenOffset":180,"takenFrom":"exif","lat":41.0082,"lon":28.9784,"width":4032,"height":3024,"camera":"Apple iPhone 15"}}}}"#
+                r#"{{"v":2,"name":"IMG_0001.jpg","mimeType":"image/jpeg","size":2345678,{CONTENT},"sha256":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","media":{{"takenAt":1719835200000,"takenOffset":180,"takenFrom":"exif","lat":41.0082,"lon":28.9784,"width":4032,"height":3024,"camera":"Apple iPhone 15"}}}}"#
             )
         );
-        assert_eq!(decode_v2(&bytes).unwrap(), photo());
+        assert_eq!(decode(&bytes).unwrap(), photo());
     }
 
     #[test]
     fn plain_files_have_no_media() {
-        let plain = FileMetadataV2 {
-            name: "a.txt".into(),
-            mime_type: "text/plain".into(),
-            size: 0,
-            sha256: None,
-            media: None,
-            ..photo()
-        };
-        let bytes = encode_v2(&plain).unwrap();
+        let plain = FileMetadata::new("a.txt", "text/plain", 0, content());
+        let bytes = encode(&plain).unwrap();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            format!(r#"{{"name":"a.txt","mimeType":"text/plain","size":0,{CONTENT}}}"#)
+            format!(r#"{{"v":2,"name":"a.txt","mimeType":"text/plain","size":0,{CONTENT}}}"#)
         );
-        assert_eq!(decode_v2(&bytes).unwrap(), plain);
+        assert_eq!(decode(&bytes).unwrap(), plain);
     }
 
     #[test]
     fn commits_to_its_content() {
-        let decoded = decode_v2(&encode_v2(&photo()).unwrap()).unwrap();
+        let decoded = decode(&encode(&photo()).unwrap()).unwrap();
         decoded.content.check(&REVISION, &[9; 32]).unwrap();
         // Older content: another revision, or this one's manifest swapped.
         assert!(decoded.content.check(&[0x23; 16], &[9; 32]).is_err());
         assert!(decoded.content.check(&REVISION, &[8; 32]).is_err());
         // No content commitment: not a file's metadata.
-        assert!(decode_v2(br#"{"name":"a","mimeType":"","size":1}"#).is_err());
+        assert!(decode(br#"{"v":2,"name":"a","mimeType":"","size":1}"#).is_err());
+        // Version 1 (a whole-file blob), with or without one: refused, not newer.
+        for v1 in [
+            r#"{"v":1,"name":"a","mimeType":"","size":1}"#.to_string(),
+            format!(r#"{{"v":1,"name":"a","mimeType":"","size":1,{CONTENT}}}"#),
+        ] {
+            assert!(!decode(v1.as_bytes()).unwrap_err().is_newer(), "{v1}");
+        }
     }
 
     #[test]
@@ -444,10 +547,9 @@ mod tests {
             ),
             format!(r#"{{"manifestSha256":"{digest}"}}"#),
         ] {
-            let bad = format!(r#"{{"name":"a","mimeType":"","size":1,"content":{content}}}"#);
-            assert!(decode_v2(bad.as_bytes()).is_err(), "{bad}");
+            let bad = format!(r#"{{"v":2,"name":"a","mimeType":"","size":1,"content":{content}}}"#);
+            assert!(decode(bad.as_bytes()).is_err(), "{bad}");
         }
-        assert!(decode_v2(br#"{"name":"a","mimeType":"","size":1}"#).is_err());
     }
 
     #[test]
@@ -455,17 +557,13 @@ mod tests {
         let mut metadata = photo();
         metadata.original_revision_id = Some("33333333-3333-4333-8333-333333333333".into());
         metadata.state_revision_id = Some("44444444-4444-4444-8444-444444444444".into());
-        let bytes = encode_v2(&metadata).unwrap();
+        let bytes = encode(&metadata).unwrap();
         let text = std::str::from_utf8(&bytes).unwrap();
         // After the content commitment, before the hash.
         assert!(text.contains(
             r#"="},"originalRevisionId":"33333333-3333-4333-8333-333333333333","stateRevisionId":"44444444-4444-4444-8444-444444444444","sha256":"#
         ));
-        assert_eq!(decode_v2(&bytes).unwrap(), metadata);
-        let digest = STANDARD.encode([9u8; 32]);
-        let content = format!(
-            r#""content":{{"revisionId":"22222222-2222-2222-2222-222222222222","manifestSha256":"{digest}"}}"#
-        );
+        assert_eq!(decode(&bytes).unwrap(), metadata);
         for field in ["originalRevisionId", "stateRevisionId"] {
             for value in [
                 r#""not-a-uuid""#,
@@ -473,39 +571,84 @@ mod tests {
                 r#""""#,
                 "1",
             ] {
-                let bad =
-                    format!(r#"{{"name":"a","mimeType":"","size":1,{content},"{field}":{value}}}"#);
-                assert!(decode_v2(bad.as_bytes()).is_err(), "{bad}");
+                let bad = format!(
+                    r#"{{"v":2,"name":"a","mimeType":"","size":1,{CONTENT},"{field}":{value}}}"#
+                );
+                assert!(decode(bad.as_bytes()).is_err(), "{bad}");
             }
         }
     }
 
     #[test]
-    fn refuses_what_it_does_not_know() {
+    fn keeps_what_a_newer_writer_added() {
+        let newer = format!(
+            r#"{{"v":2,"name":"a","mimeType":"","size":1,{CONTENT},"media":{{"takenAt":1,"takenFrom":"satellite","zz":[1],"aa":{{"b":2}}}},"tags":["x"],"colour":"red"}}"#
+        );
+        let decoded = decode(newer.as_bytes()).unwrap();
+        assert_eq!(decoded.extra.len(), 2);
+        let media = decoded.media.as_ref().unwrap();
+        assert_eq!(media.taken_from, Some(TakenFrom::Other("satellite".into())));
+        assert_eq!(media.extra.len(), 2);
+        // A rename keeps them, in their canonical (sorted) place.
+        let renamed = FileMetadata {
+            name: "b".into(),
+            ..decoded
+        };
+        assert_eq!(
+            std::str::from_utf8(&encode(&renamed).unwrap()).unwrap(),
+            format!(
+                r#"{{"v":2,"name":"b","mimeType":"","size":1,{CONTENT},"media":{{"takenAt":1,"takenFrom":"satellite","aa":{{"b":2}},"zz":[1]}},"colour":"red","tags":["x"]}}"#
+            )
+        );
+        // A newer version that older readers may still open.
+        assert!(decode(
+            format!(r#"{{"v":3,"min":2,"name":"a","mimeType":"","size":1,{CONTENT}}}"#).as_bytes()
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn newer_than_me_is_not_corrupt() {
+        for newer in [
+            &br#"{"v":3,"name":"a","mimeType":"","size":1}"#[..],
+            br#"{"v":4,"min":3,"name":{"parts":["a"]}}"#,
+            br#"{"v":9}"#,
+        ] {
+            assert!(decode(newer).unwrap_err().is_newer());
+        }
+        for corrupt in [
+            &b"garbage"[..],
+            br#"{"name":"a","mimeType":"","size":1}"#,
+            br#"{"v":2,"min":2,"name":"a","mimeType":"","size":1}"#,
+            br#"{"v":0,"name":"a","mimeType":"","size":1}"#,
+        ] {
+            assert!(!decode(corrupt).unwrap_err().is_newer());
+        }
+    }
+
+    #[test]
+    fn refuses_what_is_out_of_range() {
         for bad in [
-            r#"{"name":"a","mimeType":"","size":1,"extra":1}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"x":1}}"#,
-            r#"{"name":"","mimeType":"","size":1}"#,
-            r#"{"name":"a","mimeType":"","size":-1}"#,
-            r#"{"name":"a","mimeType":"","size":9007199254740992}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"lat":1}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"lat":0,"lon":0}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"lat":91,"lon":0}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"takenAt":1}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"takenAt":1,"takenFrom":"camera"}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"takenAt":1,"takenFrom":"exif","takenOffset":900}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"takenAt":9999999999999,"takenFrom":"exif"}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"width":10}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"width":0,"height":1}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"sha256":"AAAA"}"#,
-            r#"{"name":"a","mimeType":"","size":1,"sha256":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwd="}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"hash":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="}}"#,
-            r#"{"name":"a","mimeType":"","size":1,"media":{"caption":""}}"#,
+            r#"{"v":2,"name":"","mimeType":"","size":1}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":-1}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":9007199254740992}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"lat":1}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"lat":0,"lon":0}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"lat":91,"lon":0}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"takenAt":1}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"takenAt":1,"takenFrom":"Camera"}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"takenAt":1,"takenFrom":"exif","takenOffset":900}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"takenAt":9999999999999,"takenFrom":"exif"}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"width":10}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"width":0,"height":1}}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"sha256":"AAAA"}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"sha256":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwd="}"#,
+            r#"{"v":2,"name":"a","mimeType":"","size":1,"media":{"caption":""}}"#,
         ] {
             // Valid but for the one field: the content commitment added.
-            let bad = bad.replacen('{', &format!("{{{CONTENT},"), 1);
-            assert!(decode_v2(bad.as_bytes()).is_err(), "{bad}");
+            let bad = bad.replacen(r#""size":"#, &format!(r#"{CONTENT},"size":"#), 1);
+            assert!(decode(bad.as_bytes()).is_err(), "{bad}");
         }
     }
 

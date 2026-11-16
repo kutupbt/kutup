@@ -33,6 +33,14 @@ export interface EventFields {
   transp: 'opaque' | 'transparent' | null
   comment: string | null
   other?: string[]
+  /**
+   * Properties a newer client put in the other parts, kept so an edit here
+   * seals them again (docs/plans/format-evolution.md). An edit spreads the
+   * opened fields (`{ ...fields, summary }`) to keep them.
+   */
+  signedOther?: string[]
+  calendarOther?: string[]
+  commentOther?: string[]
 }
 
 export interface EventPart {
@@ -67,6 +75,12 @@ export interface SealedPassphrase {
 export interface CalendarMetadata {
   name: string
   description: string
+  /**
+   * What the sealed metadata holds besides: its version and a newer
+   * client's fields. `openMetadata` gives it; pass it back with a rename so
+   * nothing is dropped (docs/plans/format-evolution.md).
+   */
+  rest?: Record<string, unknown>
 }
 
 /** What `createCalendar` makes, for `POST /api/calendar/calendars`. */

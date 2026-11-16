@@ -5,7 +5,7 @@
 //! envelope (object = file, parent = revision id, epoch = the generation of
 //! the file key that seals the revision's object).
 //!
-//! The file's metadata (`FileMetadataV2::content`) commits to the current
+//! The file's metadata (`FileMetadata::content`) commits to the current
 //! content only. Every other revision a reader opens (a history version, a
 //! note's snapshot, the original upload) carries this record, sealed by
 //! whoever uploaded it, and the reader opens it first: the object must then

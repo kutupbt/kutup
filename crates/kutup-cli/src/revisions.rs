@@ -5,7 +5,7 @@
 //! `metadataCommit.ts`, for the CLI.
 //!
 //! A block-format upload lands as an uploaded revision; the file's next
-//! metadata (`FileMetadataV2`), committing to the revision and its
+//! metadata (`FileMetadata`), committing to the revision and its
 //! manifest's digest, makes it current. A new file's first commit names its
 //! original upload (`originalRevisionId`); every later one carries what the
 //! file's metadata names. A whole-buffer save (a note's state, a restored
@@ -29,6 +29,11 @@ pub struct Draft {
     pub media: Option<MediaMetadataV1>,
     pub original_revision_id: Option<String>,
     pub state_revision_id: Option<String>,
+    /// The metadata's version, its minimum reader and what a newer writer
+    /// added (docs/plans/format-evolution.md): carried by every rewrite.
+    pub v: u16,
+    pub min: Option<u16>,
+    pub extra: kutup_crypto::format::Extra,
 }
 
 impl Draft {
@@ -42,6 +47,9 @@ impl Draft {
             media: metadata.media.clone(),
             original_revision_id: metadata.original_revision_id.clone(),
             state_revision_id: metadata.state_revision_id.clone(),
+            v: metadata.v,
+            min: metadata.min,
+            extra: metadata.extra.clone(),
         }
     }
 
@@ -55,6 +63,9 @@ impl Draft {
             state_revision_id: self.state_revision_id.clone(),
             sha256: self.sha256.clone(),
             media: self.media.clone(),
+            v: self.v,
+            min: self.min,
+            extra: self.extra.clone(),
         }
     }
 
@@ -537,6 +548,9 @@ mod tests {
             media: None,
             original_revision_id: None,
             state_revision_id: None,
+            v: kutup_crypto::file_metadata::FILE_METADATA_VERSION,
+            min: None,
+            extra: Default::default(),
         }
     }
 

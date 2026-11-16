@@ -46,6 +46,7 @@ pub fn header(context: ChatMediaObjectContextV1) -> [u8; CHAT_MEDIA_BLOCKS_HEADE
 
 /// Checks a header against the attachment expected.
 pub fn validate_header(header: &[u8], expected: ChatMediaObjectContextV1) -> Result<()> {
+    crate::blocks::refuse_newer_suite(header, MAGIC, CHAT_MEDIA_BLOCKS_SUITE, "Chat-media block")?;
     if header.len() != CHAT_MEDIA_BLOCKS_HEADER_BYTES
         || header.get(..8) != Some(MAGIC)
         || u16::from_be_bytes([header[8], header[9]]) != CHAT_MEDIA_BLOCKS_SUITE

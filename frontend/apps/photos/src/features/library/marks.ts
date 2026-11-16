@@ -20,7 +20,7 @@ import api from '@kutup/session/client'
 // revision: a server can't bring back marks that were taken off (a photo
 // hidden again shown).
 
-export type MarkKind = keyof PhotosLibraryMarks
+export type MarkKind = 'favourites' | 'archived' | 'hidden'
 
 interface StoredRecord {
   envelope: string

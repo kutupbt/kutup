@@ -566,9 +566,14 @@ fn provision_message_validates_and_hides_secrets() {
         serde_json::from_str::<ChatProvisionV1>(&json).unwrap(),
         message
     );
+    // A field a newer device adds doesn't stop an older one from linking
+    // (docs/plans/format-evolution.md, provisioning message row).
     let mut extra: serde_json::Value = serde_json::from_str(&json).unwrap();
-    extra["masterKey"] = "x".into();
-    assert!(serde_json::from_value::<ChatProvisionV1>(extra).is_err());
+    extra["chatFolders"] = serde_json::json!([1]);
+    assert_eq!(
+        serde_json::from_value::<ChatProvisionV1>(extra).unwrap(),
+        message
+    );
 
     let debug = format!("{message:?}");
     assert!(!debug.contains(&b64(&[0x42; 32])) && !debug.contains(&b64(&[0x43; 32])));

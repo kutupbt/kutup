@@ -326,12 +326,12 @@ mod tests {
             sequence,
             previous_hash: previous.map(SignedMailKeyListV1::hash),
             issued_at: "2026-10-16T12:00:00Z".into(),
-            keys: vec![MailKeyEntryV1 {
-                fingerprint: [fingerprint; 20],
-                sha256_fingerprint: [fingerprint; 32],
-                primary: true,
-                flags: DEFAULT_FLAGS,
-            }],
+            keys: vec![MailKeyEntryV1::v4(
+                [fingerprint; 20],
+                [fingerprint; 32],
+                true,
+                DEFAULT_FLAGS,
+            )],
         }
         .sign(&signer.signing_key())
         .unwrap()

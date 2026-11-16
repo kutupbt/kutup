@@ -3286,7 +3286,12 @@ pub async fn drain_mailbox(
         )
         .collect::<AppResult<_>>()?;
 
-    Ok(Json(MailboxPage { envelopes, more }).into_response())
+    Ok(Json(MailboxPage {
+        envelopes,
+        more,
+        unsupported: Vec::new(),
+    })
+    .into_response())
 }
 
 #[derive(Debug, Deserialize)]

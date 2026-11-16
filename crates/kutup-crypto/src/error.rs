@@ -13,6 +13,14 @@ pub enum CryptoError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// The bytes are well formed but from a newer writer than this reader:
+    /// a minimum reader version above its own, or a code of a *refuse* enum
+    /// it does not know (docs/plans/format-evolution.md, rule 5). Show
+    /// "update Kutup to open this" and keep the bytes; never delete,
+    /// overwrite or repair them.
+    #[error("newer format: {0}")]
+    NewerThanMe(String),
+
     /// A key, nonce, or other fixed-size input had the wrong length.
     #[error("invalid length: expected {expected} bytes, got {got}")]
     InvalidLength { expected: usize, got: usize },
@@ -32,6 +40,17 @@ pub enum CryptoError {
     /// An underlying primitive reported an unexpected error.
     #[error("crypto backend error: {0}")]
     Backend(String),
+}
+
+/// How [`CryptoError::NewerThanMe`] starts as text: what the browser and
+/// other string-error boundaries match on.
+pub const NEWER_FORMAT_PREFIX: &str = "newer format: ";
+
+impl CryptoError {
+    /// Whether the error is *newer than me* rather than *corrupt*.
+    pub fn is_newer(&self) -> bool {
+        matches!(self, CryptoError::NewerThanMe(_))
+    }
 }
 
 /// Convenience result alias.

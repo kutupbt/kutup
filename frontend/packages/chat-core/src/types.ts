@@ -222,7 +222,8 @@ export type ChatAccountControl =
 
 export interface ChatReactionV1 {
   targetMessageId: string
-  emoji: '👍' | '❤️' | '😂' | '😮' | '😢' | '🙏'
+  /** Any emoji (docs/plans/format-evolution.md); the pickers offer `CHAT_REACTION_EMOJIS` first. */
+  emoji: string
   active: boolean
 }
 
@@ -563,6 +564,8 @@ export interface ReceiveReport {
   duplicates: string[]
   /** Unreadable envelopes given up on, the sender's session refreshed. */
   repaired?: string[]
+  /** Mailbox ids of envelopes newer than this client, left on the server unread (update Kutup). */
+  unsupported?: string[]
   /** Queued messages that could not be delivered on this pass. */
   sendFailures?: Array<{ sendId: string; peer: string; error: string }>
 }

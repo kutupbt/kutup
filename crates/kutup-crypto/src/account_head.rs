@@ -29,6 +29,9 @@ use zeroize::Zeroizing;
 use crate::account_record::MasterKeyGeneration;
 use crate::account_record::{self, AccountRecordPurpose};
 use crate::error::{CryptoError, Result};
+// How the head and its local state grow: `v`, `min`, kept unknown fields
+// and *newer than me* are the shared rule (docs/plans/format-evolution.md).
+use crate::format::{check_extra, check_json_version, check_version, Extra};
 use crate::master_keys::MasterKeys;
 use std::collections::BTreeMap;
 
@@ -245,55 +248,6 @@ pub const ROOT_GENERATION_MISMATCH: &str = "rootGenerationMismatch";
 pub const ACCOUNT_HEAD_VERSION: u16 = 1;
 /// The newest local-state version this reader knows.
 pub const LOCAL_HEAD_STATE_VERSION: u16 = 1;
-/// The most fields a newer writer may add that this reader keeps.
-const MAX_EXTRA_FIELDS: usize = 64;
-
-/// Fields a newer writer added: kept, in sorted order, and written back.
-pub type Extra = BTreeMap<String, serde_json::Value>;
-
-/// The error a reader gives an object a newer writer made that it may not
-/// act on: "update Kutup", the bytes kept (docs/plans/format-evolution.md,
-/// rule 5). Its text starts `newer format:`.
-fn newer(what: &str) -> CryptoError {
-    CryptoError::InvalidInput(format!("newer format: {what}"))
-}
-
-/// `v` and `min` (absent: `v`; present: below `v`) against this reader's
-/// version: version 0 or a bad `min` is corrupt, a minimum above the reader
-/// is newer than me.
-fn check_version(what: &str, v: u16, min: Option<u16>, reader: u16) -> Result<()> {
-    let minimum = match min {
-        _ if v == 0 => return Err(invalid("version 0")),
-        None => v,
-        Some(min) if min >= 1 && min < v => min,
-        Some(_) => return Err(invalid("min must be below v")),
-    };
-    if minimum > reader {
-        return Err(newer(what));
-    }
-    Ok(())
-}
-
-/// Reads `v` and `min` before the struct, so an object from a newer writer
-/// is newer than me even when its fields no longer fit this reader's struct.
-fn check_json_version(what: &str, plain: &[u8], reader: u16) -> Result<()> {
-    #[derive(Deserialize)]
-    struct Probe {
-        v: u16,
-        #[serde(default)]
-        min: Option<u16>,
-    }
-    let probe: Probe = serde_json::from_slice(plain).map_err(|_| invalid("decode"))?;
-    check_version(what, probe.v, probe.min, reader)
-}
-
-fn check_extra(extra: &Extra) -> Result<()> {
-    if extra.len() > MAX_EXTRA_FIELDS {
-        return Err(invalid("too many unknown fields"));
-    }
-    Ok(())
-}
-
 /// The account head. `v` first (docs/plans/format-evolution.md); fields a
 /// newer writer added are kept in `extra` and written back by the next head;
 /// a scope this reader doesn't know is kept and counted like any other.
@@ -326,7 +280,7 @@ pub struct AccountHeadV1 {
 impl AccountHeadV1 {
     fn validate(&self) -> Result<()> {
         check_version("account head", self.v, self.min, ACCOUNT_HEAD_VERSION)?;
-        check_extra(&self.extra)?;
+        check_extra("account head", &self.extra)?;
         if !is_lower_hex_32(&self.incarnation_id) || !is_lower_hex_32(&self.writer) {
             return Err(invalid("incarnation or writer is invalid"));
         }
@@ -976,7 +930,7 @@ impl LocalHeadStateV1 {
             self.min,
             LOCAL_HEAD_STATE_VERSION,
         )?;
-        check_extra(&self.extra)?;
+        check_extra("account head state", &self.extra)?;
         if !is_lower_hex_32(&self.incarnation_id) {
             return Err(invalid("incarnation id is invalid"));
         }

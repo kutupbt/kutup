@@ -151,6 +151,7 @@ fn parts() -> EventParts {
             exdates: Vec::new(),
             organizer: None,
             sequence: 0,
+            other: Vec::new(),
         },
         shared_encrypted: SharedEncrypted {
             uid: uid.clone(),
@@ -167,11 +168,13 @@ fn parts() -> EventParts {
             exdates: Vec::new(),
             status: Some(Status::Confirmed),
             transp: Some(Transp::Opaque),
+            other: Vec::new(),
         },
         calendar_encrypted: Some(CalendarEncrypted {
             uid,
             dtstamp: stamp,
             comment: Some("Booked".into()),
+            other: Vec::new(),
         }),
     }
 }

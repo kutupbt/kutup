@@ -397,7 +397,7 @@ pub struct FileKeyHistoryEntry {
 
 /// A file's metadata: the canonical format in `kutup-crypto` (name, type,
 /// size and a photo's details), so a rename keeps what it does not change.
-pub use kutup_crypto::file_metadata::FileMetadataV2 as FileMetadata;
+pub use kutup_crypto::file_metadata::FileMetadata;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

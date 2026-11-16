@@ -617,6 +617,9 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         state_revision_id: None,
         sha256: Some(base64::engine::general_purpose::STANDARD.encode(hash(Suite::V1, &data))),
         media: None,
+        v: kutup_crypto::file_metadata::FILE_METADATA_VERSION,
+        min: None,
+        extra: Default::default(),
     };
     let metadata_envelope = crate::file_crypto::seal_metadata(
         &meta,

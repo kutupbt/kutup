@@ -961,6 +961,8 @@
       "groupLinkJoinsRelayHint": "Burada barındırılan tüm gruplar için aynısı.",
       "multi": {
         "range": "{{min}} ile {{max}} arasında.",
+        "chatGroupMaxMembers": "Bir gruptaki üye sayısı",
+        "chatGroupMaxMembersHint": "Bu sunucuda barındırılan bir grubun en çok üye ve açık davet sayısı. Zaten daha büyük olan gruplar üyelerini korur.",
         "chatMultiMaxRecipients": "Bir grup gönderimindeki hesap sayısı",
         "chatMultiMaxRecipientsHint": "Bir grup iletisinin tek istekte ulaştığı, bu sunucudaki üye sayısı.",
         "chatMultiMaxMessageBytes": "Üye başına en büyük grup iletisi (bayt)",
@@ -1141,6 +1143,12 @@
         "accountClosingDaysHint": "Silinmesi istenen hesap bu süre boyunca kapanıyor durumundadır; bu süre içinde oturum açılırsa hesap tutulur.",
         "destructionEventRetentionDays": "İmha günlüğünü sakla (gün)",
         "destructionEventRetentionDaysHint": "Neyin, ne zaman, kim tarafından silindiği; kimsenin adını vermeden. Her yedekten uzun tutun: geri yükleme bu günlüğü yeniden uygular."
+      },
+      "mail": "Posta anahtarları",
+      "mailHint": "Bir e-posta adresinin kaç şifreleme anahtarı tutabileceği.",
+      "mailLimits": {
+        "mailKeysPerAddress": "Adres başına anahtar",
+        "mailKeysPerAddressHint": "Her adres güncel anahtarını ve eski postaları okumak için eskilerini tutar. Zaten daha çok anahtar tutan listeler onları korur."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "İlk bekleme (saniye)",

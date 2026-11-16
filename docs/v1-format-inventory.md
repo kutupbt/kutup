@@ -36,6 +36,26 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Chat history backup | Absent; a new browser device starts with an empty local database | **Implemented:** always-on account-local E2EE backup using a master-key-wrapped Chat root, independently derived segment/base/manifest/media keys, signed hash-chained manifests, and server-side base-plus-tail restore; device-to-device transfer is not supported (current contract: [`chat-backup.md`](chat-backup.md)) |
 | Broadcast post and grants | Absent | Typed broadcast policy, epoch, account/device grant, history grant and post structures |
 
+### Growing a format after the wipe
+
+Every format above grows by [`plans/format-evolution.md`](plans/format-evolution.md)
+without another wipe. As built on `wipe/format-evolution`:
+
+| Format | How it grows |
+|---|---|
+| File metadata (`file_metadata`) | `v` (1 blob, 2 block format), `min`, unknown fields kept here and in `media`; `takenFrom` *skip* |
+| Photos library (`photos_library`) | `v`, `min`, unknown fields kept |
+| Contact summary (`contact_card`) | `v`, `min`, unknown fields kept, signed with sorted keys; pinned keys carry `keyVersion` (4 or 6, others kept) |
+| Mail key list (`mail_key`) | per entry a key version and a length-prefixed fingerprint; unknown versions and flags kept; up to 256 entries parsed, the working limit a site setting |
+| Calendar metadata (`calendar`) | `v`, `min`, unknown fields kept on a rename |
+| Calendar event parts (`calendar_event`) | each part keeps properties it doesn't know |
+| Thumbnails (`thumbnail`) | an unknown image format is *newer than me* (generic icon) |
+| Suites and purposes (every registry) | unknown code: *newer than me*; 0: corrupt |
+| Block objects (`blocks`) | unknown signer kind or header suite: *newer than me* |
+| Chat bodies, provisioning message | unknown fields ignored; any emoji is a reaction |
+| Chat mailbox page | an envelope of an unknown type or suite is paged past, alone |
+| Chat backup | records carry a `type` (*skip*: unknown types kept); a newer version, or an object of an unknown suite or purpose (a later chunked base), is *newer than me* |
+
 `AccountRecordV1` (docs/plans/w1-account-record.md) is encoded as magic
 `KUTPAR1\0`, big-endian suite ID (1), big-endian u16 purpose, the big-endian
 u32 master-key generation (never 0: the generation of the master key a

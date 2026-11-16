@@ -128,7 +128,7 @@ export type {
   SealedMailKey,
   SignedMailKeyList,
 } from './mailKey'
-export { openContactCard, openMailName, sealContactCard, sealMailName, signContactSummary, verifyContactSummary } from './contactCard'
+export { contactSummaryRest, openContactCard, openMailName, sealContactCard, sealMailName, signContactSummary, verifyContactSummary } from './contactCard'
 export type { ContactSummary, MailNameKind, Revisioned } from './contactCard'
 export { OlderThanSeenError, RevisionGuard, revisionGuard, memoryRevisionStore, type RevisionStore } from './revisionGuard'
 export { LocalChainPins, localChainPins, type ChainPin } from './localChainPins'
@@ -167,10 +167,12 @@ export {
   renameOwnedCollectionV1,
 } from './ownedCollection'
 export type { CreateOwnedCollectionV1, OwnedCollectionWireV1 } from './ownedCollection'
+export { isNewerFormatError } from './newerFormat'
 export {
   createFileRecordV1,
   openFileKeyV1,
   openFileMetadataDraftV1,
+  fileMetadataRest,
   openFileMetadataV1,
   openFileRecordV1,
   sealFileMetadataDraftV1,

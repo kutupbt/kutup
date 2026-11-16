@@ -64,7 +64,7 @@ describe('file records across a re-key and a move', () => {
       keyGeneration: 1,
       metadataRevision: 1,
     }
-    expect((await openFileRecordV1(row, keyA)).metadata).toEqual(metadata)
+    expect((await openFileRecordV1(row, keyA)).metadata).toEqual({ v: 1, ...metadata })
 
     // Folder A rotated to epoch 2: the file takes generation 2 there.
     const rekeyed = await rekeyFileRecordV1(row, created.fileKey, 2, keyA2, metadata)
@@ -82,7 +82,7 @@ describe('file records across a re-key and a move', () => {
     const envelope = await wrapFileKeyForV1(atA, rekeyed.fileKey, folderB, 1, keyB)
     const atB = { ...atA, collectionId: folderB, keyEpoch: 1, fileKeyEnvelope: envelope }
     const opened = await openFileRecordV1(atB, keyB)
-    expect(opened.metadata).toEqual(metadata)
+    expect(opened.metadata).toEqual({ v: 1, ...metadata })
     // The upload's key is still reachable from B.
     expect(await fileKeyAtV1(opened.fileKey, atB.id, 2, [
       { generation: 2, previousKeyEnvelope: rekeyed.previousKeyEnvelope },

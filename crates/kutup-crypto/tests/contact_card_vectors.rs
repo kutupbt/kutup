@@ -125,27 +125,21 @@ fn refused_cards(sealed: &[u8], uid: &str) -> Vec<RefusedCard> {
 }
 
 fn summary() -> ContactSummaryV1 {
-    ContactSummaryV1 {
-        uid: "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70".into(),
-        name: "Ayşe Yılmaz".into(),
-        emails: vec![
-            ContactEmailV1 {
-                address: "ayse@example.com".into(),
-                label: Some("work".into()),
-            },
-            ContactEmailV1 {
-                address: "ayse@kutup.dev".into(),
-                label: None,
-            },
+    ContactSummaryV1::new(
+        "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "Ayşe Yılmaz",
+        vec![
+            ContactEmailV1::new("ayse@example.com", Some("work".into())),
+            ContactEmailV1::new("ayse@kutup.dev", None),
         ],
-        groups: vec!["11111111-1111-4111-8111-111111111111".into()],
-        pinned_keys: vec![PinnedKeyV1 {
-            address: "ayse@example.com".into(),
-            fingerprint: "0123456789abcdef0123456789abcdef01234567".into(),
-            encrypt: true,
-            sign: false,
-        }],
-    }
+        vec!["11111111-1111-4111-8111-111111111111".into()],
+        vec![PinnedKeyV1::v4(
+            "ayse@example.com",
+            "0123456789abcdef0123456789abcdef01234567",
+            true,
+            false,
+        )],
+    )
 }
 
 const VCARD: &str = "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70\r\nFN:Ayşe Yılmaz\r\nEMAIL;TYPE=work:ayse@example.com\r\nTEL;TYPE=cell:+90 555 000 00 00\r\nNOTE:Met at the conference\r\nEND:VCARD\r\n";

@@ -55,12 +55,12 @@ fn owner(c: &Client, base: &str) -> Owner {
         sequence: 1,
         previous_hash: None,
         issued_at: "2026-10-21T12:00:00Z".into(),
-        keys: vec![MailKeyEntryV1 {
-            fingerprint: key.fingerprint,
-            sha256_fingerprint: key.sha256_fingerprint,
-            primary: true,
-            flags: DEFAULT_FLAGS,
-        }],
+        keys: vec![MailKeyEntryV1::v4(
+            key.fingerprint,
+            key.sha256_fingerprint,
+            true,
+            DEFAULT_FLAGS,
+        )],
     }
     .sign(user.identity.authority_signing_key())
     .unwrap();
@@ -138,6 +138,9 @@ fn fields(uid: &str, start: &str, end: &str, summary: &str) -> EventFieldsV1 {
         transp: Some("opaque".into()),
         comment: None,
         other: Vec::new(),
+        signed_other: Vec::new(),
+        calendar_other: Vec::new(),
+        comment_other: Vec::new(),
     }
 }
 

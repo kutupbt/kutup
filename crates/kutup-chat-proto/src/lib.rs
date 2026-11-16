@@ -56,11 +56,12 @@ pub use backup::{
     ChatBackupBasePlaintextV1, ChatBackupBaseReceiptV1, ChatBackupCapabilitiesV1,
     ChatBackupDeviceHeadV1, ChatBackupDisplayRecordV1, ChatBackupManifestCommitReceiptV1,
     ChatBackupManifestV1, ChatBackupMediaReceiptV1, ChatBackupMediaReconciliationReceiptV1,
-    ChatBackupMediaReferenceV1, ChatBackupSegmentPageV1, ChatBackupSegmentPlaintextV1,
-    ChatBackupSegmentReceiptV1, ChatBackupSignerAuthorizationV1, ChatBackupStatusV1,
-    ChatBackupStorageUsageV1, ChatBackupWireSegmentV1, CommitChatBackupManifestRequestV1,
-    CopyChatBackupMediaRequestV1, ProvisionChatBackupRequestV1, ReconcileChatBackupMediaRequestV1,
-    StageChatBackupBaseRequestV1, UploadChatBackupMediaRequestV1, CHAT_BACKUP_PROTOCOL_VERSION,
+    ChatBackupMediaReferenceV1, ChatBackupOtherRecordV1, ChatBackupRecordV1,
+    ChatBackupSegmentPageV1, ChatBackupSegmentPlaintextV1, ChatBackupSegmentReceiptV1,
+    ChatBackupSignerAuthorizationV1, ChatBackupStatusV1, ChatBackupStorageUsageV1,
+    ChatBackupWireSegmentV1, CommitChatBackupManifestRequestV1, CopyChatBackupMediaRequestV1,
+    ProvisionChatBackupRequestV1, ReconcileChatBackupMediaRequestV1, StageChatBackupBaseRequestV1,
+    UploadChatBackupMediaRequestV1, CHAT_BACKUP_PROTOCOL_VERSION, CHAT_BACKUP_RECORD_DISPLAY,
     CHAT_DELIVERY_MEDIA_RETENTION_DAYS, MAX_CHAT_BACKUP_BASE_CIPHERTEXT_BYTES,
     MAX_CHAT_BACKUP_MEDIA_REFERENCES_PER_PAGE, MAX_CHAT_BACKUP_PAGE_SEGMENTS,
     MAX_CHAT_BACKUP_SEGMENT_CIPHERTEXT_BYTES,
@@ -512,12 +513,77 @@ pub struct DeliveredEnvelope {
 
 /// `GET /api/chat/messages` — a drain page. `more` tells the client to keep paging
 /// before it trusts the WS stream to be the only source.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `EnvelopeType` and `DirectChatSuiteId` are *skip* per envelope
+/// (docs/plans/format-evolution.md, mailbox page row): an envelope whose
+/// type or suite this client doesn't know is set apart in `unsupported`,
+/// the rest of the page is read. It is not acknowledged, so the server
+/// keeps it (until its mailbox retention) for this device once it updates.
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MailboxPage {
     pub envelopes: Vec<DeliveredEnvelope>,
     pub more: bool,
+    /// Envelopes of a type or suite newer than this client: never sent by
+    /// a server, filled in by the client's reading of a page.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub unsupported: Vec<UnsupportedEnvelope>,
+}
+
+/// An envelope a client set apart: what it needs to page past it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedEnvelope {
+    pub id: String,
+    pub cursor: u64,
+}
+
+impl<'de> Deserialize<'de> for MailboxPage {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            envelopes: Vec<serde_json::Value>,
+            more: bool,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Frame {
+            id: String,
+            cursor: u64,
+            envelope_type: serde_json::Value,
+            suite: serde_json::Value,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let mut envelopes = Vec::with_capacity(raw.envelopes.len());
+        let mut unsupported = Vec::new();
+        for value in raw.envelopes {
+            // The frame every envelope has, whatever its type: without it
+            // the page is corrupt.
+            let frame: Frame =
+                serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
+            let known_type = serde_json::from_value::<EnvelopeType>(frame.envelope_type).is_ok();
+            let known_suite = frame
+                .suite
+                .as_u64()
+                .and_then(|suite| u16::try_from(suite).ok())
+                .and_then(DirectChatSuiteId::from_u16)
+                .is_some();
+            if known_type && known_suite {
+                envelopes.push(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+            } else {
+                unsupported.push(UnsupportedEnvelope {
+                    id: frame.id,
+                    cursor: frame.cursor,
+                });
+            }
+        }
+        Ok(Self {
+            envelopes,
+            more: raw.more,
+            unsupported,
+        })
+    }
 }
 
 /// `POST /api/chat/messages/ack` — delete processed envelopes (batch).
@@ -772,5 +838,68 @@ mod tests {
         assert_eq!(v["manifests"], true);
         assert_eq!(v["profiles"], true);
         assert!(v.get("media").is_none());
+    }
+}
+
+#[cfg(test)]
+mod mailbox_page_tests {
+    use super::*;
+
+    fn envelope(id: &str, cursor: u64, kind: &str, suite: u64) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "cursor": cursor,
+            "sealedSender": true,
+            "senderDeviceId": 1,
+            "envelopeType": kind,
+            "suite": suite,
+            "content": "AA==",
+            "serverTimestamp": "2026-11-16T00:00:00Z",
+        })
+    }
+
+    /// docs/plans/format-evolution.md, mailbox page row: an envelope type
+    /// or suite this client doesn't know is set apart, alone.
+    #[test]
+    fn a_newer_envelope_is_set_apart_and_the_page_read() {
+        let page: MailboxPage = serde_json::from_value(serde_json::json!({
+            "envelopes": [
+                envelope("a", 1, "message", 1),
+                envelope("b", 2, "quantumMessage", 1),
+                envelope("c", 3, "preKey", 2),
+                envelope("d", 4, "preKey", 1),
+            ],
+            "more": false,
+        }))
+        .unwrap();
+        let ids: Vec<_> = page.envelopes.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["a", "d"]);
+        assert_eq!(
+            page.unsupported,
+            vec![
+                UnsupportedEnvelope {
+                    id: "b".into(),
+                    cursor: 2
+                },
+                UnsupportedEnvelope {
+                    id: "c".into(),
+                    cursor: 3
+                },
+            ]
+        );
+        // Without the frame every envelope has, the page is corrupt.
+        assert!(serde_json::from_value::<MailboxPage>(serde_json::json!({
+            "envelopes": [{"id": "x", "envelopeType": "message"}],
+            "more": false,
+        }))
+        .is_err());
+        // A known type and suite that don't parse stay an error.
+        let mut broken = envelope("e", 5, "message", 1);
+        broken["content"] = serde_json::json!(7);
+        assert!(serde_json::from_value::<MailboxPage>(serde_json::json!({
+            "envelopes": [broken],
+            "more": false,
+        }))
+        .is_err());
     }
 }

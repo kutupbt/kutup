@@ -702,6 +702,7 @@ mod tests {
             exdates: Vec::new(),
             organizer: None,
             sequence: 0,
+            other: Vec::new(),
         };
         let rule = Rule::parse("FREQ=WEEKLY;COUNT=3").unwrap();
         let series = Series::new(&shared.dtstart, shared.dtend.as_ref(), Some(&rule), &[]).unwrap();

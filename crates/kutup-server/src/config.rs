@@ -177,9 +177,10 @@ pub struct Config {
     /// apps show direct chats only; groups made earlier stay stored,
     /// unreachable.
     pub chat_groups: bool,
-    /// The most members (and open invitations) a group hosted here may have
+    /// The first value of the `chat_group_max_members` site setting, the
+    /// most members (and open invitations) a group hosted here may have
     /// (`CHAT_GROUP_MAX_MEMBERS`, 1 to 256, default 256;
-    /// docs/plans/pairwise-groups.md §7).
+    /// docs/plans/pairwise-groups.md §7). Administrators change it after.
     pub chat_group_max_members: usize,
     /// The most groups this server hosts (`CHAT_GROUP_MAX_GROUPS`, default
     /// 100000): with the per-server creation limit, a peer can't fill it.

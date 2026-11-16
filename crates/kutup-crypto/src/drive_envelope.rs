@@ -184,7 +184,9 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             11 => Ok(Self::PublicLinkFileKey),
             12 => Ok(Self::AlbumFileKey),
             13 => Ok(Self::RevisionContent),
-            _ => Err(CryptoError::InvalidInput(format!(
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Drive envelope purpose {value}"
             ))),
         }

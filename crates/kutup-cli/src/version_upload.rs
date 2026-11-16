@@ -836,6 +836,9 @@ mod tests {
             state_revision_id: None,
             sha256: None,
             media: None,
+            v: kutup_crypto::file_metadata::FILE_METADATA_VERSION,
+            min: None,
+            extra: Default::default(),
         };
         let metadata_envelope =
             crate::file_crypto::seal_metadata(&meta, &created.file_key, &created.id, 1, 1).unwrap();

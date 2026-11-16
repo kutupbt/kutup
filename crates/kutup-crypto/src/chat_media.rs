@@ -45,7 +45,13 @@ impl TryFrom<u16> for ChatMediaSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             2 => Ok(Self::KutupChatMediaBlocksV1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            // Suite 1 (secretstream) went with the block format: older, not newer.
+            1 => Err(CryptoError::InvalidInput(
+                "Chat-media suite 1 is no longer read".into(),
+            )),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat-media suite {value}"
             ))),
         }
@@ -70,7 +76,9 @@ impl TryFrom<u8> for ChatMediaObjectPurpose {
     fn try_from(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::AttachmentBlob),
-            _ => Err(CryptoError::InvalidInput(format!(
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat-media object purpose {value}"
             ))),
         }

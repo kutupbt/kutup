@@ -310,6 +310,15 @@ pub(crate) async fn begin_list_change(
         .ok_or_else(|| AppError::internal("account authority key is invalid"))?;
     let signed = SignedMailKeyListV1::verify(&data, &signature, &authority)
         .map_err(|error| AppError::bad_request(format!("keyList: {error}")))?;
+    // The working limit is the administrators' (the format reads more).
+    let most = crate::site_settings::MAIL_KEYS_PER_ADDRESS
+        .load(&state.pool)
+        .await?;
+    if signed.list.keys.len() as i64 > most {
+        return Err(AppError::bad_request(format!(
+            "an address lists at most {most} keys"
+        )));
+    }
 
     let mut tx = state.pool.begin().await?;
     let address: String = sqlx::query_scalar(
@@ -378,7 +387,7 @@ impl ListChange {
             .iter()
             .map(|key: &MailKeyEntryV1| {
                 (
-                    hex::encode(key.fingerprint),
+                    hex::encode(&key.fingerprint),
                     hex::encode(key.sha256_fingerprint),
                 )
             })
@@ -463,7 +472,7 @@ impl ListChange {
             .keys
             .iter()
             .find(|key| key.primary)
-            .map(|key| hex::encode(key.fingerprint));
+            .map(|key| hex::encode(&key.fingerprint));
         if old_primary.is_some() && old_primary != new_primary {
             // A new primary key: end-to-end forwardings made for the old one
             // stop, and their proxy factors go (docs/plans/mail-forwarding.md).
@@ -476,7 +485,7 @@ impl ListChange {
         for key in &self.signed.list.keys {
             sqlx::query("UPDATE mail_address_keys SET is_primary = $3, flags = $4 WHERE address_id = $1 AND fingerprint = $2")
                 .bind(self.address_id)
-                .bind(hex::encode(key.fingerprint))
+                .bind(hex::encode(&key.fingerprint))
                 .bind(key.primary)
                 .bind(key.flags as i32)
                 .execute(&mut *self.tx)
@@ -566,7 +575,7 @@ pub async fn add_key(
         .list
         .keys
         .iter()
-        .find(|key| hex::encode(key.fingerprint) == new_entry.0)
+        .find(|key| hex::encode(&key.fingerprint) == new_entry.0)
         .expect("listed")
         .flags;
     let inserted = sqlx::query(
@@ -640,7 +649,7 @@ pub(crate) async fn first_key(
     let fingerprint = hex::encode(info.fingerprint);
     let only = match signed.list.keys.as_slice() {
         [only]
-            if hex::encode(only.fingerprint) == fingerprint
+            if hex::encode(&only.fingerprint) == fingerprint
                 && only.sha256_fingerprint == info.sha256_fingerprint =>
         {
             only

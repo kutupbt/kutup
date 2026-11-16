@@ -961,6 +961,8 @@
       "groupLinkJoinsRelayHint": "The same across all groups hosted here.",
       "multi": {
         "range": "Between {{min}} and {{max}}.",
+        "chatGroupMaxMembers": "Members in one group",
+        "chatGroupMaxMembersHint": "The most members and open invitations a group hosted on this server may have. Groups already larger keep their members.",
         "chatMultiMaxRecipients": "Accounts in one group send",
         "chatMultiMaxRecipientsHint": "How many members on this server one group message reaches in one request.",
         "chatMultiMaxMessageBytes": "Largest group message per member (bytes)",
@@ -1141,6 +1143,12 @@
         "accountClosingDaysHint": "An account asked to be deleted is closing this long; signing in until then keeps it.",
         "destructionEventRetentionDays": "Keep the destruction log (days)",
         "destructionEventRetentionDaysHint": "What was deleted, when and by whom, naming no one. Keep it longer than any backup: a restore replays it."
+      },
+      "mail": "Mail keys",
+      "mailHint": "How many encryption keys one email address may keep.",
+      "mailLimits": {
+        "mailKeysPerAddress": "Keys per address",
+        "mailKeysPerAddressHint": "Each address keeps its current key and older ones to read old mail. Lists that already hold more keep them."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "First wait (seconds)",

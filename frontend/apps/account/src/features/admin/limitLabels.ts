@@ -13,6 +13,7 @@ export const SETTING_LABELS: Record<SettingSection, string> = {
   federation: 'admin.settings.federationLimits',
   privacy: 'admin.settings.privacyLimits',
   backups: 'admin.settings.backupLimits',
+  mail: 'admin.settings.mailLimits',
 }
 
 type TFunction = ReturnType<typeof useTranslation>['t']

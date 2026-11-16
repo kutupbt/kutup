@@ -90,6 +90,8 @@ export interface DriveFile {
   originalRevisionId: string | null
   /** A note's or place list's latest saved state, as the sealed metadata names it (null: none saved). */
   stateRevisionId: string | null
+  /** The rest of the sealed metadata (its version, a newer client's fields), kept for rewrites. */
+  metadataRest?: Record<string, unknown>
   /** The file key of `keyGeneration`. */
   fileKey: Uint8Array | null
   /** That key sealed under the folder key at `keyEpoch`, as listed. */
@@ -120,7 +122,7 @@ export interface DriveFile {
  * never dropped.
  */
 export function fileMetadataOf(
-  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media' | 'content'> & {
+  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media' | 'content' | 'metadataRest'> & {
     sha256?: string | null
     originalRevisionId?: string | null
     stateRevisionId?: string | null
@@ -129,7 +131,7 @@ export function fileMetadataOf(
 ): FileMetadataV2 {
   const content = change.content ?? file.content
   if (!file.name || !content) throw new Error('file is not open')
-  const metadata: FileMetadataV2 = { name: file.name, mimeType: file.mimeType, size: file.size, content }
+  const metadata: FileMetadataV2 = { ...file.metadataRest, name: file.name, mimeType: file.mimeType, size: file.size, content }
   // The revisions the metadata names are carried by every rewrite.
   if (file.originalRevisionId) metadata.originalRevisionId = file.originalRevisionId
   if (file.stateRevisionId) metadata.stateRevisionId = file.stateRevisionId

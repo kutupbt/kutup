@@ -43,12 +43,16 @@ export interface MediaMetadataV1 {
 }
 
 /**
- * A file's sealed metadata (`kutup-crypto` `FileMetadataV2`): what it is, and
+ * A file's sealed metadata (`kutup-crypto` `FileMetadata`): what it is, and
  * the content it commits to (docs/plans/drive-block-format.md §2). Every new
  * current revision seals the next metadata revision with its `content`, in
- * the request that commits it.
+ * the request that commits it. `v` is the format version (2, written when
+ * absent, docs/plans/format-evolution.md); whatever else an opened record
+ * holds besides the fields below — a newer client's fields, `min` — rides
+ * along unchanged ({@link fileMetadataRest}) so no rewrite drops it.
  */
 export interface FileMetadataV2 {
+  v?: number
   name: string
   mimeType: string
   size: number
@@ -102,14 +106,25 @@ function validateRevision(value: number): void {
   }
 }
 
+const KNOWN_METADATA_FIELDS = new Set(['name', 'mimeType', 'size', 'content', 'originalRevisionId', 'stateRevisionId', 'sha256', 'media'])
+
+/**
+ * What an opened metadata record holds besides its known fields (name,
+ * type, size, content, the revisions it names, hash and media): its version
+ * and anything a newer client wrote. Every rewrite
+ * seals it again, so an older client never erases a newer one's data.
+ */
+export function fileMetadataRest(metadata: FileMetadataV2): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(metadata).filter(([key]) => !KNOWN_METADATA_FIELDS.has(key)))
+}
+
 /** The canonical bytes, checked by the Rust format (`canonicalFileMetadata`). */
 async function encodeMetadata(metadata: FileMetadataV2): Promise<Uint8Array> {
   const module = await getCryptoWasm()
-  const plain: FileMetadataV2 = { name: metadata.name, mimeType: metadata.mimeType, size: metadata.size, content: { revisionId: metadata.content.revisionId, manifestSha256: metadata.content.manifestSha256 } }
-  if (metadata.originalRevisionId) plain.originalRevisionId = metadata.originalRevisionId
-  if (metadata.stateRevisionId) plain.stateRevisionId = metadata.stateRevisionId
-  if (metadata.sha256) plain.sha256 = metadata.sha256
-  if (metadata.media) plain.media = metadata.media
+  const plain: Record<string, unknown> = { v: 2, ...metadata, content: { revisionId: metadata.content.revisionId, manifestSha256: metadata.content.manifestSha256 } }
+  for (const key of ['originalRevisionId', 'stateRevisionId', 'sha256', 'media'] as const) {
+    if (!metadata[key]) delete plain[key]
+  }
   return new TextEncoder().encode(module.canonicalFileMetadata(JSON.stringify(plain)))
 }
 
