@@ -245,6 +245,16 @@ log for remote lookups. Needs no format change: it logs the already-signed
 account ids, key bindings and `AccountRenameV1` chains
 (docs/plans/account-ids.md).
 
+### Split the crypto WASM (after the wipe)
+
+The crypto runtime is one module every app loads, and it is close to its size
+budget (`frontend/wasm-budgets.json`, raised 2026-11-16 for the identity root,
+the block format and the master-key rotation). Split it so each app loads only
+what it uses: a core (account records, master keys, roots, the account head)
+plus parts loaded on demand for Drive blocks, account and identity work, and
+Chat. It changes no stored format, so it waits until after the wipe; each
+part then gets its own budget.
+
 ### Rotate document keys when a device is removed (after W5)
 
 Signal's practice: new sender keys after a member or device leaves. When a

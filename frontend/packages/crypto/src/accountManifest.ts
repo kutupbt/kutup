@@ -4,6 +4,7 @@
 // the master key derives. Rust (kutup-chat-proto) builds, signs and checks
 // the chain; this is its typed browser face.
 
+import type { IdentityRoot } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
 
 /** What kind of app instance a device is. */
@@ -38,17 +39,17 @@ export interface AccountManifest {
 /**
  * The next manifest after `head` with `entry` listed (in place of any entry
  * of its id); `head` null makes the account's first, naming `account`. The
- * head must name the authority `masterKeyBase64` derives, and the result is
+ * head must name the authority `identityRoot` derives, and the result is
  * checked to follow it.
  */
 export async function listDeviceInManifest(
   head: AccountManifest | null,
   entry: ManifestDevice,
   issuedAt: string,
-  masterKeyBase64: string,
+  identityRoot: IdentityRoot,
   account: string,
 ): Promise<AccountManifest> {
-  return (await getCryptoWasm()).listDeviceInManifest(head, entry, issuedAt, masterKeyBase64, account) as AccountManifest
+  return (await getCryptoWasm()).listDeviceInManifest(head, entry, issuedAt, identityRoot, account) as AccountManifest
 }
 
 /**
@@ -65,17 +66,17 @@ export interface AccountManifestPin {
 
 /**
  * Checks `head` as the server gave it (null: none) against `pin` (null:
- * none seen) for `account` and the incarnation `masterKeyBase64` derives;
+ * none seen) for `account` and the incarnation `identityRoot` derives;
  * the pin to keep. Throws on a head that doesn't verify or is older than the
  * pin, and on no head once there is a pin.
  */
 export async function checkOwnManifestHead(
   pin: AccountManifestPin | null,
   head: AccountManifest | null,
-  masterKeyBase64: string,
+  identityRoot: IdentityRoot,
   account: string,
 ): Promise<AccountManifestPin | null> {
-  return (await getCryptoWasm()).checkOwnManifestHead(pin, head, masterKeyBase64, account) as AccountManifestPin | null
+  return (await getCryptoWasm()).checkOwnManifestHead(pin, head, identityRoot, account) as AccountManifestPin | null
 }
 
 /** What a page does with a collab frame (`SenderVerdict`). */
@@ -129,12 +130,12 @@ export async function removeDevicesFromManifest(
   head: AccountManifest,
   deviceIds: readonly number[],
   issuedAt: string,
-  masterKeyBase64: string,
+  identityRoot: IdentityRoot,
 ): Promise<AccountManifest> {
   return (await getCryptoWasm()).removeDevicesFromManifest(
     head,
     Uint32Array.from(deviceIds),
     issuedAt,
-    masterKeyBase64,
+    identityRoot,
   ) as AccountManifest
 }

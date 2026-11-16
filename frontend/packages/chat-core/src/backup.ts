@@ -489,7 +489,7 @@ export class ChatBackupCoordinator {
       root = runtime.ids.randomBytes(32)
       backupIncarnationId = runtime.ids.randomUuid()
       const authorization = wasm.createChatBackupSignerAuthorization(
-        toBase64(options.masterKey),
+        options.roots.identityRoot,
         toBase64(root),
         backupIncarnationId,
         BigInt(Math.floor(runtime.clock.now() / 1000)),
@@ -510,7 +510,7 @@ export class ChatBackupCoordinator {
     const verified = wasm.verifyChatBackupMetadata(
       status.signerAuthorization,
       status.manifest ?? null,
-      toBase64(options.masterKey),
+      options.roots.identityRoot,
       toBase64(root),
       backupIncarnationId,
     )
@@ -1668,7 +1668,7 @@ export class ChatBackupCoordinator {
     const verified = (await getCryptoWasm()).verifyChatBackupMetadata(
       this.status.signerAuthorization,
       this.status.manifest ?? null,
-      toBase64(this.options.masterKey),
+      this.options.roots.identityRoot,
       toBase64(this.root),
       this.backupIncarnationId,
     )
