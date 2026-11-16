@@ -1,24 +1,24 @@
 {
   "accountMasterKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
-  "groupId": "z6ax+WeTox0FBlKJEyzayCSkKhMmCWrCY3vI2ZybyG0=",
+  "groupId": "TkwdhGvOqyLr4Fi5xRzEc37LhK/SqrjVGlhoXbB/UPY=",
   "cases": [
     {
       "joinEpoch": 0,
-      "info": "z6ax+WeTox0FBlKJEyzayCSkKhMmCWrCY3vI2ZybyG0AAAAA",
-      "seed": "PaIV0bsa3fnGk+iBYWgE+TQNrOSdtU8xChKRmjdqrSA=",
-      "publicKey": "W5lTAmYD5Me8ubqhyDTkaclPWRfLYGXETvenakvUyjc="
+      "info": "TkwdhGvOqyLr4Fi5xRzEc37LhK/SqrjVGlhoXbB/UPYAAAAA",
+      "seed": "naDO8N/mTPeU4w4RkCkl7O/gxRJlOzrePEaPIWgCIQk=",
+      "publicKey": "+wmaLxoMw1jmBw42pIKYDX0bsAglTv7fo3UwQC6hiLo="
     },
     {
       "joinEpoch": 1,
-      "info": "z6ax+WeTox0FBlKJEyzayCSkKhMmCWrCY3vI2ZybyG0AAAAB",
-      "seed": "Slb58ea6IBqFBoKwBg2xmfk49pDN9PbEIDj1YDj/E2Y=",
-      "publicKey": "WuDPleN3isnnylCacwV+lNFxYlA7ELe5ukIECV1IHSs="
+      "info": "TkwdhGvOqyLr4Fi5xRzEc37LhK/SqrjVGlhoXbB/UPYAAAAB",
+      "seed": "J3pjZ/o5AFqGEU14ZWMx/t55T51hiLBp9c5b8m8KpHk=",
+      "publicKey": "mIeIajmsQCWtslnBicwJ6cyRLS4uLip5AqZxN8EeW94="
     },
     {
       "joinEpoch": 16909060,
-      "info": "z6ax+WeTox0FBlKJEyzayCSkKhMmCWrCY3vI2ZybyG0BAgME",
-      "seed": "UVUPFa4fSGmK53O19K1wuWFZmk4TMqBeaS2eQsCvKpk=",
-      "publicKey": "U4aq5+hN3/nJUZiqZBC3UBiGLBYyclRCGyCKicpnmR8="
+      "info": "TkwdhGvOqyLr4Fi5xRzEc37LhK/SqrjVGlhoXbB/UPYBAgME",
+      "seed": "qqw8Itb7/C/okoXdd6RSzApcwVqh1NHeAjsqObO+8Rg=",
+      "publicKey": "a9lsshbm1H2m13msKchVjCJdqhrfFxHbdRxJruZXyaU="
     }
   ]
 }

@@ -89,7 +89,7 @@
     "sequence": 9,
     "nonce": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm",
     "plaintext": "Y2Fub25pY2FsIGNvbGxhYm9yYXRpb24gdXBkYXRl",
-    "frame": "S1VUUENGMwAAAQEAAAAAAwAAAAcRERERERFBEYERERERERERAAAAKgAAAAAAAAAAAAAABQAAAAAAAAAJZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmAAAALjhiP+MxDCVjK18BY4A1xAxA86qRN1Zi2/pLPPfFS3uzuDQuFlCRrP+v6AmEUZ0l1N/0X/JpaSjlq6HfDsGO2f61tyt5hQ5kIXBwlYG3evMwTHiT0mhPkp94b1FyuHfQWhL1emPqIZmZusLT0gkF"
+    "frame": "S1VUUENGMwAAAQEAAAAAAwAAAAcRERERERFBEYERERERERERAAAAKgAAAAAAAAAAAAAABQAAAAAAAAAJZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmAAAALjhiP+MxDCVjK18BY4A1xAxA86qRN1Zi2/pLPPfFS3uzuDQuFlCRrP+v6AmEUZ0cvpI6SH3LMECv8KXt/14k8eVKdI4V6aHylQzLpzFE3GRUqDifL/o4LJ8boFh5faE4b1XZDGleTsxcdTRbL70C"
   },
   "localState": {
     "key": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
@@ -335,18 +335,18 @@
     }
   },
   "safetyNumber": {
-    "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V3): Signal's fingerprint v2 (5200 x SHA-512 per side, 2 x 30 digits, CombinedFingerprints QR) with the stable id AccountRef::bytes() and the identity key the raw 32-byte Ed25519 account authority (no type prefix). A rename keeps the number; a reset or another account changes it.",
+    "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V3): Signal's fingerprint v2 (5200 x SHA-512 per side, 2 x 30 digits, CombinedFingerprints QR) with the stable id AccountRef::id_bytes() (the 16-byte account id, never the server's name) and the identity key the raw 32-byte Ed25519 account authority (no type prefix). A rename, of the name or the server, keeps the number; a reset or another account id changes it.",
     "localAccount": "aci:3f1c6a52-8d0e-4b7a-9c21-5e4d8f0a1b2c@kutup.dev",
     "localAuthority": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
     "peerAccount": "aci:9a7b5c3d-1e2f-4a6b-8c0d-2e4f6a8b0c1d@example.org",
     "peerAuthority": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
-    "fingerprint": "39802 50733 77782 23437 02321 89028 75625 06939 41895 32506 06355 36566",
-    "localQrPayload": "kutup://verify/v3/CAISIgog32uBQJq9SEEwbV47w0E2U0Ge-o0themGUR-FI5nEGrUaIgog5M3h36kiZrrPm9zhy-fnTnPXNBoss2B90zvRA3p2XQ4",
-    "peerQrPayload": "kutup://verify/v3/CAISIgog5M3h36kiZrrPm9zhy-fnTnPXNBoss2B90zvRA3p2XQ4aIgog32uBQJq9SEEwbV47w0E2U0Ge-o0themGUR-FI5nEGrU",
+    "fingerprint": "61080 92030 08163 20869 46780 93455 96904 76825 74532 15988 36688 61790",
+    "localQrPayload": "kutup://verify/v3/CAISIgog6AmhlGgkDqdv2W-hK9ZEKO7KIRRuRc4WsIbfXvw-4M8aIgogwcLYkZgoCHClvo4hkQUDJ1ydDOU-CvjAvMAQXB6vBOU",
+    "peerQrPayload": "kutup://verify/v3/CAISIgogwcLYkZgoCHClvo4hkQUDJ1ydDOU-CvjAvMAQXB6vBOUaIgog6AmhlGgkDqdv2W-hK9ZEKO7KIRRuRc4WsIbfXvw-4M8",
     "resetAuthority": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
-    "resetFingerprint": "39802 50733 77782 23437 02321 89028 91833 72749 35456 55043 87794 66986",
+    "resetFingerprint": "88422 62735 91967 41269 44452 04699 96904 76825 74532 15988 36688 61790",
     "otherAccount": "aci:c2d4e6f8-0a1b-4c3d-9e5f-7a9b1c3d5e7f@example.org",
-    "otherAccountFingerprint": "39802 50733 77782 23437 02321 89028 72465 55207 07462 66039 34446 08057"
+    "otherAccountFingerprint": "09399 57463 96810 59485 92603 49622 96904 76825 74532 15988 36688 61790"
   },
   "accountRename": {
     "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, chained 1, 2, …; a client accepts only chains that verify and extend what it saw.",
@@ -504,19 +504,21 @@
     ]
   },
   "accountRef": {
-    "description": "A person across servers (kutup-crypto/src/account_ref.rs): { server, accountId } in JSON; the string form aci:<lowercase hyphenated uuid>@<canonical server>; bytes = u16 server length, server, the id's 16 bytes. Anything else is refused, a username@server included.",
+    "description": "A person across servers (kutup-crypto/src/account_ref.rs): { server, accountId } in JSON; the string form aci:<lowercase hyphenated uuid>@<canonical server>; idBytes = the id's 16 bytes, what every signed, sealed, hashed or derived statement binds (the server is routing, docs/plans/identity-rotation.md §6); routingBytes = u16 server length, server, the id's 16 bytes, only where a server names an account next to a payload. Anything else is refused, a username@server included.",
     "valid": [
       {
         "string": "aci:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@kutup.dev",
         "server": "kutup.dev",
         "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
-        "bytes": "00096b757475702e6465763f1c9a526b7e4f0e9d1a2c3b4d5e6f70"
+        "idBytes": "3f1c9a526b7e4f0e9d1a2c3b4d5e6f70",
+        "routingBytes": "00096b757475702e6465763f1c9a526b7e4f0e9d1a2c3b4d5e6f70"
       },
       {
         "string": "aci:00000000-0000-4000-8000-000000000001@a.test",
         "server": "a.test",
         "accountId": "00000000-0000-4000-8000-000000000001",
-        "bytes": "0006612e7465737400000000000040008000000000000001"
+        "idBytes": "00000000000040008000000000000001",
+        "routingBytes": "0006612e7465737400000000000040008000000000000001"
       }
     ],
     "invalid": [

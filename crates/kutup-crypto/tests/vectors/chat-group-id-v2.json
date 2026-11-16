@@ -5,19 +5,25 @@
       "server": "home.example",
       "identitySequence": 1,
       "identityDocumentHash": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
-      "groupId": "z6ax+WeTox0FBlKJEyzayCSkKhMmCWrCY3vI2ZybyG0="
+      "groupId": "TkwdhGvOqyLr4Fi5xRzEc37LhK/SqrjVGlhoXbB/UPY="
     },
     {
       "server": "home.example",
       "identitySequence": 2,
       "identityDocumentHash": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
-      "groupId": "ZbfQxmOfZFXd6c0aOTKWnxaqKWl2SMwIkDBJRqcK9bM="
+      "groupId": "cf3wLiivwzexDDF9tLSZe1JHQYmg6gBCeS7tOQSSfic="
     },
     {
       "server": "elsewhere.example",
       "identitySequence": 1,
+      "identityDocumentHash": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "groupId": "hR3hw2ZezpuUMkQdOyJXtBZLPDVKPfdyBpu8X3I2VRU="
+    },
+    {
+      "server": "renamed.example",
+      "identitySequence": 1,
       "identityDocumentHash": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
-      "groupId": "3udam7LjbvUGs5rF9hHxk0SdlH5Vniv9sj4rCQw4S2g="
+      "groupId": "TkwdhGvOqyLr4Fi5xRzEc37LhK/SqrjVGlhoXbB/UPY="
     }
   ]
 }

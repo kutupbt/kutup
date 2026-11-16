@@ -875,8 +875,8 @@ fn manifest_v3_vector_is_pinned() {
 }
 
 const SIGNING_BYTES_SHA256: &str =
-    "f1e1a5493e66957ef92247ebac9e4f062c1c2adda2ef7689c10f1937974d1351";
-const MANIFEST_HASH: &str = "da3cdaef03a400a48e089414d9f2f465b67cbc01779931ae4a4d8c25d18fa5cb";
+    "4744709b5233fd5c6b21473f02e29f7c5697e865fa83684142270ee6e941911a";
+const MANIFEST_HASH: &str = "050a72415c4582c9700a6d211f5c7690f0e814355cf7f82e19ee27c80f99756b";
 
 #[test]
 fn account_identity_sync_body() {

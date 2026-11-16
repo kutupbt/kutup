@@ -544,7 +544,7 @@ mod tests {
             .parse()
             .unwrap();
         let first = derive_delivery_capability(&[7; 32], &alice).unwrap();
-        assert_eq!(hex::encode(first), "9f3d6f8cbc54ea934735e039f6b4f37b");
+        assert_eq!(hex::encode(first), "20cec5e38fe7f1a2a362ee02d739ce38");
         // Another account is another capability; the same id under another
         // server name is the same one (the server is routing,
         // identity-rotation.md §6).
