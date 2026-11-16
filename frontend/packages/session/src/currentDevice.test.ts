@@ -41,7 +41,7 @@ vi.mock('@kutup/crypto/signing', () => ({
 }))
 const persistDevice = vi.fn()
 vi.mock('./persist', () => ({ persistDevice: (d: unknown) => persistDevice(d) }))
-let session: { userId: string; masterKey: Uint8Array; device: DeviceKeys | null } | null = null
+let session: { userId: string; masterKey: Uint8Array; roots: { identityRoot: string }; device: DeviceKeys | null } | null = null
 vi.mock('./store', () => ({ getSession: () => session }))
 
 import {
@@ -88,7 +88,12 @@ beforeEach(() => {
   published.length = 0
   publishError = null
   head = { sequence: 4, devices: [{ deviceId: 1, session: 'cd'.repeat(32) }] }
-  session = { userId: '00000000-0000-4000-8000-000000000001', masterKey: new Uint8Array(32), device: null }
+  session = {
+    userId: '00000000-0000-4000-8000-000000000001',
+    masterKey: new Uint8Array(32),
+    roots: { identityRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' },
+    device: null,
+  }
   // What persistDevice does to the session.
   persistDevice.mockImplementation(async (d: DeviceKeys | null) => {
     if (session) session.device = d

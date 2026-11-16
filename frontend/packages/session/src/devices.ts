@@ -9,7 +9,7 @@
 import axios from 'axios'
 import { accountKeyOf, accountOfKey } from '@kutup/crypto/accountRef'
 import { checkOwnManifestHead, type AccountManifest, type DeviceKind } from '@kutup/crypto/accountManifest'
-import { toBase64, toBase64Url } from '@kutup/crypto/base64'
+import { toBase64Url } from '@kutup/crypto/base64'
 import { loadServerSettings } from './apps'
 import api from './client'
 import type { DeviceKeys } from './keys'
@@ -167,7 +167,7 @@ export async function fetchManifestHistory(account: string, from: number, to: nu
 async function keepPin(account: string, head: AccountManifest | null): Promise<void> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  const pin = await checkOwnManifestHead(await manifestPin(account), head, toBase64(session.masterKey), account)
+  const pin = await checkOwnManifestHead(await manifestPin(account), head, session.roots.identityRoot, account)
   if (pin) await keepManifestPin(pin)
 }
 
