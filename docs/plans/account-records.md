@@ -1,6 +1,6 @@
 # W3: one account-records service
 
-Status: **proposed** (second session, 2026-11-16), for
+Status: **approved** 2026-11-16 (second session's note, main session's review; decisions at the end), for
 docs/plans/wipe-unification.md W3. It follows Signal's Storage Service: one
 generic store for the account's synced private state, with the account head as
 its manifest. Branch `wipe/account-records`, on #417. It will be rebased onto
@@ -178,3 +178,32 @@ chain pins (purpose 21) stay for anything left outside the head.
    the registry makes adding it a row.
 3. **Contact groups' plaintext name:** the server stops seeing group names.
    Nothing on the server uses them. **Proposed:** yes.
+
+## Decisions (2026-11-16, main session)
+
+1. **The ledger keeps the newest revision per entity only**, as Signal keeps
+   only the latest record state.
+2. **No sealed-settings scope** until a feature needs one.
+3. **Contact group names leave the server's view.**
+4. **Record ids are never a plaintext name or id:** every scope's id is
+   `hashed_object` under the object-id root, or random. The registry states
+   which, and the server refuses another length. (Pass secrets: see the open
+   point below.)
+5. **A page and its head come in one snapshot,** and a client applies a page
+   only after it has verified that head against its anchor (the generations
+   map included). The core refuses an unverified page; it has no path around
+   that.
+6. **No data migration** (the wipe). The last slice deletes the old tables and
+   routes, with no shims.
+7. **Calendar settings** are designed against W4 (`wipe/calendar-keys`
+   fd213304: `calendar_members` lost `address_id` and `passphrase_key_packet`
+   and gained `passphrase_share`).
+8. **Order:** the build is based on `wipe/integration` once it is green. The
+   server slice and the Rust core ship first, so the clients can follow in
+   parallel.
+
+Open point: Pass secrets are keyed by the vault's Drive file id, which the
+server already knows (a Drive row). The server uses it to refuse a key for a
+file that is gone or not the caller's, and to drop the key when the file is
+deleted. A hashed id would lose both. Proposed: Pass keeps the file id as its
+record id, the one exception, named in the registry.
