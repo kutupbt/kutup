@@ -32,9 +32,9 @@ pub const SLOT_ID_LEN: usize = 16;
 pub const HASH_LEN: usize = 32;
 
 const KDF_SALT: &[u8] = crate::labels::CHAT_GROUP_V1;
-/// v2: the id binds the group's home (its server and the federation identity
-/// it was pinned at), so the same master key at another home is another
-/// group.
+/// v2: the id binds the group's home (the federation identity it was pinned
+/// at, never the server's name), so the same master key at another home is
+/// another group.
 const ID_INFO: &[u8] = crate::labels::CHAT_GROUP_ID_V2;
 const HOME_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_HOME_V1;
 /// v2: the group id follows in the info, so a state key is its group's
@@ -52,12 +52,19 @@ const BINDING_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_BINDING_V1;
 const CHANGE_HASH_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_CHANGE_HASH_V1;
 const STATE_HASH_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_STATE_HASH_V1;
 
-/// A group's home, as its id binds it: the server the group lives on, for
-/// its whole life, and the federation identity document it was pinned at.
+/// A group's home: the server the group lives on, for its whole life, and the
+/// federation identity document it was pinned at. Its id binds the document
+/// (hash and sequence), which names the home by its key; the server's name is
+/// where the group is reached (docs/plans/identity-rotation.md §6).
 /// Every notary a member takes is verified against the identity history
 /// followed from that pin (chat-core's `GroupRecordV1::followed_history`).
-/// A member who keeps the master key can't make the group live elsewhere: a
-/// home of theirs is another group id, which no member's binding names.
+/// A member who keeps the master key can't make the group live on a home of
+/// another identity: that is another group id, which no member's binding
+/// names. A pin naming another server with the true document gets the same
+/// id; it is stopped where the home is reached: the history fetched from the
+/// named server must follow from the pinned document, which names its server
+/// under the home's own signature (chat-core's `GatewayCache::refresh`, run
+/// before any signed request, and the recovery's check).
 #[derive(Clone, Copy, Debug)]
 pub struct GroupHome<'a> {
     pub server: &'a str,
@@ -66,12 +73,15 @@ pub struct GroupHome<'a> {
 }
 
 impl GroupHome<'_> {
-    /// The home's digest: SHA-256 over the domain, the server name and the
-    /// identity document hash (each u16-length-prefixed), then the identity
-    /// sequence (u64 big-endian). Only canonical spellings are taken, so one
-    /// home has one id: the server a lowercase DNS name with no trailing dot
-    /// ([`crate::account_ref::valid_server`]), the hash exactly 64 lowercase
-    /// hex digits; anything else is refused, never normalised. This is the
+    /// The home's digest: SHA-256 over the domain, the identity document
+    /// hash (u16-length-prefixed), then the identity sequence (u64
+    /// big-endian). The server's name is not in it: the document hash and
+    /// sequence already name the home by its key, and the name is where the
+    /// group is reached, not what it is (docs/plans/identity-rotation.md
+    /// §6). Only canonical spellings are taken, so one home has one id: the
+    /// hash exactly 64 lowercase hex digits; anything else is refused, never
+    /// normalised. The server must still be a canonical name
+    /// ([`crate::account_ref::valid_server`]), as every route to it. This is the
     /// pin made at the group's creation, kept for its life: the home's
     /// identity rotating later doesn't move the id (members follow the
     /// rotation from the pin).
@@ -88,10 +98,9 @@ impl GroupHome<'_> {
         }
         let mut hash = Hasher::new(Suite::V1);
         hash.update(HOME_DOMAIN);
-        for text in [self.server, self.identity_document_hash] {
-            hash.update((text.len() as u16).to_be_bytes());
-            hash.update(text.as_bytes());
-        }
+        let text = self.identity_document_hash;
+        hash.update((text.len() as u16).to_be_bytes());
+        hash.update(text.as_bytes());
         hash.update(self.identity_sequence.to_be_bytes());
         Ok(hash.finish().to_array())
     }
@@ -382,7 +391,7 @@ pub fn binding_signed_bytes(
     pseudonym: &[u8; PUBLIC_KEY_LEN],
     account: &AccountRef,
 ) -> Vec<u8> {
-    [BINDING_DOMAIN, group_id, pseudonym, &account.bytes()].concat()
+    [BINDING_DOMAIN, group_id, pseudonym, &account.id_bytes()].concat()
 }
 
 /// The account's binding of `pseudonym` in `group_id`, signed by its
@@ -578,7 +587,8 @@ mod tests {
             b"Team"
         );
         let elsewhere = master(GroupHome {
-            server: "elsewhere.example",
+            identity_document_hash:
+                "1f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
             ..HOME
         })
         .state_key();
@@ -594,7 +604,9 @@ mod tests {
         };
         let here = at(HOME);
         assert_eq!(here, at(HOME));
-        assert_ne!(
+        // The server's name is routing, not the home: a renamed home keeps
+        // its groups (identity-rotation.md §6).
+        assert_eq!(
             here,
             at(GroupHome {
                 server: "elsewhere.example",
@@ -741,7 +753,7 @@ mod tests {
         let authority = identity.authority_public_key();
         let group_id = master().group_id();
         let pseudonym = GroupKeyPair::from_seed(&[3u8; 32]).public_key();
-        let payload = [&group_id[..], &pseudonym, &account().bytes()].concat();
+        let payload = [&group_id[..], &pseudonym, &account().id_bytes()].concat();
         for domain in OTHER_DOMAINS {
             assert!(!domain.starts_with(BINDING_DOMAIN) && !BINDING_DOMAIN.starts_with(domain));
             // The same payload under another domain, signed by the same key.

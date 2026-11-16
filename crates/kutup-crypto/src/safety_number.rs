@@ -7,8 +7,9 @@
 //! the number shows both halves as 2 × 30 digits, the lower first, and the QR
 //! code carries both halves. Kutup's inputs:
 //!
-//! - the stable id is [`AccountRef::bytes`] (server and permanent account id),
-//!   Signal's ACI; a rename keeps the number;
+//! - the stable id is [`AccountRef::id_bytes`] (the permanent account id
+//!   alone, 16 bytes), Signal's ACI; a rename keeps the number, and so would
+//!   a server's (docs/plans/identity-rotation.md §6);
 //! - the identity key is the account authority: its 32 raw Ed25519 bytes, with
 //!   no type prefix (libsignal's Curve25519 keys carry a `0x05` byte; ours do
 //!   not, so Kutup numbers never equal Signal's for the same bytes).
@@ -63,8 +64,8 @@ pub fn derive(
             "an account has no safety number with itself".into(),
         ));
     }
-    let mine = signal::half(ITERATIONS, &local.bytes(), local_authority)?;
-    let theirs = signal::half(ITERATIONS, &peer.bytes(), peer_authority)?;
+    let mine = signal::half(ITERATIONS, &local.id_bytes(), local_authority)?;
+    let theirs = signal::half(ITERATIONS, &peer.id_bytes(), peer_authority)?;
     let display = signal::displayable(&mine, &theirs);
     let fingerprint = display
         .as_bytes()

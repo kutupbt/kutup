@@ -8,9 +8,9 @@
 //! client that remembers an account's authority (`identity_pins`) can then
 //! tell when a server hands out someone else's keys.
 //!
-//! It binds the account as (server, account id), never its name
-//! (docs/plans/account-ids.md, as Signal binds identity to the ACI): a
-//! rename changes nothing here. Drive keys and the authority both derive
+//! It binds the account id alone, never a name or the server's name
+//! (docs/plans/account-ids.md, docs/plans/identity-rotation.md §6, as Signal
+//! binds identity to the ACI): a rename changes nothing here. Drive keys and the authority both derive
 //! from the master key, so one binding holds for the incarnation's whole
 //! lifetime; an administrative reset starts a new incarnation and a new
 //! binding, for the same account id.
@@ -49,7 +49,7 @@ pub fn binding_bytes(
             "binding epoch starts at 1".into(),
         ));
     }
-    let account = account.bytes();
+    let account = account.id_bytes();
     let incarnation = hex::decode(incarnation_id_from_authority_public(authority_public))
         .map_err(|_| CryptoError::Backend("incarnation hex".into()))?;
     let mut out =
@@ -140,7 +140,9 @@ mod tests {
         // Another epoch is another statement.
         assert!(verify(&account, &authority, 2, &hpke, &signing, &signature).is_err());
         assert!(sign(&alice, &account, 0).is_err());
-        // Another account id, the same id on another server.
+        // Another account id is someone else; the same id under another
+        // server name is the same statement (the server is routing,
+        // identity-rotation.md §6).
         assert!(verify(
             &person("00000000-0000-4000-8000-0000000000b0"),
             &authority,
@@ -158,7 +160,7 @@ mod tests {
             &signing,
             &signature
         )
-        .is_err());
+        .is_ok());
         // Another signer, another recipient key.
         assert!(verify(
             &account,

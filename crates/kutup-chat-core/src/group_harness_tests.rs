@@ -50,6 +50,9 @@ use crate::transport::{ChatTransport, GroupGatewayAnswer, GroupRelayOutcome, Sen
 use crate::{AccountAuthority, ChatContent, SqliteChatDb};
 
 pub(crate) const SERVER: &str = "example.test";
+/// A hostile server that serves the real home's identity history and
+/// gateway key as its own (a mirror of the home).
+pub(crate) const MIRROR_HOME: &str = "mirror-home.test";
 /// The `session` hash the test server gives every device.
 pub(crate) const DEVICE_SESSION: &str =
     "5151515151515151515151515151515151515151515151515151515151515151";
@@ -155,6 +158,8 @@ pub(crate) struct World {
     pub(crate) identity_pins: RefCell<BTreeMap<String, (u64, String)>>,
     /// How many pin lists were written.
     pub(crate) pin_writes: Cell<usize>,
+    /// Every group request relayed to any home (signed requests included).
+    pub(crate) relays: Cell<usize>,
     /// How many sealed batches were sent.
     pub(crate) batches: Cell<usize>,
     /// Multi-recipient requests taken (slice 2).
@@ -328,6 +333,7 @@ impl World {
             contact_list_down: Cell::new(false),
             identity_pins: RefCell::new(BTreeMap::new()),
             pin_writes: Cell::new(0),
+            relays: Cell::new(0),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
             provisioning: RefCell::new(BTreeMap::new()),
@@ -372,6 +378,32 @@ impl World {
             .get_mut(account)
             .and_then(|hosted| hosted.manifests.pop())
             .expect("a manifest to roll back")
+    }
+
+    /// A hostile server's mirror of `account` (docs/plans/identity-rotation.md
+    /// §6): the same account id under `server`, serving the account's whole
+    /// public identity, its manifests re-labelled with `server`. The
+    /// signatures still verify, since the server's name is not signed.
+    pub(crate) fn mirror(&self, account: &str, server: &str) -> String {
+        let source: kutup_chat_proto::AccountRef = account.parse().unwrap();
+        let mirror = kutup_chat_proto::AccountRef::new(server, &source.account_id).unwrap();
+        let manifests = self.accounts.borrow()[account]
+            .manifests
+            .iter()
+            .cloned()
+            .map(|mut manifest| {
+                manifest.account = mirror.clone();
+                manifest
+            })
+            .collect();
+        self.accounts.borrow_mut().insert(
+            mirror.to_string(),
+            HostedAccount {
+                manifests,
+                ..HostedAccount::default()
+            },
+        );
+        mirror.to_string()
     }
 
     pub(crate) fn link_device(self: &Rc<Self>, person: &mut Person) -> Person {
@@ -2020,7 +2052,7 @@ impl ChatTransport for Client {
     }
 
     async fn fetch_group_gateway(&self, home: &str, _from: u64) -> Result<GroupGatewayAnswer> {
-        if home != SERVER {
+        if home != SERVER && home != MIRROR_HOME {
             return Err(ChatError::Transport("unknown home".into()));
         }
         Ok(GroupGatewayAnswer {
@@ -2030,6 +2062,7 @@ impl ChatTransport for Client {
     }
 
     async fn relay_group_request(&self, home: &str, sealed: &[u8]) -> Result<GroupRelayOutcome> {
+        self.world.relays.set(self.world.relays.get() + 1);
         if home != SERVER || self.world.home_down.get() {
             return Ok(GroupRelayOutcome::Unreachable);
         }
@@ -5028,12 +5061,22 @@ fn group_recover_a_home_of_a_former_members_is_another_group() {
     let bobs = derived_pseudonym(&bob, &group_id, 0);
     let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
     // Mallory, removed long ago, kept the key and saw Bob's binding; she
-    // names a home of her own for the real group id. The id binds the home,
-    // so that is another group: refused before anything is asked.
+    // names a home of her own for the real group id. The id binds the home's
+    // identity (its document hash and sequence; the server's name is only
+    // routing, identity-rotation.md §6), so another identity is another
+    // group: refused before anything is asked.
     let mut context = context_of(&alice, &group_id);
-    context.home.server = "mallory.test".into();
+    context.home.identity_document_hash = "6d".repeat(32);
     let probes = world.state_requests.get();
+    let relays = world.relays.get();
     assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    // Her own server with the true document: the same id, but the server
+    // must serve the home's history from the pinned document, which names
+    // the real home: it doesn't follow there, and nothing signed is sent.
+    let mut context = context_of(&alice, &group_id);
+    context.home.server = MIRROR_HOME.into();
+    assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    assert_eq!(world.relays.get(), relays);
     let mut context = context_of(&alice, &group_id);
     context.home.identity_sequence += 1;
     assert!(!recover(&mut bob2, &context, &alice, &bobs));
@@ -6779,4 +6822,97 @@ fn group_multi_a_conflict_naming_no_leg_waits_and_counts() {
         assert_eq!(leg.mismatches, 1);
         assert!(leg.retry_at_ms.is_some() && !leg.delivered);
     }
+}
+
+/// A mirror account (docs/plans/identity-rotation.md §6): a hostile server
+/// mints a pinned person's account id and serves their whole public identity
+/// as its own account. It verifies, and its safety number is theirs; what
+/// refuses it is the synced pins' rule that one authority is one account
+/// (`identity_pins::record`'s `AuthorityElsewhere`), on every path that takes
+/// a peer's manifest: a fetched manifest (here the safety number's), and the
+/// group member check.
+#[test]
+fn a_mirror_of_a_pinned_account_on_another_server_is_refused() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let seed = alice.authority_seed;
+    let binding = format!("{seed:08x}-0000-4000-8000-{seed:012x}");
+    alice
+        .engine
+        .enable_identity_pins(&[seed; 32], &binding)
+        .unwrap();
+    befriend(&mut alice, &mut bob);
+    block_on(alice.engine.flush_identity_pins(true)).unwrap();
+    let writes = world.pin_writes.get();
+    assert!(writes > 0, "Bob is pinned");
+
+    // Someone who never met Bob can't tell: the mirror verifies, with
+    // Bob's very safety number (as with any first contact).
+    let mirror = world.mirror(&bob.account, "mirror.test");
+    let mut carol = world.person(0xc3);
+    let real = block_on(carol.engine.safety_number(&bob.account)).unwrap();
+    let mirrored = block_on(carol.engine.safety_number(&mirror)).unwrap();
+    assert_eq!(mirrored.fingerprint, real.fingerprint);
+
+    // A fetched manifest: refused where Bob is pinned.
+    let error = block_on(alice.engine.safety_number(&mirror)).expect_err("a mirror is refused");
+    assert!(
+        error
+            .to_string()
+            .contains(crate::identity_sync::DIFFERS_FROM_SYNCED),
+        "{error}"
+    );
+
+    // The group member check: Bob's binding checks against Bob's
+    // authority; the mirror's account gets none.
+    let bob_ref: kutup_chat_proto::AccountRef = bob.account.parse().unwrap();
+    let other: kutup_chat_proto::AccountRef =
+        world.mirror(&bob.account, "mirror2.test").parse().unwrap();
+    let (keys, unconfirmed, _) = block_on(
+        alice
+            .engine
+            .authority_keys(&[bob_ref.clone(), other.clone()], &[]),
+    )
+    .unwrap();
+    assert!(keys.contains_key(&bob_ref));
+    assert!(!keys.contains_key(&other));
+    assert!(unconfirmed.is_empty());
+    // Nothing about the mirrors was written to the pins.
+    assert_eq!(world.pin_writes.get(), writes);
+}
+
+/// An invitation naming another server than the group's home with the true
+/// identity document (docs/plans/identity-rotation.md §6): the group id is
+/// the same, since the name is not in it, but the home's history fetched from
+/// that server doesn't follow from the pin (the pinned document names the
+/// real home), so nothing signed goes there and the claim fails.
+#[test]
+fn an_invitation_naming_another_server_with_the_true_document_sends_nothing_signed() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    assert!(matches!(bob.status(&group_id), GroupStatus::Invited { .. }));
+    let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.home.server, SERVER);
+    record.home.server = MIRROR_HOME.into();
+    record.gateway = Default::default();
+    // The key is still the group's at that pin: the name isn't in the id.
+    assert!(record.master().is_ok());
+    block_on(bob.engine.save_group(&record)).unwrap();
+    let relays = world.relays.get();
+    assert!(block_on(bob.engine.accept_group_invite(&group_id, &mut rng())).is_err());
+    assert_eq!(world.relays.get(), relays);
+    assert!(matches!(bob.status(&group_id), GroupStatus::Invited { .. }));
 }

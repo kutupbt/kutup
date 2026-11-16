@@ -80,8 +80,11 @@ fn computed() -> Vectors {
 fn the_state_key_matches_its_vector() {
     let stored: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
     assert_eq!(computed(), stored);
-    // The same master key and plaintext at two homes: two state keys.
-    assert_ne!(stored.cases[0].sealed_title, stored.cases[1].sealed_title);
+    // The same home under two server names: one group, one state key (the
+    // name is routing, identity-rotation.md §6). Another home's identity is
+    // another group (chat_group_id_vectors), so another state key.
+    assert_eq!(stored.cases[0].group_id, stored.cases[1].group_id);
+    assert_eq!(stored.cases[0].sealed_title, stored.cases[1].sealed_title);
 }
 
 #[test]

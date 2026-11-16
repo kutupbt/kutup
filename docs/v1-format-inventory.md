@@ -101,6 +101,50 @@ what they are about: the Drive key binding, named shares and profile key
 shares, MLS credentials, the mail key's own address and the peer-facing
 profile envelopes. Safety numbers (V2) name only the two authority keys.
 
+**The server name is not in the cryptography** (docs/plans/identity-rotation.md
+§6, step 2 of its order). An account's server is a routing attribute:
+`AccountRef` `(server, account id)` is the address things are looked up by
+(JSON, federation requests, local store keys, pins, the libsignal address
+name), and nothing signed, sealed, hashed or derived binds it. Self-statements
+bind the 16-byte account id alone (`AccountRef::id_bytes`): the account
+manifest's signing bytes (`kutup/account/manifest/v3`) and its identity binding,
+safety numbers, the profile envelope (header and subkey), the sealed-delivery
+capability, the Drive key binding, the group pseudonym binding and the
+collaboration frame signature. Statements between two people bind both ids and
+both incarnations: named and file shares, profile-key shares and a shared
+mailbox's key shares. A Chat group's id binds its home's identity document
+(hash and sequence), not the home's name; the name a pin carries is checked
+where the home is reached (its history, fetched from that server, must follow
+from the pinned document, which names its server under the home's signature),
+before any pseudonym-signed request goes there, so a pin naming another
+server with the true document leads nowhere. Nothing is ever looked up by
+account id alone.
+
+*Mirror accounts.* With the name unbound, a hostile server B can mint a
+victim's account id X and serve the victim's whole public identity as its own
+account (B, X): every signature verifies and the safety number is the
+victim's. B reads nothing (it lacks the private keys), but a first-time
+contact can bind (B, X) as a person, and what it sends then routes to B. The
+guard is the synced identity pins' rule that one authority is one account
+(`identity_pins::record`'s `AuthorityElsewhere`), checked before anything is
+written on each path that takes a peer's identity: Chat's manifest fetch,
+Drive's recipient check (which refuses also when the list can't be written)
+and Chat's group member check. A client that never met the victim can't tell
+the mirror apart, as with any first contact, and an in-person comparison of
+the safety number doesn't either. This rule is load-bearing.
+The routing form in binary (`AccountRef::routing_bytes`: u16 server length,
+server, id) remains only where a server names an account beside a payload
+(`envelope::deliver`) and as a store key (the Chat contact-list entry id).
+Not moved yet: the organization documents (`KUTPOC1`, `KUTPOS1`, `KUTPOR1`,
+`KUTPOE1`) still name their parties in the routing form, until the escrow's
+next format change; group requests to a home (`group_route`) bind the home
+they are addressed to, as an HTTP signature binds its audience. A Chat
+group's member, slot and ban entries (`GroupMemberEntryV1`,
+`GroupSlotEntryV1`, `GroupBannedAccountV1`) keep a full `AccountRef` inside
+the signed, sealed group state: routing, consistent with §6 (the member
+binding itself signs the id alone), but it goes stale on a server rename,
+until the group state is rewritten with the new name.
+
 `DriveEnvelopeV1` is encoded as magic `KUTPDE1\0`, big-endian suite ID,
 purpose, zero reserved byte, epoch, revision, 16-byte object UUID, 16-byte
 parent UUID, 24-byte nonce, exact ciphertext length, and XChaCha20-Poly1305
@@ -204,8 +248,10 @@ and each is bound to its file and generation. Vector: `fileKeyring`.
 
 `NamedShareEnvelopeV1` uses the fixed RFC 9180 HPKE suite X-Wing (X25519 +
 ML-KEM-768, KEM 0x647a)/HKDF-SHA256/ChaCha20-Poly1305 (named-share suite 2). Its AAD and Ed25519 signature
-bind the collection UUID, epoch, canonical sender and recipient accounts, and
-both account incarnation IDs. The sender key is the manifest-bound Drive share
+bind the collection UUID, epoch, the sender's and recipient's account ids
+(16 bytes each, never a server's name; the encoding carries the ids only, the
+servers are the routing context it is checked in), and both account
+incarnation IDs. The sender key is the manifest-bound Drive share
 signer; the recipient key is the manifest-bound Drive HPKE key. V1 intentionally
 provides no anonymous Drive sharing.
 
@@ -222,7 +268,7 @@ fixed vector).
 `kutup/drive/profile-key-hpke/v1\0`) carries a 32-byte profile key between
 two people who share a folder (docs/plans/unified-profile.md). The same suite
 and keys as a named share; the AAD and signature bind the magic, suite, both
-incarnation IDs and both canonical accounts, but no folder: one key serves
+incarnation IDs and both account ids (16 bytes each), but no folder: one key serves
 every share between the pair. Tests in `profile_key_share.rs` (no vector: the
 format has one producer and one consumer, both in this crate and its WASM).
 
@@ -234,9 +280,10 @@ ciphertext length. The header is AEAD associated data. HKDF-SHA256 derives from 
 key a distinct XChaCha20-Poly1305 key bound to the same suite, kind, key
 generation, document generation and file UUID (the 96-byte `KUTPCF1` layout,
 under the folder key, was replaced before the first tag). Ed25519 signs a
-domain (`kutup/collab/frame/v3\0`), the sender account, the header and the
-ciphertext; the trailing signature is not self-covered. The account travels
-beside the frame (`envelope::deliver`). The server accepts only the exact
+domain (`kutup/collab/frame/v3\0`), the sender's account id (16 bytes), the
+header and the ciphertext; the trailing signature is not self-covered. The
+account travels beside the frame in its routing form, unsigned
+(`envelope::deliver`). The server accepts only the exact
 current file/key-generation/document binding and a sender device that its
 account's manifest lists with the signing key (docs/plans/one-device-list.md).
 
@@ -262,8 +309,9 @@ refuse purposes 6 and 7; each has its typed export. Vector:
 
 `ProfileEnvelopeV1` uses magic `KUTPPE1\0`, `ProfileSuiteId`, a closed purpose
 (display name, avatar or wrapped profile key), revision, source device,
-profile-key-derived version, canonical federated account, 24-byte nonce and
-exact ciphertext length. The complete variable-length header is AAD. A
+profile-key-derived version, the owner's 16-byte account id (never the
+server's name), 24-byte nonce and exact ciphertext length. The complete
+fixed-length header is AAD. A
 purpose-specific HKDF-SHA256 subkey binds the same context before
 XChaCha20-Poly1305. Name padding remains the fixed 53/257-byte Signal-style
 buckets; avatars are limited to 512 KiB. The profile suite code travels beside

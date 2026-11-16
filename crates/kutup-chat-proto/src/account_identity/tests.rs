@@ -876,8 +876,8 @@ fn manifest_v3_vector_is_pinned() {
 }
 
 const SIGNING_BYTES_SHA256: &str =
-    "f1e1a5493e66957ef92247ebac9e4f062c1c2adda2ef7689c10f1937974d1351";
-const MANIFEST_HASH: &str = "da3cdaef03a400a48e089414d9f2f465b67cbc01779931ae4a4d8c25d18fa5cb";
+    "4744709b5233fd5c6b21473f02e29f7c5697e865fa83684142270ee6e941911a";
+const MANIFEST_HASH: &str = "050a72415c4582c9700a6d211f5c7690f0e814355cf7f82e19ee27c80f99756b";
 
 #[test]
 fn account_identity_sync_body() {
@@ -930,10 +930,7 @@ fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_id
     let manifest = two_devices();
     let bytes = manifest.identity_binding_bytes().unwrap();
     assert!(bytes.starts_with(kutup_crypto::labels::ACCOUNT_IDENTITY_BINDING_V1));
-    assert_eq!(
-        bytes.len(),
-        34 + 32 + 32 + manifest.account.bytes().len() + 33
-    );
+    assert_eq!(bytes.len(), 34 + 32 + 32 + 16 + 33);
     assert_eq!(
         bytes,
         identity_binding_bytes(
@@ -1116,4 +1113,62 @@ fn successions_verify_when_present_and_are_refused_when_wrong() {
         &"aa".repeat(32),
     )
     .is_err());
+}
+
+/// The server's name is not signed (docs/plans/identity-rotation.md §6), so
+/// a manifest re-labelled with another server still verifies: every check
+/// that takes one for an account compares the whole routing address, and
+/// refuses a manifest that names another server than the one asked.
+#[test]
+fn a_manifest_relabelled_with_another_server_verifies_but_is_refused_for_the_address() {
+    let keys = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([5; 32]),
+    )
+    .unwrap();
+    let account = AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+    let mirror = AccountRef::new("mirror.test", &account.account_id).unwrap();
+    let mut first = AccountManifestV3::first(
+        account.clone(),
+        &keys,
+        vec![editor(1)],
+        "2026-10-26T00:00:00Z",
+    );
+    first.sign(keys.authority_signing_key()).unwrap();
+    let mut relabelled = first.clone();
+    relabelled.account = mirror.clone();
+    // The signature covers the account id, not the server: it still verifies.
+    relabelled.verify().unwrap();
+
+    // The head check (account_identity.rs, `AccountManifestPinV1::check`).
+    let incarnation = keys.incarnation_id();
+    AccountManifestPinV1::check(None, Some(&first), &account, &incarnation).unwrap();
+    assert!(AccountManifestPinV1::check(None, Some(&relabelled), &account, &incarnation).is_err());
+
+    // A history page asked for the account.
+    let page = AccountManifestHistoryPageV3 {
+        account: account.clone(),
+        from_sequence: 1,
+        to_sequence: 1,
+        manifests: vec![first.clone()],
+        next_sequence: None,
+    };
+    page.validate().unwrap();
+    let page = AccountManifestHistoryPageV3 {
+        manifests: vec![relabelled.clone()],
+        ..page
+    };
+    assert!(page.validate().is_err());
+
+    // Prekey bundles for the account.
+    let manifest = two_devices();
+    let mut other = manifest.clone();
+    other.account = AccountRef::new("mirror.test", &manifest.account.account_id).unwrap();
+    other.verify().unwrap();
+    let bundles = AccountPreKeyBundlesResponse {
+        account: manifest.account.clone(),
+        identity_key: manifest.identity_key.clone().unwrap(),
+        devices: vec![bundle(1, 10), bundle(2, 20)],
+        manifest: other,
+    };
+    assert!(bundles.check_against_manifest().is_err());
 }

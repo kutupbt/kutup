@@ -606,6 +606,25 @@ describe('a share is checked by the address typed, against the one answer it sea
     await expect(confirmRecipient(me, 'bob@kutup.dev', elsewhere)).rejects.toMatchObject({ status: { kind: 'invalid' } })
   })
 
+  it('refuses a mirror: a pinned person’s account id and keys served by another server, also when the list can’t be written', async () => {
+    publish('ada@kutup.dev', 'A')
+    await checkIdentity(me, 'ada@kutup.dev')
+    newPage()
+    const puts = server.puts
+    // Another server mints Ada's account id and serves her whole public
+    // identity (identity-rotation.md §6): it verifies, and is refused, since
+    // her authority is pinned for her account.
+    const mirror = answer('ada@mirror.test', 'A')
+    expect(mirror.accountId).toBe('acct-A')
+    await expect(confirmRecipient(me, 'ada@mirror.test', mirror)).rejects.toMatchObject({ status: { kind: 'invalid' } })
+    // Writes stopped (another history): still refused, not taken as new.
+    head.blocked = true
+    newPage()
+    await expect(confirmRecipient(me, 'ada@mirror.test', mirror)).rejects.toMatchObject({ status: { kind: 'invalid' } })
+    expect(server.puts).toBe(puts)
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada@kutup.dev'] }])
+  })
+
   it('takes a first-met account and pins it at the typed address', async () => {
     await expect(confirmRecipient(me, 'cat@kutup.dev', answer('cat@kutup.dev', 'C'))).resolves.toEqual({ kind: 'ok', verified: false })
     expect(storedPins()).toMatchObject([{ id: 'acct-C', addresses: ['cat@kutup.dev'] }])

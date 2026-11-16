@@ -507,8 +507,8 @@ pub async fn receive_profile_key(
             .await?
             .ok_or_else(not_shared)?;
         let envelope = decode_envelope(&delivery.envelope)?;
-        if envelope.sender != delivery.sender
-            || envelope.recipient != delivery.recipient
+        if envelope.sender != delivery.sender.id()
+            || envelope.recipient != delivery.recipient.id()
             || hex::encode(envelope.recipient_incarnation_id) != recipient.incarnation
         {
             return Err(AppError::bad_request("profile key envelope does not match"));

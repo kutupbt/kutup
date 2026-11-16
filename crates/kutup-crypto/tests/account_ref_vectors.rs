@@ -1,7 +1,8 @@
 //! Checked-in vectors for the formats that name a person by their account
 //! (docs/plans/account-ids.md): `AccountRef` itself, the Drive key binding,
 //! folder and file share envelopes and the profile key envelope. Each binds
-//! the server and the account id, never an address. The envelopes are
+//! the account id alone, never an address or the server's name
+//! (docs/plans/identity-rotation.md §6). The envelopes are
 //! sealed once (HPKE draws a fresh key) and checked in; every client must
 //! open them with the same parties and refuse them for any other.
 //! Regenerate only for a deliberate format change:
@@ -30,7 +31,7 @@ struct Vectors {
     sender: String,
     recipient_master_key: String,
     recipient: String,
-    /// `AccountRef::bytes` of the sender (hex).
+    /// `AccountRef::id_bytes` of the sender (hex).
     sender_bytes: String,
     /// The sender's Drive key binding: the signed bytes (hex) and signature.
     binding_bytes: String,
@@ -65,6 +66,11 @@ fn identity(master_key: &str) -> AccountIdentityKeysV1 {
 /// The same server, another account id: never the same person.
 fn someone_else(person: &AccountRef) -> AccountRef {
     AccountRef::new(&person.server, "00000000-0000-4000-8000-000000000000").unwrap()
+}
+
+/// The same account id under another server name.
+fn renamed(person: &AccountRef) -> AccountRef {
+    AccountRef::new("renamed.kutup.test", &person.account_id).unwrap()
 }
 
 #[test]
@@ -140,7 +146,7 @@ fn write_vectors() {
         sender: sender.to_string(),
         recipient_master_key,
         recipient: recipient.to_string(),
-        sender_bytes: hex::encode(sender.bytes()),
+        sender_bytes: hex::encode(sender.id_bytes()),
         binding_bytes: hex::encode(binding_bytes),
         binding: STANDARD.encode(binding),
         collection_id: collection_id.into(),
@@ -162,10 +168,10 @@ fn load() -> Vectors {
 }
 
 #[test]
-fn an_account_is_its_server_and_id_in_bytes() {
+fn an_account_is_its_id_in_bytes() {
     let v = load();
     let sender: AccountRef = v.sender.parse().unwrap();
-    assert_eq!(hex::encode(sender.bytes()), v.sender_bytes);
+    assert_eq!(hex::encode(sender.id_bytes()), v.sender_bytes);
     assert_eq!(sender.to_string(), v.sender);
 }
 
@@ -214,7 +220,10 @@ fn shares_open_only_between_their_accounts() {
     );
 
     let named = NamedShareEnvelopeV1::decode_b64(&v.named_share).unwrap();
-    assert_eq!((&named.sender, &named.recipient), (&sender, &recipient));
+    assert_eq!(
+        (named.sender, named.recipient),
+        (sender.id(), recipient.id())
+    );
     let open_named = |who: &AccountRef, to_whom: &AccountRef| {
         named.open(
             &v.collection_id,
@@ -233,9 +242,17 @@ fn shares_open_only_between_their_accounts() {
     );
     assert!(open_named(&someone_else(&sender), &recipient).is_err());
     assert!(open_named(&sender, &someone_else(&recipient)).is_err());
+    // The server is routing: the same accounts under other server names
+    // open it (whose authority to check is the routing address's pin).
+    assert_eq!(
+        open_named(&renamed(&sender), &renamed(&recipient))
+            .unwrap()
+            .as_slice(),
+        b64(&v.collection_key)
+    );
 
     let file = FileShareEnvelopeV1::decode_b64(&v.file_share).unwrap();
-    assert_eq!((&file.sender, &file.recipient), (&sender, &recipient));
+    assert_eq!((file.sender, file.recipient), (sender.id(), recipient.id()));
     let open_file = |who: &AccountRef, to_whom: &AccountRef| {
         file.open(
             &v.file_id,

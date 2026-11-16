@@ -229,8 +229,8 @@ Trust states are:
 The safety number covers identities, not authorities, so the identity has to
 name its authority: every manifest carries `identityBinding`, the account
 identity key's XEdDSA signature over `kutup/account-identity/binding/v1\0`,
-the authority key id, incarnation id, account (`AccountRef` bytes) and the
-identity key, and the authority signs it with the rest. Clients and servers
+the authority key id, incarnation id, account id (its 16 bytes, never the
+server's name) and the identity key, and the authority signs it with the rest. Clients and servers
 refuse a manifest whose binding the identity didn't sign (`400 badSignature`
 on upload), so a server cannot list a person's real identity under an
 authority of its own and have the genuine QR verify it. Only a device holding
@@ -271,11 +271,12 @@ also get a `SafetyNumberChanged` engine event.
 
 The safety number is Signal's: libsignal's `Fingerprint` (version 2, 5200
 iterations of SHA-512 per side) over each side's stable id, the account's
-`AccountRef` bytes (server and permanent account id), and its account
+permanent account id (16 bytes, never the server's name), and its account
 identity key; the two 30-digit halves show as twelve five-digit groups. The
 QR is `kutup://verify/v4/` and the base64url `CombinedFingerprints` protobuf,
 this side's half first, so a scan is compared with the other side's code. It
-names no address: a rename keeps the number; a new identity of either account
+names no address or server: a rename keeps the number, and so would a
+server's; a new identity of either account
 changes it. Drive keeps its own number over the accounts' authorities
 (`kutup-crypto` `safety_number`, `kutup://verify/v3/`); verifying in Chat also
 marks the authority verified in the synced identity pins, since the manifest

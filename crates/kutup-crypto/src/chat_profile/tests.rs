@@ -214,10 +214,11 @@ fn profile_envelope_parser_rejects_unknown_suite_and_trailing_data() {
     assert!(decode_profile_envelope(&STANDARD.encode(&encoded)).is_err());
     encoded.pop();
 
-    // The account slot holds exactly one account's bytes: one more byte in
-    // its length (taken from the nonce) is refused.
-    let length_at = FIXED_PREFIX_BYTES - 2;
-    let length = u16::from_be_bytes([encoded[length_at], encoded[length_at + 1]]);
-    encoded[length_at..length_at + 2].copy_from_slice(&(length + 1).to_be_bytes());
+    // The account slot is the owner's 16-byte account id, nothing else.
+    assert_eq!(
+        &encoded[FIXED_PREFIX_BYTES - ACCOUNT_ID_LEN..FIXED_PREFIX_BYTES],
+        context.account.as_bytes()
+    );
+    encoded.pop();
     assert!(decode_profile_envelope(&STANDARD.encode(&encoded)).is_err());
 }
