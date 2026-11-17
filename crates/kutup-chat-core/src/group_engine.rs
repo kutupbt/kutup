@@ -969,7 +969,7 @@ impl Engine {
                 .await
             {
                 Ok(manifest) => manifest,
-                Err(ChatError::Transport(_)) => {
+                Err(error) if error.is_unreachable() => {
                     unconfirmed.push(account);
                     continue;
                 }

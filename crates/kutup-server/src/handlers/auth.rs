@@ -2202,8 +2202,13 @@ pub(crate) fn client_header(headers: &HeaderMap) -> Option<ClientType> {
     headers
         .get(CLIENT_HEADER)
         .and_then(|v| v.to_str().ok())
-        .and_then(crate::client_version::parse_client)
-        .map(|(client, _)| client)
+        .and_then(|value| {
+            // A version that doesn't parse still names the type: the gate
+            // left it unchecked, and sign-in must not fail on it.
+            crate::client_version::parse_client(value)
+                .map(|(client, _)| client)
+                .or_else(|| ClientType::parse(value.split('/').next().unwrap_or(value)))
+        })
 }
 
 pub(crate) fn user_agent(headers: &HeaderMap) -> Option<&str> {

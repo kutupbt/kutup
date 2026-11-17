@@ -3,6 +3,7 @@ import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import api from '@kutup/session/client'
 import { isAxiosError } from 'axios'
 import { resolveApiBase } from '@kutup/session/apiBase'
+import { isClientTooOld, withClientParam } from '@kutup/session/clientVersion'
 import { ApiChatTransport, PEER_UNSUPPORTED } from './transport'
 import { takeDeviceCredentialRefusal } from './device-auth'
 import type {
@@ -136,7 +137,11 @@ const GROUP_SYNC_FIRST_MS = 15_000
  * distribution). Nothing reconnects it; it is linked again, keeping its
  * history.
  */
-export type ChatConnectionStatus = 'connected' | 'connecting' | 'polling' | 'offline' | 'deviceRemoved'
+/**
+ * `stopped`: the server refused this build (`clientTooOld`, docs/plans/api-surface.md
+ * §1.5); nothing is retried until the page reloads with the new one.
+ */
+export type ChatConnectionStatus = 'connected' | 'connecting' | 'polling' | 'offline' | 'deviceRemoved' | 'stopped'
 
 /** How often the mailbox is read while the live socket cannot be opened. */
 const POLL_VISIBLE_MS = 5_000
@@ -1638,6 +1643,7 @@ export class ChatService {
           this.stopPolling()
           this.setConnection('deviceRemoved')
         }
+        if (isClientTooOld()) this.stopNetwork()
         throw error
       })
       .finally(() => {
@@ -2391,7 +2397,7 @@ export class ChatService {
       const url = new URL(`${base.replace(/\/$/, '')}/chat/ws`, window.location.href)
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
       url.searchParams.set('ticket', response.data.ticket)
-      const socket = new WebSocket(url)
+      const socket = new WebSocket(withClientParam(url))
       this.socket = socket
       socket.onopen = () => {
         this.retryAttempt = 0
@@ -2429,6 +2435,10 @@ export class ChatService {
         this.setConnection('deviceRemoved')
         return
       }
+      if (isClientTooOld()) {
+        this.stopNetwork()
+        return
+      }
       this.socketDown()
       this.scheduleSocketRetry()
     }
@@ -2456,6 +2466,7 @@ export class ChatService {
         !this.polling ||
         this.socket?.readyState === WebSocket.OPEN ||
         this.connection === 'deviceRemoved' ||
+        this.connection === 'stopped' ||
         navigator.onLine === false
       ) {
         this.polling = false
@@ -2487,8 +2498,16 @@ export class ChatService {
     this.polling = false
   }
 
+  /** The server refused this build: no socket, no polling, no retry. */
+  private stopNetwork(): void {
+    this.stopPolling()
+    if (this.socketRetry) clearTimeout(this.socketRetry)
+    this.socketRetry = null
+    this.setConnection('stopped')
+  }
+
   private scheduleSocketRetry(): void {
-    if (this.disposed || this.socketRetry) return
+    if (this.disposed || this.socketRetry || this.connection === 'stopped' || isClientTooOld()) return
     const delay = Math.min(30_000, 500 * 2 ** this.retryAttempt++)
     if (this.retryAttempt >= POLL_AFTER_ATTEMPTS) this.startPolling()
     this.socketRetry = setTimeout(() => {

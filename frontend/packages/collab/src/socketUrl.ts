@@ -1,4 +1,5 @@
 import { deviceTicket } from '@kutup/session/devices'
+import { withClientParam } from '@kutup/session/clientVersion'
 import { getOrCreateTabId } from './identity'
 
 /**
@@ -12,5 +13,5 @@ export async function collabSocketUrl(device: { header: string }, base: string):
   const ticket = await deviceTicket(device.header)
   const origin = window.location.origin.replace(/^http/, 'ws')
   // A file on another server: its route through this one (the same suffix).
-  return `${origin}/api${base}/collab/ws?ticket=${encodeURIComponent(ticket)}&tab=${getOrCreateTabId()}`
+  return withClientParam(`${origin}/api${base}/collab/ws?ticket=${encodeURIComponent(ticket)}&tab=${getOrCreateTabId()}`)
 }

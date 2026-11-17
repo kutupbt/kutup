@@ -28,6 +28,7 @@
 import type { MasterKeys } from './masterKeys'
 import type { ObjectIdKey } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
+import { storageReady } from './storageGate'
 
 /** The account's keys for the store (Rust `revision_guard::GuardKeys`). */
 export interface GuardKeys {
@@ -84,7 +85,7 @@ export function indexedDbRevisionStore(): RevisionStore {
   let opened: Promise<IDBDatabase | null> | null = null
   const fallback = memoryRevisionStore()
   const db = () =>
-    (opened ??= new Promise<IDBDatabase | null>((resolve) => {
+    (opened ??= storageReady().then(() => new Promise<IDBDatabase | null>((resolve) => {
       try {
         const open = indexedDB.open(DB_NAME, 1)
         open.onupgradeneeded = () => open.result.createObjectStore(STORE)
@@ -94,7 +95,7 @@ export function indexedDbRevisionStore(): RevisionStore {
       } catch {
         resolve(null)
       }
-    }))
+    })))
   return {
     async get(key) {
       const database = await db()

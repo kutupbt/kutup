@@ -90,8 +90,18 @@ code that every client latches.
   (`2026.1120.0` is a valid semver). Web apps: the
   release version, stamped at build into both server and frontend, replacing
   the `BUILD_VERSION = "dev"` constant: CalVer in semver shape,
-  `YYYY.MMDD.N` (sortable, no meaning to maintain). A dev build is
-  `0.0.0-dev`; a dev server enforces no minimum.
+  `YYYY.MDD.N`: the month without a leading zero, which semver forbids
+  (`2026.1120.0`, `2027.105.2`); sortable, no meaning to maintain. A dev
+  build is `0.0.0-dev`. A `-dev` client is exempt from the minimum only on a
+  server that is itself a dev build. Pre-release identifiers compare as
+  semver says: one by one, numeric ones as numbers (`-rc.10` > `-rc.2`).
+  A malformed `KUTUP_RELEASE` fails the web build; a version the server
+  can't parse leaves the request unchecked, and sign-in still reads the
+  client type before the `/`.
+- **No lockout.** An administrator can't set a web type's minimum above
+  this server's release (the web apps ship with it: the admin page itself
+  would be refused). A CLI minimum above the CLI built from the same tree
+  saves with a warning.
 
 ### 1.3 What "too old" compares
 
@@ -899,7 +909,7 @@ Nothing consumes the spec, so it changes freely:
   users).
 - **A wipe changes it,** because it empties the database. An operator who
   wants a new instance on purpose drops the row (`kutup-server
-  reset-instance-id`, refused while accounts exist).
+  reset-instance-id`, refused while accounts exist; a server already running keeps answering with the old id until it is restarted, and the command says so).
 - **Where clients see it:**
   - `GET /api/health` → `"instanceId": "<base64url, 22 chars>"`;
   - a response header `x-kutup-instance` on every `/api/v1` answer, exposed
@@ -912,19 +922,23 @@ Nothing consumes the spec, so it changes freely:
 
 **The browser** (`@kutup/session`, on every app origin, since each origin
 has its own storage):
-1. Boot reads `localStorage['kutup.instance']`. Every storage opener (IDB,
-   sealed localStorage, the chat engine) waits on one `instanceChecked`
-   promise, resolved by the first API response's `x-kutup-instance`. Boot
-   already makes a request (refresh or `auth/settings`), so this costs no
-   round trip.
+1. Boot reads `localStorage['kutup.instance']` and asks `GET /api/health`
+   for the server's id (one round trip, beside the app directory's;
+   accepted). Every storage opener (every IndexedDB database, the chat
+   engine's names) waits on one gate (`@kutup/crypto/storageGate`), which
+   `configureClient` points at this check; `restoreSession` awaits it
+   before reading the session.
 2. **Match:** go on.
 3. **Mismatch, or no marker while any `kutup` storage exists** (the beta
    browsers at this wipe):
+   - first tell the origin's other tabs on the `kutup.session` channel
+     (`instance-changed`): they reload, which closes their databases;
    - delete every IndexedDB database the origin has
      (`indexedDB.databases()`; where it is missing, the names in §6 and the
-     legacy names);
+     legacy names). "Kutup storage exists" counts databases too;
    - delete every `kutup*` localStorage and sessionStorage key;
-   - unsubscribe web push;
+   - (web push is not unsubscribed: the server that held the
+     subscription is the one that was reset);
    - store the new marker;
    - go to sign-in with a one-time notice: "This server was reset; local data
      was removed."
@@ -935,25 +949,31 @@ has its own storage):
    must not be able to make clients forget what they pinned. They are keyed
    by account id, and a wiped server mints new account ids, so a real
    wipe's anchors never match again. They are kept across an instance
-   change and dropped when they are older than 400 days or when the account
-   signs out with "forget this device". Questioned below; the alternative
-   is to drop them too and accept the rollback window.
+   change and across sign-out, and go only when the account is deleted
+   (decision 5). The legacy `kutup_own_manifest_pin_v1:` keys count as
+   anchors too.
 5. A mismatch seen mid-session (the header changes) does the same after
    stopping the chat engine and pending uploads.
 
 **The CLI:**
 - the session gains `instance_id` from login;
-- each command compares the header on its first response;
+- each command asks `GET /api/health` for the id before anything else (one
+  request per command; accepted);
 - on a mismatch it deletes the profile's `session`, `sync_state`,
-  `resume` and `collab_device`, and the keyring's device key, keeping
-  `manifest_pin` (an anchor);
+  `resume` and `collab_device`, keeping `manifest_pin` (an anchor) and the
+  keyring's device key, on purpose: that key encrypts the profile's store,
+  which still holds the anchors;
 - it exits 3 (no usable session): "<server> was reset; run `kutup login`
   again". A sync folder's local files are never touched; only the sync
   state is dropped, so the next sync treats both sides as new.
 
-**FFI and native:** the host stores the id beside its account database.
-`ChatError::ServerReset` tells it to delete the chat store (§6) and sign in
-again.
+**FFI and native:** the host passes each answer's `X-Kutup-Instance` in
+`ChatHttpResponse.instanceId`; the transport keeps the first one it sees
+and answers `ServerReset` on another. The host stores the id beside its
+account database too, and on `ServerReset` deletes the chat store (§6) and
+signs in again. `ClientTooOld`, `ServerTooOld` and `ServerReset` stop the
+engine's network work (`ChatError::stops_network`); its verification loops
+count them as unreachable, never as a failed check.
 
 ### 5.3 Tests
 
@@ -973,8 +993,10 @@ again.
   - change the instance row (test-only admin hook in the test stack, or
     truncate and restart);
   - reload: sign-in page, the notice, IndexedDB empty except anchors.
-- **CLI live test:** log in, change the row, run `kutup ls`: exit 3, the
-  message, the profile emptied, `manifest_pin` kept.
+- **CLI live test** (the backup gate's last step, as it restarts the
+  server): log in, change the row, restart, run `kutup ls`: exit 3 and the
+  message, then `whoami` finds no session. That `manifest_pin` stays is the
+  CLI unit test's (`forget_server_state`).
 
 ## 6. Client storage names
 
@@ -1273,7 +1295,7 @@ web (ci.yml browser job list).
 1. `clientTooOld` answers **426**, the code in the body.
 2. The client version goes **inside `x-kutup-client`** as `<type>/<version>`,
    as Proton's `x-pm-appversion`.
-3. Server and web use **CalVer `YYYY.MMDD.N`**. The CLI keeps its own
+3. Server and web use **CalVer `YYYY.MDD.N`** (no leading zero: semver). The CLI keeps its own
    v0.0.x semver (0.1+ only with the user's OK); its semver is mapped into
    the minimum check per client type (§1.2).
 4. Federation paths are **`/api/fed/v2/`**, the existing protocol number.

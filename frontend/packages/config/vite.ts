@@ -20,6 +20,20 @@ export type WasmModule = 'crypto' | 'crypto-calendar' | 'chat' | 'pass' | 'mail-
  * A WASM runtime's content hash (16 hex digits): its directory's files, in
  * name order. Missing (not built yet) is the empty string.
  */
+/**
+ * The release this build stamps (`KUTUP_RELEASE`, docs/plans/api-surface.md
+ * §1.2): CalVer in semver shape, `YYYY.MDD.N`, or `0.0.0-dev` when unset. A
+ * malformed one fails the build: the server could not compare it, and the
+ * apps would go out unable to say how old they are.
+ */
+function releaseVersion(): string {
+  const release = process.env.KUTUP_RELEASE || '0.0.0-dev'
+  const id = '(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)'
+  const semver = new RegExp(`^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-${id}(?:\\.${id})*)?$`)
+  if (!semver.test(release)) throw new Error(`KUTUP_RELEASE is not a version like 2026.1120.0: ${release}`)
+  return release
+}
+
 export function wasmHash(module: WasmModule): string {
   const dir = path.join(WASM_ROOT, `${module}-wasm`)
   if (!existsSync(dir)) return ''
@@ -311,7 +325,7 @@ export function kutupApp(opts: {
     worker: { format: 'es' },
     // The release this build belongs to (docs/plans/api-surface.md §1.2),
     // stamped by scripts/publish-images.sh; `0.0.0-dev` otherwise.
-    define: { __KUTUP_RELEASE__: JSON.stringify(process.env.KUTUP_RELEASE || '0.0.0-dev') },
+    define: { __KUTUP_RELEASE__: JSON.stringify(releaseVersion()) },
     resolve: {
       alias: {
         // The ESM build of libsodium-wrappers-sumo has a broken relative

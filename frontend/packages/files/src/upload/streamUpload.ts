@@ -42,6 +42,7 @@ import {
 } from '@kutup/crypto'
 import { hashBlob } from '@kutup/crypto/contentHash'
 import { resolveApiBase } from '@kutup/session/apiBase'
+import { clientFetch, clientHeaders, latchClientTooOld } from '@kutup/session/clientVersion'
 import { DRIVE_BLOCK_SIZE } from '@kutup/crypto/driveBlocks'
 import { commitRevision, conflictCode, manifestSigner } from './commit'
 import { EncryptedFileSource, fileSource, loadTail, NotTheSameFile, storeTail, type PlaintextSource, type SealedBlockLog, type SealedTail } from './encryptedSource'
@@ -469,7 +470,7 @@ async function settleCommitError(opts: CommitUploadOptions, error: unknown): Pro
 async function terminate(uploadUrl: string, accessToken: string | (() => Promise<string>)): Promise<void> {
   try {
     const token = typeof accessToken === 'function' ? await accessToken() : accessToken
-    await fetch(uploadUrl, { method: 'DELETE', headers: { 'Tus-Resumable': '1.0.0', Authorization: `Bearer ${token}` } })
+    await clientFetch(uploadUrl, { method: 'DELETE', headers: { 'Tus-Resumable': '1.0.0', Authorization: `Bearer ${token}` } })
   } catch {
     // The sweep removes it with the abandoned uploads.
   }
@@ -842,6 +843,7 @@ async function send(opts: SendOptions): Promise<{ uploadUrl: string; content: Co
       async onBeforeRequest(req) {
         const token = typeof opts.accessToken === 'function' ? await opts.accessToken() : opts.accessToken
         req.setHeader('Authorization', `Bearer ${token}`)
+        for (const [name, value] of Object.entries(clientHeaders())) req.setHeader(name, value)
       },
       // An expired token is recoverable: the next attempt's onBeforeRequest
       // fetches a fresh one. Other client errors are not retried here.
@@ -865,6 +867,7 @@ async function send(opts: SendOptions): Promise<{ uploadUrl: string; content: Co
       // The Create response (201) echoes the file's id: it must be the one
       // this client made and sealed everything under.
       onAfterResponse(req, res) {
+        if (res.getStatus() === 426) latchClientTooOld()
         if (req.getMethod() !== 'POST' || res.getStatus() !== 201) return
         let echoed: string | undefined
         try {

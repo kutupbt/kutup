@@ -87,4 +87,10 @@ describe('the server instance id', () => {
     expect(localStorage.getItem('kutup:chat:device-id:u')).toBeNull()
     expect(await databaseNames()).toEqual(['kutup-revisions-v2'])
   })
+
+  it('no id remembered and only a database left: still cleared', async () => {
+    await createDatabase('kutup.chat.store:x')
+    expect(await reconcileInstance('C')).toBe(true)
+    expect(await databaseNames()).toEqual([])
+  })
 })

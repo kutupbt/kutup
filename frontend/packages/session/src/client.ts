@@ -5,8 +5,10 @@ import { resolveApiBase } from './apiBase'
 import { clearPersisted } from './persistedStore'
 import { clearSession, getAccessToken, setAccessToken } from './store'
 import { noteSessionVersion, SESSION_VERSION_HEADER } from './sessionVersion'
-import { clientHeader } from './release'
-import { INSTANCE_HEADER, noteInstance } from './instance'
+import { CLIENT_HEADER, ClientTooOldError, clientVersionValue, isClientTooOld, isTooOldAnswer, latchClientTooOld, setClientType } from './clientVersion'
+import { ensureInstance, INSTANCE_HEADER, noteInstance } from './instance'
+import { startInstanceListener } from './sessionSync'
+import { setStorageGate } from '@kutup/crypto/storageGate'
 
 /** The server-side session types a web app can hold (X-Kutup-Client). */
 export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps' | 'web-photos' | 'web-office' | 'web-contacts' | 'web-mail' | 'web-pass' | 'web-calendar'
@@ -20,7 +22,12 @@ let clientType: WebClientType | null = null
  */
 export function configureClient(opts: { clientType: WebClientType }): void {
   clientType = opts.clientType
-  api.defaults.headers.common['X-Kutup-Client'] = clientHeader(opts.clientType)
+  setClientType(opts.clientType)
+  api.defaults.headers.common[CLIENT_HEADER] = clientVersionValue()
+  // Nothing reads this origin's storage before the instance check
+  // (docs/plans/api-surface.md §5); another tab's reset reloads this one.
+  setStorageGate(ensureInstance)
+  if (typeof window !== 'undefined') startInstanceListener(() => window.location.reload())
 }
 
 export function getClientType(): WebClientType {
@@ -28,24 +35,7 @@ export function getClientType(): WebClientType {
   return clientType
 }
 
-/** What the page dispatches when it must reload (`@kutup/config` reloadGuard.ts `RELOAD_NEEDED_EVENT`). */
-const RELOAD_NEEDED_EVENT = 'kutup:reload-needed'
-
-let tooOld = false
-
-/** The error every request fails with once the server said this build is too old. */
-export class ClientTooOldError extends Error {
-  readonly code = 'clientTooOld'
-  constructor() {
-    super('This version of Kutup is too old for the server; reload the page.')
-    this.name = 'ClientTooOldError'
-  }
-}
-
-/** Whether the server refused this build as too old (latched until a reload). */
-export function isClientTooOld(): boolean {
-  return tooOld
-}
+export { ClientTooOldError, isClientTooOld, resetClientTooOld } from './clientVersion'
 
 /**
  * Latches a `clientTooOld` answer (docs/plans/api-surface.md §1.5): every
@@ -54,17 +44,9 @@ export function isClientTooOld(): boolean {
  */
 export function noteClientTooOld(error: unknown): boolean {
   const response = (error as { response?: { status?: number; data?: { code?: unknown } } } | null)?.response
-  if (response?.data?.code !== 'clientTooOld') return false
-  if (!tooOld) {
-    tooOld = true
-    if (typeof window !== 'undefined') window.dispatchEvent(new Event(RELOAD_NEEDED_EVENT))
-  }
+  if (!isTooOldAnswer(response?.status, response?.data?.code)) return false
+  latchClientTooOld()
   return true
-}
-
-/** Forgets the latch (tests only). */
-export function resetClientTooOld(): void {
-  tooOld = false
 }
 
 export interface RefreshResult {
@@ -80,13 +62,13 @@ export interface RefreshResult {
  */
 export async function refreshAccessToken(): Promise<RefreshResult> {
   const run = async (): Promise<RefreshResult> => {
-    if (tooOld) throw new ClientTooOldError()
+    if (isClientTooOld()) throw new ClientTooOldError()
     const base = await resolveApiBase()
     try {
       const res = await axios.post<RefreshResult>(
         `${base}/auth/refresh`,
         {},
-        { withCredentials: true, headers: { 'X-Kutup-Client': clientHeader(getClientType()) } },
+        { withCredentials: true, headers: { [CLIENT_HEADER]: clientVersionValue() ?? getClientType() } },
       )
       return res.data
     } catch (error) {
@@ -176,7 +158,7 @@ axios.interceptors.request.use(exactBody)
 
 // Attach access token + resolve base URL on every request.
 api.interceptors.request.use(async (config) => {
-  if (tooOld) throw new ClientTooOldError()
+  if (isClientTooOld()) throw new ClientTooOldError()
   config.baseURL = await resolveApiBase()
   const token = getAccessToken()
   // A request that names its own credential (an administrator-made account's

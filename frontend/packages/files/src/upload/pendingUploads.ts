@@ -13,6 +13,7 @@
 // modified pick out the same file when it is chosen again.
 
 import type { ContentCommitment } from '@kutup/crypto'
+import { storageReady } from '@kutup/crypto/storageGate'
 
 export interface PendingUpload {
   fileId: string
@@ -60,7 +61,8 @@ export const PENDING_UPLOAD_LIFETIME_MS = 24 * 60 * 60 * 1000
 const DATABASE = 'kutup.drive.pendingUploads'
 const STORE = 'uploads'
 
-function open(): Promise<IDBDatabase> {
+async function open(): Promise<IDBDatabase> {
+  await storageReady()
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE, 1)
     request.onupgradeneeded = () => {

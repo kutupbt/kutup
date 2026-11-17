@@ -1,3 +1,4 @@
+import { storageReady } from '@kutup/crypto/storageGate'
 // What keeps a vault's edits when Kutup cannot be reached
 // (docs/plans/pass.md, "Offline"). Per vault, in this browser's IndexedDB:
 // the version the edits are made on (its id and contents) and the edited
@@ -21,7 +22,8 @@ const STORE = 'vaults'
 
 const databaseName = (userId: string) => `kutup.pass.outbox:${userId}`
 
-function open(userId: string): Promise<IDBDatabase> {
+async function open(userId: string): Promise<IDBDatabase> {
+  await storageReady()
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(databaseName(userId), 1)
     request.onupgradeneeded = () => {

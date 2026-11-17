@@ -45,6 +45,10 @@ pub enum KutupChatError {
     /// The server is older than this app supports.
     #[error("the server runs an older Kutup than this app supports ({supported})")]
     ServerTooOld { supported: String },
+    /// The server was reset (another instance id, docs/plans/api-surface.md
+    /// §5): delete the chat store kept for it and sign in again.
+    #[error("the server was reset")]
+    ServerReset,
 }
 
 impl From<ChatError> for KutupChatError {
@@ -75,6 +79,7 @@ impl From<ChatError> for KutupChatError {
             ChatError::LinkRequired => Self::LinkRequired,
             ChatError::ClientTooOld(minimum) => Self::ClientTooOld { minimum },
             ChatError::ServerTooOld(supported) => Self::ServerTooOld { supported },
+            ChatError::ServerReset => Self::ServerReset,
         }
     }
 }
@@ -117,6 +122,8 @@ pub struct ChatProvisionedSettings {
 pub struct ChatHttpResponse {
     pub status: u16,
     pub body_json: String,
+    /// The answer's `X-Kutup-Instance` header, when it had one.
+    pub instance_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]

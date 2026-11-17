@@ -3,6 +3,7 @@ import type { CallLinkCrypto, CallLinkInfo, CallLinkKeys } from '@kutup/chat-cor
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import { toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
+import { clientFetch } from '@kutup/session/clientVersion'
 import { getSession } from '@kutup/session/store'
 import { forgetHostToken, rememberHostToken } from './hostTokens'
 import { randomBytes } from '@kutup/crypto/random'
@@ -257,7 +258,7 @@ async function asHolder<T>(
 ): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`/api/chat/call-links/${path}`, {
+    response = await clientFetch(`/api/chat/call-links/${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(vouchFor ? { Authorization: `Bearer ${vouchFor}` } : {}) },
       credentials: 'omit',
@@ -338,7 +339,7 @@ export function knockMeeting(link: OpenCallLink, seat: MeetingSeat, label: strin
  */
 export function leaveKnock(link: OpenCallLink, knock: Knock): void {
   try {
-    void fetch('/api/chat/call-links/knock/leave', {
+    void clientFetch('/api/chat/call-links/knock/leave', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'omit',

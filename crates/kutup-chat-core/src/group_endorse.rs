@@ -637,7 +637,7 @@ impl Engine {
             .await
         {
             Ok(endorsement) => Some(Ok(endorsement)),
-            Err(ChatError::Transport(_)) => {
+            Err(error) if error.is_unreachable() => {
                 unreachable.insert(server);
                 None
             }

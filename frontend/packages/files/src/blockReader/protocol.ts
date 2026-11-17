@@ -161,7 +161,7 @@ export interface OpenedObject {
 
 /** Page → reader Worker. `token` is the bearer token to fetch with from then on ('' for a public link). */
 export type ReaderRequest =
-  | { type: 'open'; id: number; target: BlockReaderTarget; settings: BlockReaderSettings; token: string }
+  | { type: 'open'; id: number; target: BlockReaderTarget; settings: BlockReaderSettings; token: string; client: string | null }
   | { type: 'block'; id: number; index: number; token: string }
   | { type: 'signedBy'; id: number; key: string }
   | { type: 'serve'; range: StreamRange; mimeType: string; token: string }

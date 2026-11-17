@@ -1,3 +1,4 @@
+import { storageReady } from '@kutup/crypto/storageGate'
 const CHAT_DEVICE_RESET_REQUEST = 'kutup.chat.resetDevice'
 const CHAT_DEVICE_ID = 'kutup.chat.deviceId'
 const CHAT_DEVICE_REPLACED = 'kutup.chat.replacedDevice'
@@ -8,7 +9,9 @@ const CHAT_DEVICE_REPLACED = 'kutup.chat.replacedDevice'
  * server reset clears the origin (instance.ts), so the id alone scopes it.
  */
 export async function chatDeviceDatabaseName(userId: string): Promise<string> {
-  return Promise.resolve(`kutup.chat.store:${userId}`)
+  // Opened by whoever asks for the name: the instance check comes first.
+  await storageReady()
+  return `kutup.chat.store:${userId}`
 }
 
 /**

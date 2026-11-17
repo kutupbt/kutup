@@ -33,6 +33,9 @@ pub(crate) struct NativeTransport {
     pub http: Arc<dyn ChatHttpClient>,
     /// `<deviceId>.<credential>` once the device is registered.
     pub device: std::sync::Mutex<Option<String>>,
+    /// The server's instance id as first answered (docs/plans/api-surface.md
+    /// §5): another one later means the server was reset.
+    pub instance: std::sync::Mutex<Option<String>>,
 }
 
 impl NativeTransport {
@@ -40,6 +43,7 @@ impl NativeTransport {
         Self {
             http,
             device: std::sync::Mutex::new(None),
+            instance: std::sync::Mutex::new(None),
         }
     }
 }
@@ -383,6 +387,14 @@ impl NativeTransport {
             })
             .await
             .map_err(|error| ChatError::Transport(error.to_string()))?;
+        if let Some(current) = response.instance_id.as_deref().filter(|id| !id.is_empty()) {
+            let mut known = self.instance.lock().unwrap_or_else(|e| e.into_inner());
+            match known.as_deref() {
+                None => *known = Some(current.to_owned()),
+                Some(seen) if seen != current => return Err(ChatError::ServerReset),
+                Some(_) => {}
+            }
+        }
         if response.body_json.len() > MAX_RESPONSE_BYTES {
             return Err(ChatError::Transport(format!(
                 "HTTP {} response exceeded {MAX_RESPONSE_BYTES} bytes",

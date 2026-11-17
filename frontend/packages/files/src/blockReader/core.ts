@@ -28,6 +28,8 @@ export interface ReaderIo {
   fetch: typeof fetch
   /** The bearer token for the next request ('' for none). */
   token: () => string
+  /** This page's `X-Kutup-Client` (docs/plans/api-surface.md §1.2), when known. */
+  client?: () => string | null
 }
 
 /** A ranged answer the reader can't use. */
@@ -78,8 +80,13 @@ export class BlockObjectReader {
       let at = start
       while (at <= end) {
         const token = io.token()
+        const client = io.client?.()
         const resp = await io.fetch(target.url, {
-          headers: { Range: `bytes=${at}-${end}`, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          headers: {
+            Range: `bytes=${at}-${end}`,
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(client ? { 'X-Kutup-Client': client } : {}),
+          },
           signal: controller.signal,
           cache: 'no-store',
         })

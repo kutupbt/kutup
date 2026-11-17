@@ -88,8 +88,7 @@ impl Version {
         Some(Version { numbers, pre })
     }
 
-    /// A developer's build (`-dev`): never too old, so a local web build
-    /// works against any server.
+    /// A developer's build (`-dev`).
     pub fn is_dev(&self) -> bool {
         self.pre.as_deref() == Some("dev")
     }
@@ -103,8 +102,34 @@ impl Ord for Version {
                 (None, None) => Ordering::Equal,
                 (None, Some(_)) => Ordering::Greater,
                 (Some(_), None) => Ordering::Less,
-                (Some(a), Some(b)) => a.cmp(b),
+                (Some(a), Some(b)) => pre_release_order(a, b),
             })
+    }
+}
+
+/// Semver's pre-release precedence: identifiers compared one by one,
+/// numeric ones as numbers (`rc.10` > `rc.2`) and below alphanumeric ones,
+/// and a longer list above its own prefix.
+fn pre_release_order(a: &str, b: &str) -> Ordering {
+    let mut left = a.split('.');
+    let mut right = b.split('.');
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) => {
+                let order = match (x.parse::<u64>(), y.parse::<u64>()) {
+                    (Ok(x), Ok(y)) => x.cmp(&y),
+                    (Ok(_), Err(_)) => Ordering::Less,
+                    (Err(_), Ok(_)) => Ordering::Greater,
+                    (Err(_), Err(_)) => x.cmp(y),
+                };
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+        }
     }
 }
 
@@ -191,6 +216,12 @@ impl ClientMinimums {
     }
 }
 
+/// Whether this server is a developer's build: then a developer's client
+/// (`-dev`) is never too old for it. A released server checks every client.
+pub fn server_is_dev() -> bool {
+    Version::parse(RELEASE).is_none_or(|release| release.is_dev())
+}
+
 /// The compiled floor as a map.
 pub fn floors() -> BTreeMap<&'static str, Version> {
     MIN_CLIENT_VERSIONS
@@ -257,7 +288,7 @@ pub async fn client_version_gate(
         return next.run(req).await;
     }
     if let Some((client, version)) = named_client(&req).as_deref().and_then(parse_client) {
-        if !version.is_dev() {
+        if !(version.is_dev() && server_is_dev()) {
             if let Some(minimum) = state.client_minimums.get(client) {
                 if version < minimum {
                     return too_old(client, &minimum);
@@ -279,6 +310,9 @@ mod tests {
         assert!(v("2026.1120.0") > v("2026.1119.3"));
         assert!(v("2027.105.0") > v("2026.1231.9"));
         assert!(v("1.0.0") > v("1.0.0-rc1"));
+        assert!(v("1.0.0-rc.10") > v("1.0.0-rc.2"));
+        assert!(v("1.0.0-rc.1") > v("1.0.0-rc"));
+        assert!(v("1.0.0-beta") > v("1.0.0-2"));
         assert!(v("0.0.0-dev").is_dev());
         for bad in [
             "", "1", "1.2", "1.2.3.4", "01.2.3", "1.2.x", "1.2.3-", "a.b.c",

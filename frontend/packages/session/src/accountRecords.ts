@@ -8,6 +8,7 @@
 
 import { toBase64Url } from '@kutup/crypto/base64'
 import { randomBytes } from '@kutup/crypto/random'
+import { storageReady } from '@kutup/crypto/storageGate'
 
 /** The scopes of the store (`RecordScope` in kutup-crypto). */
 export type RecordScopeName =
@@ -195,7 +196,7 @@ const CURSORS = 'cursors'
 export function indexedDbRecordsStore(): RecordsStore {
   let opened: Promise<IDBDatabase | null> | null = null
   const db = () =>
-    (opened ??= new Promise<IDBDatabase | null>((resolve) => {
+    (opened ??= storageReady().then(() => new Promise<IDBDatabase | null>((resolve) => {
       try {
         const open = indexedDB.open(DB_NAME, 1)
         open.onupgradeneeded = () => {
@@ -208,7 +209,7 @@ export function indexedDbRecordsStore(): RecordsStore {
       } catch {
         resolve(null)
       }
-    }))
+    })))
   const fallback = memoryRecordsStore()
   // Every record id of a copy: string ids sort below arrays.
   const rangeOf = (copy: string) => IDBKeyRange.bound([copy, ''], [copy, []])

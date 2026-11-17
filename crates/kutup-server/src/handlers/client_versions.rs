@@ -35,6 +35,10 @@ pub struct ClientVersionsResponse {
     /// This server's release.
     pub release: String,
     pub clients: Vec<ClientVersionMinimum>,
+    /// Set when the minimum just saved is above every version published
+    /// with this server (a CLI that doesn't exist yet): saved anyway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -70,6 +74,7 @@ async fn list(state: &AppState) -> AppResult<ClientVersionsResponse> {
     Ok(ClientVersionsResponse {
         release: client_version::RELEASE.into(),
         clients,
+        warning: None,
     })
 }
 
@@ -86,6 +91,25 @@ pub async fn get_client_versions(
     _admin: AdminUser,
 ) -> AppResult<Json<ClientVersionsResponse>> {
     Ok(Json(list(&state).await?))
+}
+
+/// The CLI version built from this source tree (crates/kutup-cli).
+fn cli_version() -> Version {
+    let manifest = include_str!("../../../kutup-cli/Cargo.toml");
+    manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("version = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .and_then(Version::parse)
+        .unwrap_or(Version::ZERO)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_cli_version_is_read_from_its_manifest() {
+        assert!(super::cli_version() > super::Version::ZERO);
+    }
 }
 
 /// `PUT /api/admin/client-versions`: sets or clears one type's minimum, at
@@ -120,6 +144,17 @@ pub async fn set_client_version(
             let version = Version::parse(value)
                 .filter(|v| !v.is_dev())
                 .ok_or_else(|| AppError::bad_request("not a version (like 0.0.14)"))?;
+            // The web apps ship with this server: a minimum above its
+            // release would refuse the very page that set it.
+            if client != ClientType::Cli && !client_version::server_is_dev() {
+                let release = Version::parse(client_version::RELEASE)
+                    .expect("a released server's version parses");
+                if version > release {
+                    return Err(AppError::bad_request(format!(
+                        "the web apps are this server's release ({release}); a higher minimum would lock them out"
+                    )));
+                }
+            }
             if let Some(floor) = client_version::floor(client) {
                 if version < floor {
                     return Err(AppError::bad_request(format!(
@@ -138,6 +173,17 @@ pub async fn set_client_version(
         }
     }
     state.client_minimums.reload(&state.pool).await?;
+    let warning = request
+        .minimum
+        .as_deref()
+        .and_then(|value| Version::parse(value.trim()))
+        .filter(|version| client == ClientType::Cli && *version > cli_version())
+        .map(|version| {
+            format!(
+                "{version} is above the newest command line built with this server ({}); older ones are refused",
+                cli_version()
+            )
+        });
     audit(
         &state.pool,
         &admin.user_id,
@@ -146,5 +192,8 @@ pub async fn set_client_version(
         json!({ "key": key, "value": request.minimum }),
     )
     .await;
-    Ok(Json(list(&state).await?))
+    Ok(Json(ClientVersionsResponse {
+        warning,
+        ..list(&state).await?
+    }))
 }

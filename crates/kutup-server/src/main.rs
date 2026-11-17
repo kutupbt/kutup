@@ -280,7 +280,9 @@ async fn main() -> anyhow::Result<()> {
         .is_some_and(|rest| rest == ["reset-instance-id"])
     {
         let id = instance::reset(&pool).await?;
-        println!("kutup-server: the instance id is now {id}");
+        println!(
+            "kutup-server: the instance id is now {id}; a server already running keeps answering with the old one until it is restarted"
+        );
         return Ok(());
     }
     let rotate_sealed_sender_policy = args
@@ -552,7 +554,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let client_minimums = client_version::ClientMinimums::load(&pool).await?;
-    let instance_id: Arc<str> = instance::load_or_mint(&pool).await?.into();
+    let instance_id: Arc<str> = instance::load_or_mint(&mut *pool.acquire().await?)
+        .await?
+        .into();
     let state = AppState {
         client_minimums,
         instance_id,

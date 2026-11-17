@@ -3,6 +3,7 @@ import type {
   CiphertextCacheChunkV1,
   CiphertextCacheEntryV1,
 } from './types'
+import { storageReady } from '@kutup/crypto/storageGate'
 
 const DATABASE_NAME = 'kutup.files.ciphertextCache'
 const DATABASE_VERSION = 1
@@ -99,7 +100,7 @@ export class IndexedDbCiphertextCacheBackendV1 implements CiphertextCacheBackend
 
   private database(): Promise<IDBDatabase> {
     if (!globalThis.indexedDB) return Promise.reject(new Error('IndexedDB is unavailable'))
-    this.databasePromise ??= new Promise((resolve, reject) => {
+    this.databasePromise ??= storageReady().then(() => new Promise<IDBDatabase>((resolve, reject) => {
       const request = globalThis.indexedDB.open(DATABASE_NAME, DATABASE_VERSION)
       request.onupgradeneeded = () => {
         const database = request.result
@@ -112,7 +113,7 @@ export class IndexedDbCiphertextCacheBackendV1 implements CiphertextCacheBackend
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error ?? new Error('failed to open ciphertext cache'))
       request.onblocked = () => reject(new Error('ciphertext cache upgrade is blocked'))
-    })
+    }))
     return this.databasePromise
   }
 }

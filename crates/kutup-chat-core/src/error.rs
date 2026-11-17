@@ -72,6 +72,11 @@ pub enum ChatError {
     /// (`apiVersionUnsupported`). Holds the versions it serves.
     #[error("the server runs an older Kutup than this app supports ({0})")]
     ServerTooOld(String),
+    /// The server answered with another instance id than it had: it was
+    /// reset, and what this device keeps for it is to be dropped
+    /// (docs/plans/api-surface.md §5).
+    #[error("the server was reset; sign in again")]
+    ServerReset,
 }
 
 impl From<libsignal_protocol::SignalProtocolError> for ChatError {
@@ -125,6 +130,22 @@ impl From<base64::DecodeError> for ChatError {
 }
 
 impl ChatError {
+    /// The server refused this client's version, or the client the
+    /// server's, or the server was reset: retrying changes nothing, so the
+    /// network loops stop until the app is updated or signs in again.
+    pub fn stops_network(&self) -> bool {
+        matches!(
+            self,
+            Self::ClientTooOld(_) | Self::ServerTooOld(_) | Self::ServerReset
+        )
+    }
+
+    /// A failure to reach the server, or a server answer that says nothing
+    /// about the thing asked for: try again later, never conclude from it.
+    pub fn is_unreachable(&self) -> bool {
+        matches!(self, Self::Transport(_)) || self.stops_network()
+    }
+
     pub(crate) fn inbound_failure_kind(&self) -> crate::InboundFailureKind {
         use crate::InboundFailureKind as Kind;
         match self {
@@ -146,7 +167,8 @@ impl ChatError {
             | Self::MissingBundle(_)
             | Self::LinkRequired
             | Self::ClientTooOld(_)
-            | Self::ServerTooOld(_) => Kind::Unknown,
+            | Self::ServerTooOld(_)
+            | Self::ServerReset => Kind::Unknown,
         }
     }
 }

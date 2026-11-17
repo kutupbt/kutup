@@ -9,6 +9,7 @@
 // mid-session reloads the page, and the reload's boot does the clearing.
 
 import axios from 'axios'
+import { broadcastInstanceChanged } from './sessionSync'
 
 /** Where this origin remembers the id. */
 export const INSTANCE_KEY = 'kutup.instance'
@@ -24,12 +25,13 @@ export const SERVER_RESET_NOTICE = 'kutup.session.serverReset'
  * clients forget what they pinned.
  */
 const ANCHOR_DATABASES = ['kutup.account.revisionsSeen', 'kutup-revisions-v2']
-const ANCHOR_KEY = /^(kutup\.account\.manifestPins:|kutup-manifest-pins:)/
+const ANCHOR_KEY = /^(kutup\.account\.manifestPins:|kutup-manifest-pins:|kutup_own_manifest_pin_v1:)/
 /** Not account data: the look of the page. Kept too. */
 const KEPT_KEY = /^(kutup\.ui\.(theme|language)$|kutup-theme$|kutup-lang$)/
 
 /** Every Kutup database name this code and earlier versions used, for browsers without indexedDB.databases(). */
 const KNOWN_DATABASES = [
+  'kutup.account.revisionsSeen',
   'kutup.account.records',
   'kutup.files.ciphertextCache',
   'kutup.drive.pendingUploads',
@@ -51,9 +53,22 @@ function storageKeys(storage: Storage): string[] {
   return keys
 }
 
-/** Whether this origin holds any Kutup data (beyond the kept look). */
-function hasKutupData(): boolean {
-  return storageKeys(localStorage).some((key) => isKutupKey(key) && !KEPT_KEY.test(key))
+/** This origin's Kutup databases: all it lists, else the names known. */
+async function kutupDatabases(): Promise<string[]> {
+  if (typeof indexedDB === 'undefined') return []
+  try {
+    const listed = await indexedDB.databases?.()
+    if (listed) return listed.map((db) => db.name).filter((name): name is string => !!name && isKutupKey(name))
+  } catch {
+    // Older browsers: the known names.
+  }
+  return KNOWN_DATABASES
+}
+
+/** Whether this origin holds any Kutup data (beyond the kept look and the anchors). */
+async function hasKutupData(): Promise<boolean> {
+  if (storageKeys(localStorage).some((key) => isKutupKey(key) && !KEPT_KEY.test(key) && !ANCHOR_KEY.test(key))) return true
+  return (await kutupDatabases()).some((name) => !ANCHOR_DATABASES.includes(name))
 }
 
 function deleteDatabase(name: string): Promise<void> {
@@ -71,14 +86,8 @@ function deleteDatabase(name: string): Promise<void> {
  * IndexedDB database, every `kutup` key in localStorage and sessionStorage.
  */
 export async function clearOriginState(): Promise<void> {
-  let names: string[] = KNOWN_DATABASES
   if (typeof indexedDB !== 'undefined') {
-    try {
-      const listed = await indexedDB.databases?.()
-      if (listed) names = listed.map((db) => db.name).filter((name): name is string => !!name)
-    } catch {
-      // Older browsers: the known names.
-    }
+    const names = await kutupDatabases()
     await Promise.all(names.filter((name) => !ANCHOR_DATABASES.includes(name)).map(deleteDatabase))
   }
   for (const key of storageKeys(localStorage)) {
@@ -105,8 +114,12 @@ function remembered(): string | null {
 export async function reconcileInstance(instanceId: string): Promise<boolean> {
   const known = remembered()
   if (known === instanceId) return false
-  const clear = known !== null || hasKutupData()
-  if (clear) await clearOriginState()
+  const clear = known !== null || (await hasKutupData())
+  if (clear) {
+    // Other tabs hold databases open: they reload and let go.
+    broadcastInstanceChanged()
+    await clearOriginState()
+  }
   try {
     localStorage.setItem(INSTANCE_KEY, instanceId)
     if (clear) sessionStorage.setItem(SERVER_RESET_NOTICE, '1')
@@ -146,6 +159,7 @@ export function noteInstance(value: unknown): void {
   if (typeof value !== 'string' || !value) return
   const known = remembered()
   if (known === null || known === value) return
+  broadcastInstanceChanged()
   if (typeof window !== 'undefined') window.location.reload()
 }
 

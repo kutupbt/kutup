@@ -167,13 +167,16 @@ pub fn instance_id_of(health: &serde_json::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Whether `version` (`major.minor.patch[-pre]`) is below `minimum`; an
-/// unreadable one is not (the server's own check decides then).
+/// Whether `version` (`major.minor.patch[-pre]`) is below `minimum`, by
+/// semver's precedence (pre-release identifiers compared one by one,
+/// numeric ones as numbers); an unreadable one is not (the server's own
+/// check decides then).
 pub(crate) fn version_below(version: &str, minimum: &str) -> bool {
-    fn parse(v: &str) -> Option<([u64; 3], bool)> {
+    use std::cmp::Ordering;
+    fn parse(v: &str) -> Option<([u64; 3], Option<&str>)> {
         let (core, pre) = match v.split_once('-') {
-            Some((core, _)) => (core, true),
-            None => (v, false),
+            Some((core, pre)) => (core, Some(pre)),
+            None => (v, None),
         };
         let mut out = [0u64; 3];
         let mut parts = core.split('.');
@@ -182,8 +185,37 @@ pub(crate) fn version_below(version: &str, minimum: &str) -> bool {
         }
         parts.next().is_none().then_some((out, pre))
     }
+    fn pre_order(a: &str, b: &str) -> Ordering {
+        let (mut left, mut right) = (a.split('.'), b.split('.'));
+        loop {
+            match (left.next(), right.next()) {
+                (None, None) => return Ordering::Equal,
+                (None, Some(_)) => return Ordering::Less,
+                (Some(_), None) => return Ordering::Greater,
+                (Some(x), Some(y)) => {
+                    let order = match (x.parse::<u64>(), y.parse::<u64>()) {
+                        (Ok(x), Ok(y)) => x.cmp(&y),
+                        (Ok(_), Err(_)) => Ordering::Less,
+                        (Err(_), Ok(_)) => Ordering::Greater,
+                        (Err(_), Err(_)) => x.cmp(y),
+                    };
+                    if order != Ordering::Equal {
+                        return order;
+                    }
+                }
+            }
+        }
+    }
     match (parse(version), parse(minimum)) {
-        (Some((a, a_pre)), Some((b, b_pre))) => a < b || (a == b && a_pre && !b_pre),
+        (Some((a, a_pre)), Some((b, b_pre))) => {
+            let order = a.cmp(&b).then_with(|| match (a_pre, b_pre) {
+                (None, None) => Ordering::Equal,
+                (None, Some(_)) => Ordering::Greater,
+                (Some(_), None) => Ordering::Less,
+                (Some(x), Some(y)) => pre_order(x, y),
+            });
+            order == Ordering::Less
+        }
         _ => false,
     }
 }
@@ -581,6 +613,7 @@ mod tests {
         assert!(version_below("0.0.9", "0.0.14"));
         assert!(!version_below("0.0.14", "0.0.14"));
         assert!(version_below("0.0.14-rc1", "0.0.14"));
+        assert!(version_below("0.0.14-rc.2", "0.0.14-rc.10"));
         assert!(!version_below("junk", "0.0.14"));
     }
 
