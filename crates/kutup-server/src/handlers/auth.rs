@@ -775,7 +775,7 @@ pub async fn register(
             opaque_record, opaque_suite, opaque_server_key_id,
             recovery_key_verifier, storage_quota_bytes, drive_key_binding,
             key_binding, id, identity_suite, drive_key_binding_epoch
-        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$1,$16,2,1)
+        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$1::uuid,$16,2,1)
         RETURNING id"#,
     )
     .bind(&req.key_binding)
@@ -869,7 +869,7 @@ pub(crate) async fn signed_in_answer(
         r#"SELECT master_key_envelope, public_key,
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes,
                   (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), is_first_login,
-                  COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, ''),
+                  COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding::text, ''),
                   COALESCE(substring(sha256(opaque_record) from 1 for 16) = $2, false)
            FROM accounts WHERE id = $1"#,
     )
@@ -1083,7 +1083,7 @@ pub(crate) async fn issue_after_second_step(
         r#"SELECT master_key_envelope, public_key,
                   is_admin, storage_quota_bytes, storage_used_bytes,
                   COALESCE(username, ''), (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), COALESCE(color, ''),
-                  COALESCE(key_binding, '')
+                  COALESCE(key_binding::text, '')
            FROM accounts WHERE id = $1"#,
     )
     .bind(Uuid::parse_str(user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
@@ -1138,17 +1138,16 @@ pub async fn get_recovery_preflight(
     Query(q): Query<NameQuery>,
 ) -> AppResult<Response> {
     let name = q.name()?;
-    let row: Option<String> = match account_by_name(&state, &name).await? {
-        Some(id) => {
-            sqlx::query_scalar(
-                "SELECT key_binding FROM accounts WHERE id = $1 AND key_binding IS NOT NULL",
+    let row: Option<String> =
+        match account_by_name(&state, &name).await? {
+            Some(id) => sqlx::query_scalar(
+                "SELECT key_binding::text FROM accounts WHERE id = $1 AND key_binding IS NOT NULL",
             )
             .bind(id)
             .fetch_optional(&state.pool)
-            .await?
-        }
-        None => None,
-    };
+            .await?,
+            None => None,
+        };
 
     let resp = match row {
         Some(envelope_binding) => PreflightRecoverResponse { envelope_binding },
@@ -1187,9 +1186,10 @@ pub async fn recover_grant(
     // full cost.
     let proof = decode_canonical_base64_exact(&req.recovery_proof, 32, "recoveryProof")?;
     let account = account_by_name(&state, &req.name).await?;
+    // No verifier (a first sign-in, or after a reset) recovers nothing.
     let stored: Option<String> = match account {
         Some(id) => {
-            sqlx::query_scalar(
+            sqlx::query_scalar::<_, Option<String>>(
                 // A closing account recovers too, to keep it at the sign-in after.
                 &format!(
                     "SELECT recovery_key_verifier FROM accounts WHERE id = $1 AND {}",
@@ -1199,6 +1199,7 @@ pub async fn recover_grant(
             .bind(id)
             .fetch_optional(&state.pool)
             .await?
+            .flatten()
         }
         None => None,
     };
@@ -1345,7 +1346,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthAccount) -> AppResu
         String,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, COALESCE(key_binding, ''), COALESCE(username, ''), public_key, totp_enabled,
+        r#"SELECT id, COALESCE(key_binding::text, ''), COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
                   is_admin, COALESCE(color, ''), version_retention_days, public_sharing,
                   federation
@@ -2047,7 +2048,7 @@ pub async fn complete_setup(
               account_incarnation_id = $7, drive_signing_public_key = $8,
               recovery_key_verifier = $11,
               drive_key_binding = $13,
-              key_binding = $14,
+              key_binding = $14::uuid,
               identity_suite = 2, drive_key_binding_epoch = 1,
               is_first_login = false, updated_at = NOW()
            WHERE id = $12 AND is_first_login

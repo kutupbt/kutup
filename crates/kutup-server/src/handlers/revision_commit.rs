@@ -7,8 +7,8 @@
 //! current: a new file appears in its folder, or a new version becomes the
 //! file's content with the content it replaced kept in its history.
 //!
-//! Until then the revision is only its upload row (`uploads.uploaded_at`):
-//! a new file has no `files` row, so no listing, search, share, trash or
+//! Until then the revision is only its upload row (`drive_uploads.uploaded_at`):
+//! a new file has no `drive_files` row, so no listing, search, share, trash or
 //! count sees it. An upload never committed is swept with the abandoned
 //! uploads, its object deleted and its reservation released.
 

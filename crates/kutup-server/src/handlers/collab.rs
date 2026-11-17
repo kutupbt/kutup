@@ -2,7 +2,7 @@
 //!
 //! The server is a blind relay: it verifies each frame's Ed25519 signature (never decrypts)
 //! against the frame key the sender's account manifest lists for its device
-//! (docs/plans/one-device-list.md), persists the durable kinds to `file_update_log`, and fans
+//! (docs/plans/one-device-list.md), persists the durable kinds to `collab_update_log`, and fans
 //! frames out to the other peers in the file's room, each named by its sender account
 //! (`envelope::deliver`). Auth (a device ticket or token + device credential, file access)
 //! happens before the upgrade; `handle_connection` is the per-connection coroutine: hello →
@@ -539,9 +539,9 @@ async fn trim_log(
     tx.commit().await
 }
 
-/// Deletes the rows of `delete` (a `DELETE FROM file_update_log l ...
+/// Deletes the rows of `delete` (a `DELETE FROM collab_update_log l ...
 /// RETURNING l.*` statement) and raises each sender's floor
-/// (`file_sender_floors`) to the highest counter it took, in one statement,
+/// (`collab_sender_floors`) to the highest counter it took, in one statement,
 /// so a trimmed frame stays a replay. Every deletion of log rows goes
 /// through here. The number of rows deleted.
 pub(crate) fn trimming(delete: &str) -> String {
@@ -885,7 +885,7 @@ pub(crate) fn log_lock_key(file_uuid: Uuid) -> i64 {
     (file_uuid.as_u128() >> 64) as u64 as i64
 }
 
-/// Inserts a frame into `file_update_log`, assigning the next per-file seq — mirrors
+/// Inserts a frame into `collab_update_log`, assigning the next per-file seq — mirrors
 /// `persistFrame`. Sequence allocation is serialized per file so simultaneous frames from
 /// different devices cannot both select the same `MAX(seq) + 1`; the sender's
 /// `(domain, account, device, sender_seq)` unique index still rejects exact replays.

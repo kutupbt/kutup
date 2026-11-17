@@ -513,7 +513,7 @@ Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backen
 - **Uploads from the browser survive a lost connection and a reload.** The web client seals a file block by block as tus asks for each range (`frontend/packages/files/src/upload/encryptedSource.ts`; a PATCH carries two 4 MiB blocks), so memory stays at a few blocks whatever the size. A connection lost for any length of time leaves the upload waiting ("Waiting for the connection"); it goes on from the server's offset (tus `HEAD`) once the browser is back online. Drive and Photos also remember each upload in IndexedDB (`pendingUploads.ts`: the tus URL, size and modified time, the folder and its key epoch, the envelope the upload already made, its revision id and a draft of its metadata sealed under the file key: nothing readable without the folder key). After a reload or a crash the upload panel offers it again; choosing the same file (same name, size and modified time) goes on where the server stopped. The blocks are sealed again from the one the server's offset falls in (their nonces are synthetic, so the bytes are the same) and what the server already holds is dropped, not sent; the sealed manifest, whose nonce is random, is kept in the record once made (docs/plans/drive-block-format.md §10 slice 3). An upload running in some tab holds a Web Lock, so it is never offered as interrupted. One idle for 24 hours is reaped by the server and dropped from the list; one whose folder moved to a new key since cannot go on and is offered only to discard.
 - Each file is stored under its client-generated UUID; the human-readable name exists only in its authenticated metadata envelope, which the server cannot read. Its keyed name and content hashes ("Names in a folder" above) tell the server only which items in one folder share a name or content.
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
-- Each account has one storage pool (`users.storage_quota_bytes` /
+- Each account has one storage pool (`accounts.storage_quota_bytes` /
   `storage_used_bytes`, 10 GiB default, administrator-controlled per account).
   Drive, Photos, Office, Maps and Chat (delivery media, history segments and
   bases, protected history media) all charge it. Every write locks the user row
@@ -612,8 +612,8 @@ Each browser tab session and each CLI session generates a fresh Ed25519 keypair.
 
 ### Versioning
 Two-tier:
-- **Live deltas** in Postgres `file_update_log` (truncated on snapshot).
-- **Snapshots** as SeaweedFS S3 noncurrent versions, indexed in `file_versions`.
+- **Live deltas** in Postgres `collab_update_log` (truncated on snapshot).
+- **Snapshots** as SeaweedFS S3 noncurrent versions, indexed in `drive_file_versions`.
 
 Snapshots fire on idle 30s + ≥1 update, every 200 updates, or on explicit "Save version".
 
@@ -622,12 +622,12 @@ Retention: 30 days OR last 50 versions, whichever yields more. Named/keep-foreve
 Versions are stored with one request (`POST /files/:fileId/versions`, multipart, charged by measured size, one object per version; `docs/plans/drive-versions-v2.md`) and are file-type-agnostic — notes (`kind = yjs`), office docs and whiteboards (`kind = file`) all use the same plumbing. Restore for blob-based editors (office, whiteboard) reposts the chosen old bytes as a new version then reloads the page; for Yjs editors the CRDT merges the restored state in-place.
 
 ### Federation, sharing
-A live-edited file is still a regular `files` row with an encrypted blob; non-editing users download it as usual.
+A live-edited file is still a regular `drive_files` row with an encrypted blob; non-editing users download it as usual.
 
 Across servers, each browser connects only to its own server. For a file on another server, that server (the bridge) keeps a local room, subscribes at the file's server (home) over the signed Drive federation transport, sends its users' frames home in batches, and receives home's new frames by push, never by polling. Home applies the same checks as for a local frame plus the share's edit permission, and stores remote senders as `(domain, device)`. Versions and the seed are relayed the same way. Only notes and place lists use it so far; see `docs/plans/collab-federation.md`.
 
 ### Replay protection
-Each frame carries a per-device monotonically-increasing sequence number. The `file_update_log` has a `UNIQUE (file_id, sender_device, sender_seq)` constraint that rejects replays at the database level. Combined with Ed25519 signature verification on every frame, this prevents both forgery and replay attacks.
+Each frame carries a per-device monotonically-increasing sequence number. The `collab_update_log` has a `UNIQUE (file_id, sender_device, sender_seq)` constraint that rejects replays at the database level. Combined with Ed25519 signature verification on every frame, this prevents both forgery and replay attacks.
 
 ### File editor route + cross-tab session
 A file opens full screen at `/file/:cid/:fid` (`/shared/file/:fid` for a file shared by itself). The page is one shared package, `@kutup/editors` (`frontend/packages/editors`), mounted by both Drive and Office; it opens the folder and file keys, then the editor or viewer the file needs (the collaborative text editor, OnlyOffice in the `editor.` sandbox, Excalidraw, or an image, PDF or media viewer).

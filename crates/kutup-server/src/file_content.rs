@@ -27,7 +27,7 @@ pub fn revision_path(file_id: Uuid, revision: Uuid) -> String {
 pub struct CurrentContent {
     pub path: String,
     pub size: i64,
-    /// The `file_versions` row it came from; `None` for the original upload.
+    /// The `drive_file_versions` row it came from; `None` for the original upload.
     pub version: Option<Uuid>,
     /// Its revision id: the version's id, or the original's
     /// `content_revision_id`. Its bytes never change, so it is the ETag.

@@ -52,7 +52,7 @@ pub fn on_hold() -> AppError {
         .with_details(serde_json::json!({ "code": "legalHold" }))
 }
 
-/// The accounts that may sign in, as SQL over `users`: active ones, and
+/// The accounts that may sign in, as SQL over `accounts`: active ones, and
 /// closing ones (to keep them) unless they were suspended when they closed.
 pub const SIGNS_IN: &str =
     "(state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))";

@@ -135,7 +135,7 @@ pub async fn provision(
 
     let mut transaction = state.pool.begin().await?;
     let user_row: (String, String, String, String) = sqlx::query_as(
-        "SELECT COALESCE(key_binding, ''),account_incarnation_id,account_authority_public_key,
+        "SELECT COALESCE(key_binding::text, ''),account_incarnation_id,account_authority_public_key,
                 account_authority_key_id FROM accounts WHERE id=$1 FOR UPDATE",
     )
     .bind(user_id)

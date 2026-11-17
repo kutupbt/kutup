@@ -1,6 +1,6 @@
 //! One device list per account (docs/plans/one-device-list.md, slice 1),
 //! against a live server and its database: the manifest's entries of every
-//! kind against the account's `devices` rows. Editor rows are made by SQL
+//! kind against the account's `account_devices` rows. Editor rows are made by SQL
 //! (slice 2 brings their registration).
 //!
 //!   KUTUP_LIVE_SERVER=http://localhost:39083 \

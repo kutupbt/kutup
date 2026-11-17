@@ -1,6 +1,6 @@
 //! The account's one storage pool: Drive, Photos, Office, Maps and Chat
-//! (and later Mail) all charge `users.storage_used_bytes` against
-//! `users.storage_quota_bytes`, as Proton does with one storage figure per
+//! (and later Mail) all charge `accounts.storage_used_bytes` against
+//! `accounts.storage_quota_bytes`, as Proton does with one storage figure per
 //! account.
 //!
 //! Every write that adds stored bytes locks the user's row here, in the
@@ -20,7 +20,7 @@ use sqlx::{PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
 /// An account's storage when nobody set another: 10 GiB, the
-/// `users.storage_quota_bytes` column default (migration 001).
+/// `accounts.storage_quota_bytes` column default (migration 001).
 pub const DEFAULT_QUOTA_BYTES: i64 = 10 * 1024 * 1024 * 1024;
 
 /// The `site_settings` key an administrator sets the quota new accounts get

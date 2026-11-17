@@ -379,7 +379,7 @@ mod tests {
         }
     }
 
-    /// Every lookup of an account by name goes through `kutup_current_user`
+    /// Every lookup of an account by name goes through `kutup_current_account`
     /// (any spelling, current names only): a query comparing `username`
     /// itself would miss a variant, or find a name the account left.
     #[test]
@@ -416,13 +416,13 @@ mod tests {
         );
         assert!(
             found.is_empty(),
-            "use kutup_current_user($n) instead: {found:?}"
+            "use kutup_current_account($n) instead: {found:?}"
         );
     }
 
     /// The resolver finds the account whose current name is typed, in any
     /// spelling, and no other: not another account's, not a held name's
-    /// (`kutup_current_user`'s parameter once shared the name of a column of
+    /// (`kutup_current_account`'s parameter once shared the name of a column of
     /// `account_names`, and the lookup compared every row with its own name).
     #[tokio::test]
     async fn live_the_resolver_finds_only_the_named_current_account() {

@@ -1,10 +1,13 @@
--- The schema the whole migration chain built, squashed (the wipe-2 baseline;
--- scripts/check-migration-baseline.sh proves it equal). Never edit once
--- applied: a change is then a new timestamped migration (docs/contributing.md).
+-- The wipe-2 baseline: the whole migration chain squashed, proven equal to
+-- the chain at the squash commit by scripts/check-migration-baseline.sh, then
+-- edited in place before anything applied it (docs/plans/w7-schema.md). Never
+-- edit once applied: a change is then a new timestamped migration
+-- (docs/contributing.md).
 --
--- Refuses a database that already holds the old chain's tables.
+-- Refuses a database that already holds tables: an old chain's (`users`) or
+-- this one's (`accounts`).
 DO $$ BEGIN
-  IF to_regclass('public.accounts') IS NOT NULL THEN
+  IF to_regclass('public.users') IS NOT NULL OR to_regclass('public.accounts') IS NOT NULL THEN
     RAISE EXCEPTION 'this database predates the baseline: start from an empty one';
   END IF;
 END $$;
@@ -1742,7 +1745,7 @@ CREATE TABLE public.account_devices (
     last_resort_kyber_pre_key_id bigint,
     last_resort_kyber_pre_key text,
     last_resort_kyber_pre_key_signature text,
-    name text DEFAULT ''::text NOT NULL,
+    name text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     last_seen_at timestamp with time zone,
     credential_salt bytea NOT NULL,
@@ -3816,11 +3819,11 @@ CREATE TABLE public.accounts (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     is_first_login boolean DEFAULT false NOT NULL,
     username text NOT NULL,
-    recovery_key_verifier text DEFAULT ''::text NOT NULL,
+    recovery_key_verifier text,
     color text,
     version_retention_days integer DEFAULT 30 NOT NULL,
     drive_key_binding text,
-    key_binding text,
+    key_binding uuid,
     opaque_record bytea,
     opaque_suite smallint,
     opaque_server_key_id smallint,
@@ -3858,7 +3861,7 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_drive_key_binding_epoch_check CHECK ((drive_key_binding_epoch > 0)),
     CONSTRAINT accounts_federation_check CHECK ((federation = ANY (ARRAY['on'::text, 'off'::text]))),
     CONSTRAINT accounts_identity_suite_check CHECK ((identity_suite = ANY (ARRAY[1, 2]))),
-    CONSTRAINT accounts_key_binding_check CHECK ((key_binding ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
+    CONSTRAINT accounts_key_binding_check CHECK (((key_binding)::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
     CONSTRAINT accounts_legal_hold CHECK ((((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)) AND ((legal_hold_reference IS NOT NULL) OR (legal_hold_by_account_id IS NULL)))),
     CONSTRAINT accounts_legal_hold_reference_check CHECK (((char_length(legal_hold_reference) >= 1) AND (char_length(legal_hold_reference) <= 200))),
     CONSTRAINT accounts_master_key_generation_check CHECK ((master_key_generation > 0)),

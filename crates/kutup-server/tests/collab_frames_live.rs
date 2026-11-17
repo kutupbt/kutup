@@ -353,7 +353,7 @@ fn a_removed_devices_busy_socket_is_cut() {
 }
 
 /// A saved version trims the log; a trimmed frame's counter stays a replay
-/// (`file_sender_floors`), and the device's next counter is above it.
+/// (`collab_sender_floors`), and the device's next counter is above it.
 #[test]
 fn a_trimmed_frame_is_still_a_replay() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {

@@ -220,7 +220,7 @@ pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<L
                      FROM account_security_keys k WHERE k.account_id = u.id) || ',' ||
                     u.is_admin::text || ',' ||
                     length(COALESCE(u.username, '')) || ':' || COALESCE(u.username, '') ||
-                    length(COALESCE(u.key_binding, '')) || ':' || COALESCE(u.key_binding, ''),
+                    length(COALESCE(u.key_binding::text, '')) || ':' || COALESCE(u.key_binding::text, ''),
                     'UTF8')), 'hex')
          FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.id = $1 AND s.account_id = $2 AND s.revoked_at IS NULL

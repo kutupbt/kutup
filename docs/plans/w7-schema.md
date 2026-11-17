@@ -1,7 +1,7 @@
 # W7: the schema made once, before the wipe
 
-Status: **proposed** (second session, 2026-11-17), for main's approval before
-any rename. Branch `wipe/w7` on `wipe/final` c4ca4ad0 (with the W3 one-loop
+Status: **approved** 2026-11-17 (main session; answers at the end). Group 1
+(renames) landed 2026-11-17. Branch `wipe/w7` on `wipe/final` c4ca4ad0 (with the W3 one-loop
 follow-up). Scope: docs/plans/wipe-unification.md W7, smart's architecture
 note §5 (items 1–8) and smart's sweep (items 4, 6–11, 14), and the user's
 direction (2026-11-17): every cosmetic or structural change that is only
@@ -15,8 +15,10 @@ The inventory behind this note was taken from a dump of the current chain:
 
 1. **Squash.** One baseline generated from the chain by
    `scripts/check-migration-baseline.sh` (fixed: each migration now runs in
-   one transaction, as sqlx does), proven equal to the chain by dumping both
-   and diffing. Nothing else changes in this commit.
+   one transaction, as sqlx does), proven equal to the chain **at the squash
+   commit** by dumping both and diffing. Nothing else changes in that
+   commit; the later groups edit the baseline in place, so the proof holds
+   for the squash commit only.
 2. **Restructure the baseline in place.** Nothing has applied the new
    baseline yet (the wipe), so the later commits edit the one file rather
    than add migrations. Each commit changes the schema and every query that
@@ -73,7 +75,7 @@ are the check, and each rename commit runs them.
 | public_link_reports | drive_public_link_reports | |
 | federated_incoming_shares, federated_incoming_file_shares | drive_federated_incoming_shares, drive_federated_incoming_file_shares | |
 | federated_outgoing_shares, federated_outgoing_file_shares | drive_federated_outgoing_shares, drive_federated_outgoing_file_shares | |
-| album_items | drive_album_items | an album is a Drive collection row; Photos reads it |
+| album_items | photos_album_items | Photos is its own app (main's answer 4) |
 | file_update_log, file_sender_floors | collab_update_log, collab_sender_floors | the frame log serves notes and whiteboards too; "Office" is a product name |
 | contact_emails | contacts_emails | `contacts` stays |
 | calendar_user_settings | calendar_account_settings | the account's calendar defaults (the per-calendar sealed settings are records) |
@@ -111,7 +113,7 @@ drop it and let the organizations work add it back with its handler.
 | origin_account_id (+ origin_server) | chat_media_objects, chat_media_federation_pull_grants, chat_media_origin_delivery_operations `.origin_user_id`; `chat_media_objects.origin_domain` → `origin_server` |
 | admin_account_id | account_security_events.admin_user_id, admin_audit_log.admin_user_id |
 | target_account_id | admin_audit_log.target_user_id, auth_grants.target_user_id |
-| `<verb>_by_account_id` | added_by (drive_album_items, mail_group_members), created_by (mail_groups, registration_codes), live locations' creator_user_id, resolved_by (feedback, drive_public_link_reports), blocked_by (mail_domain_blocks, drive_public_shares), published_by, revoked_by, granted_by, invited_by, accounts.legal_hold_by, mail_messages.sent_by |
+| `<verb>_by_account_id` | added_by (photos_album_items, mail_group_members), created_by (mail_groups, registration_codes), live locations' creator_user_id, resolved_by (feedback, drive_public_link_reports), blocked_by (mail_domain_blocks, drive_public_shares), published_by, revoked_by, granted_by, invited_by, accounts.legal_hold_by, mail_messages.sent_by |
 
 Kept, because they aren't accounts: accounts.closing_by (who: user, admin
 or restore), destruction_events.actor, opaque_login_states.ceiling_account (a
@@ -436,6 +438,21 @@ off by default, with one live test that migrates an empty extra set.
 1. `organization_access_requests`: drop (proposed) or keep?
 2. Admin log payloads: drop the `username` snapshot (proposed) or keep it?
 3. `account_records.record_id` stays text (proposed)?
-4. `drive_album_items` (proposed) or `photos_album_items`?
+4. `drive_album_items` (proposed) or `photos_album_items`? **Answer:**
+   `photos_album_items`; Photos is its own app.
 5. Remote display addresses from `remote_account_renames` re-keyed by
    (server, account_id) (proposed), dropping the share tables' labels?
+
+## Answers and where they land (main session, 2026-11-17)
+
+1. `organization_access_requests` is dropped: in **group 4** (O3 adds what it
+   needs after the wipe, as a normal migration).
+2. Admin payloads carry ids only (no username snapshot): **group 3**.
+3. `account_records.record_id` stays text.
+4. `photos_album_items`: built in group 1.
+5. `remote_account_renames` re-keyed by (server, account_id), and the share
+   tables' `recipient_username` / `owner_account` labels dropped (§1.3):
+   **group 4**, with the account rows. Group 1 did only the names.
+
+From the review of group 1 (third session): the 22 index names that still
+end in `_user` over `account_id` are renamed in **group 5**.

@@ -78,7 +78,7 @@ pub async fn lock(
     session: Uuid,
 ) -> AppResult<Locked> {
     let account: Option<(String, Option<String>, i32)> = sqlx::query_as(
-        "SELECT account_incarnation_id, key_binding, master_key_generation FROM accounts
+        "SELECT account_incarnation_id, key_binding::text, master_key_generation FROM accounts
           WHERE id = $1 AND is_active FOR UPDATE",
     )
     .bind(user_id)

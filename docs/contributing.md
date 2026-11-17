@@ -102,7 +102,9 @@ time** via `sqlx::migrate!()`, then applied automatically on startup.
 
 The chain starts at `20261112000000_baseline`: every migration up to the
 wipe-2 release, squashed into one schema (docs/plans/w7-schema.md; the
-clean-slate release's `20261013000000_baseline` was squashed into it). `scripts/check-migration-baseline.sh
+clean-slate release's `20261013000000_baseline` was squashed into it). It was
+proven equal to the chain at the squash commit, then edited in place by W7
+before anything applied it; from the wipe-2 release on it is never edited. `scripts/check-migration-baseline.sh
 <old-ref>` proves a squash equal to the chain it replaces (both applied to an
 empty Postgres 16, compared by schema and rows), and `--generate` writes it.
 Plans under `docs/plans/` name migrations as they were written before the

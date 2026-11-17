@@ -4,7 +4,7 @@
 //! store-and-forward mailboxes, and the WS drain. Everything the server touches here is
 //! public-key material or opaque ciphertext; there is no plaintext path.
 //!
-//! Trust model notes (v1, mirrors `devices.rs`): the JWT is the trust anchor for *who*
+//! Trust model notes (v1, mirrors `account_devices.rs`): the JWT is the trust anchor for *who*
 //! is calling; prekey signatures are stored and served verbatim for **clients** to
 //! verify (that's where verification is meaningful under E2EE — a malicious server
 //! could serve garbage regardless, and clients must not trust server-side checks).
@@ -620,7 +620,7 @@ pub async fn register_device(
     .bind(req.last_resort_kyber_pre_key.key_id as i64)
     .bind(&req.last_resort_kyber_pre_key.public_key)
     .bind(&req.last_resort_kyber_pre_key.signature)
-    .bind(&req.name)
+    .bind((!req.name.is_empty()).then_some(&req.name))
     .bind(&salt[..])
     .bind(&hash[..])
     .bind(root_session)
@@ -1600,7 +1600,13 @@ async fn insert_kem_pool(
 )]
 pub async fn list_devices(State(state): State<AppState>, auth: AuthAccount) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.account_id)?;
-    let rows: Vec<(i32, i16, String, OffsetDateTime, Option<OffsetDateTime>)> = sqlx::query_as(
+    let rows: Vec<(
+        i32,
+        i16,
+        Option<String>,
+        OffsetDateTime,
+        Option<OffsetDateTime>,
+    )> = sqlx::query_as(
         "SELECT device_id, suite, name, created_at, last_seen_at
          FROM account_devices WHERE account_id = $1 AND suite IS NOT NULL ORDER BY device_id",
     )
@@ -1619,7 +1625,7 @@ pub async fn list_devices(State(state): State<AppState>, auth: AuthAccount) -> A
             Ok(json!({
                 "deviceId": id,
                 "suite": suite,
-                "name": name,
+                "name": name.unwrap_or_default(),
                 "createdAt": created.format(&Rfc3339).unwrap_or_default(),
                 "lastSeenAt": seen.and_then(|t| t.format(&Rfc3339).ok()),
             }))

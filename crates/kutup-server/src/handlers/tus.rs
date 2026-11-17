@@ -1,6 +1,6 @@
 //! tus.io 1.0 resumable upload endpoint — mirrors `backend/handlers/tus.go`.
 //!
-//! The multipart POST in `files.rs` buffers the whole encrypted blob and restarts from
+//! The multipart POST in `drive_files.rs` buffers the whole encrypted blob and restarts from
 //! byte zero on any blip; tus gives bounded memory (S3 multipart) + resume (offset
 //! bookkeeping) + a commit of the encrypted metadata once the content is up. Flow:
 //!
@@ -18,7 +18,7 @@
 //! `storage_quota_bytes - storage_used_bytes - SUM(uploads.total_bytes - received_bytes)`,
 //! so a half-uploaded 50 GB file blocks a concurrent 50 GB attempt without polluting
 //! `storage_used_bytes`. The revision's commit charges it, atomically with the
-//! `files` INSERT.
+//! `drive_files` INSERT.
 //!
 //! Unlike the JSON handlers, the tus error bodies are plain text + carry the
 //! `Tus-Resumable` header, matching Fiber's `c.SendString` — so responses are built
@@ -503,7 +503,7 @@ pub async fn head(
 
 /// Appends bytes — mirrors `Patch`. Each PATCH becomes one S3 multipart part; parts before
 /// the final must be ≥ 5 MiB. The PATCH that brings `received_bytes == total_bytes` runs the
-/// finaliser: complete-multipart, INSERT `files`, bump `storage_used_bytes`, DELETE the row;
+/// finaliser: complete-multipart, INSERT `drive_files`, bump `storage_used_bytes`, DELETE the row;
 /// it returns `X-Kutup-File-Id`.
 #[utoipa::path(
     patch,

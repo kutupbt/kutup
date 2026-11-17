@@ -541,7 +541,7 @@ no setup:
 
 - On first start it generates a root in memory, signs a 90-day online
   certificate with it, stores the root's public key, the certificate and the
-  online private key (`sealed_sender_generated_certificates`), publishes the
+  online private key (`chat_sealed_sender_certificates`), publishes the
   signed policy, and drops the root's private key. It is never written
   anywhere.
 - 30 days before a certificate runs out it does the same with a new root. The
@@ -922,7 +922,7 @@ scripts/backup-postgres.sh --fetch keys:<newest key dump> keys.dump kutup-backup
 docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner \
   --section=pre-data --section=data < keys.dump
 docker compose exec -T postgres psql -U kutup -d kutup -v ON_ERROR_STOP=1 \
-  -c "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = k.user_id)" \
+  -c "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM accounts u WHERE u.id = k.account_id)" \
   -c "DELETE FROM account_keys.mail_group_data_keys k WHERE NOT EXISTS (SELECT 1 FROM mail_groups g WHERE g.id = k.group_id)"
 docker compose exec -T postgres pg_restore -U kutup -d kutup --no-owner --exit-on-error \
   --section=post-data < keys.dump

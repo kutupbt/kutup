@@ -31,7 +31,7 @@ pub struct ObjectInfo {
 }
 
 /// The `{PartNumber, ETag}` pair S3 needs at finalize time — mirrors
-/// `services.CompletedPart`. Serialised into the `uploads.s3_part_etags` JSONB column;
+/// `services.CompletedPart`. Serialised into the `drive_uploads.s3_part_etags` JSONB column;
 /// the snake_case field names match the Go `json:"part_number"`/`json:"etag"` tags so a
 /// row written by either backend round-trips through the other.
 #[derive(Clone, Debug, Serialize, Deserialize)]

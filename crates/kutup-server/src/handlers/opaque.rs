@@ -215,7 +215,7 @@ pub async fn login_start(
         Some((caller, _)) => {
             let caller_id = crate::handlers::trusted_uuid(&caller.account_id)?;
             let account: Account = sqlx::query_as(
-                "SELECT u.id, u.key_binding, u.opaque_record, u.opaque_server_key_id, n.folded
+                "SELECT u.id, u.key_binding::text, u.opaque_record, u.opaque_server_key_id, n.folded
                    FROM accounts u JOIN account_names n ON n.account_id = u.id AND n.state = 'current'
                   WHERE u.id = $1",
             )
@@ -244,7 +244,7 @@ pub async fn login_start(
                 None
             } else {
                 sqlx::query_as(
-                    "SELECT u.id, u.key_binding, u.opaque_record, u.opaque_server_key_id, n.folded
+                    "SELECT u.id, u.key_binding::text, u.opaque_record, u.opaque_server_key_id, n.folded
                        FROM account_names n JOIN accounts u ON u.id = n.account_id
                       WHERE n.folded = $1 AND n.state = 'current'",
                 )
@@ -622,7 +622,7 @@ pub struct RegisterStartResponse {
 
 async fn key_binding_unused(state: &AppState, key_binding: &str) -> AppResult<()> {
     let taken: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE key_binding = $1)")
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE key_binding = $1::uuid)")
             .bind(key_binding)
             .fetch_one(&state.pool)
             .await?;
@@ -686,7 +686,7 @@ pub async fn register_start(
             } else {
                 // The account's own key binding: a new password for it.
                 let own: Option<String> =
-                    sqlx::query_scalar("SELECT key_binding FROM accounts WHERE id = $1")
+                    sqlx::query_scalar("SELECT key_binding::text FROM accounts WHERE id = $1")
                         .bind(grant.account_id)
                         .fetch_optional(&state.pool)
                         .await?;
@@ -829,7 +829,7 @@ pub async fn register_finish(
     let updated = sqlx::query(
         "UPDATE accounts SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
                           master_key_envelope = $6
-         WHERE id = $1 AND key_binding = $2
+         WHERE id = $1 AND key_binding = $2::uuid
            AND (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
            AND (NOT $7 OR opaque_server_key_id IS DISTINCT FROM $5)",
     )

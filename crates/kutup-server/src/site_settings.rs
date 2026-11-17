@@ -291,7 +291,7 @@ pub struct NumericSetting {
     pub per_account: bool,
 }
 
-/// The `user_setting_overrides` key prefix of an account's own rate limits
+/// The `account_setting_overrides` key prefix of an account's own rate limits
 /// (`rate_limit.<key>`, as `site_settings` names the site's).
 pub const RATE_LIMIT_PREFIX: &str = "rate_limit.";
 

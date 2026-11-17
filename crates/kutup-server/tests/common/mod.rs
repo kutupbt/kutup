@@ -1059,7 +1059,7 @@ pub fn owner_link_key(link_key: &[u8; 32], owner: &User, link_id: &str) -> Strin
 /// The administrator's token, signing in by username as any account does
 /// (its temporary password derived under the salt preflight answers),
 /// completing its first-login setup on a fresh server.
-/// Deletes `users` for good through the administrator (`KUTUP_LIVE_ADMIN`
+/// Deletes `accounts` for good through the administrator (`KUTUP_LIVE_ADMIN`
 /// as `name:password`), so the gate's purge checks see nothing left behind.
 /// Without an administrator the accounts stay (a run outside the gate).
 pub fn purge_accounts(c: &Client, base: &str, users: &[&User]) {
@@ -1363,7 +1363,7 @@ pub fn account_manifest(
     Some(r.json().unwrap())
 }
 
-/// The account's next manifest listing `devices` in place of the head's
+/// The account's next manifest listing `account_devices` in place of the head's
 /// entries of their ids (the first, with no Chat identity, when it has none),
 /// signed by its authority.
 pub fn next_manifest(
