@@ -1084,7 +1084,15 @@ async fn send_sealed_run(
     let federation = configured_stack(state)?;
     let mut transactions = Vec::with_capacity(rows.len());
     for row in rows {
-        transactions.push(stored_sealed_transaction(row)?);
+        match stored_sealed_transaction(row) {
+            Ok(transaction) => transactions.push(transaction),
+            // A row this server can no longer read never stalls the queue:
+            // it is settled on its own, and the run goes again from it.
+            Err(_) => {
+                settle_undecodable_sealed(state, row).await?;
+                return Ok(false);
+            }
+        }
     }
     let batch = FederatedSealedBatchV1 {
         version: kutup_chat_proto::SEALED_FEDERATION_VERSION,
@@ -1178,6 +1186,22 @@ async fn send_sealed_singles(
     Ok(true)
 }
 
+/// [`crate::federation_stream_control::settle_undecodable`] for a sealed row.
+async fn settle_undecodable_sealed(
+    state: &AppState,
+    row: &SealedFederationOutboxRow,
+) -> AppResult<bool> {
+    crate::federation_stream_control::settle_undecodable(
+        state,
+        kutup_chat_proto::FederationStreamV1::Sealed,
+        row.id,
+        &row.destination,
+        row.sequence,
+        row.attempts,
+    )
+    .await
+}
+
 fn stored_sealed_transaction(
     row: &SealedFederationOutboxRow,
 ) -> AppResult<FederatedSealedTransactionV1> {
@@ -1207,7 +1231,17 @@ async fn attempt_sealed_single(
 ) -> (AppResult<AppResult<FederatedSealedOutcome>>, bool) {
     let attempt = async {
         let federation = configured_stack(state)?;
-        let transaction = stored_sealed_transaction(row)?;
+        let Ok(transaction) = stored_sealed_transaction(row) else {
+            let settled = settle_undecodable_sealed(state, row).await?;
+            return Ok((
+                Ok(if settled {
+                    FederatedSealedOutcome::Refused
+                } else {
+                    FederatedSealedOutcome::Pending
+                }),
+                true,
+            ));
+        };
         let body = serde_json::to_vec(&transaction)
             .map_err(|error| AppError::internal(format!("encode sealed transaction: {error}")))?;
         let sent = federation
@@ -1608,8 +1642,23 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
         return withdraw_plain(state, &row).await;
     }
 
-    let message: SendMessagesRequest = serde_json::from_value(row.request.clone())
-        .map_err(|error| AppError::internal(format!("invalid federation outbox: {error}")))?;
+    // A row this server can no longer read never stalls the queue.
+    let Ok(message) = serde_json::from_value::<SendMessagesRequest>(row.request.clone()) else {
+        let settled = crate::federation_stream_control::settle_undecodable(
+            state,
+            kutup_chat_proto::FederationStreamV1::Chat,
+            row.id,
+            &row.destination,
+            row.sequence,
+            row.attempts,
+        )
+        .await?;
+        return Ok(if settled {
+            FederatedSendOutcome::Withdrawn
+        } else {
+            FederatedSendOutcome::Pending
+        });
+    };
     let sequence = u64::try_from(row.sequence)
         .map_err(|_| AppError::internal("invalid federation sequence"))?;
     let transaction = FederatedChatTransaction {

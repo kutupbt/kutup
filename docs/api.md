@@ -5002,17 +5002,17 @@ refresh/re-encrypt or replay the missing retained transaction.
 
 ### POST /api/fed/chat/stream-control
 
-A control message on one of the origin's sequenced streams (plain Chat sends
-or media offers): it uses up one sequence with nothing delivered. Signed
+A control message on one of the origin's sequenced streams (plain Chat sends,
+sealed sends or media offers): it uses up one sequence with nothing delivered. Signed
 `FederatedStreamControlV1` `{ "version": 1, "control", "transactionId",
-"stream": "chat"|"media", "sequence", "origin", "destination", "data"? }`
+"stream": "chat"|"media"|"sealed", "sequence", "origin", "destination", "data"? }`
 (at most 1 KiB), naming no sender, recipient or payload. `control` is a
 `u16` type code, so a new one needs no new version:
 
 | Code | Meaning |
 |---|---|
 | `0` | Invalid: `400 invalid` |
-| `1` | Withdrawn: the transaction never left, as its sending account turned its federation off (docs/plans/server-personal-data.md). No `data` |
+| `1` | Withdrawn: the transaction never left, as its sending account turned its federation off (docs/plans/server-personal-data.md), or as the origin can no longer read its queued row (settled `undecodable`). No `data` |
 | `2..=0x7fff` | Skip-safe: a destination that doesn't know the code still uses the sequence up and answers as for a withdrawal |
 | `0x8000..=0xffff` | Must be understood: a destination that doesn't know the code answers `400 unknownStreamControl` and does not use the sequence up |
 
