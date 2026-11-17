@@ -1455,6 +1455,11 @@ its fix is in the lockfile. Recorded 2026-10-17.
   bindings generator, only with `kutup-client-ffi`'s `bindgen` feature; no
   shipped binary links it; uniffi 0.32.2 still uses askama 0.16, so revisit
   at the next uniffi release).
+- **`chrono`** (RUSTSEC-2026-0543, 2026-11: unmaintained, not a
+  vulnerability, no fixed release): it reaches Pass's vendored `keepass`
+  0.15.2 (`kutup-pass`, `kutup-pass-wasm`, `kutup-cli`) and `kutup-cli`
+  directly. **To do:** move the vendored `keepass` and the CLI from `chrono`
+  to `time` (as the server already uses), then drop the ignore.
 - **`libcrux-chacha20poly1305` 0.0.7** (fixed in 0.0.8; a panic on an
   overlong ciphertext buffer, a crash rather than a disclosure). Not in RustSec,
   so `cargo deny` doesn't see it. It reached `kutup-chat-core` and
