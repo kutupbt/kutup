@@ -193,7 +193,7 @@ Busy-only links need nothing.
 
 ### 5. Numbers and checks
 
-- **Migration:** one, at 20261201000000 or later.
+- **Migration:** none after the wipe. The main session decided on 2026-11-18 that E3's tables (and E4's) go into the W7 baseline before the wipe, in their final names and types, coordinated with the second session; see calendar-e4.md, "Decisions". What follows lists those tables.
   - Adds `calendar_keys`, `calendar_member_shares`, `calendar_invitations`,
     `calendar_member_tombstones` and `calendar_links`, plus the
     `share_busy` column.
@@ -201,7 +201,7 @@ Busy-only links need nothing.
     from them.
   - No data migration is needed: it is a fresh table after the wipe.
 - **Other numbers:**
-  - specs 200–206;
+  - specs 201–206 (renumbered 2026-11-18: the Sieve editor holds 200);
   - one new label (`kutup/calendar/link/v1`), with the `ALL` array length
     updated;
   - no new account-record purpose or scope (it reuses `calendarSettings`,
