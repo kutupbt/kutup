@@ -505,6 +505,16 @@ account recovery; it does not claim that an authenticated session can display
 or rotate the stored phrase. A future phrase-rotation product needs a separate
 security design, backend contract, and word-by-word confirmation flow.
 
+### CI · browser specs on the server's own database role
+
+CI's single-server browser jobs (Mail, and Drive, Office and Chat) start the
+stack without `POSTGRES_APP_USER`, so they run with one database role. The
+app role, which makes the security and admin logs append-only for the
+server (self-hosting.md, "Database roles"), is exercised only by the backup
+gate (`tests/chat-backup/compose.yml`) and the isolated e2e stack, and by
+the full test before a release (docs/plans/wipe-final-test.md). Setting it
+in those jobs' env covers it on every master run.
+
 ### Mail · bounces of shared-mailbox sends
 
 A bounce is matched to the message it answers by the Message-ID's keyed hash

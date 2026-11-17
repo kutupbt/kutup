@@ -733,8 +733,7 @@ checked at each restore drill; the rest can be made again.
 | What | Where | Without it | Offline copy |
 |---|---|---|---|
 | age identity (`kutup-backup.key`) | never on the server | no backup can be read | **yes** (the only copy is offline) |
-| `OPAQUE_SETUP_KEYS` (or the file `OPAQUE_SETUP_KEYS_FILE` names) | `.env` | no one signs in with a password; everyone recovers with their recovery phrase | **yes** |
-| `SERVER_DATA_KEYS` (with L1, docs/plans/server-personal-data.md) | `.env` | every sealed server field and the destruction replay are lost | **yes**, once L1 lands |
+| `OPAQUE_SETUP_KEYS` (or the file `OPAQUE_SETUP_KEYS_FILE` names) | `.env` | no one signs in with a password (everyone recovers with their recovery phrase), and every account data key it wraps is lost with the sealed server fields and the destruction replay (docs/plans/server-personal-data.md, L1) | **yes** |
 | `MAIL_DKIM_KEYS` | `.env` | custom domains' DKIM keys stay sealed; each domain needs new DKIM records | **yes**, with custom domains |
 | `MAIL_FORWARDING_KEYS` | `.env` | end-to-end forwardings stop (Outdated) until re-enabled | **yes**, with forwarding |
 | `FEDERATION_SIGNING_KEY` (only when you set one; otherwise the identity is in the database) | `.env` | other servers no longer recognise this one | **yes**, when set |

@@ -1,0 +1,11 @@
+# Chat on one server: direct chats, media, search, contacts, and groups
+# switched off (spec 39: the stack runs with CHAT_GROUPS unset).
+# Specs 41 and 42 need the SFU (docker compose --profile sfu); without it they skip with a message.
+specs/31-chat.spec.ts
+specs/37-chat-direct-media.spec.ts
+specs/39-chat-groups-off.spec.ts
+specs/41-chat-meetings.spec.ts
+specs/42-chat-calls.spec.ts
+specs/46-chat-frozen-tab.spec.ts
+specs/48-chat-search.spec.ts
+specs/72-chat-save-contact.spec.ts

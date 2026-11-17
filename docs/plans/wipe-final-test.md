@@ -1,6 +1,6 @@
 # The final pre-wipe test: runbook
 
-Status: proposed (third session, 2026-11-18), for the main session's review.
+Status: approved 2026-11-18 by the main session (Q-1: E1 required; Q-2: suite files and a master-only CI job; F-2 to F-4 done on this branch; F-5 comes with #413).
 
 This is the one full test the wipe waits for (the user's rule since
 2026-11-09: build every pre-wipe feature, then test once, then wipe). It lists, in order,
@@ -16,7 +16,10 @@ worktree root (one lane per session: 1 main, 2 second, 3 third).
 ## 0. Before the test: the user's prerequisites
 
 These can't be done by a session. The test can start without them, but
-§6 (restore drill) and §8 (deploy) can't run until they are done.
+§6 (restore drill) and §8 (deploy) can't run until they are done. **The
+wipe date waits on U1–U3**: the staging drill E1 (§6.1) is required before
+the wipe, and it needs the backup bucket, the age key and the scratch
+bucket.
 
 | # | What | Why | Who |
 |---|---|---|---|
@@ -114,18 +117,8 @@ policy (§5.4 sorts them).
 | 1 / P | C4 | `scripts/gate.sh browser webkit` (190–192 on WebKit) | 191 and 192 pass (190 skips by design); each spec's `playback path` annotation recorded in §9 | 10 min |
 | 1 / P | C5 | `KUTUP_LIVE_SERVER=http://<P backend IP>:3000 KUTUP_LIVE_DATABASE_URL=… scripts/gate.sh live pass` | exits 0 | 10 min |
 | 2 / T | C6 | `scripts/gate.sh browser chat-backup` (10) | all pass | 30 min |
-| 2 / T | C7 | **The specs in no suite and no CI job** (§10 F-1; 37 here, as 39 runs in C8). The command is under this table (25, 32, 34 and 161 belong to the two-server gate, B2). | all pass (41 and 42 need the SFU: `--profile sfu` on T, or they skip with a message) | 60 min |
-| 2 / T | C8 | spec 39 (groups off): restart T's backend only, with `CHAT_GROUPS=false`, run `specs/39-chat-groups-off.spec.ts`, then set it back | passes | 5 min |
+| 2 / T | C7 | Restart T's backend with `CHAT_GROUPS` unset (spec 39 checks groups off), then `KUTUP_CLI=$PWD/target/debug/kutup scripts/gate.sh browser drive office-docs chat account-misc` (38 specs, §10 F-1; build the CLI first with `cargo build -p kutup-cli`, or spec 114 skips) | all pass, 114 not skipped; 41 and 42 run only with T up under `--profile sfu`, else they skip with a message (record which) | 60 min |
 | 3 | C9 | The CLI against Stack P, from lane 3 (no stack of its own): `KUTUP_SERVER=https://drive.localhost:<P port> KUTUP_INSECURE_TLS=1` with `scripts/verify-cli.sh`, `scripts/verify-mk-rotation.sh`, `scripts/verify-yjs-sync.sh` and `E2E_PSQL=… scripts/verify-cli-account-head.sh` | each exits 0 | 20 min |
-
-C7, from `tests/e2e` (bash):
-
-```sh
-npm exec -- playwright test --project=chromium $(
-  comm -23 <(ls specs/*.spec.ts | sort) \
-           <(sed -e 's/#.*//' -e '/^\s*$/d' -e 's/[[:space:]]*$//' suites/*.txt | sort -u) |
-  grep -vE '/(25|32|34|161|39)-|screenshots')
-```
 
 Phase C takes about 100 min (lane 1 is the long one); lanes 2 and 3 finish inside it.
 
@@ -221,24 +214,21 @@ fixed in self-hosting.md, not remembered.
 The drill runs with `OUTBOUND_DELIVERY=false` and Stalwart in recovery
 mode, so it never shows that a restored server federates and sends mail
 once delivery is back on. That needs two servers that are not production.
-**No script exists for it** (§10 F-3). By hand, lane 2, 45 min:
+`scripts/restore-federation-check.sh` does it on the two-server harness, in
+lane 2 (not beside B2, which uses the same project), 30 min:
 
-1. `scripts/dev-chat-federation-up.sh` (lane 2's project): two servers, A
-   and B, each with its own federation identity.
-2. Accounts on both (CLI or browser). Chat A→B, B→A; share a Drive folder A→B.
-3. Back up A's database the way §6.1 does (`backup-postgres.sh` against
-   lane 2's backup bucket), and stop A.
-4. Recreate A's database volume and restore the dump; start A with
-   `OUTBOUND_DELIVERY=false`. **Pass:**
-   - A starts;
-   - B's log shows no request from A;
-   - sends queued on A stay queued.
-5. Restart A with `OUTBOUND_DELIVERY=true`. **Pass:**
-   - the queued sends arrive at B;
-   - a new A→B message arrives;
-   - B accepts A without re-pairing (same identity);
-   - the shared folder opens on B.
-6. Mail between two servers needs two Stalwarts and DNS: not covered here.
+1. both servers up, accounts on both (the federation gate's setup phase);
+2. B unreachable, A queues sends to B;
+3. A's database dumped, dropped and restored;
+4. A started with `OUTBOUND_DELIVERY=false`: for 45 s its queued rows and
+   their attempts don't move, and B records no request;
+5. A with delivery on: the queued sends arrive and B accepts A (the
+   verify-retry phase); A's discovery names the same identity key
+   throughout.
+
+**Pass:** it exits 0.
+
+Mail between two servers needs two Stalwarts and DNS: not covered here.
    The mail gate (B3) covers sending to an outside sink. Production's first
    real send (§8.6) covers a restored Stalwart's DKIM.
 
@@ -387,28 +377,23 @@ the tree re-runs:
   - Chat: 31, 37, 39, 41, 42, 46, 48, 72;
   - account, admin and the rest: 01, 28, 35, 44, 51, 52, 61, 73, 75.
 
-  Only a whole-folder `playwright test` reaches them. C7 runs them here.
-  Before the wipe they should get suite files (`drive.txt`, `chat.txt`,
-  `office-docs.txt`) and a CI job, or they rot again.
+  Done on this branch: `tests/e2e/suites/drive.txt`, `office-docs.txt`,
+  `chat.txt` and `account-misc.txt` list them, C7 runs them, and CI's new
+  `workspace-browser` job runs them on master and on demand (no PR
+  minutes), beside the Mail browser job. Only the four two-server specs
+  (B2's) and `screenshots` stay outside the suites.
 - **F-2. self-hosting.md, "What a restore needs"**, lists
   `SERVER_DATA_KEYS (with L1)`. L1 decided against a second list: the
   account data keys are wrapped under `OPAQUE_SETUP_KEYS`
-  (server-personal-data.md, "Where the key lives"). The row should go, and
-  the `OPAQUE_SETUP_KEYS` row should say "and every account data key".
-- **F-3. No script for "a restored server delivers again"** (§6.2). A
-  script for it on the two-server stack (say, test-restore-outbound.sh) would make it
-  repeatable.
+  (server-personal-data.md, "Where the key lives"). Done on this branch:
+  the row is gone, and the `OPAQUE_SETUP_KEYS` row says what it also
+  wraps.
+- **F-3. "A restored server delivers again"** (§6.2) is now
+  `scripts/restore-federation-check.sh` (written, not run until the test).
 - **F-4. CI's single-server browser jobs run without the app role**, so
   `POSTGRES_APP_USER` is exercised only by the backup gate and the isolated
-  e2e stack (Stack P here). Setting it in the mail-browser job's env would
-  cover it on every master run.
+  e2e stack (Stack P here). A roadmap entry ("CI · browser specs on the
+  server's own database role") keeps it.
 - **F-5.** docs/plans/restore-drill-and-alerting.md is cited by
-  self-hosting.md and server-personal-data.md but is not on `wipe/w7`.
-
-## Questions
-
-- **Q-1.** Is E1 (the staging drill before the wipe) required, or is E2
-  (production, within a day after) enough? I'd require E1: a failed restore
-  found after the wipe is found with real data at stake.
-- **Q-2.** F-1: add the suite files and the CI job before the wipe (one
-  small PR, then C7 becomes `gate.sh browser drive chat office-docs`)?
+  self-hosting.md and server-personal-data.md but is not on `wipe/w7`; it
+  comes into the final tree with plans PR #413.
