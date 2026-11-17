@@ -7,6 +7,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { initI18n, mergeMessages } from '@kutup/i18n'
 import { configureClient } from '@kutup/session/client'
+import { registerFilesSignOutCleanup } from '@kutup/files/signOutCleanup'
 import { App } from './App'
 import { WebAssemblyGate } from '@kutup/ui/components/webassembly-gate'
 import en from './locales/en.json'
@@ -17,6 +18,7 @@ import editorsTr from '@kutup/editors/locales/tr.json'
 // The file page's strings (@kutup/editors) come with it.
 initI18n({ en: mergeMessages(en, editorsEn), tr: mergeMessages(tr, editorsTr) })
 configureClient({ clientType: 'web-drive' })
+registerFilesSignOutCleanup()
 
 const queryClient = new QueryClient({
   defaultOptions: {

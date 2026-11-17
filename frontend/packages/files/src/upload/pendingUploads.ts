@@ -98,6 +98,12 @@ export const pendingUploads = {
     await run('readwrite', (store) => store.delete(fileId))
   },
 
+  /** Every upload of `owner` (sign-out). */
+  async removeOwner(owner: string): Promise<void> {
+    const all = (await run<PendingUpload[]>('readonly', (store) => store.index('owner').getAll(owner))) ?? []
+    for (const upload of all) await pendingUploads.remove(upload.fileId)
+  },
+
   /** This account's, newest first; ones the server has reaped by now are dropped. */
   async list(owner: string, now = Date.now()): Promise<PendingUpload[]> {
     const all = (await run<PendingUpload[]>('readonly', (store) => store.index('owner').getAll(owner))) ?? []

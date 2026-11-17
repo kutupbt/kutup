@@ -3,7 +3,8 @@ import api from './client'
 import { deviceHeader, ownAccount, publishNextManifest } from './devices'
 import { clearPersisted } from './persistedStore'
 import { broadcastLogout } from './sessionSync'
-import { clearSession, getSession } from './store'
+import { clearSession, getSession, type Session } from './store'
+import { forgetAccountRecords } from './accountHead'
 
 /** How long a sign-out waits for its device's removal. */
 const REVOKE_WAIT_MS = 2000
@@ -46,13 +47,47 @@ export async function signOut(): Promise<boolean> {
   } catch {
     // Unreachable or already ended: the local sign-out still happens.
   }
-  const accountId = getSession()?.accountId
+  // What this origin keeps for the account goes with the sign-in
+  // (docs/plans/api-surface.md §6, decision 10): its names are computed
+  // while the session still holds the keys they derive from.
+  const session = getSession()
+  const forgetting = session ? clearAccountData(session) : Promise.resolve()
   broadcastLogout()
   clearPersisted()
   clearSession()
   clearAccountLists()
-  if (accountId) await clearAccountStorage(accountId)
+  await forgetting
   return confirmed
+}
+
+/** What a package that keeps per-account data on this origin removes at sign-out. */
+export type SignOutCleanup = (session: Session) => Promise<void>
+
+const cleanups: SignOutCleanup[] = []
+
+/**
+ * Registers a package's per-account cleanup (the Drive upload resumes, the
+ * ciphertext cache, Mail's search index), run by every sign-out. Each app
+ * registers the ones of the packages it uses at boot, since a sign-out must
+ * clear what an earlier page load left even when this one never opened it.
+ */
+export function registerSignOutCleanup(cleanup: SignOutCleanup): void {
+  if (!cleanups.includes(cleanup)) cleanups.push(cleanup)
+}
+
+/**
+ * Everything this origin keeps for `session`'s account but the
+ * anti-rollback anchors: its records copies, its `kutup.…:<accountId>` keys
+ * and databases, and what the registered cleanups own. Best effort per
+ * part: one failing never keeps the others.
+ */
+export async function clearAccountData(session: Session): Promise<void> {
+  const parts: Promise<unknown>[] = [
+    forgetAccountRecords(session),
+    clearAccountStorage(session.accountId),
+    ...cleanups.map((cleanup) => cleanup(session)),
+  ]
+  await Promise.all(parts.map((part) => part.catch(() => undefined)))
 }
 
 /**

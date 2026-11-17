@@ -1020,7 +1020,13 @@ count them as unreachable, never as a failed check.
 - **Preferences are one JSON value per app** (`kutup.<app>.prefs`), as
   `kutup-calendar-prefs` already is. That is 10 chat keys, 4 mail keys and
   3 calendar keys fewer.
-- **Sign-out clears** everything per-account that is not an anchor;
+- **Sign-out clears** everything per-account that is not an anchor
+  (`clearAccountData`, computed while the session still holds its keys):
+  its `kutup.…:<accountId>` keys and databases, its rows in the shared
+  stores (records copies by the head's name prefix, the ciphertext cache by
+  its account scope, interrupted uploads by owner) and Mail's search index
+  (its HMAC name). Packages register their part at each app's boot
+  (`registerSignOutCleanup`), so what an earlier page load left goes too;
   anchors go too only when the account itself is being deleted
   (closing or deletion flows).
   Today it clears 4 of the 20-odd per-account names (inventory); the rest

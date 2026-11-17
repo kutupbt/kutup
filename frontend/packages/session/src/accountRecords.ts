@@ -161,6 +161,8 @@ export interface RecordsStore {
   /** Writes what changed since the copy was loaded (`reset`: drop every row first). */
   save(copy: string, cursor: number, changes: { puts: [string, StoredRecord][]; deletes: string[]; reset: boolean }): Promise<void>
   clear(): Promise<void>
+  /** Drops every copy whose name starts with `prefix` (one account's: sign-out). */
+  clearPrefix(prefix: string): Promise<void>
 }
 
 export function memoryRecordsStore(): RecordsStore {
@@ -179,6 +181,10 @@ export function memoryRecordsStore(): RecordsStore {
     },
     clear: () => {
       copies.clear()
+      return Promise.resolve()
+    },
+    clearPrefix: (prefix) => {
+      for (const copy of [...copies.keys()]) if (copy.startsWith(prefix)) copies.delete(copy)
       return Promise.resolve()
     },
   }
@@ -263,6 +269,22 @@ export function indexedDbRecordsStore(): RecordsStore {
         const tx = handle.transaction([RECORDS, CURSORS], 'readwrite')
         tx.objectStore(RECORDS).clear()
         tx.objectStore(CURSORS).clear()
+        await done(tx)
+      } catch {
+        // Nothing more to do: a copy left behind is checked before any use.
+      }
+    },
+    async clearPrefix(prefix) {
+      const handle = await db()
+      await fallback.clearPrefix(prefix)
+      if (!handle) return
+      try {
+        const tx = handle.transaction([RECORDS, CURSORS], 'readwrite')
+        // Copy names sort as strings: every name with the prefix lies
+        // between it and the prefix followed by the highest code unit.
+        const names = IDBKeyRange.bound(prefix, `${prefix}\uffff`)
+        tx.objectStore(RECORDS).delete(IDBKeyRange.bound([prefix, ''], [`${prefix}\uffff`, []]))
+        tx.objectStore(CURSORS).delete(names)
         await done(tx)
       } catch {
         // Nothing more to do: a copy left behind is checked before any use.

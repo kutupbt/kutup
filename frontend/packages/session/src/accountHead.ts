@@ -555,6 +555,11 @@ export class AccountHeadClient {
     return copy
   }
 
+  /** What every copy of this account's records is named with (sign-out drops them). */
+  copyPrefix(): string {
+    return `${this.engine.localStateName()}:`
+  }
+
   private copyName(scope: RecordScopeName): string {
     return `${this.engine.localStateName()}:${scope}`
   }
@@ -801,4 +806,14 @@ function watchSignOut(): void {
   subscribe(() => {
     if (!getSession() && clients.size > 0) closeAccountHeads()
   })
+}
+
+/**
+ * Drops this origin's copies of `session`'s records (sign-out,
+ * docs/plans/api-surface.md §6): the head's anchors stay.
+ */
+export async function forgetAccountRecords(session: Parameters<typeof accountHead>[0]): Promise<void> {
+  const client = await accountHead(session)
+  sharedRecords ??= indexedDbRecordsStore()
+  await sharedRecords.clearPrefix(client.copyPrefix())
 }
