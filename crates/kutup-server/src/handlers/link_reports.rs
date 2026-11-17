@@ -555,7 +555,7 @@ pub async fn unblock_link(
 mod tests {
     #[test]
     fn reasons_match_the_schema() {
-        let schema = include_str!("../../migrations/20261013000000_baseline.up.sql");
+        let schema = include_str!("../../migrations/20261112000000_baseline.up.sql");
         for reason in super::REASONS {
             assert!(schema.contains(&format!("'{reason}'")), "{reason}");
         }
@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn block_reasons_match_the_schema() {
-        let schema = include_str!("../../migrations/20261109100000_share_controls.up.sql");
+        let schema = include_str!("../../migrations/20261112000000_baseline.up.sql");
         for reason in super::BLOCK_REASONS {
             assert!(schema.contains(&format!("'{reason}'")), "{reason}");
         }

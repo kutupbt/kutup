@@ -16,7 +16,7 @@ use super::{
 };
 
 /// The whole schema (the squashed baseline), applied into a schema of its own.
-const BASELINE: &str = include_str!("../../migrations/20261013000000_baseline.up.sql");
+const BASELINE: &str = include_str!("../../migrations/20261112000000_baseline.up.sql");
 
 #[tokio::test]
 async fn live_identity_trust_policy_and_replay_invariants() {

@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn kinds_and_resolutions_match_the_schema() {
-        let schema = include_str!("../../migrations/20261013000000_baseline.up.sql");
+        let schema = include_str!("../../migrations/20261112000000_baseline.up.sql");
         for value in KINDS.iter().chain(RESOLUTIONS.iter()) {
             assert!(schema.contains(&format!("'{value}'")), "{value}");
         }
