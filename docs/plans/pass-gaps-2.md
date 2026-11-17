@@ -1,6 +1,6 @@
 # Pass: closing gaps 4–7 and 11
 
-Status: plan for review (third session, 2026-11-17). It covers items 4–7 and
+Status: approved by the main session 2026-11-17 (see "Decisions"). Plan by the third session. It covers items 4–7 and
 11 of [`pass-parity.md`](pass-parity.md), "Gaps in priority order". Nothing
 is built. Code starts from `wipe/final` once it is green, and merges after
 the wipe.
@@ -69,9 +69,12 @@ KeePassXC's `dbsettings`:
   - compression on or off.
   - A new `SetVaultConfig` op changes the file's config. `save` keeps
     whatever config the vault carries, which it already does.
-  - Lower bounds refuse weak settings: Argon2 at least 64 MiB and 2
-    iterations, AES-KDF at least 100,000 rounds. The bounds are constants
-    in the core, since they are a format policy, not a server limit.
+  - Lower bounds refuse weak settings. The bounds are admin site settings
+    (`passArgon2MinMemoryMib` 64, `passArgon2MinIterations` 2,
+    `passAesKdfMinRounds` 100,000), read by the client and passed to the
+    core's check.
+  - A vault already below them still opens. It shows a warning and an offer
+    to strengthen.
   - The page warns that slow settings make every device slow to open.
 - **The merge:**
   - meta fields already merge by their changed times;
@@ -140,7 +143,9 @@ KeePassXC's `dbsettings`:
     writes it, through the vendored `keepass` crate's `xml_db::to_xml` (the reader is
     `parse_xml`);
   - **KDBX:** the existing Download.
-  - Both plain formats need the vault's password typed again and a warning
+  - Both plain formats need the account's re-authentication (the
+    `/user/reauth` grant that settings use for sensitive actions, as Proton
+    Pass asks for the account password before export) and a warning
     as KeePassXC gives ("This file is not encrypted. Anyone who gets it can
     read every password in it."). They are built in the worker and saved
     with the browser's download; nothing goes to the server.
@@ -198,3 +203,17 @@ KeePassXC's `dbsettings`:
     and ignore.
   - Without it, a deleted history item can come back from another device's
     copy.
+
+## Decisions (the main session, 2026-11-17)
+
+- **Q-1:** yes. `*`, `-` and quotes now; regular expressions later.
+- **Q-2:** refuse below the minimums. The minimums are admin site settings
+  with the values above as defaults. A vault opened with weaker settings
+  still opens, with a warning and an offer to strengthen.
+- **Q-3:** the account's re-authentication, not the vault password. Many
+  vaults are quick-opened with the key kept in the account, so their owners
+  may not know the vault password. Proton Pass also asks for the account
+  password before an export.
+- **Q-4:** yes, a Kutup custom-data key. Its name and format are written in
+  [`pass.md`](pass.md) when P4 is built, so another implementation can
+  honour it.
