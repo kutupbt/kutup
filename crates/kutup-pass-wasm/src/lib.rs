@@ -244,6 +244,48 @@ impl Vault {
         kutup_pass::export::keepass_xml(&self.db).map_err(js_error)
     }
 
+    /// The entry's fields with references and placeholders resolved
+    /// (`kutup_pass::resolve`), for showing and copying: `[{ key, value,
+    /// fromReference }]`, only for the fields that change. `offsetMinutes`:
+    /// the device's local offset from UTC, for `{DT_*}`.
+    #[wasm_bindgen(js_name = resolvedFields)]
+    pub fn resolved_fields(
+        &self,
+        entry_id: &str,
+        now_ms: f64,
+        offset_minutes: f64,
+    ) -> Result<JsValue, JsValue> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Resolved {
+            key: String,
+            value: String,
+            from_reference: bool,
+        }
+        let entry = self.entry(entry_id)?;
+        let utc = time(now_ms)?;
+        let context = kutup_pass::resolve::Context {
+            local: utc + chrono::Duration::minutes(offset_minutes as i64),
+            utc,
+            unix_seconds: (now_ms / 1000.0).floor().max(0.0) as u64,
+        };
+        let mut out: Vec<Resolved> = entry
+            .fields
+            .iter()
+            .filter(|(_, v)| v.get().contains('{'))
+            .filter_map(|(key, v)| {
+                let value = kutup_pass::resolve::resolve(&self.db, entry, v.get(), &context);
+                (value != *v.get()).then(|| Resolved {
+                    key: key.clone(),
+                    from_reference: kutup_pass::resolve::has_reference(v.get()),
+                    value,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.key.cmp(&b.key));
+        to_js(&out)
+    }
+
     /// An entry's earlier states, oldest first.
     pub fn history(&self, entry_id: &str) -> Result<JsValue, JsValue> {
         to_js(&view::history(&self.db, self.entry(entry_id)?))

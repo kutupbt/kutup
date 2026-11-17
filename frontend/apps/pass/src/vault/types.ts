@@ -46,6 +46,14 @@ export interface EntryView {
   inRecycleBin: boolean
 }
 
+/** A field shown resolved (references and placeholders). */
+export interface ResolvedField {
+  key: string
+  value: string
+  /** It comes from another entry ({REF:…}). */
+  fromReference: boolean
+}
+
 export interface GroupView {
   id: string
   parentId: string | null
@@ -117,7 +125,7 @@ export type Op =
   | { op: 'recycleEntries'; ids: string[] }
   | { op: 'restoreHistory'; id: string; index: number }
   /** Copies beside each entry (KeePassXC's Clone); returns the first copy's id. */
-  | { op: 'cloneEntries'; ids: string[]; titleSuffix: string | null; history: boolean }
+  | { op: 'cloneEntries'; ids: string[]; titleSuffix: string | null; history: boolean; references?: boolean }
   /** Deletes history items (indexes oldest first; null: all), remembered so a merge doesn't bring them back. */
   | { op: 'deleteHistory'; id: string; indexes: number[] | null }
   | { op: 'clearReview'; id: string }

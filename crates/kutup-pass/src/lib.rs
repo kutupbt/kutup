@@ -20,6 +20,7 @@ pub mod kept;
 pub mod merge;
 pub mod otp;
 mod refs;
+pub mod resolve;
 pub mod search;
 pub mod ssh;
 pub mod view;

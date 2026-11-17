@@ -28,7 +28,7 @@ but offers no way to see or change it.
 |---|---|---|---|
 | The database (vault) | 31 | 1 | 8 |
 | Groups (folders) | 9 | 1 | 2 |
-| Entries | 13 | 5 | 4 |
+| Entries | 16 | 4 | 2 |
 | Bulk actions and the entry list | 11 | 1 | 3 |
 | Search | 4 | 2 | 1 |
 | Password generator | 6 | 1 | 0 |
@@ -37,7 +37,7 @@ but offers no way to see or change it.
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **101** | **17** | **37** |
+| **All** | **104** | **16** | **35** |
 
 ## The database (vault)
 
@@ -121,9 +121,9 @@ but offers no way to see or change it.
 | Several URLs | Browser integration, `KP2A_URL_n` | 🟡 | extra URLs are ordinary custom fields (the CSV import makes `KP2A_URL_n`); only `URL` gets an open button |
 | URL schemes (`cmd://`, `ssh://`, `{S:…}` in URLs) | `Entry URL Handling` | 🟡 | `http(s)` opens in a new tab; other schemes are shown, not opened (deliberately: a web page cannot run commands) |
 | URL override | Properties | ❌ | kept |
-| References `{REF:P@I:…}` | `Reference.adoc` "Entry Cross-Reference" | ❌ | shown as the raw text; copying copies `{REF:…}`; nothing makes one |
-| Placeholders (`{USERNAME}`, `{DT_…}`, `{T-CONV:…}`) | `Reference.adoc` "Entry Placeholders" | ❌ | shown as typed |
-| Clone an entry (with references, with history) | Entries → Clone (Ctrl+D) | 🟡 | the entry's Clone button (`CloneDialog.tsx`): " - Clone" after the title (in the person's language), the history if asked; beside the entry, its attachments shared. "Replace with references" waits for item 12; no Ctrl+D yet |
+| References `{REF:P@I:…}` | `Reference.adoc` "Entry Cross-Reference" | ✅ | `crates/kutup-pass/src/resolve.rs` (KeePassXC's rules and test cases): fields T/U/P/A/N/I found by T/U/P/A/N/I/O, ten levels deep; shown and copied resolved, marked "from another entry"; made by Clone |
+| Placeholders (`{USERNAME}`, `{DT_…}`, `{T-CONV:…}`) | `Reference.adoc` "Entry Placeholders" | 🟡 | the standard fields, `{UUID}`, `{TOTP}`, `{S:…}`, `{URL:…}` parts, `{DT_…}` and `{T-CONV:…}`; not `{T-REPLACE-RX:…}`, `{DB_DIR}` or auto-type keys (kept as typed) |
+| Clone an entry (with references, with history) | Entries → Clone (Ctrl+D) | ✅ | the entry's Clone button (`CloneDialog.tsx`): " - Clone" after the title (in the person's language), the history, the user name and password as references, each if asked; beside the entry, its attachments shared. No Ctrl+D (keyboard shortcuts are their own gap) |
 | "Exclude from reports" (quality check) | Properties → Exclude | ✅ | a switch in the entry editor; the report and `is:weak` leave such entries out |
 | Custom data, properties (UUID, times) | Properties tab | 🟡 | created and modified times shown; the rest kept |
 | Merge review marks | (none) | ✅ | beyond KeePassXC: entries changed on two devices are marked, compared against history and marked reviewed (`EntryDetail.tsx`, spec 77) |
@@ -289,8 +289,7 @@ What people hit first, then what blocks moving from KeePassXC:
 11. ~~**Export and import**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md)
     P5a, P5b): CSV and KeePass XML out; KeePass XML, Bitwarden JSON, 1PUX
     and Proton Pass in.
-12. **References and placeholders**: resolve `{REF:…}` when showing and
-    copying, at least `{REF:U/P@I:…}`; the common placeholders.
+12. ~~**References and placeholders**~~: done ([`pass-gaps-3.md`](pass-gaps-3.md) B1).
 13. ~~**Built-in KeePass icons** and colours, group notes~~: done
     ([`pass-gaps-3.md`](pass-gaps-3.md) A3).
 14. **A CLI for entries** (`kutup pass ls|show|clip|add|edit|generate`),

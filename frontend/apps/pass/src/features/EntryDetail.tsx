@@ -10,7 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { copyText } from '@kutup/ui/lib/clipboard'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import type { VaultSession } from '../sync/vaultSession'
-import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView } from '../vault/types'
+import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView, type ResolvedField } from '../vault/types'
 import { CloneDialog } from './CloneDialog'
 import { HistoryDialog } from './HistoryDialog'
 import { TotpQrDialog } from './TotpQrDialog'
@@ -52,6 +52,31 @@ function SecretValue({ value, label }: { value: string; label: string }) {
       <span className="font-mono">{shown ? value : '•'.repeat(Math.min(Math.max(value.length, 8), 24))}</span>
     </Row>
   )
+}
+
+/** The entry's fields resolved in the worker; refreshed when the vault changes. */
+function useResolvedFields(session: VaultSession, entry: EntryView): Map<string, ResolvedField> {
+  const [resolved, setResolved] = useState<Map<string, ResolvedField>>(new Map())
+  const hasBraces = entry.fields.some((f) => f.value.includes('{'))
+  const version = session.getState().view
+  useEffect(() => {
+    if (!hasBraces) {
+      setResolved(new Map())
+      return
+    }
+    let live = true
+    void session
+      .vault()
+      .resolvedFields(entry.id)
+      .then(
+        (fields) => live && setResolved(new Map(fields.map((f) => [f.key, f]))),
+        () => live && setResolved(new Map()),
+      )
+    return () => {
+      live = false
+    }
+  }, [session, entry, hasBraces, version])
+  return resolved
 }
 
 function OtpRow({ session, entryId, uri }: { session: VaultSession; entryId: string; uri: string | null }) {
@@ -138,12 +163,18 @@ export function EntryDetail({
   const [cloning, setCloning] = useState(false)
   const attachInput = useRef<HTMLInputElement>(null)
   const canEdit = session.canEdit
-  const title = fieldValue(entry, 'Title') || t('entry.untitled')
-  const userName = fieldValue(entry, 'UserName')
-  const password = fieldValue(entry, 'Password')
-  const url = fieldValue(entry, 'URL')
-  const notes = fieldValue(entry, 'Notes')
-  const custom = entry.fields.filter((f) => !(STANDARD_FIELDS as readonly string[]).includes(f.key) && f.key !== 'otp')
+  const resolved = useResolvedFields(session, entry)
+  // What is shown and copied: references and placeholders resolved.
+  const shown = (key: string) => resolved.get(key)?.value ?? fieldValue(entry, key)
+  const labelOf = (key: string, label: string) => (resolved.get(key)?.fromReference ? `${label} · ${t('detail.fromReference')}` : label)
+  const title = shown('Title') || t('entry.untitled')
+  const userName = shown('UserName')
+  const password = shown('Password')
+  const url = shown('URL')
+  const notes = shown('Notes')
+  const custom = entry.fields
+    .filter((f) => !(STANDARD_FIELDS as readonly string[]).includes(f.key) && f.key !== 'otp')
+    .map((f) => ({ ...f, value: shown(f.key) }))
   const groups = view.groups.filter((g) => !g.inRecycleBin)
   const safeUrl = /^https?:\/\//i.test(url) ? url : null
   const picture = entry.customIcon ? (iconSources(view).get(entry.customIcon) ?? null) : null
@@ -246,7 +277,7 @@ export function EntryDetail({
         <dl>
           {userName ? (
             <Row
-              label={t('entry.userName')}
+              label={labelOf('UserName', t('entry.userName'))}
               actions={
                 <Button variant="ghost" size="icon" onClick={() => void copyText(userName).then(() => toast.success(t('detail.copied', { what: t('entry.userName') })))} aria-label={t('detail.copy', { what: t('entry.userName') })}>
                   <Copy />
@@ -256,11 +287,11 @@ export function EntryDetail({
               {userName}
             </Row>
           ) : null}
-          {password ? <SecretValue value={password} label={t('entry.password')} /> : null}
+          {password ? <SecretValue value={password} label={labelOf('Password', t('entry.password'))} /> : null}
           <OtpRow session={session} entryId={entry.id} uri={/^otpauth:\/\/totp\//i.test(fieldValue(entry, 'otp')) ? fieldValue(entry, 'otp') : null} />
           {url ? (
             <Row
-              label={t('entry.url')}
+              label={labelOf('URL', t('entry.url'))}
               actions={
                 safeUrl ? (
                   <Button variant="ghost" size="icon" asChild>
@@ -276,11 +307,11 @@ export function EntryDetail({
           ) : null}
           {custom.map((f) =>
             f.protected ? (
-              <SecretValue key={f.key} value={f.value} label={f.key} />
+              <SecretValue key={f.key} value={f.value} label={labelOf(f.key, f.key)} />
             ) : (
               <Row
                 key={f.key}
-                label={f.key}
+                label={labelOf(f.key, f.key)}
                 actions={
                   <Button variant="ghost" size="icon" onClick={() => void copyText(f.value).then(() => toast.success(t('detail.copied', { what: f.key })))} aria-label={t('detail.copy', { what: f.key })}>
                     <Copy />

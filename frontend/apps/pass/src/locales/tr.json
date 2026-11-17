@@ -221,7 +221,8 @@
     "excludeFromReportsHint": "Güvenlik raporu bu kaydı dahil etmez (KeePass'in kalite denetimi kapalı).",
     "colours": "Renkler",
     "foregroundColor": "Metin",
-    "backgroundColor": "Arka plan"
+    "backgroundColor": "Arka plan",
+    "referenceNote": "Başka bir kayda başvuruyor: kasa o kaydın değerini gösterir ve kopyalar."
   },
   "detail": {
     "edit": "Düzenle",
@@ -255,7 +256,8 @@
     "history_one": "{{count}} önceki sürüm",
     "history_other": "{{count}} önceki sürüm",
     "expired": "Bu kaydın süresi {{when}} tarihinde doldu.",
-    "clipboardNotCleared": "Kopyalanan gizli bilgi panodan silinemedi: pano erişimine izin verin ya da panoyu kendiniz temizleyin."
+    "clipboardNotCleared": "Kopyalanan gizli bilgi panodan silinemedi: pano erişimine izin verin ya da panoyu kendiniz temizleyin.",
+    "fromReference": "başka bir kayıttan"
   },
   "history": {
     "title": "Önceki sürümler",
@@ -573,7 +575,8 @@
     "copyHistory": "Geçmişi de kopyala",
     "submit": "Kopyala",
     "done_one": "Kayıt kopyalandı",
-    "done_other": "{{count}} kayıt kopyalandı"
+    "done_other": "{{count}} kayıt kopyalandı",
+    "references": "Kullanıcı adı ve parola için asıl kayda başvuru kullan"
   },
   "export": {
     "open": "Dışa aktar…",

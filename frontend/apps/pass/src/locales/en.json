@@ -221,7 +221,8 @@
     "excludeFromReportsHint": "The security report leaves this entry out (KeePass's quality check off).",
     "colours": "Colours",
     "foregroundColor": "Text",
-    "backgroundColor": "Background"
+    "backgroundColor": "Background",
+    "referenceNote": "Refers to another entry: the vault shows and copies that entry's value."
   },
   "detail": {
     "edit": "Edit",
@@ -255,7 +256,8 @@
     "history_one": "{{count}} earlier version",
     "history_other": "{{count}} earlier versions",
     "expired": "This entry expired on {{when}}.",
-    "clipboardNotCleared": "Copied secrets could not be cleared from the clipboard: allow clipboard access, or clear it yourself."
+    "clipboardNotCleared": "Copied secrets could not be cleared from the clipboard: allow clipboard access, or clear it yourself.",
+    "fromReference": "from another entry"
   },
   "history": {
     "title": "Earlier versions",
@@ -573,7 +575,8 @@
     "copyHistory": "Copy the history too",
     "submit": "Clone",
     "done_one": "Entry cloned",
-    "done_other": "{{count}} entries cloned"
+    "done_other": "{{count}} entries cloned",
+    "references": "Use references to the original's user name and password"
   },
   "export": {
     "open": "Export…",

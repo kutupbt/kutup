@@ -8,10 +8,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import type { VaultSession } from '../sync/vaultSession'
 
 /**
- * Clones entries as KeePassXC's dialog does (docs/plans/pass-gaps-2.md P4):
- * " - Clone" after the title (on by default) and the history (off). Its
- * "replace user name and password with references" waits for references
- * to be resolved (pass-parity item 12), so no raw {REF:…} is ever copied.
+ * Clones entries as KeePassXC's dialog does (docs/plans/pass-gaps-2.md P4,
+ * pass-gaps-3.md B1): " - Clone" after the title (on by default), the
+ * history, and the user name and password as references to the original.
  */
 export function CloneDialog({
   session,
@@ -31,6 +30,7 @@ export function CloneDialog({
   const open = ids.length > 0
   const [suffix, setSuffix] = useState(true)
   const [history, setHistory] = useState(false)
+  const [references, setReferences] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
@@ -50,7 +50,7 @@ export function CloneDialog({
             setPending(true)
             setError(null)
             session
-              .apply({ op: 'cloneEntries', ids, titleSuffix: suffix ? t('clone.suffix') : null, history })
+              .apply({ op: 'cloneEntries', ids, titleSuffix: suffix ? t('clone.suffix') : null, history, references })
               .then(
                 (applied) => {
                   toast.success(t('clone.done', { count: ids.length }))
@@ -72,6 +72,12 @@ export function CloneDialog({
             <Checkbox id={`${id}-history`} checked={history} onCheckedChange={(v) => setHistory(v === true)} />
             <label htmlFor={`${id}-history`} className="text-sm">
               {t('clone.copyHistory')}
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id={`${id}-references`} checked={references} onCheckedChange={(v) => setReferences(v === true)} />
+            <label htmlFor={`${id}-references`} className="text-sm">
+              {t('clone.references')}
             </label>
           </div>
           {error ? <Alert variant="error">{error}</Alert> : null}

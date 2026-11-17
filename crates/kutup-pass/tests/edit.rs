@@ -1525,6 +1525,7 @@ fn entries_are_cloned_beside_themselves() {
             ids: vec![bank.clone(), "nope".into()],
             title_suffix: None,
             history: false,
+            references: false,
         },
         at(6)
     )
@@ -1537,6 +1538,7 @@ fn entries_are_cloned_beside_themselves() {
             ids: vec![bank.clone(), mail.clone()],
             title_suffix: Some(" - Kopya".into()),
             history: true,
+            references: false,
         },
         7,
     )
@@ -1570,6 +1572,7 @@ fn entries_are_cloned_beside_themselves() {
             ids: vec![bank.clone()],
             title_suffix: None,
             history: false,
+            references: false,
         },
         8,
     )
@@ -1783,4 +1786,59 @@ fn built_in_icons_are_chosen_by_number() {
             ..
         }
     ));
+}
+
+#[test]
+fn a_clone_can_refer_to_its_original() {
+    use kutup_pass::resolve::{resolve, Context};
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let bank = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: root,
+            entry: input(&[("Title", "Banka"), ("UserName", "ayse"), ("Password", "p1")]),
+        },
+        1,
+    )
+    .id
+    .unwrap();
+    let copy = run(
+        &mut db,
+        Op::CloneEntries {
+            ids: vec![bank.clone()],
+            title_suffix: None,
+            history: false,
+            references: true,
+        },
+        2,
+    )
+    .id
+    .unwrap();
+    let hex = uuid::Uuid::parse_str(&bank).unwrap().simple().to_string();
+    let v = view::view(&db);
+    assert_eq!(value(&v, &copy, "UserName"), format!("{{REF:U@I:{hex}}}"));
+    assert_eq!(value(&v, &copy, "Password"), format!("{{REF:P@I:{hex}}}"));
+    assert!(entry(&v, &copy)
+        .fields
+        .iter()
+        .any(|f| f.key == "Password" && f.protected));
+    let context = Context {
+        local: at(3),
+        utc: at(3),
+        unix_seconds: 0,
+    };
+    let e = &db.entries[&eid(&copy)];
+    assert_eq!(resolve(&db, e, e.fields["Password"].get(), &context), "p1");
+    // The original changes; the copy follows.
+    run(
+        &mut db,
+        Op::UpdateEntry {
+            id: bank.clone(),
+            entry: input(&[("Title", "Banka"), ("UserName", "ayse"), ("Password", "p2")]),
+        },
+        4,
+    );
+    let e = &db.entries[&eid(&copy)];
+    assert_eq!(resolve(&db, e, e.fields["Password"].get(), &context), "p2");
 }

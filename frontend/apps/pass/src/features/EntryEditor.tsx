@@ -11,8 +11,8 @@ import { Label } from '@kutup/ui/components/label'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Textarea } from '@kutup/ui/components/textarea'
 import { otpFieldValue } from '../lib/otp'
+import { useStrength } from '../lib/strength'
 import { TotpSetupDialog } from './TotpSetupDialog'
-import { strengthOf } from '../lib/generator'
 import type { EntryInput, EntryView, FieldView } from '../vault/types'
 import { fieldValue, STANDARD_FIELDS } from '../vault/types'
 import { PasswordGenerator } from './PasswordGenerator'
@@ -126,6 +126,7 @@ export function EntryEditor({
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [settingUpOtp, setSettingUpOtp] = useState(false)
+  const rate = useStrength()
 
   useEffect(() => {
     if (!open) return
@@ -176,7 +177,10 @@ export function EntryEditor({
           <Field label={t('entry.userName')}>
             {(field) => <Input {...field} value={draft.userName} onChange={(e) => set({ userName: e.target.value })} autoComplete="off" />}
           </Field>
-          <Field label={t('entry.password')} description={draft.password ? t(`strength.${strengthOf(draft.password)}`) : undefined}>
+          <Field
+            label={t('entry.password')}
+            description={/\{REF:/i.test(draft.password) ? t('entry.referenceNote') : draft.password ? t(`strength.${rate(draft.password)}`) : undefined}
+          >
             {(field) => (
               <div className="flex gap-2">
                 <PasswordInput {...field} className="flex-1" value={draft.password} onChange={(e) => set({ password: e.target.value })} autoComplete="new-password" />

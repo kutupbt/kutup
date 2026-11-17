@@ -97,6 +97,10 @@ pub enum Op {
         title_suffix: Option<String>,
         #[serde(default)]
         history: bool,
+        /// The copy's user name and password as references to the original
+        /// (`{REF:U@I:…}`, `{REF:P@I:…}`), as KeePassXC's option.
+        #[serde(default)]
+        references: bool,
     },
     /// Deletes an entry's history items (`indexes`, oldest first as the
     /// history lists them; absent: all), remembered so a merge doesn't bring
@@ -589,6 +593,7 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
             ids,
             title_suffix,
             history,
+            references,
         } => {
             let ids = entry_ids(db, ids)?;
             let suffix = title_suffix.as_deref().unwrap_or("");
@@ -598,6 +603,24 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
             let mut first = None;
             for id in ids {
                 let copy = clone_entry(db, id, suffix, *history, now)?;
+                if *references {
+                    let hex = id.uuid().simple().to_string();
+                    if let Some(copy) = db.entries.get_mut(&copy) {
+                        for (key, field) in [("UserName", 'U'), ("Password", 'P')] {
+                            let protected = copy.fields.get(key).is_some_and(Value::is_protected)
+                                || key == "Password";
+                            let text = format!("{{REF:{field}@I:{hex}}}");
+                            copy.fields.insert(
+                                key.into(),
+                                if protected {
+                                    Value::protected(text)
+                                } else {
+                                    Value::unprotected(text)
+                                },
+                            );
+                        }
+                    }
+                }
                 first.get_or_insert(copy);
             }
             Applied {

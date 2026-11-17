@@ -3,7 +3,7 @@
 
 import type { MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import type { Call, Request, Response } from './protocol'
-import type { Applied, EntryView, ImportFailure, ImportFormat, ImportPreview, KdfInput, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
+import type { Applied, EntryView, ResolvedField, ImportFailure, ImportFormat, ImportPreview, KdfInput, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
 
 /** Why a vault didn't open, when the vault library says (its message's first word). */
 export type VaultFailure = 'wrongKey' | 'unsupported' | 'damaged' | 'keyFile' | 'emptyKey'
@@ -122,6 +122,11 @@ export class VaultHandle {
   /** The vault as an unencrypted KeePass XML file (history, attachments, icons); the recycle bin left out. */
   exportKeePassXml(): Promise<Uint8Array> {
     return call({ call: 'exportKeePassXml', handle: this.handle })
+  }
+
+  /** The entry's fields whose references and placeholders resolve to something else (kutup_pass::resolve). */
+  resolvedFields(entryId: string, now = new Date()): Promise<ResolvedField[]> {
+    return call({ call: 'resolvedFields', handle: this.handle, entryId, now: now.getTime(), offsetMinutes: -now.getTimezoneOffset() })
   }
 
   history(entryId: string): Promise<EntryView[]> {
