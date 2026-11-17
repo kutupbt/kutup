@@ -83,7 +83,9 @@ KeePassXC is the reference, read from `kutup-references/keepassxc`:
   - fields T, U, P, A (URL) and N;
   - searches I (UUID), T, U, P, A and N (the first match in the vault's
     order);
-  - nested up to 10 levels; a loop or a miss stays as the text it was.
+  - nested up to 10 levels; a loop stays as the text it was. A reference
+    that matches no entry resolves to empty, as KeePassXC does (decided
+    2026-11-17; the plan first said it would stay as written).
 - **Placeholders:** `{TITLE}`, `{USERNAME}`, `{PASSWORD}`, `{URL}`,
   `{NOTES}`, `{S:<field>}`, the URL parts (`{URL:HOST}`, `{URL:PORT}`,
   `{URL:SCM}`, `{URL:PATH}`, `{URL:QUERY}`) and the date and time
