@@ -1007,33 +1007,10 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
-            "/api/chat/contact-list",
-            get(handlers::chat_contact_list::list),
-        )
-        .route(
-            "/api/chat/contact-list/:id",
-            put(handlers::chat_contact_list::put)
-                .delete(handlers::chat_contact_list::delete)
-                // One sealed entry, base64, and the head.
-                .route_layer(DefaultBodyLimit::max(
-                    handlers::chat_contact_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
-                )),
-        )
-        .route(
             "/api/chat/group-send/endorsement",
             get(chat_group_send::endorsement),
         )
         .route("/api/chat/group-send/params", get(chat_group_send::params))
-        .route("/api/chat/group-list", get(handlers::chat_group_list::list))
-        .route(
-            "/api/chat/group-list/:id",
-            put(handlers::chat_group_list::put)
-                .delete(handlers::chat_group_list::delete)
-                // One sealed entry, base64, and the head.
-                .route_layer(DefaultBodyLimit::max(
-                    handlers::chat_group_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
-                )),
-        )
         .route("/api/pass/vault-states", get(handlers::pass::vault_states))
         .route(
             "/api/pass/settings",

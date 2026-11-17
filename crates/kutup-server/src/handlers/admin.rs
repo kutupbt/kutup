@@ -3045,8 +3045,6 @@ async fn clear_account_values(
     for statement in [
         "DELETE FROM account_heads WHERE user_id = $1",
         "DELETE FROM contacts WHERE user_id = $1",
-        "DELETE FROM chat_group_list WHERE user_id = $1",
-        "DELETE FROM chat_contact_list WHERE user_id = $1",
         // Calendars' passphrases were shared with the old incarnation's keys: the
         // account's own calendars go, and its places in others'.
         "DELETE FROM calendars WHERE owner_id = $1",
@@ -3095,6 +3093,7 @@ async fn clear_account_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kutup_crypto::account_records::RecordScope;
 
     #[test]
     fn audit_csv_cells_escape_quotes_and_spreadsheet_formulas() {
@@ -3126,10 +3125,11 @@ mod tests {
         assert!(validate_activity_query(&noncanonical_domain).is_err());
     }
 
-    /// A reset leaves none of the old incarnation's group list or Chat
-    /// contact list behind, and touches no other account's.
+    /// A reset leaves none of the old incarnation's account records (the
+    /// group list, the Chat contact list, every other scope) behind, and
+    /// touches no other account's.
     #[tokio::test]
-    async fn live_an_account_reset_clears_the_group_and_contact_lists() {
+    async fn live_an_account_reset_clears_the_account_records() {
         let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
             eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
             return;
@@ -3152,40 +3152,33 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-            sqlx::query(
-                "INSERT INTO chat_group_list (user_id, id, revision, envelope) VALUES ($1, $2, 1, $3)",
-            )
-            .bind(user_id)
-            .bind("A".repeat(43))
-            .bind(vec![0u8; kutup_crypto::chat_group_list::SEALED_LEN])
-            .execute(&pool)
-            .await
-            .unwrap();
-            sqlx::query(
-                "INSERT INTO chat_contact_list (user_id, id, revision, envelope) VALUES ($1, $2, 1, $3)",
-            )
-            .bind(user_id)
-            .bind("A".repeat(43))
-            .bind(vec![0u8; kutup_crypto::chat_contact_list::SEALED_LEN])
-            .execute(&pool)
-            .await
-            .unwrap();
+            // One record in each of the two Chat list scopes.
+            for scope in [RecordScope::ChatGroups, RecordScope::ChatContacts] {
+                sqlx::query(
+                    "INSERT INTO account_records (user_id, scope, record_id, revision, envelope, change_seq)
+                     VALUES ($1, $2, $3, 1, '\\x00', 1)",
+                )
+                .bind(user_id)
+                .bind(scope.info().number)
+                .bind("A".repeat(43))
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
         }
 
         let mut tx = pool.begin().await.unwrap();
         clear_account_values(&mut tx, reset).await.unwrap();
         tx.commit().await.unwrap();
 
-        for table in ["chat_group_list", "chat_contact_list"] {
-            let query = format!("SELECT COUNT(*) FROM {table} WHERE user_id = $1");
-            for (user_id, expected) in [(reset, 0), (kept, 1)] {
-                let count: i64 = sqlx::query_scalar(&query)
+        for (user_id, expected) in [(reset, 0), (kept, 2)] {
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM account_records WHERE user_id = $1")
                     .bind(user_id)
                     .fetch_one(&pool)
                     .await
                     .unwrap();
-                assert_eq!(count, expected, "{table}");
-            }
+            assert_eq!(count, expected);
         }
         sqlx::query("DELETE FROM users WHERE id = ANY($1)")
             .bind(vec![reset, kept])

@@ -175,11 +175,11 @@ compose exec -T postgres-a psql -U kutup -d kutup -q -c "DROP DATABASE outbox_mi
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
 KUTUP_LIVE_ADMIN="admina:federation-live-password" \
   cargo test -p kutup-server --test chat_groups_live -- --test-threads=1 --nocapture
-# The account's group list (§5): sealed entries by keyed id, the revision
-# from each entry's header, the head's chatGroups scope, the limit.
+# The account's group list (§5) is the records scope chatGroups: a scope
+# keeps at most its count (docs/plans/account-records.md).
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
-KUTUP_LIVE_ADMIN="admina:federation-live-password" \
-  cargo test -p kutup-server --test chat_group_list_live -- --test-threads=1 --nocapture
+  cargo test -p kutup-server --test account_records_live a_scope_keeps_at_most_its_count \
+    -- --test-threads=1 --nocapture
 # Multi-recipient sends (docs/plans/pairwise-groups.md, slice 2): stored once,
 # drained by every device; every send acked, no shared payload is left.
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
@@ -205,10 +205,6 @@ KUTUP_FEDERATION_SERVER_B="http://127.0.0.1:$port_b" \
     -- --test-threads=1 --nocapture
 compose start edge-b
 wait_url "http://127.0.0.1:$port_b/api/health"
-# The account's Chat contact list (docs/plans/chat-contacts-sync.md): the same
-# shape under its own scope, chatContacts, wherever Chat is.
-KUTUP_LIVE_SERVER="http://127.0.0.1:$port_a" \
-  cargo test -p kutup-server --test chat_contact_list_live -- --test-threads=1 --nocapture
 
 # Sealed batches: several sealed sends to one server's accounts in one
 # anonymous request; across servers, queued per recipient and delivered as

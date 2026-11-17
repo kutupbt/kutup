@@ -107,7 +107,8 @@ function backupRows(postgres: 'postgres-a' | 'postgres-b', username: string): nu
 /** How many entries the account's Chat contact list holds on its server. */
 function contactListEntries(postgres: 'postgres-a' | 'postgres-b', username: string): number {
   const quoted = username.replaceAll("'", "''")
-  const sql = `SELECT COUNT(*) FROM chat_contact_list c JOIN users u ON u.id=c.user_id WHERE u.username='${quoted}'`
+  // The Chat contact list is the account-records scope chatContacts (4).
+  const sql = `SELECT COUNT(*) FROM account_records c JOIN users u ON u.id=c.user_id WHERE c.scope=4 AND u.username='${quoted}'`
   return Number(compose(['exec', '-T', postgres, 'psql', '-U', 'kutup', '-d', 'kutup', '-Atc', sql]))
 }
 

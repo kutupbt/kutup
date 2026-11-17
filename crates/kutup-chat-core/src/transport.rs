@@ -99,7 +99,7 @@ pub struct GroupGatewayAnswer {
     pub identity_history: Vec<kutup_federation_proto::FederationIdentityDocumentV1>,
 }
 
-/// One entry of the account's group list (`GET /api/chat/group-list`), as
+/// One entry of the account's group list (the records scope `chatGroups`, docs/plans/account-records.md), as
 /// the account head vouches for it: its opaque id, its revision (as the
 /// server read it from the sealed header) and its sealed body
 /// (docs/plans/pairwise-groups.md §5).
@@ -111,17 +111,17 @@ pub struct GroupListItem {
     pub envelope: String,
 }
 
-/// One entry of the account's Chat contact list (`GET /api/chat/contact-list`),
+/// One entry of the account's Chat contact list (the records scope `chatContacts`),
 /// as the account head vouches for it (docs/plans/chat-contacts-sync.md).
 pub type ContactListItem = GroupListItem;
 
-/// How a contact list write went (`PUT /api/chat/contact-list/{id}`).
+/// How a contact list write went (a put of one `chatContacts` record).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContactListWrite {
     Stored,
     /// Another device wrote first: read the list again.
     Conflict,
-    /// The list holds as many entries as it may (`contactListFull`): a new
+    /// The list holds as many entries as it may (`scopeFull`): a new
     /// entry needs one evicted first.
     Full,
 }
@@ -438,7 +438,7 @@ pub trait ChatTransport {
         ))
     }
 
-    /// `GET /api/chat/contact-list`: every entry, each at the revision the
+    /// The `chatContacts` records: every entry, each at the revision the
     /// verified account head lists (a list it doesn't vouch for is an error).
     async fn fetch_contact_list(&self) -> Result<Vec<ContactListItem>> {
         Err(crate::error::ChatError::Transport(
@@ -446,7 +446,7 @@ pub trait ChatTransport {
         ))
     }
 
-    /// `PUT /api/chat/contact-list/{id}` with the next account head, over
+    /// A put of one `chatContacts` record with the next account head, over
     /// `base_revision` (0: a new entry). `revision` is the one in the
     /// entry's sealed header.
     async fn store_contact_entry(
@@ -461,7 +461,7 @@ pub trait ChatTransport {
         ))
     }
 
-    /// `DELETE /api/chat/contact-list/{id}` at `revision` (an eviction):
+    /// A delete of one `chatContacts` record at `revision` (an eviction):
     /// `false` when another device changed it first.
     async fn delete_contact_entry(&self, _id: &str, _revision: u64) -> Result<bool> {
         Err(crate::error::ChatError::Transport(
@@ -469,7 +469,7 @@ pub trait ChatTransport {
         ))
     }
 
-    /// `GET /api/chat/group-list`: every entry, each at the revision the
+    /// The `chatGroups` records: every entry, each at the revision the
     /// verified account head lists (a list it doesn't vouch for is an error).
     async fn fetch_group_list(&self) -> Result<Vec<GroupListItem>> {
         Err(crate::error::ChatError::Transport(
@@ -477,7 +477,7 @@ pub trait ChatTransport {
         ))
     }
 
-    /// `PUT /api/chat/group-list/{id}` with the next account head: `false`
+    /// A put of one `chatGroups` record with the next account head: `false`
     /// when the listed revision isn't `base_revision` (another device wrote
     /// first; read the list again). `revision` is the one in the entry's
     /// sealed header, where the server reads it; the account head lists it.

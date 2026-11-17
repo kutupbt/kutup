@@ -55,8 +55,6 @@ fn groups_are_off_unless_switched_on() {
             "/api/chat/groups/gateway-key?server={}&fromSequence=0",
             server_domain(&c, &base)
         ),
-        // Nor the account's group list.
-        "/api/chat/group-list",
     ] {
         assert_eq!(get(path), StatusCode::NOT_FOUND, "{path}");
     }
@@ -71,6 +69,16 @@ fn groups_are_off_unless_switched_on() {
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "the groups relay");
+    // Nor the account's group list (the records scope `chatGroups`): a
+    // batch naming it is no such scope, before its envelope is looked at.
+    let r = bearer(c.post(format!("{base}/api/account/records")), &user.token)
+        .json(
+            &json!({ "puts": [{ "scope": "chatGroups", "id": "A".repeat(43),
+            "baseRevision": 0, "envelope": "AAAA" }] }),
+        )
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND, "the group list");
     // The federated side too: groups off answers before any signature check.
     let r = c
         .post(format!("{base}/api/fed/chat/groups/gateway"))

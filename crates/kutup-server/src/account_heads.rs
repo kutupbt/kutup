@@ -405,6 +405,19 @@ async fn values(
     user_id: Uuid,
     scope: Scope,
 ) -> AppResult<Vec<(String, i64)>> {
+    // Every scope but two is in the account-records store
+    // (docs/plans/account-records.md): one query for all of them.
+    if let Some(records) = scope.records() {
+        let mut values: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT record_id, revision FROM account_records WHERE user_id = $1 AND scope = $2",
+        )
+        .bind(user_id)
+        .bind(records.info().number)
+        .fetch_all(&mut *conn)
+        .await?;
+        values.sort();
+        return Ok(values);
+    }
     let mut values: Vec<(String, i64)> = match scope {
         Scope::Contacts => {
             sqlx::query_as("SELECT uid, revision FROM contacts WHERE user_id = $1")
@@ -412,8 +425,6 @@ async fn values(
                 .fetch_all(&mut *conn)
                 .await?
         }
-        // In the account-records store (below) only.
-        Scope::Pins => Vec::new(),
         Scope::MailNames => {
             let rows: Vec<(String, String)> = sqlx::query_as(
                 "SELECT 'folder:' || id, name_sealed FROM mail_folders
@@ -428,39 +439,9 @@ async fn values(
                 .map(|(id, name)| Ok((id, crate::revisions::mail_name(&name)? as i64)))
                 .collect::<AppResult<_>>()?
         }
-        // In the account-records store (below) only.
-        Scope::PassSecrets => Vec::new(),
-        Scope::ChatGroups => {
-            sqlx::query_as("SELECT id, revision FROM chat_group_list WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_all(&mut *conn)
-                .await?
-        }
-        Scope::ChatContacts => {
-            sqlx::query_as("SELECT id, revision FROM chat_contact_list WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_all(&mut *conn)
-                .await?
-        }
-        // Only in the account-records store (below).
-        Scope::PhotosLibrary
-        | Scope::ChatAttachments
-        | Scope::ContactGroups
-        | Scope::CalendarSettings
-        | Scope::JoinedMeetings => Vec::new(),
+        // A records scope, answered above.
+        _ => return Err(AppError::internal("a records scope outside the store")),
     };
-    // The account-records store (docs/plans/account-records.md): a scope
-    // reads both stores until its clients move, and then only this one.
-    if let Some(records) = scope.records() {
-        let stored: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT record_id, revision FROM account_records WHERE user_id = $1 AND scope = $2",
-        )
-        .bind(user_id)
-        .bind(records.info().number)
-        .fetch_all(&mut *conn)
-        .await?;
-        values.extend(stored);
-    }
     values.sort();
     Ok(values)
 }

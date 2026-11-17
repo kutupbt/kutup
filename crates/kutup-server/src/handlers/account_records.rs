@@ -64,6 +64,17 @@ fn scope_named(name: &str) -> AppResult<RecordScope> {
     RecordScope::by_name(name).ok_or_else(|| AppError::not_found("no such scope"))
 }
 
+/// A scope this server takes writes of: the group list only while pairwise
+/// groups are on (with federation), as its old route was; anything else is
+/// no such scope.
+fn writable(state: &AppState, scope: RecordScope) -> AppResult<RecordScope> {
+    if scope == RecordScope::ChatGroups && !(state.config.chat_groups && state.federation.is_some())
+    {
+        return Err(AppError::not_found("no such scope"));
+    }
+    Ok(scope)
+}
+
 fn read_allowed(user_id: Uuid) -> AppResult<()> {
     if crate::ratelimit::ACCOUNT_HEAD_READS.allow(&user_id.to_string()) {
         Ok(())
@@ -378,7 +389,7 @@ pub async fn batch(
     let mut seen = BTreeSet::new();
     let mut deletes = Vec::with_capacity(batch.deletes.len());
     for item in &batch.deletes {
-        let scope = scope_named(&item.scope)?;
+        let scope = writable(&state, scope_named(&item.scope)?)?;
         scope
             .object(&item.id)
             .map_err(|_| AppError::bad_request("not a record id of its scope"))?;
@@ -391,7 +402,10 @@ pub async fn batch(
         deletes.push((scope, item.id.clone(), item.base_revision));
     }
     for item in &batch.puts {
-        if !seen.insert((scope_named(&item.scope)?, item.id.clone())) {
+        if !seen.insert((
+            writable(&state, scope_named(&item.scope)?)?,
+            item.id.clone(),
+        )) {
             return Err(AppError::bad_request("a record is named twice"));
         }
     }

@@ -18,6 +18,7 @@ mod common;
 use common::*;
 use kutup_crypto::account_head::{self, AccountHeadV1, HeadKeys, ScopeV1};
 use kutup_crypto::account_record::MasterKeyGeneration;
+use kutup_crypto::chat_contact_list::ContactListKey;
 use kutup_crypto::chat_group_list::{encode_entry_id, GroupListKey};
 use kutup_crypto::pass_vault::{seal_vault_secret, VaultSecret};
 use reqwest::blocking::Client;
@@ -48,9 +49,9 @@ impl Chain {
         }
     }
 
-    /// The next head with `chatGroups` holding `index`, kept as the last.
+    /// The next head with `chatContacts` holding `index`, kept as the last.
     fn next(&mut self, index: &[(&str, u64)]) -> String {
-        self.next_in("chatGroups", index)
+        self.next_in("chatContacts", index)
     }
 
     /// The next head with `scope` holding `index`, kept as the last.
@@ -85,16 +86,21 @@ struct Account<'a> {
     c: &'a Client,
     base: &'a str,
     user: &'a User,
-    groups: GroupListKey,
+    contacts: ContactListKey,
 }
 
 impl Account<'_> {
-    /// Group `n`'s record id and its sealed entry at `revision`.
-    fn group(&self, n: u8, revision: u64) -> (String, String) {
-        let id = self.groups.entry_id(&[n; 32]);
+    /// Contact entry `n`'s record id (a keyed hash, as the scope's ids are)
+    /// and its sealed entry at `revision`.
+    fn entry(&self, n: u8, revision: u64) -> (String, String) {
+        let id = kutup_crypto::account_record::hashed_object(
+            &self.user.roots.object_id,
+            kutup_crypto::account_record::AccountRecordPurpose::ChatContactListEntry,
+            &[n; 32],
+        );
         let sealed = self
-            .groups
-            .seal(&self.user.binding, &id, revision, b"{\"g\":1}")
+            .contacts
+            .seal(&self.user.binding, &id, revision, b"{\"c\":1}")
             .unwrap();
         (encode_entry_id(&id), b64(&sealed))
     }
@@ -120,14 +126,14 @@ impl Account<'_> {
     }
 
     fn feed(&self, after: i64) -> Value {
-        let (status, page) = self.get(&format!("/api/account/records/chatGroups?after={after}"));
+        let (status, page) = self.get(&format!("/api/account/records/chatContacts?after={after}"));
         assert_eq!(status, StatusCode::OK, "{page}");
         page
     }
 }
 
 fn put(id: &str, base: i64, envelope: &str) -> Value {
-    json!({ "scope": "chatGroups", "id": id, "baseRevision": base, "envelope": envelope })
+    json!({ "scope": "chatContacts", "id": id, "baseRevision": base, "envelope": envelope })
 }
 
 fn ids(list: &Value) -> Vec<String> {
@@ -151,7 +157,7 @@ fn records_land_in_batches_under_the_head() {
         c: &c,
         base: &base,
         user: &user,
-        groups: GroupListKey::new(
+        contacts: ContactListKey::new(
             &user.master_key,
             MasterKeyGeneration::FIRST,
             &user.roots.object_id,
@@ -171,10 +177,10 @@ fn records_land_in_batches_under_the_head() {
         .unwrap();
     assert!(r.status().is_success(), "{}", r.text().unwrap());
 
-    let (a, a1) = account.group(1, 1);
-    let (_, a2) = account.group(1, 2);
-    let (b, b5) = account.group(2, 5);
-    let (cc, c1) = account.group(3, 1);
+    let (a, a1) = account.entry(1, 1);
+    let (_, a2) = account.entry(1, 2);
+    let (b, b5) = account.entry(2, 5);
+    let (cc, c1) = account.entry(3, 1);
 
     // Once the account keeps a head, a batch needs the next one.
     let (status, body) = account.batch(json!({ "puts": [put(&a, 0, &a1)] }));
@@ -202,14 +208,14 @@ fn records_land_in_batches_under_the_head() {
     assert_eq!(page["head"].as_str(), Some(head.as_str()));
     assert!(page["basis"].is_null());
     // The head's index reads the store.
-    let (_, index) = account.get("/api/account/index/chatGroups");
+    let (_, index) = account.get("/api/account/index/chatContacts");
     let mut values: Vec<(String, i64)> = serde_json::from_value(index["values"].clone()).unwrap();
     values.sort();
     let mut want = vec![(a.clone(), 1), (b.clone(), 5)];
     want.sort();
     assert_eq!(values, want);
     // One record.
-    let (status, one) = account.get(&format!("/api/account/records/chatGroups/{b}"));
+    let (status, one) = account.get(&format!("/api/account/records/chatContacts/{b}"));
     assert_eq!(status, StatusCode::OK);
     assert_eq!(one["revision"], 5);
     assert_eq!(one["envelope"].as_str(), Some(b5.as_str()));
@@ -221,7 +227,7 @@ fn records_land_in_batches_under_the_head() {
     let (status, body) = account.batch(json!({
         "head": head,
         "puts": [put(&a, 0, &a2), put(&cc, 0, &c1)],
-        "deletes": [{ "scope": "chatGroups", "id": b, "baseRevision": 4 }],
+        "deletes": [{ "scope": "chatContacts", "id": b, "baseRevision": 4 }],
     }));
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["code"], "revision_conflict");
@@ -242,7 +248,7 @@ fn records_land_in_batches_under_the_head() {
     assert_eq!(conflicts, want);
     assert_eq!(
         account
-            .get(&format!("/api/account/records/chatGroups/{cc}"))
+            .get(&format!("/api/account/records/chatContacts/{cc}"))
             .0,
         StatusCode::NOT_FOUND
     );
@@ -253,7 +259,7 @@ fn records_land_in_batches_under_the_head() {
     let (status, body) = account.batch(json!({
         "head": head,
         "puts": [put(&a, 1, &a2)],
-        "deletes": [{ "scope": "chatGroups", "id": b, "baseRevision": 5 }],
+        "deletes": [{ "scope": "chatContacts", "id": b, "baseRevision": 5 }],
     }));
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["seq"], 4);
@@ -296,7 +302,7 @@ fn records_land_in_batches_under_the_head() {
         json!({ "puts": [{ "scope": "pins", "id": "pin", "baseRevision": 0, "envelope": a2 }] }),
     );
     // A delete names the revision it read.
-    refused(json!({ "deletes": [{ "scope": "chatGroups", "id": a, "baseRevision": 0 }] }));
+    refused(json!({ "deletes": [{ "scope": "chatContacts", "id": a, "baseRevision": 0 }] }));
     // An envelope sealed for another id, or not above its base.
     refused(json!({ "puts": [put(&cc, 0, &a2)] }));
     refused(json!({ "puts": [put(&a, 2, &a2)] }));
@@ -341,7 +347,7 @@ fn contact_groups_calendar_settings_and_joined_meetings_are_records() {
         c: &c,
         base: &base,
         user: &user,
-        groups: GroupListKey::new(
+        contacts: ContactListKey::new(
             &user.master_key,
             MasterKeyGeneration::FIRST,
             &user.roots.object_id,
@@ -430,4 +436,49 @@ fn contact_groups_calendar_settings_and_joined_meetings_are_records() {
             "{gone}: {status}"
         );
     }
+}
+
+/// A scope keeps at most its count (a per-account site setting): the group
+/// list's 1,024 entries land in batches, and one more is `scopeFull`, naming
+/// the scope and its maximum. Needs `KUTUP_LIVE_GROUPS_SERVER` (pairwise
+/// groups on: the two-server gate's A).
+#[test]
+fn a_scope_keeps_at_most_its_count() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_GROUPS_SERVER") else {
+        eprintln!("KUTUP_LIVE_GROUPS_SERVER not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_owned();
+    let c = crate::common::client();
+    let user = register(&c, &base);
+    let groups = GroupListKey::new(
+        &user.master_key,
+        MasterKeyGeneration::FIRST,
+        &user.roots.object_id,
+    );
+    let entry = |n: u32| {
+        let mut group = [0u8; 32];
+        group[..4].copy_from_slice(&n.to_be_bytes());
+        let id = groups.entry_id(&group);
+        let sealed = groups.seal(&user.binding, &id, 1, b"{\"g\":1}").unwrap();
+        json!({ "scope": "chatGroups", "id": encode_entry_id(&id), "baseRevision": 0, "envelope": b64(&sealed) })
+    };
+    let batch = |puts: Vec<Value>| {
+        let r = bearer(c.post(format!("{base}/api/account/records")), &user.token)
+            .json(&json!({ "puts": puts }))
+            .send()
+            .unwrap();
+        let status = r.status();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    for start in (0..1024).step_by(256) {
+        let (status, body) = batch((start..start + 256).map(entry).collect());
+        assert_eq!(status, StatusCode::OK, "{start}: {body}");
+    }
+    let (status, body) = batch(vec![entry(1024)]);
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "scopeFull");
+    assert_eq!(body["scope"], "chatGroups");
+    assert_eq!(body["max"], 1024);
+    purge_accounts(&c, &base, &[&user]);
 }
