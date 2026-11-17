@@ -6,7 +6,8 @@ import { toast } from 'sonner'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { GridSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { useLibraryContext } from '../library/libraryContext'
 import { PhotoGrid } from '../timeline/PhotoGrid'
 import { NameAlbumDialog } from './NameAlbumDialog'
@@ -30,7 +31,7 @@ export function AlbumPage() {
   const [sharing, setSharing] = useState(false)
   const [leaving, setLeaving] = useState(false)
 
-  if (albums.isPending || (album && items.isPending)) return <LoadingPanel label={t('albums.loading')} />
+  if (albums.isPending || (album && items.isPending)) return <GridSkeleton label={t('albums.loading')} />
   if (!album) {
     return (
       <div className="px-4 py-6 md:px-8">

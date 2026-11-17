@@ -766,3 +766,68 @@ fn a_deleted_or_deactivated_manager_means_a_new_signer() {
     assert!(!needs_new_signer(&live, &alice, &id));
     purge_accounts(&live.c, &live.base, &[&alice, &carol]);
 }
+
+#[test]
+fn a_shared_mailbox_signature_is_set_by_its_owners_and_managers() {
+    let Some(live) = live() else { return };
+    let (alice, bob) = (register(&live.c, &live.base), register(&live.c, &live.base));
+    let (id, _address, k1, _signer, _chain) = shared_mailbox(&live, &alice);
+    let mut share = key_share(&k1, &id, &bob);
+    share["groupFingerprint"] = json!(hex::encode(k1.fingerprint));
+    let both = json!([
+        { "userId": alice.id, "role": "owner", "canSendAs": true },
+        { "userId": bob.id, "role": "member", "canSendAs": true },
+    ]);
+    assert_eq!(
+        members(
+            &live,
+            &alice,
+            &id,
+            json!({ "members": both, "keyShares": [share] })
+        )
+        .status(),
+        StatusCode::OK
+    );
+    let patch = |by: &User, body: Value| {
+        bearer(
+            live.c.patch(format!("{}/api/mail/groups/{id}", live.base)),
+            &by.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+    };
+    // The owner sets it; every member sees it, to write as the mailbox with it.
+    let signature = "<p>— The team</p>";
+    let r = patch(&alice, json!({ "signature": signature }));
+    assert_eq!(r.status(), StatusCode::OK);
+    let mine: Value = bearer(
+        live.c.get(format!("{}/api/mail/groups", live.base)),
+        &bob.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let group = mine
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == id.as_str())
+        .unwrap_or_else(|| panic!("{mine}"));
+    assert_eq!(group["signature"], signature);
+    // A member who may send as it may not change it.
+    assert_eq!(
+        patch(&bob, json!({ "signature": "<p>mine</p>" })).status(),
+        StatusCode::FORBIDDEN
+    );
+    // 10 KB at most, as an address's own; empty removes it.
+    assert_eq!(
+        patch(&alice, json!({ "signature": "x".repeat(10_001) })).status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        patch(&alice, json!({ "signature": "" })).status(),
+        StatusCode::OK
+    );
+}

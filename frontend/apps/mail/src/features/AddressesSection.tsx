@@ -25,7 +25,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 
@@ -56,7 +56,7 @@ export function AddressesSection() {
   const [deleting, setDeleting] = useState<OwnAddressRow | null>(null)
   const [missing, setMissing] = useState<OwnAddressRow[] | null>(null)
 
-  if (addresses.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (addresses.isPending) return <ListSkeleton label={t('common.loading')} rows={3} />
   if (addresses.isError) return <Alert variant="error">{apiErrorMessage(addresses.error, t('common.tryAgain'))}</Alert>
   const rows = addresses.data
   const defaultId = defaultAddressId(rows)

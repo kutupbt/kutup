@@ -434,6 +434,28 @@ pub async fn seal(
     .map_err(internal)
 }
 
+/// [`seal`] under any owner's key (a shared mailbox's own).
+pub async fn seal_owner(
+    pool: &PgPool,
+    keys: &OpaqueSetupKeys,
+    owner: KeyOwner,
+    (table, column, row): (&str, &str, &str),
+    value: &[u8],
+) -> AppResult<Vec<u8>> {
+    let mut conn = pool.acquire().await?;
+    let key = key_owner_in(&mut conn, keys, owner).await?;
+    key.seal(
+        &Field {
+            table,
+            column,
+            row,
+            account_id: owner.id().as_bytes(),
+        },
+        value,
+    )
+    .map_err(internal)
+}
+
 /// Opens the account's sealed `field`; None when it is destroyed: the
 /// account's key is gone (deleted, or a restore brought back a field without
 /// its key) or is not the one it was sealed under. Never makes a key.
@@ -462,6 +484,45 @@ pub async fn open(
         .ok();
     if opened.is_none() {
         tracing::warn!(%user_id, table, column, "a sealed field does not open under the account's key");
+    }
+    Ok(opened)
+}
+
+/// [`open`] under any owner's key (a shared mailbox's own).
+pub async fn open_owner(
+    pool: &PgPool,
+    keys: &OpaqueSetupKeys,
+    owner: KeyOwner,
+    (table, column, row): (&str, &str, &str),
+    sealed: &[u8],
+) -> AppResult<Option<Zeroizing<Vec<u8>>>> {
+    let generation = kutup_crypto::server_data::sealed_generation(sealed).map_err(internal)?;
+    let key = {
+        let mut conn = pool.acquire().await?;
+        load_owner_in(&mut conn, keys, owner, Some(generation)).await?
+    };
+    let Some(key) = key else {
+        tracing::warn!(?owner, table, column, "a sealed field has no data key");
+        return Ok(None);
+    };
+    let opened = key
+        .open(
+            &Field {
+                table,
+                column,
+                row,
+                account_id: owner.id().as_bytes(),
+            },
+            sealed,
+        )
+        .ok();
+    if opened.is_none() {
+        tracing::warn!(
+            ?owner,
+            table,
+            column,
+            "a sealed field does not open under its owner's key"
+        );
     }
     Ok(opened)
 }

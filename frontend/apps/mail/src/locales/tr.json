@@ -43,7 +43,8 @@
     "trash": "Çöp",
     "all": "Tüm postalar",
     "scheduled": "Planlanan",
-    "snoozed": "Ertelenen"
+    "snoozed": "Ertelenen",
+    "refresh": "Yenile: {{name}}"
   },
   "empty": {
     "inbox": "Gelen kutunuz boş",
@@ -563,6 +564,10 @@
     "autoDeleteHint": "Çöp Kutusu ve İstenmeyen’deki iletileri 30 gün sonra sil. Açıldığında orada olan iletiler şimdiden sayılır.",
     "almostAllMail": "Tüm postalara İstenmeyen/Çöp’ü katma",
     "almostAllMailHint": "Tüm postalar o zaman İstenmeyen ve Çöp Kutusu dışındaki her şeyi gösterir.",
+    "keepMovedSent": "İletileri Gönderilenler’de tut",
+    "keepMovedSentHint": "Başka bir klasöre taşıdığınız gönderilmiş postalar Gönderilenler’de de görünür.",
+    "unreadFavicon": "Okunmamış sayısını sekme simgesinde göster",
+    "unreadFaviconHint": "Sekmenin simgesi, açık klasördeki okunmamış ileti sayısını gösterir.",
     "conversations": "Konuşmaları grupla",
     "conversationsHint": "Aynı konuşmadaki e-postaları posta kutunuzda bir arada gösterin ya da ayrı ayrı listeleyin.",
     "signOutside": "Kutup dışına giden postayı imzala",
@@ -645,7 +650,10 @@
     "signatureTooLong": "İmza çok uzun (en fazla 10 KB).",
     "addLink": "Bağlantı ekle",
     "nameAndSignature": "Görünen ad ve imza",
-    "address": "Adres"
+    "address": "Adres",
+    "sharedSignatures": "Ortak posta kutuları",
+    "sharedSignaturesHint": "Biri posta kutusu adına yazdığında iletinin başladığı imza. Sahipler ve yöneticiler belirler.",
+    "sharedSignatureOf": "{{name}} imzası"
   },
   "autoReply": {
     "title": "Otomatik yanıt",
@@ -1338,5 +1346,58 @@
       "enabled": "Etkin",
       "updated": "Tümünü yakala adresi güncellendi"
     }
+  },
+  "sendCheck": {
+    "sendAnyway": "Yine de gönder",
+    "dontShowAgain": "Bir daha gösterme",
+    "noReply": {
+      "title": "Yanıt kabul etmeyen adres",
+      "body": "{{detail}} adresi yanıt kabul etmiyor gibi görünüyor. İletinizi göndermek istediğinize emin misiniz?"
+    },
+    "noSubject": {
+      "title": "Konu yok",
+      "body": "İletinize bir konu yazmadınız. Yine de göndermek istiyor musunuz?"
+    },
+    "noAttachment": {
+      "title": "Ek bulunamadı",
+      "body": "“{{detail}}” yazdınız, ancak hiç ek eklenmedi. İletinizi yine de göndermek istiyor musunuz?"
+    }
+  },
+  "sieve": {
+    "import": "Sieve içe aktar",
+    "export": "Sieve olarak dışa aktar",
+    "importTitle": "Filtreleri Sieve’den içe aktar",
+    "importDescription": "Proton, Fastmail ya da bir Sieve sunucusundan bir Sieve betiği yapıştırın veya dosya seçin. Kutup, kendi filtrelerinin tutabildiği filtreleri okur: gönderen, alıcı, konu ve ekler; taşıma, etiketler, okundu ve yıldızlı. Filtreler sizinkilerin ardına eklenir.",
+    "script": "Sieve betiği",
+    "chooseFile": "Bir Sieve dosyası seçin",
+    "tooLarge": "Bu dosya bir Sieve betiği için fazla büyük.",
+    "read": "Oku",
+    "back": "Geri",
+    "toAdd_one": "Eklenecek {{count}} filtre",
+    "toAdd_other": "Eklenecek {{count}} filtre",
+    "nothing": "Bu betikte Kutup’un tutabileceği bir filtre yok.",
+    "skipped_one": "{{count}} bölüm içe aktarılmadı",
+    "skipped_other": "{{count}} bölüm içe aktarılmadı",
+    "add_one": "{{count}} filtre ekle",
+    "add_other": "{{count}} filtre ekle",
+    "added_one": "{{count}} filtre eklendi",
+    "added_other": "{{count}} filtre eklendi",
+    "addFailed": "{{count}} eklendi, ardından: {{error}}",
+    "problem": {
+      "syntax": "Betik okunamadı:",
+      "unsupported": "Kutup filtreleri bunu yapamaz:",
+      "unknownPlace": "Bu adla bir klasör ya da etiket yok (önce oluşturun, sonra yeniden içe aktarın):",
+      "noAction": "Bu filtre Kutup’un yapabileceği hiçbir şey yapmıyor:"
+    }
+  },
+  "export": {
+    "title": "Postaları dışa aktar",
+    "hint": "Bir klasörü ya da etiketi veya tüm postalarınızı zip içinde .eml dosyaları olarak indirin. İletiler bu tarayıcıda açılır; dosya onları okunur halde tutar, güvenli saklayın.",
+    "place": "Dışa aktarılacak yer",
+    "start": "Dışa aktar",
+    "stop": "Durdur",
+    "progress": "{{total}} iletiden {{done}}",
+    "done": "Postalarınız indirildi.",
+    "failed": "Dışa aktarma durdu. Yeniden deneyin."
   }
 }

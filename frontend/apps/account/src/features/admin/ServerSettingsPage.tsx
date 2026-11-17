@@ -11,7 +11,7 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import type { AdminSettings, PublicSharing, RegistrationMode, RegistrySetting, SettingSection } from '@kutup/session/api-types'
 import { SETTING_LABELS } from './limitLabels'
@@ -44,7 +44,7 @@ export function ServerSettingsPage() {
   const { t } = useTranslation()
   const settings = useAdminSettings()
   const registry = useSettingsRegistry()
-  if (settings.isPending || registry.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (settings.isPending || registry.isPending) return <FormSkeleton label={t('common.loading')} rows={6} />
   if (settings.isError || registry.isError) {
     return <PageBody width="prose"><Alert variant="error">{apiErrorMessage(settings.error ?? registry.error, t('common.tryAgain'))}</Alert></PageBody>
   }

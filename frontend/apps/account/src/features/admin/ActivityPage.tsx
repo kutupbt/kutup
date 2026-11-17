@@ -9,7 +9,8 @@ import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Mono } from '@kutup/ui/components/mono'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { exportActivityCsv, useActivityIntegrity, useAdminActivity, type ActivityFilter } from './api'
@@ -93,7 +94,7 @@ export function ActivityPage() {
             />
           ) : null}
         </form>
-        {activity.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+        {activity.isPending ? <ListSkeleton label={t('common.loading')} /> : null}
         {activity.isError ? (
           <div className="p-4"><Alert variant="error">{apiErrorMessage(activity.error, t('common.tryAgain'))}</Alert></div>
         ) : null}

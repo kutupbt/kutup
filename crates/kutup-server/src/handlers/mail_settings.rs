@@ -78,6 +78,12 @@ pub struct MailSettings {
     /// font/size: Arial, 14).
     pub font_face: String,
     pub font_size: i32,
+    /// The tab icon shows the open place's unread count (Proton's
+    /// `UnreadFavicon`; off by default).
+    pub unread_favicon: bool,
+    /// Sent mail moved to another place still shows in Sent (Proton's
+    /// `ShowMoved`, "Keep messages in Sent"; off by default).
+    pub keep_moved_sent: bool,
 }
 
 /// The composer fonts (Proton's FONT_FACES).
@@ -99,7 +105,8 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
     let row: Option<MailSettings> = sqlx::query_as(
         "SELECT auto_delete_days, almost_all_mail, sign_outside, attach_public_key, pgp_scheme,
                 view_layout, density, composer_mode, view_mode, confirm_link, page_size, spam_action, remote_images, delay_send_seconds,
-                draft_type, text_direction, font_face, font_size, image_proxy, embedded_images, remove_image_metadata
+                draft_type, text_direction, font_face, font_size, image_proxy, embedded_images, remove_image_metadata,
+                unread_favicon, keep_moved_sent
            FROM mail_settings WHERE user_id = $1",
     )
     .bind(user_id)
@@ -127,6 +134,8 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
         text_direction: "ltr".into(),
         font_face: "arial".into(),
         font_size: 14,
+        unread_favicon: false,
+        keep_moved_sent: false,
     }))
 }
 
@@ -167,6 +176,8 @@ pub struct UpdateMailSettings {
     pub density: Option<String>,
     pub composer_mode: Option<String>,
     pub view_mode: Option<String>,
+    pub unread_favicon: Option<bool>,
+    pub keep_moved_sent: Option<bool>,
 }
 
 /// `PATCH /api/mail/settings`.
@@ -252,13 +263,15 @@ pub async fn update(
         "INSERT INTO mail_settings
              (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
               view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size, spam_action, remote_images, delay_send_seconds,
-              draft_type, text_direction, font_face, font_size, image_proxy, embedded_images, remove_image_metadata)
+              draft_type, text_direction, font_face, font_size, image_proxy, embedded_images, remove_image_metadata,
+              unread_favicon, keep_moved_sent)
          VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
                  COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
                  COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'), COALESCE($11, true),
                  COALESCE($12, 50), COALESCE($13, 'ask'), COALESCE($14, 'ask'),
                  COALESCE($15, $16), COALESCE($17, 'html'), COALESCE($18, 'ltr'),
-                 COALESCE($19, 'arial'), COALESCE($20, 14), COALESCE($21, true), COALESCE($22, true), COALESCE($23, true))
+                 COALESCE($19, 'arial'), COALESCE($20, 14), COALESCE($21, true), COALESCE($22, true), COALESCE($23, true),
+                 COALESCE($24, false), COALESCE($25, false))
          ON CONFLICT (user_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
@@ -281,6 +294,8 @@ pub async fn update(
              image_proxy = COALESCE($21, mail_settings.image_proxy),
              embedded_images = COALESCE($22, mail_settings.embedded_images),
              remove_image_metadata = COALESCE($23, mail_settings.remove_image_metadata),
+             unread_favicon = COALESCE($24, mail_settings.unread_favicon),
+             keep_moved_sent = COALESCE($25, mail_settings.keep_moved_sent),
              updated_at = now()",
     )
     .bind(user_id)
@@ -306,6 +321,8 @@ pub async fn update(
     .bind(request.image_proxy)
     .bind(request.embedded_images)
     .bind(request.remove_image_metadata)
+    .bind(request.unread_favicon)
+    .bind(request.keep_moved_sent)
     .execute(&state.pool)
     .await?;
     Ok(Json(settings_of(&state, user_id).await?))

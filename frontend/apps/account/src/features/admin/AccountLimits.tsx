@@ -4,7 +4,7 @@ import api from '@kutup/session/client'
 import type { AccountLimits as Limits, AccountRateLimitLimit, AccountSettingLimit, ValueSource } from '@kutup/session/api-types'
 import { Alert } from '@kutup/ui/components/alert'
 import { Card, CardContent } from '@kutup/ui/components/card'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { adminKey } from './api'
 import { countsText, SETTING_LABELS } from './limitLabels'
@@ -24,7 +24,7 @@ export function AccountLimits({ userId }: { userId: string }) {
     queryFn: async () => (await api.get<Limits>(`/admin/users/${userId}/limits`)).data,
   })
   if (limits.isError) return <Alert variant="error">{apiErrorMessage(limits.error, t('common.tryAgain'))}</Alert>
-  if (limits.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (limits.isPending) return <FormSkeleton label={t('common.loading')} />
 
   const source = (from: ValueSource, site: number) =>
     from === 'account' ? t('admin.limits.source.account', { site }) : t(`admin.limits.source.${from}`)

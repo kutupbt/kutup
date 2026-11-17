@@ -275,6 +275,19 @@ const scoped = (group?: string) => (group ? { group } : {})
 /** Fetched again this often while the app is open (web push comes later). */
 export const POLL_MS = 30_000
 
+/**
+ * The open list and the counts, fetched again now: the sidebar's refresh
+ * (Proton's `call()` on the event loop). Resolves when both are in.
+ */
+export function useRefetchOpenMail() {
+  const queryClient = useQueryClient()
+  return () =>
+    Promise.all([
+      queryClient.refetchQueries({ queryKey: ['mail', 'folder'], type: 'active' }),
+      queryClient.refetchQueries({ queryKey: ['mail', 'counts'], type: 'active' }),
+    ])
+}
+
 /** No address key yet: the Account app makes it at sign-in. */
 export class NoAddressKey extends Error {
   constructor() {
@@ -615,6 +628,8 @@ export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true)
       ).data,
     getNextPageParam: () => null,
     refetchInterval: POLL_MS,
+    // Back on the tab: at once if a poll fell due meanwhile (Proton's event loop).
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -648,6 +663,8 @@ export function useCounts(group?: string) {
     enabled: !settings.isPending,
     queryFn: async () => (await api.get<FolderCount[]>('/mail/counts', { params: { ...scoped(group), ...(conversations ? { conversations: true } : {}) } })).data,
     refetchInterval: POLL_MS,
+    // Back on the tab: at once if a poll fell due meanwhile (Proton's event loop).
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -720,6 +737,22 @@ async function offeredKey(raw: Uint8Array, parsed: ParsedMessage, from: string, 
  * as for reading (OpenPGP from outside decrypted too), signatures not checked,
  * which search does not need.
  */
+/**
+ * A message as it was received or sent: its MIME, opened from the stored
+ * encryption, for export (an outside sender's own OpenPGP layer stays, as
+ * Proton's export keeps it). Your own mailbox only.
+ */
+export async function storedMessage(account: MailAccount, message: MailMessage): Promise<Uint8Array> {
+  const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
+  return (await openWithKeys(account, new Uint8Array(response.data), undefined, !!message.forwardedFrom)).data
+}
+
+/** One numbered page of a place's messages (one row per message), with how many it holds. */
+export async function placePage(place: PlaceKey, page: number, limit: number): Promise<{ messages: MailMessage[]; total: number }> {
+  const { data } = await api.get<Page>('/mail/messages', { params: { folder: place, page, limit } })
+  return { messages: data.messages, total: data.total ?? data.messages.length }
+}
+
 export async function openMessageText(account: MailAccount, message: MailMessage): Promise<string> {
   const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
   const opened = await openWithKeys(account, new Uint8Array(response.data), undefined, !!message.forwardedFrom)
@@ -1129,6 +1162,10 @@ export interface MailSettings {
   attachPublicKey: boolean
   /** How mail to outside OpenPGP users is encrypted or signed (Proton's PGPScheme); Inline is plain text. */
   pgpScheme: 'pgp_mime' | 'inline'
+  /** The tab icon shows the open place's unread count (Proton's UnreadFavicon). */
+  unreadFavicon: boolean
+  /** Sent mail moved elsewhere still shows in Sent (Proton's ShowMoved). */
+  keepMovedSent: boolean
 }
 
 export const mailSettingsKey = ['mail', 'settings'] as const

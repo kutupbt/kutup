@@ -12,7 +12,7 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { adminKey } from './api'
 import { Choice } from './federation/Choice'
@@ -54,7 +54,7 @@ export function MapsSettingsPage() {
     return settings.isError ? (
       <PageBody width="prose"><Alert variant="error">{apiErrorMessage(settings.error, t('common.tryAgain'))}</Alert></PageBody>
     ) : (
-      <LoadingPanel label={t('common.loading')} />
+      <FormSkeleton label={t('common.loading')} />
     )
   }
 

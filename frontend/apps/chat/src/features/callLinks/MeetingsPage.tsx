@@ -6,6 +6,7 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorCode } from '@kutup/ui/lib/apiError'
 import { useChat } from '../../app/chatStore'
 import { formatDuration } from '../../lib/callText'
@@ -98,10 +99,7 @@ export function MeetingsPage() {
         />
         {list.isError ? <Alert variant="error">{t('chat.meetings.loadFailed')}</Alert> : null}
         {list.isPending ? (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden />
-            {t('common.loading')}
-          </p>
+          <ListSkeleton label={t('common.loading')} rows={3} className="px-0" />
         ) : null}
 
         {upcoming.length > 0 ? (

@@ -19,7 +19,7 @@ import { Input } from '@kutup/ui/components/input'
 import { Mono } from '@kutup/ui/components/mono'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { Fact, PageBody, PageHeader, Section } from '@kutup/ui/components/page'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
@@ -183,7 +183,7 @@ export function UserPage() {
   const [revealed, setRevealed] = useState<string | null>(null)
   const lang = i18n.language
 
-  if (users.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (users.isPending) return <FormSkeleton label={t('common.loading')} />
   const user = users.data?.find((u) => u.id === id)
   if (!user) {
     return (

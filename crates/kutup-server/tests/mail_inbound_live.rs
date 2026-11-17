@@ -2873,7 +2873,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14 })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14, "unreadFavicon": false, "keepMovedSent": false })
     );
     // Proton's page sizes only.
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
@@ -2905,6 +2905,30 @@ fn mail_settings_all_mail_and_emptying() {
             .status()
             .is_success());
     }
+    // Keep messages in Sent (Proton's ShowMoved): sent mail filed in the
+    // Archive leaves Sent, and comes back to it with the setting on.
+    let sent = folder(&c, &base, &user.token, "sent");
+    assert_eq!(sent.len(), 2);
+    let archived = sent[0]["id"].as_str().unwrap().to_string();
+    let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
+        .json(&json!({ "ids": [archived], "folder": "archive" }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success());
+    assert_eq!(folder(&c, &base, &user.token, "sent").len(), 1);
+    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "keepMovedSent": true }))
+        .send()
+        .unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["keepMovedSent"], true);
+    let sent = folder(&c, &base, &user.token, "sent");
+    assert_eq!(sent.len(), 2, "the archived sent message shows in Sent");
+    assert!(sent
+        .iter()
+        .any(|m| m["id"] == archived.as_str() && m["folder"] == "archive"));
+    // Received copies never show there.
+    assert!(sent.iter().all(|m| m["direction"] == "outbound"));
+
     let inbox = folder(&c, &base, &user.token, "inbox");
     let trashed = inbox[0]["id"].as_str().unwrap().to_string();
     let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
@@ -2918,12 +2942,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18 }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18 })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true, "keepMovedSent": true })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),

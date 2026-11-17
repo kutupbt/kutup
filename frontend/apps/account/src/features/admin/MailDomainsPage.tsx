@@ -12,7 +12,8 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
@@ -120,7 +121,7 @@ export function MailDomainsPage() {
   })
   const [ending, setEnding] = useState<AdminDomain | null>(null)
 
-  if (view.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (view.isPending) return <ListSkeleton label={t('common.loading')} rows={4} />
   if (view.isError) return <Alert variant="error">{apiErrorMessage(view.error, t('common.tryAgain'))}</Alert>
   const data = view.data
   const mode = data.settings['mail_domains.mode'] ?? 'everyone'
