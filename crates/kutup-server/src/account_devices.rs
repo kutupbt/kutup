@@ -285,7 +285,8 @@ pub async fn register_device(
     .bind(request.kind.as_str())
     .bind(root)
     .bind(&frame_key[..])
-    .bind(&request.name)
+    // An unnamed device has no name (NULL), not ''.
+    .bind((!request.name.is_empty()).then_some(&request.name))
     .bind(&salt[..])
     .bind(&credential_hash[..])
     .execute(&mut *tx)
@@ -323,7 +324,7 @@ pub async fn list_devices(
     let rows: Vec<(
         i32,
         String,
-        String,
+        Option<String>,
         Uuid,
         bool,
         OffsetDateTime,
@@ -345,7 +346,7 @@ pub async fn list_devices(
                 Some(AccountDeviceV1 {
                     device_id: device_id as u32,
                     kind: DeviceKind::parse(&kind).ok()?,
-                    name,
+                    name: name.unwrap_or_default(),
                     session: session_hash(session_id),
                     this_sign_in: session_id == root,
                     listed: head

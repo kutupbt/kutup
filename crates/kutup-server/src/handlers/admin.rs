@@ -291,7 +291,7 @@ pub async fn create_user(
                public_key, account_authority_public_key, account_authority_key_id,
                account_incarnation_id, drive_signing_public_key,
                is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2,$3,$4,$5,'','','','','','','',false,true,$6)
+           ) VALUES ($1,$2::uuid,$3,$4,$5,'','','','','','','',false,true,$6)
            RETURNING id"#,
     )
     .bind(&req.username)
@@ -2470,7 +2470,7 @@ pub async fn rotate_temp_password(
     let mut tx = state.pool.begin().await?;
     take_reset_grant(&mut tx, &req.grant, &admin, target).await?;
     let rotated = sqlx::query(
-        "UPDATE accounts SET key_binding = $2, opaque_record = $3, opaque_suite = $4,
+        "UPDATE accounts SET key_binding = $2::uuid, opaque_record = $3, opaque_suite = $4,
                 opaque_server_key_id = $5, updated_at = NOW()
           WHERE id = $1 AND is_first_login",
     )
@@ -2713,8 +2713,8 @@ pub async fn wipe_user(
                public_key = '', account_authority_public_key = '',
                account_authority_key_id = '', account_incarnation_id = '',
                drive_signing_public_key = '',
-               recovery_key_verifier = '', drive_key_binding = NULL,
-               key_binding = $1, opaque_record = $3, opaque_suite = $4,
+               recovery_key_verifier = NULL, drive_key_binding = NULL,
+               key_binding = $1::uuid, opaque_record = $3, opaque_suite = $4,
                opaque_server_key_id = $5,
                totp_secret_sealed = NULL, totp_enabled = false,
                is_first_login = true, updated_at = NOW()

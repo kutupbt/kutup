@@ -1628,7 +1628,7 @@ pub async fn accept(
         ));
     }
     let binding: String =
-        sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM accounts WHERE id = $1")
+        sqlx::query_scalar("SELECT COALESCE(key_binding::text, '') FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;

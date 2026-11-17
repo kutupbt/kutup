@@ -86,7 +86,7 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let binding: Option<String> =
-        sqlx::query_scalar("SELECT key_binding FROM accounts WHERE id = $1")
+        sqlx::query_scalar("SELECT key_binding::text FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(executor)
             .await?;

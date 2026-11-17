@@ -549,7 +549,7 @@ pub async fn add_key(
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     // The account's key binding: a key sealed for any other is refused.
     let binding: String =
-        sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM accounts WHERE id = $1")
+        sqlx::query_scalar("SELECT COALESCE(key_binding::text, '') FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(&mut *change.tx)
             .await?;
@@ -620,7 +620,7 @@ pub(crate) async fn first_key(
     let info = mail_key::inspect_address_public_key(&public_key, &address)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let (authority, binding): (String, String) = sqlx::query_as(
-        "SELECT account_authority_public_key, COALESCE(key_binding, '') FROM accounts WHERE id = $1",
+        "SELECT account_authority_public_key, COALESCE(key_binding::text, '') FROM accounts WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut *conn)
