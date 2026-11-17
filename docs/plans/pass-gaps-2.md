@@ -167,6 +167,14 @@ KeePassXC's `dbsettings`:
     import in Mail does.
 - **Specs:** 212 (CSV and XML export, then import of the XML back into a
   new vault), 213 (Bitwarden, 1PUX and Proton fixtures).
+- **As built (P5a, 2026-11-17):** CSV export and the three structured
+  imports. The account check is `verifyAccountPassword` (the `/user/reauth`
+  check with no grant, as Pass's other dialogs use it): nothing reaches the
+  server, so no grant is needed. `ImportCsv` keeps its name and reads every
+  format. ZIPs are read by a small reader on `flate2` (already in the build
+  through `keepass`), bounded per file and in total. KeePass XML (export and
+  import) is P5b: the vendored crate's XML is crate-private and needs a
+  patch, attachments included.
 
 ## Order and numbers
 
