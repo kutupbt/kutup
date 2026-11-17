@@ -4,7 +4,7 @@
 //! the content is sent), again when it lands as an uploaded revision, and
 //! at its commit, where the version, the new metadata (size, SHA-256, the
 //! content it commits to) and the content hash are stored in one
-//! transaction. One open upload per file (`uploads.file_id` is unique), as
+//! transaction. One open upload per file (`drive_uploads.file_id` is unique), as
 //! Proton allows one draft revision.
 
 use std::collections::HashMap;

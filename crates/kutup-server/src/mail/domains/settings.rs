@@ -189,7 +189,7 @@ impl Settings {
     }
 
     /// `account`'s address limit: the site's, with the account's own value
-    /// (`user_setting_overrides`) where set and in range.
+    /// (`account_setting_overrides`) where set and in range.
     pub async fn for_account(
         &self,
         pool: &PgPool,

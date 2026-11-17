@@ -41,9 +41,9 @@ contact's PGP preferences).
 
 | App | Settings | Storage |
 |---|---|---|
-| Account | theme, language | `user_ui_preferences` |
-| Account | two-factor sign-in | `users.totp_*` |
-| Account | presence / cursor colour | `users.color` |
+| Account | theme, language | `account_ui_preferences` |
+| Account | two-factor sign-in | `accounts.totp_*` |
+| Account | presence / cursor colour | `accounts.color` |
 | Account | identity pins | the `pins` account record (sealed; highest revision seen also kept on each device against rollback) |
 | Chat | profile (name, avatar, about) | `chat_profiles` (end to end encrypted) |
 | Chat | per-conversation pinned, archived, muted, read | hidden Note to Self messages (end to end encrypted) |
@@ -51,9 +51,9 @@ contact's PGP preferences).
 | Mail | senders whose images load, block/spam/allow lists, filters, folder notify and expanded, auto-reply, identity and signature | their own tables |
 | Pass | site icons (through Kutup or off) | `pass_settings` |
 | Pass | PIN | `pass_pins` (bcrypt) |
-| Drive | version retention, folder colours | `users.version_retention_days`, `collections.color` |
+| Drive | version retention, folder colours | `accounts.version_retention_days`, `drive_collections.color` |
 | Photos | upload and library folders; favourites, archived, hidden | `photos_preferences`; account records `photosLibrary` (sealed) |
-| Maps | on/off, provider, through proxy, save folder | `user_map_preferences` |
+| Maps | on/off, provider, through proxy, save folder | `account_map_preferences` |
 | Contacts | per-contact encrypt, sign, scheme | inside the encrypted contact card |
 
 ### Per device (browser)

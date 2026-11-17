@@ -1,5 +1,5 @@
 //! Permanent account ids (docs/plans/account-ids.md): a person is their
-//! server and their account id (`users.id`), never their name.
+//! server and their account id (`accounts.id`), never their name.
 
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::primitives::{mac, mac_verify, subkey, Suite};

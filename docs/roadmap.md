@@ -156,7 +156,7 @@ Left before the tag:
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
   browser still uses libsodium for collaboration Ed25519 device keys and frame signatures (`sign.ts`,
-  `devices.ts`, `cryptoFrame.ts`), random bytes, and SHA-256 in Chat's
+  `account_devices.ts`, `cryptoFrame.ts`), random bytes, and SHA-256 in Chat's
   `backup.ts` and `media.ts`. Each gets a written 10× justification in
   [`docs/cryptographic-dependencies.md`](cryptographic-dependencies.md) or
   moves to WASM. The Android Worker benchmark is still open; with OPAQUE's
@@ -1532,7 +1532,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   "do when we touch the server" decision):
   - `latestVersionId` on the `GET /collections/:id/files` rows (one
     `LEFT JOIN LATERAL`) — kills the sync engine's per-file `list_versions`
-    polling (its remote-change signal; `files.updated_at` is never bumped).
+    polling (its remote-change signal; `drive_files.updated_at` is never bumped).
   - `trashRetentionDays` in `GET /api/auth/settings` — lets `kutup trash ls`
     show an accurate EXPIRES column on any server config (currently omitted
     rather than hardcoding 30).

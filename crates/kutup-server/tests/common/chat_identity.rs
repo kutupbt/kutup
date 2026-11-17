@@ -180,7 +180,7 @@ impl ChatAccount {
         b64(&self.identity.identity_key().serialize())
     }
 
-    /// The account's next manifest listing `devices`, signed by its authority.
+    /// The account's next manifest listing `account_devices`, signed by its authority.
     pub fn next_manifest(&self, devices: &[&ChatDevice]) -> AccountManifestV3 {
         let public = self.authority.verifying_key();
         let mut incarnation = Hasher::new(Suite::V1);

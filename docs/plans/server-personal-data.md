@@ -29,7 +29,7 @@ escrow and no server-side decryption path for end-to-end encrypted data.
 
 | Area | Today |
 |---|---|
-| Account state | `users.is_active` only. Admin delete is immediate and synchronous (`handlers/admin.rs:453`); no self-service deletion; no background deletion; no legal hold. |
+| Account state | `accounts.is_active` only. Admin delete is immediate and synchronous (`handlers/admin.rs:453`); no self-service deletion; no background deletion; no legal hold. |
 | Recovery email | Not built (`account-identity.md`, "Recovery email": planned `user_recovery_emails`). |
 | User agents | Raw `User-Agent` (up to 512 characters) in `auth_sessions.user_agent`, copied into `account_security_events.acting_user_agent`; returned raw and parsed in the browser (`describeUserAgent`). Feedback stores `navigator.userAgent` (300 characters). |
 | Retention | Security events: pruned on every insert to 365 days or the newest 500 (`security_events.rs:138`). `auth_sessions`: never deleted. |
@@ -37,7 +37,7 @@ escrow and no server-side decryption path for end-to-end encrypted data.
 | Logs | `account_security_events` (user-visible; no sign-ins), `admin_audit_log` (admin mutations only, best effort, no reads). One database role for everything; nothing is append-only. `security-log.md` is an unaccepted draft. |
 | Server-held keys | None per account. TOTP secrets are plaintext; two columns are sealed under env key lists (`OPAQUE_SETUP_KEYS`, `MAIL_FORWARDING_KEYS`). |
 | Mail metadata | `mail_messages`: subject, from, to/cc/bcc, reply-to, Message-IDs in the clear (the "readable fields" the sender's browser supplies). |
-| Share links | `public_shares` (Drive and Photos): `removed_at` (owner or admin takedown) and `expires_at`, both `410`. No per-account or site-wide switch. |
+| Share links | `drive_public_shares` (Drive and Photos): `removed_at` (owner or admin takedown) and `expires_at`, both `410`. No per-account or site-wide switch. |
 | Legal documents, consent | Nothing recorded at signup; no consent records; federation is site-level only. |
 | Backups | `pg_dump`, AES-encrypted, kept 30 days. A deleted account stays in every backup. |
 | nginx | PROXY protocol on all TLS listeners; `real_ip_header proxy_protocol`. No custom log format. |
@@ -115,7 +115,7 @@ each copy.
 
 ## A5. Account states and legal hold
 
-- **`users.state`** (text, CHECK): `active`, `suspended`, `closing`. It
+- **`accounts.state`** (text, CHECK): `active`, `suspended`, `closing`. It
   replaces `is_active`: `suspended` is today's "not active", with a
   `suspended_reason` (`admin`, `operator_order`, `security`) and
   `state_changed_at`.
@@ -163,7 +163,7 @@ Retention is a site setting, default 3 years. The core emits these events and
 keeps them; reports on them are operator tooling.
 
 **As built (L4, A5 and A7):**
-- `users.state` (`active`, `suspended` with `suspended_reason`, `closing` with
+- `accounts.state` (`active`, `suspended` with `suspended_reason`, `closing` with
   `closing_by` and `closes_at`), `state_changed_at`, `purpose_ended_at` (set
   when closing, cleared when kept). `is_active` stays, generated as
   `state = 'active'`, for the queries that route, deliver and sign in;
@@ -325,13 +325,13 @@ keeps them; reports on them are operator tooling.
 
 ## A11. Share-link controls
 
-- **Operator block:** `public_shares` gains `blocked_at`, `blocked_reason`
+- **Operator block:** `drive_public_shares` gains `blocked_at`, `blocked_reason`
   (`legal_order`, `abuse`, `other`) and `blocked_reference` (admin-only).
   - A blocked link answers `451` for `legal_order` and `410` otherwise. The
     code is `link_blocked` with the reason, so the public page says why;
     owner and admin takedowns keep `link_removed`.
   - Unblocking is possible; both directions are audited.
-- **Per account:** `users.public_sharing` (`on`, `off`), which an admin sets
+- **Per account:** `accounts.public_sharing` (`on`, `off`), which an admin sets
   per account. While `off`, the account can't create public links, and its
   existing ones answer `410 sharing_off`.
 - **Site-wide:** a site setting `public_sharing`: `on`, `off`, or
@@ -350,7 +350,7 @@ keeps them; reports on them are operator tooling.
   sharing_off` while either switch is off; `signed_in` still makes links.
 - The site switch is the site setting `public_sharing` (default `on`), set in
   Server settings → Accounts and shown in the public settings. The account
-  switch is `users.public_sharing`, on the admin's user page and in
+  switch is `accounts.public_sharing`, on the admin's user page and in
   `/user/me`.
 - Blocks: `POST`/`DELETE /api/admin/shares/:id/block` (reason `legal_order`,
   `abuse`, `other`; an admin-only reference), from the Reports page; open
@@ -401,7 +401,7 @@ keeps them; reports on them are operator tooling.
   too) and `consents` (a row per change, ordered by a sequence) are
   append-only for the app role. A purpose's text is the current document of
   the purpose's kind.
-- The federation switch (`users.federation`, default from the site setting
+- The federation switch (`accounts.federation`, default from the site setting
   `federation_default`): off, the account is no account to other servers by
   the same code path an unknown one takes (`kutup_account_federates` in each
   peer-facing query: Chat lookups, deliveries, the sealed store, multi-sends,

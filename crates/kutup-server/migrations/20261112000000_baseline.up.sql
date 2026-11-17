@@ -1,10 +1,13 @@
--- The schema the whole migration chain built, squashed (the wipe-2 baseline;
--- scripts/check-migration-baseline.sh proves it equal). Never edit once
--- applied: a change is then a new timestamped migration (docs/contributing.md).
+-- The wipe-2 baseline: the whole migration chain squashed, proven equal to
+-- the chain at the squash commit by scripts/check-migration-baseline.sh, then
+-- edited in place before anything applied it (docs/plans/w7-schema.md). Never
+-- edit once applied: a change is then a new timestamped migration
+-- (docs/contributing.md).
 --
--- Refuses a database that already holds the old chain's tables.
+-- Refuses a database that already holds tables: an old chain's (`users`) or
+-- this one's (`accounts`).
 DO $$ BEGIN
-  IF to_regclass('public.accounts') IS NOT NULL THEN
+  IF to_regclass('public.users') IS NOT NULL OR to_regclass('public.accounts') IS NOT NULL THEN
     RAISE EXCEPTION 'this database predates the baseline: start from an empty one';
   END IF;
 END $$;

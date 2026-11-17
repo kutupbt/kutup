@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 
 /// The Drive object suite every stored blob is in (`blob_suite` of
-/// `files`, `file_versions` and `uploads`): the block format.
+/// `drive_files`, `drive_file_versions` and `drive_uploads`): the block format.
 pub const BLOCK_SUITE: i16 = 2;
 
 /// A block-format blob being stored, bound to the revision the client chose.
@@ -102,8 +102,8 @@ impl BlockBlob {
 
 /// Refuses (`409`) a revision id any file, version or open upload already
 /// has: a revision names one content, and its id is that content's ETag, so
-/// it is unique across `files.content_revision_id`, `file_versions.id` and
-/// `uploads.revision_id` together. Each table has its unique key; across the
+/// it is unique across `drive_files.content_revision_id`, `drive_file_versions.id` and
+/// `drive_uploads.revision_id` together. Each table has its unique key; across the
 /// three, every claim of an id takes that id's advisory lock first (held to
 /// the end of the transaction that stores it), so two claims of one id can't
 /// both find it free.

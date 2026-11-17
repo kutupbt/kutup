@@ -1,5 +1,5 @@
 //! One device list per account (docs/plans/one-device-list.md): the
-//! account's `devices` rows against its signed V3 manifest. Every device of
+//! account's `account_devices` rows against its signed V3 manifest. Every device of
 //! every kind (a Chat app, an editing app, the CLI) is a row with a server
 //! issued id and credential, and an entry in the manifest the account
 //! authority signs; a row is live while it is listed.

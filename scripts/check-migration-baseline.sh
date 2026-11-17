@@ -56,13 +56,13 @@ apply "$work/old/crates/kutup-server/migrations" chain
 if [[ "$generate" == "--generate" ]]; then
   mkdir -p "$migrations"
   {
-    echo "-- The schema the whole migration chain built, squashed (the wipe-2 baseline;"
-    echo "-- scripts/check-migration-baseline.sh proves it equal). Never edit once"
+    echo "-- The whole migration chain squashed, proven equal to it by"
+    echo "-- scripts/check-migration-baseline.sh at the squash commit. Never edit once"
     echo "-- applied: a change is then a new timestamped migration (docs/contributing.md)."
     echo "--"
-    echo "-- Refuses a database that already holds the old chain's tables."
+    echo "-- Refuses a database that already holds tables (an old chain's)."
     echo "DO \$\$ BEGIN"
-    echo "  IF to_regclass('public.users') IS NOT NULL THEN"
+    echo "  IF to_regclass('public.users') IS NOT NULL OR to_regclass('public.accounts') IS NOT NULL THEN"
     echo "    RAISE EXCEPTION 'this database predates the baseline: start from an empty one';"
     echo "  END IF;"
     echo "END \$\$;"

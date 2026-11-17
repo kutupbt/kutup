@@ -433,7 +433,7 @@ The complete account identity is fixed at registration: the account authority,
 incarnation, Drive X25519 key, and Drive Ed25519 share-signing key are persisted
 as one binding. A later account manifest must match all of them exactly; a
 self-signed first manifest cannot select a replacement authority.
-The account's permanent id (`users.id`, docs/plans/account-ids.md) is the one
+The account's permanent id (`accounts.id`, docs/plans/account-ids.md) is the one
 `register/start` minted for this sign-up's key binding: `accountId` and
 `accountIdProof` come back unchanged (`400 accountIdInvalid` for anything
 else; `409 accountIdTaken` for an id some account has, or had: a deleted
@@ -2445,7 +2445,7 @@ Administrators only. One account's limits over the site's: `{ "maxDomains":
 0–100 | null, "maxAddresses": 1–1000 | null, "catchAll": bool | null }`, `null`
 keeping the site's. `maxDomains` and `catchAll` are the account's
 organization's (`organization_setting_overrides`), `maxAddresses` its own
-(`user_setting_overrides`); setting an organization's limit for an account
+(`account_setting_overrides`); setting an organization's limit for an account
 without one makes its organization of one, so a limit (0 blocks custom
 domains) can be set before the first domain. `GET` adds `maxDomainsRange` and
 `maxAddressesRange` (`{ min, max }`, the ranges of the site settings they
@@ -3252,7 +3252,7 @@ the revision id (parent) and the key generation that sealed the object
 to one length (356 bytes, 476 in base64). It comes with the revision's commit
 (the commit body, the multipart upload and version forms, the federated
 upload and version saves) and is stored with the row the revision becomes
-(`files` for the first upload, `file_versions` for every version); the server
+(`drive_files` for the first upload, `drive_file_versions` for every version); the server
 checks only its header and length (`400` otherwise) and requires it for every
 revision. Readers of any
 revision other than the current content (a history version, a note's
@@ -4365,7 +4365,7 @@ A new account identity for the devices the account keeps (Signal's
 devices" after a lost or stolen device: `{ identityKey, devices: [{ deviceId,
 registrationId, signedPreKey, lastResortKyberPreKey }], deviceMessages:
 [OutgoingEnvelope], manifest }`, each list strictly ordered by `deviceId`.
-`devices` names exactly the manifest's devices (the sender included) with its
+`account_devices` names exactly the manifest's devices (the sender included) with its
 registration ids, and `deviceMessages` one sealed `accountIdentity` sync per
 other listed device on its current session (each at most
 `chatDistributionMessageBytes`). `409` (`DeviceListMismatch`) when
@@ -6362,7 +6362,7 @@ so a reader asks for that state and refuses another.
 The server measures the body and charges **that** size to the author's
 quota (a client's size claim is not read), stores it as an object of its own
 (`files/{id}/versions/{versionId}`), records the row, truncates
-`file_update_log` up to `seqAtSnapshot` and sets the file's `updatedAt` (and
+`collab_update_log` up to `seqAtSnapshot` and sets the file's `updatedAt` (and
 so its folder's) — one transaction; the object is removed again if the
 commit fails. Under the relay's per-file lock, `seqAtSnapshot` is clamped
 to the log's head before the row is stored; truncation happens only when

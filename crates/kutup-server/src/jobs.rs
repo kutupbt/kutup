@@ -717,7 +717,7 @@ const INCOMPLETE_MULTIPART_PER_SWEEP: usize = 1000;
 
 /// Aborts the store's multipart uploads that were started longer ago than
 /// `storage_incomplete_multipart_max_age_seconds` (a day by default) and that
-/// no upload row (`uploads`, `chat_media_uploads`) names: the parts an abort
+/// no upload row (`drive_uploads`, `chat_media_uploads`) names: the parts an abort
 /// left behind when it failed after its row was removed (a cancel, the
 /// stale-upload sweep above). A bucket lifecycle rule for incomplete
 /// multipart uploads does the same on the store's side

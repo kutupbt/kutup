@@ -4,7 +4,7 @@
 //! store-and-forward mailboxes, and the WS drain. Everything the server touches here is
 //! public-key material or opaque ciphertext; there is no plaintext path.
 //!
-//! Trust model notes (v1, mirrors `devices.rs`): the JWT is the trust anchor for *who*
+//! Trust model notes (v1, mirrors `account_devices.rs`): the JWT is the trust anchor for *who*
 //! is calling; prekey signatures are stored and served verbatim for **clients** to
 //! verify (that's where verification is meaningful under E2EE — a malicious server
 //! could serve garbage regardless, and clients must not trust server-side checks).

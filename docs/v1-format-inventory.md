@@ -188,7 +188,7 @@ them; the generic WASM export refuses both purposes. The top-level name hash
 key comes from the current Drive root (`drive_names::top_level_hash_key`,
 same label and derivation as under the master key), and each top-level
 folder records the root's generation next to its hash
-(`collections.name_hash_generation`, sent as `nameHashGeneration`), so a
+(`drive_collections.name_hash_generation`, sent as `nameHashGeneration`), so a
 reader knows which key made it; a Drive-root rotation rehashes the top level
 (the rotation flow).
 

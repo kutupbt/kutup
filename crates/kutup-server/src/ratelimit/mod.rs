@@ -75,7 +75,7 @@ pub(crate) fn apply_overrides(rows: Vec<(String, String, i64)>) {
     *OVERRIDES.write().unwrap() = overrides;
 }
 
-/// Every account's own values, as stored (`user_setting_overrides`, keyed
+/// Every account's own values, as stored (`account_setting_overrides`, keyed
 /// `rate_limit.<key>`), by limit key.
 pub async fn stored_overrides(
     pool: &sqlx::PgPool,

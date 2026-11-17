@@ -4,7 +4,7 @@
 //! With no offline root configured, a server with a federation identity makes
 //! its own: a root generated in memory, used once to sign a long-lived online
 //! certificate, and dropped. Only the root's public key and the online
-//! private key are stored (`sealed_sender_generated_certificates`), so a copy
+//! private key are stored (`chat_sealed_sender_certificates`), so a copy
 //! of the database cannot sign another certificate under that root. Before a
 //! certificate runs out, the cycle repeats with a new root under the policy's
 //! usual rules: the new root and certificate are published first and start
