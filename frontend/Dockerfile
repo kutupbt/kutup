@@ -68,6 +68,9 @@ RUN o=apps/editor/public/onlyoffice \
     && sed -i "s#dist/x2t/#dist/$x2t/#g" $o/x2t.html $o/inner.html \
     && ! grep -n 'dist/v9/\|dist/x2t/' $o/inner.html $o/x2t.html \
     && grep -q "dist/$client/" $o/inner.html && grep -q "dist/$x2t/" $o/x2t.html
+# The release version (scripts/publish-images.sh); `0.0.0-dev` when unset.
+ARG KUTUP_RELEASE
+ENV KUTUP_RELEASE=${KUTUP_RELEASE}
 RUN pnpm run build \
     && mkdir -p /out \
     && for app in account drive chat maps photos office contacts mail pass calendar editor; do cp -r apps/$app/dist /out/$app; done \

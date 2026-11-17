@@ -21,6 +21,8 @@ pub fn run(
         server = prompt_line("Server URL: ")?;
     }
     let server = server.trim_end_matches('/').to_string();
+    // A CLI this server no longer accepts says so before asking anything else.
+    Client::new(&server, "").check_version()?;
 
     // Username or Kutup address: --username flag, else prompt. Password: KUTUP_PASSWORD env (for
     // non-interactive automation/CI), else a hidden prompt.

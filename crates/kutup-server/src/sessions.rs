@@ -49,6 +49,21 @@ pub enum ClientType {
 }
 
 impl ClientType {
+    /// Every client type, in a stable order.
+    pub const ALL: [ClientType; 11] = [
+        Self::WebAccount,
+        Self::WebDrive,
+        Self::WebChat,
+        Self::WebMaps,
+        Self::WebPhotos,
+        Self::WebOffice,
+        Self::WebContacts,
+        Self::WebMail,
+        Self::WebPass,
+        Self::WebCalendar,
+        Self::Cli,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::WebAccount => "web-account",

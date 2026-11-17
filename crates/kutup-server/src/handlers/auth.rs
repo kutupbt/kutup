@@ -2196,11 +2196,14 @@ pub(crate) fn direct_sign_in_client(headers: &HeaderMap) -> AppResult<ClientType
     Ok(client)
 }
 
+/// The client type `X-Kutup-Client` names (`<type>/<version>`, or the type
+/// alone); its version is the gate's (crate::client_version).
 pub(crate) fn client_header(headers: &HeaderMap) -> Option<ClientType> {
     headers
         .get(CLIENT_HEADER)
         .and_then(|v| v.to_str().ok())
-        .and_then(ClientType::parse)
+        .and_then(crate::client_version::parse_client)
+        .map(|(client, _)| client)
 }
 
 pub(crate) fn user_agent(headers: &HeaderMap) -> Option<&str> {
@@ -2344,7 +2347,7 @@ async fn issue_tokens_and_respond(
 }
 
 pub(crate) const REFRESH_COOKIE: &str = "refresh_token";
-pub(crate) const CLIENT_HEADER: &str = "x-kutup-client";
+pub(crate) const CLIENT_HEADER: &str = crate::client_version::CLIENT_HEADER;
 
 /// The refresh cookie: HttpOnly, host-only on the app's own origin (no `Domain`), sent
 /// only to `/api/auth/refresh`, 30-day sliding lifetime; `Secure` outside development.

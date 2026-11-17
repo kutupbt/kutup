@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { describe, it, expect, beforeEach } from 'vitest'
-import api, { configureClient, setUnauthenticatedHandler } from './client'
+import api, { ClientTooOldError, configureClient, isClientTooOld, resetClientTooOld, setUnauthenticatedHandler } from './client'
 import { clearSession, getAccessToken, getSession, setSession } from './store'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
@@ -96,6 +96,28 @@ describe('api/client — Authorization header', () => {
     responses[route('GET /me')] = [{ status: 200, data: { ok: true } }]
     await api.get('/me')
     expect(calls[0].headers.Authorization).toBeUndefined()
+  })
+})
+
+describe('api/client — client version', () => {
+  it('names the app and its release in X-Kutup-Client', async () => {
+    responses[route('GET /me')] = [{ status: 200, data: { ok: true } }]
+    await api.get('/me')
+    expect(calls[0].headers['X-Kutup-Client']).toBe('web-account/0.0.0-dev')
+  })
+
+  it('latches clientTooOld: the page is told to reload and later calls fail at once', async () => {
+    let reloads = 0
+    const onReload = () => { reloads += 1 }
+    window.addEventListener('kutup:reload-needed', onReload)
+    responses[route('GET /me')] = [{ status: 426, data: { error: 'client too old', code: 'clientTooOld', minimum: '2026.1120.0' } }]
+    await expect(api.get('/me')).rejects.toBeInstanceOf(ClientTooOldError)
+    expect(isClientTooOld()).toBe(true)
+    await expect(api.get('/other')).rejects.toBeInstanceOf(ClientTooOldError)
+    expect(calls.filter((c) => c.url === '/other')).toHaveLength(0)
+    expect(reloads).toBe(1)
+    window.removeEventListener('kutup:reload-needed', onReload)
+    resetClientTooOld()
   })
 })
 

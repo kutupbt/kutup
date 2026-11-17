@@ -17,6 +17,7 @@ import type { AdminSettings, PublicSharing, RegistrationMode, RegistrySetting, S
 import { SETTING_LABELS } from './limitLabels'
 import { useAdminSettings, useSettingsRegistry, useUpdateAdminSettings } from './api'
 import { Choice } from './federation/Choice'
+import { ClientVersionsSection } from './ClientVersions'
 import { bytesToGib, gibToBytes } from './helpers'
 
 const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
@@ -308,6 +309,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
           <Button type="submit" loading={update.isPending} disabled={!isDirty}>{t('common.save')}</Button>
         </div>
       </form>
+      <ClientVersionsSection />
     </PageBody>
   )
 }

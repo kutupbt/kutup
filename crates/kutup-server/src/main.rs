@@ -28,6 +28,7 @@ mod chat_groups;
 mod chat_hub;
 mod chat_media_federation;
 mod client_family;
+mod client_version;
 mod collab_federation;
 mod config;
 mod content_range;
@@ -113,10 +114,6 @@ use config::Config;
 use error::AppError;
 use models::HealthResponse;
 
-/// Server build identifier returned by `/api/health`. Mirrors `main.buildVersion`
-/// in Go (injected via `-ldflags` in release builds; `"dev"` otherwise).
-const BUILD_VERSION: &str = "dev";
-
 /// Default request-body cap. Handlers that buffer (JSON, `Bytes`) hold the
 /// whole body in memory, so the default is small; the upload routes that
 /// need more raise it on their own route (and stream to disk).
@@ -162,6 +159,8 @@ pub struct AppState {
     /// (docs/plans/security-keys.md); `None` where the account app's origin
     /// can't use WebAuthn (plain http off localhost), so keys are off.
     pub(crate) webauthn: Option<Arc<kutup_crypto::webauthn::RelyingParty>>,
+    /// The lowest client version per type (docs/plans/api-surface.md §1.3).
+    pub(crate) client_minimums: client_version::ClientMinimums,
 }
 
 const USAGE: &str = "usage: kutup-server [serve]
@@ -537,7 +536,9 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+    let client_minimums = client_version::ClientMinimums::load(&pool).await?;
     let state = AppState {
+        client_minimums,
         opaque,
         group_send,
         webauthn,
@@ -2450,6 +2451,11 @@ fn build_router(state: AppState) -> Router {
                         .put(handlers::mail_domains_admin::set_overrides),
                 )
                 .route(
+                    "/api/admin/client-versions",
+                    get(handlers::client_versions::get_client_versions)
+                        .put(handlers::client_versions::set_client_version),
+                )
+                .route(
                     "/api/admin/mail/outside-sending",
                     get(handlers::mail_sending::outside_sending)
                         .put(handlers::mail_sending::set_outside_sending),
@@ -2549,6 +2555,10 @@ fn build_router(state: AppState) -> Router {
         // NOTE: trailing-slash normalization is applied *outside* the Router in `main` (a
         // `Router::layer` runs only for matched paths, so it can't rescue `/collections/`).
         .layer(from_fn(middleware::session_version_header))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            client_version::client_version_gate,
+        ))
         .layer(CatchPanicLayer::new())
         // Outside the handlers and panic recovery, inside CORS: every /api/
         // answer, errors included, carries the API policy.
@@ -2687,11 +2697,15 @@ async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
     tag = "health",
     responses((status = 200, description = "Server name, build version, tus versions", body = HealthResponse))
 )]
-async fn health() -> Result<Json<HealthResponse>, AppError> {
+async fn health(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<Json<HealthResponse>, AppError> {
     Ok(Json(HealthResponse {
         name: "kutup",
-        version: BUILD_VERSION.to_string(),
+        version: client_version::RELEASE.to_string(),
         tus_versions: vec!["1.0.0"],
+        api_versions: client_version::API_VERSIONS.to_vec(),
+        minimum_clients: state.client_minimums.snapshot(),
     }))
 }
 
@@ -2738,6 +2752,7 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static(file_content::REVISION_HEADER),
             HeaderName::from_static(file_content::REVISION_CONTENT_HEADER),
             HeaderName::from_static(middleware::SESSION_VERSION_HEADER),
+            HeaderName::from_static(client_version::MIN_CLIENT_HEADER),
             axum::http::header::LOCATION,
         ])
 }

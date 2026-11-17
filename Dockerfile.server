@@ -24,6 +24,9 @@ COPY crates ./crates
 # copied sources can look older than the artifacts in the cached target
 # directory, which would silently reuse a stale workspace crate. Dependencies
 # (registry crates) stay cached.
+# The release version (scripts/publish-images.sh); `0.0.0-dev` when unset.
+ARG KUTUP_RELEASE
+ENV KUTUP_RELEASE=${KUTUP_RELEASE}
 RUN --mount=type=cache,id=kutup-server-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=kutup-server-release-target,target=/build/target,sharing=locked \
     find crates -type f -exec touch {} + \

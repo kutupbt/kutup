@@ -5,6 +5,7 @@ import { resolveApiBase } from './apiBase'
 import { clearPersisted } from './persistedStore'
 import { clearSession, getAccessToken, setAccessToken } from './store'
 import { noteSessionVersion, SESSION_VERSION_HEADER } from './sessionVersion'
+import { clientHeader } from './release'
 
 /** The server-side session types a web app can hold (X-Kutup-Client). */
 export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps' | 'web-photos' | 'web-office' | 'web-contacts' | 'web-mail' | 'web-pass' | 'web-calendar'
@@ -18,12 +19,51 @@ let clientType: WebClientType | null = null
  */
 export function configureClient(opts: { clientType: WebClientType }): void {
   clientType = opts.clientType
-  api.defaults.headers.common['X-Kutup-Client'] = opts.clientType
+  api.defaults.headers.common['X-Kutup-Client'] = clientHeader(opts.clientType)
 }
 
 export function getClientType(): WebClientType {
   if (!clientType) throw new Error('configureClient() has not run')
   return clientType
+}
+
+/** What the page dispatches when it must reload (`@kutup/config` reloadGuard.ts `RELOAD_NEEDED_EVENT`). */
+const RELOAD_NEEDED_EVENT = 'kutup:reload-needed'
+
+let tooOld = false
+
+/** The error every request fails with once the server said this build is too old. */
+export class ClientTooOldError extends Error {
+  readonly code = 'clientTooOld'
+  constructor() {
+    super('This version of Kutup is too old for the server; reload the page.')
+    this.name = 'ClientTooOldError'
+  }
+}
+
+/** Whether the server refused this build as too old (latched until a reload). */
+export function isClientTooOld(): boolean {
+  return tooOld
+}
+
+/**
+ * Latches a `clientTooOld` answer (docs/plans/api-surface.md §1.5): every
+ * later request fails at once, and the page offers its reload, as Proton
+ * latches APP_VERSION_BAD. Returns whether `error` was one.
+ */
+export function noteClientTooOld(error: unknown): boolean {
+  const response = (error as { response?: { status?: number; data?: { code?: unknown } } } | null)?.response
+  if (response?.data?.code !== 'clientTooOld') return false
+  if (!tooOld) {
+    tooOld = true
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(RELOAD_NEEDED_EVENT))
+  }
+  return true
+}
+
+/** Forgets the latch (tests only). */
+export function resetClientTooOld(): void {
+  tooOld = false
 }
 
 export interface RefreshResult {
@@ -39,13 +79,19 @@ export interface RefreshResult {
  */
 export async function refreshAccessToken(): Promise<RefreshResult> {
   const run = async (): Promise<RefreshResult> => {
+    if (tooOld) throw new ClientTooOldError()
     const base = await resolveApiBase()
-    const res = await axios.post<RefreshResult>(
-      `${base}/auth/refresh`,
-      {},
-      { withCredentials: true, headers: { 'X-Kutup-Client': getClientType() } },
-    )
-    return res.data
+    try {
+      const res = await axios.post<RefreshResult>(
+        `${base}/auth/refresh`,
+        {},
+        { withCredentials: true, headers: { 'X-Kutup-Client': clientHeader(getClientType()) } },
+      )
+      return res.data
+    } catch (error) {
+      if (noteClientTooOld(error)) throw new ClientTooOldError()
+      throw error
+    }
   }
   if (typeof navigator !== 'undefined' && navigator.locks) {
     return navigator.locks.request('kutup-refresh', run)
@@ -129,6 +175,7 @@ axios.interceptors.request.use(exactBody)
 
 // Attach access token + resolve base URL on every request.
 api.interceptors.request.use(async (config) => {
+  if (tooOld) throw new ClientTooOldError()
   config.baseURL = await resolveApiBase()
   const token = getAccessToken()
   // A request that names its own credential (an administrator-made account's
@@ -170,6 +217,7 @@ api.interceptors.response.use(
   },
   async (error) => {
     noteSessionVersion(error.response?.headers?.[SESSION_VERSION_HEADER])
+    if (noteClientTooOld(error)) return Promise.reject(new ClientTooOldError())
     const originalRequest = error.config
     const status = error.response?.status
     // If axios couldn't even attach the request config (some network-layer

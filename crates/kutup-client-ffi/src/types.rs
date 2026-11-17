@@ -39,6 +39,12 @@ pub enum KutupChatError {
     /// from it (`NativeLinkingDevice`), or re-register.
     #[error("this device must be linked from one of the account's devices")]
     LinkRequired,
+    /// The server refuses this app's version: show the store's update prompt.
+    #[error("this app is too old for the server (needs {minimum})")]
+    ClientTooOld { minimum: String },
+    /// The server is older than this app supports.
+    #[error("the server runs an older Kutup than this app supports ({supported})")]
+    ServerTooOld { supported: String },
 }
 
 impl From<ChatError> for KutupChatError {
@@ -67,6 +73,8 @@ impl From<ChatError> for KutupChatError {
             ChatError::SendNotConverged(attempts) => Self::SendNotConverged { attempts },
             ChatError::MissingBundle(device_id) => Self::MissingBundle { device_id },
             ChatError::LinkRequired => Self::LinkRequired,
+            ChatError::ClientTooOld(minimum) => Self::ClientTooOld { minimum },
+            ChatError::ServerTooOld(supported) => Self::ServerTooOld { supported },
         }
     }
 }

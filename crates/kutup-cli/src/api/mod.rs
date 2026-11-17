@@ -40,6 +40,13 @@ use serde::Serialize;
 
 pub use types::*;
 
+/// What every request says it is (docs/plans/api-surface.md §1.2): the
+/// `cli` client type and this build's version.
+pub const CLIENT_HEADER_VALUE: &str = concat!("cli/", env!("CARGO_PKG_VERSION"));
+
+/// The update hint a too-old CLI prints.
+pub const UPDATE_URL: &str = "https://github.com/kutupbt/kutup/releases";
+
 /// Typed HTTP error, carried through anyhow chains so `main` can map exit
 /// codes and commands can match on `status` instead of string-parsing.
 #[derive(Debug, thiserror::Error)]
@@ -114,8 +121,22 @@ impl ApiError {
             .and_then(|v| v.get("uploadId")?.as_str().map(str::to_string));
         let idle_seconds = parsed.as_ref().and_then(|v| v.get("idleSeconds")?.as_i64());
         let yours = parsed.as_ref().and_then(|v| v.get("yours")?.as_bool());
-        let message = parsed
-            .and_then(|v| v.get("error")?.as_str().map(str::to_string))
+        // Too old for this server: say what it needs and where to get it.
+        let too_old = parsed
+            .as_ref()
+            .filter(|_| code.as_deref() == Some("clientTooOld"))
+            .map(|v| {
+                let minimum = v
+                    .get("minimum")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("a newer version");
+                format!(
+                    "this server needs kutup {minimum} or newer (this is {}); update: {UPDATE_URL}",
+                    env!("CARGO_PKG_VERSION")
+                )
+            });
+        let message = too_old
+            .or_else(|| parsed.and_then(|v| v.get("error")?.as_str().map(str::to_string)))
             .unwrap_or_else(|| {
                 let trimmed = body.trim().to_string();
                 if trimmed.is_empty() {
@@ -134,6 +155,27 @@ impl ApiError {
             name_taken,
             version_conflict,
         }
+    }
+}
+
+/// Whether `version` (`major.minor.patch[-pre]`) is below `minimum`; an
+/// unreadable one is not (the server's own check decides then).
+pub(crate) fn version_below(version: &str, minimum: &str) -> bool {
+    fn parse(v: &str) -> Option<([u64; 3], bool)> {
+        let (core, pre) = match v.split_once('-') {
+            Some((core, _)) => (core, true),
+            None => (v, false),
+        };
+        let mut out = [0u64; 3];
+        let mut parts = core.split('.');
+        for slot in &mut out {
+            *slot = parts.next()?.parse().ok()?;
+        }
+        parts.next().is_none().then_some((out, pre))
+    }
+    match (parse(version), parse(minimum)) {
+        (Some((a, a_pre)), Some((b, b_pre))) => a < b || (a == b && a_pre && !b_pre),
+        _ => false,
     }
 }
 
@@ -179,7 +221,7 @@ impl Client {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             "x-kutup-client",
-            reqwest::header::HeaderValue::from_static("cli"),
+            reqwest::header::HeaderValue::from_static(CLIENT_HEADER_VALUE),
         );
         let http = crate::tls::client_builder()
             .default_headers(headers.clone())
@@ -279,6 +321,35 @@ impl Client {
 
     fn delete(&self, path: &str) -> Result<Response> {
         Ok(self.request(Method::DELETE, path).send()?)
+    }
+
+    /// The server's health answer: what it serves and the oldest clients it
+    /// accepts. `kutup login` reads it first, so a too-old CLI says so before
+    /// asking for a password.
+    pub fn check_version(&self) -> Result<()> {
+        let resp = self.get("/health")?;
+        if !resp.status().is_success() {
+            return Ok(());
+        }
+        let health: serde_json::Value = resp.json().unwrap_or_default();
+        let Some(minimum) = health
+            .get("minimumClients")
+            .and_then(|m| m.get("cli"))
+            .and_then(|m| m.as_str())
+        else {
+            return Ok(());
+        };
+        if version_below(env!("CARGO_PKG_VERSION"), minimum) {
+            let body = serde_json::json!({
+                "error": "client too old", "code": "clientTooOld", "minimum": minimum,
+            });
+            return Err(anyhow::Error::new(ApiError::from_parts(
+                426,
+                "Upgrade Required",
+                body.to_string(),
+            )));
+        }
+        Ok(())
     }
 
     // --- Auth ---
@@ -477,7 +548,26 @@ pub(crate) fn check_ok(resp: Response) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{path_segment, ApiError};
+    use super::{path_segment, version_below, ApiError};
+
+    #[test]
+    fn a_too_old_cli_says_what_it_needs() {
+        let e = ApiError::from_parts(
+            426,
+            "Upgrade Required",
+            r#"{"error":"client too old","code":"clientTooOld","clientType":"cli","minimum":"9.0.0"}"#.into(),
+        );
+        assert_eq!(e.code.as_deref(), Some("clientTooOld"));
+        assert!(
+            e.message.contains("needs kutup 9.0.0 or newer"),
+            "{}",
+            e.message
+        );
+        assert!(version_below("0.0.9", "0.0.14"));
+        assert!(!version_below("0.0.14", "0.0.14"));
+        assert!(version_below("0.0.14-rc1", "0.0.14"));
+        assert!(!version_below("junk", "0.0.14"));
+    }
 
     #[test]
     fn path_segment_encodes_reserved_chars() {

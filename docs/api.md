@@ -19,7 +19,20 @@ larger body gets `413`.
 ### GET /api/health
 
 Anonymous liveness and identity: `{ "name": "kutup", "version": "…",
-"tusVersions": ["1.0.0"] }`. It touches neither the database nor storage.
+"tusVersions": ["1.0.0"], "apiVersions": [1], "minimumClients": {"cli":
+"0.0.14"} }`. `version` is the release (`YYYY.MDD.N`, `0.0.0-dev` for a
+developer's build); `minimumClients` lists the client types that have a
+minimum. It touches neither the database nor storage.
+
+## Client versions
+
+Every Kutup client sends `X-Kutup-Client: <clientType>/<version>`
+(`web-drive/2026.1120.0`, `cli/0.0.14`); a WebSocket upgrade, which a
+browser can't give headers, sends `?client=` instead. A client older than
+its type's minimum gets `426 clientTooOld`. The minimum is the higher of
+the server build's own floor and the one administrators set
+(`GET`/`PUT /api/admin/client-versions`). A request naming no client is not
+checked; a `-dev` version never is.
 
 ### GET /api/health/ready
 
@@ -255,6 +268,7 @@ Specific codes, where an app does something particular (a test in
 | `sendLimit`, `scheduledLimit` | 429 | A sending or scheduling limit was reached |
 | `spam`, `refused` | 403 | The message was refused |
 | `expiringOutside` | 400 | Expiring messages cannot go outside Kutup |
+| `clientTooOld` | 426 | This client is older than the server accepts for its type (`clientType`, `minimum`; the `X-Kutup-Min-Client` header says `<type>/<minimum>`). Every client latches it: the web apps offer a reload, the CLI exits 7 asking for an update, native apps show their store's update prompt |
 
 Not covered: server-to-server federation answers (signed, their own shapes)
 and the framework's own refusals of a request it cannot read (a body that is

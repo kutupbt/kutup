@@ -29,6 +29,12 @@ pub struct HealthResponse {
     pub version: String,
     #[serde(rename = "tusVersions")]
     pub tus_versions: Vec<&'static str>,
+    /// The API versions served under `/api/v{n}/`.
+    #[serde(rename = "apiVersions")]
+    pub api_versions: Vec<u32>,
+    /// The lowest version per client type, for types that have one.
+    #[serde(rename = "minimumClients")]
+    pub minimum_clients: std::collections::BTreeMap<String, String>,
 }
 
 /// Wraps API error messages — mirrors `handlers.ErrorResponse`.
@@ -569,13 +575,15 @@ mod tests {
         // Mirrors handlers/health.go: keys name, version, tusVersions (in order).
         let body = serde_json::to_string(&HealthResponse {
             name: "kutup",
-            version: "dev".to_string(),
+            version: "0.0.0-dev".to_string(),
             tus_versions: vec!["1.0.0"],
+            api_versions: vec![1],
+            minimum_clients: [("cli".to_string(), "0.0.14".to_string())].into(),
         })
         .unwrap();
         assert_eq!(
             body,
-            r#"{"name":"kutup","version":"dev","tusVersions":["1.0.0"]}"#
+            r#"{"name":"kutup","version":"0.0.0-dev","tusVersions":["1.0.0"],"apiVersions":[1],"minimumClients":{"cli":"0.0.14"}}"#
         );
     }
 

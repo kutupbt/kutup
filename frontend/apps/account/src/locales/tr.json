@@ -1912,6 +1912,28 @@
         "site": "Sitenin değeri",
         "saved": "Sınırlar kaydedildi"
       }
+    },
+    "clientVersions": {
+      "title": "İstemci sürümleri",
+      "hint": "Bu sunucunun kabul ettiği en eski uygulama ve komut satırı sürümleri. Daha eskileri yeniden yüklemeye ya da güncellemeye çağrılır.",
+      "release": "Bu sunucu {{release}} sürümünü çalıştırıyor.",
+      "floor": "Bu sunucu en az {{version}} sürümünü gerektirir.",
+      "noFloor": "Bu sunucunun bir alt sınırı yok.",
+      "placeholder": "Alt sınır yok",
+      "saved": "En düşük sürüm kaydedildi",
+      "types": {
+        "web-account": "Hesap",
+        "web-drive": "Drive",
+        "web-chat": "Sohbet",
+        "web-maps": "Haritalar",
+        "web-photos": "Fotoğraflar",
+        "web-office": "Ofis",
+        "web-contacts": "Kişiler",
+        "web-mail": "Posta",
+        "web-pass": "Kasa",
+        "web-calendar": "Takvim",
+        "cli": "Komut satırı (kutup)"
+      }
     }
   },
   "groupMembership": {

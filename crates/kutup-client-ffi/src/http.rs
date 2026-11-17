@@ -395,12 +395,28 @@ impl NativeTransport {
 
 fn ensure_success(response: &ChatHttpResponse) -> CoreResult<()> {
     if (200..300).contains(&response.status) {
-        Ok(())
-    } else {
-        Err(ChatError::Transport(format!(
+        return Ok(());
+    }
+    // The two version answers stop the engine with their own errors
+    // (docs/plans/api-surface.md §1.5); every other failure is transport.
+    let body: Option<serde_json::Value> = serde_json::from_str(&response.body_json).ok();
+    let field = |name: &str| {
+        body.as_ref()
+            .and_then(|b| b.get(name))
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| v.to_string())
+            })
+            .unwrap_or_default()
+    };
+    match field("code").as_str() {
+        "clientTooOld" => Err(ChatError::ClientTooOld(field("minimum"))),
+        "apiVersionUnsupported" => Err(ChatError::ServerTooOld(field("supported"))),
+        _ => Err(ChatError::Transport(format!(
             "chat API returned HTTP {}",
             response.status
-        )))
+        ))),
     }
 }
 

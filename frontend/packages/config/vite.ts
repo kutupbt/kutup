@@ -309,6 +309,9 @@ export function kutupApp(opts: {
       ...(opts.serviceWorker ? [kutupServiceWorker()] : []),
     ],
     worker: { format: 'es' },
+    // The release this build belongs to (docs/plans/api-surface.md §1.2),
+    // stamped by scripts/publish-images.sh; `0.0.0-dev` otherwise.
+    define: { __KUTUP_RELEASE__: JSON.stringify(process.env.KUTUP_RELEASE || '0.0.0-dev') },
     resolve: {
       alias: {
         // The ESM build of libsodium-wrappers-sumo has a broken relative

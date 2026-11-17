@@ -1912,6 +1912,28 @@
         "site": "The site's",
         "saved": "Limits saved"
       }
+    },
+    "clientVersions": {
+      "title": "Client versions",
+      "hint": "The oldest version of each app and of the command line this server accepts. Older ones are asked to reload or update.",
+      "release": "This server runs release {{release}}.",
+      "floor": "This server needs at least {{version}}.",
+      "noFloor": "No minimum from this server.",
+      "placeholder": "No minimum",
+      "saved": "Minimum version saved",
+      "types": {
+        "web-account": "Account",
+        "web-drive": "Drive",
+        "web-chat": "Chat",
+        "web-maps": "Maps",
+        "web-photos": "Photos",
+        "web-office": "Office",
+        "web-contacts": "Contacts",
+        "web-mail": "Mail",
+        "web-pass": "Pass",
+        "web-calendar": "Calendar",
+        "cli": "Command line (kutup)"
+      }
     }
   },
   "groupMembership": {
