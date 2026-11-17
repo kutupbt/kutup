@@ -82,7 +82,7 @@ export function ClientVersionsSection() {
           {versions.isError ? (
             <Alert variant="error">{apiErrorMessage(versions.error, t('common.tryAgain'))}</Alert>
           ) : !versions.data ? (
-            <FormSkeleton />
+            <FormSkeleton label={t('common.loading')} />
           ) : (
             <>
               <p className="text-sm text-muted-foreground">{t('admin.clientVersions.release', { release: versions.data.release })}</p>
