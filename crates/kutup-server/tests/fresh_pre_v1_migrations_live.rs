@@ -81,7 +81,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
         "collection ids must be client-generated"
     );
 
-    for table in ["files", "uploads"] {
+    for table in ["drive_files", "drive_uploads"] {
         let columns: Vec<String> = sqlx::query_scalar(
             "SELECT column_name FROM information_schema.columns
              WHERE table_schema = 'public' AND table_name = $1",
@@ -97,7 +97,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
             "key_epoch",
             "metadata_revision",
         ] {
-            if table == "files" && required == "file_id" {
+            if table == "drive_files" && required == "file_id" {
                 continue;
             }
             assert!(
@@ -183,7 +183,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     for required in [
         "collection_key_envelope",
         "collection_key_epoch",
-        "owner_user_id",
+        "owner_account_id",
     ] {
         assert!(public_share_columns.iter().any(|column| column == required));
     }
@@ -205,7 +205,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     .unwrap();
     assert_eq!(
         history_primary_key,
-        ["user_id", "incarnation_id", "version"]
+        ["account_id", "incarnation_id", "version"]
     );
 
     // MLS groups are gone (docs/plans/pairwise-groups.md §9): no table of
@@ -272,7 +272,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    for required in ["origin_domain", "ciphertext_sha256", "retrieval_token_hash"] {
+    for required in ["origin_server", "ciphertext_sha256", "retrieval_token_hash"] {
         assert!(media_object_columns.iter().any(|column| column == required));
     }
     let origin_delivery_columns: Vec<String> = sqlx::query_scalar(

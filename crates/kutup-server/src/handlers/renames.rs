@@ -86,7 +86,7 @@ pub async fn check(
             .with_details(json!({ "code": "rateLimited" })));
     }
     let incarnation: String =
-        sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT account_incarnation_id FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
@@ -104,7 +104,7 @@ pub async fn check(
             let keyed: bool = sqlx::query_scalar(
                 "SELECT EXISTS (SELECT 1 FROM mail_addresses a
                                   JOIN mail_address_keys k ON k.address_id = a.id
-                                 WHERE a.user_id = $1 AND a.state <> 'freed'
+                                 WHERE a.account_id = $1 AND a.state <> 'freed'
                                    AND a.folded = kutup_fold($2) || '@' || lower($3))",
             )
             .bind(user_id)
@@ -206,7 +206,7 @@ pub async fn rename(
     let (username, incarnation, authority, first_login, break_glass): Account = sqlx::query_as(
         "SELECT COALESCE(username, ''), account_incarnation_id, account_authority_public_key,
                 is_first_login, is_break_glass
-           FROM users WHERE id = $1 AND is_active FOR UPDATE",
+           FROM accounts WHERE id = $1 AND is_active FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *tx)
@@ -350,7 +350,7 @@ pub async fn rename(
     }
     let held: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM account_names
-          WHERE user_id = $1 AND state = 'held' AND receive_until > now()",
+          WHERE account_id = $1 AND state = 'held' AND receive_until > now()",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -371,7 +371,7 @@ pub async fn rename(
     let free_at = now + time::Duration::days(hold_days);
     sqlx::query(
         "UPDATE account_names SET state = 'held', receive_until = $2, free_at = $3
-          WHERE user_id = $1 AND state = 'current'",
+          WHERE account_id = $1 AND state = 'current'",
     )
     .bind(user_id)
     .bind(receive_until)
@@ -383,7 +383,7 @@ pub async fn rename(
             // As it was spelled: its address, keys and key lists name it so.
             let taken = sqlx::query(
                 "UPDATE account_names SET state = 'current', receive_until = NULL, free_at = NULL
-                  WHERE folded = kutup_fold($2) AND name = $2 AND user_id = $1 AND state = 'held'",
+                  WHERE folded = kutup_fold($2) AND name = $2 AND account_id = $1 AND state = 'held'",
             )
             .bind(user_id)
             .bind(&new_name)
@@ -398,7 +398,7 @@ pub async fn rename(
             account_names::claim(&mut tx, &new_name, user_id, Some(&incarnation)).await?
         }
     }
-    sqlx::query("UPDATE users SET username = $2, updated_at = now() WHERE id = $1")
+    sqlx::query("UPDATE accounts SET username = $2, updated_at = now() WHERE id = $1")
         .bind(user_id)
         .bind(&new_name)
         .execute(&mut *tx)
@@ -406,7 +406,7 @@ pub async fn rename(
         .map_err(crate::handlers::auth::map_insert_conflict)?;
     sqlx::query(
         "INSERT INTO account_renames
-             (incarnation_id, sequence, user_id, authority_public_key, previous, current,
+             (incarnation_id, sequence, account_id, authority_public_key, previous, current,
               counted, statement, digest)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
@@ -429,7 +429,7 @@ pub async fn rename(
     // domains stay as they are.
     let place: Option<i32> = sqlx::query_scalar(
         "UPDATE mail_addresses SET state = 'receiving', receive_until = $2
-          WHERE user_id = $1 AND state = 'active' AND domain_id IS NULL
+          WHERE account_id = $1 AND state = 'active' AND domain_id IS NULL
           RETURNING position",
     )
     .bind(user_id)
@@ -438,7 +438,7 @@ pub async fn rename(
     .await?;
     let reused: u64 = sqlx::query(
         "UPDATE mail_addresses SET state = 'active', receive_until = NULL
-          WHERE user_id = $1 AND folded = kutup_fold($2) || '@' || $3 AND state <> 'freed'",
+          WHERE account_id = $1 AND folded = kutup_fold($2) || '@' || $3 AND state <> 'freed'",
     )
     .bind(user_id)
     .bind(&new_name)
@@ -457,7 +457,7 @@ pub async fn rename(
     let (address_id, keyed): (Uuid, bool) = sqlx::query_as(
         "SELECT a.id, EXISTS (SELECT 1 FROM mail_address_keys k WHERE k.address_id = a.id)
            FROM mail_addresses a
-          WHERE a.user_id = $1 AND a.state = 'active' AND a.domain_id IS NULL",
+          WHERE a.account_id = $1 AND a.state = 'active' AND a.domain_id IS NULL",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -488,7 +488,7 @@ pub async fn rename(
     // address; the old one, receiving only, has no identity to send as.
     sqlx::query(
         "UPDATE mail_identities SET address_id = $2
-          WHERE address_id = (SELECT id FROM mail_addresses WHERE user_id = $1 AND state = 'receiving'
+          WHERE address_id = (SELECT id FROM mail_addresses WHERE account_id = $1 AND state = 'receiving'
                                 ORDER BY receive_until DESC LIMIT 1)
             AND NOT EXISTS (SELECT 1 FROM mail_identities WHERE address_id = $2)",
     )
@@ -498,7 +498,7 @@ pub async fn rename(
     .await?;
     sqlx::query(
         "DELETE FROM mail_identities
-          WHERE address_id IN (SELECT id FROM mail_addresses WHERE user_id = $1 AND state <> 'active')",
+          WHERE address_id IN (SELECT id FROM mail_addresses WHERE account_id = $1 AND state <> 'active')",
     )
     .bind(user_id)
     .execute(&mut *tx)
@@ -554,7 +554,7 @@ pub async fn names(State(state): State<AppState>, user: AuthUser) -> AppResult<R
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<HeldName> = sqlx::query_as(
         "SELECT name, state, receive_until, free_at FROM account_names
-          WHERE user_id = $1 ORDER BY state = 'current' DESC, free_at",
+          WHERE account_id = $1 ORDER BY state = 'current' DESC, free_at",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -588,7 +588,7 @@ pub async fn drop_name(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -597,7 +597,7 @@ pub async fn drop_name(
     // people may still write to, not something to repeat at will.
     let last: Option<time::OffsetDateTime> = sqlx::query_scalar(
         "SELECT max(at) FROM account_security_events
-          WHERE user_id = $1 AND kind = 'nameDropped' AND admin_user_id IS NULL",
+          WHERE account_id = $1 AND kind = 'nameDropped' AND admin_account_id IS NULL",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -615,7 +615,7 @@ pub async fn drop_name(
     }
     let dropped: Option<String> = sqlx::query_scalar(
         "UPDATE account_names SET receive_until = LEAST(COALESCE(receive_until, now()), now())
-          WHERE user_id = $1 AND folded = kutup_fold($2) AND state = 'held'
+          WHERE account_id = $1 AND folded = kutup_fold($2) AND state = 'held'
          RETURNING name",
     )
     .bind(user_id)
@@ -650,7 +650,7 @@ pub(crate) async fn close_address(
 ) -> AppResult<()> {
     sqlx::query(
         "UPDATE mail_addresses SET state = 'closed', receive_until = now()
-          WHERE user_id = $1 AND folded = kutup_fold($2) || '@' || lower($3)
+          WHERE account_id = $1 AND folded = kutup_fold($2) || '@' || lower($3)
             AND state = 'receiving'",
     )
     .bind(user_id)
@@ -679,7 +679,7 @@ async fn admin_name(
     let admin_id = trusted_uuid(&admin.user_id)?;
     let mut tx = state.pool.begin().await?;
     let held: Option<(String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT name, user_id FROM account_names
+        "SELECT name, account_id FROM account_names
           WHERE folded = kutup_fold($1) AND state = 'held' FOR UPDATE",
     )
     .bind(name)
@@ -712,7 +712,7 @@ async fn admin_name(
             if let Some(owner) = owner {
                 sqlx::query(
                     "UPDATE mail_addresses SET state = 'freed', receive_until = NULL
-                      WHERE user_id = $1 AND split_part(folded, '@', 1) = kutup_fold($2)
+                      WHERE account_id = $1 AND split_part(folded, '@', 1) = kutup_fold($2)
                         AND state IN ('receiving', 'closed')",
                 )
                 .bind(owner)

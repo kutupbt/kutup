@@ -111,7 +111,7 @@ async fn grant_role(owner: &PgPool, app: &str) -> Result<()> {
     // the sequence, never names one, and never moves the sequence back.
     statements.push(format!("REVOKE INSERT ON admin_audit_log FROM {role}"));
     statements.push(format!(
-        "GRANT INSERT (admin_user_id, action, target_user_id, payload, occurred_at, \
+        "GRANT INSERT (admin_account_id, action, target_account_id, payload, occurred_at, \
          previous_hash, row_hash, chain_version) ON admin_audit_log TO {role}"
     ));
     let sequence: Option<String> =
@@ -183,7 +183,7 @@ mod tests {
             "UPDATE consents SET given = true",
             "DELETE FROM document_acknowledgements",
             "UPDATE legal_documents SET url = 'x'",
-            "INSERT INTO admin_audit_log (id, admin_user_id, action, payload) \
+            "INSERT INTO admin_audit_log (id, admin_account_id, action, payload) \
              VALUES (9223372036854775000, gen_random_uuid(), 'x', '{}')",
             "SELECT setval(pg_get_serial_sequence('admin_audit_log', 'id'), 1)",
             "INSERT INTO admin_audit_anchor (through_id, through_hash) VALUES (1, sha256('x'))",
@@ -212,7 +212,7 @@ mod tests {
             .execute(&mut *tx)
             .await
             .unwrap();
-        sqlx::query("UPDATE users SET updated_at = updated_at WHERE false")
+        sqlx::query("UPDATE accounts SET updated_at = updated_at WHERE false")
             .execute(&mut *tx)
             .await
             .unwrap();

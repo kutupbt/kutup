@@ -1438,13 +1438,13 @@ pub async fn enqueue_send(
     let key = plain_key(sender_user_id, request.sender_device_id, &request.send_id);
 
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR SHARE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR SHARE")
         .bind(sender_user_id)
         .execute(&mut *tx)
         .await?;
     let device: Option<i32> = sqlx::query_scalar(
-        "UPDATE devices SET last_seen_at = now()
-             WHERE user_id = $1 AND device_id = $2 RETURNING 1",
+        "UPDATE account_devices SET last_seen_at = now()
+             WHERE account_id = $1 AND device_id = $2 RETURNING 1",
     )
     .bind(sender_user_id)
     .bind(request.sender_device_id as i32)
@@ -1533,7 +1533,7 @@ pub async fn enqueue_send(
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO federation_outbox
-                 (id, kind, destination, sequence, idempotency_key, sender_user_id,
+                 (id, kind, destination, sequence, idempotency_key, sender_account_id,
                   recipient_account_id, payload)
              VALUES ($1, 'chat', $2, $3, $4, $5, $6,
                      jsonb_build_object('request', $7::jsonb, 'sender', $5))",
@@ -1813,7 +1813,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
 /// one's queued sends still go, as they always did).
 pub(crate) async fn sender_is_off(pool: &sqlx::PgPool, sender: Uuid) -> AppResult<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND federation = 'off')",
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND federation = 'off')",
     )
     .bind(sender)
     .fetch_one(pool)
@@ -1824,7 +1824,7 @@ pub(crate) async fn sender_is_off(pool: &sqlx::PgPool, sender: Uuid) -> AppResul
 /// off (one try; it waits as any send when the destination doesn't answer).
 async fn withdraw_off_head(state: &AppState, destination: &str) -> AppResult<()> {
     let head: Option<Uuid> = sqlx::query_scalar(
-        "SELECT o.id FROM federation_outbox o JOIN users u ON u.id = (o.payload->>'sender')::uuid
+        "SELECT o.id FROM federation_outbox o JOIN accounts u ON u.id = (o.payload->>'sender')::uuid
           WHERE o.kind = 'chat' AND o.destination = $1 AND o.state = 'pending'
             AND u.federation = 'off'
             AND o.sequence = (SELECT MIN(sequence) FROM federation_outbox
@@ -2588,7 +2588,7 @@ pub async fn get_manifest_history(
         return signed_app_error(federation, &authenticated, error);
     };
     let incarnation_id: Option<String> = match sqlx::query_scalar(
-        "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
+        "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE account_id = $1",
     )
     .bind(target_id)
     .fetch_optional(&state.pool)
@@ -2621,7 +2621,7 @@ pub async fn get_manifest_history(
     }
     let values: Vec<serde_json::Value> = sqlx::query_scalar(
         "SELECT manifest FROM chat_device_manifest_history
-         WHERE user_id = $1 AND incarnation_id = $2 AND version BETWEEN $3 AND $4
+         WHERE account_id = $1 AND incarnation_id = $2 AND version BETWEEN $3 AND $4
          ORDER BY version LIMIT 65",
     )
     .bind(target_id)
@@ -2685,7 +2685,7 @@ pub async fn get_manifest(
         return signed_app_error(federation, &authenticated, error);
     };
     let value: Option<serde_json::Value> =
-        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE account_id = $1")
             .bind(target_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -2905,17 +2905,16 @@ pub async fn deliver_messages(
         );
     }
 
-    let recipient_id: Option<Uuid> =
-        match Uuid::parse_str(&transaction.recipient.account_id) {
-            Ok(id) => sqlx::query_scalar(
-                "SELECT id FROM users WHERE id = $1 AND is_active AND kutup_account_federates(id)
+    let recipient_id: Option<Uuid> = match Uuid::parse_str(&transaction.recipient.account_id) {
+        Ok(id) => sqlx::query_scalar(
+            "SELECT id FROM accounts WHERE id = $1 AND is_active AND kutup_account_federates(id)
                   FOR SHARE",
-            )
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?,
-            Err(_) => None,
-        };
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?,
+        Err(_) => None,
+    };
     let Some(recipient_id) = recipient_id else {
         let response = FederationDeliveryResponse {
             stored: 0,
@@ -2976,7 +2975,7 @@ pub async fn deliver_messages(
     for envelope in &transaction.message.envelopes {
         let (id, cursor, server_ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox
-                (recipient_user_id, recipient_device_id, sender_server, sender_account_id,
+                (recipient_account_id, recipient_device_id, sender_server, sender_account_id,
                  sender_device_id, envelope_type, suite, content, send_id)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
              RETURNING id, cursor, server_ts",
@@ -3492,7 +3491,7 @@ mod sealed_live_tests {
         let id = Uuid::new_v4();
         let name = format!("sb{}", &id.simple().to_string()[..12]);
         sqlx::query(
-            "INSERT INTO users (id, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, master_key_envelope, recovery_key_envelope,
                  public_key, account_authority_public_key,
                  account_authority_key_id, account_incarnation_id, drive_signing_public_key,
                  username)
@@ -3504,7 +3503,7 @@ mod sealed_live_tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO devices (user_id, device_id, suite, registration_id, identity_key,
+            "INSERT INTO account_devices (account_id, device_id, suite, registration_id, identity_key,
                  signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                  last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                  last_resort_kyber_pre_key_signature, credential_salt, credential_hash,
@@ -3520,7 +3519,7 @@ mod sealed_live_tests {
         // Listed in the account's manifest: only listed devices are addressed.
         sqlx::query(
             "INSERT INTO chat_device_manifests
-                 (user_id, version, manifest_hash, authority_key_id, manifest)
+                 (account_id, version, manifest_hash, authority_key_id, manifest)
              VALUES ($1, 1, repeat('a', 64), repeat('b', 64),
                      '{\"devices\": [{\"deviceId\": 1, \"kind\": \"chat\", \"chat\": {\"directChatSuite\": 1, \"registrationId\": 77}}]}')",
         )
@@ -3530,7 +3529,7 @@ mod sealed_live_tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO chat_delivery_capabilities
-                 (user_id, profile_version, profile_revision, capability_hash)
+                 (account_id, profile_version, profile_revision, capability_hash)
              VALUES ($1, $2, 1, $3)",
         )
         .bind(id)
@@ -3579,7 +3578,7 @@ mod sealed_live_tests {
     }
 
     async fn stored(pool: &sqlx::PgPool, user: Uuid) -> i64 {
-        sqlx::query_scalar("SELECT COUNT(*) FROM chat_mailbox WHERE recipient_user_id = $1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM chat_mailbox WHERE recipient_account_id = $1")
             .bind(user)
             .fetch_one(pool)
             .await
@@ -3603,7 +3602,7 @@ mod sealed_live_tests {
             .execute(pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        sqlx::query("DELETE FROM accounts WHERE id = ANY($1)")
             .bind(users)
             .execute(pool)
             .await

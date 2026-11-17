@@ -875,7 +875,7 @@ fn expiry_of_tokens_and_devices() {
         .block_on(
             sqlx::query(
                 "UPDATE chat_link_tokens SET expires_at = now() - interval '1 second'
-                  WHERE user_id = $1",
+                  WHERE account_id = $1",
             )
             .bind(user_id)
             .execute(&pool),
@@ -895,7 +895,7 @@ fn expiry_of_tokens_and_devices() {
     runtime
         .block_on(
             sqlx::query(
-                "UPDATE devices SET expired_at = now() WHERE user_id = $1 AND device_id = 2",
+                "UPDATE account_devices SET expired_at = now() WHERE account_id = $1 AND device_id = 2",
             )
             .bind(user_id)
             .execute(&pool),

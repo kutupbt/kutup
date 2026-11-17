@@ -132,11 +132,11 @@ pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> Ap
     let out = file_rows(
         &state.pool,
         "f.collection_id IN (
-             SELECT c.id FROM collections c
+             SELECT c.id FROM drive_collections c
              WHERE c.deleted_at IS NULL AND c.kind = 'folder'
-               AND (c.owner_user_id = $1
-                    OR EXISTS (SELECT 1 FROM collection_shares cs
-                               WHERE cs.collection_id = c.id AND cs.recipient_user_id = $1)))",
+               AND (c.owner_account_id = $1
+                    OR EXISTS (SELECT 1 FROM drive_collection_shares cs
+                               WHERE cs.collection_id = c.id AND cs.recipient_account_id = $1)))",
         user_id,
         user_id,
     )
@@ -240,7 +240,7 @@ pub async fn upload(
 
     // Write access: owner, or share recipient with can_upload.
     let collection: Option<(Uuid, i32)> = sqlx::query_as(
-        "SELECT owner_user_id, key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT owner_account_id, key_epoch FROM drive_collections WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(coll_id)
     .fetch_optional(&state.pool)
@@ -251,7 +251,7 @@ pub async fn upload(
     let is_owner = owner_user_id == user_id;
     if !is_owner {
         let can_upload: Option<bool> = sqlx::query_scalar(
-            "SELECT can_upload FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
+            "SELECT can_upload FROM drive_collection_shares WHERE collection_id = $1 AND recipient_account_id = $2",
         )
         .bind(coll_id)
         .bind(user_id)
@@ -310,7 +310,7 @@ pub async fn upload(
     // The folder must still be live, at the epoch the envelopes were bound
     // to, until the file row is in (a key rotation updates this row).
     let live_epoch: Option<i32> = sqlx::query_scalar(
-        "SELECT key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
+        "SELECT key_epoch FROM drive_collections WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
     )
     .bind(coll_id)
     .fetch_optional(&mut *tx)
@@ -337,7 +337,7 @@ pub async fn upload(
         })?;
 
     let insert = sqlx::query(
-        r#"INSERT INTO files (id, collection_id, uploader_user_id,
+        r#"INSERT INTO drive_files (id, collection_id, uploader_account_id,
                               metadata_envelope, file_key_envelope,
                               key_epoch, key_generation, metadata_revision,
                               storage_path, encrypted_size_bytes, original_key_generation,
@@ -417,11 +417,12 @@ pub async fn download(
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let exists: Option<Uuid> =
-        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
-            .bind(file_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let exists: Option<Uuid> = sqlx::query_scalar(
+        "SELECT collection_id FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(file_id)
+    .fetch_optional(&state.pool)
+    .await?;
     if exists.is_none() {
         return Err(AppError::not_found("not found"));
     }
@@ -564,8 +565,8 @@ pub async fn update_metadata(
 
     let mut tx = state.pool.begin().await?;
     let row: Option<(Uuid, Uuid, i32, i64)> = sqlx::query_as(
-        r#"SELECT collection_id, uploader_user_id, key_generation, metadata_revision
-           FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE"#,
+        r#"SELECT collection_id, uploader_account_id, key_generation, metadata_revision
+           FROM drive_files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE"#,
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
@@ -611,7 +612,7 @@ pub async fn update_metadata(
         crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(file_id)).await?;
     }
     sqlx::query(
-        "UPDATE files SET metadata_envelope = $1, metadata_revision = $2,
+        "UPDATE drive_files SET metadata_envelope = $1, metadata_revision = $2,
                           name_hash = CASE WHEN $5 THEN $4 ELSE name_hash END, updated_at = NOW()
          WHERE id = $3",
     )
@@ -651,7 +652,7 @@ pub async fn delete(
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT collection_id, uploader_user_id FROM files WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT collection_id, uploader_account_id FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(file_id)
     .fetch_optional(&state.pool)
@@ -662,7 +663,7 @@ pub async fn delete(
     require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
 
     sqlx::query(
-        "UPDATE files SET deleted_at = NOW(), trash_root_id = id WHERE id = $1 AND deleted_at IS NULL",
+        "UPDATE drive_files SET deleted_at = NOW(), trash_root_id = id WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(file_id)
     .execute(&state.pool)
@@ -694,7 +695,7 @@ pub async fn claim_seed(
 
     // Atomic false → true; RETURNING reports whether this caller won the race.
     let claimed: Option<Uuid> = sqlx::query_scalar(
-        "UPDATE files SET seed_committed = true WHERE id = $1 AND seed_committed = false RETURNING id",
+        "UPDATE drive_files SET seed_committed = true WHERE id = $1 AND seed_committed = false RETURNING id",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
@@ -714,7 +715,7 @@ async fn require_owner_or_uploader_with_delete(
     uploader_id: Uuid,
 ) -> AppResult<()> {
     let owner: Option<Uuid> =
-        sqlx::query_scalar("SELECT owner_user_id FROM collections WHERE id = $1")
+        sqlx::query_scalar("SELECT owner_account_id FROM drive_collections WHERE id = $1")
             .bind(coll_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -725,7 +726,7 @@ async fn require_owner_or_uploader_with_delete(
         return Err(AppError::forbidden("forbidden"));
     }
     let can_delete: Option<bool> = sqlx::query_scalar(
-        "SELECT can_delete FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
+        "SELECT can_delete FROM drive_collection_shares WHERE collection_id = $1 AND recipient_account_id = $2",
     )
     .bind(coll_id)
     .bind(user_id)
@@ -753,6 +754,7 @@ pub(crate) async fn file_rows(
     struct Row {
         id: Uuid,
         collection_id: Uuid,
+        #[sqlx(rename = "uploader_account_id")]
         uploader_user_id: Uuid,
         metadata_envelope: String,
         file_key_envelope: String,
@@ -775,7 +777,7 @@ pub(crate) async fn file_rows(
         content_hash: Option<String>,
     }
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        r#"SELECT f.id, f.collection_id, f.uploader_user_id, f.name_hash, f.content_hash,
+        r#"SELECT f.id, f.collection_id, f.uploader_account_id, f.name_hash, f.content_hash,
                   f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.key_generation,
                   f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
                   f.original_key_generation,
@@ -786,20 +788,20 @@ pub(crate) async fn file_rows(
                   -- Drawn from something other than the latest version (or,
                   -- with no versions, from a version at all).
                   EXISTS (
-                    SELECT 1 FROM file_thumbnails t
+                    SELECT 1 FROM drive_file_thumbnails t
                     WHERE t.file_id = f.id
                       AND t.source_version IS DISTINCT FROM (
-                        SELECT v.id FROM file_versions v WHERE v.file_id = f.id
+                        SELECT v.id FROM drive_file_versions v WHERE v.file_id = f.id
                         ORDER BY v.created_at DESC LIMIT 1)
                   ) AS thumb_stale,
-                  -- Only the owner learns whom a file is shared with.
+                  -- Only the mailbox_owner learns whom a file is shared with.
                   EXISTS (
-                    SELECT 1 FROM file_shares fs JOIN collections oc ON oc.id = f.collection_id
-                    WHERE fs.file_id = f.id AND oc.owner_user_id = $2
+                    SELECT 1 FROM drive_file_shares fs JOIN drive_collections oc ON oc.id = f.collection_id
+                    WHERE fs.file_id = f.id AND oc.owner_account_id = $2
                   ) AS shared
-           FROM files f
-           LEFT JOIN file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
-           LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
+           FROM drive_files f
+           LEFT JOIN drive_file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
+           LEFT JOIN drive_file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
            WHERE {} AND f.deleted_at IS NULL
            ORDER BY f.created_at DESC"#,
         crate::models::FILE_KEY_HISTORY_SQL,

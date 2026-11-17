@@ -319,7 +319,7 @@ fn seal_known_client(key: &[u8; 32], user_id: Uuid, issued_at: i64, epoch: &[u8]
 /// it), `Secure` in production; bound to the account's current password.
 pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppResult<String> {
     let opaque_record: Vec<u8> =
-        sqlx::query_scalar("SELECT COALESCE(opaque_record, ''::bytea) FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT COALESCE(opaque_record, ''::bytea) FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;

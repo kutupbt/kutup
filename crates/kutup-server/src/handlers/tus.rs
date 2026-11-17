@@ -262,7 +262,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 
     // Permission check + quota gate, mirroring files.rs upload.
     let collection: Option<(Uuid, i32)> = match sqlx::query_as(
-        "SELECT owner_user_id, key_epoch FROM collections WHERE id=$1 AND deleted_at IS NULL",
+        "SELECT owner_account_id, key_epoch FROM drive_collections WHERE id=$1 AND deleted_at IS NULL",
     )
     .bind(coll_uuid)
     .fetch_optional(&mut *tx)
@@ -281,9 +281,9 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 
     if !is_owner {
         let can_upload: Option<bool> = match sqlx::query_scalar(
-            "SELECT cs.can_upload FROM collection_shares cs \
-             JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL \
-             WHERE cs.collection_id=$1 AND cs.recipient_user_id=$2",
+            "SELECT cs.can_upload FROM drive_collection_shares cs \
+             JOIN drive_collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL \
+             WHERE cs.collection_id=$1 AND cs.recipient_account_id=$2",
         )
         .bind(coll_uuid)
         .bind(user_id)
@@ -377,8 +377,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     // The metadata comes with the commit: NULL, never the columns' old
     // default (`uploads_metadata_at_commit`).
     let ins = sqlx::query(
-        "INSERT INTO uploads \
-            (id, user_id, collection_id, file_id, total_bytes, \
+        "INSERT INTO drive_uploads \
+            (id, account_id, collection_id, file_id, total_bytes, \
              file_key_envelope, key_epoch, \
              storage_path, s3_upload_id, name_hash, revision_id, blob_suite, \
              metadata_envelope, metadata_revision) \
@@ -464,7 +464,7 @@ pub async fn head(
     };
 
     let row: Option<(i64, i64)> = match sqlx::query_as(
-        "SELECT total_bytes, received_bytes FROM uploads WHERE id=$1 AND user_id=$2",
+        "SELECT total_bytes, received_bytes FROM drive_uploads WHERE id=$1 AND account_id=$2",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -598,7 +598,7 @@ pub async fn patch(
                 storage_path, s3_upload_id, s3_part_etags, pending_bytes, name_hash, \
                 kind, key_generation, content_hash, based_on, revision_id, \
                 uploaded_at IS NOT NULL AS uploaded \
-         FROM uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
+         FROM drive_uploads WHERE id=$1 AND account_id=$2 FOR UPDATE",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -670,7 +670,7 @@ pub async fn patch(
                     .storage
                     .abort_multipart(&storage_path, &s3_upload_id)
                     .await;
-                let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+                let _ = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
                     .bind(upload_id)
                     .execute(&state.pool)
                     .await;
@@ -735,7 +735,7 @@ pub async fn patch(
     let new_received = received_bytes + chunk_len;
 
     if sqlx::query(
-        "UPDATE uploads SET received_bytes=$1, s3_part_etags=$2, pending_bytes=$3, updated_at=NOW() WHERE id=$4",
+        "UPDATE drive_uploads SET received_bytes=$1, s3_part_etags=$2, pending_bytes=$3, updated_at=NOW() WHERE id=$4",
     )
     .bind(new_received)
     .bind(&parts_json)
@@ -813,7 +813,7 @@ pub async fn patch(
             .storage
             .abort_multipart(&storage_path, &s3_upload_id)
             .await;
-        let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+        let _ = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
             .bind(upload_id)
             .execute(&state.pool)
             .await;
@@ -838,7 +838,7 @@ pub async fn patch(
                 .storage
                 .abort_multipart(&storage_path, &s3_upload_id)
                 .await;
-            let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+            let _ = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
                 .bind(upload_id)
                 .execute(&state.pool)
                 .await;
@@ -901,7 +901,7 @@ pub(super) async fn check_stored_tail(state: &AppState, path: &str, total: i64) 
 /// Call it with the transaction dropped: it holds the row's lock.
 async fn drop_landed(state: &AppState, storage_path: &str, upload_id: Uuid) {
     let _ = state.storage.delete(storage_path).await;
-    let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+    let _ = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
         .bind(upload_id)
         .execute(&state.pool)
         .await;
@@ -945,10 +945,10 @@ pub(super) async fn landing_check(
     total_bytes: i64,
 ) -> AppResult<()> {
     let folder: Option<(Uuid, i32, Option<bool>)> = sqlx::query_as(
-        "SELECT c.owner_user_id, c.key_epoch,
-                (SELECT cs.can_upload FROM collection_shares cs
-                 WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
-         FROM collections c WHERE c.id = $1 AND c.deleted_at IS NULL FOR SHARE",
+        "SELECT c.owner_account_id, c.key_epoch,
+                (SELECT cs.can_upload FROM drive_collection_shares cs
+                 WHERE cs.collection_id = c.id AND cs.recipient_account_id = $2)
+         FROM drive_collections c WHERE c.id = $1 AND c.deleted_at IS NULL FOR SHARE",
     )
     .bind(coll_id)
     .bind(user_id)
@@ -995,8 +995,8 @@ pub(super) async fn insert_file(
     file: NewFile<'_>,
 ) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO files \
-            (id, collection_id, uploader_user_id, \
+        "INSERT INTO drive_files \
+            (id, collection_id, uploader_account_id, \
              metadata_envelope, file_key_envelope, key_epoch, key_generation, \
              metadata_revision, storage_path, encrypted_size_bytes, original_key_generation, \
              name_hash, content_hash, content_revision_id, \
@@ -1036,7 +1036,7 @@ pub(super) async fn mark_uploaded(
     total_bytes: i64,
 ) -> Response {
     let marked = sqlx::query(
-        "UPDATE uploads SET uploaded_at = NOW(), updated_at = NOW(),
+        "UPDATE drive_uploads SET uploaded_at = NOW(), updated_at = NOW(),
                             pending_bytes = '\\x'::bytea, s3_part_etags = '[]'::jsonb
          WHERE id = $1",
     )
@@ -1054,7 +1054,7 @@ pub(super) async fn mark_uploaded(
         // A commit can fail in the reporting after it took effect: the
         // object of a revision marked uploaded stays.
         let landed: sqlx::Result<bool> = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM uploads WHERE id = $1 AND uploaded_at IS NOT NULL)",
+            "SELECT EXISTS (SELECT 1 FROM drive_uploads WHERE id = $1 AND uploaded_at IS NOT NULL)",
         )
         .bind(upload_id)
         .fetch_one(&state.pool)
@@ -1141,10 +1141,10 @@ pub async fn delete(
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db begin"),
     };
     let row: Option<(String, String, bool)> = match sqlx::query_as(
-        "SELECT u.storage_path, u.s3_upload_id, u.uploaded_at IS NOT NULL FROM uploads u
-         WHERE u.id = $1 AND (u.user_id = $2 OR (u.kind = 'version' AND EXISTS (
-             SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
-             WHERE f.id = u.file_id AND c.owner_user_id = $2)))
+        "SELECT u.storage_path, u.s3_upload_id, u.uploaded_at IS NOT NULL FROM drive_uploads u
+         WHERE u.id = $1 AND (u.account_id = $2 OR (u.kind = 'version' AND EXISTS (
+             SELECT 1 FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+             WHERE f.id = u.file_id AND c.owner_account_id = $2)))
          FOR UPDATE OF u",
     )
     .bind(upload_id)
@@ -1162,7 +1162,7 @@ pub async fn delete(
         return tus_text(StatusCode::NOT_FOUND, "");
     };
 
-    let deleted = sqlx::query("DELETE FROM uploads WHERE id=$1")
+    let deleted = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
         .bind(upload_id)
         .execute(&mut *tx)
         .await;

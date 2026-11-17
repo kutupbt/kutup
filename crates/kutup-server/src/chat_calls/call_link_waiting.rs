@@ -166,7 +166,7 @@ pub(crate) async fn set_waiting_room(
     let mut tx = state.pool.begin().await?;
     let updated = sqlx::query(
         "UPDATE chat_call_links SET waiting_room = $3, host_token_hash = $4
-         WHERE room_id = $1 AND owner_user_id = $2",
+         WHERE room_id = $1 AND owner_account_id = $2",
     )
     .bind(&room_id)
     .bind(owner(&auth)?)
@@ -438,7 +438,7 @@ pub(crate) async fn knocks(
     // The name each vouched-for knocker goes by now.
     let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime, Option<String>)> = sqlx::query_as(
         "SELECT k.id, k.label, k.created_at, u.username
-         FROM chat_call_link_knocks k LEFT JOIN users u ON u.id = k.account_id
+         FROM chat_call_link_knocks k LEFT JOIN accounts u ON u.id = k.account_id
          WHERE k.room_id = $1 AND k.status = $2
            AND k.last_seen_at > NOW() - make_interval(secs => $3)
          ORDER BY k.created_at, k.id",

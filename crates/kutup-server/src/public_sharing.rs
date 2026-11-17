@@ -135,7 +135,7 @@ pub async fn ensure_may_share(pool: &PgPool, owner: uuid::Uuid) -> AppResult<()>
         return Err(sharing_off_as(StatusCode::FORBIDDEN, "site"));
     }
     let account: Option<String> =
-        sqlx::query_scalar("SELECT public_sharing FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT public_sharing FROM accounts WHERE id = $1")
             .bind(owner)
             .fetch_optional(pool)
             .await?;
@@ -153,7 +153,7 @@ pub async fn ensure_link_up(pool: &PgPool, token: &str, signed_in: bool) -> AppR
         "SELECT p.removed_at IS NOT NULL OR NOT u.is_active,
                 COALESCE(p.blocked_reason, kutup_target_blocked(p.share_type, p.target_id)),
                 u.public_sharing
-           FROM public_shares p JOIN users u ON u.id = p.owner_user_id
+           FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id
           WHERE p.token = $1",
     )
     .bind(token)

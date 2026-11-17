@@ -154,29 +154,29 @@ impl From<SenderRow> for MailSender {
 async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResult<Vec<SenderRow>> {
     Ok(sqlx::query_as(
         "WITH sent AS (
-             SELECT sender_account AS user_id,
+             SELECT sender_account_id AS account_id,
                     SUM(external_recipients) FILTER (WHERE received_at > now() - interval '1 day')::bigint AS day,
                     SUM(external_recipients)::bigint AS week
                FROM mail_messages
               WHERE external_recipients > 0 AND received_at > now() - interval '7 days'
-              GROUP BY sender_account),
+              GROUP BY sender_account_id),
          events AS (
-             SELECT user_id,
+             SELECT account_id,
                     COUNT(*) FILTER (WHERE kind = 'bounce') AS bounces,
                     COUNT(*) FILTER (WHERE kind = 'spam_refused') AS spam
                FROM mail_sending_events
               WHERE created_at > now() - interval '7 days'
-              GROUP BY user_id)
+              GROUP BY account_id)
          SELECT u.id, u.username,
                 COALESCE(s.day, 0) AS sent_day, COALESCE(s.week, 0) AS sent_week,
                 COALESCE(e.bounces, 0) AS bounces_week, COALESCE(e.spam, 0) AS spam_week,
                 p.per_hour, p.per_day, p.paused_at, p.paused_reason, p.flagged_at, p.flag_reason
-           FROM users u
-           LEFT JOIN sent s ON s.user_id = u.id
-           LEFT JOIN events e ON e.user_id = u.id
-           LEFT JOIN mail_sending_policies p ON p.user_id = u.id
+           FROM accounts u
+           LEFT JOIN sent s ON s.account_id = u.id
+           LEFT JOIN events e ON e.account_id = u.id
+           LEFT JOIN mail_sending_policies p ON p.account_id = u.id
           WHERE CASE WHEN $2::uuid IS NOT NULL THEN u.id = $2
-                     ELSE (s.user_id IS NOT NULL OR e.user_id IS NOT NULL OR p.user_id IS NOT NULL)
+                     ELSE (s.account_id IS NOT NULL OR e.account_id IS NOT NULL OR p.account_id IS NOT NULL)
                           AND (NOT $1 OR p.paused_at IS NOT NULL OR p.flagged_at IS NOT NULL) END
           ORDER BY (p.paused_at IS NOT NULL OR p.flagged_at IS NOT NULL) DESC,
                    COALESCE(s.week, 0) DESC, u.username
@@ -259,7 +259,7 @@ pub async fn update(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     limit(&request.per_hour)?;
     limit(&request.per_day)?;
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
         .bind(target)
         .fetch_one(&state.pool)
         .await?;
@@ -267,7 +267,7 @@ pub async fn update(
         return Err(AppError::not_found("not found"));
     }
     sqlx::query(
-        "INSERT INTO mail_sending_policies (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+        "INSERT INTO mail_sending_policies (account_id) VALUES ($1) ON CONFLICT (account_id) DO NOTHING",
     )
     .bind(target)
     .execute(&state.pool)
@@ -283,7 +283,7 @@ pub async fn update(
              flagged_at = CASE WHEN $7 THEN NULL ELSE flagged_at END,
              flag_reason = CASE WHEN $7 THEN NULL ELSE flag_reason END,
              updated_at = now()
-          WHERE user_id = $1",
+          WHERE account_id = $1",
     )
     .bind(target)
     .bind(request.per_hour.is_some())

@@ -771,7 +771,7 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
         rt.block_on(
             sqlx::query_scalar(
                 "SELECT count(*) FROM account_records
-                  WHERE scope = 1 AND record_id = $1 AND user_id = $2::uuid",
+                  WHERE scope = 1 AND record_id = $1 AND account_id = $2::uuid",
             )
             .bind(&vault.id)
             .bind(&member.id)
@@ -782,8 +782,8 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
     let kept: String = rt
         .block_on(
             sqlx::query_scalar(
-                "SELECT row_to_json(cs)::text FROM collection_shares cs
-                  WHERE collection_id = $1::uuid AND recipient_user_id = $2::uuid",
+                "SELECT row_to_json(cs)::text FROM drive_collection_shares cs
+                  WHERE collection_id = $1::uuid AND recipient_account_id = $2::uuid",
             )
             .bind(&folder.id)
             .bind(&member.id)
@@ -792,7 +792,7 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
         .unwrap();
     rt.block_on(
         sqlx::query(
-            "DELETE FROM collection_shares WHERE collection_id = $1::uuid AND recipient_user_id = $2::uuid",
+            "DELETE FROM drive_collection_shares WHERE collection_id = $1::uuid AND recipient_account_id = $2::uuid",
         )
         .bind(&folder.id)
         .bind(&member.id)
@@ -807,8 +807,8 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
     assert_eq!(held(), 1, "the read deleted nothing");
     rt.block_on(
         sqlx::query(
-            "INSERT INTO collection_shares
-             SELECT * FROM json_populate_record(NULL::collection_shares, $1::json)",
+            "INSERT INTO drive_collection_shares
+             SELECT * FROM json_populate_record(NULL::drive_collection_shares, $1::json)",
         )
         .bind(&kept)
         .execute(&pool),

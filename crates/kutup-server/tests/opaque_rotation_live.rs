@@ -137,7 +137,7 @@ fn a_rotation_moves_the_record_once_and_shows() {
             .unwrap();
     };
     set_key(
-        "UPDATE users SET opaque_server_key_id = (SELECT max(key_id) FROM opaque_server_setups)
+        "UPDATE accounts SET opaque_server_key_id = (SELECT max(key_id) FROM opaque_server_setups)
          WHERE id = $1::uuid",
     );
     assert_eq!(
@@ -153,7 +153,7 @@ fn a_rotation_moves_the_record_once_and_shows() {
         "already on the current setup"
     );
     set_key(
-        "UPDATE users SET opaque_server_key_id = (SELECT min(key_id) FROM opaque_server_setups)
+        "UPDATE accounts SET opaque_server_key_id = (SELECT min(key_id) FROM opaque_server_setups)
          WHERE id = $1::uuid",
     );
     // A rotate grant is no password change.

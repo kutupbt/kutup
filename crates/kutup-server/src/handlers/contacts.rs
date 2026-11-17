@@ -104,11 +104,12 @@ impl Checked {
 
 /// The caller's key binding (which contact summaries bind) and authority key.
 async fn binding_of(state: &AppState, user_id: Uuid) -> AppResult<(String, [u8; 32])> {
-    let (binding, authority): (Option<String>, String) =
-        sqlx::query_as("SELECT key_binding, account_authority_public_key FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let (binding, authority): (Option<String>, String) = sqlx::query_as(
+        "SELECT key_binding, account_authority_public_key FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let binding = binding.ok_or_else(|| AppError::bad_request("the account has no key binding"))?;
     let authority = STANDARD
         .decode(&authority)
@@ -158,12 +159,12 @@ async fn write_index(
     contact_id: Uuid,
     summary: &ContactSummaryV1,
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM contact_emails WHERE contact_id = $1")
+    sqlx::query("DELETE FROM contacts_emails WHERE contact_id = $1")
         .bind(contact_id)
         .execute(&mut **tx)
         .await?;
     for (position, email) in summary.emails.iter().enumerate() {
-        sqlx::query("INSERT INTO contact_emails (contact_id, user_id, address, label, position) VALUES ($1, $2, $3, $4, $5)")
+        sqlx::query("INSERT INTO contacts_emails (contact_id, account_id, address, label, position) VALUES ($1, $2, $3, $4, $5)")
             .bind(contact_id)
             .bind(user_id)
             .bind(&email.address)
@@ -177,7 +178,7 @@ async fn write_index(
     if !summary.groups.is_empty() {
         let kept: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM account_records
-              WHERE user_id = $1 AND scope = $2 AND record_id = ANY($3)",
+              WHERE account_id = $1 AND scope = $2 AND record_id = ANY($3)",
         )
         .bind(user_id)
         .bind(RecordScope::ContactGroups.info().number)
@@ -199,9 +200,9 @@ async fn insert(
     checked: &Checked,
 ) -> AppResult<Uuid> {
     let id: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO contacts (user_id, uid, name, summary, signature, card, revision)
+        "INSERT INTO contacts (account_id, uid, name, summary, signature, card, revision)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (user_id, uid) DO NOTHING
+         ON CONFLICT (account_id, uid) DO NOTHING
          RETURNING id",
     )
     .bind(user_id)
@@ -219,7 +220,7 @@ async fn insert(
 }
 
 async fn room_for(tx: &mut Transaction<'_, Postgres>, user_id: Uuid, more: usize) -> AppResult<()> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE user_id = $1")
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE account_id = $1")
         .bind(user_id)
         .fetch_one(&mut **tx)
         .await?;
@@ -230,11 +231,12 @@ async fn room_for(tx: &mut Transaction<'_, Postgres>, user_id: Uuid, more: usize
 }
 
 async fn fetch(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<ContactRow> {
-    let row: Option<Row> = sqlx::query_as(&format!("{ROW_SELECT} WHERE id = $1 AND user_id = $2"))
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(&state.pool)
-        .await?;
+    let row: Option<Row> =
+        sqlx::query_as(&format!("{ROW_SELECT} WHERE id = $1 AND account_id = $2"))
+            .bind(id)
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?;
     row.map(to_row)
         .ok_or_else(|| AppError::not_found("not found"))
 }
@@ -270,14 +272,14 @@ pub async fn list(
     let limit = query.limit.unwrap_or(MAX_PAGE).clamp(1, MAX_PAGE);
     let offset = query.offset.unwrap_or(0).max(0);
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        "{ROW_SELECT} WHERE user_id = $1 ORDER BY lower(name), id LIMIT $2 OFFSET $3"
+        "{ROW_SELECT} WHERE account_id = $1 ORDER BY lower(name), id LIMIT $2 OFFSET $3"
     ))
     .bind(user_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
     .await?;
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE user_id = $1")
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE account_id = $1")
         .bind(user_id)
         .fetch_one(&state.pool)
         .await?;
@@ -393,7 +395,7 @@ pub async fn update(
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let current: Option<(String, i64, i64)> = sqlx::query_as(
         "SELECT uid, revision, (octet_length(summary) + octet_length(card))::bigint FROM contacts
-          WHERE id = $1 AND user_id = $2 FOR UPDATE",
+          WHERE id = $1 AND account_id = $2 FOR UPDATE",
     )
     .bind(id)
     .bind(user_id)
@@ -444,7 +446,7 @@ async fn delete_ids(
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, session).await?;
     let freed: Option<i64> = sqlx::query_scalar(
-        "WITH gone AS (DELETE FROM contacts WHERE user_id = $1 AND id = ANY($2)
+        "WITH gone AS (DELETE FROM contacts WHERE account_id = $1 AND id = ANY($2)
                        RETURNING (octet_length(summary) + octet_length(card))::bigint AS bytes)
          SELECT SUM(bytes)::bigint FROM gone",
     )
@@ -640,8 +642,8 @@ pub async fn emails(
     let word = format!("% {}", pattern);
     let rows: Vec<(Uuid, String, String, Option<String>)> = sqlx::query_as(
         "SELECT c.id, c.name, e.address, e.label
-           FROM contact_emails e JOIN contacts c ON c.id = e.contact_id
-          WHERE e.user_id = $1
+           FROM contacts_emails e JOIN contacts c ON c.id = e.contact_id
+          WHERE e.account_id = $1
             AND ($2 = '' OR e.address LIKE $3 OR lower(c.name) LIKE $3 OR lower(c.name) LIKE $4)
           ORDER BY e.last_used_at DESC NULLS LAST, lower(c.name), e.position
           LIMIT $5",

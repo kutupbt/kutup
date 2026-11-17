@@ -147,7 +147,7 @@ pub async fn append_in(
     let hash = row_hash(&previous, admin, action, target, micros(at), payload);
     sqlx::query(
         "INSERT INTO admin_audit_log
-             (admin_user_id, action, target_user_id, payload, occurred_at, previous_hash, row_hash,
+             (admin_account_id, action, target_account_id, payload, occurred_at, previous_hash, row_hash,
               chain_version)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
@@ -198,7 +198,7 @@ pub async fn verify(pool: &PgPool) -> AppResult<Verification> {
     let mut checked = 0u64;
     loop {
         let rows: Vec<ChainRow> = sqlx::query_as(
-            "SELECT id, admin_user_id, action, target_user_id, payload, occurred_at,
+            "SELECT id, admin_account_id, action, target_account_id, payload, occurred_at,
                     previous_hash, row_hash, chain_version
                FROM admin_audit_log
               WHERE id > $1
@@ -260,7 +260,7 @@ pub async fn prune(pool: &PgPool, days: i64) -> AppResult<u64> {
                          -- A legal hold keeps its account's rows (A5), and the
                          -- chain stays whole: nothing from the oldest held row on.
                          AND id < COALESCE((SELECT min(a.id) FROM admin_audit_log a
-                                              JOIN users u ON u.id = a.target_user_id
+                                              JOIN accounts u ON u.id = a.target_account_id
                                              WHERE u.legal_hold_reference IS NOT NULL),
                                            9223372036854775807))",
     )

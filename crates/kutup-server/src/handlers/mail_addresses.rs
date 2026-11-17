@@ -52,7 +52,7 @@ async fn default_address_in(
 ) -> AppResult<Option<(Uuid, String)>> {
     let rows: Vec<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
         "SELECT a.id, a.address, a.domain_id FROM mail_addresses a
-          WHERE a.user_id = $1 AND a.state = 'active' AND a.disabled_at IS NULL
+          WHERE a.account_id = $1 AND a.state = 'active' AND a.disabled_at IS NULL
             AND EXISTS (SELECT 1 FROM mail_address_keys k
                          WHERE k.address_id = a.id AND k.is_primary)
           ORDER BY a.position, a.created_at",
@@ -112,7 +112,7 @@ pub async fn order(
     let mut tx = state.pool.begin().await?;
     let current: Vec<(Uuid, bool)> = sqlx::query_as(
         "SELECT id, disabled_at IS NOT NULL FROM mail_addresses
-          WHERE user_id = $1 AND state = 'active' ORDER BY id FOR UPDATE",
+          WHERE account_id = $1 AND state = 'active' ORDER BY id FOR UPDATE",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -157,7 +157,7 @@ async fn custom_address(
 ) -> AppResult<bool> {
     let row: Option<(Option<Uuid>, bool)> = sqlx::query_as(
         "SELECT domain_id, disabled_at IS NOT NULL FROM mail_addresses
-          WHERE id = $1 AND user_id = $2 AND state = 'active' FOR UPDATE",
+          WHERE id = $1 AND account_id = $2 AND state = 'active' FOR UPDATE",
     )
     .bind(address_id)
     .bind(user_id)

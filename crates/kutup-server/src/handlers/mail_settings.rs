@@ -107,7 +107,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
                 view_layout, density, composer_mode, view_mode, confirm_link, page_size, spam_action, remote_images, delay_send_seconds,
                 draft_type, text_direction, font_face, font_size, image_proxy, embedded_images, remove_image_metadata,
                 unread_favicon, keep_moved_sent
-           FROM mail_settings WHERE user_id = $1",
+           FROM mail_settings WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -261,7 +261,7 @@ pub async fn update(
     }
     sqlx::query(
         "INSERT INTO mail_settings
-             (user_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
+             (account_id, auto_delete_days, almost_all_mail, view_layout, density, composer_mode,
               view_mode, sign_outside, attach_public_key, pgp_scheme, confirm_link, page_size, spam_action, remote_images, delay_send_seconds,
               draft_type, text_direction, font_face, font_size, image_proxy, embedded_images, remove_image_metadata,
               unread_favicon, keep_moved_sent)
@@ -272,7 +272,7 @@ pub async fn update(
                  COALESCE($15, $16), COALESCE($17, 'html'), COALESCE($18, 'ltr'),
                  COALESCE($19, 'arial'), COALESCE($20, 14), COALESCE($21, true), COALESCE($22, true), COALESCE($23, true),
                  COALESCE($24, false), COALESCE($25, false))
-         ON CONFLICT (user_id) DO UPDATE SET
+         ON CONFLICT (account_id) DO UPDATE SET
              auto_delete_days = COALESCE($2, mail_settings.auto_delete_days),
              almost_all_mail = COALESCE($3, mail_settings.almost_all_mail),
              view_layout = COALESCE($4, mail_settings.view_layout),
@@ -379,7 +379,7 @@ pub(crate) async fn delete_all(
     loop {
         let ids: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id FROM mail_messages
-              WHERE owner = $1 AND folder = $2
+              WHERE mailbox_owner = $1 AND folder = $2
                 AND ($3::int IS NULL OR folder_changed_at < now() - make_interval(days => $3))
               LIMIT 500",
         )

@@ -136,7 +136,7 @@ pub async fn provision(
     let mut transaction = state.pool.begin().await?;
     let user_row: (String, String, String, String) = sqlx::query_as(
         "SELECT COALESCE(key_binding, ''),account_incarnation_id,account_authority_public_key,
-                account_authority_key_id FROM users WHERE id=$1 FOR UPDATE",
+                account_authority_key_id FROM accounts WHERE id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_one(&mut *transaction)
@@ -175,7 +175,7 @@ pub async fn provision(
 
     if let Some((stored_digest, stored_backup_id)) = sqlx::query_as::<_, (String, Uuid)>(
         "SELECT request_digest,backup_incarnation_id
-         FROM chat_backup_provision_operations WHERE user_id=$1 AND operation_id=$2",
+         FROM chat_backup_provision_operations WHERE account_id=$1 AND operation_id=$2",
     )
     .bind(user_id)
     .bind(operation_id)
@@ -194,7 +194,7 @@ pub async fn provision(
     if let Some((stored_backup_id, root_envelope, stored_authorization_digest)) =
         sqlx::query_as::<_, (Uuid, String, String)>(
             "SELECT backup_incarnation_id,root_envelope,signer_authorization_digest
-             FROM chat_backups WHERE user_id=$1",
+             FROM chat_backups WHERE account_id=$1",
         )
         .bind(user_id)
         .fetch_optional(&mut *transaction)
@@ -211,7 +211,7 @@ pub async fn provision(
     } else {
         sqlx::query(
             "INSERT INTO chat_backups
-             (user_id,backup_incarnation_id,suite,protection_domain,root_envelope,
+             (account_id,backup_incarnation_id,suite,protection_domain,root_envelope,
               signer_authorization,signer_authorization_digest)
              VALUES ($1,$2,$3,$4,$5,$6,$7)",
         )
@@ -233,7 +233,7 @@ pub async fn provision(
     }
     sqlx::query(
         "INSERT INTO chat_backup_provision_operations
-         (user_id,operation_id,request_digest,backup_incarnation_id) VALUES ($1,$2,$3,$4)",
+         (account_id,operation_id,request_digest,backup_incarnation_id) VALUES ($1,$2,$3,$4)",
     )
     .bind(user_id)
     .bind(operation_id)
@@ -265,7 +265,7 @@ pub async fn status(
 pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()> {
     let mut transaction = state.pool.begin().await?;
     let backup_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT backup_incarnation_id FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+        "SELECT backup_incarnation_id FROM chat_backups WHERE account_id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -276,14 +276,14 @@ pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()>
     };
     let released: i64 = sqlx::query_scalar(
         "SELECT
-           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_segments WHERE user_id=$1),0) +
-           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_bases WHERE user_id=$1),0) +
-           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_media_objects WHERE user_id=$1),0)",
+           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_segments WHERE account_id=$1),0) +
+           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_bases WHERE account_id=$1),0) +
+           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_media_objects WHERE account_id=$1),0)",
     )
     .bind(user_id)
     .fetch_one(&mut *transaction)
     .await?;
-    sqlx::query("DELETE FROM chat_backups WHERE user_id=$1")
+    sqlx::query("DELETE FROM chat_backups WHERE account_id=$1")
         .bind(user_id)
         .execute(&mut *transaction)
         .await?;
@@ -304,29 +304,29 @@ pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()>
 
 async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupStatusV1> {
     let (quota, used): (i64, i64) =
-        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM users WHERE id=$1")
+        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM accounts WHERE id=$1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
     let delivery_media_bytes: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(logical_bytes),0)::bigint
-         FROM chat_media_references WHERE user_id=$1",
+         FROM chat_media_references WHERE account_id=$1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
     let history_media_bytes: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
-         FROM chat_backup_media_objects WHERE user_id=$1",
+         FROM chat_backup_media_objects WHERE account_id=$1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
     let message_bytes: i64 = sqlx::query_scalar(
         "SELECT
-          COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_segments WHERE user_id=$1),0) +
+          COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_segments WHERE account_id=$1),0) +
           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_bases
-                    WHERE user_id=$1),0)",
+                    WHERE account_id=$1),0)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
@@ -347,7 +347,7 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
     );
     let backup: Option<BackupRow> = sqlx::query_as(
         "SELECT root_envelope,signer_authorization,current_manifest,current_cursor,
-                latest_protected_at FROM chat_backups WHERE user_id=$1",
+                latest_protected_at FROM chat_backups WHERE account_id=$1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -366,7 +366,7 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
     };
     let heads: Vec<(i32, i64, String)> = sqlx::query_as(
         "SELECT source_device_id,last_device_sequence,last_segment_digest
-         FROM chat_backup_device_heads WHERE user_id=$1 ORDER BY source_device_id",
+         FROM chat_backup_device_heads WHERE account_id=$1 ORDER BY source_device_id",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -452,7 +452,7 @@ pub async fn append_segment(
     let mut transaction = state.pool.begin().await?;
     let backup: (Uuid, i64, i16, i16) = sqlx::query_as(
         "SELECT backup_incarnation_id,current_cursor,suite,protection_domain
-         FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+         FROM chat_backups WHERE account_id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -462,7 +462,7 @@ pub async fn append_segment(
         return Err(AppError::conflict("backup incarnation or suite changed"));
     }
     let account_incarnation_id: String =
-        sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id=$1")
+        sqlx::query_scalar("SELECT account_incarnation_id FROM accounts WHERE id=$1")
             .bind(user_id)
             .fetch_one(&mut *transaction)
             .await?;
@@ -478,7 +478,7 @@ pub async fn append_segment(
         sqlx::query_as::<_, (i64, String, OffsetDateTime, i32, i64, String, i64, i32)>(
             "SELECT cursor,ciphertext_sha256,acknowledged_at,source_device_id,
                     device_sequence,previous_segment_digest,account_manifest_sequence,ciphertext_bytes
-             FROM chat_backup_segments WHERE user_id=$1 AND operation_id=$2",
+             FROM chat_backup_segments WHERE account_id=$1 AND operation_id=$2",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -506,7 +506,7 @@ pub async fn append_segment(
     }
 
     let current_manifest_sequence: Option<i64> =
-        sqlx::query_scalar("SELECT version FROM chat_device_manifests WHERE user_id=$1")
+        sqlx::query_scalar("SELECT version FROM chat_device_manifests WHERE account_id=$1")
             .bind(user_id)
             .fetch_optional(&mut *transaction)
             .await?;
@@ -514,8 +514,8 @@ pub async fn append_segment(
         return Err(AppError::conflict("account manifest sequence changed"));
     }
     let device_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM devices
-          WHERE user_id = $1 AND device_id = $2 AND suite IS NOT NULL)",
+        "SELECT EXISTS(SELECT 1 FROM account_devices
+          WHERE account_id = $1 AND device_id = $2 AND suite IS NOT NULL)",
     )
     .bind(user_id)
     .bind(source_device_id)
@@ -527,7 +527,7 @@ pub async fn append_segment(
 
     let head: Option<(i64, String)> = sqlx::query_as(
         "SELECT last_device_sequence,last_segment_digest
-         FROM chat_backup_device_heads WHERE user_id=$1 AND source_device_id=$2 FOR UPDATE",
+         FROM chat_backup_device_heads WHERE account_id=$1 AND source_device_id=$2 FOR UPDATE",
     )
     .bind(user_id)
     .bind(source_device_id)
@@ -563,7 +563,7 @@ pub async fn append_segment(
     let acknowledged_at = OffsetDateTime::now_utc();
     sqlx::query(
         "INSERT INTO chat_backup_segments
-         (user_id,cursor,operation_id,source_device_id,device_sequence,
+         (account_id,cursor,operation_id,source_device_id,device_sequence,
           previous_segment_digest,account_manifest_sequence,ciphertext_bytes,
           ciphertext_sha256,ciphertext,acknowledged_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
@@ -583,9 +583,9 @@ pub async fn append_segment(
     .await?;
     sqlx::query(
         "INSERT INTO chat_backup_device_heads
-         (user_id,source_device_id,last_device_sequence,last_segment_digest)
+         (account_id,source_device_id,last_device_sequence,last_segment_digest)
          VALUES ($1,$2,$3,$4)
-         ON CONFLICT (user_id,source_device_id) DO UPDATE SET
+         ON CONFLICT (account_id,source_device_id) DO UPDATE SET
            last_device_sequence=EXCLUDED.last_device_sequence,
            last_segment_digest=EXCLUDED.last_segment_digest,
            updated_at=NOW()",
@@ -598,7 +598,7 @@ pub async fn append_segment(
     .await?;
     sqlx::query(
         "UPDATE chat_backups SET current_cursor=$1,latest_protected_at=$2,updated_at=NOW()
-         WHERE user_id=$3",
+         WHERE account_id=$3",
     )
     .bind(cursor)
     .bind(acknowledged_at)
@@ -647,7 +647,7 @@ pub async fn list_segments(
         .execute(&mut *snapshot)
         .await?;
     let current_cursor: i64 =
-        sqlx::query_scalar("SELECT current_cursor FROM chat_backups WHERE user_id=$1")
+        sqlx::query_scalar("SELECT current_cursor FROM chat_backups WHERE account_id=$1")
             .bind(user_id)
             .fetch_optional(&mut *snapshot)
             .await?
@@ -666,7 +666,7 @@ pub async fn list_segments(
     let rows: Vec<SegmentRow> = sqlx::query_as(
         "SELECT operation_id,cursor,source_device_id,device_sequence,previous_segment_digest,
                     ciphertext_bytes,ciphertext_sha256,ciphertext,acknowledged_at
-             FROM chat_backup_segments WHERE user_id=$1 AND cursor>$2
+             FROM chat_backup_segments WHERE account_id=$1 AND cursor>$2
              ORDER BY cursor LIMIT $3",
     )
     .bind(user_id)
@@ -815,7 +815,7 @@ pub async fn stage_base(
     let preflight: Option<(Uuid, i64, i64, String)> = sqlx::query_as(
         "SELECT b.backup_incarnation_id,b.current_generation,b.current_cursor,
                 u.account_incarnation_id
-         FROM chat_backups b JOIN users u ON u.id=b.user_id WHERE b.user_id=$1",
+         FROM chat_backups b JOIN accounts u ON u.id=b.account_id WHERE b.account_id=$1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -839,7 +839,7 @@ pub async fn stage_base(
     if let Some((generation, covered, bytes, digest)) =
         sqlx::query_as::<_, (i64, i64, i64, String)>(
             "SELECT generation,covered_cursor,ciphertext_bytes,ciphertext_sha256
-             FROM chat_backup_bases WHERE user_id=$1 AND object_id=$2",
+             FROM chat_backup_bases WHERE account_id=$1 AND object_id=$2",
         )
         .bind(user_id)
         .bind(object_id)
@@ -884,7 +884,7 @@ pub async fn stage_base(
         let (locked_backup_id, locked_generation, locked_cursor): (Uuid, i64, i64) =
             sqlx::query_as(
                 "SELECT backup_incarnation_id,current_generation,current_cursor
-                 FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+                 FROM chat_backups WHERE account_id=$1 FOR UPDATE",
             )
             .bind(user_id)
             .fetch_one(&mut *transaction)
@@ -907,10 +907,10 @@ pub async fn stage_base(
                     "SELECT
                    COALESCE((SELECT SUM(ciphertext_bytes)::bigint
                              FROM chat_backup_segments
-                             WHERE user_id=$1 AND cursor<=$2),0) +
+                             WHERE account_id=$1 AND cursor<=$2),0) +
                    COALESCE((SELECT SUM(ciphertext_bytes)::bigint
                              FROM chat_backup_bases
-                             WHERE user_id=$1 AND state='committed'),0)",
+                             WHERE account_id=$1 AND state='committed'),0)",
                 )
                 .bind(user_id)
                 .bind(locked_cursor)
@@ -927,7 +927,7 @@ pub async fn stage_base(
         }
         let inserted = sqlx::query(
             "INSERT INTO chat_backup_bases
-             (user_id,object_id,generation,covered_cursor,ciphertext_bytes,
+             (account_id,object_id,generation,covered_cursor,ciphertext_bytes,
               ciphertext_sha256,storage_path)
              VALUES ($1,$2,$3,$4,$5,$6,$7)
              ON CONFLICT DO NOTHING",
@@ -959,7 +959,7 @@ pub async fn stage_base(
         } else {
             let existing: Option<(Uuid, i64, i64, String)> = sqlx::query_as(
                 "SELECT object_id,covered_cursor,ciphertext_bytes,ciphertext_sha256
-                 FROM chat_backup_bases WHERE user_id=$1 AND generation=$2",
+                 FROM chat_backup_bases WHERE account_id=$1 AND generation=$2",
             )
             .bind(user_id)
             .bind(i64::try_from(metadata.generation).unwrap_or(i64::MAX))
@@ -1016,7 +1016,7 @@ pub async fn commit_manifest(
     let row: (i64, i64, String, serde_json::Value, String) = sqlx::query_as(
         "SELECT current_generation,current_cursor,current_manifest_digest,
                 signer_authorization,signer_authorization_digest
-         FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+         FROM chat_backups WHERE account_id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -1048,7 +1048,7 @@ pub async fn commit_manifest(
     let staged: Option<(i64, i64, String)> = sqlx::query_as(
         "SELECT ciphertext_bytes,covered_cursor,ciphertext_sha256
          FROM chat_backup_bases
-         WHERE user_id=$1 AND object_id=$2 AND generation=$3 AND state='staged'
+         WHERE account_id=$1 AND object_id=$2 AND generation=$3 AND state='staged'
          FOR UPDATE",
     )
     .bind(user_id)
@@ -1072,7 +1072,7 @@ pub async fn commit_manifest(
     }
     let reconciliation_id: Uuid = sqlx::query_scalar(
         "SELECT operation_id FROM chat_backup_media_reconciliations
-         WHERE user_id=$1 AND target_generation=$2 AND reference_set_digest=$3 AND completed=true",
+         WHERE account_id=$1 AND target_generation=$2 AND reference_set_digest=$3 AND completed=true",
     )
     .bind(user_id)
     .bind(i64::try_from(request.manifest.generation).unwrap_or(i64::MAX))
@@ -1082,7 +1082,7 @@ pub async fn commit_manifest(
     .ok_or_else(|| AppError::conflict("backup media reconciliation is incomplete"))?;
     let mut old_paths: Vec<String> = sqlx::query_scalar(
         "SELECT storage_path FROM chat_backup_bases
-         WHERE user_id=$1 AND state='committed' AND object_id<>$2",
+         WHERE account_id=$1 AND state='committed' AND object_id<>$2",
     )
     .bind(user_id)
     .bind(base_id)
@@ -1090,7 +1090,7 @@ pub async fn commit_manifest(
     .await?;
     let released_segments: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint FROM chat_backup_segments
-         WHERE user_id=$1 AND cursor<=$2",
+         WHERE account_id=$1 AND cursor<=$2",
     )
     .bind(user_id)
     .bind(covered_cursor)
@@ -1098,21 +1098,21 @@ pub async fn commit_manifest(
     .await?;
     let released_bases: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint FROM chat_backup_bases
-         WHERE user_id=$1 AND state='committed' AND object_id<>$2",
+         WHERE account_id=$1 AND state='committed' AND object_id<>$2",
     )
     .bind(user_id)
     .bind(base_id)
     .fetch_one(&mut *transaction)
     .await?;
-    sqlx::query("DELETE FROM chat_backup_media_references WHERE user_id=$1")
+    sqlx::query("DELETE FROM chat_backup_media_references WHERE account_id=$1")
         .bind(user_id)
         .execute(&mut *transaction)
         .await?;
     sqlx::query(
-        "INSERT INTO chat_backup_media_references(user_id,media_id,reference_id)
-         SELECT user_id,media_id,reference_id
+        "INSERT INTO chat_backup_media_references(account_id,media_id,reference_id)
+         SELECT account_id,media_id,reference_id
          FROM chat_backup_media_reconciliation_entries
-         WHERE user_id=$1 AND operation_id=$2",
+         WHERE account_id=$1 AND operation_id=$2",
     )
     .bind(user_id)
     .bind(reconciliation_id)
@@ -1121,9 +1121,9 @@ pub async fn commit_manifest(
     let unreferenced_media: Vec<(String, i64)> = sqlx::query_as(
         "SELECT object.storage_path,object.ciphertext_bytes
          FROM chat_backup_media_objects object
-         WHERE object.user_id=$1 AND NOT EXISTS (
+         WHERE object.account_id=$1 AND NOT EXISTS (
            SELECT 1 FROM chat_backup_media_references reference
-           WHERE reference.user_id=object.user_id AND reference.media_id=object.media_id
+           WHERE reference.account_id=object.account_id AND reference.media_id=object.media_id
          )",
     )
     .bind(user_id)
@@ -1135,9 +1135,9 @@ pub async fn commit_manifest(
     old_paths.extend(unreferenced_media.into_iter().map(|(path, _)| path));
     sqlx::query(
         "DELETE FROM chat_backup_media_objects object
-         WHERE object.user_id=$1 AND NOT EXISTS (
+         WHERE object.account_id=$1 AND NOT EXISTS (
            SELECT 1 FROM chat_backup_media_references reference
-           WHERE reference.user_id=object.user_id AND reference.media_id=object.media_id
+           WHERE reference.account_id=object.account_id AND reference.media_id=object.media_id
          )",
     )
     .bind(user_id)
@@ -1146,20 +1146,20 @@ pub async fn commit_manifest(
     let committed_at = OffsetDateTime::now_utc();
     sqlx::query(
         "UPDATE chat_backup_bases SET state='committed',committed_at=$1,expires_at='infinity'
-         WHERE user_id=$2 AND object_id=$3",
+         WHERE account_id=$2 AND object_id=$3",
     )
     .bind(committed_at)
     .bind(user_id)
     .bind(base_id)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query("DELETE FROM chat_backup_segments WHERE user_id=$1 AND cursor<=$2")
+    sqlx::query("DELETE FROM chat_backup_segments WHERE account_id=$1 AND cursor<=$2")
         .bind(user_id)
         .bind(covered_cursor)
         .execute(&mut *transaction)
         .await?;
     sqlx::query(
-        "DELETE FROM chat_backup_bases WHERE user_id=$1 AND state='committed' AND object_id<>$2",
+        "DELETE FROM chat_backup_bases WHERE account_id=$1 AND state='committed' AND object_id<>$2",
     )
     .bind(user_id)
     .bind(base_id)
@@ -1168,7 +1168,7 @@ pub async fn commit_manifest(
     sqlx::query(
         "UPDATE chat_backups SET current_generation=$1,current_manifest_digest=$2,
          current_manifest=$3,current_base_object_id=$4,latest_protected_at=$5,updated_at=NOW()
-         WHERE user_id=$6",
+         WHERE account_id=$6",
     )
     .bind(i64::try_from(request.manifest.generation).unwrap_or(i64::MAX))
     .bind(&manifest_digest)
@@ -1191,7 +1191,7 @@ pub async fn commit_manifest(
     .await?;
     sqlx::query(
         "DELETE FROM chat_backup_media_reconciliations
-         WHERE user_id=$1 AND target_generation<=$2",
+         WHERE account_id=$1 AND target_generation<=$2",
     )
     .bind(user_id)
     .bind(i64::try_from(request.manifest.generation).unwrap_or(i64::MAX))
@@ -1225,8 +1225,8 @@ pub async fn download_base(
     let row: Option<(String, i64, String)> = sqlx::query_as(
         "SELECT base.storage_path,base.ciphertext_bytes,base.ciphertext_sha256
          FROM chat_backups backup JOIN chat_backup_bases base
-           ON base.user_id=backup.user_id AND base.object_id=backup.current_base_object_id
-         WHERE backup.user_id=$1 AND base.object_id=$2 AND base.state='committed'",
+           ON base.account_id=backup.account_id AND base.object_id=backup.current_base_object_id
+         WHERE backup.account_id=$1 AND base.object_id=$2 AND base.state='committed'",
     )
     .bind(user_id)
     .bind(object_id)
@@ -1277,8 +1277,8 @@ pub async fn copy_media(
                 object.storage_path
              FROM chat_backup_media_operations operation
              JOIN chat_backup_media_objects object
-               ON object.user_id=operation.user_id AND object.media_id=operation.media_id
-             WHERE operation.user_id=$1 AND operation.operation_id=$2",
+               ON object.account_id=operation.account_id AND object.media_id=operation.media_id
+             WHERE operation.account_id=$1 AND operation.operation_id=$2",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -1304,9 +1304,9 @@ pub async fn copy_media(
                 account.account_incarnation_id
          FROM chat_media_references reference
          JOIN chat_media_objects object ON object.attachment_id=reference.attachment_id
-         JOIN chat_backups backup ON backup.user_id=reference.user_id
-         JOIN users account ON account.id=reference.user_id
-         WHERE reference.user_id=$1 AND reference.attachment_id=$2",
+         JOIN chat_backups backup ON backup.account_id=reference.account_id
+         JOIN accounts account ON account.id=reference.account_id
+         WHERE reference.account_id=$1 AND reference.attachment_id=$2",
     )
     .bind(user_id)
     .bind(source_id)
@@ -1413,7 +1413,7 @@ pub async fn copy_media(
     let store_result: AppResult<bool> = async {
         let mut transaction = state.pool.begin().await?;
         let locked_backup_id: Uuid = sqlx::query_scalar(
-            "SELECT backup_incarnation_id FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+            "SELECT backup_incarnation_id FROM chat_backups WHERE account_id=$1 FOR UPDATE",
         )
         .bind(user_id)
         .fetch_one(&mut *transaction)
@@ -1425,7 +1425,7 @@ pub async fn copy_media(
         }
         let existing: Option<(i64, String)> = sqlx::query_as(
             "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
-             WHERE user_id=$1 AND media_id=$2",
+             WHERE account_id=$1 AND media_id=$2",
         )
         .bind(user_id)
         .bind(media_id.as_slice())
@@ -1450,7 +1450,7 @@ pub async fn copy_media(
             }
             sqlx::query(
                 "INSERT INTO chat_backup_media_objects
-                 (user_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path)
+                 (account_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path)
                  VALUES ($1,$2,$3,$4,$5)",
             )
             .bind(user_id)
@@ -1470,7 +1470,7 @@ pub async fn copy_media(
         };
         if let Some(existing_media_id) = sqlx::query_scalar::<_, Vec<u8>>(
             "SELECT media_id FROM chat_backup_media_references
-             WHERE user_id=$1 AND reference_id=$2",
+             WHERE account_id=$1 AND reference_id=$2",
         )
         .bind(user_id)
         .bind(reference_id)
@@ -1484,7 +1484,7 @@ pub async fn copy_media(
             }
         } else {
             sqlx::query(
-                "INSERT INTO chat_backup_media_references(user_id,media_id,reference_id)
+                "INSERT INTO chat_backup_media_references(account_id,media_id,reference_id)
                  VALUES ($1,$2,$3)",
             )
             .bind(user_id)
@@ -1494,7 +1494,7 @@ pub async fn copy_media(
             .await?;
         }
         sqlx::query(
-            "INSERT INTO chat_backup_media_operations(user_id,operation_id,request_digest,media_id)
+            "INSERT INTO chat_backup_media_operations(account_id,operation_id,request_digest,media_id)
              VALUES ($1,$2,$3,$4)",
         )
         .bind(user_id)
@@ -1522,7 +1522,7 @@ pub async fn copy_media(
         }
         let (bytes, stored_digest, stored_path): (i64, String, String) = sqlx::query_as(
             "SELECT ciphertext_bytes,ciphertext_sha256,storage_path FROM chat_backup_media_objects
-             WHERE user_id=$1 AND media_id=$2",
+             WHERE account_id=$1 AND media_id=$2",
         )
         .bind(user_id)
         .bind(media_id.as_slice())
@@ -1654,8 +1654,8 @@ pub async fn upload_media(
     }
     let account: Option<(Uuid, String)> = sqlx::query_as(
         "SELECT backup.backup_incarnation_id,account.account_incarnation_id
-         FROM chat_backups backup JOIN users account ON account.id=backup.user_id
-         WHERE backup.user_id=$1",
+         FROM chat_backups backup JOIN accounts account ON account.id=backup.account_id
+         WHERE backup.account_id=$1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -1674,7 +1674,7 @@ pub async fn upload_media(
 
     if let Some((bytes, digest)) = sqlx::query_as::<_, (i64, String)>(
         "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
-         WHERE user_id=$1 AND media_id=$2",
+         WHERE account_id=$1 AND media_id=$2",
     )
     .bind(user_id)
     .bind(media_id.as_slice())
@@ -1715,13 +1715,13 @@ pub async fn upload_media(
         .map_err(|_| AppError::internal("backup media storage error"))?;
     let result: AppResult<bool> = async {
         let mut transaction = state.pool.begin().await?;
-        sqlx::query("SELECT user_id FROM chat_backups WHERE user_id=$1 FOR UPDATE")
+        sqlx::query("SELECT account_id FROM chat_backups WHERE account_id=$1 FOR UPDATE")
             .bind(user_id)
             .execute(&mut *transaction)
             .await?;
         let existing: Option<(i64, String)> = sqlx::query_as(
             "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
-             WHERE user_id=$1 AND media_id=$2",
+             WHERE account_id=$1 AND media_id=$2",
         )
         .bind(user_id)
         .bind(media_id.as_slice())
@@ -1750,7 +1750,7 @@ pub async fn upload_media(
             }
             sqlx::query(
                 "INSERT INTO chat_backup_media_objects
-                 (user_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path)
+                 (account_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path)
                  VALUES ($1,$2,$3,$4,$5)",
             )
             .bind(user_id)
@@ -1785,7 +1785,7 @@ pub async fn upload_media(
     }
     let (stored_bytes, stored_digest): (i64, String) = sqlx::query_as(
         "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
-         WHERE user_id=$1 AND media_id=$2",
+         WHERE account_id=$1 AND media_id=$2",
     )
     .bind(user_id)
     .bind(media_id.as_slice())
@@ -1868,7 +1868,7 @@ async fn insert_media_reference(
 ) -> AppResult<()> {
     if let Some(existing) = sqlx::query_scalar::<_, Vec<u8>>(
         "SELECT media_id FROM chat_backup_media_references
-         WHERE user_id=$1 AND reference_id=$2",
+         WHERE account_id=$1 AND reference_id=$2",
     )
     .bind(user_id)
     .bind(reference_id)
@@ -1882,7 +1882,7 @@ async fn insert_media_reference(
         }
     } else {
         sqlx::query(
-            "INSERT INTO chat_backup_media_references(user_id,media_id,reference_id)
+            "INSERT INTO chat_backup_media_references(account_id,media_id,reference_id)
              VALUES ($1,$2,$3)",
         )
         .bind(user_id)
@@ -1922,7 +1922,7 @@ pub async fn download_media(
     let media_id_bytes = canonical_hex_32("backup media id", &media_id)?;
     let row: Option<(String, i64, String)> = sqlx::query_as(
         "SELECT storage_path,ciphertext_bytes,ciphertext_sha256
-         FROM chat_backup_media_objects WHERE user_id=$1 AND media_id=$2",
+         FROM chat_backup_media_objects WHERE account_id=$1 AND media_id=$2",
     )
     .bind(user_id)
     .bind(media_id_bytes.as_slice())
@@ -1974,7 +1974,7 @@ pub async fn reconcile_media(
     let page_digest = request_digest(&request)?;
     let mut transaction = state.pool.begin().await?;
     let current_generation: i64 = sqlx::query_scalar(
-        "SELECT current_generation FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+        "SELECT current_generation FROM chat_backups WHERE account_id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -1987,7 +1987,7 @@ pub async fn reconcile_media(
     }
     let staged: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM chat_backup_bases
-         WHERE user_id=$1 AND generation=$2 AND state='staged')",
+         WHERE account_id=$1 AND generation=$2 AND state='staged')",
     )
     .bind(user_id)
     .bind(target_generation)
@@ -2000,7 +2000,7 @@ pub async fn reconcile_media(
     }
     if let Some(stored_digest) = sqlx::query_scalar::<_, String>(
         "SELECT request_digest FROM chat_backup_media_reconciliation_pages
-         WHERE user_id=$1 AND operation_id=$2 AND page_index=$3",
+         WHERE account_id=$1 AND operation_id=$2 AND page_index=$3",
     )
     .bind(user_id)
     .bind(operation_id)
@@ -2015,7 +2015,7 @@ pub async fn reconcile_media(
         }
         let (next_page, completed): (i32, bool) = sqlx::query_as(
             "SELECT next_page,completed FROM chat_backup_media_reconciliations
-             WHERE user_id=$1 AND operation_id=$2",
+             WHERE account_id=$1 AND operation_id=$2",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -2031,7 +2031,7 @@ pub async fn reconcile_media(
     let operation: Option<(i64, String, i32, bool)> = sqlx::query_as(
         "SELECT target_generation,reference_set_digest,next_page,completed
          FROM chat_backup_media_reconciliations
-         WHERE user_id=$1 AND operation_id=$2 FOR UPDATE",
+         WHERE account_id=$1 AND operation_id=$2 FOR UPDATE",
     )
     .bind(user_id)
     .bind(operation_id)
@@ -2054,7 +2054,7 @@ pub async fn reconcile_media(
         }
         sqlx::query(
             "INSERT INTO chat_backup_media_reconciliations
-             (user_id,operation_id,target_generation,reference_set_digest)
+             (account_id,operation_id,target_generation,reference_set_digest)
              VALUES ($1,$2,$3,$4)",
         )
         .bind(user_id)
@@ -2075,7 +2075,7 @@ pub async fn reconcile_media(
         let media_id = canonical_hex_32("backup media id", &reference.media_id)?;
         sqlx::query(
             "INSERT INTO chat_backup_media_reconciliation_entries
-             (user_id,operation_id,reference_id,media_id) VALUES ($1,$2,$3,$4)",
+             (account_id,operation_id,reference_id,media_id) VALUES ($1,$2,$3,$4)",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -2099,7 +2099,7 @@ pub async fn reconcile_media(
     if request.final_page {
         let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
             "SELECT reference_id,media_id FROM chat_backup_media_reconciliation_entries
-             WHERE user_id=$1 AND operation_id=$2 ORDER BY reference_id",
+             WHERE account_id=$1 AND operation_id=$2 ORDER BY reference_id",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -2124,7 +2124,7 @@ pub async fn reconcile_media(
     sqlx::query(
         "UPDATE chat_backup_media_reconciliations
          SET next_page=$1,completed=$2,updated_at=NOW()
-         WHERE user_id=$3 AND operation_id=$4",
+         WHERE account_id=$3 AND operation_id=$4",
     )
     .bind(new_next_page)
     .bind(now_completed)
@@ -2134,7 +2134,7 @@ pub async fn reconcile_media(
     .await?;
     sqlx::query(
         "INSERT INTO chat_backup_media_reconciliation_pages
-         (user_id,operation_id,page_index,request_digest) VALUES ($1,$2,$3,$4)",
+         (account_id,operation_id,page_index,request_digest) VALUES ($1,$2,$3,$4)",
     )
     .bind(user_id)
     .bind(operation_id)

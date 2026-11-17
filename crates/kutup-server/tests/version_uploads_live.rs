@@ -322,7 +322,7 @@ fn upload_rows_are_a_file_or_a_version() {
                   generation: Option<i32>| {
         runtime.block_on(
             sqlx::query(
-                "INSERT INTO uploads (user_id, collection_id, file_id, total_bytes,
+                "INSERT INTO drive_uploads (account_id, collection_id, file_id, total_bytes,
                     file_key_envelope, key_epoch, storage_path, s3_upload_id,
                     name_hash, kind, key_generation)
                  VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, $2, 1,
@@ -378,7 +378,7 @@ fn a_version_over_tus_stands_at_the_log_head() {
         .unwrap();
     runtime
         .block_on(
-            sqlx::query("UPDATE files SET collab_log_floor = 7 WHERE id = $1::uuid")
+            sqlx::query("UPDATE drive_files SET collab_log_floor = 7 WHERE id = $1::uuid")
                 .bind(&file.id)
                 .execute(&pool),
         )

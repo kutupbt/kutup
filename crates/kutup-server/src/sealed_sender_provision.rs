@@ -189,7 +189,7 @@ pub(crate) async fn maintain(
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        "UPDATE sealed_sender_generated_certificates SET online_private_key = NULL
+        "UPDATE chat_sealed_sender_certificates SET online_private_key = NULL
          WHERE expires_at <= $1 AND online_private_key IS NOT NULL",
     )
     .bind(now_seconds)
@@ -198,7 +198,7 @@ pub(crate) async fn maintain(
     let mut rows: Vec<GeneratedCertificate> = sqlx::query_as(
         "SELECT certificate_id, root_id, root_public_key, certificate, online_private_key,
                 published_at, activates_at, expires_at
-         FROM sealed_sender_generated_certificates ORDER BY activates_at, certificate_id",
+         FROM chat_sealed_sender_certificates ORDER BY activates_at, certificate_id",
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -228,7 +228,7 @@ pub(crate) async fn maintain(
     if let Some(activates_at) = successor_activation(&rows, now_seconds) {
         let created = generate(&rows, now_seconds, activates_at)?;
         sqlx::query(
-            "INSERT INTO sealed_sender_generated_certificates
+            "INSERT INTO chat_sealed_sender_certificates
                 (certificate_id, root_id, root_public_key, certificate, online_private_key,
                  published_at, activates_at, expires_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",

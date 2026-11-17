@@ -283,6 +283,7 @@ struct MediaRow {
     state: String,
     answer: Option<Value>,
     attempts: i32,
+    #[sqlx(rename = "sender_account_id")]
     sender_user_id: Option<Uuid>,
 }
 
@@ -358,7 +359,7 @@ pub(crate) async fn stage_remote_delivery(
         let object: Option<ObjectRow> = sqlx::query_as(
             "SELECT suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
              FROM chat_media_objects
-             WHERE attachment_id=$1 AND origin_user_id=$2 AND origin_domain=$3",
+             WHERE attachment_id=$1 AND origin_account_id=$2 AND origin_server=$3",
         )
         .bind(attachment_id)
         .bind(origin_user_id)
@@ -394,7 +395,7 @@ pub(crate) async fn stage_remote_delivery(
             .map_err(|_| AppError::internal("serialize Chat-media transaction"))?;
         sqlx::query(
             "INSERT INTO chat_media_federation_pull_grants
-                 (origin_user_id,destination,recipient_account_id,operation_id,attachment_id,
+                 (origin_account_id,destination,recipient_account_id,operation_id,attachment_id,
                   retrieval_token_hash,expires_at)
              VALUES ($1,$2,$3,$4,$5,$6,to_timestamp($7))",
         )
@@ -409,7 +410,7 @@ pub(crate) async fn stage_remote_delivery(
         .await?;
         let id: Uuid = sqlx::query_scalar(
             "INSERT INTO federation_outbox
-                 (kind, destination, sequence, idempotency_key, sender_user_id,
+                 (kind, destination, sequence, idempotency_key, sender_account_id,
                   recipient_account_id, payload)
              VALUES ('media', $1, $2, $3, $4, $5,
                      jsonb_build_object('transaction', $6::jsonb, 'operationId', $7::text))
@@ -759,7 +760,7 @@ async fn reserve_inbound_offer(
     let lease_id = Uuid::new_v4();
     type Pending = (String, Uuid, Uuid, i64);
     let pending: Option<Pending> = sqlx::query_as(
-        "SELECT transaction_digest,recipient_user_id,attachment_id,ciphertext_bytes
+        "SELECT transaction_digest,recipient_account_id,attachment_id,ciphertext_bytes
          FROM chat_media_federation_inbound_pending
          WHERE origin=$1 AND sequence=$2",
     )
@@ -825,7 +826,7 @@ async fn reserve_inbound_offer(
     let recipient_user_id: Option<Uuid> = sqlx::query_scalar(
         // An account that doesn't talk to other servers is, to them, no
         // account (crate::federation_switch).
-        "SELECT id FROM users WHERE id = $1 AND is_active AND kutup_account_federates(id)",
+        "SELECT id FROM accounts WHERE id = $1 AND is_active AND kutup_account_federates(id)",
     )
     .bind(recipient)
     .fetch_optional(&mut *tx)
@@ -879,7 +880,7 @@ async fn reserve_inbound_offer(
         return refuse_offer(tx, transaction, transaction_digest, collision).await;
     }
     let existing_reference: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM chat_media_references WHERE user_id=$1 AND attachment_id=$2",
+        "SELECT id FROM chat_media_references WHERE account_id=$1 AND attachment_id=$2",
     )
     .bind(recipient_user_id)
     .bind(attachment_id)
@@ -929,7 +930,7 @@ async fn reserve_inbound_offer(
     }
     sqlx::query(
         "INSERT INTO chat_media_federation_inbound_pending
-             (origin,sequence,operation_id,transaction_digest,recipient_user_id,
+             (origin,sequence,operation_id,transaction_digest,recipient_account_id,
               attachment_id,ciphertext_bytes,lease_id,lease_until)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '2 minutes')",
     )
@@ -961,7 +962,7 @@ async fn check_object_identity(
 ) -> AppResult<bool> {
     type ExistingObject = (String, i16, i64, String, Vec<u8>);
     let existing: Option<ExistingObject> = sqlx::query_as(
-        "SELECT origin_domain,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
+        "SELECT origin_server,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
          FROM chat_media_objects WHERE attachment_id=$1 FOR UPDATE",
     )
     .bind(attachment_id)
@@ -1157,7 +1158,7 @@ async fn process_reserved_offer_inner(
         )
         .await?;
         let pending: Option<(Uuid, Uuid, i64)> = sqlx::query_as(
-            "SELECT recipient_user_id,attachment_id,ciphertext_bytes
+            "SELECT recipient_account_id,attachment_id,ciphertext_bytes
              FROM chat_media_federation_inbound_pending
              WHERE origin=$1 AND sequence=$2 AND lease_id=$3 FOR UPDATE",
         )
@@ -1201,7 +1202,7 @@ async fn process_reserved_offer_inner(
                 .ok_or_else(|| AppError::internal("Chat-media object disappeared"))?;
             sqlx::query(
                 "INSERT INTO chat_media_objects
-                     (attachment_id,origin_user_id,origin_domain,suite,ciphertext_bytes,
+                     (attachment_id,origin_account_id,origin_server,suite,ciphertext_bytes,
                       ciphertext_sha256,retrieval_token_hash,storage_path)
                  VALUES ($1,NULL,$2,$3,$4,$5,$6,$7)",
             )
@@ -1272,7 +1273,7 @@ async fn process_reserved_offer_inner(
             return AppResult::Ok((StatusCode::OK, value, false));
         }
         let existing_reference: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM chat_media_references WHERE user_id=$1 AND attachment_id=$2",
+            "SELECT id FROM chat_media_references WHERE account_id=$1 AND attachment_id=$2",
         )
         .bind(recipient_user_id)
         .bind(attachment_id)
@@ -1282,7 +1283,7 @@ async fn process_reserved_offer_inner(
             (reference_id, ChatMediaDeliveryStatusV1::AlreadyStored)
         } else {
             let reference_id: Uuid = sqlx::query_scalar(
-                "INSERT INTO chat_media_references(user_id,attachment_id,logical_bytes)
+                "INSERT INTO chat_media_references(account_id,attachment_id,logical_bytes)
                  VALUES ($1,$2,$3) RETURNING id",
             )
             .bind(recipient_user_id)
@@ -1567,10 +1568,10 @@ async fn serve_object_inner(
          JOIN chat_media_objects o ON o.attachment_id=g.attachment_id
          WHERE g.destination=$1 AND g.recipient_account_id=$2 AND g.operation_id=$3
            AND g.attachment_id=$4 AND g.expires_at>now()
-           AND o.origin_domain=$5 AND o.origin_user_id=g.origin_user_id
+           AND o.origin_server=$5 AND o.origin_account_id=g.origin_account_id
            -- A sender whose federation is off serves nothing to another
            -- server, its grants from before included (crate::federation_switch).
-           AND kutup_account_federates(g.origin_user_id)",
+           AND kutup_account_federates(g.origin_account_id)",
     )
     .bind(authenticated.origin())
     .bind(recipient_account_id(&transaction.offer).map_err(|_| chat_media::unavailable())?)

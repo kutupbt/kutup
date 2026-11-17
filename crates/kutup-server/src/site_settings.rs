@@ -350,7 +350,7 @@ impl NumericSetting {
         account: uuid::Uuid,
     ) -> Result<i64, sqlx::Error> {
         let (own, site): (Option<i64>, Option<String>) = sqlx::query_as(
-            "SELECT (SELECT value FROM user_setting_overrides WHERE user_id = $2 AND key = $1),
+            "SELECT (SELECT value FROM account_setting_overrides WHERE account_id = $2 AND key = $1),
                     (SELECT value FROM site_settings WHERE key = $1)",
         )
         .bind(self.key)

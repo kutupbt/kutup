@@ -112,20 +112,20 @@ pub async fn create_link_token(
         .load_for(&state.pool, user_id)
         .await?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     // Spent and lapsed tokens are kept only until the account asks again.
     sqlx::query(
         "DELETE FROM chat_link_tokens
-          WHERE user_id = $1 AND (used_at IS NOT NULL OR expires_at <= now())",
+          WHERE account_id = $1 AND (used_at IS NOT NULL OR expires_at <= now())",
     )
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
     let unused: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM chat_link_tokens WHERE user_id = $1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM chat_link_tokens WHERE account_id = $1")
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -138,7 +138,7 @@ pub async fn create_link_token(
     let token: [u8; 32] = random();
     let expires_at = time::OffsetDateTime::now_utc() + time::Duration::seconds(lifetime);
     sqlx::query(
-        "INSERT INTO chat_link_tokens (token_hash, user_id, issued_by_device, expires_at)
+        "INSERT INTO chat_link_tokens (token_hash, account_id, issued_by_device, expires_at)
          VALUES ($1, $2, $3, $4)",
     )
     .bind(hash(Suite::V1, token).to_vec())

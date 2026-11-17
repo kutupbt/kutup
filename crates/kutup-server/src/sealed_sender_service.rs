@@ -329,8 +329,8 @@ pub(crate) async fn issue_sender_certificate(
     .await?;
     let row: Option<String> = sqlx::query_scalar(
         "SELECT i.identity_key FROM chat_account_identities i
-           JOIN users u ON u.id = i.user_id
-          WHERE i.user_id = $1 AND u.is_active = true",
+           JOIN accounts u ON u.id = i.account_id
+          WHERE i.account_id = $1 AND u.is_active = true",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)

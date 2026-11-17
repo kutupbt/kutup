@@ -178,7 +178,7 @@ pub async fn replay(pool: &PgPool, keys: &OpaqueSetupKeys) -> AppResult<u64> {
     let mut after = Uuid::nil();
     loop {
         let page: Vec<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE id > $1 ORDER BY id LIMIT $2")
+            sqlx::query_scalar("SELECT id FROM accounts WHERE id > $1 ORDER BY id LIMIT $2")
                 .bind(after)
                 .bind(REPLAY_PAGE)
                 .fetch_all(pool)
@@ -197,7 +197,7 @@ pub async fn replay(pool: &PgPool, keys: &OpaqueSetupKeys) -> AppResult<u64> {
         // A legal hold in the restored database wins: nothing of that account
         // is destroyed. The operator decides, told loudly.
         let held: bool = sqlx::query_scalar(
-            "SELECT legal_hold_reference IS NOT NULL FROM users WHERE id = $1 FOR UPDATE",
+            "SELECT legal_hold_reference IS NOT NULL FROM accounts WHERE id = $1 FOR UPDATE",
         )
         .bind(account)
         .fetch_one(&mut *tx)
@@ -210,14 +210,14 @@ pub async fn replay(pool: &PgPool, keys: &OpaqueSetupKeys) -> AppResult<u64> {
             );
             continue;
         }
-        sqlx::query("DELETE FROM account_keys.account_data_keys WHERE user_id = $1")
+        sqlx::query("DELETE FROM account_keys.account_data_keys WHERE account_id = $1")
             .bind(account)
             .execute(&mut *tx)
             .await?;
         crate::account_closing::close(&mut tx, *account, ClosingBy::Restore, 0).await?;
         // One closing already deletes now too, whoever asked.
         sqlx::query(
-            "UPDATE users SET closes_at = LEAST(closes_at, now()), closing_by = 'restore'
+            "UPDATE accounts SET closes_at = LEAST(closes_at, now()), closing_by = 'restore'
               WHERE id = $1 AND state = 'closing'",
         )
         .bind(account)
@@ -249,7 +249,7 @@ mod tests {
     async fn user(pool: &PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
              VALUES ($1, $2, '', '', '', '', '', '', '')",
@@ -303,8 +303,8 @@ mod tests {
                 sqlx::query_as::<_, (String, Option<String>, bool, bool)>(
                     "SELECT state, closing_by, COALESCE(closes_at <= now(), false),
                             EXISTS (SELECT 1 FROM account_keys.account_data_keys k
-                                     WHERE k.user_id = u.id)
-                       FROM users u WHERE id = $1",
+                                     WHERE k.account_id = u.id)
+                       FROM accounts u WHERE id = $1",
                 )
                 .bind(account)
                 .fetch_one(&pool)
@@ -321,7 +321,7 @@ mod tests {
         let (s, _, _, has_key) = state(other).await;
         assert_eq!((s.as_str(), has_key), ("active", true));
 
-        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        sqlx::query("DELETE FROM accounts WHERE id = ANY($1)")
             .bind(vec![destroyed, other])
             .execute(&pool)
             .await

@@ -212,7 +212,7 @@ fi
 # its own local recipient, but never the remote sender account/device. Pending
 # reservations must also be empty after the durable retry finishes.
 media_sender_rows="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
-  "SELECT COUNT(*) FROM chat_media_objects WHERE origin_domain='a.test' AND origin_user_id IS NOT NULL")"
+  "SELECT COUNT(*) FROM chat_media_objects WHERE origin_server='a.test' AND origin_account_id IS NOT NULL")"
 media_pending_rows="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
   "SELECT COUNT(*) FROM chat_media_federation_inbound_pending")"
 media_sender_columns="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \

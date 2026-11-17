@@ -77,7 +77,7 @@ pub async fn upload(
         return Err(AppError::forbidden("forbidden"));
     }
     let (collection_id, key_generation): (Uuid, i32) = sqlx::query_as(
-        "SELECT collection_id, key_generation FROM files WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT collection_id, key_generation FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
@@ -96,8 +96,8 @@ pub async fn upload(
     let revision_id =
         Uuid::parse_str(revision).map_err(|_| AppError::bad_request("invalid revision"))?;
     let known_revision: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM files WHERE id = $1 AND content_revision_id = $2)
-             OR EXISTS (SELECT 1 FROM file_versions WHERE id = $2 AND file_id = $1)",
+        "SELECT EXISTS (SELECT 1 FROM drive_files WHERE id = $1 AND content_revision_id = $2)
+             OR EXISTS (SELECT 1 FROM drive_file_versions WHERE id = $2 AND file_id = $1)",
     )
     .bind(fid)
     .bind(revision_id)
@@ -113,7 +113,7 @@ pub async fn upload(
             let vid =
                 Uuid::parse_str(value).map_err(|_| AppError::bad_request("invalid source"))?;
             let belongs: bool = sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM file_versions WHERE id = $1 AND file_id = $2)",
+                "SELECT EXISTS (SELECT 1 FROM drive_file_versions WHERE id = $1 AND file_id = $2)",
             )
             .bind(vid)
             .bind(fid)
@@ -138,7 +138,7 @@ pub async fn upload(
         .execute(&mut *tx)
         .await?;
     let previous: Option<(i64, Uuid, String)> = sqlx::query_as(
-        "SELECT size_bytes, uploader_user_id, s3_version_id FROM file_thumbnails
+        "SELECT size_bytes, uploader_account_id, s3_version_id FROM drive_file_thumbnails
          WHERE file_id = $1 AND variant = $2 FOR UPDATE",
     )
     .bind(fid)
@@ -185,14 +185,14 @@ pub async fn upload(
         .await
         .map_err(|_| AppError::internal("storage error"))?;
     sqlx::query(
-        r#"INSERT INTO file_thumbnails (file_id, variant, size_bytes, s3_version_id, source_version, uploader_user_id, key_generation, updated_at)
+        r#"INSERT INTO drive_file_thumbnails (file_id, variant, size_bytes, s3_version_id, source_version, uploader_account_id, key_generation, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
            ON CONFLICT (file_id, variant) DO UPDATE SET
              size_bytes = EXCLUDED.size_bytes,
              key_generation = EXCLUDED.key_generation,
              s3_version_id = EXCLUDED.s3_version_id,
              source_version = EXCLUDED.source_version,
-             uploader_user_id = EXCLUDED.uploader_user_id,
+             uploader_account_id = EXCLUDED.uploader_account_id,
              updated_at = NOW()"#,
     )
     .bind(fid)
@@ -231,8 +231,8 @@ async fn owns_trashed_file(
     file_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
-                        WHERE f.id = $1 AND f.trash_root_id = f.id AND c.owner_user_id = $2
+        "SELECT EXISTS (SELECT 1 FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+                        WHERE f.id = $1 AND f.trash_root_id = f.id AND c.owner_account_id = $2
                           AND c.deleted_at IS NULL)",
     )
     .bind(file_id)
@@ -284,7 +284,7 @@ pub(crate) async fn serve_thumbnail(
 
 async fn serve(state: &AppState, fid: Uuid, variant: ThumbnailVariant) -> AppResult<Response> {
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM file_thumbnails WHERE file_id = $1 AND variant = $2)",
+        "SELECT EXISTS (SELECT 1 FROM drive_file_thumbnails WHERE file_id = $1 AND variant = $2)",
     )
     .bind(fid)
     .bind(variant.as_str())
@@ -333,8 +333,8 @@ pub async fn delete(
     }
     let mut tx = state.pool.begin().await?;
     let removed: Vec<(String, i64, Uuid, String)> = sqlx::query_as(
-        "DELETE FROM file_thumbnails WHERE file_id = $1
-         RETURNING variant, size_bytes, uploader_user_id, s3_version_id",
+        "DELETE FROM drive_file_thumbnails WHERE file_id = $1
+         RETURNING variant, size_bytes, uploader_account_id, s3_version_id",
     )
     .bind(fid)
     .fetch_all(&mut *tx)

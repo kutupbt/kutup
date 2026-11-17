@@ -159,7 +159,7 @@ pub async fn check_shares(
             .map_err(|_| AppError::bad_request("userId must be an account id"))?;
         let share = decode(&input.share, "share")?;
         let current: Option<(String, i16)> = sqlx::query_as(
-            "SELECT account_incarnation_id, identity_suite FROM users
+            "SELECT account_incarnation_id, identity_suite FROM accounts
               WHERE id = $1 AND is_active AND NOT is_first_login AND account_incarnation_id <> ''",
         )
         .bind(user_id)
@@ -303,7 +303,7 @@ pub async fn publish(
     .ok_or_else(|| AppError::conflict("this key is already in use"))?;
     for share in shares {
         sqlx::query(
-            "INSERT INTO mail_group_key_shares (group_key_id, user_id, share, member_incarnation_id)
+            "INSERT INTO mail_group_key_shares (group_key_id, account_id, share, member_incarnation_id)
              VALUES ($1, $2, $3, $4)",
         )
         .bind(key_id)
@@ -448,9 +448,9 @@ pub async fn add_signing_shares(
     for share in shares {
         sqlx::query(
             "INSERT INTO mail_group_signing_shares
-                    (group_id, signer_public_key, user_id, share, member_incarnation_id)
+                    (group_id, signer_public_key, account_id, share, member_incarnation_id)
              VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (group_id, signer_public_key, user_id) DO UPDATE
+             ON CONFLICT (group_id, signer_public_key, account_id) DO UPDATE
                SET share = EXCLUDED.share, member_incarnation_id = EXCLUDED.member_incarnation_id,
                    created_at = now()",
         )
@@ -482,9 +482,9 @@ pub async fn add_shares(
     .ok_or_else(|| AppError::bad_request("no such group key"))?;
     for share in shares {
         sqlx::query(
-            "INSERT INTO mail_group_key_shares (group_key_id, user_id, share, member_incarnation_id)
+            "INSERT INTO mail_group_key_shares (group_key_id, account_id, share, member_incarnation_id)
              VALUES ($1, $2, $3, $4)
-             ON CONFLICT (group_key_id, user_id) DO UPDATE
+             ON CONFLICT (group_key_id, account_id) DO UPDATE
                SET share = EXCLUDED.share, member_incarnation_id = EXCLUDED.member_incarnation_id, created_at = now()",
         )
         .bind(key_id)
@@ -599,10 +599,10 @@ pub async fn signer_leaving(conn: &mut sqlx::PgConnection, user: Uuid) -> AppRes
                 SELECT g.id FROM mail_groups g
                  WHERE g.kind = 'shared'
                    AND (EXISTS (SELECT 1 FROM mail_group_members m
-                                 WHERE m.group_id = g.id AND m.user_id = $1
+                                 WHERE m.group_id = g.id AND m.account_id = $1
                                    AND m.role IN ('owner', 'manager'))
                         OR EXISTS (SELECT 1 FROM mail_group_signing_shares s
-                                    WHERE s.group_id = g.id AND s.user_id = $1))
+                                    WHERE s.group_id = g.id AND s.account_id = $1))
                  ORDER BY g.id
                  FOR UPDATE)",
     )

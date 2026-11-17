@@ -196,7 +196,7 @@ impl Settings {
         account: uuid::Uuid,
     ) -> Result<Self, sqlx::Error> {
         let own: Option<i64> = sqlx::query_scalar(
-            "SELECT value FROM user_setting_overrides WHERE user_id = $1 AND key = $2",
+            "SELECT value FROM account_setting_overrides WHERE account_id = $1 AND key = $2",
         )
         .bind(account)
         .bind(Self::ACCOUNT_KEY)

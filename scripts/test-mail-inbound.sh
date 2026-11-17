@@ -151,7 +151,7 @@ purged="$(grep -o 'PURGED-USER [0-9a-f-]*' "$output" | cut -d' ' -f2)"
 [[ "$purged" =~ ^[0-9a-f-]{36}$ ]] || { echo "the test did not report its deleted account" >&2; exit 1; }
 mail_rows="$(compose exec -T postgres psql \
   --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
-  --command "SELECT COUNT(*) FROM mail_messages WHERE user_id = '$purged';")"
+  --command "SELECT COUNT(*) FROM mail_messages WHERE account_id = '$purged';")"
 if [[ "$mail_rows" != "0" ]]; then
   echo "account purge left $mail_rows mail rows" >&2
   exit 1

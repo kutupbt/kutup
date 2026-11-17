@@ -54,7 +54,7 @@ pub(crate) async fn viewed(
     target: Uuid,
     view: &str,
 ) -> AppResult<()> {
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
         .bind(target)
         .fetch_one(&state.pool)
         .await?;
@@ -90,7 +90,7 @@ fn valid_admin_username(s: &str) -> bool {
 /// disabled, wiped or deleted.
 async fn is_break_glass(state: &AppState, id: Uuid) -> AppResult<bool> {
     Ok(
-        sqlx::query_scalar("SELECT is_break_glass FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT is_break_glass FROM accounts WHERE id = $1")
             .bind(id)
             .fetch_optional(&state.pool)
             .await?
@@ -172,7 +172,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
                   legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
                   public_sharing, federation,
                   totp_enabled, is_first_login, created_at, is_break_glass AS is_protected
-           FROM users ORDER BY created_at DESC"#,
+           FROM accounts ORDER BY created_at DESC"#,
     )
     .fetch_all(&state.pool)
     .await
@@ -285,7 +285,7 @@ pub async fn create_user(
         return Err(unavailable.error());
     }
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
-        r#"INSERT INTO users (
+        r#"INSERT INTO accounts (
                username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
                master_key_envelope, recovery_key_envelope,
                public_key, account_authority_public_key, account_authority_key_id,
@@ -370,7 +370,7 @@ pub async fn update_user(
     // Load the target's current state for the break-glass + last-admin guards.
     let (target_username, target_is_admin, target_is_active): (String, bool, bool) =
         sqlx::query_as(
-            "SELECT COALESCE(username, ''), is_admin, is_active FROM users WHERE id = $1",
+            "SELECT COALESCE(username, ''), is_admin, is_active FROM accounts WHERE id = $1",
         )
         .bind(target)
         .fetch_optional(&state.pool)
@@ -394,7 +394,7 @@ pub async fn update_user(
     // Last-admin guard: don't let a demote/disable leave zero usable admins.
     if (wants_demote || wants_disable) && target_is_admin && target_is_active {
         let other_usable: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users WHERE is_admin AND is_active AND id != $1",
+            "SELECT COUNT(*) FROM accounts WHERE is_admin AND is_active AND id != $1",
         )
         .bind(target)
         .fetch_one(&state.pool)
@@ -408,7 +408,7 @@ pub async fn update_user(
         if q <= 0 {
             return Err(AppError::bad_request("storage quota must be positive"));
         }
-        sqlx::query("UPDATE users SET storage_quota_bytes = $1 WHERE id = $2")
+        sqlx::query("UPDATE accounts SET storage_quota_bytes = $1 WHERE id = $2")
             .bind(q)
             .bind(target)
             .execute(&state.pool)
@@ -421,7 +421,7 @@ pub async fn update_user(
             // Active again: a suspension lifted, or a closing account kept
             // while it still can be.
             let suspension = sqlx::query(
-                "UPDATE users SET state = 'active', suspended_reason = NULL,
+                "UPDATE accounts SET state = 'active', suspended_reason = NULL,
                         state_changed_at = now()
                   WHERE id = $1 AND state = 'suspended'",
             )
@@ -430,7 +430,7 @@ pub async fn update_user(
             .await?
             .rows_affected();
             let closing: bool =
-                sqlx::query_scalar("SELECT state = 'closing' FROM users WHERE id = $1")
+                sqlx::query_scalar("SELECT state = 'closing' FROM accounts WHERE id = $1")
                     .bind(target)
                     .fetch_one(&mut *tx)
                     .await?;
@@ -453,7 +453,7 @@ pub async fn update_user(
             // still hold the seed (docs/plans/mail-groups.md).
             crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
             let suspended = sqlx::query(
-                "UPDATE users SET state = 'suspended', suspended_reason = $2,
+                "UPDATE accounts SET state = 'suspended', suspended_reason = $2,
                         state_changed_at = now()
                   WHERE id = $1 AND state <> 'closing'",
             )
@@ -519,7 +519,7 @@ pub async fn update_user(
         // With its own record, in one transaction: a switch that turns an
         // account's links off is evidence of who did it.
         let mut tx = state.pool.begin().await?;
-        sqlx::query("UPDATE users SET public_sharing = $1 WHERE id = $2")
+        sqlx::query("UPDATE accounts SET public_sharing = $1 WHERE id = $2")
             .bind(sharing)
             .bind(target)
             .execute(&mut *tx)
@@ -535,7 +535,7 @@ pub async fn update_user(
         tx.commit().await?;
     }
     if let Some(a) = req.is_admin {
-        sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2")
+        sqlx::query("UPDATE accounts SET is_admin = $1 WHERE id = $2")
             .bind(a)
             .bind(target)
             .execute(&state.pool)
@@ -592,7 +592,7 @@ pub async fn delete_user(
 
     // Break-glass admin can never be deleted.
     let target_username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?
@@ -642,7 +642,7 @@ pub async fn close_user(
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let (username, is_admin, is_active): (String, bool, bool) = sqlx::query_as(
-        "SELECT COALESCE(username, ''), is_admin, is_active FROM users WHERE id = $1",
+        "SELECT COALESCE(username, ''), is_admin, is_active FROM accounts WHERE id = $1",
     )
     .bind(target)
     .fetch_optional(&state.pool)
@@ -653,7 +653,7 @@ pub async fn close_user(
     }
     if is_admin && is_active {
         let other_usable: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users WHERE is_admin AND is_active AND id != $1",
+            "SELECT COUNT(*) FROM accounts WHERE is_admin AND is_active AND id != $1",
         )
         .bind(target)
         .fetch_one(&state.pool)
@@ -724,7 +724,7 @@ pub async fn set_legal_hold(
     }
     let admin_id = crate::handlers::trusted_uuid(&admin.user_id)?;
     let set = sqlx::query(
-        "UPDATE users SET legal_hold_reference = $2, legal_hold_at = now(), legal_hold_by = $3
+        "UPDATE accounts SET legal_hold_reference = $2, legal_hold_at = now(), legal_hold_by_account_id = $3
           WHERE id = $1 AND deleting_at IS NULL",
     )
     .bind(target)
@@ -736,7 +736,7 @@ pub async fn set_legal_hold(
     if set == 0 {
         // A deletion under way can't be held any more: its purges have begun.
         let deleting: Option<bool> =
-            sqlx::query_scalar("SELECT deleting_at IS NOT NULL FROM users WHERE id = $1")
+            sqlx::query_scalar("SELECT deleting_at IS NOT NULL FROM accounts WHERE id = $1")
                 .bind(target)
                 .fetch_optional(&state.pool)
                 .await?;
@@ -773,8 +773,8 @@ pub async fn clear_legal_hold(
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let cleared: Option<Option<String>> = sqlx::query_scalar(
-        "UPDATE users u SET legal_hold_reference = NULL, legal_hold_at = NULL, legal_hold_by = NULL
-           FROM users old
+        "UPDATE accounts u SET legal_hold_reference = NULL, legal_hold_at = NULL, legal_hold_by_account_id = NULL
+           FROM accounts old
           WHERE u.id = $1 AND old.id = u.id
           RETURNING old.legal_hold_reference",
     )
@@ -810,7 +810,7 @@ pub(crate) async fn purge_mail(state: &AppState, target: Uuid) -> AppResult<()> 
 /// references and deletes every object no one else references.
 pub(crate) async fn purge_chat_media(state: &AppState, target: Uuid) -> AppResult<()> {
     let media_uploads: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT id,storage_path,s3_upload_id FROM chat_media_uploads WHERE user_id=$1",
+        "SELECT id,storage_path,s3_upload_id FROM chat_media_uploads WHERE account_id=$1",
     )
     .bind(target)
     .fetch_all(&state.pool)
@@ -822,11 +822,11 @@ pub(crate) async fn purge_chat_media(state: &AppState, target: Uuid) -> AppResul
             .await
             .map_err(|_| AppError::internal("failed to abort Chat media upload"))?;
     }
-    sqlx::query("DELETE FROM chat_media_uploads WHERE user_id=$1")
+    sqlx::query("DELETE FROM chat_media_uploads WHERE account_id=$1")
         .bind(target)
         .execute(&state.pool)
         .await?;
-    sqlx::query("DELETE FROM chat_media_references WHERE user_id=$1")
+    sqlx::query("DELETE FROM chat_media_references WHERE account_id=$1")
         .bind(target)
         .execute(&state.pool)
         .await?;
@@ -854,9 +854,9 @@ pub(crate) async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResu
     // Open uploads by the user anywhere, or by anyone into the user's
     // folders: their multipart parts would otherwise stay in the bucket.
     let open_uploads: Vec<(Uuid, String, String, bool)> = sqlx::query_as(
-        "SELECT u.id, u.storage_path, u.s3_upload_id, u.uploaded_at IS NOT NULL FROM uploads u
-         WHERE u.user_id = $1
-            OR u.collection_id IN (SELECT id FROM collections WHERE owner_user_id = $1)",
+        "SELECT u.id, u.storage_path, u.s3_upload_id, u.uploaded_at IS NOT NULL FROM drive_uploads u
+         WHERE u.account_id = $1
+            OR u.collection_id IN (SELECT id FROM drive_collections WHERE owner_account_id = $1)",
     )
     .bind(target)
     .fetch_all(&state.pool)
@@ -867,23 +867,24 @@ pub(crate) async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResu
         {
             tracing::warn!(%error, "purge {target}: abort upload {id}");
         }
-        sqlx::query("DELETE FROM uploads WHERE id = $1")
+        sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
             .bind(id)
             .execute(&state.pool)
             .await?;
     }
     let colls: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM collections WHERE owner_user_id = $1")
+        sqlx::query_scalar("SELECT id FROM drive_collections WHERE owner_account_id = $1")
             .bind(target)
             .fetch_all(&state.pool)
             .await?;
     if colls.is_empty() {
         return Ok(());
     }
-    let files: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM files WHERE collection_id = ANY($1)")
-        .bind(&colls)
-        .fetch_all(&state.pool)
-        .await?;
+    let files: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM drive_files WHERE collection_id = ANY($1)")
+            .bind(&colls)
+            .fetch_all(&state.pool)
+            .await?;
     for fid in files {
         jobs::purge_file_root(&state.pool, &state.storage, fid, jobs::PurgeGuard::Any)
             .await
@@ -893,11 +894,11 @@ pub(crate) async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResu
             })?;
     }
     // Public share links pointing at the purged tree (no FK ties them down).
-    sqlx::query("DELETE FROM public_shares WHERE target_id = ANY($1)")
+    sqlx::query("DELETE FROM drive_public_shares WHERE target_id = ANY($1)")
         .bind(&colls)
         .execute(&state.pool)
         .await?;
-    sqlx::query("DELETE FROM collections WHERE id = ANY($1)")
+    sqlx::query("DELETE FROM drive_collections WHERE id = ANY($1)")
         .bind(&colls)
         .execute(&state.pool)
         .await?;
@@ -913,22 +914,22 @@ pub(crate) async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppR
     let mut tx = pool.begin().await?;
     let moved: Vec<(Uuid, i64)> = sqlx::query_as(
         r#"WITH moved AS (
-              SELECT c.owner_user_id AS owner, SUM(x.bytes) AS total FROM (
+              SELECT c.owner_account_id, SUM(x.bytes) AS total FROM (
                   SELECT f.collection_id, (CASE WHEN f.original_pruned THEN 0 ELSE f.encrypted_size_bytes END) AS bytes
-                    FROM files f WHERE f.uploader_user_id = $1
+                    FROM drive_files f WHERE f.uploader_account_id = $1
                   UNION ALL
-                  SELECT f.collection_id, v.size_bytes FROM file_versions v JOIN files f ON f.id = v.file_id
-                   WHERE v.author_user_id = $1
+                  SELECT f.collection_id, v.size_bytes FROM drive_file_versions v JOIN drive_files f ON f.id = v.file_id
+                   WHERE v.author_account_id = $1
                   UNION ALL
-                  SELECT f.collection_id, a.size_bytes FROM file_assets a JOIN files f ON f.id = a.file_id
-                   WHERE a.uploader_user_id = $1
+                  SELECT f.collection_id, a.size_bytes FROM drive_file_assets a JOIN drive_files f ON f.id = a.file_id
+                   WHERE a.uploader_account_id = $1
                   UNION ALL
-                  SELECT f.collection_id, t.size_bytes FROM file_thumbnails t JOIN files f ON f.id = t.file_id
-                   WHERE t.uploader_user_id = $1) x
-              JOIN collections c ON c.id = x.collection_id
-              WHERE c.owner_user_id <> $1
-              GROUP BY c.owner_user_id)
-           SELECT owner, total::bigint FROM moved ORDER BY owner"#,
+                  SELECT f.collection_id, t.size_bytes FROM drive_file_thumbnails t JOIN drive_files f ON f.id = t.file_id
+                   WHERE t.uploader_account_id = $1) x
+              JOIN drive_collections c ON c.id = x.collection_id
+              WHERE c.owner_account_id <> $1
+              GROUP BY c.owner_account_id)
+           SELECT owner_account_id, total::bigint FROM moved ORDER BY owner_account_id"#,
     )
     .bind(target)
     .fetch_all(&mut *tx)
@@ -938,16 +939,20 @@ pub(crate) async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppR
             .await?;
     }
     for (table, column) in [
-        ("files", "uploader_user_id"),
-        ("file_versions", "author_user_id"),
-        ("file_assets", "uploader_user_id"),
-        ("file_thumbnails", "uploader_user_id"),
+        ("drive_files", "uploader_account_id"),
+        ("drive_file_versions", "author_account_id"),
+        ("drive_file_assets", "uploader_account_id"),
+        ("drive_file_thumbnails", "uploader_account_id"),
     ] {
-        let file_column = if table == "files" { "id" } else { "file_id" };
+        let file_column = if table == "drive_files" {
+            "id"
+        } else {
+            "file_id"
+        };
         sqlx::query(&format!(
-            "UPDATE {table} t SET {column} = c.owner_user_id
-             FROM files f JOIN collections c ON c.id = f.collection_id
-             WHERE t.{file_column} = f.id AND t.{column} = $1 AND c.owner_user_id <> $1"
+            "UPDATE {table} t SET {column} = c.owner_account_id
+             FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+             WHERE t.{file_column} = f.id AND t.{column} = $1 AND c.owner_account_id <> $1"
         ))
         .bind(target)
         .execute(&mut *tx)
@@ -976,7 +981,7 @@ pub async fn force_disable_2fa(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     let username: Option<String> =
-        sqlx::query_scalar("SELECT COALESCE(username, '') FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT COALESCE(username, '') FROM accounts WHERE id = $1")
             .bind(target)
             .fetch_optional(&mut *tx)
             .await?;
@@ -1057,14 +1062,16 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
     }
 
     let stats = StatsResponse {
-        total_users: scalar("SELECT COUNT(*) FROM users").await,
-        active_users: scalar("SELECT COUNT(*) FROM users WHERE is_active = true").await,
-        total_files: scalar("SELECT COUNT(*) FROM files").await,
+        total_users: scalar("SELECT COUNT(*) FROM accounts").await,
+        active_users: scalar("SELECT COUNT(*) FROM accounts WHERE is_active = true").await,
+        total_files: scalar("SELECT COUNT(*) FROM drive_files").await,
         // ::bigint — SUM(bigint) yields NUMERIC, which sqlx cannot decode as i64;
         // without the cast this silently fell back to 0 via unwrap_or.
-        total_storage_used: scalar("SELECT COALESCE(SUM(storage_used_bytes),0)::bigint FROM users")
-            .await,
-        total_collections: scalar("SELECT COUNT(*) FROM collections").await,
+        total_storage_used: scalar(
+            "SELECT COALESCE(SUM(storage_used_bytes),0)::bigint FROM accounts",
+        )
+        .await,
+        total_collections: scalar("SELECT COUNT(*) FROM drive_collections").await,
         storage_total_bytes,
         storage_backend_used_bytes,
     };
@@ -1797,11 +1804,11 @@ pub async fn get_federation_control_plane(
                    AND o.state = 'rejected' AND o.error_class = 'device_mismatch'
                    AND o.updated_at > now() - interval '1 day')
                     AS chat_mismatches_last_day,
-                (SELECT COUNT(*) FROM federated_incoming_shares s
-                 WHERE s.remote_domain = federation_peer_identities.domain)
+                (SELECT COUNT(*) FROM drive_federated_incoming_shares s
+                 WHERE s.owner_server = federation_peer_identities.domain)
                     AS drive_incoming_shares,
-                (SELECT COUNT(*) FROM federated_outgoing_shares s
-                 WHERE s.recipient_domain = federation_peer_identities.domain)
+                (SELECT COUNT(*) FROM drive_federated_outgoing_shares s
+                 WHERE s.recipient_server = federation_peer_identities.domain)
                     AS drive_outgoing_shares
          FROM federation_peer_identities ORDER BY domain",
     )
@@ -1862,8 +1869,8 @@ pub async fn get_federation_control_plane(
                AND error_class = 'device_mismatch' AND updated_at > now() - interval '1 day'),
             (SELECT MIN(created_at) FROM federation_outbox
              WHERE kind IN ('chat', 'sealed') AND state = 'pending'),
-            (SELECT COUNT(*) FROM federated_incoming_shares),
-            (SELECT COUNT(*) FROM federated_outgoing_shares),
+            (SELECT COUNT(*) FROM drive_federated_incoming_shares),
+            (SELECT COUNT(*) FROM drive_federated_outgoing_shares),
             (SELECT COUNT(*) FROM federation_request_replays WHERE expires_at > now())",
     )
     .fetch_one(&state.pool)
@@ -2446,7 +2453,7 @@ pub async fn rotate_temp_password(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(String, bool)> =
-        sqlx::query_as("SELECT COALESCE(username, ''), is_first_login FROM users WHERE id = $1")
+        sqlx::query_as("SELECT COALESCE(username, ''), is_first_login FROM accounts WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?;
@@ -2463,7 +2470,7 @@ pub async fn rotate_temp_password(
     let mut tx = state.pool.begin().await?;
     take_reset_grant(&mut tx, &req.grant, &admin, target).await?;
     let rotated = sqlx::query(
-        "UPDATE users SET key_binding = $2, opaque_record = $3, opaque_suite = $4,
+        "UPDATE accounts SET key_binding = $2, opaque_record = $3, opaque_suite = $4,
                 opaque_server_key_id = $5, updated_at = NOW()
           WHERE id = $1 AND is_first_login",
     )
@@ -2538,7 +2545,7 @@ pub async fn reset_grant(
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let admin_id = Uuid::parse_str(&admin.user_id).map_err(|_| AppError::forbidden("forbidden"))?;
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
         .bind(target)
         .fetch_one(&state.pool)
         .await?;
@@ -2609,7 +2616,7 @@ pub async fn wipe_user(
     tx.commit().await?;
 
     let row: Option<Option<String>> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?;
@@ -2643,43 +2650,45 @@ pub async fn wipe_user(
     // 2. Everything keyed to the lost key material: incoming federated shares
     //    (their wrapped keys are unreachable), local shares received. (Collab
     //    devices go with the keys, below.)
-    sqlx::query("DELETE FROM federated_incoming_shares WHERE user_id = $1")
+    sqlx::query("DELETE FROM drive_federated_incoming_shares WHERE account_id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;
-    sqlx::query("DELETE FROM collection_shares WHERE recipient_user_id = $1")
+    sqlx::query("DELETE FROM drive_collection_shares WHERE recipient_account_id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;
-    sqlx::query("DELETE FROM file_shares WHERE recipient_user_id = $1 OR sharer_user_id = $1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "DELETE FROM drive_file_shares WHERE recipient_account_id = $1 OR sharer_account_id = $1",
+    )
+    .bind(target)
+    .execute(&state.pool)
+    .await?;
 
     // A destructive wipe terminates the old account incarnation. Retain its
     // append-only signed manifest history for peers' reset evidence, but remove
     // the mutable head and every server-held delivery/device capability so the
     // next setup begins at manifest sequence 1 with a new authority.
-    sqlx::query("DELETE FROM chat_device_manifests WHERE user_id = $1")
+    sqlx::query("DELETE FROM chat_device_manifests WHERE account_id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;
-    sqlx::query("DELETE FROM chat_delivery_capabilities WHERE user_id = $1")
+    sqlx::query("DELETE FROM chat_delivery_capabilities WHERE account_id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;
-    sqlx::query("DELETE FROM chat_profiles WHERE user_id = $1")
+    sqlx::query("DELETE FROM chat_profiles WHERE account_id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;
-    sqlx::query("DELETE FROM devices WHERE user_id = $1")
+    sqlx::query("DELETE FROM account_devices WHERE account_id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;
     // The account identity (docs/plans/account-identity-key.md) and what
     // hangs on it: the next device re-registers under a new one.
     for table in ["chat_account_identities", "chat_link_tokens"] {
-        sqlx::query(&format!("DELETE FROM {table} WHERE user_id = $1"))
+        sqlx::query(&format!("DELETE FROM {table} WHERE account_id = $1"))
             .bind(target)
             .execute(&state.pool)
             .await?;
@@ -2699,7 +2708,7 @@ pub async fn wipe_user(
     // The old keys' roots go with them; the setup makes new ones.
     crate::account_roots::delete(&mut tx, target).await?;
     sqlx::query(
-        r#"UPDATE users SET
+        r#"UPDATE accounts SET
                master_key_envelope = '', recovery_key_envelope = '',
                public_key = '', account_authority_public_key = '',
                account_authority_key_id = '', account_incarnation_id = '',
@@ -2722,7 +2731,7 @@ pub async fn wipe_user(
     // The account's data key goes too: whatever the old incarnation sealed
     // under it is unreadable everywhere, backups included
     // (docs/plans/server-personal-data.md, A2); the next seal makes a new one.
-    sqlx::query("DELETE FROM account_keys.account_data_keys WHERE user_id = $1")
+    sqlx::query("DELETE FROM account_keys.account_data_keys WHERE account_id = $1")
         .bind(target)
         .execute(&mut *tx)
         .await?;
@@ -2741,11 +2750,11 @@ pub async fn wipe_user(
     // 4. Recompute quota: uploads into OTHER people's folders survive (they're the
     //    folder-owner's data view) and still count against this user.
     sqlx::query(
-        r#"UPDATE users SET storage_used_bytes = (
-               SELECT COALESCE((SELECT SUM((CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)) FROM files WHERE uploader_user_id = $1), 0)
-                    + COALESCE((SELECT SUM(size_bytes) FROM file_assets WHERE uploader_user_id = $1), 0)
-                    + COALESCE((SELECT SUM(size_bytes) FROM file_thumbnails WHERE uploader_user_id = $1), 0)
-                    + COALESCE((SELECT SUM(size_bytes) FROM file_versions WHERE author_user_id = $1), 0)
+        r#"UPDATE accounts SET storage_used_bytes = (
+               SELECT COALESCE((SELECT SUM((CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)) FROM drive_files WHERE uploader_account_id = $1), 0)
+                    + COALESCE((SELECT SUM(size_bytes) FROM drive_file_assets WHERE uploader_account_id = $1), 0)
+                    + COALESCE((SELECT SUM(size_bytes) FROM drive_file_thumbnails WHERE uploader_account_id = $1), 0)
+                    + COALESCE((SELECT SUM(size_bytes) FROM drive_file_versions WHERE author_account_id = $1), 0)
            ) WHERE id = $1"#,
     )
     .bind(target)
@@ -2956,11 +2965,11 @@ async fn load_activity_entries(
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT l.id, l.action, l.admin_user_id, a.username,
-                  l.target_user_id, t.username, l.payload, l.occurred_at
+        r#"SELECT l.id, l.action, l.admin_account_id, a.username,
+                  l.target_account_id, t.username, l.payload, l.occurred_at
            FROM admin_audit_log l
-           LEFT JOIN users a ON a.id = l.admin_user_id
-           LEFT JOIN users t ON t.id = l.target_user_id
+           LEFT JOIN accounts a ON a.id = l.admin_account_id
+           LEFT JOIN accounts t ON t.id = l.target_account_id
            WHERE ($1::bigint IS NULL OR l.id < $1)
              AND ($2::text IS NULL OR left(l.action, char_length($2)) = $2)
              AND ($3::text IS NULL
@@ -3043,26 +3052,26 @@ async fn clear_account_values(
     target: Uuid,
 ) -> Result<(), sqlx::Error> {
     for statement in [
-        "DELETE FROM account_heads WHERE user_id = $1",
-        "DELETE FROM contacts WHERE user_id = $1",
+        "DELETE FROM account_heads WHERE account_id = $1",
+        "DELETE FROM contacts WHERE account_id = $1",
         // Calendars' passphrases were shared with the old incarnation's keys: the
         // account's own calendars go, and its places in others'.
-        "DELETE FROM calendars WHERE owner_id = $1",
-        "DELETE FROM calendar_members WHERE user_id = $1",
+        "DELETE FROM calendars WHERE owner_account_id = $1",
+        "DELETE FROM calendar_members WHERE account_id = $1",
         // Forwardings both ways end with their proxy factors: they were
         // made for the old incarnation's keys (docs/plans/mail-forwarding.md).
-        "DELETE FROM mail_forwardings WHERE user_id = $1
-            OR forwardee_address_id IN (SELECT id FROM mail_addresses WHERE user_id = $1)",
-        "DELETE FROM mail_labels WHERE user_id = $1",
-        "DELETE FROM mail_filters WHERE user_id = $1",
-        "UPDATE mail_folders SET name_sealed = NULL WHERE user_id = $1",
+        "DELETE FROM mail_forwardings WHERE account_id = $1
+            OR forwardee_address_id IN (SELECT id FROM mail_addresses WHERE account_id = $1)",
+        "DELETE FROM mail_labels WHERE account_id = $1",
+        "DELETE FROM mail_filters WHERE account_id = $1",
+        "UPDATE mail_folders SET name_sealed = NULL WHERE account_id = $1",
         // Old names held by the old incarnation stop receiving now: no one
         // holds the keys their mail would be sealed to. They are freed on
         // their own dates; the current name waits for the new incarnation,
         // which complete-setup records (docs/plans/username-renames.md).
         "UPDATE mail_addresses SET state = 'closed', receive_until = now()
-          WHERE user_id = $1 AND state = 'receiving'",
-        "UPDATE account_names SET receive_until = now() WHERE user_id = $1 AND state = 'held'",
+          WHERE account_id = $1 AND state = 'receiving'",
+        "UPDATE account_names SET receive_until = now() WHERE account_id = $1 AND state = 'held'",
         // Addresses on the account's custom domains stay its own but close
         // until rekeyed (docs/plans/mail-custom-domains.md §8): their keys
         // were sealed under the old master key, so their key lists (signed by
@@ -3070,15 +3079,15 @@ async fn clear_account_values(
         // them is refused until the owner makes each again with a new key.
         "DELETE FROM mail_key_lists WHERE address_id IN
             (SELECT id FROM mail_addresses
-              WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
+              WHERE account_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
         // Obsolete as well (Proton's FLAG_NOT_OBSOLETE cleared): nobody can
         // open mail encrypted to them now.
         "UPDATE mail_address_keys SET is_primary = false, flags = flags & ~2 WHERE address_id IN
             (SELECT id FROM mail_addresses
-              WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
+              WHERE account_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
         "UPDATE mail_addresses SET state = 'closed'
-          WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active'",
-        "UPDATE account_names SET incarnation_id = NULL WHERE user_id = $1 AND state = 'current'",
+          WHERE account_id = $1 AND domain_id IS NOT NULL AND state = 'active'",
+        "UPDATE account_names SET incarnation_id = NULL WHERE account_id = $1 AND state = 'current'",
     ] {
         sqlx::query(statement)
             .bind(target)
@@ -3142,7 +3151,7 @@ mod tests {
         let (reset, kept) = (Uuid::new_v4(), Uuid::new_v4());
         for user_id in [reset, kept] {
             sqlx::query(
-                "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                     public_key, account_authority_public_key,
                     account_authority_key_id, account_incarnation_id, drive_signing_public_key)
                  VALUES ($1, $2, '', '', '', '', '', '', '')",
@@ -3155,7 +3164,7 @@ mod tests {
             // One record in each of the two Chat list scopes.
             for scope in [RecordScope::ChatGroups, RecordScope::ChatContacts] {
                 sqlx::query(
-                    "INSERT INTO account_records (user_id, scope, record_id, revision, envelope, change_seq)
+                    "INSERT INTO account_records (account_id, scope, record_id, revision, envelope, change_seq)
                      VALUES ($1, $2, $3, 1, '\\x00', 1)",
                 )
                 .bind(user_id)
@@ -3173,14 +3182,14 @@ mod tests {
 
         for (user_id, expected) in [(reset, 0), (kept, 2)] {
             let count: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM account_records WHERE user_id = $1")
+                sqlx::query_scalar("SELECT COUNT(*) FROM account_records WHERE account_id = $1")
                     .bind(user_id)
                     .fetch_one(&pool)
                     .await
                     .unwrap();
             assert_eq!(count, expected);
         }
-        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        sqlx::query("DELETE FROM accounts WHERE id = ANY($1)")
             .bind(vec![reset, kept])
             .execute(&pool)
             .await

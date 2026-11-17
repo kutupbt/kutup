@@ -119,7 +119,7 @@ pub async fn issue(
     let (version, _) = keys.current().ok_or(NotIssued::Unavailable)?;
     let key = code_key(keys, version).expect("the current key is configured");
     let (account, destination): (Uuid, String) = sqlx::query_as(
-        "SELECT user_id, lower(forwardee_email) FROM mail_forwardings WHERE id = $1",
+        "SELECT account_id, lower(forwardee_email) FROM mail_forwardings WHERE id = $1",
     )
     .bind(forwarding)
     .fetch_one(&mut **tx)
@@ -253,7 +253,7 @@ async fn try_send(
             "SELECT f.kind, a.address, f.forwardee_email, p.language
                FROM mail_forwardings f
                JOIN mail_addresses a ON a.id = f.forwarder_address_id
-               LEFT JOIN user_ui_preferences p ON p.user_id = f.user_id
+               LEFT JOIN account_ui_preferences p ON p.account_id = f.account_id
               WHERE f.id = $1",
         )
         .bind(issued.forwarding)
@@ -272,7 +272,7 @@ async fn try_send(
     }
     // Under Mail's own rules: none goes out for an account that may not
     // send outside now.
-    let account: Uuid = sqlx::query_scalar("SELECT user_id FROM mail_forwardings WHERE id = $1")
+    let account: Uuid = sqlx::query_scalar("SELECT account_id FROM mail_forwardings WHERE id = $1")
         .bind(issued.forwarding)
         .fetch_one(&state.pool)
         .await?;

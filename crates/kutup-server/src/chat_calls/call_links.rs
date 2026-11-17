@@ -171,10 +171,11 @@ pub(super) async fn vouched_name(
     let Some(account_id) = account_id else {
         return Ok(None);
     };
-    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-        .bind(account_id)
-        .fetch_optional(&state.pool)
-        .await?;
+    let username: Option<String> =
+        sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&state.pool)
+            .await?;
     Ok(username.map(|username| format!("{username}@{}", state.config.chat_server_name)))
 }
 
@@ -243,7 +244,7 @@ pub(crate) async fn create(
     .execute(&mut *tx)
     .await?;
     let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM chat_call_links WHERE owner_user_id = $1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM chat_call_links WHERE owner_account_id = $1")
             .bind(owner)
             .fetch_one(&mut *tx)
             .await?;
@@ -252,7 +253,7 @@ pub(crate) async fn create(
         Some(old) => Some(
             sqlx::query_scalar(
                 "SELECT sitting FROM chat_call_links
-                 WHERE room_id = $1 AND owner_user_id = $2 FOR UPDATE",
+                 WHERE room_id = $1 AND owner_account_id = $2 FOR UPDATE",
             )
             .bind(old)
             .bind(owner)
@@ -273,7 +274,7 @@ pub(crate) async fn create(
         if hosts_group_calls(&state) {
             delete_sfu_room(&state, &sfu_room(old, sitting)).await?;
         }
-        sqlx::query("DELETE FROM chat_call_links WHERE room_id = $1 AND owner_user_id = $2")
+        sqlx::query("DELETE FROM chat_call_links WHERE room_id = $1 AND owner_account_id = $2")
             .bind(old)
             .bind(owner)
             .execute(&mut *tx)
@@ -281,7 +282,7 @@ pub(crate) async fn create(
     }
     let created: Option<OffsetDateTime> = sqlx::query_scalar(
         "INSERT INTO chat_call_links
-            (room_id, owner_user_id, nonce, access_token_hash, info, host_token_hash, waiting_room)
+            (room_id, owner_account_id, nonce, access_token_hash, info, host_token_hash, waiting_room)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT DO NOTHING
          RETURNING created_at",
@@ -325,7 +326,7 @@ pub(crate) async fn list(
 ) -> AppResult<Json<CallLinkList>> {
     let rows: Vec<(String, String, Vec<u8>, bool, OffsetDateTime)> = sqlx::query_as(
         "SELECT room_id, nonce, info, waiting_room, created_at FROM chat_call_links
-         WHERE owner_user_id = $1 ORDER BY created_at DESC, room_id",
+         WHERE owner_account_id = $1 ORDER BY created_at DESC, room_id",
     )
     .bind(owner(&auth)?)
     .fetch_all(&state.pool)
@@ -365,7 +366,7 @@ pub(crate) async fn delete(
 ) -> AppResult<StatusCode> {
     hex32("roomId", &room_id)?;
     let sitting: Option<i64> = sqlx::query_scalar(
-        "DELETE FROM chat_call_links WHERE room_id = $1 AND owner_user_id = $2 RETURNING sitting",
+        "DELETE FROM chat_call_links WHERE room_id = $1 AND owner_account_id = $2 RETURNING sitting",
     )
     .bind(&room_id)
     .bind(owner(&auth)?)
@@ -406,7 +407,7 @@ pub(crate) async fn update_info(
     hex32("roomId", &room_id)?;
     let info = base64_exact("info", &request.info, SEALED_INFO_BYTES)?;
     let updated = sqlx::query(
-        "UPDATE chat_call_links SET info = $3 WHERE room_id = $1 AND owner_user_id = $2",
+        "UPDATE chat_call_links SET info = $3 WHERE room_id = $1 AND owner_account_id = $2",
     )
     .bind(&room_id)
     .bind(owner(&auth)?)

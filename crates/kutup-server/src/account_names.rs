@@ -26,7 +26,7 @@ pub async fn current<'e, E: sqlx::PgExecutor<'e>>(
     name: &str,
 ) -> AppResult<Option<Uuid>> {
     Ok(sqlx::query_scalar(
-        "SELECT n.user_id FROM account_names n JOIN users u ON u.id = n.user_id
+        "SELECT n.account_id FROM account_names n JOIN accounts u ON u.id = n.account_id
           WHERE n.folded = kutup_fold($1) AND n.state = 'current' AND u.is_active",
     )
     .bind(name)
@@ -64,7 +64,7 @@ pub async fn chains(
           WHERE ($3::text IS NULL OR r.incarnation_id = $3)
             -- To another server, an account that doesn't talk to other
             -- servers has no names (crate::federation_switch).
-            AND (NOT $4 OR NOT EXISTS (SELECT 1 FROM users u
+            AND (NOT $4 OR NOT EXISTS (SELECT 1 FROM accounts u
                                         WHERE u.account_incarnation_id = r.incarnation_id
                                           AND NOT kutup_account_federates(u.id)))
           ORDER BY latest DESC, r.incarnation_id, r.sequence",
@@ -109,7 +109,7 @@ pub async fn renamed(
 ) -> AppResult<Option<AppError>> {
     // Someone's current name is not a renamed one (a chain names its
     // current address too): what was not found there is just not found.
-    let current: Option<Uuid> = sqlx::query_scalar("SELECT kutup_current_user($1)")
+    let current: Option<Uuid> = sqlx::query_scalar("SELECT kutup_current_account($1)")
         .bind(name)
         .fetch_one(pool)
         .await?;
@@ -202,7 +202,7 @@ pub async fn available(
     // Locked, so a held name taken back is not freed (the sweep, an
     // administrator) between this answer and the write that relies on it.
     let held: Option<(Option<Uuid>, Option<String>, String)> = sqlx::query_as(
-        "SELECT user_id, incarnation_id, state FROM account_names WHERE folded = $1 FOR UPDATE",
+        "SELECT account_id, incarnation_id, state FROM account_names WHERE folded = $1 FOR UPDATE",
     )
     .bind(&folded)
     .fetch_optional(&mut *conn)
@@ -241,7 +241,7 @@ pub async fn claim(
     incarnation: Option<&str>,
 ) -> AppResult<()> {
     let inserted = sqlx::query(
-        "INSERT INTO account_names (folded, name, user_id, incarnation_id, state)
+        "INSERT INTO account_names (folded, name, account_id, incarnation_id, state)
          VALUES (kutup_fold($1), $1, $2, NULLIF($3, ''), 'current')
          ON CONFLICT DO NOTHING",
     )
@@ -265,7 +265,7 @@ pub async fn set_incarnation(
 ) -> AppResult<()> {
     sqlx::query(
         "UPDATE account_names SET incarnation_id = $2
-          WHERE user_id = $1 AND state = 'current'",
+          WHERE account_id = $1 AND state = 'current'",
     )
     .bind(user_id)
     .bind(incarnation)
@@ -289,14 +289,14 @@ pub async fn sweep(pool: &sqlx::PgPool) -> AppResult<(u64, u64)> {
     let mut tx = pool.begin().await?;
     let freed: Vec<(String, Option<Uuid>)> = sqlx::query_as(
         "DELETE FROM account_names WHERE state = 'held' AND free_at <= now()
-         RETURNING folded, user_id",
+         RETURNING folded, account_id",
     )
     .fetch_all(&mut *tx)
     .await?;
     for (folded, user_id) in &freed {
         sqlx::query(
             "UPDATE mail_addresses SET state = 'freed', receive_until = NULL
-              WHERE split_part(folded, '@', 1) = $1 AND user_id IS NOT DISTINCT FROM $2
+              WHERE split_part(folded, '@', 1) = $1 AND account_id IS NOT DISTINCT FROM $2
                 AND state IN ('receiving', 'closed')",
         )
         .bind(folded)
@@ -444,7 +444,7 @@ mod tests {
         );
         for (id, name) in [(a, &name_a), (b, &name_b)] {
             sqlx::query(
-                "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                     public_key, account_authority_public_key,
                     account_authority_key_id, account_incarnation_id, drive_signing_public_key)
                  VALUES ($1, $2, '', '', '', '', '', '', '')",
@@ -461,7 +461,7 @@ mod tests {
             (&held_a, a, "held", Some("+30 days")),
         ] {
             sqlx::query(
-                "INSERT INTO account_names (folded, name, user_id, state, free_at)
+                "INSERT INTO account_names (folded, name, account_id, state, free_at)
                  VALUES (kutup_fold($1), $1, $2, $3, now() + $4::interval)",
             )
             .bind(name)
@@ -475,7 +475,7 @@ mod tests {
         let resolve = |typed: String| {
             let pool = pool.clone();
             async move {
-                sqlx::query_scalar::<_, Option<Uuid>>("SELECT kutup_current_user($1)")
+                sqlx::query_scalar::<_, Option<Uuid>>("SELECT kutup_current_account($1)")
                     .bind(typed)
                     .fetch_one(&pool)
                     .await
@@ -489,12 +489,12 @@ mod tests {
         assert_eq!(resolve(format!("res_b{tag}")).await, Some(b));
         assert_eq!(resolve(held_a.clone()).await, None, "a held name");
         assert_eq!(resolve(format!("nobody{tag}")).await, None);
-        sqlx::query("DELETE FROM account_names WHERE user_id = ANY($1)")
+        sqlx::query("DELETE FROM account_names WHERE account_id = ANY($1)")
             .bind(vec![a, b])
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        sqlx::query("DELETE FROM accounts WHERE id = ANY($1)")
             .bind(vec![a, b])
             .execute(&pool)
             .await
@@ -520,7 +520,7 @@ mod tests {
         let (current, held) = (format!("now{tag}"), format!("was{tag}"));
         let incarnation = "a".repeat(64);
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
              VALUES ($1, $2, '', '', '', '', '', $3, '')",
@@ -536,7 +536,7 @@ mod tests {
             (&held, "held", Some("+30 days")),
         ] {
             sqlx::query(
-                "INSERT INTO account_names (folded, name, user_id, incarnation_id, state, free_at)
+                "INSERT INTO account_names (folded, name, account_id, incarnation_id, state, free_at)
                  VALUES (kutup_fold($1), $1, $2, $3, $4, now() + $5::interval)",
             )
             .bind(name)
@@ -573,12 +573,12 @@ mod tests {
         drop(freeing);
         renaming.rollback().await.unwrap();
         // Once the rename is over, it can be freed.
-        sqlx::query("DELETE FROM account_names WHERE user_id = $1")
+        sqlx::query("DELETE FROM account_names WHERE account_id = $1")
             .bind(user_id)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user_id)
             .execute(&pool)
             .await
@@ -607,7 +607,7 @@ mod tests {
             format!("gone{tag}"),
         );
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
              VALUES ($1, $2, '', '', '', '', '', '', '')",
@@ -623,7 +623,7 @@ mod tests {
             (&freeing, "held", Some("-2 days"), Some("-1 hour")),
         ] {
             sqlx::query(
-                "INSERT INTO account_names (folded, name, user_id, state, receive_until, free_at)
+                "INSERT INTO account_names (folded, name, account_id, state, receive_until, free_at)
                  VALUES (kutup_fold($1), $1, $2, $3, now() + $4::interval, now() + $5::interval)",
             )
             .bind(name)
@@ -635,7 +635,7 @@ mod tests {
             .await
             .unwrap();
             sqlx::query(
-                "INSERT INTO mail_addresses (user_id, address, state, receive_until)
+                "INSERT INTO mail_addresses (account_id, address, state, receive_until)
                  VALUES ($1, $2 || '@sweep.test', $3, now() + $4::interval)",
             )
             .bind(user_id)
@@ -653,7 +653,7 @@ mod tests {
         sweep(&pool).await.unwrap();
         let states: Vec<(String, String)> = sqlx::query_as(
             "SELECT split_part(address, '@', 1), state FROM mail_addresses
-              WHERE user_id = $1 ORDER BY address",
+              WHERE account_id = $1 ORDER BY address",
         )
         .bind(user_id)
         .fetch_all(&pool)
@@ -669,30 +669,31 @@ mod tests {
         assert_eq!(state(&current), "active");
         assert_eq!(state(&closing), "closed");
         assert_eq!(state(&freeing), "freed");
-        let names: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM account_names WHERE user_id = $1 ORDER BY name")
-                .bind(user_id)
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM account_names WHERE account_id = $1 ORDER BY name",
+        )
+        .bind(user_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
         let mut expected = vec![current.clone(), closing.clone()];
         expected.sort();
         assert_eq!(names, expected);
         // The freed address no longer holds its spelling: another row may.
         sqlx::query(
-            "INSERT INTO mail_addresses (user_id, address) VALUES ($1, $2 || '@sweep.test')",
+            "INSERT INTO mail_addresses (account_id, address) VALUES ($1, $2 || '@sweep.test')",
         )
         .bind(user_id)
         .bind(&freeing)
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("DELETE FROM account_names WHERE user_id = $1")
+        sqlx::query("DELETE FROM account_names WHERE account_id = $1")
             .bind(user_id)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user_id)
             .execute(&pool)
             .await

@@ -224,10 +224,10 @@ pub async fn put(
     let mut tx = state.pool.begin().await?;
     sqlx::query(
         "INSERT INTO mail_auto_replies
-            (user_id, enabled, repeat, zone, start_local, end_local, days, start_day, end_day,
+            (account_id, enabled, repeat, zone, start_local, end_local, days, start_day, end_day,
              start_minute, end_minute, message_html, message_text)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         ON CONFLICT (user_id) DO UPDATE SET
+         ON CONFLICT (account_id) DO UPDATE SET
              enabled = $2, repeat = $3, zone = $4, start_local = $5, end_local = $6, days = $7,
              start_day = $8, end_day = $9, start_minute = $10, end_minute = $11,
              message_html = $12, message_text = $13, updated_at = now()",
@@ -247,7 +247,7 @@ pub async fn put(
     .bind(&request.message_text)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("DELETE FROM mail_auto_reply_sent WHERE user_id = $1")
+    sqlx::query("DELETE FROM mail_auto_reply_sent WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;

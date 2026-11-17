@@ -99,14 +99,14 @@ pub async fn places(State(state): State<AppState>, user: AuthUser) -> AppResult<
     let user_id = trusted_uuid(&user.user_id)?;
     let folders: Vec<FolderRow> = sqlx::query_as(
         "SELECT id, parent_id, name_sealed, color, position, expanded, notify
-           FROM mail_folders WHERE user_id = $1 ORDER BY position, created_at",
+           FROM mail_folders WHERE account_id = $1 ORDER BY position, created_at",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
     let labels: Vec<(Uuid, String, String, i32)> = sqlx::query_as(
         "SELECT id, name_sealed, color, position FROM mail_labels
-          WHERE user_id = $1 ORDER BY position, created_at",
+          WHERE account_id = $1 ORDER BY position, created_at",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -147,7 +147,7 @@ async fn depth_of(
 ) -> AppResult<(i32, i32)> {
     let depth: Option<i32> = sqlx::query_scalar(
         "WITH RECURSIVE up(id, parent_id, depth) AS (
-             SELECT id, parent_id, 1 FROM mail_folders WHERE user_id = $1 AND id = $2
+             SELECT id, parent_id, 1 FROM mail_folders WHERE account_id = $1 AND id = $2
            UNION ALL
              SELECT f.id, f.parent_id, up.depth + 1 FROM mail_folders f JOIN up ON f.id = up.parent_id
               WHERE up.depth < 10)
@@ -159,7 +159,7 @@ async fn depth_of(
     .await?;
     let below: Option<i32> = sqlx::query_scalar(
         "WITH RECURSIVE down(id, depth) AS (
-             SELECT id, 1 FROM mail_folders WHERE user_id = $1 AND id = $2
+             SELECT id, 1 FROM mail_folders WHERE account_id = $1 AND id = $2
            UNION ALL
              SELECT f.id, down.depth + 1 FROM mail_folders f JOIN down ON f.parent_id = down.id
               WHERE down.depth < 10)
@@ -183,7 +183,7 @@ async fn subtree(
 ) -> AppResult<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
         "WITH RECURSIVE down(id) AS (
-             SELECT id FROM mail_folders WHERE user_id = $1 AND id = $2
+             SELECT id FROM mail_folders WHERE account_id = $1 AND id = $2
            UNION
              SELECT f.id FROM mail_folders f JOIN down ON f.parent_id = down.id)
          SELECT id FROM down",
@@ -233,7 +233,7 @@ pub async fn create_folder(
     let head = NextHead::parse(request.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_folders WHERE user_id = $1")
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_folders WHERE account_id = $1")
         .bind(user_id)
         .fetch_one(&mut *tx)
         .await?;
@@ -250,14 +250,14 @@ pub async fn create_folder(
     }
     let position: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(position) + 1, 0) FROM mail_folders
-          WHERE user_id = $1 AND parent_id IS NOT DISTINCT FROM $2",
+          WHERE account_id = $1 AND parent_id IS NOT DISTINCT FROM $2",
     )
     .bind(user_id)
     .bind(parent)
     .fetch_one(&mut *tx)
     .await?;
     let inserted = sqlx::query(
-        "INSERT INTO mail_folders (id, user_id, parent_id, name_sealed, color, position)
+        "INSERT INTO mail_folders (id, account_id, parent_id, name_sealed, color, position)
          VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
     )
     .bind(id)
@@ -339,7 +339,7 @@ pub async fn update_folder(
     if let Some(name) = &request.name {
         let new = check_sealed(&state, user_id, MailNameKind::Folder, &id, name).await?;
         let stored: Option<String> = sqlx::query_scalar(
-            "SELECT name_sealed FROM mail_folders WHERE user_id = $1 AND id = $2",
+            "SELECT name_sealed FROM mail_folders WHERE account_id = $1 AND id = $2",
         )
         .bind(user_id)
         .bind(id)
@@ -384,7 +384,7 @@ pub async fn update_folder(
              position = COALESCE($7, position),
              expanded = COALESCE($8, expanded),
              notify = COALESCE($9, notify)
-          WHERE user_id = $1 AND id = $2",
+          WHERE account_id = $1 AND id = $2",
     )
     .bind(user_id)
     .bind(id)
@@ -490,7 +490,7 @@ pub async fn delete_folder(
     }
     let moved = sqlx::query(
         "UPDATE mail_messages SET folder = 'archive', custom_folder = NULL
-          WHERE user_id = $1 AND custom_folder = ANY($2)",
+          WHERE account_id = $1 AND custom_folder = ANY($2)",
     )
     .bind(user_id)
     .bind(&folders)
@@ -503,13 +503,13 @@ pub async fn delete_folder(
     sqlx::query(
         "UPDATE mail_filters SET actions = actions - 'folder',
              enabled = enabled AND (actions - 'folder') <> '{}'::jsonb
-          WHERE user_id = $1 AND actions->>'folder' = ANY($2)",
+          WHERE account_id = $1 AND actions->>'folder' = ANY($2)",
     )
     .bind(user_id)
     .bind(&targets)
     .execute(&mut *tx)
     .await?;
-    let removed = sqlx::query("DELETE FROM mail_folders WHERE user_id = $1 AND id = $2")
+    let removed = sqlx::query("DELETE FROM mail_folders WHERE account_id = $1 AND id = $2")
         .bind(user_id)
         .bind(id)
         .execute(&mut *tx)
@@ -564,7 +564,7 @@ pub async fn create_label(
     let head = NextHead::parse(request.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_labels WHERE user_id = $1")
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_labels WHERE account_id = $1")
         .bind(user_id)
         .fetch_one(&mut *tx)
         .await?;
@@ -572,8 +572,8 @@ pub async fn create_label(
         return Err(AppError::conflict("this account has its most labels"));
     }
     let inserted = sqlx::query(
-        "INSERT INTO mail_labels (id, user_id, name_sealed, color, position)
-         SELECT $1, $2, $3, $4, COALESCE(MAX(position) + 1, 0) FROM mail_labels WHERE user_id = $2
+        "INSERT INTO mail_labels (id, account_id, name_sealed, color, position)
+         SELECT $1, $2, $3, $4, COALESCE(MAX(position) + 1, 0) FROM mail_labels WHERE account_id = $2
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(id)
@@ -630,7 +630,7 @@ pub async fn update_label(
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let stored: Option<String> =
-        sqlx::query_scalar("SELECT name_sealed FROM mail_labels WHERE user_id = $1 AND id = $2")
+        sqlx::query_scalar("SELECT name_sealed FROM mail_labels WHERE account_id = $1 AND id = $2")
             .bind(user_id)
             .bind(id)
             .fetch_optional(&mut *tx)
@@ -644,7 +644,7 @@ pub async fn update_label(
     let updated = sqlx::query(
         "UPDATE mail_labels SET name_sealed = COALESCE($3, name_sealed),
              color = COALESCE($4, color), position = COALESCE($5, position)
-          WHERE user_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = $6)",
+          WHERE account_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = $6)",
     )
     .bind(user_id)
     .bind(id)
@@ -658,7 +658,7 @@ pub async fn update_label(
     if updated == 0 {
         drop(tx);
         let now: Option<String> = sqlx::query_scalar(
-            "SELECT name_sealed FROM mail_labels WHERE user_id = $1 AND id = $2",
+            "SELECT name_sealed FROM mail_labels WHERE account_id = $1 AND id = $2",
         )
         .bind(user_id)
         .bind(id)
@@ -695,7 +695,7 @@ pub async fn delete_label(
     let head = NextHead::parse(body.and_then(|Json(body)| body.head).as_deref())?;
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
-    let removed = sqlx::query("DELETE FROM mail_labels WHERE user_id = $1 AND id = $2")
+    let removed = sqlx::query("DELETE FROM mail_labels WHERE account_id = $1 AND id = $2")
         .bind(user_id)
         .bind(id)
         .execute(&mut *tx)
@@ -709,14 +709,14 @@ pub async fn delete_label(
         "UPDATE mail_filters SET actions = CASE
                  WHEN jsonb_array_length(actions->'labels') = 1 THEN actions - 'labels'
                  ELSE jsonb_set(actions, '{labels}', (actions->'labels') - $2) END
-          WHERE user_id = $1 AND actions->'labels' ? $2",
+          WHERE account_id = $1 AND actions->'labels' ? $2",
     )
     .bind(user_id)
     .bind(id.to_string())
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE mail_filters SET enabled = false WHERE user_id = $1 AND actions = '{}'::jsonb",
+        "UPDATE mail_filters SET enabled = false WHERE account_id = $1 AND actions = '{}'::jsonb",
     )
     .bind(user_id)
     .execute(&mut *tx)

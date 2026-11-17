@@ -974,7 +974,7 @@ fn reports_take_public_links_down() {
     let (alice, admin) = (register(&c, &base), register(&c, &base));
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-        sqlx::query("UPDATE users SET is_admin = true WHERE id = $1::uuid")
+        sqlx::query("UPDATE accounts SET is_admin = true WHERE id = $1::uuid")
             .bind(&admin.id)
             .execute(&pool)
             .await

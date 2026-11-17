@@ -125,7 +125,7 @@ pub async fn acknowledge(
     }
     for id in ids {
         sqlx::query(
-            "INSERT INTO document_acknowledgements (user_id, document_id, context)
+            "INSERT INTO document_acknowledgements (account_id, document_id, context)
              VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
@@ -144,7 +144,7 @@ pub async fn pending(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Vec<Document>
     let acknowledged: Vec<(String, String)> = sqlx::query_as(
         "SELECT d.kind, d.version FROM document_acknowledgements a
            JOIN legal_documents d ON d.id = a.document_id
-          WHERE a.user_id = $1",
+          WHERE a.account_id = $1",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -179,7 +179,7 @@ pub async fn consents<'e, E: sqlx::PgExecutor<'e>>(
 ) -> sqlx::Result<Vec<Consent>> {
     sqlx::query_as(
         "SELECT DISTINCT ON (purpose) purpose, given, document_id, at FROM consents
-          WHERE user_id = $1 ORDER BY purpose, seq DESC",
+          WHERE account_id = $1 ORDER BY purpose, seq DESC",
     )
     .bind(user_id)
     .fetch_all(executor)
@@ -193,7 +193,7 @@ pub async fn given<'e, E: sqlx::PgExecutor<'e>>(
     purpose: &str,
 ) -> sqlx::Result<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT given FROM consents WHERE user_id = $1 AND purpose = $2
+        "SELECT given FROM consents WHERE account_id = $1 AND purpose = $2
           ORDER BY seq DESC LIMIT 1",
     )
     .bind(user_id)
@@ -234,7 +234,7 @@ pub async fn set_consent(
         (false, _) => None,
     };
     sqlx::query(
-        "INSERT INTO consents (user_id, purpose, given, document_id, channel)
+        "INSERT INTO consents (account_id, purpose, given, document_id, channel)
          VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(user_id)
@@ -444,7 +444,7 @@ pub async fn publish(
     }
     let admin_id = crate::handlers::trusted_uuid(&admin.user_id)?;
     let published: Result<Document, sqlx::Error> = sqlx::query_as(&format!(
-        "INSERT INTO legal_documents AS d (kind, version, language, url, sha256, required_at_signup, published_by)
+        "INSERT INTO legal_documents AS d (kind, version, language, url, sha256, required_at_signup, published_by_account_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING {DOCUMENT_COLUMNS}"
     ))
@@ -494,7 +494,7 @@ mod tests {
     async fn account(pool: &PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
              VALUES ($1, $2, '', '', '', '', '', '', '')",
@@ -605,7 +605,7 @@ mod tests {
         );
         tx.commit().await.unwrap();
 
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user)
             .execute(&pool)
             .await

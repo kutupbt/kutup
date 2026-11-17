@@ -65,6 +65,7 @@ pub struct CommitRevisionResponse {
 #[derive(sqlx::FromRow)]
 struct Uploaded {
     id: Uuid,
+    #[sqlx(rename = "account_id")]
     user_id: Uuid,
     kind: String,
     collection_id: Uuid,
@@ -119,10 +120,10 @@ pub async fn commit(
     let mut tx = state.pool.begin().await?;
     // The upload row first: the lock order its last part takes (`tus::patch`).
     let row: Option<Uploaded> = sqlx::query_as(
-        "SELECT id, user_id, kind, collection_id, total_bytes, file_key_envelope, key_epoch,
+        "SELECT id, account_id, kind, collection_id, total_bytes, file_key_envelope, key_epoch,
                 storage_path, s3_upload_id, name_hash, key_generation, content_hash, based_on,
                 uploaded_at IS NOT NULL AS uploaded
-         FROM uploads WHERE file_id = $1 AND revision_id = $2
+         FROM drive_uploads WHERE file_id = $1 AND revision_id = $2
          FOR UPDATE",
     )
     .bind(file_id)
@@ -232,8 +233,8 @@ async fn already_committed(
     revision_id: Uuid,
 ) -> AppResult<AppError> {
     let stored: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM files WHERE id = $1 AND content_revision_id = $2)
-             OR EXISTS (SELECT 1 FROM file_versions WHERE id = $2 AND file_id = $1)",
+        "SELECT EXISTS (SELECT 1 FROM drive_files WHERE id = $1 AND content_revision_id = $2)
+             OR EXISTS (SELECT 1 FROM drive_file_versions WHERE id = $2 AND file_id = $1)",
     )
     .bind(file_id)
     .bind(revision_id)
@@ -312,7 +313,7 @@ async fn commit_file(
         row.total_bytes,
     )
     .await?;
-    sqlx::query("DELETE FROM uploads WHERE id = $1")
+    sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
         .bind(row.id)
         .execute(&mut **tx)
         .await?;

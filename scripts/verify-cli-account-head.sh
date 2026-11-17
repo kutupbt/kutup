@@ -47,8 +47,8 @@ exit_of() { set +e; "$@" >/dev/null 2>"$TMP/err"; local code=$?; set -e; echo "$
 # this script goes back to), so the server's data matches its newest head.
 rollback_to() {
   {
-    echo "DELETE FROM account_heads WHERE sequence > $1 AND user_id = (SELECT id FROM users WHERE username = '$USERNAME');"
-    echo "DELETE FROM account_records WHERE scope = 1 AND user_id = (SELECT id FROM users WHERE username = '$USERNAME');"
+    echo "DELETE FROM account_heads WHERE sequence > $1 AND account_id = (SELECT id FROM accounts WHERE username = '$USERNAME');"
+    echo "DELETE FROM account_records WHERE scope = 1 AND account_id = (SELECT id FROM accounts WHERE username = '$USERNAME');"
   } | $E2E_PSQL >/dev/null
 }
 

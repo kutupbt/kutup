@@ -249,10 +249,12 @@ pub async fn charge(
         Charge::Confirmation => (0, 1, 0),
         Charge::Forward => (0, 0, 1),
     };
-    sqlx::query("INSERT INTO mail_forwarding_quota (user_id) VALUES ($1) ON CONFLICT DO NOTHING")
-        .bind(account)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO mail_forwarding_quota (account_id) VALUES ($1) ON CONFLICT DO NOTHING",
+    )
+    .bind(account)
+    .execute(&mut **tx)
+    .await?;
     let charged = sqlx::query(
         "UPDATE mail_forwarding_quota SET
                 created_this_hour = CASE WHEN hour = date_trunc('hour', now())
@@ -263,7 +265,7 @@ pub async fn charge(
                 forwards_today = CASE WHEN day = current_date
                                       THEN forwards_today ELSE 0 END + $4,
                 day = current_date
-          WHERE user_id = $1
+          WHERE account_id = $1
             AND (CASE WHEN hour = date_trunc('hour', now()) THEN created_this_hour ELSE 0 END)
                 + $2 <= $5
             AND (CASE WHEN day = current_date THEN confirmations_today ELSE 0 END) + $3 <= $6
@@ -298,7 +300,7 @@ pub async fn outside_refusal(
     state: &AppState,
     account: Uuid,
 ) -> Result<Option<&'static str>, crate::error::AppError> {
-    let is_admin: bool = sqlx::query_scalar("SELECT is_admin FROM users WHERE id = $1")
+    let is_admin: bool = sqlx::query_scalar("SELECT is_admin FROM accounts WHERE id = $1")
         .bind(account)
         .fetch_one(&state.pool)
         .await?;
@@ -440,9 +442,9 @@ pub async fn tidy(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     // account comes back.
     let stopped: Vec<Uuid> = sqlx::query_scalar(
         "SELECT f.id FROM mail_forwardings f
-           JOIN users fu ON fu.id = f.user_id
+           JOIN accounts fu ON fu.id = f.account_id
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
-           LEFT JOIN users bu ON bu.id = b.user_id
+           LEFT JOIN accounts bu ON bu.id = b.account_id
           WHERE f.kind = 'end_to_end' AND f.state <> 'outdated'
             AND (NOT fu.is_active OR NOT COALESCE(bu.is_active, true))",
     )
@@ -588,12 +590,12 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
         return Ok(());
     }
     let forwardings: Vec<Forwarding> = sqlx::query_as(
-        "SELECT f.id, f.kind, f.match, f.conditions, b.id, b.user_id, f.forwardee_email,
-                a.address, f.user_id
+        "SELECT f.id, f.kind, f.match, f.conditions, b.id, b.account_id, f.forwardee_email,
+                a.address, f.account_id
            FROM mail_forwardings f
            JOIN mail_addresses a ON a.id = f.forwarder_address_id
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
-           LEFT JOIN users u ON u.id = b.user_id
+           LEFT JOIN accounts u ON u.id = b.account_id
           WHERE f.forwarder_address_id = $1 AND f.state = 'active'
             AND f.verified_at IS NOT NULL
             AND (f.kind = 'outside' OR (b.state = 'active' AND b.disabled_at IS NULL AND u.is_active))",
@@ -733,7 +735,7 @@ async fn claim_budget(
 ) -> Result<bool, sqlx::Error> {
     let mut tx = state.pool.begin().await?;
     // Each account's forwards are counted one at a time.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(account)
         .execute(&mut *tx)
         .await?;

@@ -299,7 +299,7 @@ fn a_lowered_limit_removes_nothing() {
         runtime
             .block_on(
                 sqlx::query_scalar(
-                    "SELECT count(*) FROM calendar_push_subscriptions WHERE user_id = $1::uuid",
+                    "SELECT count(*) FROM calendar_push_subscriptions WHERE account_id = $1::uuid",
                 )
                 .bind(&id)
                 .fetch_one(&pool),

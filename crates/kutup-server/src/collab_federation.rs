@@ -181,8 +181,8 @@ impl CollabFederation {
             return Ok(());
         }
         let owned: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT f.id FROM files f JOIN collections c ON c.id = f.collection_id
-              WHERE c.owner_user_id = $1 AND f.id = ANY($2)",
+            "SELECT f.id FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+              WHERE c.owner_account_id = $1 AND f.id = ANY($2)",
         )
         .bind(user_id)
         .bind(&subscribed)
@@ -260,13 +260,13 @@ async fn remote_access(
     let file: Option<(bool, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_edit AND s.key_generation = f.key_generation AND f.key_epoch = c.key_epoch,
                 s.recipient_account_id, s.recipient_incarnation_id
-         FROM federated_outgoing_file_shares s
-         JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
-         JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND s.file_id = $3
-           -- An owner that doesn't talk to other servers has, to them, no
+         FROM drive_federated_outgoing_file_shares s
+         JOIN drive_files f ON f.id = s.file_id AND f.deleted_at IS NULL
+         JOIN drive_collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+         WHERE s.capability_hash = $1 AND s.recipient_server = $2 AND s.file_id = $3
+           -- An mailbox_owner that doesn't talk to other servers has, to them, no
            -- shares (crate::federation_switch).
-           AND kutup_account_federates(c.owner_user_id)",
+           AND kutup_account_federates(c.owner_account_id)",
     )
     .bind(&hash)
     .bind(authenticated.origin())
@@ -283,13 +283,13 @@ async fn remote_access(
     let folder: Option<(bool, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_upload AND f.key_epoch = c.key_epoch,
                 s.recipient_account_id, s.recipient_incarnation_id
-         FROM federated_outgoing_shares s
-         JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
-         JOIN files f ON f.collection_id = c.id AND f.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND f.id = $3
-           -- An owner that doesn't talk to other servers has, to them, no
+         FROM drive_federated_outgoing_shares s
+         JOIN drive_collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
+         JOIN drive_files f ON f.collection_id = c.id AND f.deleted_at IS NULL
+         WHERE s.capability_hash = $1 AND s.recipient_server = $2 AND f.id = $3
+           -- An mailbox_owner that doesn't talk to other servers has, to them, no
            -- shares (crate::federation_switch).
-           AND kutup_account_federates(c.owner_user_id)",
+           AND kutup_account_federates(c.owner_account_id)",
     )
     .bind(&hash)
     .bind(authenticated.origin())
@@ -384,11 +384,12 @@ pub async fn subscribe(
         }
         let access = remote_access(&state, &authenticated, &headers, request.file_id).await?;
         let head = log_head(&state.pool, request.file_id).await?;
-        let (doc_key, floor): (i64, i64) =
-            sqlx::query_as("SELECT current_doc_key_id, collab_log_floor FROM files WHERE id = $1")
-                .bind(request.file_id)
-                .fetch_one(&state.pool)
-                .await?;
+        let (doc_key, floor): (i64, i64) = sqlx::query_as(
+            "SELECT current_doc_key_id, collab_log_floor FROM drive_files WHERE id = $1",
+        )
+        .bind(request.file_id)
+        .fetch_one(&state.pool)
+        .await?;
         let domain = authenticated.origin().to_owned();
         let existing =
             state
@@ -573,7 +574,7 @@ async fn pusher(state: AppState, sub: Arc<Subscriber>) {
         loop {
             let sent_through = sub.inner.lock().unwrap().sent_through;
             let rows: Vec<(i64, Vec<u8>, String, Uuid)> = match sqlx::query_as(
-                "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
+                "SELECT seq, frame, sender_server, sender_account_id FROM collab_update_log
                  WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC LIMIT $3",
             )
             .bind(sub.file_id)
@@ -585,13 +586,14 @@ async fn pusher(state: AppState, sub: Arc<Subscriber>) {
                 Ok(rows) => rows,
                 Err(_) => break,
             };
-            let floor: i64 = sqlx::query_scalar("SELECT collab_log_floor FROM files WHERE id = $1")
-                .bind(sub.file_id)
-                .fetch_optional(&state.pool)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(0);
+            let floor: i64 =
+                sqlx::query_scalar("SELECT collab_log_floor FROM drive_files WHERE id = $1")
+                    .bind(sub.file_id)
+                    .fetch_optional(&state.pool)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0);
             let ephemeral = std::mem::take(&mut sub.inner.lock().unwrap().ephemeral);
             let through = rows
                 .last()
@@ -815,17 +817,18 @@ pub async fn log(
         let request = parsed?;
         remote_access(&state, &authenticated, &headers, request.file_id).await?;
         let rows: Vec<(i64, Vec<u8>, String, Uuid)> = sqlx::query_as(
-            "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
+            "SELECT seq, frame, sender_server, sender_account_id FROM collab_update_log
               WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC",
         )
         .bind(request.file_id)
         .bind(request.since)
         .fetch_all(&state.pool)
         .await?;
-        let floor: i64 = sqlx::query_scalar("SELECT collab_log_floor FROM files WHERE id = $1")
-            .bind(request.file_id)
-            .fetch_one(&state.pool)
-            .await?;
+        let floor: i64 =
+            sqlx::query_scalar("SELECT collab_log_floor FROM drive_files WHERE id = $1")
+                .bind(request.file_id)
+                .fetch_one(&state.pool)
+                .await?;
         let through = rows.last().map_or(request.since, |row| row.0);
         signed_json(
             federation,
@@ -909,7 +912,7 @@ pub async fn version_content(
         let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
         remote_access(&state, &authenticated, &headers, file_id).await?;
         let row: Option<(String, i64)> = sqlx::query_as(
-            "SELECT storage_path, size_bytes FROM file_versions WHERE id = $1 AND file_id = $2",
+            "SELECT storage_path, size_bytes FROM drive_file_versions WHERE id = $1 AND file_id = $2",
         )
         .bind(vid)
         .bind(file_id)
@@ -1012,7 +1015,7 @@ pub async fn versions_create(
         let mut file = tempfile::NamedTempFile::new().map_err(|_| AppError::internal("temp file"))?;
         std::io::Write::write_all(&mut file, &blob).map_err(|_| AppError::internal("temp write"))?;
         let owner: Uuid = sqlx::query_scalar(
-            "SELECT c.owner_user_id FROM files f JOIN collections c ON c.id = f.collection_id WHERE f.id = $1",
+            "SELECT c.owner_account_id FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id WHERE f.id = $1",
         )
         .bind(request.file_id)
         .fetch_one(&state.pool)
@@ -1089,7 +1092,7 @@ pub async fn assets_create(
             .decode(&request.blob)
             .map_err(|_| AppError::bad_request("invalid blob"))?;
         let owner: Uuid = sqlx::query_scalar(
-            "SELECT c.owner_user_id FROM files f JOIN collections c ON c.id = f.collection_id WHERE f.id = $1",
+            "SELECT c.owner_account_id FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id WHERE f.id = $1",
         )
         .bind(request.file_id)
         .fetch_one(&state.pool)
@@ -1174,7 +1177,7 @@ pub async fn versions_patch(
         }
         if let Some(label) = label {
             sqlx::query(
-                "UPDATE file_versions SET label = NULLIF($1, '') WHERE id = $2 AND file_id = $3",
+                "UPDATE drive_file_versions SET label = NULLIF($1, '') WHERE id = $2 AND file_id = $3",
             )
             .bind(label)
             .bind(request.version_id)
@@ -1184,7 +1187,7 @@ pub async fn versions_patch(
         }
         if let Some(keep) = request.keep_forever {
             sqlx::query(
-                "UPDATE file_versions SET keep_forever = $1 WHERE id = $2 AND file_id = $3",
+                "UPDATE drive_file_versions SET keep_forever = $1 WHERE id = $2 AND file_id = $3",
             )
             .bind(keep)
             .bind(request.version_id)
@@ -1226,7 +1229,7 @@ pub async fn claim_seed(
             return Err(AppError::forbidden("this share does not allow editing"));
         }
         let claimed: Option<Uuid> = sqlx::query_scalar(
-            "UPDATE files SET seed_committed = true WHERE id = $1 AND seed_committed = false RETURNING id",
+            "UPDATE drive_files SET seed_committed = true WHERE id = $1 AND seed_committed = false RETURNING id",
         )
         .bind(request.file_id)
         .fetch_optional(&state.pool)
@@ -1658,7 +1661,7 @@ async fn target_for(
     match route {
         RemoteRoute::Folder { share_id, file_id } => {
             let row: Option<(String, String)> = sqlx::query_as(
-                "SELECT remote_domain, remote_capability FROM federated_incoming_shares WHERE id = $1 AND user_id = $2",
+                "SELECT owner_server, remote_capability FROM drive_federated_incoming_shares WHERE id = $1 AND account_id = $2",
             )
             .bind(share_id)
             .bind(user_id)
@@ -1674,8 +1677,8 @@ async fn target_for(
         }
         RemoteRoute::File { share_id } => {
             let row: Option<(String, String, Uuid)> = sqlx::query_as(
-                "SELECT remote_domain, remote_capability, remote_file_id
-                 FROM federated_incoming_file_shares WHERE id = $1 AND user_id = $2",
+                "SELECT owner_server, remote_capability, remote_file_id
+                 FROM drive_federated_incoming_file_shares WHERE id = $1 AND account_id = $2",
             )
             .bind(share_id)
             .bind(user_id)
@@ -1776,7 +1779,7 @@ async fn bridge_connection(
     let hub = state.hub.clone();
     let key = bridge.key.clone();
     let (username, color): (String, String) = sqlx::query_as(
-        "SELECT COALESCE(username, ''), COALESCE(color, '') FROM users WHERE id = $1",
+        "SELECT COALESCE(username, ''), COALESCE(color, '') FROM accounts WHERE id = $1",
     )
     .bind(user_uuid)
     .fetch_one(&state.pool)

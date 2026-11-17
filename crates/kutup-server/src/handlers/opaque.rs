@@ -216,7 +216,7 @@ pub async fn login_start(
             let caller_id = crate::handlers::trusted_uuid(&caller.user_id)?;
             let account: Account = sqlx::query_as(
                 "SELECT u.id, u.key_binding, u.opaque_record, u.opaque_server_key_id, n.folded
-                   FROM users u JOIN account_names n ON n.user_id = u.id AND n.state = 'current'
+                   FROM accounts u JOIN account_names n ON n.account_id = u.id AND n.state = 'current'
                   WHERE u.id = $1",
             )
             .bind(caller_id)
@@ -245,7 +245,7 @@ pub async fn login_start(
             } else {
                 sqlx::query_as(
                     "SELECT u.id, u.key_binding, u.opaque_record, u.opaque_server_key_id, n.folded
-                       FROM account_names n JOIN users u ON u.id = n.user_id
+                       FROM account_names n JOIN accounts u ON u.id = n.account_id
                       WHERE n.folded = $1 AND n.state = 'current'",
                 )
                 .bind(&canonical)
@@ -308,7 +308,7 @@ pub async fn login_start(
         "DELETE FROM opaque_login_states WHERE login_id IN (
              SELECT login_id FROM opaque_login_states WHERE canonical_name = $1
              ORDER BY expires_at DESC OFFSET $2)
-         RETURNING user_id, purpose",
+         RETURNING account_id, purpose",
     )
     .bind(&canonical)
     .bind(PENDING_PER_NAME - 1)
@@ -319,7 +319,7 @@ pub async fn login_start(
             "DELETE FROM opaque_login_states WHERE login_id IN (
                  SELECT login_id FROM opaque_login_states WHERE source = $1
                  ORDER BY expires_at DESC OFFSET $2)
-             RETURNING user_id, purpose",
+             RETURNING account_id, purpose",
         )
         .bind(&source)
         .bind(PENDING_PER_SOURCE - 1)
@@ -327,7 +327,7 @@ pub async fn login_start(
         .await?,
     );
     sqlx::query(
-        "INSERT INTO opaque_login_states (login_id, canonical_name, user_id, purpose, session_id,
+        "INSERT INTO opaque_login_states (login_id, canonical_name, account_id, purpose, session_id,
              grant_for, source, lockout_key, ceiling_account, ceiling_source, server_key_id,
              sealed_state, credential_epoch, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
@@ -418,7 +418,7 @@ pub async fn login_abort(
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let dropped: Vec<(Option<Uuid>, String)> = sqlx::query_as(
-        "DELETE FROM opaque_login_states WHERE login_id = $1 RETURNING user_id, purpose",
+        "DELETE FROM opaque_login_states WHERE login_id = $1 RETURNING account_id, purpose",
     )
     .bind(req.login_id)
     .fetch_all(&state.pool)
@@ -463,7 +463,7 @@ pub async fn login_finish(
     );
     let pending: Option<Pending> = sqlx::query_as(
         "DELETE FROM opaque_login_states WHERE login_id = $1 AND expires_at > now()
-         RETURNING user_id, purpose, session_id, grant_for, lockout_key, ceiling_account,
+         RETURNING account_id, purpose, session_id, grant_for, lockout_key, ceiling_account,
                    ceiling_source, server_key_id, sealed_state, credential_epoch",
     )
     .bind(req.login_id)
@@ -622,7 +622,7 @@ pub struct RegisterStartResponse {
 
 async fn key_binding_unused(state: &AppState, key_binding: &str) -> AppResult<()> {
     let taken: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE key_binding = $1)")
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE key_binding = $1)")
             .bind(key_binding)
             .fetch_one(&state.pool)
             .await?;
@@ -686,7 +686,7 @@ pub async fn register_start(
             } else {
                 // The account's own key binding: a new password for it.
                 let own: Option<String> =
-                    sqlx::query_scalar("SELECT key_binding FROM users WHERE id = $1")
+                    sqlx::query_scalar("SELECT key_binding FROM accounts WHERE id = $1")
                         .bind(grant.user_id)
                         .fetch_optional(&state.pool)
                         .await?;
@@ -816,7 +816,7 @@ pub async fn register_finish(
     .generation
     .get();
     let current: Option<i32> =
-        sqlx::query_scalar("SELECT master_key_generation FROM users WHERE id = $1 FOR UPDATE")
+        sqlx::query_scalar("SELECT master_key_generation FROM accounts WHERE id = $1 FOR UPDATE")
             .bind(grant.user_id)
             .fetch_optional(&mut *tx)
             .await?;
@@ -827,7 +827,7 @@ pub async fn register_finish(
     // and never a password change in disguise for an account already on the
     // current one.
     let updated = sqlx::query(
-        "UPDATE users SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
+        "UPDATE accounts SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
                           master_key_envelope = $6
          WHERE id = $1 AND key_binding = $2
            AND (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))

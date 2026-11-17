@@ -46,7 +46,7 @@ pub async fn status(
     let user_id = trusted_uuid(&user.user_id)?;
     let outbox = id_of(&id)?;
     let row: Option<(String, Option<Vec<u8>>)> = sqlx::query_as(
-        "SELECT state, result_sealed FROM mail_outbox WHERE id = $1 AND user_id = $2",
+        "SELECT state, result_sealed FROM mail_outbox WHERE id = $1 AND account_id = $2",
     )
     .bind(outbox)
     .bind(user_id)
@@ -100,7 +100,7 @@ pub async fn cancel(
         return Ok(axum::http::StatusCode::NO_CONTENT);
     }
     let known: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM mail_outbox WHERE id = $1 AND user_id = $2)",
+        "SELECT EXISTS (SELECT 1 FROM mail_outbox WHERE id = $1 AND account_id = $2)",
     )
     .bind(id)
     .bind(user_id)

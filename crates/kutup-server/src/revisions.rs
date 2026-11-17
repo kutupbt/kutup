@@ -85,10 +85,11 @@ pub async fn key_binding<'e, E>(executor: E, user_id: uuid::Uuid) -> AppResult<S
 where
     E: sqlx::PgExecutor<'e>,
 {
-    let binding: Option<String> = sqlx::query_scalar("SELECT key_binding FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(executor)
-        .await?;
+    let binding: Option<String> =
+        sqlx::query_scalar("SELECT key_binding FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(executor)
+            .await?;
     binding.ok_or_else(|| AppError::bad_request("the account has no key binding"))
 }
 

@@ -209,9 +209,9 @@ async fn own_domain_row(
     address: &str,
 ) -> Result<Option<RecipientRow>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
+        "SELECT a.id, a.account_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
-           JOIN users u ON u.id = a.user_id AND u.is_active
+           JOIN accounts u ON u.id = a.account_id AND u.is_active
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
           WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
             AND a.disabled_at IS NULL
@@ -264,10 +264,10 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     let (domain_id, catch_all) = (held.id, held.catch_all_address_id);
     // An address of an enabled member of the domain's organization.
     const SELECT: &str =
-        "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
+        "SELECT a.id, a.account_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
-           JOIN users u ON u.id = a.user_id AND u.is_active
-           JOIN organization_members m ON m.account_id = a.user_id AND m.organization_id = $3
+           JOIN accounts u ON u.id = a.account_id AND u.is_active
+           JOIN organization_members m ON m.account_id = a.account_id AND m.organization_id = $3
                                       AND m.state = 1
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary";
     let row: Option<RecipientRow> = sqlx::query_as(&format!(
@@ -638,7 +638,7 @@ pub(crate) async fn ancestor_thread(
     let hashes = sealed::thread_hashes(opener.keys(), &ancestors)?;
     Ok(sqlx::query_scalar(
         "SELECT thread_id FROM mail_messages
-          WHERE owner = $1 AND message_id_hash = ANY($2)
+          WHERE mailbox_owner = $1 AND message_id_hash = ANY($2)
           ORDER BY received_at DESC LIMIT 1",
     )
     .bind(owner.id())
@@ -697,10 +697,10 @@ pub(crate) async fn insert_message(
     }
     let inserted: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO mail_messages
-            (id, user_id, address_id, thread_id, direction, folder, seen, protection, object_key,
+            (id, account_id, address_id, thread_id, direction, folder, seen, protection, object_key,
              object_version, size_bytes, sent_at, headers, message_id_hash, in_reply_to_hash,
              references_hashes, search_tokens,
-             attachment_count, external_recipients, group_id, key_packet, sent_by, unsubscribable,
+             attachment_count, external_recipients, group_id, key_packet, sent_by_account_id, unsubscribable,
              expires_at, notify_at, forwarded)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
                  $18, $19, $20, $21, $22, $23, $24,

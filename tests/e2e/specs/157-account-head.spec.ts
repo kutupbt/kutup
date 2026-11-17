@@ -58,7 +58,7 @@ test('an app shown an older history stops its listed writes until the person con
   // The server goes back to the head before the keep (as a restore from a
   // backup would; an attack looks the same).
   execSync(psql!, {
-    input: `DELETE FROM account_heads WHERE sequence > 1 AND user_id = (SELECT id FROM users WHERE username = '${account.username}');\n`,
+    input: `DELETE FROM account_heads WHERE sequence > 1 AND account_id = (SELECT id FROM accounts WHERE username = '${account.username}');\n`,
     stdio: ['pipe', 'inherit', 'inherit'],
   })
 

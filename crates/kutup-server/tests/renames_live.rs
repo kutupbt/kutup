@@ -615,10 +615,10 @@ fn five_old_names_receive_and_a_drop_makes_room() {
             .block_on(
                 sqlx::query(
                     "INSERT INTO account_names
-                         (folded, name, user_id, incarnation_id, state, receive_until, free_at)
+                         (folded, name, account_id, incarnation_id, state, receive_until, free_at)
                      SELECT kutup_fold($1), $1, id, account_incarnation_id, 'held',
                             now() + interval '90 days', now() + interval '180 days'
-                       FROM users WHERE id = $2::uuid",
+                       FROM accounts WHERE id = $2::uuid",
                 )
                 .bind(old)
                 .bind(&user.id)

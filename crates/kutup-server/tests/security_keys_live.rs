@@ -663,7 +663,7 @@ fn an_expired_ceremony_is_refused() {
         .block_on(
             sqlx::query(
                 "UPDATE webauthn_ceremonies SET expires_at = now() - interval '1 second'
-                 WHERE user_id = $1::uuid AND kind = 'signIn'",
+                 WHERE account_id = $1::uuid AND kind = 'signIn'",
             )
             .bind(&user.id)
             .execute(&pool),

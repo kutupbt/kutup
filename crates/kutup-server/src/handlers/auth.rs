@@ -768,7 +768,7 @@ pub async fn register(
         return Err(unavailable.error());
     }
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
-        r#"INSERT INTO users (
+        r#"INSERT INTO accounts (
             username, master_key_envelope, recovery_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
@@ -871,7 +871,7 @@ pub(crate) async fn signed_in_answer(
                   (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), is_first_login,
                   COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, ''),
                   COALESCE(substring(sha256(opaque_record) from 1 for 16) = $2, false)
-           FROM users WHERE id = $1"#,
+           FROM accounts WHERE id = $1"#,
     )
     .bind(user_id)
     .bind(epoch)
@@ -991,7 +991,7 @@ pub async fn login_two_fa(
     // still being set up never signs anyone in.
     let row: Option<(Option<Vec<u8>>, bool)> = sqlx::query_as(
         "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END, (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
-         FROM users WHERE id = $1",
+         FROM accounts WHERE id = $1",
     )
     .bind(Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
     .fetch_optional(&state.pool)
@@ -1084,7 +1084,7 @@ pub(crate) async fn issue_after_second_step(
                   is_admin, storage_quota_bytes, storage_used_bytes,
                   COALESCE(username, ''), (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), COALESCE(color, ''),
                   COALESCE(key_binding, '')
-           FROM users WHERE id = $1"#,
+           FROM accounts WHERE id = $1"#,
     )
     .bind(Uuid::parse_str(user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
     .fetch_optional(&state.pool)
@@ -1141,7 +1141,7 @@ pub async fn get_recovery_preflight(
     let row: Option<String> = match account_by_name(&state, &name).await? {
         Some(id) => {
             sqlx::query_scalar(
-                "SELECT key_binding FROM users WHERE id = $1 AND key_binding IS NOT NULL",
+                "SELECT key_binding FROM accounts WHERE id = $1 AND key_binding IS NOT NULL",
             )
             .bind(id)
             .fetch_optional(&state.pool)
@@ -1192,7 +1192,7 @@ pub async fn recover_grant(
             sqlx::query_scalar(
                 // A closing account recovers too, to keep it at the sign-in after.
                 &format!(
-                    "SELECT recovery_key_verifier FROM users WHERE id = $1 AND {}",
+                    "SELECT recovery_key_verifier FROM accounts WHERE id = $1 AND {}",
                     crate::account_closing::SIGNS_IN
                 ),
             )
@@ -1213,7 +1213,7 @@ pub async fn recover_grant(
     // setup) in between replaces the verifier, and leaves no grant behind.
     let mut tx = state.pool.begin().await?;
     let still: Option<String> = sqlx::query_scalar(&format!(
-        "SELECT recovery_key_envelope FROM users
+        "SELECT recovery_key_envelope FROM accounts
          WHERE id = $1 AND {} AND recovery_key_verifier = $2
          FOR SHARE",
         crate::account_closing::SIGNS_IN
@@ -1349,7 +1349,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
                   storage_quota_bytes, storage_used_bytes,
                   is_admin, COALESCE(color, ''), version_retention_days, public_sharing,
                   federation
-           FROM users WHERE id = $1"#,
+           FROM accounts WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
     .fetch_optional(&state.pool)
@@ -1380,7 +1380,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     // The account's rename chain, of its current incarnation: where it ends.
     let anchor: Option<(i32, String)> = sqlx::query_as(
         "SELECT r.sequence, r.digest FROM account_renames r
-           JOIN users u ON u.account_incarnation_id = r.incarnation_id
+           JOIN accounts u ON u.account_incarnation_id = r.incarnation_id
           WHERE u.id = $1 ORDER BY r.sequence DESC LIMIT 1",
     )
     .bind(id)
@@ -1441,7 +1441,7 @@ pub async fn update_me(
             return Err(AppError::bad_request("invalid color: expected #rrggbb hex"));
         }
         let value: Option<String> = if color.is_empty() { None } else { Some(color) };
-        sqlx::query("UPDATE users SET color = $1 WHERE id = $2")
+        sqlx::query("UPDATE accounts SET color = $1 WHERE id = $2")
             .bind(value)
             .bind(parse_uuid(&user.user_id)?)
             .execute(&state.pool)
@@ -1455,7 +1455,7 @@ pub async fn update_me(
                 "versionRetentionDays must be 7, 30, 90, 180, 365 or 3650",
             ));
         }
-        sqlx::query("UPDATE users SET version_retention_days = $1 WHERE id = $2")
+        sqlx::query("UPDATE accounts SET version_retention_days = $1 WHERE id = $2")
             .bind(days)
             .bind(parse_uuid(&user.user_id)?)
             .execute(&state.pool)
@@ -1519,7 +1519,7 @@ pub async fn get_user_by_address(
     let local = local_account_username(&address, &state.config.chat_server_name);
     let id: Option<Uuid> = match &local {
         Some(username) => {
-            sqlx::query_scalar("SELECT kutup_current_user($1)")
+            sqlx::query_scalar("SELECT kutup_current_account($1)")
                 .bind(username)
                 .fetch_one(&state.pool)
                 .await?
@@ -1554,7 +1554,7 @@ pub async fn get_user_by_address(
 )]
 pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     let username: Option<Option<String>> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
             .bind(parse_uuid(&user.user_id)?)
             .fetch_optional(&state.pool)
             .await?;
@@ -1575,12 +1575,13 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
     // off (with the password) and on again.
     let user_id = parse_uuid(&user.user_id)?;
     let sealed = seal_totp_secret(&state, user_id, &secret).await?;
-    let set =
-        sqlx::query("UPDATE users SET totp_secret_sealed = $1 WHERE id = $2 AND NOT totp_enabled")
-            .bind(&sealed)
-            .bind(user_id)
-            .execute(&state.pool)
-            .await?;
+    let set = sqlx::query(
+        "UPDATE accounts SET totp_secret_sealed = $1 WHERE id = $2 AND NOT totp_enabled",
+    )
+    .bind(&sealed)
+    .bind(user_id)
+    .execute(&state.pool)
+    .await?;
     if set.rows_affected() != 1 {
         return Err(AppError::conflict("two-step sign-in is already on"));
     }
@@ -1605,7 +1606,7 @@ pub async fn verify_totp(
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
     let sealed: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT totp_secret_sealed FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT totp_secret_sealed FROM accounts WHERE id = $1")
             .bind(parse_uuid(&user.user_id)?)
             .fetch_optional(&state.pool)
             .await?
@@ -1640,7 +1641,7 @@ pub async fn verify_totp(
     )
     .await?;
     let enabled = sqlx::query(
-        "UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret_sealed = $2",
+        "UPDATE accounts SET totp_enabled = true WHERE id = $1 AND totp_secret_sealed = $2",
     )
     .bind(user_id)
     .bind(&sealed)
@@ -1809,7 +1810,7 @@ pub(crate) async fn prove_second_factor(
         });
     }
     let sealed: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END FROM users WHERE id = $1",
+        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END FROM accounts WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut **tx)
@@ -1945,7 +1946,7 @@ pub async fn disable_totp(
     // codes): only the authenticator app goes.
     let kind = if factors.keys > 0 {
         sqlx::query(
-            "UPDATE users SET totp_enabled = false, totp_secret_sealed = NULL WHERE id = $1",
+            "UPDATE accounts SET totp_enabled = false, totp_secret_sealed = NULL WHERE id = $1",
         )
         .bind(user_id)
         .execute(&mut *tx)
@@ -1989,7 +1990,7 @@ pub async fn complete_setup(
     let (user_id, setup_epoch) = jwt::validate_setup_token(token, &state.config.jwt_secret)
         .map_err(|_| setup_token_invalid())?;
 
-    let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM users WHERE id = $1")
+    let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM accounts WHERE id = $1")
         .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
         .fetch_optional(&state.pool)
         .await?;
@@ -2036,7 +2037,7 @@ pub async fn complete_setup(
     // after setup completes.
     let mut tx = state.pool.begin().await?;
     let res = sqlx::query(
-        r#"UPDATE users SET
+        r#"UPDATE accounts SET
               opaque_record = $1, opaque_suite = $9, opaque_server_key_id = $10,
               master_key_envelope = $2, recovery_key_envelope = $3,
               public_key = $4,
@@ -2090,7 +2091,7 @@ pub async fn complete_setup(
     tx.commit().await?;
 
     let (is_admin, quota, used, username): (bool, i64, i64, String) = sqlx::query_as(
-        "SELECT is_admin, storage_quota_bytes, storage_used_bytes, COALESCE(username, '') FROM users WHERE id = $1",
+        "SELECT is_admin, storage_quota_bytes, storage_used_bytes, COALESCE(username, '') FROM accounts WHERE id = $1",
     )
     .bind(uid)
     .fetch_one(&state.pool)
@@ -2171,7 +2172,7 @@ pub(crate) async fn credential_held(
     epoch: &[u8],
 ) -> AppResult<Option<Option<i16>>> {
     Ok(sqlx::query_scalar(
-        "SELECT opaque_server_key_id FROM users
+        "SELECT opaque_server_key_id FROM accounts
          WHERE id = $1 AND is_active
            AND substring(sha256(opaque_record) from 1 for 16) = $2
          FOR SHARE",
@@ -2228,7 +2229,7 @@ async fn issue_tokens_and_respond(
     // offer to keep it (docs/plans/server-personal-data.md, A5).
     let closing: Option<(time::OffsetDateTime, bool)> = sqlx::query_as(
         "SELECT closes_at, closes_at > now() OR kutup_account_held(id)
-           FROM users WHERE id = $1 AND state = 'closing'",
+           FROM accounts WHERE id = $1 AND state = 'closing'",
     )
     .bind(uid)
     .fetch_optional(&state.pool)
@@ -2442,7 +2443,7 @@ fn deterministic_fake_bytes(secret: &[u8], name: &str, purpose: &str, len: usize
 
 /// Where the authenticator app's secret is sealed: the account's own row.
 fn totp_field(user_id: &str) -> (&'static str, &'static str, &str) {
-    ("users", "totp_secret", user_id)
+    ("accounts", "totp_secret", user_id)
 }
 
 /// The authenticator app's secret, sealed under the account's data key

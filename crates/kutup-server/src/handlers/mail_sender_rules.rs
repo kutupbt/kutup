@@ -42,7 +42,7 @@ pub async fn list(
 ) -> AppResult<Json<Vec<MailSenderRule>>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, pattern, kind FROM mail_sender_rules WHERE user_id = $1 ORDER BY created_at DESC",
+        "SELECT id, pattern, kind FROM mail_sender_rules WHERE account_id = $1 ORDER BY created_at DESC",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -101,12 +101,12 @@ pub async fn set(
     patterns.sort();
     patterns.dedup();
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM mail_sender_rules WHERE user_id = $1 AND pattern <> ALL($2)",
+        "SELECT COUNT(*) FROM mail_sender_rules WHERE account_id = $1 AND pattern <> ALL($2)",
     )
     .bind(user_id)
     .bind(&patterns)
@@ -118,9 +118,9 @@ pub async fn set(
         ));
     }
     let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "INSERT INTO mail_sender_rules (user_id, pattern, kind)
+        "INSERT INTO mail_sender_rules (account_id, pattern, kind)
          SELECT $1, p, $3 FROM UNNEST($2::text[]) p
-         ON CONFLICT (user_id, pattern) DO UPDATE SET kind = EXCLUDED.kind
+         ON CONFLICT (account_id, pattern) DO UPDATE SET kind = EXCLUDED.kind
          RETURNING id, pattern, kind",
     )
     .bind(user_id)
@@ -166,7 +166,7 @@ pub async fn update(
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such entry"))?;
     let kind = kind(&request.kind)?;
     let updated =
-        sqlx::query("UPDATE mail_sender_rules SET kind = $3 WHERE user_id = $1 AND id = $2")
+        sqlx::query("UPDATE mail_sender_rules SET kind = $3 WHERE account_id = $1 AND id = $2")
             .bind(user_id)
             .bind(id)
             .bind(kind.as_str())
@@ -206,7 +206,7 @@ pub async fn delete(
         .take(1000)
         .map(|id| Uuid::parse_str(id).map_err(|_| AppError::bad_request("not an id")))
         .collect::<AppResult<_>>()?;
-    sqlx::query("DELETE FROM mail_sender_rules WHERE user_id = $1 AND id = ANY($2)")
+    sqlx::query("DELETE FROM mail_sender_rules WHERE account_id = $1 AND id = ANY($2)")
         .bind(user_id)
         .bind(&ids)
         .execute(&state.pool)

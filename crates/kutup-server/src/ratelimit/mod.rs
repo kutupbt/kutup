@@ -81,7 +81,7 @@ pub async fn stored_overrides(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, String, i64)>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT user_id::text, substr(key, length($1) + 1), value FROM user_setting_overrides
+        "SELECT account_id::text, substr(key, length($1) + 1), value FROM account_setting_overrides
          WHERE starts_with(key, $1)",
     )
     .bind(SETTING_PREFIX)

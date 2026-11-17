@@ -282,10 +282,10 @@ pub(crate) async fn sweep(pool: &PgPool) -> AppResult<u64> {
         .await?;
     let gone = sqlx::query(
         "DELETE FROM remote_account_manifests r
-          WHERE NOT EXISTS (SELECT 1 FROM federated_outgoing_shares s
-                             WHERE s.recipient_domain = r.domain)
-            AND NOT EXISTS (SELECT 1 FROM federated_outgoing_file_shares s
-                             WHERE s.recipient_domain = r.domain)",
+          WHERE NOT EXISTS (SELECT 1 FROM drive_federated_outgoing_shares s
+                             WHERE s.recipient_server = r.domain)
+            AND NOT EXISTS (SELECT 1 FROM drive_federated_outgoing_file_shares s
+                             WHERE s.recipient_server = r.domain)",
     )
     .execute(pool)
     .await?

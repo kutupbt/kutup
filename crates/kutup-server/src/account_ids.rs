@@ -45,7 +45,7 @@ pub async fn local_user<'e, E: sqlx::PgExecutor<'e>>(
     let id = Uuid::parse_str(&account.account_id)
         .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
     Ok(
-        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND is_active")
             .bind(id)
             .fetch_optional(executor)
             .await?,
@@ -66,7 +66,7 @@ pub async fn local_user_for_peer<'e, E: sqlx::PgExecutor<'e>>(
     let id = Uuid::parse_str(&account.account_id)
         .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
     Ok(sqlx::query_scalar(
-        "SELECT id FROM users WHERE id = $1 AND is_active AND kutup_account_federates(id)",
+        "SELECT id FROM accounts WHERE id = $1 AND is_active AND kutup_account_federates(id)",
     )
     .bind(id)
     .fetch_optional(executor)
@@ -139,7 +139,7 @@ pub async fn redeem(
     let key = proof_key(state).await?;
     mac_verify(Suite::V1, &key, &proof_parts(key_binding, &id), &tag).map_err(|_| invalid())?;
     let used: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)
              OR EXISTS (SELECT 1 FROM retired_account_ids WHERE id = $1)",
     )
     .bind(id)

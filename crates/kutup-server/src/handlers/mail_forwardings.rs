@@ -340,7 +340,7 @@ const SELECT: &str = "SELECT f.id, f.kind, f.state, a.address, f.forwardee_email
                              f.conditions, f.skipped, f.created_at, f.expires_at,
                              f.notice, f.verified_at IS NOT NULL,
                              CASE WHEN f.code_expires_at > now() THEN f.code_expires_at END,
-                             f.code_attempts, f.user_id
+                             f.code_attempts, f.account_id
                         FROM mail_forwardings f JOIN mail_addresses a ON a.id = f.forwarder_address_id";
 
 fn view(row: Row) -> MailForwarding {
@@ -410,14 +410,14 @@ pub async fn list(
 ) -> AppResult<Json<MailForwardings>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let outgoing: Vec<Row> = sqlx::query_as(&format!(
-        "{SELECT} WHERE f.user_id = $1 ORDER BY f.created_at"
+        "{SELECT} WHERE f.account_id = $1 ORDER BY f.created_at"
     ))
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
     let incoming: Vec<Row> = sqlx::query_as(&format!(
         "{SELECT} JOIN mail_addresses b ON b.id = f.forwardee_address_id
-          WHERE b.user_id = $1 AND f.state <> 'rejected'
+          WHERE b.account_id = $1 AND f.state <> 'rejected'
             AND (f.verified_at IS NOT NULL OR f.state <> 'pending')
           ORDER BY f.created_at"
     ))
@@ -441,8 +441,8 @@ async fn local_person(
         return Ok(None);
     }
     Ok(sqlx::query_as(
-        "SELECT a.id, a.user_id, a.address, a.disabled_at IS NOT NULL FROM mail_addresses a
-           JOIN users u ON u.id = a.user_id AND u.is_active
+        "SELECT a.id, a.account_id, a.address, a.disabled_at IS NOT NULL FROM mail_addresses a
+           JOIN accounts u ON u.id = a.account_id AND u.is_active
           WHERE a.folded = kutup_address_folded($1)
             AND a.state = 'active' AND a.group_id IS NULL",
     )
@@ -527,7 +527,7 @@ pub async fn create(
 
     let inserted = sqlx::query(
         "INSERT INTO mail_forwardings
-           (id, user_id, forwarder_address_id, forwardee_email, forwardee_address_id,
+           (id, account_id, forwarder_address_id, forwardee_email, forwardee_address_id,
             kind, state, match, conditions)
          VALUES ($1, $2, $3, $4, $5, 'end_to_end', 'pending', $6, $7)
          ON CONFLICT DO NOTHING",
@@ -567,7 +567,7 @@ async fn prepare(
     user_id: Uuid,
     address_id: Uuid,
 ) -> AppResult<Vec<u8>> {
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR NO KEY UPDATE")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
@@ -575,7 +575,7 @@ async fn prepare(
     let forwarder_key: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT k.public_key FROM mail_addresses a
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active' AND a.group_id IS NULL",
+          WHERE a.id = $1 AND a.account_id = $2 AND a.state = 'active' AND a.group_id IS NULL",
     )
     .bind(address_id)
     .bind(user_id)
@@ -586,7 +586,7 @@ async fn prepare(
     };
     let (per_address, per_account): (i64, i64) = sqlx::query_as(
         "SELECT COUNT(*) FILTER (WHERE forwarder_address_id = $2), COUNT(*)
-           FROM mail_forwardings WHERE user_id = $1",
+           FROM mail_forwardings WHERE account_id = $1",
     )
     .bind(user_id)
     .bind(address_id)
@@ -725,13 +725,13 @@ async fn unverified_room(
     user_id: Uuid,
     except: Option<Uuid>,
 ) -> AppResult<()> {
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR NO KEY UPDATE")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
     let waiting: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM mail_forwardings
-          WHERE user_id = $1 AND state = 'pending' AND verified_at IS NULL
+          WHERE account_id = $1 AND state = 'pending' AND verified_at IS NULL
             AND id IS DISTINCT FROM $2",
     )
     .bind(user_id)
@@ -867,7 +867,7 @@ async fn create_outside(
     };
     let inserted = sqlx::query(
         "INSERT INTO mail_forwardings
-           (id, user_id, forwarder_address_id, forwardee_email, kind, state, match, conditions)
+           (id, account_id, forwarder_address_id, forwardee_email, kind, state, match, conditions)
          VALUES ($1, $2, $3, $4, 'outside', 'pending', $5, $6)
          ON CONFLICT DO NOTHING",
     )
@@ -1092,7 +1092,7 @@ async fn lock(
 ) -> AppResult<(Uuid, Side, String, Option<Uuid>)> {
     let id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(Uuid, Option<Uuid>, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT f.user_id, b.user_id, f.state, f.forwardee_address_id
+        "SELECT f.account_id, b.account_id, f.state, f.forwardee_address_id
            FROM mail_forwardings f
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
           WHERE f.id = $1 FOR UPDATE OF f",
@@ -1534,7 +1534,7 @@ pub async fn activation(
            FROM mail_forwardings f
            JOIN mail_addresses a ON a.id = f.forwarder_address_id
            JOIN mail_addresses b ON b.id = f.forwardee_address_id
-          WHERE f.id = $1 AND b.user_id = $2 AND f.state = 'pending'
+          WHERE f.id = $1 AND b.account_id = $2 AND f.state = 'pending'
             AND f.verified_at IS NOT NULL
             AND f.activation IS NOT NULL AND f.expires_at > now()",
     )
@@ -1628,7 +1628,7 @@ pub async fn accept(
         ));
     }
     let binding: String =
-        sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -1739,7 +1739,7 @@ pub async fn delete_key(
     let mut tx = state.pool.begin().await?;
     let deleted: Option<Option<Uuid>> = sqlx::query_scalar(
         "DELETE FROM mail_address_keys k USING mail_addresses a
-          WHERE k.id = $1 AND k.address_id = $2 AND a.id = k.address_id AND a.user_id = $3
+          WHERE k.id = $1 AND k.address_id = $2 AND a.id = k.address_id AND a.account_id = $3
             AND k.is_forwarding
          RETURNING k.forwarding_id",
     )
