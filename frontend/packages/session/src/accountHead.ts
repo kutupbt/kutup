@@ -34,7 +34,18 @@ import { indexedDbRevisionStore, type RevisionStore } from '@kutup/crypto/revisi
 import api from './client'
 import { getSession, subscribe } from './store'
 import { hash } from '@kutup/crypto/hash'
-import { batchBody, ScopeRecords, type RecordScopeName, type RecordsEdit, type RecordsPage } from './accountRecords'
+import {
+  batchBody,
+  changesOf,
+  cloneRecords,
+  indexedDbRecordsStore,
+  memoryRecordsStore,
+  ScopeRecords,
+  type RecordScopeName,
+  type RecordsEdit,
+  type RecordsPage,
+  type RecordsStore,
+} from './accountRecords'
 
 /** A verified head (`@kutup/crypto/accountHead` `VerifiedHead`): each holder its own, freed when done. */
 export interface VerifiedHeadLike {
@@ -234,11 +245,15 @@ export class AccountHeadClient {
   private writes: Promise<unknown> = Promise.resolve()
   private readonly listeners = new Set<HeadListener>()
 
+  /** Each records scope as this page last verified it. */
+  private readonly copies = new Map<RecordScopeName, ScopeRecords>()
+
   constructor(
     private readonly engine: HeadEngine,
     private readonly store: RevisionStore,
     private readonly http: Http = api,
     private readonly now: () => number = Date.now,
+    private readonly recordsStore: RecordsStore = memoryRecordsStore(),
   ) {}
 
   private get entry(): string {
@@ -540,14 +555,68 @@ export class AccountHeadClient {
     return copy
   }
 
-  private async readRecords(scope: RecordScopeName): Promise<{ copy: ScopeRecords; basis: string | null; verified: VerifiedHeadLike | null }> {
+  private copyName(scope: RecordScopeName): string {
+    return `${this.engine.localStateName()}:${scope}`
+  }
+
+  /** The copy this device kept of `scope`, from this page or an earlier one (not yet trusted). */
+  private async keptCopy(scope: RecordScopeName): Promise<ScopeRecords | null> {
+    const cached = this.copies.get(scope)
+    if (cached) return cached
+    const kept = await this.recordsStore.load(this.copyName(scope))
+    if (!kept) return null
     const copy = new ScopeRecords(scope)
+    copy.cursor = kept.cursor
+    for (const [id, record] of kept.records) copy.records.set(id, record)
+    return copy
+  }
+
+  /** Keeps `copy` (verified) as this device's, writing only what changed since `before`. */
+  private async keepCopy(scope: RecordScopeName, before: ScopeRecords | null, copy: ScopeRecords): Promise<void> {
+    this.copies.set(scope, copy)
+    await this.recordsStore.save(this.copyName(scope), copy.cursor, changesOf(before, copy))
+  }
+
+  /**
+   * A records scope as the head vouches for it: the copy this device kept,
+   * brought up to date from its cursor (every page's head verified as it
+   * comes), and then the whole scope checked against the last head. A kept
+   * copy that fails the check (altered, or left stale) is never used: it is
+   * dropped and the scope read again from the start; a second failure is
+   * `IndexMismatchError`.
+   */
+  private async readRecords(scope: RecordScopeName): Promise<{ copy: ScopeRecords; basis: string | null; verified: VerifiedHeadLike | null }> {
+    let kept = await this.keptCopy(scope)
+    for (;;) {
+      const copy = kept ? cloneRecords(kept) : new ScopeRecords(scope)
+      const { page, verified } = await this.caughtUp(copy)
+      if (verified) {
+        try {
+          this.engine.checkIndex(verified, scope, copy.index())
+        } catch {
+          verified.free()
+          if (kept) {
+            // Not what the head lists: start over, trusting nothing kept.
+            kept = null
+            this.copies.delete(scope)
+            continue
+          }
+          throw new IndexMismatchError(scope)
+        }
+      }
+      await this.keepCopy(scope, kept, copy)
+      return { copy, basis: page.head === null ? page.basis : null, verified }
+    }
+  }
+
+  /** Reads `copy`'s scope on from its cursor to the end; the last page's head, verified. */
+  private async caughtUp(copy: ScopeRecords): Promise<{ page: RecordsPage; verified: VerifiedHeadLike | null }> {
     let resyncs = 0
     // Each page starts past the one before; the bound only stops a server
     // that keeps answering "more".
     for (let pages = 0; pages < MOST_RECORD_PAGES; pages++) {
       const { data: page, verified } = await this.checked(async () => {
-        const { data } = await this.http.get<RecordsPage>(`/account/records/${encodeURIComponent(scope)}?after=${copy.cursor}`)
+        const { data } = await this.http.get<RecordsPage>(`/account/records/${encodeURIComponent(copy.scope)}?after=${copy.cursor}`)
         return { current: data.head, data }
       })
       let merged: ReturnType<ScopeRecords['merge']>
@@ -557,22 +626,11 @@ export class AccountHeadClient {
         verified?.free()
         throw error
       }
-      if (merged !== 'done') {
-        verified?.free()
-        if (merged === 'resync' && ++resyncs > 3) throw new Error(`${scope}: the server kept sending this device back to the start`)
-        continue
-      }
-      if (verified) {
-        try {
-          this.engine.checkIndex(verified, scope, copy.index())
-        } catch {
-          verified.free()
-          throw new IndexMismatchError(scope)
-        }
-      }
-      return { copy, basis: page.head === null ? page.basis : null, verified }
+      if (merged === 'done') return { page, verified }
+      verified?.free()
+      if (merged === 'resync' && ++resyncs > 3) throw new Error(`${copy.scope}: the server kept sending this device back to the start`)
     }
-    throw new Error(`${scope}: the server's records did not end`)
+    throw new Error(`${copy.scope}: the server's records did not end`)
   }
 
   /**
@@ -608,7 +666,14 @@ export class AccountHeadClient {
         }
         if (!base) throw new Error('no verified account head to write on')
         const head = this.engine.next(base, writer, [this.engine.scope(scope, copy.indexAfter(batch))])
-        await this.http.post('/account/records', batchBody(batch, head))
+        const { data: stored } = await this.http.post<{ seq: number }>('/account/records', batchBody(batch, head))
+        // The batch followed the head this copy was caught up at, so nothing
+        // else was written in between: the copy is the scope at `seq`.
+        const after = cloneRecords(copy)
+        for (const put of batch.puts) after.records.set(put.id, { revision: put.revision, envelope: put.envelope })
+        for (const gone of batch.deletes) after.records.delete(gone.id)
+        if (Number.isSafeInteger(stored?.seq) && stored.seq > after.cursor) after.cursor = stored.seq
+        await this.keepCopy(scope, copy, after)
         try {
           const after = this.engine.committed(base, head)
           await this.remember(after)
@@ -687,6 +752,7 @@ function lazyEngine(masterKeys: MasterKeys, roots: AccountRoots, binding: string
 }
 
 let shared: RevisionStore | null = null
+let sharedRecords: RecordsStore | null = null
 const clients = new Map<string, { masterKeys: MasterKeys; client: Promise<AccountHeadClient> }>()
 
 /**
@@ -706,7 +772,9 @@ export function accountHead(session: {
   watchSignOut()
   shared ??= indexedDbRevisionStore()
   const store = shared
-  const client = lazyEngine(masterKeys, session.roots, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store))
+  sharedRecords ??= indexedDbRecordsStore()
+  const records = sharedRecords
+  const client = lazyEngine(masterKeys, session.roots, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store, api, Date.now, records))
   // Not kept when it failed: the next call tries again.
   client.catch(() => {
     if (clients.get(session.userId)?.client === client) clients.delete(session.userId)
@@ -719,6 +787,9 @@ export function accountHead(session: {
 export function closeAccountHeads(): void {
   for (const { client } of clients.values()) void client.then((c) => c.close(), () => undefined)
   clients.clear()
+  // The records copies go with the session (they are read again at the
+  // next sign-in).
+  void sharedRecords?.clear()
 }
 
 // Signed out (any path: a sign-out, a refused refresh, another tab's): the

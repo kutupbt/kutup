@@ -147,3 +147,145 @@ export function batchBody(batch: RecordsBatch, head: string): unknown {
     deletes: batch.deletes.map(({ id, baseRevision }) => ({ scope: batch.scope, id, baseRevision })),
   }
 }
+
+/**
+ * Where a device keeps its copies between page loads: one row per record,
+ * keyed by the copy's name and the record id, and each copy's cursor. The
+ * envelopes are already sealed account records (each bound to its account,
+ * its id and its revision), so the rows are kept as they came; nothing here
+ * is trusted until the whole scope matches the verified head again.
+ */
+export interface RecordsStore {
+  load(copy: string): Promise<{ cursor: number; records: [string, StoredRecord][] } | null>
+  /** Writes what changed since the copy was loaded (`reset`: drop every row first). */
+  save(copy: string, cursor: number, changes: { puts: [string, StoredRecord][]; deletes: string[]; reset: boolean }): Promise<void>
+  clear(): Promise<void>
+}
+
+export function memoryRecordsStore(): RecordsStore {
+  const copies = new Map<string, { cursor: number; records: Map<string, StoredRecord> }>()
+  return {
+    load: (copy) => {
+      const kept = copies.get(copy)
+      return Promise.resolve(kept ? { cursor: kept.cursor, records: [...kept.records] } : null)
+    },
+    save: (copy, cursor, { puts, deletes, reset }) => {
+      const kept = (!reset && copies.get(copy)?.records) || new Map<string, StoredRecord>()
+      for (const [id, record] of puts) kept.set(id, record)
+      for (const id of deletes) kept.delete(id)
+      copies.set(copy, { cursor, records: kept })
+      return Promise.resolve()
+    },
+    clear: () => {
+      copies.clear()
+      return Promise.resolve()
+    },
+  }
+}
+
+const DB_NAME = 'kutup-account-records'
+const RECORDS = 'records'
+const CURSORS = 'cursors'
+
+/**
+ * The copies in this origin's IndexedDB, or in memory where it can't be
+ * opened (a private window that refuses it): a copy that isn't kept is only
+ * read again from the start.
+ */
+export function indexedDbRecordsStore(): RecordsStore {
+  let opened: Promise<IDBDatabase | null> | null = null
+  const db = () =>
+    (opened ??= new Promise<IDBDatabase | null>((resolve) => {
+      try {
+        const open = indexedDB.open(DB_NAME, 1)
+        open.onupgradeneeded = () => {
+          open.result.createObjectStore(RECORDS)
+          open.result.createObjectStore(CURSORS)
+        }
+        open.onsuccess = () => resolve(open.result)
+        open.onerror = () => resolve(null)
+        open.onblocked = () => resolve(null)
+      } catch {
+        resolve(null)
+      }
+    }))
+  const fallback = memoryRecordsStore()
+  // Every record id of a copy: string ids sort below arrays.
+  const rangeOf = (copy: string) => IDBKeyRange.bound([copy, ''], [copy, []])
+  const done = (tx: IDBTransaction) =>
+    new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error ?? new Error('IndexedDB write failed'))
+      tx.onabort = () => reject(tx.error ?? new Error('IndexedDB write aborted'))
+    })
+  const asked = <T>(request: IDBRequest<T>) =>
+    new Promise<T>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('IndexedDB read failed'))
+    })
+  return {
+    async load(copy) {
+      const handle = await db()
+      if (!handle) return fallback.load(copy)
+      try {
+        const tx = handle.transaction([RECORDS, CURSORS], 'readonly')
+        const cursor = await asked(tx.objectStore(CURSORS).get(copy) as IDBRequest<number | undefined>)
+        if (typeof cursor !== 'number') return null
+        const range = rangeOf(copy)
+        const [keys, values] = await Promise.all([asked(tx.objectStore(RECORDS).getAllKeys(range)), asked(tx.objectStore(RECORDS).getAll(range) as IDBRequest<StoredRecord[]>)])
+        const records = keys.map((key, i): [string, StoredRecord] => [String((key as unknown[])[1]), values[i]!])
+        return { cursor, records }
+      } catch {
+        return null
+      }
+    },
+    async save(copy, cursor, { puts, deletes, reset }) {
+      const handle = await db()
+      if (!handle) return fallback.save(copy, cursor, { puts, deletes, reset })
+      try {
+        const tx = handle.transaction([RECORDS, CURSORS], 'readwrite')
+        const records = tx.objectStore(RECORDS)
+        if (reset) records.delete(rangeOf(copy))
+        for (const [id, record] of puts) records.put({ revision: record.revision, envelope: record.envelope }, [copy, id])
+        for (const id of deletes) records.delete([copy, id])
+        tx.objectStore(CURSORS).put(cursor, copy)
+        await done(tx)
+      } catch {
+        // Not kept: the next page load reads this scope from the start.
+      }
+    },
+    async clear() {
+      const handle = await db()
+      await fallback.clear()
+      if (!handle) return
+      try {
+        const tx = handle.transaction([RECORDS, CURSORS], 'readwrite')
+        tx.objectStore(RECORDS).clear()
+        tx.objectStore(CURSORS).clear()
+        await done(tx)
+      } catch {
+        // Nothing more to do: a copy left behind is checked before any use.
+      }
+    },
+  }
+}
+
+/** What changed from `before` (null: nothing kept) to `after`. */
+export function changesOf(before: ScopeRecords | null, after: ScopeRecords): { puts: [string, StoredRecord][]; deletes: string[]; reset: boolean } {
+  if (!before) return { puts: [...after.records], deletes: [], reset: true }
+  const puts: [string, StoredRecord][] = []
+  for (const [id, record] of after.records) {
+    const was = before.records.get(id)
+    if (!was || was.revision !== record.revision || was.envelope !== record.envelope) puts.push([id, record])
+  }
+  const deletes = [...before.records.keys()].filter((id) => !after.records.has(id))
+  return { puts, deletes, reset: false }
+}
+
+/** A copy that can change without changing `copy`. */
+export function cloneRecords(copy: ScopeRecords): ScopeRecords {
+  const clone = new ScopeRecords(copy.scope)
+  clone.cursor = copy.cursor
+  for (const [id, record] of copy.records) clone.records.set(id, record)
+  return clone
+}

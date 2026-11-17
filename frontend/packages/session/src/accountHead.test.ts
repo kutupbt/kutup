@@ -3,6 +3,7 @@ import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios'
 import { describe, expect, it, vi } from 'vitest'
 import type { AccountHeadValue, HeadAnchor, HeadIndex, HeadScope, HeadStatus, LocalHeadState, Reanchored } from '@kutup/crypto/accountHead'
 import { memoryRevisionStore } from '@kutup/crypto/revisionGuard'
+import { memoryRecordsStore } from './accountRecords'
 import {
   AccountHeadClient,
   HeadBlockedError,
@@ -548,11 +549,12 @@ describe('account records', () => {
     expect(copy.index()).toEqual([['a', 2], ['c', 1]])
     expect(copy.cursor).toBe(5)
     expect(calls.filter(([method]) => method === 'GET')).toHaveLength(2)
-    // A server that drops a record the head names: refused.
+    // A server that drops a record the head names: refused (a device with
+    // nothing kept, reading from the start).
     last = page([['a', 2, 4]], [['b', 3]], 5, head)
-    await expect(client.records('chatGroups')).rejects.toEqual(new IndexMismatchError('chatGroups'))
-    // Only the client's one copy of the latest head stays.
-    expect(alive - before).toBeLessThanOrEqual(1)
+    await expect(new AccountHeadClient(engine, memoryRevisionStore(), http).records('chatGroups')).rejects.toEqual(new IndexMismatchError('chatGroups'))
+    // Only each client's one copy of its latest head stays.
+    expect(alive - before).toBeLessThanOrEqual(2)
   })
 
   it('refuses a page out of counter order', async () => {
@@ -597,6 +599,8 @@ describe('account records', () => {
     let tries = 0
     const { http } = server({
       'GET /account/records/pins?after=0': () => page([['pins', 1, 1]], [], 1, head),
+      // The second try reads on from the copy it kept.
+      'GET /account/records/pins?after=1': () => page([], [], 1, head),
       'POST /account/records': () => {
         tries++
         if (tries === 1) throw conflict409('revision_conflict')
@@ -610,6 +614,71 @@ describe('account records', () => {
     })
     expect(attempts).toEqual([1, 2])
     expect(alive - before).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('kept records copies', () => {
+  const page = (records: [string, number, number][], next: number, head: string) => ({
+    records: records.map(([id, revision, seq]) => ({ id, revision, envelope: `e:${id}:${revision}`, seq })),
+    deleted: [],
+    next,
+    more: false,
+    resync: false,
+    head,
+    basis: null,
+  })
+
+  it('reads only what changed since the kept cursor, and a write moves it on', async () => {
+    const engine = new FakeEngine()
+    const records = memoryRecordsStore()
+    const head1 = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('chatContacts', [['a', 1], ['b', 1]])] })
+    const head2 = seal({ sequence: 2, previous: digest(head1), writer: 'w:other', scopes: [engine.scope('chatContacts', [['a', 2], ['b', 1]])] })
+    let current = head1
+    const { http, calls } = server({
+      'GET /account/records/chatContacts?after=0': () => page([['a', 1, 1], ['b', 1, 2]], 2, current),
+      'GET /account/records/chatContacts?after=2': () => (current === head1 ? page([], 2, current) : page([['a', 2, 3]], 3, current)),
+      'GET /account/records/chatContacts?after=3': () => page([], 9, current),
+      'GET /account/heads?from=1': () => ({ heads: [head1, head2], next: null }),
+      'POST /account/records': () => ({ seq: 9 }),
+    })
+    const first = new AccountHeadClient(engine, memoryRevisionStore(), http, Date.now, records)
+    expect((await first.records('chatContacts')).index()).toEqual([['a', 1], ['b', 1]])
+    // Another page load of this device: from the kept cursor, not from 0.
+    current = head2
+    const store = memoryRevisionStore()
+    await store.put(`account-head:${engine.name}`, JSON.stringify({ ...engine.newLocalState(), anchor: anchorOf(head1), anchoredAtMs: 1 }))
+    const later = new AccountHeadClient(engine, store, http, Date.now, records)
+    const copy = await later.records('chatContacts')
+    expect(copy.index()).toEqual([['a', 2], ['b', 1]])
+    expect(calls.filter(([method, url]) => method === 'GET' && url.endsWith('after=0'))).toHaveLength(1)
+    // A write lands at seq 9: the kept copy is the scope at 9.
+    await later.recordsWrite('chatContacts', () => Promise.resolve({ puts: [{ id: 'c', revision: 1, envelope: 'C' }], deletes: [], done: null }))
+    expect((await records.load(`${engine.name}:chatContacts`))?.cursor).toBe(9)
+  })
+
+  it('never trusts an altered kept copy: the digest catches it, and the scope is read again from the start', async () => {
+    const engine = new FakeEngine()
+    const head = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('chatContacts', [['a', 1], ['b', 1]])] })
+    const alterations: [string, [string, { revision: number; envelope: string }][]][] = [
+      ['a record removed', [['a', { revision: 1, envelope: 'e:a:1' }]]],
+      ['a revision changed', [['a', { revision: 1, envelope: 'e:a:1' }], ['b', { revision: 7, envelope: 'e:b:7' }]]],
+      ['a record added', [['a', { revision: 1, envelope: 'e:a:1' }], ['b', { revision: 1, envelope: 'e:b:1' }], ['x', { revision: 1, envelope: 'e:x:1' }]]],
+    ]
+    for (const [what, rows] of alterations) {
+      const records = memoryRecordsStore()
+      // The altered copy opens (here: the store hands it back as kept), at
+      // the server's own cursor, so nothing new would be read.
+      await records.save(`${engine.name}:chatContacts`, 2, { puts: rows, deletes: [], reset: true })
+      const { http, calls } = server({
+        'GET /account/records/chatContacts?after=2': () => page([], 2, head),
+        'GET /account/records/chatContacts?after=0': () => page([['a', 1, 1], ['b', 1, 2]], 2, head),
+      })
+      const copy = await new AccountHeadClient(engine, memoryRevisionStore(), http, Date.now, records).records('chatContacts')
+      expect(copy.index(), what).toEqual([['a', 1], ['b', 1]])
+      expect(calls.some(([, url]) => url.endsWith('after=0')), what).toBe(true)
+      // The kept copy is the verified one now, not the altered one.
+      expect((await records.load(`${engine.name}:chatContacts`))?.records.map(([id]) => id).sort(), what).toEqual(['a', 'b'])
+    }
   })
 })
 

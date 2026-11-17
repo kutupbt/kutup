@@ -306,3 +306,30 @@ apps"), not as a half head manager here.
   `20261111220000`). The head's index still reads the old stores of slices
   3 to 5's scopes until those slices land; that last part of "the old index
   path goes" falls to whichever lands last.
+
+### Built: the web's kept copies (slice 5, 2026-11-17)
+
+The web head client keeps each records scope it reads (`AccountHeadClient`,
+`@kutup/session/accountRecords`), so a read pages only `after=cursor`, not
+the whole scope (the ledger may hold 100,000 entities):
+
+- **Where:** this origin's IndexedDB (`kutup-account-records`), one row per
+  record keyed by the copy's name and the record id, and a cursor per copy.
+  The copy's name is the head engine's local-state name (an HMAC of the
+  incarnation under the account's keys) and the scope, so copies never mix
+  across accounts or incarnations. An in-memory copy per scope saves reading
+  the rows again within a page; a write updates both.
+- **Not sealed again:** each envelope is already an account record whose
+  header authenticates its account binding, its object (the record id) and
+  its revision. A record moved to another id fails to open; an older
+  envelope under the same id is caught by its revision.
+- **Never trusted as kept:** after the pages since the cursor are merged,
+  the whole scope's index is checked against the page's verified head. A
+  kept copy that fails (altered, or left stale) is dropped and the scope
+  read from the start; only a second failure is `IndexMismatchError`
+  (tested: a record removed, a revision changed, a record added).
+- **Gone with the session:** sign-out clears every kept copy. The CLI
+  stays full-read.
+
+This replaces the sealed blob first proposed (purpose 33 was never taken):
+a blob of a full ledger (about 60 MB) would be resealed on every write.
