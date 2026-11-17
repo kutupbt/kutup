@@ -59,7 +59,7 @@ section says why; the open questions are **Q-n** at the end.
 
 - **Who and what.** Only the owner shares. The two presets are Proton's;
   the server keeps the bits. The limit is an admin setting
-  (`calendarMembersPerCalendar`, default 49).
+  (`calendar.members_per_calendar`, default 49).
 - **Inviting.**
   - The owner's client finds the person with Drive's flow
     (`lookupAddress`, then `confirmRecipient`): pins by the typed address,
@@ -82,7 +82,7 @@ section says why; the open questions are **Q-n** at the end.
   - Unlike Proton, there is no second signature: the envelope already binds
     the member and the calendar.
 - **Expiry.** An invitation expires after an admin setting
-  (`calendarInvitationDays`, default 7) and is swept.
+  (`calendar.invitation_days`, default 7) and is swept.
 - **What the owner manages.** The owner lists members and pending
   invitations, changes a member's preset, revokes an invitation, or removes
   a member.
@@ -130,11 +130,11 @@ calendar.md §1 decided to rotate on removal, beyond Proton. How:
   up to 25,000 events × 2 packets opened and rewritten by the owner's
   browser on every removal. Proton's key list avoids it.
 - **Size:** generations are capped by an admin setting
-  (`calendarKeyGenerations`, default 50).
+  (`calendar.key_generations`, default 50).
 
 ### 3. Links (D-2)
 
-Three kinds, at most `calendarLinksPerCalendar` (default 5). Each has an
+Three kinds, at most `calendar.links_per_calendar` (default 5). Each has an
 optional purpose sealed to the calendar key, as Proton's. Only the owner
 makes or deletes links.
 
@@ -183,7 +183,7 @@ Busy-only links need nothing.
   - it unions the calendars that share busy times;
   - it expands recurrences with E2's rule engine;
   - it answers `[{start, end, fullDay}]` in UTC.
-- **Limits** (admin settings): window `calendarBusyWindowDays` (default 31),
+- **Limits** (admin settings): window `calendar.busy_window_days` (default 31),
   and a rate limit in the registry.
 - **What a limited (`AVAILABILITY`) member sees:** the calendar's busy
   blocks in the grid, drawn as Proton's `PartDayBusyEvent` /
@@ -207,7 +207,9 @@ Busy-only links need nothing.
   - no new account-record purpose or scope (it reuses `calendarSettings`,
     purpose 32).
 - **Everything else:**
-  - every limit above is a site setting;
+  - every limit above is a site setting, keyed `calendar.<snake_case>` (W7
+    §7). The JSON that `/api/auth/settings` publishes keeps camelCase fields
+    (`calendar.queryLinksAllowed`), which is what the app reads;
   - all strings are in en.json and tr.json;
   - all crypto is in Rust/WASM, with vectors for the link envelope and the
     generation lists.
@@ -323,7 +325,7 @@ differs, only that module changes.
     …/calendars/{id}` with the member's defaults;
   - `GET /api/calendar/busy?address&start&end` → `{busy: [{startUtc,
     endUtc, fullDay}]}` (camelCase UTC, as event rows), its window at most
-    `calendar.busyWindowDays` from the published settings;
+    `calendar.busy_window_days` from the published settings;
   - the client merges overlaps;
   - the participant row stays with E4 (Q-4).
   - No member is limited to busy times in E3 (the presets give `READ`), so
@@ -373,7 +375,7 @@ opened after the wipe.
   - it says plainly in the UI (en and tr) that the server sees the calendar
     in plaintext on each fetch;
   - it is off by default in the link dialog;
-  - it is an admin site setting (`calendarQueryLinksAllowed`, default
+  - it is an admin site setting (`calendar.query_links_allowed`, default
     allowed, as Proton);
   - the redaction test stays.
 - **Busy-only ICS:** times only, from the readable columns. It reveals
