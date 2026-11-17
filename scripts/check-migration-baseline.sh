@@ -36,13 +36,17 @@ dump() {
     --exclude-table=_sqlx_migrations "$@"
 }
 
-# Applies the .up.sql files in $1 to database $2, in version order, as sqlx does.
+# Applies the .up.sql files in $1 to database $2, in version order, as sqlx
+# does: each in one transaction (a temporary table ON COMMIT DROP lives for the
+# whole file), except one marked `-- no-transaction`.
 apply() {
-  local dir="$1" db="$2" file
+  local dir="$1" db="$2" file single
   psql -c "CREATE DATABASE $db" >/dev/null
   while IFS= read -r file; do
-    psql -d "$db" < "$file" >/dev/null || { echo "failed applying $(basename "$file")" >&2; exit 1; }
-  done < <(find "$dir" -maxdepth 1 -name '*.up.sql' | sort -t_ -k1,1n)
+    single=--single-transaction
+    head -n 1 "$file" | grep -q -- '-- no-transaction' && single=
+    psql $single -d "$db" < "$file" >/dev/null || { echo "failed applying $(basename "$file")" >&2; exit 1; }
+  done < <(find "$dir" -maxdepth 1 -name '*.up.sql' -printf '%f\t%p\n' | sort | cut -f2)
 }
 
 mkdir -p "$work/old"
