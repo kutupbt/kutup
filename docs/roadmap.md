@@ -1056,6 +1056,9 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 
 ## Polish / smaller items (future)
 
+- **A licences page per app (third-party credits).** Each app lists what it
+  ships from others and their licences, e.g. Kutup Pass's EFF word list
+  (CC BY 3.0), credited today in the generator's passphrase panel.
 - **Rate limits across backends (2026-10-21):** every rate limit is an
   administrators' setting (Administration → Rate limits, per account where it
   counts per account), but the windows are counted in each backend's memory.
