@@ -1587,6 +1587,16 @@ async fn insert_kem_pool(
 /// `GET /api/chat/device` — the account's Chat devices: those its manifest
 /// lists with Chat keys (a registration not listed yet, waiting out the
 /// listing grace, isn't one).
+/// A Chat device as `list_devices` reads it: id, suite, name (none: unnamed),
+/// created, last seen.
+type ChatDeviceRow = (
+    i32,
+    i16,
+    Option<String>,
+    OffsetDateTime,
+    Option<OffsetDateTime>,
+);
+
 #[utoipa::path(
     get,
     path = "/api/chat/device",
@@ -1597,13 +1607,7 @@ async fn insert_kem_pool(
 )]
 pub async fn list_devices(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    let rows: Vec<(
-        i32,
-        i16,
-        Option<String>,
-        OffsetDateTime,
-        Option<OffsetDateTime>,
-    )> = sqlx::query_as(
+    let rows: Vec<ChatDeviceRow> = sqlx::query_as(
         "SELECT device_id, suite, name, created_at, last_seen_at
          FROM account_devices WHERE account_id = $1 AND suite IS NOT NULL ORDER BY device_id",
     )
