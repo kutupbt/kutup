@@ -36,8 +36,8 @@ but offers no way to see or change it.
 | Health report | 4 | 0 | 3 |
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
-| Platforms | 2 | 4 | 4 |
-| **All** | **104** | **16** | **35** |
+| Platforms | 3 | 5 | 2 |
+| **All** | **105** | **17** | **33** |
 
 ## The database (vault)
 
@@ -250,8 +250,8 @@ read-only vault has no selection and no dragging.
 | Website | (none) | ✅ | `pass.<domain>`, strict CSP (spec 79) |
 | Phones | (none; KeePassDX, Keepass2Android, KeePassium) | 🟡 | the website at phone width (K3); no autofill; native apps deferred ([`../mobile-build.md`](../mobile-build.md)) |
 | Browser extension | KeePassXC-Browser | ❌ | later |
-| CLI: open, `ls`, `show`, `clip`, `search` | `keepassxc-cli` | ❌ | `kutup pass` manages kept keys only (`keep`, `ls`, `forget`, `show-key`; `crates/kutup-cli/src/commands/pass.rs`) |
-| CLI: `add`, `edit`, `rm`, `mv`, `mkdir`, `rmdir`, attachments | `keepassxc-cli` | ❌ | |
+| CLI: open, `ls`, `show`, `clip`, `search` | `keepassxc-cli` | ✅ (CLI) | `kutup pass ls <vault> [group] [-R]`, `search`, `show` (`-s`, `-a`, `-t`), `clip` (`--clear-after`, default 10 s; the platform's clipboard tool) (`crates/kutup-cli/src/commands/pass_entries.rs`): a vault by file id or name, opened with the kept key, `KUTUP_VAULT_PASSWORD` or a prompt; entries by path or UUID, values resolved |
+| CLI: `add`, `edit`, `rm`, `mv`, `mkdir`, `rmdir`, attachments | `keepassxc-cli` | 🟡 | `add`, `edit` (`--move-to` moves), `rm` (`--force` for good), `generate`: the website's operations, saved as a Drive version based on the one read and merged with a save that landed first; no `mkdir`, `rmdir` or attachments yet |
 | CLI: `db-create`, `db-edit`, `db-info`, `merge`, `import`, `export` | `keepassxc-cli` | 🟡 | `merge` happens inside `kutup sync`; the rest none |
 | CLI: `generate`, `diceware`, `estimate`, `analyze` | `keepassxc-cli` | ❌ | |
 | CLI: SSH agent | (in the GUI) | ✅ | beyond KeePassXC: `kutup ssh-agent`, `kutup ssh-add`, headless and over SSH |
@@ -292,8 +292,8 @@ What people hit first, then what blocks moving from KeePassXC:
 12. ~~**References and placeholders**~~: done ([`pass-gaps-3.md`](pass-gaps-3.md) B1).
 13. ~~**Built-in KeePass icons** and colours, group notes~~: done
     ([`pass-gaps-3.md`](pass-gaps-3.md) A3).
-14. **A CLI for entries** (`kutup pass ls|show|clip|add|edit|generate`),
-    so scripts need not run `keepassxc-cli` on a synced copy.
+14. ~~**A CLI for entries**~~: done ([`pass-gaps-3.md`](pass-gaps-3.md) B2);
+    groups and attachments from the CLI later.
 15. **Breach check** (opt-in, proxied k-anonymity, research 19 §5.12) and
     statistics.
 16. **YubiKey challenge-response**: CLI first, WebHID later.

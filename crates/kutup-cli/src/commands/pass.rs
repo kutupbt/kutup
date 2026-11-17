@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 use serde::Serialize;
 
+use crate::commands::pass_entries as entries;
 use crate::context::require_session;
 use crate::cryptohelpers::{decrypt_file_meta, locate_file, FoundFile};
 use crate::output::print_json;
@@ -28,8 +29,88 @@ pub enum PassCmd {
         #[arg(long)]
         no_password: bool,
     },
-    /// List the vaults whose keys your account keeps.
-    Ls,
+    /// List the vaults whose keys your account keeps; with a vault, its
+    /// groups and entries (in a group, or all below it with --recursive).
+    Ls {
+        /// A vault's file id or name.
+        vault: Option<String>,
+        /// A group path in it (Group/Sub).
+        group: Option<String>,
+        #[arg(long, short = 'R')]
+        recursive: bool,
+    },
+    /// Search a vault's entries as the website does (title:, user:, url:,
+    /// tag:, is:expired, has:totp…; -word leaves out; "quotes"; *).
+    Search { vault: String, query: String },
+    /// Show an entry (a path Group/Title, or its UUID); protected fields are
+    /// hidden unless --show-protected or named with --attribute.
+    Show {
+        /// A vault's file id or name.
+        vault: String,
+        /// An entry: its path (Group/Sub/Title) or its UUID.
+        entry: String,
+        #[arg(long, short = 's')]
+        show_protected: bool,
+        /// Only this field's value (repeatable).
+        #[arg(long, short = 'a')]
+        attribute: Vec<String>,
+        /// The one-time code now.
+        #[arg(long, short = 't')]
+        totp: bool,
+    },
+    /// Copy an entry's password (or an attribute, or --totp) to the
+    /// clipboard, cleared after --clear-after seconds if still there.
+    Clip {
+        /// A vault's file id or name.
+        vault: String,
+        /// An entry: its path (Group/Sub/Title) or its UUID.
+        entry: String,
+        /// A field to copy instead of the password.
+        attribute: Option<String>,
+        #[arg(long, short = 't')]
+        totp: bool,
+        /// Seconds before the clipboard is cleared; 0 never clears it.
+        #[arg(long, default_value_t = 10)]
+        clear_after: u64,
+    },
+    /// Add an entry at a path (Group/Sub/Title).
+    Add {
+        /// A vault's file id or name.
+        vault: String,
+        /// Where and what: Group/Sub/Title.
+        path: String,
+        #[command(flatten)]
+        entry: crate::commands::pass_entries::EntryOpts,
+    },
+    /// Change an entry: only what is given.
+    Edit {
+        /// A vault's file id or name.
+        vault: String,
+        /// An entry: its path (Group/Sub/Title) or its UUID.
+        entry: String,
+        #[arg(long)]
+        title: Option<String>,
+        /// Move it to this group (Group/Sub; empty for the top group).
+        #[arg(long)]
+        move_to: Option<String>,
+        #[command(flatten)]
+        changes: crate::commands::pass_entries::EntryOpts,
+    },
+    /// Move an entry to the recycle bin (for good with --force inside it or
+    /// with the bin off).
+    Rm {
+        /// A vault's file id or name.
+        vault: String,
+        /// An entry: its path (Group/Sub/Title) or its UUID.
+        entry: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Generate a password, or a passphrase with --words; no vault needed.
+    Generate {
+        #[command(flatten)]
+        options: crate::commands::pass_entries::GenerateOpts,
+    },
     /// Forget a vault's key (the vault itself is untouched).
     Forget {
         /// The vault's file id.
@@ -53,7 +134,64 @@ pub fn run(profile: &str, json: bool, cmd: &PassCmd) -> Result<()> {
             key_file,
             no_password,
         } => keep(profile, json, file_id, key_file.as_ref(), *no_password),
-        PassCmd::Ls => ls(profile, json),
+        PassCmd::Ls { vault: None, .. } => ls(profile, json),
+        PassCmd::Ls {
+            vault: Some(vault),
+            group,
+            recursive,
+        } => entries::ls(profile, json, vault, group.as_deref(), *recursive),
+        PassCmd::Search { vault, query } => entries::search(profile, json, vault, query),
+        PassCmd::Show {
+            vault,
+            entry,
+            show_protected,
+            attribute,
+            totp,
+        } => entries::show(
+            profile,
+            json,
+            vault,
+            entry,
+            *show_protected,
+            attribute,
+            *totp,
+        ),
+        PassCmd::Clip {
+            vault,
+            entry,
+            attribute,
+            totp,
+            clear_after,
+        } => entries::clip(
+            profile,
+            vault,
+            entry,
+            attribute.as_deref(),
+            *totp,
+            *clear_after,
+        ),
+        PassCmd::Add { vault, path, entry } => entries::add(profile, json, vault, path, entry),
+        PassCmd::Edit {
+            vault,
+            entry,
+            title,
+            move_to,
+            changes,
+        } => entries::edit(
+            profile,
+            json,
+            vault,
+            entry,
+            title.as_deref(),
+            move_to.as_deref(),
+            changes,
+        ),
+        PassCmd::Rm {
+            vault,
+            entry,
+            force,
+        } => entries::rm(profile, json, vault, entry, *force),
+        PassCmd::Generate { options } => entries::generate(json, options),
         PassCmd::Forget { file_id, force } => forget(profile, json, file_id, *force),
         PassCmd::ShowKey { file_id } => show_key(profile, json, file_id),
     }

@@ -1013,7 +1013,9 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   (`scripts/verify-pass-sync.sh`).
 - **K2a** ✅: vault secrets sealed under the account key
   (`kutup_crypto::pass_vault`; since W3 the account-records scope `passSecrets`); `kutup sync`
-  opens vaults with the sign-in, `kutup pass keep|ls|forget`.
+  opens vaults with the sign-in, `kutup pass keep|ls|forget`; entries from
+  the CLI with `kutup pass ls|search|show|clip|add|edit|rm|generate`
+  (docs/plans/pass-gaps-3.md, B2).
 - **K2b** ✅: vault editing in `kutup-pass` (KeePass semantics: history,
   recycle bin, deletions recorded) and `kutup-pass-wasm`.
 - **K2c** ✅: the website at `pass.<domain>`: vaults from Drive, unlock with
