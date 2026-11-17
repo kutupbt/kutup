@@ -8,12 +8,15 @@ import { createRoot } from 'react-dom/client'
 import { initI18n } from '@kutup/i18n'
 import { configureClient } from '@kutup/session/client'
 import { App } from './App'
+import { installOwnerCheck } from './features/sharing/client'
 import { WebAssemblyGate } from '@kutup/ui/components/webassembly-gate'
 import en from './locales/en.json'
 import tr from './locales/tr.json'
 
 initI18n({ en, tr })
 configureClient({ clientType: 'web-calendar' })
+// Shared calendars open only once their owner is checked against the pins.
+installOwnerCheck()
 
 const queryClient = new QueryClient({
   defaultOptions: {

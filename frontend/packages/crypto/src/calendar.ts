@@ -105,6 +105,8 @@ export interface UnlockedCalendar {
   openMetadata(metadata: SealedMetadata, calendarId: string, authorPublicKeys: string[]): CalendarMetadata & { verified: boolean }
   sealEvent(...args: [...KeyArgs, fields: EventFields]): SealedEvent
   sealMetadata(...args: [...KeyArgs, calendarId: string, metadata: CalendarMetadata]): SealedMetadata
+  /** The key ID (hex) key packets to this key name: which generation an event needs. */
+  readonly keyId: string
   free(): void
 }
 
@@ -122,6 +124,63 @@ export interface CalendarLock {
   lockedSecretKey: string
 }
 
+/**
+ * A member the passphrase is shared with, as their verified key binding names
+ * them (docs/plans/calendar-e3.md §1): `aci:<uuid>@<server>`, the account
+ * incarnation (hex) and its account HPKE public key (base64).
+ */
+export interface CalendarMember {
+  account: string
+  incarnationId: string
+  hpkePublicKey: string
+}
+
+/** A calendar's owner as a member checks their shares, verified: their account signing key (base64). */
+export interface CalendarOwner {
+  account: string
+  incarnationId: string
+  signingPublicKey: string
+}
+
+/** One key generation's own share of the passphrase. */
+export interface GenerationShare {
+  keyGeneration: number
+  share: string
+}
+
+/** One key generation's sealed copy (a link's passphrase, or its secret). */
+export interface GenerationSealed {
+  keyGeneration: number
+  sealed: string
+}
+
+/** What a rotation takes: who stays, the calendar's names, and its full links. */
+export interface RotationInput {
+  members: CalendarMember[]
+  names: CalendarMetadata
+  /** Each full link and its secret, sealed under the current generation's passphrase. */
+  links: { linkId: string; secret: string }[]
+}
+
+/** A new key generation, all of it for one request (docs/plans/calendar-e3.md §2). */
+export interface RotatedCalendar {
+  keyGeneration: number
+  publicKey: string
+  lockedSecretKey: string
+  fingerprint: string
+  ownShare: string
+  memberShares: { account: string; share: string }[]
+  metadata: SealedMetadata
+  links: { linkId: string; passphrase: string; secret: string }[]
+}
+
+/** A new full link: its URL's secret (never stored), and what the server keeps. */
+export interface NewCalendarLink {
+  urlSecret: string
+  secret: GenerationSealed
+  passphrases: GenerationSealed[]
+}
+
 interface CalendarWasm {
   createCalendar(
     ...args: [...KeyArgs, identityRoot: IdentityRoot, account: string, calendarId: string, metadata: CalendarMetadata, createdAtSecs: number]
@@ -134,6 +193,30 @@ interface CalendarWasm {
     passphraseShare: string,
     lockedSecretKey: string,
   ): UnlockedCalendar
+  shareCalendarPassphrase(identityRoot: IdentityRoot, ownerAccount: string, calendarId: string, keyGeneration: number, ownShare: string, member: CalendarMember): string
+  unlockSharedCalendar(
+    identityRoot: IdentityRoot,
+    memberAccount: string,
+    owner: CalendarOwner,
+    calendarId: string,
+    keyGeneration: number,
+    passphraseShare: string,
+    lockedSecretKey: string,
+  ): UnlockedCalendar
+  calendarEventKeyId(event: SealedEvent): string
+  rotateCalendar(
+    ...args: [...KeyArgs, identityRoot: IdentityRoot, ownerAccount: string, calendarId: string, keyGeneration: number, ownShare: string, rotation: RotationInput, createdAtSecs: number]
+  ): RotatedCalendar
+  createCalendarLink(identityRoot: IdentityRoot, ownerAccount: string, calendarId: string, linkId: string, ownShares: GenerationShare[]): NewCalendarLink
+  calendarLinkUrlSecret(
+    identityRoot: IdentityRoot,
+    ownerAccount: string,
+    calendarId: string,
+    keyGeneration: number,
+    ownShare: string,
+    linkId: string,
+    sealedSecret: string,
+  ): string
   calendarUtcToLocal(instant: string, tzid: string): string
   calendarLocalToUtc(local: string, tzid: string): string
   calendarTimeZones(): string[]
@@ -207,4 +290,68 @@ export async function localToUtc(local: string, tzid: string): Promise<string> {
 /** The IANA time zones the bundled database knows. */
 export async function timeZones(): Promise<string[]> {
   return (await wasm()).calendarTimeZones()
+}
+
+/**
+ * The owner shares generation `keyGeneration`'s passphrase (opened from their
+ * own share) with `member`, whose keys the caller checked against the pins.
+ */
+export async function shareCalendarPassphrase(owner: CalendarAccount, calendarId: string, own: GenerationShare, member: CalendarMember): Promise<string> {
+  return (await wasm()).shareCalendarPassphrase(owner.identityRoot, owner.account, calendarId, own.keyGeneration, own.share, member)
+}
+
+/**
+ * A member unlocks a calendar someone else owns from their share of one
+ * generation's passphrase: refused unless `owner` (verified) signed it for
+ * this member, calendar and generation.
+ */
+export async function unlockSharedCalendar(member: CalendarAccount, owner: CalendarOwner, lock: CalendarLock): Promise<UnlockedCalendar> {
+  return (await wasm()).unlockSharedCalendar(
+    member.identityRoot,
+    member.account,
+    owner,
+    lock.calendarId,
+    lock.keyGeneration,
+    lock.passphraseShare,
+    lock.lockedSecretKey,
+  )
+}
+
+/** The key ID (hex) an event's key packets are to: which generation's key opens it. */
+export async function calendarEventKeyId(event: SealedEvent): Promise<string> {
+  return (await wasm()).calendarEventKeyId(event)
+}
+
+/**
+ * The calendar's next key generation after `own.keyGeneration`: a new key and
+ * passphrase, shares for the owner and every member who stays, the name
+ * re-sealed (signed by `signer`), and each full link carried over.
+ */
+export async function rotateCalendar(
+  owner: CalendarAccount,
+  signer: SealedMailKey,
+  calendarId: string,
+  own: GenerationShare,
+  rotation: RotationInput,
+): Promise<RotatedCalendar> {
+  return (await wasm()).rotateCalendar(
+    ...keyArgs(signer),
+    owner.identityRoot,
+    owner.account,
+    calendarId,
+    own.keyGeneration,
+    own.share,
+    rotation,
+    Math.floor(Date.now() / 1000),
+  )
+}
+
+/** A new full link `linkId`, from the owner's share of each live generation. */
+export async function createCalendarLink(owner: CalendarAccount, calendarId: string, linkId: string, ownShares: GenerationShare[]): Promise<NewCalendarLink> {
+  return (await wasm()).createCalendarLink(owner.identityRoot, owner.account, calendarId, linkId, ownShares)
+}
+
+/** A full link's URL secret again, from what the members keep (sealed under `own`'s generation). */
+export async function calendarLinkUrlSecret(owner: CalendarAccount, calendarId: string, own: GenerationShare, linkId: string, sealedSecret: string): Promise<string> {
+  return (await wasm()).calendarLinkUrlSecret(owner.identityRoot, owner.account, calendarId, own.keyGeneration, own.share, linkId, sealedSecret)
 }
