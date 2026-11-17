@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::AppState;
 
 /// Why someone reports a link.
@@ -182,7 +182,7 @@ pub struct LinkReport {
     /// Why an operator blocked the link (`legal_order`, `abuse`, `other`);
     /// none while it isn't blocked.
     share_blocked_reason: Option<String>,
-    owner_user_id: Uuid,
+    owner_account_id: Uuid,
     owner_username: String,
     owner_is_active: bool,
     /// Open reports on the same link, this one included.
@@ -228,7 +228,7 @@ type ReportRow = (
 )]
 pub async fn list_reports(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Query(q): Query<ReportsQuery>,
 ) -> AppResult<Response> {
     let resolved = match q.status.as_deref() {
@@ -292,7 +292,7 @@ pub async fn list_reports(
                 share_created_at,
                 share_removed_at,
                 share_blocked_reason,
-                owner_user_id,
+                owner_account_id: owner_user_id,
                 owner_username: owner_username.unwrap_or_default(),
                 owner_is_active,
                 open_reports_on_link,
@@ -319,8 +319,8 @@ async fn open_report(pool: &PgPool, id: &str) -> AppResult<(Uuid, Uuid, Uuid, St
     Ok((id, share, owner, username))
 }
 
-fn admin_id(admin: &AdminUser) -> AppResult<Uuid> {
-    Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("unauthorized"))
+fn admin_id(admin: &AdminAccount) -> AppResult<Uuid> {
+    Uuid::parse_str(&admin.account_id).map_err(|_| AppError::unauthorized("unauthorized"))
 }
 
 /// `POST /api/admin/reports/{id}/dismiss` — nothing wrong: close the report.
@@ -334,7 +334,7 @@ fn admin_id(admin: &AdminUser) -> AppResult<Uuid> {
 )]
 pub async fn dismiss_report(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let (report, share, owner, username) = open_report(&state.pool, &id).await?;
@@ -349,7 +349,7 @@ pub async fn dismiss_report(
     .await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "report.dismiss",
         Some(owner),
         json!({ "username": username, "reportId": report, "shareId": share }),
@@ -370,7 +370,7 @@ pub async fn dismiss_report(
 )]
 pub async fn remove_reported_link(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let (report, share, owner, username) = open_report(&state.pool, &id).await?;
@@ -393,7 +393,7 @@ pub async fn remove_reported_link(
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "share.remove",
         Some(owner),
         json!({ "username": username, "reportId": report, "shareId": share }),
@@ -430,7 +430,7 @@ pub struct BlockLinkRequest {
 )]
 pub async fn block_link(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(req): Json<BlockLinkRequest>,
 ) -> AppResult<Response> {
@@ -505,7 +505,7 @@ pub async fn block_link(
 )]
 pub async fn unblock_link(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let share = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;

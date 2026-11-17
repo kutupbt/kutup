@@ -15,7 +15,7 @@ use crate::account_data::KeyOwner;
 use crate::error::{AppError, AppResult};
 use crate::handlers::{octet_stream_response, trusted_uuid};
 use crate::mail::sealed::{self, Opener};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 pub(crate) const FOLDERS: [&str; 8] = [
@@ -456,7 +456,7 @@ fn parse_cursor(value: &str, sort: Sort) -> AppResult<Cursor> {
 )]
 pub async fn list_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<MailListQuery>,
 ) -> AppResult<Json<MailMessagePage>> {
     list_page(&state, &user, query).await
@@ -497,10 +497,10 @@ pub struct SearchIndexPage {
 )]
 pub async fn search_index(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<SearchIndexQuery>,
 ) -> AppResult<Json<SearchIndexPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(200).clamp(1, 200);
     let before = query
         .before
@@ -628,10 +628,10 @@ pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Fee
 )]
 pub async fn search_index_changes(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<SearchChangesQuery>,
 ) -> AppResult<Json<SearchChanges>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(500).clamp(1, 500);
     let since = query
         .since
@@ -704,10 +704,10 @@ pub(crate) async fn forget_old_tombstones(pool: &sqlx::PgPool) -> sqlx::Result<u
 /// A page of a place.
 async fn list_page(
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     query: MailListQuery,
 ) -> AppResult<Json<MailMessagePage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mailbox = mailbox(state, user_id, query.group.as_deref()).await?;
     let owner = mailbox.owner();
     let opener = mailbox.opener(state).await?;
@@ -889,10 +889,10 @@ pub struct SearchAddressesQuery {
 )]
 pub async fn search_addresses(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<SearchAddressesQuery>,
 ) -> AppResult<Json<Vec<String>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, query.group.as_deref())
         .await?
         .owner();
@@ -1231,11 +1231,11 @@ pub struct MailReceiptSent {
 )]
 pub async fn receipt_sent(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<MailReceiptSent>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1285,11 +1285,11 @@ pub struct UnsubscribeMailList {
 )]
 pub async fn unsubscribe(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UnsubscribeMailList>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1339,11 +1339,11 @@ pub async fn unsubscribe(
 )]
 pub async fn message_content(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Query(scope): Query<MailboxQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, scope.group.as_deref())
         .await?
         .owner();
@@ -1438,10 +1438,10 @@ pub struct UpdatedMailMessages {
 )]
 pub async fn update_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<UpdateMailMessages>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1613,10 +1613,10 @@ pub struct SnoozeMailMessages {
 )]
 pub async fn snooze_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<SnoozeMailMessages>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1689,10 +1689,10 @@ pub struct BatchMailMessages {
 )]
 pub async fn batch_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<BatchMailMessages>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, request.group.as_deref())
         .await?
         .owner();
@@ -1776,10 +1776,10 @@ pub struct DeleteMailMessages {
 )]
 pub async fn delete_messages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<DeleteMailMessages>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let ids = parse_ids(&request.ids)?;
     let mailbox = mailbox(&state, user_id, request.group.as_deref()).await?;
     let deleted = delete_for_good(&state, mailbox, &ids, &["trash", "spam", "drafts"]).await?;
@@ -1891,10 +1891,10 @@ pub struct MailCountsQuery {
 )]
 pub async fn counts(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(scope): Query<MailCountsQuery>,
 ) -> AppResult<Json<Vec<MailFolderCount>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let owner = mailbox(&state, user_id, scope.group.as_deref())
         .await?
         .owner();
@@ -1951,11 +1951,11 @@ pub async fn counts(
 )]
 pub async fn thread(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Query(scope): Query<MailboxQuery>,
 ) -> AppResult<Json<Vec<MailMessage>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mailbox = mailbox(&state, user_id, scope.group.as_deref()).await?;
     let owner = mailbox.owner();
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;

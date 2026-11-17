@@ -900,7 +900,7 @@ fn sending_safety() {
         .as_array()
         .unwrap_or_else(|| panic!("senders: {senders}"))
         .iter()
-        .find(|s| s["userId"] == bouncer.id.as_str())
+        .find(|s| s["accountId"] == bouncer.id.as_str())
         .expect("paused sender listed");
     assert_eq!(row["pausedReason"], "bounces");
     assert_eq!(row["flagReason"], "bounces");
@@ -1964,16 +1964,16 @@ fn distribution_lists_and_role_groups() {
         .unwrap()
     };
     let three = json!([
-        { "userId": alice_user.id, "role": "owner" },
-        { "userId": bob_user.id, "role": "member" },
-        { "userId": carol_user.id, "role": "member" },
+        { "accountId": alice_user.id, "role": "owner" },
+        { "accountId": bob_user.id, "role": "member" },
+        { "accountId": carol_user.id, "role": "member" },
     ]);
     assert_eq!(set_members(&alice_user, three.clone()).status(), 200);
     assert_eq!(set_members(&bob_user, three.clone()).status(), 403);
     assert_eq!(
         set_members(
             &alice_user,
-            json!([{ "userId": bob_user.id, "role": "member" }])
+            json!([{ "accountId": bob_user.id, "role": "member" }])
         )
         .status(),
         400,
@@ -2212,7 +2212,7 @@ fn distribution_lists_and_role_groups() {
         c.put(format!("{base}/api/mail/groups/{abuse_id}/members")),
         &admin,
     )
-    .json(&json!({ "members": [{ "userId": carol_user.id, "role": "member" }] }))
+    .json(&json!({ "members": [{ "accountId": carol_user.id, "role": "member" }] }))
     .send()
     .unwrap();
     assert_eq!(r.status(), 200);
@@ -2297,7 +2297,7 @@ fn group_list(
 fn share_for(group_secret: &[u8], group_id: &str, member: &User) -> Value {
     let incarnation = member.identity.incarnation_id();
     json!({
-        "userId": member.id,
+        "accountId": member.id,
         "share": b64(&mail_key::seal_group_key_share(
             group_secret,
             group_id,
@@ -2378,7 +2378,7 @@ fn shared_mailboxes() {
     with_signer["signer"] = json!({
         "publicKey": b64(&signer.public_key),
         "shares": [{
-            "userId": alice_user.id,
+            "accountId": alice_user.id,
             "share": b64(&kutup_crypto::mail_group::seal_group_signing_share(
                 &signer,
                 &id,
@@ -2503,8 +2503,8 @@ fn shared_mailboxes() {
         .unwrap()
     };
     let both = json!([
-        { "userId": alice_user.id, "role": "owner", "canSendAs": true },
-        { "userId": bob_user.id, "role": "member" },
+        { "accountId": alice_user.id, "role": "owner", "canSendAs": true },
+        { "accountId": bob_user.id, "role": "member" },
     ]);
     assert_eq!(code(set_members(both.clone(), json!({}))).1, "sharesNeeded");
     let bob_share = json!({ "groupFingerprint": hex::encode(first.fingerprint) });
@@ -2628,8 +2628,8 @@ fn shared_mailboxes() {
     };
     assert_eq!(code(send_as(&bob_user)), (403, "notAllowedToSendAs".into()));
     let with_right = json!([
-        { "userId": alice_user.id, "role": "owner", "canSendAs": true },
-        { "userId": bob_user.id, "role": "member", "canSendAs": true },
+        { "accountId": alice_user.id, "role": "owner", "canSendAs": true },
+        { "accountId": bob_user.id, "role": "member", "canSendAs": true },
     ]);
     assert_eq!(set_members(with_right.clone(), json!({})).status(), 200);
     let r = send_as(&bob_user);
@@ -2677,7 +2677,7 @@ fn shared_mailboxes() {
     assert_eq!(thanks["protection"], "end_to_end");
 
     // Bob leaves: only with a new key, which he never gets.
-    let alice_only = json!([{ "userId": alice_user.id, "role": "owner", "canSendAs": true }]);
+    let alice_only = json!([{ "accountId": alice_user.id, "role": "owner", "canSendAs": true }]);
     assert_eq!(
         code(set_members(alice_only.clone(), json!({}))).1,
         "newKeyNeeded"
@@ -5524,7 +5524,7 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
     .unwrap()
     .json()
     .unwrap();
-    assert_eq!(enrolled["userId"], json!(carol.id), "{enrolled}");
+    assert_eq!(enrolled["accountId"], json!(carol.id), "{enrolled}");
     common::purge_accounts(&c, &base, &[&alice, &bob, &carol]);
 }
 
@@ -6605,7 +6605,7 @@ fn forwarding_codes() {
 /// What the phases of [`outside_forwarding`] hand on.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ForwardState {
-    user_id: String,
+    account_id: String,
     username: String,
     password: String,
     master_key: String,
@@ -6862,7 +6862,7 @@ fn outside_forwarding() {
                 "forwardingKeepsNoEncrypt"
             );
             let state = ForwardState {
-                user_id: alice.id.clone(),
+                account_id: alice.id.clone(),
                 username: alice.username.clone(),
                 password: alice.password.clone(),
                 master_key: b64(&alice.master_key),
@@ -7001,7 +7001,7 @@ Message-ID: <oloop-{tag}@sender.test>\r\n\r\nround\r\n",
             arrived(&loop_id);
             println!("FORWARD-NOT {loop_id}");
             // While Alice's sending is paused, nothing of hers goes outside.
-            let alice_id = state.user_id.clone();
+            let alice_id = state.account_id.clone();
             paused(&alice_id, true);
             let while_paused = format!(
                 "From: writer@sender.test\r\nTo: {}\r\nSubject: while paused\r\n\

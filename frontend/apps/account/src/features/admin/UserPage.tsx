@@ -131,7 +131,7 @@ type Pending =
   | { kind: 'release' }
 
 /** Which referral code the account signed up with (docs/plans/registration-codes.md). */
-function SignedUpWithFact({ userId }: { userId: string }) {
+function SignedUpWithFact({ accountId: userId }: { accountId: string }) {
   const { t, i18n } = useTranslation()
   const code = useUserRegistrationCode(userId)
   if (code.isPending || code.isError) return null
@@ -195,7 +195,7 @@ export function UserPage() {
     )
   }
 
-  const self = user.id === me.userId
+  const self = user.id === me.accountId
   const locked = user.isProtected
   const close = () => {
     setPending(null)
@@ -367,7 +367,7 @@ export function UserPage() {
             {formatBytes(user.storageUsedBytes, lang)} / {formatBytes(user.storageQuotaBytes, lang)}
           </Fact>
           <Fact label={t('admin.users.columns.twoFactor')}>{user.totpEnabled ? t('admin.users.on') : t('admin.users.off')}</Fact>
-          <SignedUpWithFact userId={user.id} />
+          <SignedUpWithFact accountId={user.id} />
           {user.state === 'closing' && user.closesAt ? (
             <Fact label={t('admin.user.closesAt')}>{formatInstant(user.closesAt, lang)}</Fact>
           ) : null}
@@ -453,11 +453,11 @@ export function UserPage() {
       </Section>
 
       <Section title={t('admin.mailSending.title')} description={t('admin.mailSending.cardHint')}>
-        <MailSendingCard userId={user.id} />
+        <MailSendingCard accountId={user.id} />
       </Section>
 
       <Section title={t('admin.mailDomains.overrides.title')}>
-        <MailDomainOverridesCard userId={user.id} />
+        <MailDomainOverridesCard accountId={user.id} />
       </Section>
 
       <Section title={t('admin.user.quotas')} description={t('admin.user.quotasHint')}>
@@ -465,7 +465,7 @@ export function UserPage() {
       </Section>
 
       <Section title={t('admin.limits.title')} description={t('admin.limits.hint')}>
-        <AccountLimits userId={user.id} />
+        <AccountLimits accountId={user.id} />
       </Section>
 
       <Section title={t('admin.user.recovery')} description={t('admin.user.recoveryHint')}>

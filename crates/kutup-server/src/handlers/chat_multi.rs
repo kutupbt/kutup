@@ -48,7 +48,7 @@ const SEALED_SUITE: i16 = 1;
 /// One recipient account as the payload names it.
 struct Recipient {
     account_id: String,
-    user_id: Uuid,
+    account_uuid: Uuid,
     /// Device id and registration id, as the sender has them.
     devices: Vec<(u32, u32)>,
     /// `C_i ‖ AT_i`.
@@ -153,7 +153,7 @@ fn parse(submission: &SealedMultiSubmissionV1, limits: &MultiLimits) -> AppResul
             account_id.clone(),
             Recipient {
                 account_id,
-                user_id,
+                account_uuid: user_id,
                 devices: devices.into_iter().collect(),
                 key_material,
             },
@@ -183,7 +183,7 @@ async fn check_token(
     let token = submission
         .group_send_token_bytes()
         .map_err(|error| malformed(&error))?;
-    let accounts: Vec<Uuid> = parsed.recipients.iter().map(|r| r.user_id).collect();
+    let accounts: Vec<Uuid> = parsed.recipients.iter().map(|r| r.account_uuid).collect();
     let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp())
         .map_err(|_| AppError::internal("clock"))?;
     let verified = tokio::task::spawn_blocking(move || {
@@ -365,7 +365,7 @@ async fn deliver(
               WHERE id = $1 AND is_active AND (NOT $2 OR kutup_account_federates(id))
               FOR SHARE",
         )
-        .bind(recipient.user_id)
+        .bind(recipient.account_uuid)
         .bind(federated)
         .fetch_optional(&mut *tx)
         .await?;
@@ -379,7 +379,7 @@ async fn deliver(
             Suite::V1,
             [
                 kutup_crypto::labels::MULTI_RECIPIENT_V1,
-                recipient.user_id.as_bytes(),
+                recipient.account_uuid.as_bytes(),
             ]
             .concat(),
         )
@@ -396,7 +396,7 @@ async fn deliver(
     for recipient in &passing {
         let current: Vec<(i32, i64)> =
             sqlx::query_as(crate::handlers::chat_identity::LISTED_DEVICES)
-                .bind(recipient.user_id)
+                .bind(recipient.account_uuid)
                 .fetch_all(&mut *tx)
                 .await?;
         let (missing, extra, stale) = device_answers(&current, &recipient.devices);
@@ -440,7 +440,7 @@ async fn deliver(
                 "INSERT INTO chat_multi_send_ids (account_id, device_id, send_id)
                  VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING 1",
             )
-            .bind(recipient.user_id)
+            .bind(recipient.account_uuid)
             .bind(device_id)
             .bind(send_id)
             .fetch_optional(&mut *tx)
@@ -467,7 +467,7 @@ async fn deliver(
                      envelope_type, suite, content, send_id, shared_payload_id)
                  VALUES ($1, $2, true, 0, $3, $4, $5, $6, $7)",
             )
-            .bind(recipient.user_id)
+            .bind(recipient.account_uuid)
             .bind(device_id)
             .bind(envelope_type_code(EnvelopeType::Message))
             .bind(SEALED_SUITE)
@@ -476,7 +476,7 @@ async fn deliver(
             .bind(shared_id)
             .execute(&mut *tx)
             .await?;
-            stored.push((recipient.user_id, device_id));
+            stored.push((recipient.account_uuid, device_id));
         }
     }
     tx.commit().await?;
@@ -804,9 +804,13 @@ mod tests {
         // In account-id order, whatever order the payload has.
         let mut expected = [a, b];
         expected.sort();
-        let order: Vec<Uuid> = parsed.recipients.iter().map(|r| r.user_id).collect();
+        let order: Vec<Uuid> = parsed.recipients.iter().map(|r| r.account_uuid).collect();
         assert_eq!(order, expected);
-        let first = parsed.recipients.iter().find(|r| r.user_id == a).unwrap();
+        let first = parsed
+            .recipients
+            .iter()
+            .find(|r| r.account_uuid == a)
+            .unwrap();
         assert_eq!(first.devices, vec![(1, 10), (2, 20)]);
         assert_eq!(first.key_material, [1u8; KEY_MATERIAL_LEN]);
         // What the device drains is libsignal's received message for it.

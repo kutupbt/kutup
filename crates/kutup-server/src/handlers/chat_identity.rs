@@ -280,12 +280,12 @@ pub(crate) fn validate_manifest(manifest: &AccountManifestV3) -> AppResult<()> {
 )]
 pub async fn check_keys(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    auth: crate::middleware::AuthUser,
+    auth: crate::middleware::AuthAccount,
     headers: HeaderMap,
     axum::Json(request): axum::Json<ChatKeysCheckRequest>,
 ) -> AppResult<axum::response::Response> {
     use axum::response::IntoResponse as _;
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let device_id = authenticated_device(&state.pool, &headers, user_id).await?;
     let presented = hex::decode(&request.digest)
         .ok()
@@ -346,15 +346,15 @@ pub async fn check_keys(
 )]
 pub async fn distribute_identity(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    auth: crate::middleware::AuthUser,
+    auth: crate::middleware::AuthAccount,
     headers: HeaderMap,
     axum::Json(request): axum::Json<AccountIdentityDistributionRequest>,
 ) -> AppResult<axum::response::Response> {
     use axum::response::IntoResponse as _;
     use axum::Json;
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let sender = authenticated_device(&state.pool, &headers, user_id).await?;
-    if !crate::ratelimit::CHAT_IDENTITY_DISTRIBUTIONS.allow(&auth.user_id) {
+    if !crate::ratelimit::CHAT_IDENTITY_DISTRIBUTIONS.allow(&auth.account_id) {
         return Err(
             AppError::too_many_requests("too many identity distributions")
                 .with_details(serde_json::json!({ "code": "rateLimited" })),

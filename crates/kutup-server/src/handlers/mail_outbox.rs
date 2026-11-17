@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -40,10 +40,10 @@ fn id_of(value: &str) -> AppResult<Uuid> {
 )]
 pub async fn status(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailOutboxStatus>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let outbox = id_of(&id)?;
     let row: Option<(String, Option<Vec<u8>>)> = sqlx::query_as(
         "SELECT state, result_sealed FROM mail_outbox WHERE id = $1 AND account_id = $2",
@@ -91,10 +91,10 @@ pub async fn status(
 )]
 pub async fn cancel(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = id_of(&id)?;
     if crate::mail::outbox::cancel(&state, user_id, id).await? {
         return Ok(axum::http::StatusCode::NO_CONTENT);

@@ -27,7 +27,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::{AdminUser, AuthUser};
+use crate::middleware::{AdminAccount, AuthAccount};
 use crate::AppState;
 
 /// The purposes a consent is given for: the core's, worded neutrally; their
@@ -270,8 +270,8 @@ pub async fn get_documents(State(state): State<AppState>) -> AppResult<Response>
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Documents to acknowledge", body = Vec<Document>))
 )]
-pub async fn get_pending(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+pub async fn get_pending(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     Ok(Json(pending(&state.pool, user_id).await?).into_response())
 }
 
@@ -294,10 +294,10 @@ pub struct AcknowledgeRequest {
 )]
 pub async fn post_acknowledge(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<AcknowledgeRequest>,
 ) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     if req.document_ids.is_empty() || req.document_ids.len() > 32 {
         return Err(AppError::bad_request("name 1 to 32 documents"));
     }
@@ -325,8 +325,8 @@ pub struct ConsentsView {
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's consents", body = ConsentsView))
 )]
-pub async fn get_consents(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+pub async fn get_consents(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let documents = current(&state.pool)
         .await?
         .into_iter()
@@ -360,10 +360,10 @@ pub struct ConsentRequest {
 )]
 pub async fn put_consent(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<ConsentRequest>,
 ) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     set_consent(
         &mut tx,
@@ -396,7 +396,7 @@ pub async fn put_consent(
 )]
 pub async fn admin_documents(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Response> {
     let all: Vec<Document> = sqlx::query_as(&format!(
         "SELECT {DOCUMENT_COLUMNS} FROM legal_documents d ORDER BY d.kind, d.published_at DESC, d.language"
@@ -431,7 +431,7 @@ pub struct PublishRequest {
 )]
 pub async fn publish(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(req): Json<PublishRequest>,
 ) -> AppResult<Response> {
     let sha256 = hex::decode(req.sha256.trim())
@@ -442,7 +442,7 @@ pub async fn publish(
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err(AppError::bad_request("url is an http(s) address"));
     }
-    let admin_id = crate::handlers::trusted_uuid(&admin.user_id)?;
+    let admin_id = crate::handlers::trusted_uuid(&admin.account_id)?;
     let published: Result<Document, sqlx::Error> = sqlx::query_as(&format!(
         "INSERT INTO legal_documents AS d (kind, version, language, url, sha256, required_at_signup, published_by_account_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -472,7 +472,7 @@ pub async fn publish(
     };
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "legal.publish",
         None,
         json!({

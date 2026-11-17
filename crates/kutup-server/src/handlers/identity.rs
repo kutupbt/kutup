@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The answer to sharing with an account still on identity suite 1 (an
@@ -93,7 +93,7 @@ pub struct DriveIdentity {
 )]
 pub async fn drive_identities(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Json(req): Json<DriveIdentitiesRequest>,
 ) -> AppResult<Response> {
     if req.accounts.len() > MAX_IDENTITIES_PER_LOOKUP {

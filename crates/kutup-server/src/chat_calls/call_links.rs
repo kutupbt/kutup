@@ -35,7 +35,7 @@ use super::group_calls::{
     hosts_group_calls, livekit_token_with, GroupCallTokenResponse, TokenExtras,
 };
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Links one account may keep at a time.
@@ -159,7 +159,7 @@ pub(super) async fn vouched_account(state: &AppState, headers: &HeaderMap) -> Op
     let user = crate::middleware::authenticate_access_token(state, token)
         .await
         .ok()?;
-    Uuid::parse_str(&user.user_id).ok()
+    Uuid::parse_str(&user.account_id).ok()
 }
 
 /// The address a vouched-for account goes by now, for the others to see.
@@ -192,8 +192,8 @@ pub(super) fn base64_exact(name: &str, value: &str, bytes: usize) -> AppResult<V
     decoded.ok_or_else(|| AppError::bad_request(format!("{name} is {bytes} bytes of base64")))
 }
 
-pub(super) fn owner(auth: &AuthUser) -> AppResult<Uuid> {
-    Uuid::parse_str(&auth.user_id).map_err(|_| AppError::internal("invalid user id"))
+pub(super) fn owner(auth: &AuthAccount) -> AppResult<Uuid> {
+    Uuid::parse_str(&auth.account_id).map_err(|_| AppError::internal("invalid user id"))
 }
 
 pub(super) fn require_sfu(state: &AppState) -> AppResult<()> {
@@ -219,7 +219,7 @@ pub(super) fn require_sfu(state: &AppState) -> AppResult<()> {
 )]
 pub(crate) async fn create(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Json(request): Json<CreateCallLinkRequest>,
 ) -> AppResult<(StatusCode, Json<CallLink>)> {
     require_sfu(&state)?;
@@ -322,7 +322,7 @@ pub(crate) async fn create(
 )]
 pub(crate) async fn list(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
 ) -> AppResult<Json<CallLinkList>> {
     let rows: Vec<(String, String, Vec<u8>, bool, OffsetDateTime)> = sqlx::query_as(
         "SELECT room_id, nonce, info, waiting_room, created_at FROM chat_call_links
@@ -361,7 +361,7 @@ pub(crate) async fn list(
 )]
 pub(crate) async fn delete(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Path(room_id): Path<String>,
 ) -> AppResult<StatusCode> {
     hex32("roomId", &room_id)?;
@@ -400,7 +400,7 @@ pub(crate) async fn delete(
 )]
 pub(crate) async fn update_info(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Path(room_id): Path<String>,
     Json(request): Json<UpdateCallLinkInfoRequest>,
 ) -> AppResult<StatusCode> {

@@ -257,7 +257,7 @@ async fn open(
 
 /// A version upload's last part arrived: its row as `patch` read it.
 pub(super) struct Landing {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub upload_id: Uuid,
     pub file_id: Uuid,
     /// The folder the file was in when the upload started (its content hash
@@ -301,7 +301,7 @@ pub(super) async fn finish(
     let checked = check(
         state,
         &mut tx,
-        landing.user_id,
+        landing.account_id,
         landing.file_id,
         Some(landing.key_generation),
         None,
@@ -386,7 +386,7 @@ pub(super) async fn commit(
     let (collection_now, _) = check(
         state,
         tx,
-        landing.user_id,
+        landing.account_id,
         landing.file_id,
         Some(landing.key_generation),
         landing
@@ -463,7 +463,7 @@ async fn record(
     .bind(landing.revision_id)
     .bind(landing.file_id)
     .bind(&landing.storage_path)
-    .bind(landing.user_id)
+    .bind(landing.account_id)
     .bind(landing.total_bytes)
     .bind(landing.key_generation)
     .bind(parent)
@@ -475,7 +475,7 @@ async fn record(
     .await?;
     crate::storage_pool::charge(
         &mut **tx,
-        crate::storage_pool::Payer::Account(landing.user_id),
+        crate::storage_pool::Payer::Account(landing.account_id),
         landing.total_bytes,
     )
     .await?;

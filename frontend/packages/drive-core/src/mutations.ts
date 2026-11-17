@@ -52,7 +52,7 @@ export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) 
 
 export function useCreateFolder() {
   return useDriveMutation(async ({ parent, name }: { parent: Folder; name: string }, me) => {
-    const created = await createOwnedCollectionV1(me, me.userId, name.trim(), parent.id)
+    const created = await createOwnedCollectionV1(me, me.accountId, name.trim(), parent.id)
     await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(parent), name.trim()) })
     return created.payload.id
   })
@@ -73,7 +73,7 @@ export function useRenameFolder() {
     if (!folder.key || !folder.canManage) throw new Error('only the owner can rename a folder')
     // The name envelope binds the owner's id; only owners rename, so it is ours.
     const next = await renameOwnedCollectionV1(
-      { id: folder.id, ownerUserId: me.userId, keyEpoch: folder.keyEpoch, nameRevision: folder.nameRevision },
+      { id: folder.id, ownerAccountId: me.accountId, keyEpoch: folder.keyEpoch, nameRevision: folder.nameRevision },
       folder.key,
       name.trim(),
     )
@@ -159,12 +159,12 @@ export function useCreatePublicLink(app: 'drive' | 'photos' = 'drive') {
     const id = crypto.randomUUID().toLowerCase()
     const collectionKeyEnvelope = await sealPublicLinkCollectionKeyV1(folder.key, linkKey, {
       collectionId: folder.id,
-      ownerUserId: me.userId,
+      ownerAccountId: me.accountId,
       epoch: folder.keyEpoch,
     })
     // A copy of the link key for the owner: to list and copy the link later,
     // and to keep it working when the folder key rotates.
-    const ownerLinkKeyEnvelope = await sealOwnerLinkKeyV1(linkKey, me.roots, { linkId: id, ownerUserId: me.userId })
+    const ownerLinkKeyEnvelope = await sealOwnerLinkKeyV1(linkKey, me.roots, { linkId: id, ownerAccountId: me.accountId })
     const { data } = await api.post<{ token: string }>('/share', {
       id,
       shareType: 'collection',
@@ -235,7 +235,7 @@ export function useShareFolder() {
         { server: local.server, accountId: local.accountId },
         local.accountIncarnationId,
       )
-      await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.accountId, namedShareEnvelope, ...permissions })
+      await api.post(`/collections/${folder.id}/share`, { recipientAccountId: local.accountId, namedShareEnvelope, ...permissions })
       return { kind: 'local', account: local.account }
     }
 

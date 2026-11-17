@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationDirection;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::opaque_setup::OpaqueSetupKeys;
 use crate::AppState;
 
@@ -344,11 +344,11 @@ fn enabled(state: &AppState) -> AppResult<&GroupSendKeys> {
 )]
 pub(crate) async fn endorsement(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<impl axum::response::IntoResponse> {
     let keys = enabled(&state)?;
     let account =
-        Uuid::parse_str(&user.user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+        Uuid::parse_str(&user.account_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     let allowed = crate::site_settings::CHAT_GROUP_SEND_ENDORSEMENTS_PER_DAY
         .load(&state.pool)
         .await?;
@@ -428,7 +428,7 @@ fn params_of(keys: Vec<FederationGroupSendKeyV1>) -> GroupSendParamsV1 {
 )]
 pub(crate) async fn params(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Query(query): Query<ParamsQuery>,
 ) -> AppResult<Json<GroupSendParamsV1>> {
     let keys = enabled(&state)?;

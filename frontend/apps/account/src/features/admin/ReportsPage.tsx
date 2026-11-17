@@ -178,7 +178,7 @@ export function ReportsPage() {
           errorFallback={t('admin.reports.actionFailed')}
           onConfirm={() =>
             update.mutate(
-              { id: pending.report.ownerUserId, patch: { isActive: false } },
+              { id: pending.report.ownerAccountId, patch: { isActive: false } },
               {
                 onSuccess: () => {
                   toast.success(t('admin.reports.disabled'))
@@ -232,7 +232,7 @@ function ReportCard({
       <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
         <dt className="text-muted-foreground">{t('admin.reports.owner')}</dt>
         <dd className="flex min-w-0 flex-wrap items-center gap-2">
-          <Link to={`/admin/users/${report.ownerUserId}`} className="truncate font-medium hover:underline">
+          <Link to={`/admin/users/${report.ownerAccountId}`} className="truncate font-medium hover:underline">
             {report.ownerUsername}
           </Link>
           {report.ownerIsActive ? null : <Badge variant="neutral">{t('admin.users.disabled')}</Badge>}

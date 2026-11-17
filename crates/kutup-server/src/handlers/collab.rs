@@ -69,8 +69,8 @@ pub(crate) struct PeerSummary {
     /// The tab's id (see `CollabQuery::tab`); omitted for an older client.
     #[serde(skip_serializing_if = "String::is_empty")]
     tab: String,
-    #[serde(rename = "userId")]
-    user_id: String,
+    #[serde(rename = "accountId")]
+    account_id: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     username: String,
 }
@@ -124,7 +124,7 @@ pub async fn ws(
     let device = authenticate_socket(&state, &headers, &q).await?;
     // Anyone who may read the file joins; only editors' edits are kept.
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    let access = file_access(&state.pool, device.user_id, file_uuid)
+    let access = file_access(&state.pool, device.account_id, file_uuid)
         .await?
         .ok_or_else(|| AppError::not_found("file not found"))?;
     if access == Access::None {
@@ -268,7 +268,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
     let hub = state.hub.clone();
     let (file_id, file_uuid) = (conn.file_id.clone(), conn.file_uuid);
     let device = &conn.device;
-    let user_uuid = device.user_id;
+    let user_uuid = device.account_id;
 
     // Username + color for the peer-list (best-effort).
     let (username, color): (String, String) = sqlx::query_as(
@@ -406,7 +406,7 @@ pub(crate) fn peer_summaries(hub: &Hub, file_id: &str) -> Vec<PeerSummary> {
             color: p.color.clone(),
             device_id: p.device_id,
             tab: p.tab.clone(),
-            user_id: p.user_id.clone(),
+            account_id: p.account_id.clone(),
             username: p.username.clone(),
         })
         .collect()
@@ -665,7 +665,7 @@ pub(crate) async fn accept_frame(
     // started with: the device listed itself again since, or the frame lies.
     if f.manifest_sequence > device.manifest_sequence {
         let now =
-            crate::account_devices::frame_device(state, device.user_id, device.device_id as i32)
+            crate::account_devices::frame_device(state, device.account_id, device.device_id as i32)
                 .await;
         if !now.is_ok_and(|now| {
             now.frame_key == device.frame_key && f.manifest_sequence <= now.manifest_sequence
@@ -701,7 +701,7 @@ pub(crate) async fn accept_frame(
     // (a share can be narrowed while the socket is open).
     // A failed check never lets the edit through: it closes the socket, as
     // a definite "no" does (the client reconnects).
-    match file_access(&state.pool, device.user_id, file_uuid).await {
+    match file_access(&state.pool, device.account_id, file_uuid).await {
         Ok(Some(Access::Write)) => {}
         Ok(Some(Access::Read)) => return FrameOutcome::Dropped,
         _ => return FrameOutcome::Close,
@@ -738,7 +738,7 @@ pub(crate) async fn accept_frame(
     // client knows every frame up to a position it has seen is applied.
     let log_sender = LogSender {
         domain: None,
-        account: device.user_id,
+        account: device.account_id,
         device: device.device_id,
     };
     let Ok(seq) = persist_frame(state, file_uuid, log_sender, &f, data).await else {
@@ -840,7 +840,7 @@ async fn sender_seq_high(
                           AND sender_device_id = $3), 0))",
     )
     .bind(file_uuid)
-    .bind(device.user_id)
+    .bind(device.account_id)
     .bind(device.device_id as i32)
     .fetch_one(pool)
     .await
@@ -1062,7 +1062,7 @@ pub async fn get_frames(
 ) -> AppResult<Response> {
     let device = crate::account_devices::frame_device_of_request(&state, &headers).await?;
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    match file_access(&state.pool, device.user_id, file_uuid).await? {
+    match file_access(&state.pool, device.account_id, file_uuid).await? {
         None => return Err(AppError::not_found("file not found")),
         Some(Access::None) => return Err(AppError::forbidden("forbidden")),
         Some(_) => {}
@@ -1153,13 +1153,13 @@ pub async fn post_frame(
 ) -> AppResult<Response> {
     let device = crate::account_devices::frame_device_of_request(&state, &headers).await?;
     if !crate::ratelimit::COLLAB_FRAME_POSTS
-        .allow(&format!("{}/{}", device.user_id, device.device_id))
+        .allow(&format!("{}/{}", device.account_id, device.device_id))
     {
         return Err(AppError::too_many_requests("too many requests")
             .with_details(serde_json::json!({ "code": "rateLimited" })));
     }
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    match file_access(&state.pool, device.user_id, file_uuid).await? {
+    match file_access(&state.pool, device.account_id, file_uuid).await? {
         None => return Err(AppError::not_found("file not found")),
         Some(Access::Write) => {}
         Some(_) => return Err(AppError::forbidden("forbidden")),

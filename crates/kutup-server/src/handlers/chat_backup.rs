@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 use super::trusted_uuid;
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const ZERO_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -108,13 +108,13 @@ fn request_digest<T: serde::Serialize>(value: &T) -> AppResult<String> {
     responses((status = 201, body = ChatBackupStatusV1), (status = 200, body = ChatBackupStatusV1)))]
 pub async fn provision(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<ProvisionChatBackupRequestV1>,
 ) -> AppResult<(StatusCode, Json<ChatBackupStatusV1>)> {
     request
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid Chat backup: {error}")))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let operation_id = canonical_uuid("backup operation id", &request.operation_id)?;
     let backup_incarnation_id = canonical_uuid(
         "backup incarnation id",
@@ -253,10 +253,10 @@ pub async fn provision(
     security(("BearerAuth" = [])), responses((status = 200, body = ChatBackupStatusV1)))]
 pub async fn status(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<ChatBackupStatusV1>> {
     Ok(Json(
-        load_status(&state, trusted_uuid(&user.user_id)?).await?,
+        load_status(&state, trusted_uuid(&user.account_id)?).await?,
     ))
 }
 
@@ -406,14 +406,14 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
     responses((status = 200, body = ChatBackupSegmentReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn append_segment(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     headers: axum::http::HeaderMap,
     Json(request): Json<AppendChatBackupSegmentRequestV1>,
 ) -> AppResult<Json<ChatBackupSegmentReceiptV1>> {
     let ciphertext = request
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid backup segment: {error}")))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     // Written by the device it names, with its credential (a replay too).
     crate::handlers::chat_identity::authenticate_device(
         &state.pool,
@@ -628,10 +628,10 @@ pub async fn append_segment(
     ), responses((status = 200, body = ChatBackupSegmentPageV1)))]
 pub async fn list_segments(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<SegmentPageQuery>,
 ) -> AppResult<Json<ChatBackupSegmentPageV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let after = i64::try_from(query.after.unwrap_or(0))
         .map_err(|_| AppError::bad_request("invalid backup cursor"))?;
     let limit = query
@@ -721,10 +721,10 @@ pub async fn list_segments(
     ), responses((status = 200, body = ChatBackupBaseReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn stage_base(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     mut multipart: Multipart,
 ) -> AppResult<Json<ChatBackupBaseReceiptV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut metadata: Option<StageChatBackupBaseRequestV1> = None;
     let mut object: Option<(NamedTempFile, u64, [u8; 32])> = None;
     while let Some(mut field) = multipart
@@ -1003,13 +1003,13 @@ pub async fn stage_base(
     responses((status = 200, body = ChatBackupManifestCommitReceiptV1), (status = 409, description = "Restore point changed")))]
 pub async fn commit_manifest(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CommitChatBackupManifestRequestV1>,
 ) -> AppResult<Json<ChatBackupManifestCommitReceiptV1>> {
     request.validate().map_err(|error| {
         AppError::bad_request(format!("invalid backup manifest commit: {error}"))
     })?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let base_id = canonical_uuid("backup base object id", &request.manifest.base_object_id)?;
     let manifest_digest = request.manifest.digest().map_err(AppError::bad_request)?;
     let mut transaction = state.pool.begin().await?;
@@ -1217,10 +1217,10 @@ pub async fn commit_manifest(
     responses((status = 200, description = "Encrypted committed base", content_type = "application/octet-stream")))]
 pub async fn download_base(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(object_id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let object_id = canonical_uuid("backup base object id", &object_id)?;
     let row: Option<(String, i64, String)> = sqlx::query_as(
         "SELECT base.storage_path,base.ciphertext_bytes,base.ciphertext_sha256
@@ -1257,13 +1257,13 @@ pub async fn download_base(
     responses((status = 200, body = kutup_chat_proto::ChatBackupMediaReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn copy_media(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CopyChatBackupMediaRequestV1>,
 ) -> AppResult<Json<kutup_chat_proto::ChatBackupMediaReceiptV1>> {
     let outer_key = request
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid backup media copy: {error}")))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let operation_id = canonical_uuid("backup media operation id", &request.operation_id)?;
     let backup_id = canonical_uuid("backup incarnation id", &request.backup_incarnation_id)?;
     let source_id = canonical_uuid("source attachment id", &request.source_attachment_id)?;
@@ -1555,10 +1555,10 @@ pub async fn copy_media(
     ), responses((status = 200, body = kutup_chat_proto::ChatBackupMediaReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn upload_media(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     mut multipart: Multipart,
 ) -> AppResult<Json<kutup_chat_proto::ChatBackupMediaReceiptV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut metadata: Option<UploadChatBackupMediaRequestV1> = None;
     let mut object: Option<(NamedTempFile, u64, [u8; 32])> = None;
     while let Some(mut field) = multipart
@@ -1914,11 +1914,11 @@ async fn ensure_media_reference(
         (status = 416, description = "A range past its end")))]
 pub async fn download_media(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(media_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let media_id_bytes = canonical_hex_32("backup media id", &media_id)?;
     let row: Option<(String, i64, String)> = sqlx::query_as(
         "SELECT storage_path,ciphertext_bytes,ciphertext_sha256
@@ -1959,13 +1959,13 @@ pub async fn download_media(
     responses((status = 200, body = ChatBackupMediaReconciliationReceiptV1)))]
 pub async fn reconcile_media(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<ReconcileChatBackupMediaRequestV1>,
 ) -> AppResult<Json<ChatBackupMediaReconciliationReceiptV1>> {
     request
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid media reconciliation: {error}")))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let operation_id = canonical_uuid("media reconciliation operation id", &request.operation_id)?;
     let target_generation = i64::try_from(request.target_generation)
         .map_err(|_| AppError::bad_request("target generation exceeds server range"))?;

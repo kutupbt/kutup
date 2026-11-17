@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{
     CollectionRow, CreateCollectionRequest, CreateCollectionResult, MessageResponse,
     ShareCollectionRequest, UpdateCollectionRequest, UpdateColorRequest,
@@ -26,8 +26,7 @@ use crate::AppState;
 #[derive(sqlx::FromRow)]
 struct SharedCollectionDbRow {
     id: Uuid,
-    #[sqlx(rename = "owner_account_id")]
-    owner_user_id: Uuid,
+    owner_account_id: Uuid,
     name_envelope: String,
     key_epoch: i32,
     name_revision: i64,
@@ -95,9 +94,9 @@ fn decode_public_key(value: &str) -> AppResult<Vec<u8>> {
 )]
 pub async fn list_collections(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     // Albums are the Photos app's (GET /api/albums), never Drive folders.
     Ok(Json(collection_rows(&state, user_id, "folder").await?).into_response())
 }
@@ -164,7 +163,7 @@ pub(crate) async fn collection_rows(
                 name_hash_generation,
             )| CollectionRow {
                 id: id.to_string(),
-                owner_user_id: owner.to_string(),
+                owner_account_id: owner.to_string(),
                 name_envelope: name,
                 owner_key_envelope: Some(owner_key),
                 named_share_envelope: None,
@@ -241,7 +240,7 @@ pub(crate) async fn collection_rows(
             .ok_or_else(|| AppError::conflict("share owner identity is unavailable"))?;
         out.push(CollectionRow {
             id: row.id.to_string(),
-            owner_user_id: row.owner_user_id.to_string(),
+            owner_account_id: row.owner_account_id.to_string(),
             name_envelope: row.name_envelope,
             owner_key_envelope: None,
             named_share_envelope: Some(row.named_share_envelope),
@@ -282,10 +281,10 @@ pub(crate) async fn collection_rows(
 )]
 pub async fn create_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<CreateCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     create_owned_collection(&state, user_id, req, "folder").await
 }
 
@@ -429,10 +428,10 @@ pub(crate) async fn create_owned_collection(
 )]
 pub async fn get_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
     type Row = (
@@ -489,7 +488,7 @@ pub async fn get_collection(
             name_hash,
             name_hash_generation,
             id: cid.to_string(),
-            owner_user_id: owner.to_string(),
+            owner_account_id: owner.to_string(),
             name_envelope: name,
             owner_key_envelope: Some(owner_key),
             named_share_envelope: None,
@@ -556,7 +555,7 @@ pub async fn get_collection(
         name_hash: row.name_hash.clone(),
         name_hash_generation: None,
         id: coll_id.to_string(),
-        owner_user_id: row.owner_user_id.to_string(),
+        owner_account_id: row.owner_account_id.to_string(),
         name_envelope: row.name_envelope,
         owner_key_envelope: None,
         named_share_envelope: Some(row.named_share_envelope),
@@ -594,11 +593,11 @@ pub async fn get_collection(
 )]
 pub async fn update_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
     let mut tx = state.pool.begin().await?;
@@ -684,11 +683,11 @@ pub async fn update_collection(
 )]
 pub async fn update_collection_color(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateColorRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
     // `#rrggbb`, stored lowercase; null or "" clears it. Every client (web,
     // CLI) writes the same form, so a colour set in one shows in the other.
@@ -726,10 +725,10 @@ pub async fn update_collection_color(
 )]
 pub async fn delete_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
     let mut tx = state.pool.begin().await?;
@@ -785,14 +784,14 @@ pub async fn delete_collection(
 )]
 pub async fn share_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<ShareCollectionRequest>,
 ) -> AppResult<Response> {
-    let sharer_id = trusted_uuid(&user.user_id)?;
+    let sharer_id = trusted_uuid(&user.account_id)?;
     // Invalid collection id ⇒ ownership check fails ⇒ 403 (matches Go).
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
-    let recipient_id = Uuid::parse_str(&req.recipient_user_id)
+    let recipient_id = Uuid::parse_str(&req.recipient_account_id)
         .map_err(|_| AppError::bad_request("invalid request"))?;
 
     let collection: Option<(Uuid, i32)> = sqlx::query_as(

@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::mail::sender_rules::{normalise_for, Kind};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -38,9 +38,9 @@ fn kind(value: &str) -> AppResult<Kind> {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<MailSenderRule>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
         "SELECT id, pattern, kind FROM mail_sender_rules WHERE account_id = $1 ORDER BY created_at DESC",
     )
@@ -82,10 +82,10 @@ pub struct SetMailSenderRules {
 )]
 pub async fn set(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<SetMailSenderRules>,
 ) -> AppResult<Json<Vec<MailSenderRule>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let kind = kind(&request.kind)?;
     if request.patterns.is_empty() || request.patterns.len() > 100 {
         return Err(AppError::bad_request("1 to 100 addresses or domains"));
@@ -158,11 +158,11 @@ pub struct UpdateMailSenderRule {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateMailSenderRule>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such entry"))?;
     let kind = kind(&request.kind)?;
     let updated =
@@ -196,10 +196,10 @@ pub struct DeleteMailSenderRules {
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<DeleteMailSenderRules>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let ids: Vec<Uuid> = request
         .ids
         .iter()

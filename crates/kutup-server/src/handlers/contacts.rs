@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::account_heads::{self, HeadOnly, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::{revisions, AppState};
 
 /// Contacts one import may carry, all or nothing.
@@ -265,10 +265,10 @@ pub struct ContactPage {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<ListQuery>,
 ) -> AppResult<Json<ContactPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(MAX_PAGE).clamp(1, MAX_PAGE);
     let offset = query.offset.unwrap_or(0).max(0);
     let rows: Vec<Row> = sqlx::query_as(&format!(
@@ -305,10 +305,10 @@ pub async fn list(
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<ContactCreate>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let head = NextHead::parse(input.head.as_deref())?;
     let (binding, authority) = binding_of(&state, user_id).await?;
     let checked = check(
@@ -374,11 +374,11 @@ pub struct ContactUpdate {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(input): Json<ContactUpdate>,
 ) -> AppResult<Json<ContactRow>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let head = NextHead::parse(input.head.as_deref())?;
     let (binding, authority) = binding_of(&state, user_id).await?;
@@ -480,11 +480,11 @@ async fn delete_ids(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<HeadOnly>>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let head = body.and_then(|Json(body)| body.head);
     delete_ids(
@@ -518,10 +518,10 @@ pub struct DeleteContacts {
 )]
 pub async fn delete_many(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<DeleteContacts>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if input.ids.len() > MAX_IMPORT {
         return Err(AppError::bad_request("too many contacts at once"));
     }
@@ -570,10 +570,10 @@ pub struct ImportResult {
 )]
 pub async fn import(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<ImportContacts>,
 ) -> AppResult<Json<ImportResult>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if input.contacts.is_empty() || input.contacts.len() > MAX_IMPORT {
         return Err(AppError::bad_request("import 1 to 500 contacts at once"));
     }
@@ -627,10 +627,10 @@ pub struct ContactEmailRow {
 )]
 pub async fn emails(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<EmailQuery>,
 ) -> AppResult<Json<Vec<ContactEmailRow>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(20).clamp(1, 200);
     let q = query.q.unwrap_or_default().trim().to_lowercase();
     let pattern = format!(

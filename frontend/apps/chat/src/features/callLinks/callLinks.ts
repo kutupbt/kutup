@@ -86,7 +86,7 @@ async function owned(callLinkRoot: CallLinkRoot, stored: StoredLink): Promise<Ow
     return null
   }
   const { hostToken } = wasm.callLinkHostToken(callLinkRoot, stored.nonce)
-  const account = getSession()?.userId
+  const account = getSession()?.accountId
   if (account) rememberHostToken(account, stored.roomId, hostToken)
   return {
     roomId: stored.roomId,
@@ -101,7 +101,7 @@ async function owned(callLinkRoot: CallLinkRoot, stored: StoredLink): Promise<Ow
 
 /** Make a meeting and register it with this server. */
 function forgetOwnHostToken(roomId: string): void {
-  const account = getSession()?.userId
+  const account = getSession()?.accountId
   if (account) forgetHostToken(account, roomId)
 }
 

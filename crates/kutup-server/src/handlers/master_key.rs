@@ -19,7 +19,7 @@ use crate::account_heads::{self, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::grants::{self, Purpose};
 use crate::handlers::opaque::RecordUpload;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::security_events;
 use crate::AppState;
 
@@ -88,11 +88,11 @@ fn checked(
 )]
 pub async fn rotate(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<RotateRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let session = user.session.session_id;
     let (record, server_key_id) = req.record.checked(&state)?;
     let recovery_verifier = crate::handlers::auth::hash_recovery_proof(&req.recovery_proof)?;
@@ -101,7 +101,7 @@ pub async fn rotate(
     let (_, grant) = grants::take(&mut *tx, &req.grant, &[Purpose::MasterKeyRotation])
         .await?
         .ok_or_else(grants::invalid)?;
-    if grant.user_id != user_id || grant.session_id != Some(session) {
+    if grant.account_id != user_id || grant.session_id != Some(session) {
         return Err(grants::invalid());
     }
     // The account row, locked: no listed write or other rotation between.

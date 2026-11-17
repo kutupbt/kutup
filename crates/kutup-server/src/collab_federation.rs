@@ -51,7 +51,7 @@ use crate::handlers::collab::{
 use crate::handlers::file_versions::{store_version, to_version_row, VersionTuple, VERSION_SELECT};
 use crate::handlers::trusted_uuid;
 use crate::hub::{self, WsOut};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 use kutup_crypto::account_ref::AccountRef;
 
@@ -1255,7 +1255,7 @@ struct RemoteTarget {
     file_id: Uuid,
     /// The local account the share is theirs: its devices are the only ones
     /// home accepts through this capability.
-    user_id: Uuid,
+    account_id: Uuid,
 }
 
 struct Bridge {
@@ -1278,7 +1278,7 @@ struct Bridge {
 fn room_key(target: &RemoteTarget) -> String {
     format!(
         "remote:{}:{}:{}",
-        target.domain, target.file_id, target.user_id
+        target.domain, target.file_id, target.account_id
     )
 }
 
@@ -1672,7 +1672,7 @@ async fn target_for(
                 domain,
                 capability,
                 file_id: *file_id,
-                user_id,
+                account_id: user_id,
             })
         }
         RemoteRoute::File { share_id } => {
@@ -1690,7 +1690,7 @@ async fn target_for(
                 domain,
                 capability,
                 file_id,
-                user_id,
+                account_id: user_id,
             })
         }
     }
@@ -1754,7 +1754,7 @@ async fn bridge_ws(
 ) -> AppResult<Response> {
     let device = authenticate_socket(&state, &headers, &q).await?;
     let tab = q.tab();
-    let target = target_for(&state, device.user_id, &route).await?;
+    let target = target_for(&state, device.account_id, &route).await?;
     // Subscribed before the upgrade: a share gone or not reachable answers here.
     let (bridge, subscribed) = bridge_join(&state, &target).await?;
     let max_frame = envelope::MAX_PLAINTEXT_BYTES + envelope::MIN_PACKED;
@@ -1775,7 +1775,7 @@ async fn bridge_connection(
     device: crate::account_devices::FrameDevice,
     tab: String,
 ) {
-    let user_uuid = device.user_id;
+    let user_uuid = device.account_id;
     let hub = state.hub.clone();
     let key = bridge.key.clone();
     let (username, color): (String, String) = sqlx::query_as(
@@ -1929,16 +1929,16 @@ async fn bridge_replay(state: &AppState, bridge: &Bridge, peer: &hub::Peer, sinc
 
 async fn relayed_target(
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     route: RemoteRoute,
 ) -> AppResult<(RemoteTarget, Uuid)> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok((target_for(state, user_id, &route).await?, user_id))
 }
 
 async fn relay_versions(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
 ) -> AppResult<Response> {
     let (target, _) = relayed_target(&state, &user, route).await?;
@@ -1957,7 +1957,7 @@ async fn relay_versions(
 
 async fn relay_version_download(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     vid: String,
 ) -> AppResult<Response> {
@@ -1990,7 +1990,7 @@ async fn relay_version_download(
 
 async fn relay_version_create(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
@@ -2073,7 +2073,7 @@ async fn relay_version_create(
 /// A file's asset on another server, for this server's user.
 async fn relay_asset_download(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     asset_id: String,
 ) -> AppResult<Response> {
@@ -2110,7 +2110,7 @@ async fn relay_asset_download(
 /// multipart `file` part, as for local assets).
 async fn relay_asset_upload(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     asset_id: String,
     mut multipart: Multipart,
@@ -2178,7 +2178,7 @@ pub struct RelayedPatch {
 
 async fn relay_version_patch(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
     vid: String,
     patch: RelayedPatch,
@@ -2203,7 +2203,7 @@ async fn relay_version_patch(
 
 async fn relay_claim_seed(
     state: AppState,
-    user: AuthUser,
+    user: AuthAccount,
     route: RemoteRoute,
 ) -> AppResult<Response> {
     let (target, _) = relayed_target(&state, &user, route).await?;
@@ -2226,21 +2226,21 @@ async fn relay_claim_seed(
 
 pub async fn folder_versions(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid)): Path<(String, String)>,
 ) -> AppResult<Response> {
     relay_versions(s, u, folder_route(&sid, &fid)?).await
 }
 pub async fn file_versions(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     relay_versions(s, u, file_route(&id)?).await
 }
 pub async fn folder_version_create(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid)): Path<(String, String)>,
     m: Multipart,
 ) -> AppResult<Response> {
@@ -2248,7 +2248,7 @@ pub async fn folder_version_create(
 }
 pub async fn file_version_create(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path(id): Path<String>,
     m: Multipart,
 ) -> AppResult<Response> {
@@ -2256,21 +2256,21 @@ pub async fn file_version_create(
 }
 pub async fn folder_version_download(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid, vid)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     relay_version_download(s, u, folder_route(&sid, &fid)?, vid).await
 }
 pub async fn file_version_download(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((id, vid)): Path<(String, String)>,
 ) -> AppResult<Response> {
     relay_version_download(s, u, file_route(&id)?, vid).await
 }
 pub async fn folder_version_patch(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid, vid)): Path<(String, String, String)>,
     Json(p): Json<RelayedPatch>,
 ) -> AppResult<Response> {
@@ -2278,7 +2278,7 @@ pub async fn folder_version_patch(
 }
 pub async fn file_version_patch(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((id, vid)): Path<(String, String)>,
     Json(p): Json<RelayedPatch>,
 ) -> AppResult<Response> {
@@ -2286,35 +2286,35 @@ pub async fn file_version_patch(
 }
 pub async fn folder_claim_seed(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid)): Path<(String, String)>,
 ) -> AppResult<Response> {
     relay_claim_seed(s, u, folder_route(&sid, &fid)?).await
 }
 pub async fn file_claim_seed(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     relay_claim_seed(s, u, file_route(&id)?).await
 }
 pub async fn folder_asset_download(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid, aid)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     relay_asset_download(s, u, folder_route(&sid, &fid)?, aid).await
 }
 pub async fn file_asset_download(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((id, aid)): Path<(String, String)>,
 ) -> AppResult<Response> {
     relay_asset_download(s, u, file_route(&id)?, aid).await
 }
 pub async fn folder_asset_upload(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((sid, fid, aid)): Path<(String, String, String)>,
     m: Multipart,
 ) -> AppResult<Response> {
@@ -2322,7 +2322,7 @@ pub async fn folder_asset_upload(
 }
 pub async fn file_asset_upload(
     State(s): State<AppState>,
-    u: AuthUser,
+    u: AuthAccount,
     Path((id, aid)): Path<(String, String)>,
     m: Multipart,
 ) -> AppResult<Response> {

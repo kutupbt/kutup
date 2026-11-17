@@ -91,7 +91,7 @@ export function ChatGate({ children }: { children: ReactNode }) {
         errorFallback={t('chat.deviceRecovery.failed')}
         onConfirm={() => {
           // The reset itself runs as the next open starts, before any keys load.
-          requestLocalChatDeviceReset(session.userId)
+          requestLocalChatDeviceReset(session.accountId)
           window.location.reload()
         }}
       />

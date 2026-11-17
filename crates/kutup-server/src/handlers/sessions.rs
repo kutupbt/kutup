@@ -15,13 +15,13 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::auth::{clear_refresh_cookie, client_header, refresh_cookie, user_agent};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::OkResponse;
 use crate::sessions::{self, ClientType};
 use crate::{jwt, AppState};
 
-fn user_uuid(user: &AuthUser) -> AppResult<Uuid> {
-    Uuid::parse_str(&user.user_id).map_err(|_| AppError::unauthorized("unauthorized"))
+fn user_uuid(user: &AuthAccount) -> AppResult<Uuid> {
+    Uuid::parse_str(&user.account_id).map_err(|_| AppError::unauthorized("unauthorized"))
 }
 
 /// `POST /api/auth/logout` — ends the whole sign-in the caller belongs to: the
@@ -34,7 +34,7 @@ fn user_uuid(user: &AuthUser) -> AppResult<Uuid> {
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Signed out", body = OkResponse))
 )]
-pub async fn logout(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn logout(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
     // Recorded first: the session's client and browser are copied from it.
     // Best effort: a log that can't be written never keeps anyone signed in.
     log(&state, &user, crate::security_events::Kind::SignOut).await;
@@ -86,7 +86,10 @@ pub struct SessionView {
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Live sessions", body = [SessionView]))
 )]
-pub async fn list_sessions(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn list_sessions(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Response> {
     let rows = sessions::list(&state.pool, user_uuid(&user)?).await?;
     let own = user.session.session_id;
     let own_root = rows
@@ -121,7 +124,7 @@ pub async fn list_sessions(State(state): State<AppState>, user: AuthUser) -> App
 )]
 pub async fn revoke_session(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("session not found"))?;
@@ -143,7 +146,7 @@ pub async fn revoke_session(
 )]
 pub async fn revoke_other_sessions(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Response> {
     sessions::revoke_all_for_user(
         &state.pool,
@@ -163,7 +166,7 @@ pub async fn revoke_other_sessions(
 /// `kind` in the account's security log, made by the calling session
 /// (docs/plans/server-personal-data.md, A8). Best effort: what it records
 /// goes on whether or not the log could be written (a failure is logged).
-async fn log(state: &AppState, user: &AuthUser, kind: crate::security_events::Kind) {
+async fn log(state: &AppState, user: &AuthAccount, kind: crate::security_events::Kind) {
     let written: AppResult<()> = async {
         let mut tx = state.pool.begin().await?;
         crate::security_events::record(
@@ -212,7 +215,7 @@ pub struct CreateForkResponse {
 )]
 pub async fn create_fork(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<CreateForkRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
@@ -249,7 +252,7 @@ pub struct ConsumeForkRequest {
 pub struct ConsumeForkResponse {
     access_token: String,
     session_id: String,
-    user_id: String,
+    account_id: String,
     /// The `SessionFork` envelope, canonical base64; the key is in the child's URL fragment.
     payload: String,
 }
@@ -288,7 +291,7 @@ pub async fn consume_fork(
     let consumed =
         sessions::consume_fork(&state.pool, &req.selector, child, user_agent(&headers)).await?;
     let access = jwt::generate_access_token(
-        &consumed.user_id.to_string(),
+        &consumed.account_id.to_string(),
         consumed.is_admin,
         &consumed.issued.session_id.to_string(),
         &state.config.jwt_secret,
@@ -297,7 +300,7 @@ pub async fn consume_fork(
     let body = ConsumeForkResponse {
         access_token: access,
         session_id: consumed.issued.session_id.to_string(),
-        user_id: consumed.user_id.to_string(),
+        account_id: consumed.account_id.to_string(),
         payload: STANDARD.encode(&consumed.payload),
     };
     // Each app's origin gets its own known-client mark (`auth_check`), so
@@ -311,7 +314,7 @@ pub async fn consume_fork(
             ),
             (
                 SET_COOKIE,
-                crate::auth_check::known_client_cookie(&state, consumed.user_id).await?,
+                crate::auth_check::known_client_cookie(&state, consumed.account_id).await?,
             ),
         ]),
         Json(body),
@@ -339,7 +342,7 @@ pub struct LocalKeyBody {
 )]
 pub async fn put_local_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<LocalKeyBody>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
@@ -360,7 +363,10 @@ pub async fn put_local_key(
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The session's local key", body = LocalKeyBody), (status = 404, description = "None stored"))
 )]
-pub async fn get_local_key(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn get_local_key(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Response> {
     let key = sessions::local_key(&state.pool, &user.session)
         .await?
         .ok_or_else(|| AppError::not_found("no local key"))?;

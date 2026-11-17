@@ -7,7 +7,7 @@ export interface VersionRow {
   storagePath: string
   seqAtSnapshot: number
   docKeyId: number
-  authorUserId: string
+  authorAccountId: string
   sizeBytes: number
   label: string | null
   keepForever: boolean
@@ -16,7 +16,7 @@ export interface VersionRow {
   kind: 'file' | 'yjs'
   /** The generation of the file key it was sealed under (docs/plans/drive-move.md). */
   keyGeneration: number
-  /** Saved by someone on another server (`user@server`); the owner is `authorUserId` then. */
+  /** Saved by someone on another server (`user@server`); the owner is `authorAccountId` then. */
   remoteAuthor?: string
   /** A whole-file version: the version it replaced (`null`: the original upload, or not recorded). */
   parentVersionId?: string | null

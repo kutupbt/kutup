@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::site_settings::{
     CALENDARS_PER_ACCOUNT, CALENDAR_DEFAULT_REMINDERS, CALENDAR_EVENTS_PAGE,
     CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_MAX_COUNT, CALENDAR_REMINDERS_PER_EVENT,
@@ -91,7 +91,7 @@ fn crypto(error: kutup_crypto::error::CryptoError) -> AppError {
 pub struct CalendarView {
     pub id: Uuid,
     /// The owner's account id (on this server): who shared the passphrase.
-    pub owner_id: Uuid,
+    pub owner_account_id: Uuid,
     pub public_key: String,
     pub fingerprint: String,
     pub locked_secret_key: String,
@@ -156,7 +156,7 @@ const VIEW: &str =
 fn view(row: ViewRow) -> CalendarView {
     CalendarView {
         id: row.id,
-        owner_id: row.owner_id,
+        owner_account_id: row.owner_id,
         public_key: STANDARD.encode(row.public_key),
         fingerprint: row.fingerprint,
         locked_secret_key: STANDARD.encode(row.locked_secret_key),
@@ -197,8 +197,11 @@ async fn fetch(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<CalendarV
     security(("BearerAuth" = [])),
     responses((status = 200, body = CalendarList))
 )]
-pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<CalendarList>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn list(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<CalendarList>> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<ViewRow> = sqlx::query_as(&format!(
         "{VIEW} WHERE m.account_id = $1 ORDER BY c.created_at, c.id"
     ))
@@ -274,10 +277,10 @@ pub struct CalendarCreate {
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<CalendarCreate>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     limited(user_id)?;
     if input.id.get_version_num() != 4 {
         return Err(AppError::bad_request("a calendar's id is a UUID v4"));
@@ -412,11 +415,11 @@ pub struct CalendarUpdate {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<Uuid>,
     Json(input): Json<CalendarUpdate>,
 ) -> AppResult<Json<CalendarView>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     limited(user_id)?;
     if let Some(defaults) = &input.default_reminders {
         let most =
@@ -514,10 +517,10 @@ pub async fn update(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     limited(user_id)?;
     let mut tx = state.pool.begin().await?;
     let found: Option<(i32, Uuid, i64)> = sqlx::query_as(
@@ -735,11 +738,11 @@ fn instant(value: &str, what: &str) -> AppResult<time::OffsetDateTime> {
 )]
 pub async fn events(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<Uuid>,
     Query(query): Query<EventsQuery>,
 ) -> AppResult<Json<EventPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let (start, end) = (instant(&query.start, "start")?, instant(&query.end, "end")?);
     let window_days = CALENDAR_WINDOW_DAYS.load(&state.pool).await?;
     if end <= start || end - start > time::Duration::days(window_days) {
@@ -807,10 +810,10 @@ pub async fn events(
 )]
 pub async fn event(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((id, event_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<EventView>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut conn = state.pool.acquire().await?;
     if member_permissions(&mut conn, user_id, id).await? & READ == 0 {
         return Err(AppError::forbidden("this calendar shows busy times only"));
@@ -1123,11 +1126,11 @@ async fn check_event_blocking(
 )]
 pub async fn sync(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<Uuid>,
     Json(input): Json<EventSync>,
 ) -> AppResult<Json<EventSyncResults>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     limited(user_id)?;
     let batch = CALENDAR_SYNC_BATCH.load(&state.pool).await?;
     if input.changes.is_empty() || input.changes.len() as i64 > batch {

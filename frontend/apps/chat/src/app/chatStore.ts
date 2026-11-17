@@ -56,7 +56,7 @@ export interface ChatSelf {
   /** Its address now (`username@server`): shown only, never a key. */
   address: string
   /** The account's id: what this browser keys the account's local state by, never a name. */
-  userId: string
+  accountId: string
 }
 
 export interface ChatSnapshot extends ChatData {
@@ -264,13 +264,13 @@ export function openChat(session: Session, install?: ChatInstall): void {
       set({ status: 'failed', failure: 'unavailable', capabilities })
       return
     }
-    const account: AccountRef = { server: capabilities.serverName, accountId: session.userId }
-    const mediaCache = privateCiphertextCacheForAccountV1(session.userId)
+    const account: AccountRef = { server: capabilities.serverName, accountId: session.accountId }
+    const mediaCache = privateCiphertextCacheForAccountV1(session.accountId)
     void mediaCache.initialize().catch((error: unknown) => console.warn('chat: media cache unavailable', error))
     let service: ChatService
     try {
       service = await ChatService.open({
-        userId: session.userId,
+        accountId: session.accountId,
         envelopeBinding: session.envelopeBinding,
         account,
         displayName: session.username,
@@ -332,7 +332,7 @@ export function openChat(session: Session, install?: ChatInstall): void {
         account,
         key: accountKey(account),
         address: `${session.username}@${capabilities.serverName}`,
-        userId: session.userId,
+        accountId: session.accountId,
       },
       mediaCache,
       connection: service.connectionStatus(),

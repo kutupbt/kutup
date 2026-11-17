@@ -146,10 +146,10 @@ pub struct RefreshResponse {
     pub refresh_token: Option<String>,
 }
 
-/// `GET /api/user/me` — mirrors `handlers.MeResponse`.
+/// `GET /api/user/me` — mirrors `handlers.AccountResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct MeResponse {
+pub struct AccountResponse {
     pub id: String,
     /// The account's permanent id (= `id`), with `server` what names the
     /// account everywhere (docs/plans/account-ids.md).
@@ -217,7 +217,7 @@ pub struct TotpCodeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionRow {
     pub id: String,
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     pub name_envelope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_key_envelope: Option<String>,
@@ -322,7 +322,7 @@ pub struct UpdateColorRequest {
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ShareCollectionRequest {
-    pub recipient_user_id: String,
+    pub recipient_account_id: String,
     pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
@@ -335,7 +335,7 @@ pub struct ShareCollectionRequest {
 pub struct FileRow {
     pub id: String,
     pub collection_id: String,
-    pub uploader_user_id: String,
+    pub uploader_account_id: String,
     pub metadata_envelope: String,
     pub file_key_envelope: String,
     /// The folder epoch the file key is wrapped at; below the folder's own
@@ -422,7 +422,7 @@ pub struct UploadResult {
 #[serde(rename_all = "camelCase")]
 pub struct TrashFolderRow {
     pub id: String,
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     pub name_envelope: String,
     pub owner_key_envelope: String,
     pub key_epoch: i32,
@@ -452,7 +452,7 @@ pub struct TrashFileRow {
     pub key_epoch: i32,
     pub key_generation: i32,
     pub metadata_revision: i64,
-    pub collection_owner_user_id: String,
+    pub collection_owner_account_id: String,
     pub collection_owner_key_envelope: String,
     pub collection_key_epoch: i32,
     pub collection_epoch_statement: String,
@@ -496,15 +496,15 @@ pub struct PublicShareResponse {
     pub target_id: String,
     pub collection_key_envelope: String,
     pub collection_key_epoch: i32,
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub expires_at: Option<OffsetDateTime>,
 }
 
-/// `POST /api/admin/users` body — mirrors `handlers.CreateAdminUserRequest`.
+/// `POST /api/admin/users` body — mirrors `handlers.CreateAdminAccountRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateAdminUserRequest {
+pub struct CreateAdminAccountRequest {
     pub username: String,
     /// The temporary password, registered by the administrator's client.
     #[serde(flatten)]
@@ -512,10 +512,10 @@ pub struct CreateAdminUserRequest {
     pub storage_quota_bytes: i64,
 }
 
-/// `PUT /api/admin/users/{id}` body — mirrors `handlers.UpdateAdminUserRequest`.
+/// `PUT /api/admin/users/{id}` body — mirrors `handlers.UpdateAdminAccountRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct UpdateAdminUserRequest {
+pub struct UpdateAdminAccountRequest {
     pub storage_quota_bytes: Option<i64>,
     /// False suspends the account; true makes a suspended or closing account
     /// active again (a closing one is kept).
@@ -562,8 +562,8 @@ pub struct UpdateAdminSettingsRequest {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsResponse {
-    pub total_users: i64,
-    pub active_users: i64,
+    pub total_accounts: i64,
+    pub active_accounts: i64,
     pub total_files: i64,
     #[serde(rename = "totalStorageUsedBytes")]
     pub total_storage_used: i64,
@@ -606,7 +606,7 @@ mod tests {
         // Go `,omitempty` pointers/bool are absent when nil/false.
         let row = CollectionRow {
             id: "c1".into(),
-            owner_user_id: "u1".into(),
+            owner_account_id: "u1".into(),
             name_envelope: "n".into(),
             owner_key_envelope: Some("k".into()),
             named_share_envelope: None,
@@ -650,7 +650,7 @@ mod tests {
             target_id: "c1".into(),
             collection_key_envelope: "envelope".into(),
             collection_key_epoch: 1,
-            owner_user_id: "u1".into(),
+            owner_account_id: "u1".into(),
             expires_at: None,
         };
         let v: serde_json::Value = serde_json::to_value(&resp).unwrap();

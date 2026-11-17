@@ -22,7 +22,7 @@ use crate::drive_federation::{
 use kutup_crypto::account_ref::AccountRef;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const MAX_IDENTITY_RESPONSE_BYTES: usize = 64 * 1024;
@@ -156,7 +156,7 @@ pub(crate) fn forget_remote(server: &str, incarnation_id: &str) {
 )]
 pub async fn by_id(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(account_id): Path<String>,
     Query(query): Query<ByIdQuery>,
 ) -> AppResult<Response> {
@@ -175,10 +175,10 @@ pub async fn by_id(
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
-    remote_account(&state, &user.user_id, &person)
+    remote_account(&state, &user.account_id, &person)
         .await?
         .map(|found| Json(found).into_response())
         .ok_or_else(|| AppError::not_found("no such account"))

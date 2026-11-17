@@ -406,7 +406,7 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
         mayRename={
           liveFolder.source === 'file'
             ? liveFolder.canUpload
-            : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)
+            : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderAccountId === session.accountId)
         }
         onRestored={(bytes, base) => {
           if (opened.kind === 'office' || opened.kind === 'whiteboard') {

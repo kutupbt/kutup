@@ -571,7 +571,7 @@ malformed finalization is a `400`.
 {
   "accessToken": "<jwt>",
   "sessionId": "<uuid>",
-  "userId": "<uuid>",
+  "accountId": "<uuid>",
   "username": "alice",
   "masterKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "accountRoots": ["<canonical base64 AccountRecordV1>", "…"],
@@ -608,7 +608,7 @@ silently. Nobody's sign-in ends for that.
 
 **Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
 
-**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>", "userId": "<uuid>", "username": "alice"}` — proceed to `/api/auth/complete-setup` (`userId` is the account id the new keys' `driveKeyBinding` names). Its temporary password was registered by the administrator's client; the server never had it.
+**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>", "accountId": "<uuid>", "username": "alice"}` — proceed to `/api/auth/complete-setup` (`accountId` is the account id the new keys' `driveKeyBinding` names). Its temporary password was registered by the administrator's client; the server never had it.
 
 **Response (a reauth):** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>" }`.
 
@@ -812,7 +812,7 @@ Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't ye
 **Request body:** Same shape as `POST /api/auth/register` (the key bundle, the
 OPAQUE record of the person's own password under a key binding they drew now,
 registered with the setup token as Bearer, and the required `driveKeyBinding`
-for the account's id, the `userId` of the first sign-in; `username` is
+for the account's id, the `accountId` of the first sign-in; `username` is
 ignored, and `accountId`/`accountIdProof` are refused: the account has its
 id). The temporary password's
 record goes with it.
@@ -822,7 +822,7 @@ record goes with it.
 {
   "accessToken": "<jwt>",
   "sessionId": "<uuid>",
-  "userId": "<uuid>",
+  "accountId": "<uuid>",
   "username": "alice",
   "isAdmin": false,
   "storageQuotaBytes": 5368709120,
@@ -927,7 +927,7 @@ on its own origin. Rate-limited with login.
 {
   "accessToken": "<jwt>",
   "sessionId": "<uuid>",
-  "userId": "<uuid>",
+  "accountId": "<uuid>",
   "payload": "<the SessionFork envelope, canonical base64>"
 }
 ```
@@ -1277,7 +1277,7 @@ usable admin.
 
 A sign-in of a closing account that passed every step answers (`409
 accountDeleting` once its date has passed; a closing account that was
-suspended doesn't sign in at all), instead of a session, `{"userId", "username", "closing": {"closesAt", "grant"}}`: the grant
+suspended doesn't sign in at all), instead of a session, `{"accountId", "username", "closing": {"closesAt", "grant"}}`: the grant
 (purpose `keep`, minutes, once) keeps the account here. The account is active
 again (`accountKept`), and the answer is the sign-in's, with the session.
 
@@ -1709,7 +1709,7 @@ envelope is returned in the other row type.
 [
   {
     "id": "<uuid>",
-    "ownerUserId": "<uuid>",
+    "ownerAccountId": "<uuid>",
     "nameEnvelope": "<DriveEnvelopeV1 base64>",
     "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
     "keyEpoch": 1,
@@ -1796,7 +1796,7 @@ owner-vs-recipient key-envelope separation as the list route.
 ```json
 {
   "id": "<uuid>",
-  "ownerUserId": "<uuid>",
+  "ownerAccountId": "<uuid>",
   "nameEnvelope": "<DriveEnvelopeV1 base64>",
   "ownerKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "keyEpoch": 1,
@@ -1873,7 +1873,7 @@ Share a collection with another user on this server.
 **Request body:**
 ```json
 {
-  "recipientUserId": "<uuid>",
+  "recipientAccountId": "<uuid>",
   "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
   "canUpload": false,
   "canDelete": false,
@@ -2632,7 +2632,7 @@ only seeds the stored value when the server starts without one.
 
 Admin only. The list: accounts that sent outside in the last week, or have
 their own limits, a pause or a flag, paused and flagged first:
-`[{ "userId", "username", "sentDay", "sentWeek", "bouncesWeek",
+`[{ "accountId", "username", "sentDay", "sentWeek", "bouncesWeek",
 "spamRefusedWeek", "perHour", "perDay", "pausedAt", "pausedReason",
 "flaggedAt", "flagReason" }]` (counts only, never content). `attention=true`
 keeps only paused and flagged ones. The update takes `{ "perHour"?, "perDay"?
@@ -2654,7 +2654,7 @@ active administrator.
 
 - `GET /api/mail/groups` — the caller's groups, with `myRole` and
   `myCanSendAs`.
-- `GET /api/mail/accounts?address=` — `{ "userId", "username", "address" }`
+- `GET /api/mail/accounts?address=` — `{ "accountId", "username", "address" }`
   of the active account at a Kutup address with a mail key, so members are
   added by address (there is no user search). Rate-limited like user lookup.
 - `GET /api/mail/groups/directory?q=` — up to 10 groups whose address or name
@@ -2662,13 +2662,13 @@ active administrator.
   suggestions.
 - Message rows carry `groupAddress` (the list or shared mailbox a copy came
   through) and `sentBy` (who sent a shared mailbox's message).
-- `GET /api/mail/groups/:id` — `{ "group", "members": [{ "userId", "username",
+- `GET /api/mail/groups/:id` — `{ "group", "members": [{ "accountId", "username",
   "address", "role", "canSendAs", "active" }], "goesToAdministrators" }`, for
   members and administrators.
 - `PATCH /api/mail/groups/:id` — `displayName`, `description`, `postPolicy`
   (`anyone`, `local`, `members`, `managers`; role addresses stay `anyone`),
   for owners, managers and administrators.
-- `PUT /api/mail/groups/:id/members` — `{ "members": [{ "userId", "role":
+- `PUT /api/mail/groups/:id/members` — `{ "members": [{ "accountId", "role":
   "owner" | "manager" | "member", "canSendAs" }] }`, the whole list. Owners
   and administrators change anyone; managers neither add, remove nor change
   owners; a group other than a role address keeps an owner. At most 1000.
@@ -2716,10 +2716,10 @@ active administrator.
     keys); `403 handoverNeeded` for a new signer without a handover from
     anyone but an administrator (who starts a new chain).
   - `PUT /api/mail/groups/:id/members` also takes `keyShares` (`[{
-    "groupFingerprint", "userId", "share" }]`, every existing key for each
+    "groupFingerprint", "accountId", "share" }]`, every existing key for each
     joining member; `400` `sharesNeeded`) and `newKey` (required when anyone
     leaves, with a share for exactly the members who stay; `400`
-    `newKeyNeeded`), and `signerShares` (`[{ "userId", "share" }]`, the
+    `newKeyNeeded`), and `signerShares` (`[{ "accountId", "share" }]`, the
     signer in force's seed for owners and managers who lack it: joining,
     promoted, or reset since). Losing an owner or manager (removed, or no
     longer one) needs `newKey` with a new `signer` (`400 newSignerNeeded`).
@@ -3173,7 +3173,7 @@ of `GET /api/collections` and the trash. Each item is a file and its key
 sealed under the album key (Drive envelope purpose 12: object = file,
 parent = album, epoch = album epoch, revision = file key generation).
 
-- `GET /api/albums`: your albums (`{ id, ownerUserId, nameEnvelope,
+- `GET /api/albums`: your albums (`{ id, ownerAccountId, nameEnvelope,
   ownerKeyEnvelope, keyEpoch, nameRevision, epochStatement,
   epochStatementHash, itemCount, createdAt, updatedAt }`).
 - `POST /api/albums`: a new album, with the body of `POST /api/collections`
@@ -3376,7 +3376,7 @@ List files in a collection.
   {
     "id": "<uuid>",
     "collectionId": "<uuid>",
-    "uploaderUserId": "<uuid>",
+    "uploaderAccountId": "<uuid>",
     "metadataEnvelope": "<DriveEnvelopeV1 base64>",
     "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
     "keyEpoch": 1,
@@ -3669,7 +3669,7 @@ recipients: `GET /api/drive/federation/shares/:shareId/epochs`.
 
 ### GET /api/collections/:id/access
 
-Owner only. `{ keyEpoch, epochStatementHash, members: [{ userId, account,
+Owner only. `{ keyEpoch, epochStatementHash, members: [{ accountId, account,
 accountIncarnationId, drivePublicKey, driveSigningPublicKey, canUpload, canDelete, uploadQuotaBytes,
 createdAt }], publicLinks: [{ id, token, ownerLinkKeyEnvelope, expiresAt?,
 createdAt }], federatedShares: [{ id, recipientUsername, recipientServer,
@@ -3679,9 +3679,9 @@ Every link carries `ownerLinkKeyEnvelope`, so a rotation re-wraps it.
 ### POST /api/collections/:id/rotate
 
 Owner only; all or nothing. **Body:** `{ fromEpoch, epochStatement,
-ownerKeyEnvelope, previousKeyEnvelope, nameEnvelope, members: [{ userId,
+ownerKeyEnvelope, previousKeyEnvelope, nameEnvelope, members: [{ accountId,
 namedShareEnvelope }], publicLinks: [{ id, collectionKeyEnvelope }],
-federatedShares: [{ id, namedShareEnvelope }], removed: { members: [userId],
+federatedShares: [{ id, namedShareEnvelope }], removed: { members: [accountId],
 publicLinks: [id], federatedShares: [id] } }`. The statement must chain from
 the current one under the owner's authority; the owner key, previous-key and
 name (next name revision) envelopes must be at `fromEpoch + 1`; every kept
@@ -3734,24 +3734,24 @@ epoch. Otherwise `403`, and the share waits for the owner. Rename, move,
 delete and share stay with the owner. A file in the trash is out of reach
 through its shares.
 
-- **`POST /api/files/:id/share`**: owner only. **Body:** `{ recipientUserId,
+- **`POST /api/files/:id/share`**: owner only. **Body:** `{ recipientAccountId,
   shareEnvelope, canEdit }`. The envelope must be at the file's current
   generation, sealed to that exact account (`400` otherwise). Sharing again
   replaces the envelope and permission. `204`.
 - **`GET /api/files/:id/access`**: owner only. `{ keyGeneration, members:
-  [{ userId, account, accountIncarnationId, drivePublicKey,
+  [{ accountId, account, accountIncarnationId, drivePublicKey,
   driveSigningPublicKey, canEdit, keyGeneration, createdAt }] }`. A member
   whose `keyGeneration` is below the file's is waiting to be re-sealed.
 - **`POST /api/files/:id/rotate`**: remove people, owner only, all or
   nothing. **Body:** `{ fromGeneration, fileKeyEnvelope, metadataEnvelope,
-  previousKeyEnvelope, members: [{ userId, shareEnvelope }], removed: [userId]
+  previousKeyEnvelope, members: [{ accountId, shareEnvelope }], removed: [accountId]
   }`. It uses the same new-generation envelopes as `rekey`, wrapped at the
   folder's current epoch, plus an envelope at the new generation for everyone
   who stays. Kept plus removed must be exactly the file's people and `removed`
   must not be empty, else `409`. Collaboration sockets on the file are
   closed. **Response:** the new `FileAccess`.
 - **`PUT /api/files/:id/shares`**: owner only. **Body:** `{ members: [{
-  userId, shareEnvelope }] }`. It re-seals shares left at an older generation
+  accountId, shareEnvelope }] }`. It re-seals shares left at an older generation
   (someone else re-keyed the file) at the current one. `204`.
 - **`GET /api/file-shares/pending`**: the caller's files with shares to bring
   up to date, `[{ fileId, collectionId }]`. These are shares below the file's
@@ -3759,7 +3759,7 @@ through its shares.
   re-keys the file if needed and re-seals.
 - **`GET /api/shared-files`**: files shared with the caller. `[{ file:
   FileRow, shareEnvelope, canEdit, keyGeneration, folderKeyCurrent, server,
-  ownerUserId, ownerAccount, ownerIncarnationId, ownerSigningPublicKey,
+  ownerAccountId, ownerAccount, ownerIncarnationId, ownerSigningPublicKey,
   sharedAt }]`. The owner and the sharer are accounts on `server`, by their
   user ids (as the envelope names them); `ownerAccount` and `sharerAccount`
   are their addresses now, shown only. With `keyGeneration` below `file.keyGeneration`, the current
@@ -3779,7 +3779,7 @@ rotation takes the folder's key). Envelopes the owner re-seals become the
 owner's.
 
 - `GET /api/shared-files` rows also carry the envelope's sender
-  (`sharerUserId`, `sharerAccount`, `sharerIncarnationId`,
+  (`sharerAccountId`, `sharerAccount`, `sharerIncarnationId`,
   `sharerSigningPublicKey`), which is
   the owner or an editor, plus `editorsCanShare`. A share left at an older
   generation carries `metadataAtShare: { envelope, revision }`: the file's
@@ -3861,7 +3861,7 @@ new name for the right place.
   "folders": [
     {
       "id": "<uuid>",
-      "ownerUserId": "<uuid>",
+      "ownerAccountId": "<uuid>",
       "nameEnvelope": "<DriveEnvelopeV1 base64>",
       "ownerKeyEnvelope": "<DriveEnvelopeV1 base64>",
       "keyEpoch": 1,
@@ -3882,7 +3882,7 @@ new name for the right place.
       "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
       "keyEpoch": 1,
       "metadataRevision": 1,
-      "collectionOwnerUserId": "<uuid>",
+      "collectionOwnerAccountId": "<uuid>",
       "collectionOwnerKeyEnvelope": "<DriveEnvelopeV1 base64>",
       "collectionKeyEpoch": 1,
       "collectionEpochStatement": "<CollectionEpochStatementV1 base64>",
@@ -4016,7 +4016,7 @@ Get metadata for a public share. The wrapped collection key is included; the lin
   "targetId": "<uuid>",
   "collectionKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "collectionKeyEpoch": 1,
-  "ownerUserId": "<uuid>",
+  "ownerAccountId": "<uuid>",
   "ownerAccount": "alice@example.org",
   "expiresAt": "2026-04-01T00:00:00Z",
   "collectionKind": "album",
@@ -4075,7 +4075,7 @@ List files in a public share.
 
 **Auth:** None
 
-**Response:** Array of file objects. Note: shape is similar to `GET /api/collections/:id/files` but **omits** `uploaderUserId` and `updatedAt`, and `createdAt` is serialized as a string (matches the database `TIMESTAMP` text form).
+**Response:** Array of file objects. Note: shape is similar to `GET /api/collections/:id/files` but **omits** `uploaderAccountId` and `updatedAt`, and `createdAt` is serialized as a string (matches the database `TIMESTAMP` text form).
 ```json
 [
   {
@@ -5082,7 +5082,7 @@ intended recipient username match the authenticated local account. Success is
   "nameRevision": 1,
   "epochStatement": "<CollectionEpochStatementV1 base64>",
   "epochStatementHash": "<lowercase SHA-256 hex>",
-  "ownerUserId": "<uuid>",
+  "ownerAccountId": "<uuid>",
   "ownerAccount": "alice@sharer.example.com",
   "ownerIncarnationId": "<lowercase SHA-256 hex>",
   "ownerSigningPublicKey": "<canonical base64, 32 bytes>",
@@ -5417,7 +5417,7 @@ the latest 100 resolved (`?status=resolved`). Each carries the report
 (`id`, `reason`, `details`, `link` while open, `createdAt`, `resolvedAt`,
 `resolution`: `dismissed`, `removed` or `disabled`), its link (`shareId`,
 `shareType`, `shareCreatedAt`, `shareRemovedAt`), the account that made it
-(`ownerUserId`, `ownerUsername`, `ownerIsActive`) and
+(`ownerAccountId`, `ownerUsername`, `ownerIsActive`) and
 `openReportsOnLink`.
 
 ### POST /api/admin/reports/:id/dismiss
@@ -5454,7 +5454,7 @@ in `PUT /api/admin/users/:id` (also in the user list and the account's
 
 Feedback: open items oldest first (default, `?status=open`), or the latest 100
 resolved (`?status=resolved`). Each carries `id`, `kind`, `app`, `message`,
-`details`, `createdAt`, who sent it (`userId`, `userUsername`;
+`details`, `createdAt`, who sent it (`accountId`, `userUsername`;
 null once the account is deleted), `resolvedAt`, `resolution` (`done`,
 `dismissed` or `forwarded`) and `githubUrl`.
 
@@ -5664,8 +5664,8 @@ Return aggregate server statistics.
 **Response:**
 ```json
 {
-  "totalUsers": 42,
-  "activeUsers": 39,
+  "totalAccounts": 42,
+  "activeAccounts": 39,
   "totalFiles": 1234,
   "totalStorageUsedBytes": 107374182400,
   "totalCollections": 87,
@@ -5697,9 +5697,9 @@ cursor remains stable.
     {
       "id": 7,
       "action": "user.create",
-      "adminUserId": "<uuid>",
+      "adminAccountId": "<uuid>",
       "adminUsername": "admin",
-      "targetUserId": "<uuid>",
+      "targetAccountId": "<uuid>",
       "targetUsername": "newuser",
       "payload": { "username": "newuser", "storageQuotaBytes": 10737418240 },
       "occurredAt": "2026-06-11T11:22:33Z"
@@ -5985,7 +5985,7 @@ in the audit log (`registration_code.created`, `registration_code.revoked`).
   `revoked`.
 - `POST /api/admin/registration-codes/{id}/revoke` → the row, revoked at once
   (also "expire now").
-- `GET /api/admin/registration-codes/{id}/uses` → `[{ userId, username,
+- `GET /api/admin/registration-codes/{id}/uses` → `[{ accountId, username,
   usedAt }]`, the accounts that signed up with it.
 - `GET /api/admin/users/{id}/registration-code` → `{ codeId, hint, note,
   createdBy, usedAt }`, the code an account signed up with, or `null`.
@@ -6246,7 +6246,7 @@ sending edits faster than 50 frames/s or 1 MiB/s sustained (bursts of 500
 frames / 16 MiB) is disconnected. Office edit frames stay in the log for a
 day, as a buffer for peers resuming after a dropped connection.
 
-On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{account, deviceId, userId}]}` (a device id is its account's: a peer is `account` and `deviceId` together). Every binary message the server sends is a delivered frame: the sender account (`AccountRef` bytes) then the packed frame (`envelope::deliver`); a client sends bare frames, and the server names it. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF3\0` format (`kutup-crypto::envelope`: the header names the sender's device id and manifest sequence; the signature covers the sender account too); the server rejects an unknown suite, malformed length, a frame of another device or naming a manifest sequence the account doesn't have, an invalid signature under the device's listed frame key, or any file/collection/epoch/document-generation mismatch.
+On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{account, deviceId, accountId}]}` (a device id is its account's: a peer is `account` and `deviceId` together). Every binary message the server sends is a delivered frame: the sender account (`AccountRef` bytes) then the packed frame (`envelope::deliver`); a client sends bare frames, and the server names it. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF3\0` format (`kutup-crypto::envelope`: the header names the sender's device id and manifest sequence; the signature covers the sender account too); the server rejects an unknown suite, malformed length, a frame of another device or naming a manifest sequence the account doesn't have, an invalid signature under the device's listed frame key, or any file/collection/epoch/document-generation mismatch.
 
 ### GET /api/files/:fileId/collab/frames and POST /api/files/:fileId/collab/frames
 
@@ -6325,7 +6325,7 @@ Remove both variants and release their bytes to whoever was charged.
 
 ### GET /api/files/:fileId/versions
 List all versions newest-first.
-**Response:** array of `{id, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId, revisionContentEnvelope}`.
+**Response:** array of `{id, storagePath, seqAtSnapshot, docKeyId, authorAccountId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId, revisionContentEnvelope}`.
 `revisionContentEnvelope` is the version's sealed content record ("What each
 revision is"); readers open it before the version (`null`: a streaming-format
 version).

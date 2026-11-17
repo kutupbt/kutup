@@ -232,7 +232,7 @@ fn administrators_set_rate_limits() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["action"] == "user.rate_limit" && e["targetUserId"] == own_id),
+            .any(|e| e["action"] == "user.rate_limit" && e["targetAccountId"] == own_id),
         "{activity}"
     );
 }

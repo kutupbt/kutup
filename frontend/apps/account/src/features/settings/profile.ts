@@ -41,7 +41,7 @@ export function useAccountAddress(): string | null {
 export function useProfileAccount(): string | null {
   const session = useRequiredSession()
   const server = useServerName()
-  return server ? accountKeyOf({ server, accountId: session.userId }) : null
+  return server ? accountKeyOf({ server, accountId: session.accountId }) : null
 }
 
 async function fetchSealed(): Promise<unknown> {

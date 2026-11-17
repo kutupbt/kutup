@@ -325,7 +325,7 @@ fn move_folder(
             let Some(dest) = cols.iter().find(|c| c.id == *to) else {
                 return Err(destination_not_found(ctx, to, "folder"));
             };
-            if dest.is_shared || dest.owner_user_id != col.owner_user_id {
+            if dest.is_shared || dest.owner_account_id != col.owner_account_id {
                 return Err(UsageError(format!(
                     "folder {to} belongs to someone else: a folder moves only among your own \
                      folders (to put its contents there, download them and upload them there)"
@@ -436,7 +436,7 @@ fn check_file_move(source: &Collection, dest: &Collection) -> Result<()> {
     if source.id == dest.id {
         bail!("the file is already in that folder");
     }
-    if source.owner_user_id != dest.owner_user_id {
+    if source.owner_account_id != dest.owner_account_id {
         return Err(UsageError(
             "a file moves only between folders of the same owner; to put it in the other \
              folder, download it and upload it there"
@@ -492,7 +492,7 @@ mod tests {
         Collection {
             name_hash: None,
             id: id.into(),
-            owner_user_id: owner.into(),
+            owner_account_id: owner.into(),
             name_envelope: String::new(),
             owner_key_envelope: None,
             named_share_envelope: None,

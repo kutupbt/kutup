@@ -49,7 +49,7 @@ export function createdFolder(
     name,
     key: created.collectionKey,
     keyEpoch: 1,
-    ownerUserId: me.userId,
+    ownerAccountId: me.accountId,
     ownerAuthorityPublicKey: me.authorityPublicKey,
     epochStatementHash: created.epochStatementHash,
     nameRevision: 1,
@@ -122,7 +122,7 @@ export async function copyFolder(
   onFileDone: () => void,
 ): Promise<void> {
   signal.throwIfAborted()
-  const created = await createOwnedCollectionV1(me, me.userId, name, destParent.id)
+  const created = await createOwnedCollectionV1(me, me.accountId, name, destParent.id)
   await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(destParent), name) })
   const copy = createdFolder(me, destParent, created, name)
   const files = (await loadFolderFiles(source)).filter((f) => f.fileKey && f.name)

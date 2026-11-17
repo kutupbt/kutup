@@ -283,10 +283,10 @@ export function useRegistrationCodeUses(id: string | null) {
 }
 
 /** The code an account signed up with, or null. */
-export function useUserRegistrationCode(userId: string) {
+export function useUserRegistrationCode(accountId: string) {
   return useQuery({
-    queryKey: [...usersKey, userId, 'registration-code'],
-    queryFn: async () => (await api.get<SignedUpWith | null>(`/admin/users/${userId}/registration-code`)).data,
+    queryKey: [...usersKey, accountId, 'registration-code'],
+    queryFn: async () => (await api.get<SignedUpWith | null>(`/admin/users/${accountId}/registration-code`)).data,
   })
 }
 
@@ -378,7 +378,7 @@ export interface LinkReport {
   shareType: 'collection' | 'file'
   shareCreatedAt: string
   shareRemovedAt: string | null
-  ownerUserId: string
+  ownerAccountId: string
   ownerUsername: string
   ownerIsActive: boolean
   openReportsOnLink: number
@@ -394,8 +394,8 @@ export interface FeedbackItem {
   details: Partial<Record<'version' | 'browser' | 'language' | 'screen', string>> | null
   createdAt: string
   /** Null when the account was deleted since. */
-  userId: string | null
-  userUsername: string | null
+  accountId: string | null
+  username: string | null
   resolvedAt: string | null
   resolution: 'done' | 'dismissed' | 'forwarded' | null
   githubUrl: string | null

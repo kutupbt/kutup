@@ -24,7 +24,7 @@ use super::gateway::{self, Opened};
 use super::{keys, limits};
 use crate::error::{AppError, AppResult};
 use crate::federation::{FederationRequestSpec, FederationStack};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const GATEWAY_PATH: &str = "/api/fed/chat/groups/gateway";
@@ -84,7 +84,7 @@ pub struct GatewayKeyAnswer {
 )]
 pub async fn gateway_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<GatewayKeyQuery>,
 ) -> AppResult<Json<GatewayKeyAnswer>> {
     let federation = enabled(&state)?;
@@ -112,7 +112,7 @@ pub async fn gateway_key(
     // quiet for it until the switch is on again (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let remote = federation
@@ -188,7 +188,7 @@ fn opaque(status: StatusCode, body: Vec<u8>) -> Response {
 )]
 pub async fn relay(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(server): Path<String>,
     body: Bytes,
 ) -> AppResult<Response> {
@@ -196,7 +196,7 @@ pub async fn relay(
     if body.is_empty() || body.len() > MAX_SEALED {
         return Err(AppError::bad_request("sealed request size is invalid"));
     }
-    if !limits::relaying_user(&user.user_id) {
+    if !limits::relaying_user(&user.account_id) {
         return Err(AppError::too_many_requests("too many group requests"));
     }
     if server == federation.server_name() {
@@ -212,7 +212,7 @@ pub async fn relay(
     // quiet for it until the switch is on again (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let remote = federation

@@ -112,7 +112,7 @@ impl Client {
     fn knows(&self, account: Uuid, epoch: &[u8]) -> bool {
         self.signed_in_as == Some(account)
             || self.cookie.as_ref().is_some_and(|cookie| {
-                cookie.user_id == account
+                cookie.account_id == account
                     && cookie.is_valid(
                         &self.key,
                         epoch,
@@ -263,7 +263,7 @@ async fn known_client_key(state: &AppState) -> AppResult<[u8; 32]> {
 /// ‖ tag`, base64url; the tag is an HMAC over the account, the time and the
 /// account's credential epoch.
 struct KnownClient {
-    user_id: Uuid,
+    account_id: Uuid,
     issued_at: i64,
     tag: [u8; 16],
 }
@@ -275,7 +275,7 @@ impl KnownClient {
             return None;
         }
         Some(Self {
-            user_id: Uuid::from_slice(&bytes[..16]).ok()?,
+            account_id: Uuid::from_slice(&bytes[..16]).ok()?,
             issued_at: i64::from_be_bytes(bytes[16..24].try_into().ok()?),
             tag: bytes[24..].try_into().ok()?,
         })
@@ -288,7 +288,7 @@ impl KnownClient {
         };
         fresh
             && ct_eq(
-                &known_client_tag(key, self.user_id, self.issued_at, epoch),
+                &known_client_tag(key, self.account_id, self.issued_at, epoch),
                 &self.tag,
             )
     }
@@ -364,7 +364,7 @@ mod tests {
     fn opened(cookie: &str, epoch: &[u8], now: i64) -> Option<Uuid> {
         KnownClient::parse(cookie)
             .filter(|c| c.is_valid(&KEY, epoch, now))
-            .map(|c| c.user_id)
+            .map(|c| c.account_id)
     }
 
     #[test]

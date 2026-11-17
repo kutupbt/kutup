@@ -20,7 +20,7 @@ import type { Folder } from './model'
  */
 
 export interface AccessMember {
-  userId: string
+  accountId: string
   account: string
   accountIncarnationId: string
   drivePublicKey: string
@@ -68,7 +68,7 @@ export const accessKey = (folderId: string) => ['folder-access', folderId] as co
 
 /** A member: an account on this server (its user id is its account id). */
 function memberRef(me: DriveIdentity, member: AccessMember): AccountRef {
-  return { server: me.accountRef.server, accountId: member.userId }
+  return { server: me.accountRef.server, accountId: member.accountId }
 }
 
 async function loadAccess(folderId: string): Promise<FolderAccess> {
@@ -87,7 +87,7 @@ export function useFolderAccess(folder: Folder | undefined) {
 
 /** A link's key, from the owner's copy. */
 export function openLinkKey(link: AccessLink, me: DriveIdentity): Promise<Uint8Array> {
-  return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.roots, { linkId: link.id, ownerUserId: me.userId })
+  return openOwnerLinkKeyV1(link.ownerLinkKeyEnvelope, me.roots, { linkId: link.id, ownerAccountId: me.accountId })
 }
 
 export interface Removal {
@@ -156,7 +156,7 @@ export async function rotateFolder(
     throw new AccessChanged()
   }
   // Who stays, and the keys of those on other servers.
-  const keptMembers = access.members.filter((m) => !removed.members.includes(m.userId))
+  const keptMembers = access.members.filter((m) => !removed.members.includes(m.accountId))
   const keptRemote = await Promise.all(
     access.federatedShares
       .filter((f) => !removed.federatedShares.includes(f.id))
@@ -164,7 +164,7 @@ export async function rotateFolder(
   )
   const extra = pendingUpgradeRemoval(
     {
-      members: keptMembers.map((m) => ({ id: m.userId, account: m.account, identitySuite: m.identitySuite })),
+      members: keptMembers.map((m) => ({ id: m.accountId, account: m.account, identitySuite: m.identitySuite })),
       federatedShares: keptRemote.map(({ share, remote }) => ({ id: share.id, account: remote.account, identitySuite: remote.identitySuite })),
     },
     alsoRemove,
@@ -176,12 +176,12 @@ export async function rotateFolder(
     epoch: next,
     revision: BigInt(revision),
     objectId: folder.id,
-    parentId: me.userId,
+    parentId: me.accountId,
   })
   const [epochStatement, ownerKeyEnvelope, previousKeyEnvelope, nameEnvelope] = await Promise.all([
-    createCollectionEpochStatement(me.roots.identityRoot, key, folder.id, me.userId, next, folder.epochStatementHash),
-    sealOwnerCollectionKey(key, me.roots, { collectionId: folder.id, ownerUserId: me.userId, epoch: next }),
-    sealPreviousCollectionKey(folder.key, key, folder.id, me.userId, next),
+    createCollectionEpochStatement(me.roots.identityRoot, key, folder.id, me.accountId, next, folder.epochStatementHash),
+    sealOwnerCollectionKey(key, me.roots, { collectionId: folder.id, ownerAccountId: me.accountId, epoch: next }),
+    sealPreviousCollectionKey(folder.key, key, folder.id, me.accountId, next),
     sealDriveEnvelope(
       new TextEncoder().encode(folder.name),
       key,
@@ -202,9 +202,9 @@ export async function rotateFolder(
 
   const members = await Promise.all(
     keptMembers
-      .filter((m) => !extra.members.includes(m.userId))
+      .filter((m) => !extra.members.includes(m.accountId))
       .map(async (m) => ({
-        userId: m.userId,
+        accountId: m.accountId,
         namedShareEnvelope: await seal(sealableDriveKey(m.account, m.drivePublicKey, m.identitySuite), memberRef(me, m), m.accountIncarnationId),
       })),
   )
@@ -215,7 +215,7 @@ export async function rotateFolder(
         id: l.id,
         collectionKeyEnvelope: await sealPublicLinkCollectionKeyV1(key, await openLinkKey(l, me), {
           collectionId: folder.id,
-          ownerUserId: me.userId,
+          ownerAccountId: me.accountId,
           epoch: next,
         }),
       })),
@@ -283,7 +283,7 @@ export function useSetFolderPermissions() {
           recipientIncarnationId: member.accountIncarnationId,
         })
         await api.post(`/collections/${folder.id}/share`, {
-          recipientUserId: member.userId,
+          recipientAccountId: member.accountId,
           namedShareEnvelope,
           canUpload,
           canDelete,

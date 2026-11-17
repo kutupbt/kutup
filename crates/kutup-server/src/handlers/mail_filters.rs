@@ -15,7 +15,7 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::mail::filters::{self, Actions, Condition, Destination, Match};
 use crate::mail::headers::Mailbox;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Messages one batch of "apply to existing" reads and files.
@@ -102,9 +102,9 @@ type FilterRow = (
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<MailFilter>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<FilterRow> = sqlx::query_as(
         "SELECT id, name_sealed, enabled, position, match, conditions, actions, source
            FROM mail_filters WHERE account_id = $1 ORDER BY position, created_at",
@@ -194,10 +194,10 @@ async fn check_enabled_limit(
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateMailFilter>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&request.id).map_err(|_| AppError::bad_request("not an id"))?;
     check_sealed(&state, user_id, &id, &request.name).await?;
     filters::check(&request.conditions, &request.actions).map_err(AppError::bad_request)?;
@@ -272,11 +272,11 @@ pub struct UpdateMailFilter {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateMailFilter>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such filter"))?;
     let current: Option<(serde_json::Value, serde_json::Value, String)> = sqlx::query_as(
         "SELECT conditions, actions, name_sealed FROM mail_filters WHERE account_id = $1 AND id = $2",
@@ -362,11 +362,11 @@ pub async fn update(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<crate::account_heads::HeadOnly>>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such filter"))?;
     let head = NextHead::parse(body.and_then(|Json(body)| body.head).as_deref())?;
     let mut tx = state.pool.begin().await?;
@@ -403,10 +403,10 @@ pub struct OrderMailFilters {
 )]
 pub async fn order(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<OrderMailFilters>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let ids: Vec<Uuid> = request
         .ids
         .iter()
@@ -462,10 +462,10 @@ pub struct MailFilterRun {
 )]
 pub async fn apply(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<ApplyMailFilters>,
 ) -> AppResult<(StatusCode, Json<MailFilterRun>)> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let ids: Option<Vec<Uuid>> = request
         .ids
         .map(|ids| {
@@ -600,10 +600,10 @@ async fn run_filters(
 )]
 pub async fn run_status(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailFilterRun>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such run"))?;
     let row: Option<(i32, i32, i32, Option<OffsetDateTime>, bool)> = sqlx::query_as(
         "SELECT total, done, changed, finished_at, failed FROM mail_filter_runs WHERE account_id = $1 AND id = $2",

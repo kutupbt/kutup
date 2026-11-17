@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const MAX_NAME_CHARS: usize = 100;
@@ -125,10 +125,10 @@ async fn identity(
 )]
 pub async fn get(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<IdentityQuery>,
 ) -> AppResult<Json<MailIdentity>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(
         identity(&state, user_id, query.address_id.as_deref()).await?,
     ))
@@ -156,11 +156,11 @@ pub struct UpdateMailIdentity {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<IdentityQuery>,
     Json(request): Json<UpdateMailIdentity>,
 ) -> AppResult<Json<MailIdentity>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let name = request.display_name.as_deref().map(str::trim);
     if let Some(name) = name {
         if name.chars().count() > MAX_NAME_CHARS || name.chars().any(char::is_control) {

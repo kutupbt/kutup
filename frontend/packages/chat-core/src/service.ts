@@ -281,7 +281,7 @@ export class ChatServiceError extends Error {
 }
 
 export interface ChatServiceOptions {
-  userId: string
+  accountId: string
   /** What the account's sealed keys are bound to (`session.envelopeBinding`). */
   envelopeBinding: string
   /** This account: its server and permanent id. */
@@ -458,8 +458,8 @@ export class ChatService {
       throw new ChatServiceError('serverUnsupported')
     }
 
-    await completeRequestedLocalChatDeviceReset(options.userId)
-    const databaseName = await chatDeviceDatabaseName(options.userId)
+    await completeRequestedLocalChatDeviceReset(options.accountId)
+    const databaseName = await chatDeviceDatabaseName(options.accountId)
     const scope = databaseName.slice(databaseName.indexOf(':') + 1)
     const lockName = `kutup.chat.engine:${scope}`
     const channelName = `kutup.chat.updates:${scope}`
@@ -531,7 +531,7 @@ export class ChatService {
           ),
           mediaSources: () => service.backupMediaSources(),
           localMediaCiphertext: (descriptor, signal) =>
-            privateCiphertextCacheForAccountV1(options.userId).readVerified(
+            privateCiphertextCacheForAccountV1(options.accountId).readVerified(
               chatMediaCacheBindingV1(descriptor), signal,
             ),
           sealer: service.sealedStorage,
@@ -546,8 +546,8 @@ export class ChatService {
         service.backupUnsubscribe = service.backup.subscribe(() => service.emitUpdate())
       }
       await service.syncOwnManifest()
-      await service.revokeReplacedDevice(options.userId)
-      rememberLocalChatDevice(options.userId, service.deviceId)
+      await service.revokeReplacedDevice(options.accountId)
+      rememberLocalChatDevice(options.accountId, service.deviceId)
       await service.reconcile()
       requestPersistentStorage()
       void service.maintainPrekeys()
@@ -856,17 +856,17 @@ export class ChatService {
    * through it, the account's groups). Never fatal: if it cannot be done now
    * it is tried again on the next open, and Devices offers it by hand.
    */
-  private async revokeReplacedDevice(userId: string): Promise<void> {
-    const replaced = replacedLocalChatDevice(userId)
+  private async revokeReplacedDevice(accountId: string): Promise<void> {
+    const replaced = replacedLocalChatDevice(accountId)
     if (replaced === null) return
     if (replaced === this.deviceId) {
-      forgetReplacedLocalChatDevice(userId)
+      forgetReplacedLocalChatDevice(accountId)
       return
     }
     try {
       const registered = (await this.devices()).some(device => device.deviceId === replaced)
       if (registered) await this.revokeDevice(replaced)
-      forgetReplacedLocalChatDevice(userId)
+      forgetReplacedLocalChatDevice(accountId)
     } catch (error) {
       console.warn('chat: could not revoke the device this browser replaced', error)
     }

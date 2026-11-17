@@ -114,7 +114,7 @@ const DISMISSED = 'kutup.mail.notInContactsDismissed'
 
 /** Per account: two accounts in one browser keep their own lists. */
 function dismissedKey(): string | null {
-  const userId = getSession()?.userId
+  const userId = getSession()?.accountId
   return userId ? `${DISMISSED}:${userId}` : null
 }
 

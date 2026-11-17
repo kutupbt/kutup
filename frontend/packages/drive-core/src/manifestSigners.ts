@@ -77,13 +77,13 @@ function claimedName(claimed: ClaimedAuthor): string | null {
 }
 
 async function signerOf(me: DriveIdentity, signature: ManifestSignature): Promise<{ signer: Signer } | Exclude<ManifestSignerVerdict, { kind: 'verified' | 'authorMismatch' }>> {
-  if (signature.accountId === me.userId) {
+  if (signature.accountId === me.accountId) {
     // This account under another incarnation than its own now: its keys
     // went with a reset this device didn't make, or the name is passed off.
     if (signature.incarnationId !== me.incarnationId) return { kind: 'changed', name: me.account }
     const own = await deriveAccountIdentityKeys(me.roots.identityRoot)
     return (await signature.signedBy(own.driveSigningPublicKey))
-      ? { signer: { accountId: me.userId, address: me.account } }
+      ? { signer: { accountId: me.accountId, address: me.account } }
       : { kind: 'forged', name: me.account }
   }
   let pins

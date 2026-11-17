@@ -346,7 +346,7 @@ import type { DriveIdentity } from './identity'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const me: DriveIdentity = {
-  userId: 'me-id',
+  accountId: 'me-id',
   account: 'me@kutup.dev',
   accountRef: { server: 'kutup.dev', accountId: 'me-id' },
   binding: ME_BINDING,

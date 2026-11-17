@@ -12,7 +12,7 @@ use utoipa::ToSchema;
 use crate::client_version::{self, Version};
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::sessions::ClientType;
 use crate::AppState;
 
@@ -88,7 +88,7 @@ async fn list(state: &AppState) -> AppResult<ClientVersionsResponse> {
 )]
 pub async fn get_client_versions(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<ClientVersionsResponse>> {
     Ok(Json(list(&state).await?))
 }
@@ -127,7 +127,7 @@ mod tests {
 )]
 pub async fn set_client_version(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(request): Json<SetClientVersionRequest>,
 ) -> AppResult<Json<ClientVersionsResponse>> {
     let client = ClientType::parse(&request.client_type)
@@ -186,7 +186,7 @@ pub async fn set_client_version(
         });
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "settings.update",
         None,
         json!({ "key": key, "value": request.minimum }),

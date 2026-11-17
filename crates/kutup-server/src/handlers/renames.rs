@@ -24,7 +24,7 @@ use crate::account_names::{self, Available};
 use crate::error::{AppError, AppResult};
 use crate::grants::{self, Purpose};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::security_events;
 use crate::AppState;
 
@@ -77,10 +77,10 @@ pub struct CheckView {
 )]
 pub async fn check(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<CheckQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if !crate::ratelimit::RENAME_CHECKS.allow(&user_id.to_string()) {
         return Err(AppError::too_many_requests("too many requests")
             .with_details(json!({ "code": "rateLimited" })));
@@ -196,10 +196,10 @@ fn rename_invalid(why: &str) -> AppError {
 )]
 pub async fn rename(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<RenameRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let server = state.config.chat_server_name.to_ascii_lowercase();
     let mut tx = state.pool.begin().await?;
     type Account = (String, String, String, bool, bool);
@@ -550,8 +550,8 @@ pub struct HeldName {
     security(("BearerAuth" = [])),
     responses((status = 200, body = [HeldName]))
 )]
-pub async fn names(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn names(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<HeldName> = sqlx::query_as(
         "SELECT name, state, receive_until, free_at FROM account_names
           WHERE account_id = $1 ORDER BY state = 'current' DESC, free_at",
@@ -582,11 +582,11 @@ pub struct DropName {
 )]
 pub async fn drop_name(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(name): Path<String>,
     Json(req): Json<DropName>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
@@ -672,11 +672,11 @@ enum AdminAction {
 
 async fn admin_name(
     state: &AppState,
-    admin: &crate::middleware::AdminUser,
+    admin: &crate::middleware::AdminAccount,
     name: &str,
     action: AdminAction,
 ) -> AppResult<Response> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let mut tx = state.pool.begin().await?;
     let held: Option<(String, Option<Uuid>)> = sqlx::query_as(
         "SELECT name, account_id FROM account_names
@@ -730,7 +730,7 @@ async fn admin_name(
     tx.commit().await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         audit_action,
         owner,
         json!({ "name": held_name }),
@@ -750,7 +750,7 @@ async fn admin_name(
 )]
 pub async fn admin_close(
     State(state): State<AppState>,
-    admin: crate::middleware::AdminUser,
+    admin: crate::middleware::AdminAccount,
     Path(name): Path<String>,
 ) -> AppResult<Response> {
     admin_name(&state, &admin, &name, AdminAction::Close).await
@@ -768,7 +768,7 @@ pub async fn admin_close(
 )]
 pub async fn admin_free(
     State(state): State<AppState>,
-    admin: crate::middleware::AdminUser,
+    admin: crate::middleware::AdminAccount,
     Path(name): Path<String>,
 ) -> AppResult<Response> {
     admin_name(&state, &admin, &name, AdminAction::Free).await
@@ -794,7 +794,7 @@ pub struct ChainsQuery {
 )]
 pub async fn chains(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(address): Path<String>,
     Query(query): Query<ChainsQuery>,
 ) -> AppResult<Response> {
@@ -806,7 +806,8 @@ pub async fn chains(
     // none is fresh (crate::remote_renames).
     if server != state.config.chat_server_name.to_ascii_lowercase() {
         let mut found =
-            crate::remote_renames::lookup(&state, trusted_uuid(&user.user_id)?, &address).await?;
+            crate::remote_renames::lookup(&state, trusted_uuid(&user.account_id)?, &address)
+                .await?;
         if let (Some(incarnation), Some(chains)) = (
             query.incarnation_id.as_deref(),
             found["chains"].as_array_mut(),

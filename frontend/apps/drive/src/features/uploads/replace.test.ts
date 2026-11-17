@@ -17,7 +17,7 @@ vi.mock('@kutup/drive-core/rekey', () => ({ rekeyFile: (_folder: unknown, file: 
 vi.mock('@kutup/drive-core/names', () => ({ contentHashIn: () => Promise.resolve('cd'.repeat(32)) }))
 vi.mock('@kutup/crypto/contentHash', () => ({ hashBlob: () => Promise.resolve('BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=') }))
 vi.mock('@kutup/files/media', () => ({ readMedia: () => Promise.resolve(undefined) }))
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'me' }) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ accountId: 'me' }) }))
 vi.mock('@kutup/session/client', () => ({ default: { delete: mocks.del }, freshAccessToken: () => Promise.resolve('t') }))
 
 import type { DriveFile, Folder } from '@kutup/drive-core/model'

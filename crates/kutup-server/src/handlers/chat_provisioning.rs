@@ -38,7 +38,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::chat_identity::authenticated_device;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::site_settings::{
     CHAT_LINK_TOKENS_PER_ACCOUNT, CHAT_LINK_TOKEN_SECONDS, CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT,
     CHAT_PROVISIONING_TICKET_SECONDS, CHAT_PROVISION_BODY_BYTES,
@@ -99,12 +99,12 @@ fn rate_limited() -> AppError {
 )]
 pub async fn create_link_token(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     let device_id = authenticated_device(&state.pool, &headers, user_id).await?;
-    if !ratelimit::CHAT_LINK_TOKENS.allow(&auth.user_id) {
+    if !ratelimit::CHAT_LINK_TOKENS.allow(&auth.account_id) {
         return Err(rate_limited());
     }
     let lifetime = CHAT_LINK_TOKEN_SECONDS.load(&state.pool).await?;
@@ -177,8 +177,11 @@ pub struct ProvisioningTicketResponse {
     ),
     security(("bearerAuth" = []))
 )]
-pub async fn create_ticket(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+pub async fn create_ticket(
+    State(state): State<AppState>,
+    auth: AuthAccount,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&auth.account_id)?;
     let lifetime = CHAT_PROVISIONING_TICKET_SECONDS.load(&state.pool).await?;
     let most = CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT
         .load_for(&state.pool, user_id)
@@ -358,14 +361,14 @@ async fn serve(
 )]
 pub async fn relay(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Path(address): Path<String>,
     Json(request): Json<ProvisioningRelayRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     authenticated_device(&state.pool, &headers, user_id).await?;
-    if !ratelimit::CHAT_PROVISIONING_RELAYS.allow(&auth.user_id) {
+    if !ratelimit::CHAT_PROVISIONING_RELAYS.allow(&auth.account_id) {
         return Err(rate_limited());
     }
     let most = CHAT_PROVISION_BODY_BYTES.load(&state.pool).await?;

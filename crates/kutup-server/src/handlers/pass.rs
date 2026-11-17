@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// What has become of a kept key's vault, for its owner now.
@@ -56,8 +56,8 @@ pub struct VaultState {
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Each kept key's vault and its state", body = Vec<VaultState>))
 )]
-pub async fn vault_states(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn vault_states(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     // `exists`, `trashed`: a purged vault's file row is gone (a record has no
     // foreign key to it). The record id is the file id (canonical text).
     let rows: Vec<(String, bool, bool)> = sqlx::query_as(
@@ -190,8 +190,8 @@ fn refusal(status: StatusCode, error: &'static str, attempts_left: Option<i16>) 
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Whether a PIN is set", body = PinStatus))
 )]
-pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn pin_status(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let set: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pass_pins WHERE account_id = $1)")
             .bind(user_id)
@@ -215,14 +215,14 @@ pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppRes
 )]
 pub async fn set_pin(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<SetPinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     if !valid_pin(&req.pin) {
         return Err(AppError::bad_request("the PIN must be six digits"));
     }
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let hash = bcrypt::hash(&req.pin, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::internal(format!("hash PIN: {e}")))?;
     let mut tx = state.pool.begin().await?;
@@ -259,11 +259,11 @@ pub async fn set_pin(
 )]
 pub async fn remove_pin(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<RemovePinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
         .await?;
@@ -290,11 +290,11 @@ pub async fn remove_pin(
 )]
 pub async fn verify_pin(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<VerifyPinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let hash: Option<String> =
         sqlx::query_scalar("SELECT pin_hash FROM pass_pins WHERE account_id = $1")
             .bind(user_id)

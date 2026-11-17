@@ -10,7 +10,7 @@ use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The caller's storage pool and what fills it.
@@ -95,9 +95,9 @@ pub struct ChatUsage {
 )]
 pub async fn usage(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<StorageUsageResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     type Row = (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64);
     let row: Row = sqlx::query_as(
         r#"SELECT u.storage_quota_bytes, u.storage_used_bytes,
@@ -210,9 +210,9 @@ pub struct VersionAge {
 )]
 pub async fn version_ages(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<VersionAge>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<(i32, bool, i64, i64)> = sqlx::query_as(&format!(
         "SELECT FLOOR(EXTRACT(EPOCH FROM now() - v.created_at) / 86400)::int AS age,
                 v.keep_forever, SUM(v.size_bytes)::bigint, COUNT(*)::bigint
@@ -274,10 +274,10 @@ const PRUNE_BATCH: i64 = 500;
 )]
 pub async fn prune_versions(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<PruneVersionsRequest>,
 ) -> AppResult<Json<PruneVersionsResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if !(0..=36_500).contains(&req.older_than_days) {
         return Err(AppError::bad_request(
             "olderThanDays must be between 0 and 36500",

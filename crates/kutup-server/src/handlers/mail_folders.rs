@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::account_heads::{self, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Folders nest at most this deep: a top folder and two levels inside it
@@ -95,8 +95,11 @@ type FolderRow = (Uuid, Option<Uuid>, Option<String>, String, i32, bool, bool);
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Folders and labels", body = MailPlaces))
 )]
-pub async fn places(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailPlaces>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn places(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<MailPlaces>> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let folders: Vec<FolderRow> = sqlx::query_as(
         "SELECT id, parent_id, name_sealed, color, position, expanded, notify
            FROM mail_folders WHERE account_id = $1 ORDER BY position, created_at",
@@ -222,10 +225,10 @@ pub struct CreateMailFolder {
 )]
 pub async fn create_folder(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateMailFolder>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = parse_id(&request.id)?;
     let parent = request.parent_id.as_deref().map(parse_id).transpose()?;
     check_sealed(&state, user_id, MailNameKind::Folder, &id, &request.name).await?;
@@ -323,11 +326,11 @@ pub struct UpdateMailFolder {
 )]
 pub async fn update_folder(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateMailFolder>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such folder"))?;
     if let Some(color) = &request.color {
         check_color(color)?;
@@ -445,11 +448,11 @@ pub struct DeletedMailFolder {
 )]
 pub async fn delete_folder(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<DeleteMailFolder>>,
 ) -> AppResult<Json<DeletedMailFolder>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such folder"))?;
     let request = body.map(|Json(body)| body).unwrap_or_default();
     let head = NextHead::parse(request.head.as_deref())?;
@@ -554,10 +557,10 @@ pub struct CreateMailLabel {
 )]
 pub async fn create_label(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateMailLabel>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = parse_id(&request.id)?;
     check_sealed(&state, user_id, MailNameKind::Label, &id, &request.name).await?;
     check_color(&request.color)?;
@@ -617,11 +620,11 @@ pub struct UpdateMailLabel {
 )]
 pub async fn update_label(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateMailLabel>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such label"))?;
     if let Some(color) = &request.color {
         check_color(color)?;
@@ -686,11 +689,11 @@ pub async fn update_label(
 )]
 pub async fn delete_label(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<crate::account_heads::HeadOnly>>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such label"))?;
     let head = NextHead::parse(body.and_then(|Json(body)| body.head).as_deref())?;
     let mut tx = state.pool.begin().await?;

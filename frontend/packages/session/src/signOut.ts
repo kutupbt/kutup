@@ -46,7 +46,7 @@ export async function signOut(): Promise<boolean> {
   } catch {
     // Unreachable or already ended: the local sign-out still happens.
   }
-  const accountId = getSession()?.userId
+  const accountId = getSession()?.accountId
   broadcastLogout()
   clearPersisted()
   clearSession()

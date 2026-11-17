@@ -27,7 +27,7 @@ import { clearSession, setSession } from './store'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const keys = {
-  userId: 'u1',
+  accountId: 'u1',
   // Fresh each time: a session replaced in the store zeroes its key.
   get masterKey() {
     return new Uint8Array(32).fill(1)
@@ -118,7 +118,7 @@ describe('produceFork', () => {
 describe('consumeFork', () => {
   beforeEach(() => {
     post.mockResolvedValue({
-      data: { accessToken: 'AT', sessionId: 'S2', userId: 'u1', payload: 'ENV' },
+      data: { accessToken: 'AT', sessionId: 'S2', accountId: 'u1', payload: 'ENV' },
     })
   })
 
@@ -129,8 +129,8 @@ describe('consumeFork', () => {
     const next = await consumeFork()
     expect(window.location.hash).toBe('')
     expect(post).toHaveBeenCalledWith('/auth/forks/consume', { selector: 'SEL' })
-    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), 'AT', 'S2')
-    expect(persistKeys).toHaveBeenCalledWith('S2', expect.objectContaining({ userId: 'u1' }))
+    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'u1' }), 'AT', 'S2')
+    expect(persistKeys).toHaveBeenCalledWith('S2', expect.objectContaining({ accountId: 'u1' }))
     expect(next).toBe('/folders/abc')
     expect(sessionStorage.getItem('kutup.session.fork:st')).toBeNull()
   })
@@ -142,7 +142,7 @@ describe('consumeFork', () => {
   })
 
   it('refuses keys for another account', async () => {
-    opened.value = encodeKeys({ ...keys, userId: 'someone-else' })
+    opened.value = encodeKeys({ ...keys, accountId: 'someone-else' })
     sessionStorage.setItem('kutup.session.fork:st', '/')
     visit(`/login#selector=SEL&sk=${sk}&state=st`)
     await expect(consumeFork()).rejects.toThrow(/another account/)

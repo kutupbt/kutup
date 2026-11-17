@@ -31,7 +31,7 @@ use uuid::Uuid;
 use crate::chat_hub::ChatHub;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One push per device per this long; the push service keeps the latest.
@@ -340,7 +340,7 @@ pub struct DeviceQuery {
 )]
 pub async fn put_subscription(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: axum::http::HeaderMap,
     Json(request): Json<PushSubscriptionRequest>,
 ) -> AppResult<Response> {
@@ -353,7 +353,7 @@ pub async fn put_subscription(
             "this push service is not one the server sends to",
         ));
     }
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     crate::handlers::chat_identity::authenticate_device(
         &state.pool,
         &headers,
@@ -386,11 +386,11 @@ pub async fn put_subscription(
 )]
 pub async fn delete_subscription(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: axum::http::HeaderMap,
     Query(query): Query<DeviceQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     crate::handlers::chat_identity::authenticate_device(
         &state.pool,
         &headers,

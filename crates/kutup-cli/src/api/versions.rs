@@ -60,7 +60,7 @@ pub struct VersionRow {
     #[serde(default)]
     pub doc_key_id: i64,
     #[serde(default)]
-    pub author_user_id: String,
+    pub author_account_id: String,
     #[serde(default)]
     pub size_bytes: i64,
     #[serde(default)]

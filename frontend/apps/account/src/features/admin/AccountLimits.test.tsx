@@ -37,7 +37,7 @@ const feedback = {
 function view() {
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <AccountLimits userId="u1" />
+      <AccountLimits accountId="u1" />
     </QueryClientProvider>,
   )
 }

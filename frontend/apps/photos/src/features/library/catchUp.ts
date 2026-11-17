@@ -27,10 +27,10 @@ const tried = new Set<string>()
  * uploaded. Others' photos it may only view are read for this tab only
  * (writing would also charge its storage for someone else's files).
  */
-export function mayWrite(folder: Folder, file: DriveFile, userId: string): boolean {
+export function mayWrite(folder: Folder, file: DriveFile, accountId: string): boolean {
   if (folder.source === 'remote' || folder.source === 'file') return false
   if (file.keyEpoch !== folder.keyEpoch) return false
-  return folder.canManage || file.uploaderUserId === userId
+  return folder.canManage || file.uploaderAccountId === accountId
 }
 
 /**
@@ -54,8 +54,8 @@ function saveData(): boolean {
   return Boolean((navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData)
 }
 
-function needs(photo: Photo, userId: string): { media: boolean; thumbnail: boolean } {
-  const write = mayWrite(photo.folder, photo.file, userId)
+function needs(photo: Photo, accountId: string): { media: boolean; thumbnail: boolean } {
+  const write = mayWrite(photo.folder, photo.file, accountId)
   return {
     media: !photo.media,
     thumbnail: write && (!photo.file.thumbnails.sm || photo.file.thumbnailStale),
@@ -63,9 +63,9 @@ function needs(photo: Photo, userId: string): { media: boolean; thumbnail: boole
 }
 
 /** Queue the catch-up for one photo; `first` when it is on screen now. */
-export function catchUp(photo: Photo, userId: string, first = false): void {
+export function catchUp(photo: Photo, accountId: string, first = false): void {
   const { folder, file } = photo
-  const want = needs(photo, userId)
+  const want = needs(photo, accountId)
   if (!want.media && !want.thumbnail) return
   if (file.size > MAX_BYTES || saveData()) return
   const attempt = `${file.id}:${file.metadataRevision}:${file.thumbnails.sm ?? ''}`
@@ -85,7 +85,7 @@ export function catchUp(photo: Photo, userId: string, first = false): void {
       if (want.media) {
         const media = await readMedia(plain)
         if (media) {
-          if (mayWrite(folder, file, userId)) {
+          if (mayWrite(folder, file, accountId)) {
             try {
               await writeMedia(file, media, file.sha256 ? undefined : await hashBlob(plain))
               stored = true
@@ -114,15 +114,15 @@ export function catchUp(photo: Photo, userId: string, first = false): void {
 }
 
 /** Works through the library in the background, newest uploads first. */
-export function useLibraryCatchUp(photos: readonly Photo[], userId: string, enabled: boolean): void {
+export function useLibraryCatchUp(photos: readonly Photo[], accountId: string, enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return
     const pending = photos
       .filter((p) => {
-        const want = needs(p, userId)
+        const want = needs(p, accountId)
         return want.media || want.thumbnail
       })
       .sort((a, b) => b.file.createdAt.localeCompare(a.file.createdAt))
-    for (const photo of pending) catchUp(photo, userId)
-  }, [photos, userId, enabled])
+    for (const photo of pending) catchUp(photo, accountId)
+  }, [photos, accountId, enabled])
 }

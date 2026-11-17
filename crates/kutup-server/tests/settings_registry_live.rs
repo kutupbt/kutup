@@ -217,7 +217,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
     assert!(
         activity["entries"].as_array().unwrap().iter().any(|e| {
             e["action"] == "user.setting"
-                && e["targetUserId"] == small_id
+                && e["targetAccountId"] == small_id
                 && e["payload"]["key"] == "drive_upload_max_bytes"
         }),
         "{activity}"

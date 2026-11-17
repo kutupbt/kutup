@@ -37,7 +37,7 @@ use crate::drive_blob::BlockBlob;
 use crate::drive_writes::Room;
 use crate::error::{AppError, AppResult};
 use crate::handlers::files::{canonical_uuid, validate_envelope};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::storage::{CompletedPart, MultipartUpload};
 use crate::AppState;
 
@@ -168,11 +168,15 @@ pub async fn options() -> Response {
     ),
     responses((status = 201, description = "Session created; `Location` + `Upload-Offset: 0` headers and a `{\"fileId\": …}` body"))
 )]
-pub async fn create(State(state): State<AppState>, user: AuthUser, headers: HeaderMap) -> Response {
+pub async fn create(
+    State(state): State<AppState>,
+    user: AuthAccount,
+    headers: HeaderMap,
+) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -447,14 +451,14 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 )]
 pub async fn head(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -524,7 +528,7 @@ pub async fn head(
 )]
 pub async fn patch(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -538,7 +542,7 @@ pub async fn patch(
             "Content-Type must be application/offset+octet-stream",
         );
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
@@ -771,7 +775,7 @@ pub async fn patch(
             &state,
             tx,
             super::tus_versions::Landing {
-                user_id,
+                account_id: user_id,
                 upload_id,
                 file_id,
                 collection_id: coll_id,
@@ -1115,14 +1119,14 @@ pub(super) async fn mark_uploaded(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(resp) = require_tus_resumable(&headers) {
         return resp;
     }
-    let user_id = match Uuid::parse_str(&user.user_id) {
+    let user_id = match Uuid::parse_str(&user.account_id) {
         Ok(u) => u,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };

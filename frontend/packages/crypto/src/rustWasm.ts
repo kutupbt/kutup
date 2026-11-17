@@ -690,13 +690,13 @@ export interface CryptoWasmModule {
     previousKeyBase64: string,
     keyBase64: string,
     collectionId: string,
-    ownerUserId: string,
+    ownerAccountId: string,
     epoch: number,
   ): string
   unlockCollectionKeyring(
     currentKeyBase64: string,
     collectionId: string,
-    ownerUserId: string,
+    ownerAccountId: string,
     ownerAuthorityPublicKeyBase64: string,
     chain: { epoch: number; epochStatement: string; previousKeyEnvelope?: string }[],
   ): string[]
@@ -704,7 +704,7 @@ export interface CryptoWasmModule {
     identityRoot: IdentityRoot,
     collectionKeyBase64: string,
     collectionId: string,
-    ownerUserId: string,
+    ownerAccountId: string,
     epoch: number,
     previousStatementHash: string,
   ): string

@@ -43,7 +43,7 @@ use kutup_chat_proto::{
 use crate::chat_hub::ChatWsOut;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::{ratelimit, AppState};
 
 /// libsignal registration ids are random values in `1..16380`.
@@ -389,12 +389,12 @@ pub(crate) fn canonical_profile_version(value: &str) -> bool {
 )]
 pub async fn register_device(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Json(req): Json<RegisterChatDeviceRequestV2>,
 ) -> AppResult<Response> {
     use crate::handlers::chat_identity as identity;
     use kutup_chat_proto::DeviceRegistrationV1;
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
 
     if req.registration_id == 0 || req.registration_id > MAX_REGISTRATION_ID {
         return Err(AppError::bad_request("registrationId out of range"));
@@ -884,11 +884,11 @@ pub(crate) async fn store_manifest(
 )]
 pub async fn publish_manifest(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Json(manifest): Json<AccountManifestV3>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     use crate::handlers::chat_identity::DeviceKinds;
     // Any device of the account lists itself (an editor too, slice 2). A
     // sign-in without a device of its own (the Account app) may publish a
@@ -1020,7 +1020,7 @@ pub async fn publish_manifest(
 )]
 pub async fn get_user_manifest(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    _auth: AuthAccount,
     Path(account_id): Path<String>,
     Query(query): Query<AccountServerQuery>,
 ) -> AppResult<Response> {
@@ -1029,7 +1029,7 @@ pub async fn get_user_manifest(
             // Another server: only for an account that talks to them (crate::federation_switch).
             crate::federation_switch::ensure_federates(
                 &state.pool,
-                crate::handlers::trusted_uuid(&_auth.user_id)?,
+                crate::handlers::trusted_uuid(&_auth.account_id)?,
             )
             .await?;
             let manifest = crate::chat_federation::fetch_remote_manifest(&state, &account).await?;
@@ -1094,7 +1094,7 @@ pub(crate) async fn load_account_manifest(
 #[tracing::instrument(name = "chat.account_manifest.history", skip_all)]
 pub async fn get_manifest_history(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    _auth: AuthAccount,
     Path(account_id): Path<String>,
     Query(query): Query<ManifestHistoryQuery>,
 ) -> AppResult<Response> {
@@ -1111,7 +1111,7 @@ pub async fn get_manifest_history(
             // Another server: only for an account that talks to them (crate::federation_switch).
             crate::federation_switch::ensure_federates(
                 &state.pool,
-                crate::handlers::trusted_uuid(&_auth.user_id)?,
+                crate::handlers::trusted_uuid(&_auth.account_id)?,
             )
             .await?;
             let page =
@@ -1194,11 +1194,11 @@ pub async fn get_manifest_history(
 )]
 pub async fn put_profile(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Json(profile): Json<PutChatProfileRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     // A Chat device writes as itself, with its credential; the account app
     // writes as the account.
     if profile.source_device_id != kutup_chat_proto::ACCOUNT_PROFILE_SOURCE {
@@ -1332,8 +1332,11 @@ pub async fn put_profile(
     ),
     security(("bearerAuth" = []))
 )]
-pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+pub async fn get_own_profile(
+    State(state): State<AppState>,
+    auth: AuthAccount,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&auth.account_id)?;
     let mut tx = state.pool.begin().await?;
     let profile = load_own_profile_in(&mut tx, &state.config.chat_server_name, user_id, false)
         .await?
@@ -1363,7 +1366,7 @@ pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> A
 )]
 pub async fn get_user_profile(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    _auth: AuthAccount,
     Path((account_id, version)): Path<(String, String)>,
     Query(query): Query<AccountServerQuery>,
     headers: HeaderMap,
@@ -1377,7 +1380,7 @@ pub async fn get_user_profile(
             // Another server: only for an account that talks to them (crate::federation_switch).
             crate::federation_switch::ensure_federates(
                 &state.pool,
-                crate::handlers::trusted_uuid(&_auth.user_id)?,
+                crate::handlers::trusted_uuid(&_auth.account_id)?,
             )
             .await?;
             let profile = crate::chat_federation::fetch_remote_profile(
@@ -1595,8 +1598,8 @@ async fn insert_kem_pool(
     responses((status = 200, description = "Devices", body = serde_json::Value)),
     security(("bearerAuth" = []))
 )]
-pub async fn list_devices(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+pub async fn list_devices(State(state): State<AppState>, auth: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&auth.account_id)?;
     let rows: Vec<(i32, i16, String, OffsetDateTime, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT device_id, suite, name, created_at, last_seen_at
          FROM account_devices WHERE account_id = $1 AND suite IS NOT NULL ORDER BY device_id",
@@ -1644,12 +1647,12 @@ pub async fn list_devices(State(state): State<AppState>, auth: AuthUser) -> AppR
 )]
 pub async fn rename_device(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Path(device_id): Path<i32>,
     Json(req): Json<RenameChatDeviceRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     // A device of the account does it (Signal's linked-device management).
     crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
     let name = normalized_device_name(&req.name)?;
@@ -1686,11 +1689,11 @@ pub async fn rename_device(
 )]
 pub async fn revoke_device(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Path(device_id): Path<i32>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     // A device of the account does it (Signal's linked-device management).
     crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
     let mut tx = state.pool.begin().await?;
@@ -1782,12 +1785,12 @@ async fn require_device(
 )]
 pub async fn replenish_keys(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Query(q): Query<DeviceQuery>,
     Json(req): Json<ReplenishKeysRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     require_device(&state, &headers, user_id, q.device_id).await?;
 
     if req.one_time_pre_keys.len() > MAX_PREKEY_BATCH
@@ -1876,11 +1879,11 @@ pub async fn replenish_keys(
 )]
 pub async fn prekey_count(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Query(q): Query<DeviceQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     require_device(&state, &headers, user_id, q.device_id).await?;
     let ec: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM chat_one_time_pre_keys WHERE account_id = $1 AND device_id = $2",
@@ -1925,7 +1928,7 @@ pub async fn prekey_count(
 )]
 pub async fn get_user_bundles(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Path(account_id): Path<String>,
     Query(query): Query<BundleQuery>,
@@ -1935,12 +1938,12 @@ pub async fn get_user_bundles(
         crate::handlers::chat_identity::authenticate_device(
             &state.pool,
             &headers,
-            trusted_uuid(&auth.user_id)?,
+            trusted_uuid(&auth.account_id)?,
             device_id,
         )
         .await?;
     }
-    if !ratelimit::CHAT_KEYS_ACCOUNT.allow(&auth.user_id) {
+    if !ratelimit::CHAT_KEYS_ACCOUNT.allow(&auth.account_id) {
         crate::telemetry::rate_limit_rejection("prekey_account");
         return Err(AppError::too_many_requests(
             "too many chat key requests for this account",
@@ -1956,7 +1959,7 @@ pub async fn get_user_bundles(
             // Another server: only for an account that talks to them (crate::federation_switch).
             crate::federation_switch::ensure_federates(
                 &state.pool,
-                crate::handlers::trusted_uuid(&auth.user_id)?,
+                crate::handlers::trusted_uuid(&auth.account_id)?,
             )
             .await?;
             let bundles = crate::chat_federation::fetch_remote_bundles(&state, &account).await?;
@@ -1964,7 +1967,7 @@ pub async fn get_user_bundles(
         }
         NamedAccount::Local(user_id) => user_id,
     };
-    if query.sync_device_id.is_some() && trusted_uuid(&auth.user_id)? != target_id {
+    if query.sync_device_id.is_some() && trusted_uuid(&auth.account_id)? != target_id {
         return Err(AppError::forbidden(
             "linked-device key fetch is limited to the caller's account",
         ));
@@ -2269,13 +2272,13 @@ pub(crate) async fn load_user_bundles(
 )]
 pub async fn send_messages(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Path(account_id): Path<String>,
     Query(query): Query<AccountServerQuery>,
     Json(req): Json<SendMessagesRequest>,
 ) -> AppResult<Response> {
-    let sender_id = trusted_uuid(&auth.user_id)?;
+    let sender_id = trusted_uuid(&auth.account_id)?;
     crate::handlers::chat_identity::authenticate_device(
         &state.pool,
         &headers,
@@ -2290,7 +2293,7 @@ pub async fn send_messages(
             // Another server: only for an account that talks to them (crate::federation_switch).
             crate::federation_switch::ensure_federates(
                 &state.pool,
-                crate::handlers::trusted_uuid(&auth.user_id)?,
+                crate::handlers::trusted_uuid(&auth.account_id)?,
             )
             .await?;
             let envelope_count = req.envelopes.len();
@@ -2899,11 +2902,11 @@ pub(crate) async fn push_sealed(state: &AppState, stored: Vec<(Uuid, i32, Delive
 )]
 pub async fn sync_messages(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Json(req): Json<SendMessagesRequest>,
 ) -> AppResult<Response> {
-    let sender_id = trusted_uuid(&auth.user_id)?;
+    let sender_id = trusted_uuid(&auth.account_id)?;
     crate::handlers::chat_identity::authenticate_device(
         &state.pool,
         &headers,
@@ -3152,11 +3155,11 @@ pub struct DrainQuery {
 )]
 pub async fn drain_mailbox(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Query(q): Query<DrainQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     require_device(&state, &headers, user_id, q.device_id).await?;
     let limit = q
         .limit
@@ -3313,12 +3316,12 @@ pub struct AckQuery {
 )]
 pub async fn ack_messages(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
     Query(q): Query<AckQuery>,
     Json(req): Json<AckRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     require_device(&state, &headers, user_id, q.device_id).await?;
     let ids: Vec<Uuid> = req
         .ids
@@ -3385,7 +3388,7 @@ pub async fn ws(
             let user_id = crate::middleware::authenticate_access_token(&state, token)
                 .await
                 .map_err(|_| AppError::unauthorized("invalid token"))?
-                .user_id;
+                .account_id;
             let user_uuid =
                 Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
             let device_id: i32 = match q.device_id.as_deref().and_then(|s| s.trim().parse().ok()) {

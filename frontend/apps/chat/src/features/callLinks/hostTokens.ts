@@ -98,7 +98,7 @@ export async function verifiedHostAccount(): Promise<string | null> {
   if (!persisted) return null
   try {
     const { sessionId } = await refreshAccessToken()
-    if (sessionId === persisted.sessionId) return persisted.userId
+    if (sessionId === persisted.sessionId) return persisted.accountId
   } catch {
     // Signed out, expired or unreachable: not confirmed.
   }

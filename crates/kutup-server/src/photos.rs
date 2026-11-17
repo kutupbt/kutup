@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// More folders than anyone arranges photos in; keeps listing bounded.
@@ -38,9 +38,9 @@ pub struct PhotosPreferences {
 )]
 pub async fn get_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<PhotosPreferences>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(preferences_of(&state, user_id).await?))
 }
 
@@ -91,10 +91,10 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
 )]
 pub async fn put_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<PhotosPreferences>,
 ) -> AppResult<Json<PhotosPreferences>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if request.library_folder_ids.len() > MAX_LIBRARY_FOLDERS {
         return Err(AppError::bad_request("too many folders in the library"));
     }

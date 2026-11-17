@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One key of an address, as its owner sees it.
@@ -231,9 +231,9 @@ async fn own_address(
 )]
 pub async fn list_addresses(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<OwnMailAddress>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     // Read only: the rows come with the account and its renames. The
     // current addresses in the account's order (the default first), then the
     // old ones, newest first.
@@ -528,11 +528,11 @@ impl ListChange {
 )]
 pub async fn add_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<AddMailKeyRequest>,
 ) -> AppResult<Json<OwnMailAddress>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let public_key = decode(&req.public_key, "publicKey")?;
     let envelope = account_record::decode_record_b64(
         &req.private_key_envelope,
@@ -721,11 +721,11 @@ pub struct UpdateKeyListRequest {
 )]
 pub async fn update_key_list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateKeyListRequest>,
 ) -> AppResult<Json<OwnMailAddress>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut change = begin_list_change(&state, user_id, &id, &req.key_list).await?;
     if change.signed.list.sequence == 1 {
         return Err(AppError::bad_request(
@@ -856,7 +856,7 @@ async fn public_keys(
 )]
 pub async fn lookup_keys(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Query(query): Query<KeyLookupQuery>,
 ) -> AppResult<Json<MailKeyLookup>> {
     let address =
@@ -1114,7 +1114,7 @@ pub struct OutsideMailKeyEntry {
 )]
 pub async fn outside_keys(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Query(query): Query<KeyLookupQuery>,
 ) -> AppResult<Json<OutsideMailKey>> {
     let Some((local, domain)) = crate::mail::outside_keys::split(&query.email) else {

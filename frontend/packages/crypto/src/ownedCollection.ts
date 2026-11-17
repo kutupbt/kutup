@@ -11,7 +11,7 @@ import { generateKey } from './symmetric'
 /** Which owned folder key an owner copy holds. */
 export interface OwnerCollectionKeyContext {
   collectionId: string
-  ownerUserId: string
+  ownerAccountId: string
   /** The folder key's epoch. */
   epoch: number
 }
@@ -31,7 +31,7 @@ export async function sealOwnerCollectionKey(
     roots.driveRoot,
     roots.driveGeneration,
     context.collectionId,
-    context.ownerUserId,
+    context.ownerAccountId,
     context.epoch,
   )
 }
@@ -47,14 +47,14 @@ export async function openOwnerCollectionKey(
     roots.driveRoot,
     roots.driveGeneration,
     context.collectionId,
-    context.ownerUserId,
+    context.ownerAccountId,
     context.epoch,
   ))
 }
 
 export interface OwnedCollectionWireV1 {
   id: string
-  ownerUserId: string
+  ownerAccountId: string
   nameEnvelope: string
   ownerKeyEnvelope?: string
   keyEpoch: number
@@ -78,25 +78,25 @@ export interface CreateOwnedCollectionV1 {
 /** Build the complete epoch-1 record before the server sees the collection. */
 export async function createOwnedCollectionV1(
   account: AccountSecrets,
-  ownerUserId: string,
+  ownerAccountId: string,
   name: string,
   parentCollectionId: string | null,
 ): Promise<CreateOwnedCollectionV1> {
   const id = crypto.randomUUID().toLowerCase()
   const collectionKey = await generateKey()
-  const ownerKeyEnvelope = await sealOwnerCollectionKey(collectionKey, account.roots, { collectionId: id, ownerUserId, epoch: 1 })
+  const ownerKeyEnvelope = await sealOwnerCollectionKey(collectionKey, account.roots, { collectionId: id, ownerAccountId: ownerAccountId, epoch: 1 })
   const nameEnvelope = await sealDriveEnvelope(new TextEncoder().encode(name), collectionKey, {
     purpose: DRIVE_ENVELOPE_PURPOSE.collectionName,
     epoch: 1,
     revision: 1n,
     objectId: id,
-    parentId: ownerUserId,
+    parentId: ownerAccountId,
   })
   const epochStatement = await createCollectionEpochStatement(
     account.roots.identityRoot,
     collectionKey,
     id,
-    ownerUserId,
+    ownerAccountId,
     1,
     undefined,
   )
@@ -106,7 +106,7 @@ export async function createOwnedCollectionV1(
     identity.authorityPublicKey,
     collectionKey,
     id,
-    ownerUserId,
+    ownerAccountId,
     1,
     undefined,
   )
@@ -131,14 +131,14 @@ export async function openOwnedCollectionV1(
     epoch: row.keyEpoch,
     revision: BigInt(row.nameRevision),
     objectId: row.id,
-    parentId: row.ownerUserId,
+    parentId: row.ownerAccountId,
   })
   return { collectionKey, name: new TextDecoder().decode(name) }
 }
 
 export async function openOwnedCollectionKeyV1(
   row: Pick<OwnedCollectionWireV1,
-    'id' | 'ownerUserId' | 'ownerKeyEnvelope' | 'keyEpoch' | 'epochStatement' | 'epochStatementHash'>,
+    'id' | 'ownerAccountId' | 'ownerKeyEnvelope' | 'keyEpoch' | 'epochStatement' | 'epochStatementHash'>,
   account: AccountSecrets,
 ): Promise<Uint8Array> {
   if (!row.ownerKeyEnvelope) throw new Error('owner key envelope missing')
@@ -147,7 +147,7 @@ export async function openOwnedCollectionKeyV1(
   }
   const collectionKey = await openOwnerCollectionKey(row.ownerKeyEnvelope, account.roots, {
     collectionId: row.id,
-    ownerUserId: row.ownerUserId,
+    ownerAccountId: row.ownerAccountId,
     epoch: row.keyEpoch,
   })
   const identity = await deriveAccountIdentityKeys(account.roots.identityRoot)
@@ -156,7 +156,7 @@ export async function openOwnedCollectionKeyV1(
     identity.authorityPublicKey,
     collectionKey,
     row.id,
-    row.ownerUserId,
+    row.ownerAccountId,
     row.keyEpoch,
     undefined,
   )
@@ -167,7 +167,7 @@ export async function openOwnedCollectionKeyV1(
 }
 
 export async function renameOwnedCollectionV1(
-  row: Pick<OwnedCollectionWireV1, 'id' | 'ownerUserId' | 'keyEpoch' | 'nameRevision'>,
+  row: Pick<OwnedCollectionWireV1, 'id' | 'ownerAccountId' | 'keyEpoch' | 'nameRevision'>,
   collectionKey: Uint8Array,
   name: string,
 ): Promise<{ nameEnvelope: string; nameRevision: number }> {
@@ -178,7 +178,7 @@ export async function renameOwnedCollectionV1(
     epoch: row.keyEpoch,
     revision: BigInt(nameRevision),
     objectId: row.id,
-    parentId: row.ownerUserId,
+    parentId: row.ownerAccountId,
   })
   return { nameEnvelope, nameRevision }
 }
@@ -186,7 +186,7 @@ export async function renameOwnedCollectionV1(
 export async function openSharedCollectionV1(
   row: OwnedCollectionWireV1 & {
     namedShareEnvelope: string
-    /** The owner's server; with `ownerUserId`, who sealed the share. */
+    /** The owner's server; with `ownerAccountId`, who sealed the share. */
     ownerServer: string
     ownerIncarnationId: string
     ownerDriveSigningPublicKey: string
@@ -203,7 +203,7 @@ export async function openSharedCollectionV1(
     {
       collectionId: row.id,
       epoch: row.keyEpoch,
-      sender: { server: row.ownerServer, accountId: row.ownerUserId },
+      sender: { server: row.ownerServer, accountId: row.ownerAccountId },
       senderIncarnationId: row.ownerIncarnationId,
       recipient,
       recipientIncarnationId,
@@ -214,7 +214,7 @@ export async function openSharedCollectionV1(
     row.ownerAuthorityPublicKey,
     collectionKey,
     row.id,
-    row.ownerUserId,
+    row.ownerAccountId,
     row.keyEpoch,
   )
   if (statementHash !== row.epochStatementHash) {
@@ -225,7 +225,7 @@ export async function openSharedCollectionV1(
     epoch: row.keyEpoch,
     revision: BigInt(row.nameRevision),
     objectId: row.id,
-    parentId: row.ownerUserId,
+    parentId: row.ownerAccountId,
   })
   return { collectionKey, name: new TextDecoder().decode(nameBytes) }
 }

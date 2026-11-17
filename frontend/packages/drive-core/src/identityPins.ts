@@ -215,7 +215,7 @@ interface PinStore {
   pins: PinsText
 }
 
-let store: { userId: string; loaded: Promise<PinStore> } | null = null
+let store: { accountId: string; loaded: Promise<PinStore> } | null = null
 let writes: Promise<unknown> = Promise.resolve()
 
 /** The highest revision this browser has seen: a server cannot quietly hand back an older list. */
@@ -236,7 +236,7 @@ const SCOPE = 'pins'
 const RECORD_ID = 'pins'
 
 function headFor(me: DriveIdentity) {
-  return accountHead({ userId: me.userId, masterKeys: me.masterKeys, roots: me.roots, envelopeBinding: me.binding })
+  return accountHead({ accountId: me.accountId, masterKeys: me.masterKeys, roots: me.roots, envelopeBinding: me.binding })
 }
 
 /**
@@ -295,9 +295,9 @@ async function openPins(me: DriveIdentity, copy: ScopeRecords): Promise<PinStore
 }
 
 function pinStore(me: DriveIdentity): Promise<PinStore> {
-  if (!store || store.userId !== me.userId) {
+  if (!store || store.accountId !== me.accountId) {
     const loaded = fetchPins(me)
-    store = { userId: me.userId, loaded }
+    store = { accountId: me.accountId, loaded }
     loaded.catch(() => {
       if (store?.loaded === loaded) store = null
     })
@@ -327,7 +327,7 @@ function updatePins(me: DriveIdentity, change: (pins: PinsText) => Promise<PinsT
     })
     if (!stored) return
     await revisionGuard({ ...me, envelopeBinding: me.binding }).accept(PINS_SCOPE, PINS_ID, stored.revision)
-    store = { userId: me.userId, loaded: Promise.resolve(stored) }
+    store = { accountId: me.accountId, loaded: Promise.resolve(stored) }
   }
   const result = writes.then(run, run)
   writes = result.catch(() => undefined)

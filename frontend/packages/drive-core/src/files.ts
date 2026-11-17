@@ -17,8 +17,8 @@ export const filesKey = (folderId: string) => ['files', folderId] as const
 export const folderFilesKey = (folder: Pick<Folder, 'id' | 'remoteShareId' | 'keyEpoch'>) =>
   [...filesKey(folder.remoteShareId ?? folder.id), folder.keyEpoch] as const
 
-export type FileRowLike = Omit<FileRow, 'uploaderUserId' | 'updatedAt'> & {
-  uploaderUserId?: string
+export type FileRowLike = Omit<FileRow, 'uploaderAccountId' | 'updatedAt'> & {
+  uploaderAccountId?: string
   updatedAt?: string
 }
 
@@ -51,7 +51,7 @@ export function toDriveFile(
   return {
     id: row.id,
     collectionId: row.collectionId,
-    uploaderUserId: row.uploaderUserId ?? null,
+    uploaderAccountId: row.uploaderAccountId ?? null,
     keyEpoch: row.keyEpoch,
     keyGeneration: row.keyGeneration,
     metadataRevision: row.metadataRevision,

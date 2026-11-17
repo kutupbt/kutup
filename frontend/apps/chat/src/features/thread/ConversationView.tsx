@@ -106,23 +106,23 @@ export function ConversationView({
     established,
   })
   // An owed default timer is set once the chat is accepted.
-  const owedTimer = pendingDefaultTimer(self.userId, model.key)
+  const owedTimer = pendingDefaultTimer(self.accountId, model.key)
   const settlingTimer = useRef(false)
   const setTimerAction = actions.setTimer
   useEffect(() => {
     if (owedTimer === undefined || !established || settlingTimer.current) return
     if (model.timerSeconds !== undefined) {
-      settlePendingDefaultTimer(self.userId, model.key)
+      settlePendingDefaultTimer(self.accountId, model.key)
       return
     }
     settlingTimer.current = true
     void setTimerAction(owedTimer)
-      .then(() => settlePendingDefaultTimer(self.userId, model.key))
+      .then(() => settlePendingDefaultTimer(self.accountId, model.key))
       .catch(() => undefined)
       .finally(() => {
         settlingTimer.current = false
       })
-  }, [owedTimer, established, model.timerSeconds, model.key, self.userId, setTimerAction])
+  }, [owedTimer, established, model.timerSeconds, model.key, self.accountId, setTimerAction])
   const [params, setParams] = useSearchParams()
   const focus = params.get('focus')
   const [highlight, setHighlight] = useState<string | null>(focus)

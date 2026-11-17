@@ -451,7 +451,7 @@ export function PhotoViewer({ photos, index, onNavigate, onClose }: Props) {
                 {hidden ? <Eye /> : <EyeOff />}
                 {hidden ? t('selection.unhide') : t('selection.hide')}
               </DropdownMenuItem>
-              {mayTrash(photo, session.userId) ? (
+              {mayTrash(photo, session.accountId) ? (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={() => setTrashing(true)}>
@@ -490,7 +490,7 @@ export function PhotoViewer({ photos, index, onNavigate, onClose }: Props) {
         ) : null}
       </div>
       {info ? (
-        <InfoPanel photo={photo} onClose={toggleInfo} onEdit={mayWrite(photo.folder, photo.file, session.userId) ? () => setEditing(true) : undefined} />
+        <InfoPanel photo={photo} onClose={toggleInfo} onEdit={mayWrite(photo.folder, photo.file, session.accountId) ? () => setEditing(true) : undefined} />
       ) : null}
       <EditDetailsDialog photo={photo} open={editing} onClose={() => setEditing(false)} />
       <ConfirmDestructive

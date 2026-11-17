@@ -61,7 +61,7 @@ export async function activateSession(
   resetSessionVersion()
   const me = prefetched ?? (await api.get<MeResponse>('/user/me')).data
   const keys = given
-  if (me.id !== keys.userId) {
+  if (me.id !== keys.accountId) {
     throw new Error('the session belongs to a different account than its keys')
   }
   if (me.envelopeBinding !== keys.keyBinding) {
@@ -80,7 +80,7 @@ export async function activateSession(
   // the shell's banner, which offers to continue with the server's data;
   // anything else ends the sign-in.
   try {
-    await (await accountHead({ userId: keys.userId, masterKeys: keys.masterKeys, roots: keys.roots, envelopeBinding: keys.keyBinding })).atSignIn()
+    await (await accountHead({ accountId: keys.accountId, masterKeys: keys.masterKeys, roots: keys.roots, envelopeBinding: keys.keyBinding })).atSignIn()
   } catch (error) {
     if (!(error instanceof HeadBlockedError)) {
       await api.post('/auth/logout').catch(() => undefined)
@@ -93,7 +93,7 @@ export async function activateSession(
   setSession(
     {
       sessionId,
-      userId: me.id,
+      accountId: me.id,
       address: me.address,
       envelopeBinding: keys.keyBinding,
       username: me.username || null,
@@ -124,7 +124,7 @@ export async function recheckAccount(): Promise<void> {
   const session = getSession()
   if (!session) return
   const { data: me } = await api.get<MeResponse>('/user/me')
-  if (me.id !== session.userId || me.envelopeBinding !== session.envelopeBinding) {
+  if (me.id !== session.accountId || me.envelopeBinding !== session.envelopeBinding) {
     // As a refused session (KeyBindingMismatchError): ended on the server,
     // the keys dropped here; the app's boot shows "this account's keys
     // changed" on the way back.

@@ -11,7 +11,7 @@ use utoipa::ToSchema;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::mail::sender_rules::normalise_for;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Senders one account may list.
@@ -35,9 +35,9 @@ pub struct MailImageSender {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<MailImageSender>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<(String, OffsetDateTime)> = sqlx::query_as(
         "SELECT address, created_at FROM mail_image_senders WHERE account_id = $1 ORDER BY created_at DESC",
     )
@@ -81,10 +81,10 @@ fn address(state: &AppState, value: &str) -> AppResult<String> {
 )]
 pub async fn add(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<MailImageSenderAddress>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address(&state, &request.address)?;
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM mail_image_senders WHERE account_id = $1")
@@ -115,10 +115,10 @@ pub async fn add(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<MailImageSenderAddress>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address(&state, &request.address)?;
     sqlx::query("DELETE FROM mail_image_senders WHERE account_id = $1 AND address = $2")
         .bind(user_id)

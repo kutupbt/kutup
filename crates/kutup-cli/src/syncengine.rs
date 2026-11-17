@@ -525,7 +525,7 @@ pub fn sync(
                         leaf,
                         &parent.collection_id,
                         &parent.hash_key,
-                        &sess.user_id,
+                        &sess.account_id,
                         sess,
                     ) {
                         Ok((id, key)) => {

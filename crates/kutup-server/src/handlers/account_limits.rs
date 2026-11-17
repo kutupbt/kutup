@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::rate_limits::{entry, RateLimitUnit};
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::ratelimit::{self, Section, Spec};
 use crate::site_settings::{
     self, NumericSetting, SettingSection, SettingUnit, ValueSource, RATE_LIMIT_PREFIX,
@@ -60,7 +60,7 @@ pub struct RegistryResponse {
 )]
 pub async fn registry(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<RegistryResponse>> {
     let stored: HashMap<String, String> =
         sqlx::query_as::<_, (String, String)>("SELECT key, value FROM site_settings")
@@ -224,7 +224,7 @@ async fn account_name(state: &AppState, id: Uuid) -> AppResult<Option<String>> {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<AccountLimitsResponse>> {
     account_name(&state, id).await?;
@@ -317,7 +317,7 @@ pub enum AccountLimitEntry {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path((id, key)): Path<(Uuid, String)>,
     Json(request): Json<UpdateLimitRequest>,
 ) -> AppResult<Json<AccountLimitEntry>> {
@@ -370,7 +370,7 @@ pub async fn update(
     let site = ratelimit::reload(&state.pool).await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         action,
         Some(id),
         // Named as the pages name them: a rate limit by its own key (as

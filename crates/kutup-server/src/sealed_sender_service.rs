@@ -27,7 +27,7 @@ use time::OffsetDateTime;
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One online certificate this server can issue sender certificates under.
@@ -309,7 +309,7 @@ pub(crate) struct SenderCertificateQuery {
 #[tracing::instrument(name = "chat.sealed_sender.certificate.issue", skip_all)]
 pub(crate) async fn issue_sender_certificate(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: axum::http::HeaderMap,
     Query(query): Query<SenderCertificateQuery>,
 ) -> AppResult<Response> {
@@ -317,7 +317,7 @@ pub(crate) async fn issue_sender_certificate(
         .sealed_sender
         .as_ref()
         .ok_or_else(|| AppError::not_found("sealed sender is not enabled"))?;
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     // Issued to the device that asks, under the account's identity (Signal's
     // certificate carries the ACI identity key and the device id).
     crate::handlers::chat_identity::authenticate_device(
@@ -384,7 +384,7 @@ pub(crate) async fn issue_sender_certificate(
 
 pub(crate) async fn get_domain_policy(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    _auth: AuthAccount,
     Path(domain): Path<String>,
 ) -> AppResult<Response> {
     kutup_federation_proto::validate_server_name(&domain)

@@ -72,8 +72,8 @@ export function UsersPage() {
       />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={t('admin.overview.users')} value={stats.data ? String(stats.data.totalUsers) : null}
-          detail={stats.data ? t('admin.overview.activeUsers', { count: stats.data.activeUsers }) : null} />
+        <Stat label={t('admin.overview.users')} value={stats.data ? String(stats.data.totalAccounts) : null}
+          detail={stats.data ? t('admin.overview.activeUsers', { count: stats.data.activeAccounts }) : null} />
         <Stat label={t('admin.overview.storage')} value={stats.data ? formatBytes(stats.data.totalStorageUsedBytes, lang) : null} detail={capacity} />
         <Stat label={t('admin.overview.files')} value={stats.data ? stats.data.totalFiles.toLocaleString(lang) : null} />
         <Stat label={t('admin.overview.folders')} value={stats.data ? stats.data.totalCollections.toLocaleString(lang) : null} />

@@ -20,9 +20,9 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{
-    MeResponse, MessageResponse, OkResponse, PreflightRecoverResponse, RefreshResponse,
+    AccountResponse, MessageResponse, OkResponse, PreflightRecoverResponse, RefreshResponse,
     SettingsResponse, TotpSetupResponse,
 };
 use crate::sessions::{self, ClientType};
@@ -94,7 +94,7 @@ pub struct LoginResponse {
     /// Only for non-web clients (the CLI); web clients get an HttpOnly cookie.
     #[serde(skip_serializing_if = "Option::is_none")]
     refresh_token: Option<String>,
-    user_id: String,
+    account_id: String,
     username: String,
     master_key_envelope: String,
     /// The account's root records (`GET /api/account/roots`), with the
@@ -318,7 +318,7 @@ pub struct CompleteSetupResponse {
     session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     refresh_token: Option<String>,
-    user_id: String,
+    account_id: String,
     username: String,
     is_admin: bool,
     storage_quota_bytes: i64,
@@ -549,7 +549,7 @@ pub async fn check_registration_code(
 )]
 pub async fn get_public_settings(
     State(state): State<AppState>,
-    user: Option<AuthUser>,
+    user: Option<AuthAccount>,
 ) -> AppResult<Response> {
     let registration_mode = crate::registration::mode(&state).await?;
     let federation_enabled = match state.federation.as_ref() {
@@ -605,7 +605,7 @@ pub async fn get_public_settings(
             .unwrap_or(u32::MAX),
         // A signed-in caller's own limit (docs/plans/settings-registry.md),
         // else the site's.
-        maximum_active_devices: match user.as_ref().map(|user| parse_uuid(&user.user_id)) {
+        maximum_active_devices: match user.as_ref().map(|user| parse_uuid(&user.account_id)) {
             Some(Ok(account)) => {
                 crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
                     .load_for(&state.pool, account)
@@ -913,7 +913,7 @@ pub(crate) async fn signed_in_answer(
         return Ok(Json(LoginResponse {
             requires_setup: true,
             setup_token: Some(setup_token),
-            user_id,
+            account_id: user_id,
             username,
             ..Default::default()
         })
@@ -1298,7 +1298,7 @@ pub async fn refresh(
         sessions::RefreshOutcome::Grace { session } => (session, None),
     };
     let access = jwt::generate_access_token(
-        &session.user_id.to_string(),
+        &session.account_id.to_string(),
         session.is_admin,
         &session.session_id.to_string(),
         &state.config.jwt_secret,
@@ -1327,9 +1327,9 @@ pub async fn refresh(
     path = "/api/user/me",
     tag = "auth",
     security(("BearerAuth" = [])),
-    responses((status = 200, description = "The caller's profile", body = MeResponse))
+    responses((status = 200, description = "The caller's profile", body = AccountResponse))
 )]
-pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn get_me(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
     type Row = (
         Uuid,
         String,
@@ -1351,7 +1351,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
                   federation
            FROM accounts WHERE id = $1"#,
     )
-    .bind(parse_uuid(&user.user_id)?)
+    .bind(parse_uuid(&user.account_id)?)
     .fetch_optional(&state.pool)
     .await?;
 
@@ -1386,7 +1386,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     .bind(id)
     .fetch_optional(&state.pool)
     .await?;
-    Ok(Json(MeResponse {
+    Ok(Json(AccountResponse {
         id: id.to_string(),
         account_id: id.to_string(),
         server: state.config.chat_server_name.clone(),
@@ -1422,7 +1422,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
 )]
 pub async fn update_me(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<UpdateMeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|rejection| {
@@ -1443,7 +1443,7 @@ pub async fn update_me(
         let value: Option<String> = if color.is_empty() { None } else { Some(color) };
         sqlx::query("UPDATE accounts SET color = $1 WHERE id = $2")
             .bind(value)
-            .bind(parse_uuid(&user.user_id)?)
+            .bind(parse_uuid(&user.account_id)?)
             .execute(&state.pool)
             .await
             .map_err(|_| AppError::internal("failed to update color"))?;
@@ -1457,7 +1457,7 @@ pub async fn update_me(
         }
         sqlx::query("UPDATE accounts SET version_retention_days = $1 WHERE id = $2")
             .bind(days)
-            .bind(parse_uuid(&user.user_id)?)
+            .bind(parse_uuid(&user.account_id)?)
             .execute(&state.pool)
             .await
             .map_err(|_| AppError::internal("failed to update version retention"))?;
@@ -1492,7 +1492,7 @@ fn local_account_username(address: &str, server_name: &str) -> Option<String> {
 )]
 pub async fn get_user_by_address(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(address): Path<String>,
 ) -> AppResult<Response> {
     if let Some((name, server)) = address.trim().rsplit_once('@') {
@@ -1501,12 +1501,12 @@ pub async fn get_user_by_address(
             // (crate::federation_switch).
             crate::federation_switch::ensure_federates(
                 &state.pool,
-                crate::handlers::trusted_uuid(&user.user_id)?,
+                crate::handlers::trusted_uuid(&user.account_id)?,
             )
             .await?;
             let remote = crate::drive_federation::remote_user_by_name(
                 &state,
-                &user.user_id,
+                &user.account_id,
                 name,
                 &server.to_ascii_lowercase(),
             )
@@ -1552,10 +1552,10 @@ pub async fn get_user_by_address(
     security(("BearerAuth" = [])),
     responses((status = 200, description = "TOTP secret + provisioning URI", body = TotpSetupResponse))
 )]
-pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn setup_totp(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
     let username: Option<Option<String>> =
         sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
-            .bind(parse_uuid(&user.user_id)?)
+            .bind(parse_uuid(&user.account_id)?)
             .fetch_optional(&state.pool)
             .await?;
     let Some(username) = username else {
@@ -1573,7 +1573,7 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
 
     // Never while it is on: the secret in use is replaced only by turning it
     // off (with the password) and on again.
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     let sealed = seal_totp_secret(&state, user_id, &secret).await?;
     let set = sqlx::query(
         "UPDATE accounts SET totp_secret_sealed = $1 WHERE id = $2 AND NOT totp_enabled",
@@ -1600,14 +1600,14 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
 )]
 pub async fn verify_totp(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
     let sealed: Option<Vec<u8>> =
         sqlx::query_scalar("SELECT totp_secret_sealed FROM accounts WHERE id = $1")
-            .bind(parse_uuid(&user.user_id)?)
+            .bind(parse_uuid(&user.account_id)?)
             .fetch_optional(&state.pool)
             .await?
             .flatten();
@@ -1615,7 +1615,8 @@ pub async fn verify_totp(
         return Err(AppError::bad_request("TOTP not set up"));
     };
     // A secret being set up whose key is gone: set it up again.
-    let Some(secret) = open_totp_secret(&state, parse_uuid(&user.user_id)?, &sealed).await? else {
+    let Some(secret) = open_totp_secret(&state, parse_uuid(&user.account_id)?, &sealed).await?
+    else {
         return Err(AppError::conflict("set the authenticator app up again")
             .with_details(serde_json::json!({ "code": "authenticatorLost" })));
     };
@@ -1628,7 +1629,7 @@ pub async fn verify_totp(
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     // Already on with a security key: the app joins it once a key (or a
     // recovery code) is proved too, and the recovery codes the account has
     // stay (none are shown).
@@ -1706,9 +1707,10 @@ pub struct RecoveryCodesResponse {
 )]
 pub async fn recovery_codes_left(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<RecoveryCodesLeft>> {
-    let remaining = crate::two_factor::remaining(&state.pool, parse_uuid(&user.user_id)?).await?;
+    let remaining =
+        crate::two_factor::remaining(&state.pool, parse_uuid(&user.account_id)?).await?;
     Ok(Json(RecoveryCodesLeft { remaining }))
 }
 
@@ -1731,11 +1733,11 @@ pub async fn recovery_codes_left(
 )]
 pub async fn renew_recovery_codes(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     second_factor_not_blocked(user_id)?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
@@ -1780,11 +1782,11 @@ pub(crate) enum SecondFactor {
 pub(crate) async fn prove_second_factor(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     code: &str,
     security_key: Option<&serde_json::Value>,
 ) -> AppResult<SecondFactor> {
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     let factors = crate::two_factor::factors_locked(tx, user_id).await?;
     if !factors.on() {
         return Ok(SecondFactor::Off);
@@ -1841,11 +1843,11 @@ pub(crate) async fn prove_second_factor(
 pub(crate) async fn second_factor_if_on<'c>(
     mut tx: sqlx::Transaction<'c, sqlx::Postgres>,
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     code: &str,
     security_key: Option<&serde_json::Value>,
 ) -> AppResult<(sqlx::Transaction<'c, sqlx::Postgres>, bool)> {
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     if !crate::two_factor::factors_locked(&mut tx, user_id)
         .await?
         .on()
@@ -1913,7 +1915,7 @@ pub(crate) async fn settle_second_factor<'c>(
 )]
 pub async fn disable_totp(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let req = match body {
@@ -1927,7 +1929,7 @@ pub async fn disable_totp(
     // The password (the grant, taken first) and the code (an authenticator's,
     // or a recovery code when the authenticator is lost): a stolen session
     // alone cannot turn it off.
-    let user_id = parse_uuid(&user.user_id)?;
+    let user_id = parse_uuid(&user.account_id)?;
     second_factor_not_blocked(user_id)?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
@@ -2127,7 +2129,7 @@ pub async fn complete_setup(
         access_token: access,
         session_id: issued.session_id.to_string(),
         refresh_token: (!client.uses_cookie()).then(|| issued.refresh_token.clone()),
-        user_id,
+        account_id: user_id,
         username,
         is_admin,
         storage_quota_bytes: quota,
@@ -2257,7 +2259,7 @@ async fn issue_tokens_and_respond(
         )
         .await?;
         return Ok(Json(LoginResponse {
-            user_id: user_id.to_owned(),
+            account_id: user_id.to_owned(),
             username: username.to_owned(),
             closing: Some(Closing { closes_at, grant }),
             ..Default::default()
@@ -2313,7 +2315,7 @@ async fn issue_tokens_and_respond(
         access_token: access,
         session_id: issued.session_id.to_string(),
         refresh_token: (!client.uses_cookie()).then(|| issued.refresh_token.clone()),
-        user_id: user_id.to_string(),
+        account_id: user_id.to_string(),
         username: username.to_string(),
         master_key_envelope: master_key_envelope.to_string(),
         account_roots: keys.account_roots,

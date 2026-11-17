@@ -14,7 +14,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::account_heads::{self, Scope};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The account's head reads, limited per account.
@@ -43,8 +43,8 @@ pub struct HeadView {
     security(("BearerAuth" = [])),
     responses((status = 200, body = HeadView))
 )]
-pub async fn head(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn head(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     allowed(user_id)?;
     let head = account_heads::latest(&state.pool, user_id).await?;
     Ok(Json(HeadView {
@@ -86,10 +86,10 @@ pub struct HeadsView {
 )]
 pub async fn heads(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<HeadsQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     allowed(user_id)?;
     if query.from < 1 {
         return Err(AppError::bad_request("from is a sequence of 1 or more"));
@@ -146,10 +146,10 @@ pub struct StartHead {
 )]
 pub async fn start(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<StartHead>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let head = account_heads::NextHead::parse(Some(&req.head))?
         .ok_or_else(|| AppError::bad_request("head is required"))?;
     let mut tx = state.pool.begin().await?;
@@ -177,10 +177,10 @@ pub async fn start(
 )]
 pub async fn index(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(scope): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     allowed(user_id)?;
     let scope = Scope::parse(&scope).ok_or_else(|| AppError::not_found("no such scope"))?;
     let (head, values, basis) = account_heads::index(&state.pool, user_id, scope).await?;

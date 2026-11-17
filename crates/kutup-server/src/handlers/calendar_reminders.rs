@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::site_settings::CALENDAR_ALARMS_PAGE;
 use crate::AppState;
 
@@ -70,10 +70,10 @@ fn instant(text: &str, what: &str) -> AppResult<time::OffsetDateTime> {
 )]
 pub async fn alarms(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<AlarmsQuery>,
 ) -> AppResult<Json<Alarms>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let start = instant(&query.start, "start")?;
     let end = instant(&query.end, "end")?;
     let after_fire = query
@@ -144,9 +144,9 @@ pub struct CalendarSettings {
 )]
 pub async fn settings(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<CalendarSettings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let zone: Option<String> =
         sqlx::query_scalar("SELECT zone FROM calendar_account_settings WHERE account_id = $1")
             .bind(user_id)
@@ -167,10 +167,10 @@ pub async fn settings(
 )]
 pub async fn put_settings(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<CalendarSettings>,
 ) -> AppResult<Json<CalendarSettings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     crate::handlers::calendar::limited(user_id)?;
     if let Some(zone) = &input.zone {
         // The bundled time zone database knows it.
@@ -232,14 +232,14 @@ pub struct CalendarPushSubscription {
 )]
 pub async fn put_push_subscription(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<CalendarPushSubscription>,
 ) -> AppResult<StatusCode> {
     let push = state
         .web_push
         .as_ref()
         .ok_or_else(|| AppError::not_found("Web Push is off on this server"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     crate::handlers::calendar::limited(user_id)?;
     if !push.allowed_endpoint(&input.endpoint) {
         return Err(AppError::bad_request(
@@ -332,7 +332,7 @@ pub async fn put_push_subscription(
 )]
 pub async fn delete_push_subscription(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<StatusCode> {
     sqlx::query("DELETE FROM calendar_push_subscriptions WHERE session_id = $1")
         .bind(user.session.session_id)

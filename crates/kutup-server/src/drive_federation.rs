@@ -36,7 +36,7 @@ use crate::federation::{
 };
 use crate::handlers::files::{canonical_uuid, validate_envelope};
 use crate::handlers::{random_token, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 pub(crate) const JSON_CONTENT_TYPE: &str = "application/json";
@@ -116,7 +116,7 @@ pub struct DriveInviteResponse {
     pub name_revision: i64,
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
-    pub owner_user_id: Uuid,
+    pub owner_account_id: Uuid,
     pub owner_account: String,
     pub owner_incarnation_id: String,
     pub owner_signing_public_key: String,
@@ -153,8 +153,7 @@ pub struct IncomingDriveShare {
     pub name_revision: i64,
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
-    #[sqlx(rename = "owner_account_id")]
-    pub owner_user_id: Uuid,
+    pub owner_account_id: Uuid,
     pub owner_account: String,
     pub owner_incarnation_id: String,
     pub owner_signing_public_key: String,
@@ -180,8 +179,7 @@ pub struct IncomingShareListQuery {
 pub struct FederatedDriveFile {
     pub id: Uuid,
     pub collection_id: Uuid,
-    #[sqlx(rename = "uploader_account_id")]
-    pub uploader_user_id: Uuid,
+    pub uploader_account_id: Uuid,
     pub metadata_envelope: String,
     pub file_key_envelope: String,
     pub key_epoch: i32,
@@ -212,8 +210,7 @@ pub struct FederatedDriveUploadResponse {
 pub(crate) struct OutgoingShare {
     id: Uuid,
     pub(crate) collection_id: Uuid,
-    #[sqlx(rename = "sharer_account_id")]
-    sharer_user_id: Uuid,
+    sharer_account_id: Uuid,
     recipient_account_id: Uuid,
     can_upload: bool,
     can_delete: bool,
@@ -370,7 +367,7 @@ fn validate_name_envelope(invite: &DriveInviteResponse) -> AppResult<()> {
         u64::try_from(invite.name_revision)
             .map_err(|_| AppError::bad_request("invalid Drive revision"))?,
         &invite.collection_id.to_string(),
-        &invite.owner_user_id.to_string(),
+        &invite.owner_account_id.to_string(),
     )
     .map_err(|_| AppError::bad_request("invalid Drive name envelope"))?;
     if STANDARD.encode(&bytes) != invite.name_envelope
@@ -538,7 +535,7 @@ pub(crate) async fn remote_user_by_name(
 )]
 pub async fn create_federated_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(collection_id): Path<String>,
     Json(request): Json<CreateFederatedShareRequest>,
 ) -> AppResult<Response> {
@@ -546,7 +543,7 @@ pub async fn create_federated_share(
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let federation = configured_stack(&state)?;
@@ -566,7 +563,7 @@ pub async fn create_federated_share(
         .await
         .map_err(gateway_error)?;
 
-    let owner = trusted_uuid(&user.user_id)?;
+    let owner = trusted_uuid(&user.account_id)?;
     let collection_id =
         Uuid::parse_str(&collection_id).map_err(|_| AppError::forbidden("forbidden"))?;
     let collection: Option<(Uuid, i32, String)> = sqlx::query_as(
@@ -613,7 +610,7 @@ pub async fn create_federated_share(
         .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
     let recipient_username = recipient_label(
         &state,
-        &user.user_id,
+        &user.account_id,
         &recipient,
         &named_share.recipient_incarnation_id,
     )
@@ -771,20 +768,20 @@ pub async fn get_user(
 )]
 pub async fn accept_incoming_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<AcceptFederatedShareRequest>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let federation = configured_stack(&state)?;
     let server = canonical_domain(&request.server)?;
     validate_capability(&request.capability)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let local_incarnation: String = sqlx::query_scalar(
         "SELECT account_incarnation_id FROM accounts WHERE id = $1 AND is_active = true",
     )
@@ -840,7 +837,7 @@ pub async fn accept_incoming_share(
     .bind(invite.name_revision)
     .bind(&invite.epoch_statement)
     .bind(&invite.epoch_statement_hash)
-    .bind(invite.owner_user_id)
+    .bind(invite.owner_account_id)
     .bind(&invite.owner_account)
     .bind(&invite.owner_incarnation_id)
     .bind(&invite.owner_signing_public_key)
@@ -863,7 +860,7 @@ pub async fn accept_incoming_share(
             name_revision: invite.name_revision,
             epoch_statement: invite.epoch_statement,
             epoch_statement_hash: invite.epoch_statement_hash,
-            owner_user_id: invite.owner_user_id,
+            owner_account_id: invite.owner_account_id,
             owner_account: invite.owner_account,
             owner_incarnation_id: invite.owner_incarnation_id,
             owner_signing_public_key: invite.owner_signing_public_key,
@@ -934,7 +931,7 @@ async fn fetch_verified_invite(
             &invite.collection_id.to_string(),
             u32::try_from(invite.key_epoch)
                 .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid Drive epoch"))?,
-            &crate::account_ids::from_peer(server, &invite.owner_user_id.to_string())?,
+            &crate::account_ids::from_peer(server, &invite.owner_account_id.to_string())?,
             &invite.owner_incarnation_id,
             &canonical_public_key(&invite.owner_signing_public_key)?,
             &crate::account_ids::local(federation.server_name(), local_user_id)?,
@@ -953,7 +950,7 @@ async fn fetch_verified_invite(
         .and_then(|_| {
             epoch_statement.verify_current_binding(
                 &invite.collection_id.to_string(),
-                &invite.owner_user_id.to_string(),
+                &invite.owner_account_id.to_string(),
                 u32::try_from(invite.key_epoch).unwrap_or(0),
             )
         })
@@ -988,18 +985,18 @@ async fn fetch_verified_invite(
 )]
 pub async fn refresh_incoming_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let federation = configured_stack(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let share_uuid =
         Uuid::parse_str(&share_id).map_err(|_| AppError::not_found("share not found"))?;
     type Stored = (String, String, Uuid, i32, String, Uuid, String);
@@ -1030,7 +1027,7 @@ pub async fn refresh_incoming_share(
     )
     .await?;
     if invite.collection_id != collection_id
-        || invite.owner_user_id != owner_id
+        || invite.owner_account_id != owner_id
         || invite.owner_authority_public_key != authority
     {
         return Err(AppError::conflict(
@@ -1145,14 +1142,14 @@ pub async fn refresh_incoming_share(
 )]
 pub async fn proxy_list_epochs(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -1188,10 +1185,10 @@ pub async fn proxy_list_epochs(
 )]
 pub async fn list_incoming_shares(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<IncomingShareListQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let kind = match query.kind.as_deref() {
         None | Some("folder") => "folder",
         Some("album") => "album",
@@ -1224,10 +1221,10 @@ pub async fn list_incoming_shares(
 )]
 pub async fn remove_incoming_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let share_id = Uuid::parse_str(&share_id).map_err(|_| AppError::not_found("not found"))?;
     let result = sqlx::query(
         "DELETE FROM drive_federated_incoming_shares WHERE id = $1 AND account_id = $2",
@@ -1244,10 +1241,10 @@ pub async fn remove_incoming_share(
 
 pub(crate) async fn incoming_share(
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     share_id: &str,
 ) -> AppResult<IncomingShareSecret> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let share_id = Uuid::parse_str(share_id).map_err(|_| AppError::not_found("share not found"))?;
     sqlx::query_as(
         "SELECT owner_server, remote_capability
@@ -1270,14 +1267,14 @@ pub(crate) async fn incoming_share(
 )]
 pub async fn proxy_list_files(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -1317,7 +1314,7 @@ pub async fn proxy_list_files(
 )]
 pub async fn proxy_download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((share_id, file_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
@@ -1325,7 +1322,7 @@ pub async fn proxy_download(
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -1351,7 +1348,7 @@ pub async fn proxy_download(
 )]
 pub async fn proxy_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(share_id): Path<String>,
     headers: HeaderMap,
     body: axum::body::Body,
@@ -1360,7 +1357,7 @@ pub async fn proxy_upload(
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -1378,7 +1375,7 @@ pub async fn proxy_upload(
     let request_id = stable_mutation_request_id(
         "upload",
         &[
-            user.user_id.as_bytes(),
+            user.account_id.as_bytes(),
             share_id.as_bytes(),
             spooled.content_digest.as_bytes(),
         ],
@@ -1454,14 +1451,14 @@ fn is_http_token_byte(byte: u8) -> bool {
 )]
 pub async fn proxy_delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((share_id, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming_share(&state, &user, &share_id).await?;
@@ -1477,7 +1474,7 @@ pub async fn proxy_delete(
     spec.request_id = stable_mutation_request_id(
         "delete",
         &[
-            user.user_id.as_bytes(),
+            user.account_id.as_bytes(),
             share_id.as_bytes(),
             file_id.as_bytes(),
         ],
@@ -1582,7 +1579,7 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
                 name_revision,
                 epoch_statement,
                 epoch_statement_hash,
-                owner_user_id,
+                owner_account_id: owner_user_id,
                 owner_account: format!("{}@{}", owner_username, federation.server_name()),
                 owner_incarnation_id,
                 owner_signing_public_key,
@@ -1937,7 +1934,7 @@ pub async fn upload_file(
         // The folder owner pays for what peers add: their quota (and open
         // uploads) first, then the share's own limit, measured from its files.
         let owner_room =
-            crate::drive_writes::lock_headroom(&mut tx, share.sharer_user_id, None).await?;
+            crate::drive_writes::lock_headroom(&mut tx, share.sharer_account_id, None).await?;
         if parsed.size > owner_room {
             tx.rollback().await?;
             return signed_app_error(
@@ -2011,7 +2008,7 @@ pub async fn upload_file(
             )
             .bind(file_id)
             .bind(share.collection_id)
-            .bind(share.sharer_user_id)
+            .bind(share.sharer_account_id)
             .bind(&parsed.metadata_envelope)
             .bind(&parsed.file_key_envelope)
             .bind(share.key_epoch)
@@ -2029,7 +2026,7 @@ pub async fn upload_file(
             .map_err(crate::drive_names::map_unique_violation)?;
             crate::storage_pool::charge(
                 &mut *tx,
-                crate::storage_pool::Payer::Account(share.sharer_user_id),
+                crate::storage_pool::Payer::Account(share.sharer_account_id),
                 parsed.size,
             )
             .await?;

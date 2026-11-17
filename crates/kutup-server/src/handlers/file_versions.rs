@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -29,7 +29,7 @@ pub struct VersionRow {
     storage_path: String,
     seq_at_snapshot: i64,
     doc_key_id: i64,
-    author_user_id: String,
+    author_account_id: String,
     size_bytes: i64,
     label: Option<String>,
     keep_forever: bool,
@@ -102,7 +102,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         storage_path: path,
         seq_at_snapshot: seq,
         doc_key_id: dk,
-        author_user_id: author.to_string(),
+        author_account_id: author.to_string(),
         size_bytes: size,
         label,
         keep_forever: keep,
@@ -140,10 +140,10 @@ pub struct PatchVersionRequest {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -176,11 +176,11 @@ pub async fn list(
 )]
 pub async fn download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, vid)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
@@ -235,11 +235,11 @@ pub async fn download(
 )]
 pub async fn patch(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, vid)): Path<(String, String)>,
     Json(req): Json<PatchVersionRequest>,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     // Naming or pinning a version changes what retention keeps: an editor's call.
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
@@ -316,10 +316,10 @@ pub(crate) const NEWEST_VERSION: &str =
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, vid)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     if vid == crate::handlers::files::ORIGINAL {
         return delete_original(&state, user_id, fid).await;
     }
@@ -432,11 +432,11 @@ const MAX_LABEL_CHARS: usize = 200;
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    let (user_id, fid) = ids(&user.account_id, &file_id)?;
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }

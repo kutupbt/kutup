@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::handlers::chat_identity::{self, DeviceKinds};
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The device's root sign-in: an app session's parent (the account sign-in
@@ -70,7 +70,7 @@ pub struct DeviceSessionResponse {
 )]
 pub async fn get_device_session(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
 ) -> AppResult<Json<DeviceSessionResponse>> {
     let root = root_session_id(&state.pool, auth.session.session_id).await?;
     Ok(Json(DeviceSessionResponse {
@@ -220,11 +220,11 @@ fn devices_conflict() -> AppError {
 )]
 pub async fn register_device(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Json(request): Json<RegisterDeviceRequestV1>,
 ) -> AppResult<Json<RegisterDeviceResponseV1>> {
     request.validate().map_err(AppError::bad_request)?;
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     if !crate::ratelimit::DEVICE_REGISTRATIONS.allow(&user_id.to_string()) {
         return Err(AppError::too_many_requests("too many requests")
             .with_details(serde_json::json!({ "code": "rateLimited" })));
@@ -315,9 +315,9 @@ pub struct AccountDevicesResponse {
 )]
 pub async fn list_devices(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
 ) -> AppResult<Json<AccountDevicesResponse>> {
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let root = root_session_id(&state.pool, auth.session.session_id).await?;
     #[allow(clippy::type_complexity)]
     let rows: Vec<(
@@ -389,10 +389,10 @@ fn ticket_hash(ticket: &str) -> String {
 )]
 pub async fn create_device_ticket(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: HeaderMap,
 ) -> AppResult<Json<DeviceTicketResponse>> {
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let device_id =
         chat_identity::authenticated_device_of(&state.pool, &headers, user_id, DeviceKinds::Any)
             .await?;
@@ -438,7 +438,7 @@ pub(crate) async fn consume_ticket(state: &AppState, ticket: &str) -> AppResult<
 /// live sign-in, that the account's head manifest lists with that key.
 #[derive(Clone, Debug)]
 pub(crate) struct FrameDevice {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub device_id: u32,
     pub account: AccountRef,
     pub frame_key: [u8; 32],
@@ -478,7 +478,7 @@ pub(crate) async fn frame_device(
     };
     let (frame_key, session_id, sequence) = row.ok_or_else(not_authorized)?;
     Ok(FrameDevice {
-        user_id,
+        account_id: user_id,
         device_id: device_id as u32,
         account: crate::account_ids::local(&state.config.chat_server_name, user_id)?,
         frame_key: frame_key.try_into().map_err(|_| not_authorized())?,
@@ -525,7 +525,7 @@ pub(crate) async fn prune_stale_unlisted(
 /// A removal also closes the socket at once ([`close_device`]); this catches
 /// a close that socket missed.
 pub(crate) async fn still_counts(state: &AppState, device: &FrameDevice) -> Option<bool> {
-    match frame_device(state, device.user_id, device.device_id as i32).await {
+    match frame_device(state, device.account_id, device.device_id as i32).await {
         Ok(now) => Some(now.frame_key == device.frame_key && now.session_id == device.session_id),
         Err(error) if error.status == axum::http::StatusCode::FORBIDDEN => Some(false),
         Err(_) => None,
@@ -547,7 +547,7 @@ pub(crate) async fn frame_device_of_request(
     let auth = crate::middleware::authenticate_access_token(state, token)
         .await
         .map_err(|_| AppError::unauthorized("invalid token"))?;
-    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let device_id =
         chat_identity::authenticated_device_of(&state.pool, headers, user_id, DeviceKinds::Any)
             .await?;

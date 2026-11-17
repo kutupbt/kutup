@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationRequestSpec, FederationStack};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
@@ -138,10 +138,10 @@ fn millis(at: OffsetDateTime) -> i64 {
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateLiveLocationRequest>,
 ) -> AppResult<Response> {
-    if !CREATE_LIMIT.allow(&user.user_id) {
+    if !CREATE_LIMIT.allow(&user.account_id) {
         return Err(limited());
     }
     let stream_id = stream_id_of(&request.stream_id)
@@ -170,7 +170,7 @@ pub async fn create(
     .bind(hash(Suite::V1, write).to_vec())
     .bind(hash(Suite::V1, read).to_vec())
     .bind(expires_at)
-    .bind(crate::handlers::trusted_uuid(&user.user_id)?)
+    .bind(crate::handlers::trusted_uuid(&user.account_id)?)
     .execute(&state.pool)
     .await?;
     if inserted.rows_affected() == 0 {
@@ -197,7 +197,7 @@ pub async fn create(
 )]
 pub async fn write(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Path(stream_id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<WriteLiveLocationRequest>,
@@ -262,7 +262,7 @@ pub async fn write(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Path(stream_id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
@@ -343,12 +343,12 @@ async fn read_local(
 )]
 pub async fn read(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(stream_id): Path<String>,
     Query(query): Query<ReadQuery>,
     headers: HeaderMap,
 ) -> AppResult<Json<LiveLocationResponse>> {
-    if !READ_LIMIT.allow(&user.user_id) {
+    if !READ_LIMIT.allow(&user.account_id) {
         return Err(limited());
     }
     let stream = stream_id_of(&stream_id)?;
@@ -361,7 +361,7 @@ pub async fn read(
             // account's federation is off.
             crate::federation_switch::ensure_federates(
                 &state.pool,
-                crate::handlers::trusted_uuid(&user.user_id)?,
+                crate::handlers::trusted_uuid(&user.account_id)?,
             )
             .await?;
             let capability = headers

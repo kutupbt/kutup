@@ -113,7 +113,7 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
     // is no account.
     for spelling in [new.clone(), new.to_uppercase(), new.replace('_', "")] {
         let session = sign_in(&c, &base, &spelling, &user.password);
-        assert_eq!(session["userId"], json!(user.id), "{spelling}");
+        assert_eq!(session["accountId"], json!(user.id), "{spelling}");
     }
     let (status, _, _) = opaque_login(&c, &base, &old, &user.password, "session", None, None);
     assert_eq!(
@@ -386,7 +386,7 @@ fn variant_spellings_find_the_current_account_as_stored() {
         )
         .json()
         .unwrap();
-        assert_eq!(account["userId"], json!(user.id), "{at}: {account}");
+        assert_eq!(account["accountId"], json!(user.id), "{at}: {account}");
         let keys: Value = get(
             &c,
             &base,

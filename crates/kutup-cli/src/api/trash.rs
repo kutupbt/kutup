@@ -22,7 +22,7 @@ pub struct TrashResponse {
 pub struct TrashFolder {
     pub id: String,
     #[serde(default)]
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     #[serde(default)]
     pub name_envelope: String,
     #[serde(default)]
@@ -68,7 +68,7 @@ pub struct TrashFile {
     #[serde(default)]
     pub metadata_revision: u64,
     #[serde(default)]
-    pub collection_owner_user_id: String,
+    pub collection_owner_account_id: String,
     #[serde(default)]
     pub collection_owner_key_envelope: String,
     #[serde(default)]
@@ -145,7 +145,7 @@ mod tests {
     fn deserializes_server_shape() {
         let body = r##"{
             "folders": [{
-                "id": "f0", "ownerUserId": "u1", "nameEnvelope": "ne",
+                "id": "f0", "ownerAccountId": "u1", "nameEnvelope": "ne",
                 "ownerKeyEnvelope": "oke", "keyEpoch": 1, "nameRevision": 1,
                 "epochStatement": "es", "epochStatementHash": "esh",
                 "color": "#ef4444", "items": 3, "deletedAt": "2026-07-01T10:00:00Z"
@@ -154,7 +154,7 @@ mod tests {
                 "id": "a1", "collectionId": "c1",
                 "metadataEnvelope": "me", "fileKeyEnvelope": "fke",
                 "keyEpoch": 1, "keyGeneration": 2, "metadataRevision": 1,
-                "collectionOwnerUserId": "u1", "collectionOwnerKeyEnvelope": "oke",
+                "collectionOwnerAccountId": "u1", "collectionOwnerKeyEnvelope": "oke",
                 "collectionKeyEpoch": 1, "collectionEpochStatement": "es",
                 "collectionEpochStatementHash": "esh",
                 "deletedAt": "2026-07-02T11:30:00Z"

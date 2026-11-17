@@ -118,7 +118,7 @@ impl Me {
         // Who this account is, read with the session: by its id, never by
         // the username the session last saw (a rename elsewhere changes it).
         let current = ctx.client.me().context("read the account")?;
-        if current.account_id != ctx.session.user_id {
+        if current.account_id != ctx.session.account_id {
             bail!("the server described another account than this session's");
         }
         let roots = ctx.session.roots()?;

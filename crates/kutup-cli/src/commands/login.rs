@@ -42,7 +42,7 @@ pub fn run(
             "username": sess.username,
             "name": sess.name,
             "server": sess.server,
-            "userId": sess.user_id,
+            "accountId": sess.account_id,
         }))?;
     } else {
         println!("Logged in as {}", sess.username);
@@ -277,7 +277,7 @@ pub(crate) fn login_with_password(
     let account = Client::new(server, &resp.access_token)
         .me()
         .context("read the account")?;
-    if account.account_id != resp.user_id {
+    if account.account_id != resp.account_id {
         bail!("the server described another account than the one signed in");
     }
 
@@ -323,7 +323,7 @@ pub(crate) fn login_with_password(
         server: server.to_string(),
         name: name.to_string(),
         envelope_binding: binding,
-        user_id: resp.user_id,
+        account_id: resp.account_id,
         server_name: account.server,
         username: account.username,
         access_token: resp.access_token,

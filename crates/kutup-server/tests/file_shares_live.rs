@@ -67,7 +67,9 @@ fn file_share_contract() {
             c.post(format!("{base}/api/files/{}/share", file.id)),
             &by.token,
         )
-        .json(&json!({ "recipientUserId": to.id, "shareEnvelope": envelope, "canEdit": can_edit }))
+        .json(
+            &json!({ "recipientAccountId": to.id, "shareEnvelope": envelope, "canEdit": can_edit }),
+        )
         .send()
         .unwrap()
         .status()
@@ -226,7 +228,7 @@ fn file_share_contract() {
         StatusCode::CONFLICT
     );
     let rotated = rotate(
-        json!([{ "userId": carol.id, "shareEnvelope": file_share(&alice, &file.id, &next_key, 2, &carol) }]),
+        json!([{ "accountId": carol.id, "shareEnvelope": file_share(&alice, &file.id, &next_key, 2, &carol) }]),
         json!([bob.id]),
     );
     assert_eq!(rotated.status(), StatusCode::OK);
@@ -319,7 +321,7 @@ fn stale_file_shares_wait_for_the_owner() {
         c.post(format!("{base}/api/files/{}/share", file.id)),
         &alice.token,
     )
-    .json(&json!({ "recipientUserId": carol.id,
+    .json(&json!({ "recipientAccountId": carol.id,
                    "shareEnvelope": file_share(&alice, &file.id, &file.key, 1, &carol),
                    "canEdit": true }))
     .send()
@@ -411,7 +413,7 @@ fn stale_file_shares_wait_for_the_owner() {
         "ownerKeyEnvelope": crate::common::owner_collection_key(&folder2, &alice, &folder.id, 2),
         "previousKeyEnvelope": collection_keyring::seal_previous_key(&folder.key, &folder2, &folder.id, &alice.id, 2).unwrap(),
         "nameEnvelope": drive_envelope::seal_b64(b"Stale", &folder2, ctx2(DriveEnvelopePurpose::CollectionName, 2)).unwrap(),
-        "members": [{ "userId": editor.id, "namedShareEnvelope": editor_share }],
+        "members": [{ "accountId": editor.id, "namedShareEnvelope": editor_share }],
         "publicLinks": [],
         "removed": { "members": [leaver.id] },
     }))
@@ -479,7 +481,7 @@ fn stale_file_shares_wait_for_the_owner() {
 
     // The owner re-seals: Carol edits again, nothing is pending.
     let r = bearer(c.put(format!("{base}/api/files/{}/shares", file.id)), &alice.token)
-        .json(&json!({ "members": [{ "userId": carol.id,
+        .json(&json!({ "members": [{ "accountId": carol.id,
                                      "shareEnvelope": file_share(&alice, &file.id, &key2, 2, &carol) }] }))
         .send()
         .unwrap();
@@ -513,7 +515,7 @@ fn editors_share_and_rename_when_allowed() {
             c.post(format!("{base}/api/files/{}/share", file.id)),
             &by.token,
         )
-        .json(&json!({ "recipientUserId": to.id,
+        .json(&json!({ "recipientAccountId": to.id,
                        "shareEnvelope": file_share(by, &file.id, &file.key, 1, to),
                        "canEdit": can_edit }))
         .send()
@@ -614,7 +616,7 @@ fn editors_share_and_rename_when_allowed() {
         kutup_crypto::primitives::random(&mut next);
         let members: Vec<Value> = [&carol, &erin]
             .iter()
-            .map(|m| json!({ "userId": m.id, "shareEnvelope": file_share(&alice, &file.id, &next, 2, m) }))
+            .map(|m| json!({ "accountId": m.id, "shareEnvelope": file_share(&alice, &file.id, &next, 2, m) }))
             .collect();
         bearer(c.post(format!("{base}/api/files/{}/rotate", file.id)), &by.token)
             .json(&json!({
@@ -827,7 +829,7 @@ fn a_public_link_to_one_file() {
 
     // Removing Bob keeps the link, re-wrapped for the new key.
     let status = bearer(c.post(format!("{base}/api/files/{}/share", file.id)), &alice.token)
-        .json(&json!({ "recipientUserId": bob.id, "shareEnvelope": file_share(&alice, &file.id, &file.key, 1, &bob), "canEdit": false }))
+        .json(&json!({ "recipientAccountId": bob.id, "shareEnvelope": file_share(&alice, &file.id, &file.key, 1, &bob), "canEdit": false }))
         .send()
         .unwrap()
         .status();
@@ -1060,7 +1062,7 @@ fn reports_take_public_links_down() {
         .clone();
     assert_eq!(mine["reason"], "phishing");
     assert_eq!(mine["details"], "asks for a password");
-    assert_eq!(mine["ownerUserId"], alice.id.as_str());
+    assert_eq!(mine["ownerAccountId"], alice.id.as_str());
     assert_eq!(mine["shareType"], "file");
     let id = mine["id"].as_str().unwrap();
 
@@ -1133,7 +1135,7 @@ fn reports_take_public_links_down() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|r| r["ownerUserId"] == alice.id.as_str() && r["resolution"] == "disabled"));
+        .any(|r| r["ownerAccountId"] == alice.id.as_str() && r["resolution"] == "disabled"));
 
     // Enabled again, the link the administrator did not take down works again.
     let enabled = bearer(

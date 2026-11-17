@@ -100,7 +100,7 @@ async function mintFork(child: ForkChild, state: string): Promise<string> {
   const clientType = CHILD_CLIENT[child]
   const key = randomBytes(32)
   const payload = encodeKeys({
-    userId: session.userId,
+    accountId: session.accountId,
     masterKey: session.masterKey,
     masterKeys: session.masterKeys,
     roots: session.roots,
@@ -180,7 +180,7 @@ export async function consumeFork(): Promise<string> {
     const { data } = await api.post<{
       accessToken: string
       sessionId: string
-      userId: string
+      accountId: string
       payload: string
     }>('/auth/forks/consume', { selector })
     const plaintext = await openLocalState(
@@ -191,7 +191,7 @@ export async function consumeFork(): Promise<string> {
     )
     const keys = decodeKeys(plaintext)
     plaintext.fill(0)
-    if (keys.userId !== data.userId) throw new Error('the fork belongs to another account')
+    if (keys.accountId !== data.accountId) throw new Error('the fork belongs to another account')
     const activated = await activateSession(keys, data.accessToken, data.sessionId)
     await persistKeys(data.sessionId, activated)
     return returnTo

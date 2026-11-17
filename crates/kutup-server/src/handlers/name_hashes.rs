@@ -14,7 +14,7 @@ use crate::drive_names::{self, Place};
 use crate::error::{AppError, AppResult};
 use crate::handlers::drive_move::writable_folder;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -38,11 +38,11 @@ pub struct ContentHashRequest {
 )]
 pub async fn set_content_hash(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<ContentHashRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let hash = drive_names::parse_content_hash(Some(&req.content_hash))?
         .ok_or_else(|| AppError::bad_request("invalid content hash"))?;
@@ -102,11 +102,11 @@ pub struct AvailableHashes {
 )]
 pub async fn available_hashes(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<AvailableHashesRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let folder = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     writable_folder(&mut tx, user_id, folder).await?;
@@ -127,10 +127,10 @@ pub async fn available_hashes(
 )]
 pub async fn top_level_available_hashes(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<AvailableHashesRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let available = free_of(&mut tx, Place::TopLevel(user_id), user_id, &req).await?;
     tx.commit().await?;

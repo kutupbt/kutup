@@ -20,7 +20,7 @@ use crate::handlers::collections::{
 };
 use crate::handlers::files::file_rows;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{CollectionRow, CreateCollectionRequest, FileRow};
 use crate::AppState;
 
@@ -44,8 +44,11 @@ pub struct AlbumRow {
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your albums and albums shared with you", body = [AlbumRow]))
 )]
-pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<Vec<AlbumRow>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn list(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<Vec<AlbumRow>>> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows = collection_rows(&state, user_id, "album").await?;
     let ids: Vec<Uuid> = rows
         .iter()
@@ -84,10 +87,10 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Js
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     create_owned_collection(&state, user_id, request, "album").await
 }
 
@@ -146,10 +149,10 @@ async fn owned_album(state: &AppState, user_id: Uuid, album_id: &str) -> AppResu
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let (id, _) = owned_album(&state, user_id, &album).await?;
     sqlx::query("DELETE FROM drive_collections WHERE id = $1 AND kind = 'album'")
         .bind(id)
@@ -185,10 +188,10 @@ pub struct AlbumItem {
 )]
 pub async fn items(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
 ) -> AppResult<Json<Vec<AlbumItem>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = album_access(&state, user_id, &album).await?.id;
     let files = file_rows(
         &state.pool,
@@ -248,10 +251,10 @@ pub async fn items(
 )]
 pub async fn leave(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let access = album_access(&state, user_id, &album).await?;
     if access.owner {
         return Err(AppError::bad_request(
@@ -296,10 +299,10 @@ pub struct AlbumItemKey {
 )]
 pub async fn keys(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
 ) -> AppResult<Json<Vec<AlbumItemKey>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let (id, _) = owned_album(&state, user_id, &album).await?;
     let rows: Vec<(Uuid, String, i32, i32)> = sqlx::query_as(
         "SELECT file_id, file_key_envelope, key_generation, album_epoch FROM photos_album_items WHERE album_id = $1",
@@ -356,11 +359,11 @@ pub struct AddAlbumItems {
 )]
 pub async fn add_items(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
     Json(request): Json<AddAlbumItems>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if request.items.is_empty() || request.items.len() > MAX_ADD {
         return Err(AppError::bad_request(
             "add between 1 and 500 photos at a time",
@@ -449,11 +452,11 @@ pub struct RemoveAlbumItems {
 )]
 pub async fn remove_items(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(album): Path<String>,
     Json(request): Json<RemoveAlbumItems>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let access = album_access(&state, user_id, &album).await?;
     let album_id = access.id;
     let ids: Vec<Uuid> = request

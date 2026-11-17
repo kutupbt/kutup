@@ -159,7 +159,7 @@ export async function uploadOne(
     )
     return null
   }
-  const owner = getSession()?.userId
+  const owner = getSession()?.accountId
   const uploaded = await streamUpload({
     file,
     collection: { id: folder.id, keyEpoch: folder.keyEpoch, collectionKey: folder.key },

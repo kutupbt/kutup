@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::files::{canonical_uuid, validate_envelope};
 use crate::handlers::{octet_stream_response, random_token};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Default, Deserialize)]
@@ -49,11 +49,11 @@ pub struct CreateShareRequest {
 )]
 pub async fn create_public_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<CreateShareRequest>,
 ) -> AppResult<Response> {
     let user_id =
-        Uuid::parse_str(&user.user_id).map_err(|_| AppError::internal("invalid user id"))?;
+        Uuid::parse_str(&user.account_id).map_err(|_| AppError::internal("invalid user id"))?;
     // Public links off, for the site or this account: none is made.
     crate::public_sharing::ensure_may_share(&state.pool, user_id).await?;
     let target = canonical_uuid(&req.target_id)?;
@@ -206,7 +206,7 @@ struct PublicShareResponse {
     target_id: Uuid,
     collection_key_envelope: String,
     collection_key_epoch: i32,
-    owner_user_id: Uuid,
+    owner_account_id: Uuid,
     /// The owner's account address (`alice@example.org`): a public page says
     /// who shared it, so a link cannot pass its content off as the server's.
     owner_account: String,
@@ -312,7 +312,7 @@ pub async fn get_public_share(
         target_id,
         collection_key_envelope: envelope,
         collection_key_epoch: epoch,
-        owner_user_id,
+        owner_account_id: owner_user_id,
         owner_account: format!("{owner_username}@{}", state.config.chat_server_name),
         owner_authority_public_key: authority,
         expires_at,

@@ -14,7 +14,7 @@ vi.mock('@kutup/session/client', () => ({
   },
 }))
 vi.mock('@kutup/session/apiBase', () => ({ apiBase: () => '/api' }))
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', address: 'me@home.test' }) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ accountId: 'u1', address: 'me@home.test' }) }))
 
 import { ApiChatTransport, PEER_UNSUPPORTED } from './transport'
 

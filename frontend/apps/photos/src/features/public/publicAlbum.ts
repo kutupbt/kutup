@@ -45,7 +45,7 @@ interface ShareInfo {
   targetId: string
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
-  ownerUserId: string
+  ownerAccountId: string
   /** Who shared it (`alice@example.org`): the page says so. */
   ownerAccount: string
   expiresAt: string | null
@@ -55,7 +55,7 @@ interface ShareInfo {
 }
 
 interface PublicItem {
-  file: Omit<FileRow, 'uploaderUserId' | 'updatedAt' | 'thumbnails'>
+  file: Omit<FileRow, 'uploaderAccountId' | 'updatedAt' | 'thumbnails'>
   thumbnails: DriveFile['thumbnails']
   fileKeyEnvelope: string
   keyGeneration: number
@@ -109,7 +109,7 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
   try {
     albumKey = await openPublicLinkCollectionKeyV1(share.collectionKeyEnvelope, key, {
       collectionId: share.targetId,
-      ownerUserId: share.ownerUserId,
+      ownerAccountId: share.ownerAccountId,
       epoch: share.collectionKeyEpoch,
     })
     name = new TextDecoder().decode(
@@ -118,7 +118,7 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
         epoch: share.collectionKeyEpoch,
         revision: BigInt(share.nameRevision),
         objectId: share.targetId,
-        parentId: share.ownerUserId,
+        parentId: share.ownerAccountId,
       }),
     )
   } catch {
@@ -148,7 +148,7 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
           // No folder here: the link reaches the photo, nothing around it.
           folder: {
             source: 'shared', id: item.file.collectionId, parentId: null, name: null, key: null, keyEpoch: item.file.keyEpoch,
-            ownerUserId: share.ownerUserId, ownerAuthorityPublicKey: '', epochStatementHash: '', nameRevision: 1, color: null,
+            ownerAccountId: share.ownerAccountId, ownerAuthorityPublicKey: '', epochStatementHash: '', nameRevision: 1, color: null,
             createdAt: item.file.createdAt, updatedAt: item.file.createdAt, ownerAccount: null,
             canUpload: false, canDelete: false, canManage: false, isRoot: false,
           },

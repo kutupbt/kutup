@@ -9,7 +9,7 @@ import { adminKey } from './api'
 // the update shared by Administration → Mail sending and the user page.
 
 export interface MailSender {
-  userId: string
+  accountId: string
   username: string
   sentDay: number
   sentWeek: number
@@ -37,7 +37,7 @@ export function useUpdateMailSending(onDone?: () => void) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ userId, change }: { userId: string; change: Change }) => {
+    mutationFn: async ({ accountId: userId, change }: { accountId: string; change: Change }) => {
       await api.put(`/admin/users/${userId}/mail-sending`, change)
     },
     onSuccess: async () => {

@@ -5,7 +5,7 @@ import { resolveApiBase } from '@kutup/session/apiBase'
 import { ApiChatTransport, FederationOffError, forgetFederationState } from './transport'
 
 // A custom-domain address: this server's Chat name is another than its domain.
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', address: 'me@custom.example' }) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ accountId: 'u1', address: 'me@custom.example' }) }))
 vi.mock('@kutup/session/apps', () => ({ loadServerSettings: () => Promise.resolve({ chat: { serverName: 'home.test' } }) }))
 
 /** This account's switch, as `/user/me` says it. */

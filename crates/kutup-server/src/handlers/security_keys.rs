@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::security_keys::{self as keys, CeremonyKind, Refused};
 use crate::site_settings::{SECURITY_KEYS_PER_ACCOUNT, WEBAUTHN_CEREMONY_SECONDS};
 use crate::{jwt, ratelimit, AppState};
@@ -72,9 +72,9 @@ pub struct SecurityKeysResponse {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<SecurityKeysResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let keys: Vec<SecurityKeyView> = sqlx::query_as(
         "SELECT id, name, created_at, last_used_at, compromised
          FROM account_security_keys WHERE account_id = $1 ORDER BY created_at",
@@ -110,12 +110,12 @@ pub async fn list(
 )]
 pub async fn register_start(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<super::auth::CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let rp = relying_party(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let seconds = ceremony_seconds(&state).await?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, req.grant(), crate::grants::Purpose::Totp, &user)
@@ -232,12 +232,12 @@ pub struct RegisterFinishResponse {
 )]
 pub async fn register_finish(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<RegisterFinishRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let rp = relying_party(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let name = key_name(&req.name)?;
     let response = serde_json::to_vec(&req.credential)
         .map_err(|_| AppError::bad_request("invalid credential"))?;
@@ -351,12 +351,12 @@ pub struct RenameRequest {
 )]
 pub async fn rename(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Result<Json<RenameRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let renamed =
         sqlx::query("UPDATE account_security_keys SET name = $3 WHERE id = $1 AND account_id = $2")
@@ -382,9 +382,9 @@ pub async fn rename(
     security(("BearerAuth" = [])),
     responses((status = 200, description = "PublicKeyCredentialRequestOptions (JSON form)"))
 )]
-pub async fn proof_start(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn proof_start(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
     let rp = relying_party(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let seconds = ceremony_seconds(&state).await?;
     let mut tx = state.pool.begin().await?;
     let options = keys::start_assertion(
@@ -560,12 +560,12 @@ pub struct RemoveResponse {
 )]
 pub async fn remove(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Result<Json<super::auth::CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     super::auth::second_factor_not_blocked(user_id)?;
     let mut tx = state.pool.begin().await?;
@@ -648,11 +648,11 @@ pub struct RequireUvRequest {
 )]
 pub async fn set_require_uv(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<RequireUvRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;

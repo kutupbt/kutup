@@ -19,7 +19,7 @@ use crate::handlers::admin::audit;
 use crate::mail::domains::dkim;
 use crate::mail::domains::settings::{self, Settings, KEYS, MODE_KEY};
 use crate::mail::domains::store;
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::AppState;
 
 /// A DKIM key and the record that publishes it.
@@ -159,7 +159,7 @@ fn effective(settings: &Settings) -> BTreeMap<String, String> {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<AdminDomains>> {
     let settings = Settings::load(&state.pool).await?;
     let server = &state.config.chat_server_name;
@@ -240,7 +240,7 @@ pub async fn list(
 )]
 pub async fn set_settings(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(changes): Json<BTreeMap<String, String>>,
 ) -> AppResult<Json<BTreeMap<String, String>>> {
     let mut checked = Vec::with_capacity(changes.len());
@@ -263,7 +263,7 @@ pub async fn set_settings(
     if !checked.is_empty() {
         audit(
             &state.pool,
-            &admin.user_id,
+            &admin.account_id,
             "mail.domains.settings",
             None,
             json!(checked.iter().cloned().collect::<BTreeMap<_, _>>()),
@@ -285,7 +285,7 @@ pub async fn set_settings(
 )]
 pub async fn approve(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
@@ -299,7 +299,7 @@ pub async fn approve(
     let name = name.ok_or_else(|| AppError::not_found("no such domain"))?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "mail.domains.approve",
         None,
         json!({ "domain": name }),
@@ -321,12 +321,12 @@ pub async fn approve(
 )]
 pub async fn deactivate(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
     let admin_id =
-        Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("bad session"))?;
+        Uuid::parse_str(&admin.account_id).map_err(|_| AppError::unauthorized("bad session"))?;
     let (organization, name) = store::deactivate(&state.pool, id, admin_id).await?;
     crate::mail::notice::domain_lost_to_owners(
         &state,
@@ -337,7 +337,7 @@ pub async fn deactivate(
     .await;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "mail.domains.deactivate",
         None,
         json!({ "domain": name }),
@@ -368,7 +368,7 @@ pub struct DomainBlock {
 )]
 pub async fn blocks(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<Vec<DomainBlock>>> {
     Ok(Json(
         store::blocks(&state.pool)
@@ -395,14 +395,14 @@ pub async fn blocks(
 )]
 pub async fn unblock(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(name): Path<String>,
 ) -> AppResult<StatusCode> {
     let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
     store::unblock(&state.pool, &name).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "mail.domains.unblock",
         None,
         json!({ "domain": name }),
@@ -475,7 +475,7 @@ async fn organization_of(
 )]
 pub async fn overrides(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<DomainOverridesView>> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such user"))?;
@@ -537,7 +537,7 @@ pub async fn overrides(
 )]
 pub async fn set_overrides(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(input): Json<DomainOverrides>,
 ) -> AppResult<Json<DomainOverrides>> {
@@ -599,7 +599,7 @@ pub async fn set_overrides(
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "mail.domains.overrides",
         Some(id),
         json!({ "limits": input, "organization": organization.map(|o| o.to_string()) }),

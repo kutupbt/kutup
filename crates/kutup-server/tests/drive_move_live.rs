@@ -292,7 +292,7 @@ fn drive_move_contract() {
         "ownerKeyEnvelope": crate::common::owner_collection_key(&a2, &owner, &a.id, 2),
         "previousKeyEnvelope": collection_keyring::seal_previous_key(&a.key, &a2, &a.id, &owner.id, 2).unwrap(),
         "nameEnvelope": drive_envelope::seal_b64(b"Integrity", &a2, ctx2(DriveEnvelopePurpose::CollectionName, 2)).unwrap(),
-        "members": [{ "userId": editor.id, "namedShareEnvelope": editor_share }],
+        "members": [{ "accountId": editor.id, "namedShareEnvelope": editor_share }],
         "publicLinks": [],
         "removed": { "members": [viewer.id] },
     }))

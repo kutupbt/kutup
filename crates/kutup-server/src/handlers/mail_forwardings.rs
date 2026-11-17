@@ -28,7 +28,7 @@ use crate::handlers::trusted_uuid;
 use crate::mail::filters::{self, Condition, Field, Match};
 use crate::mail::forwarding::{self, MAX_PER_ACCOUNT, MAX_PER_ADDRESS, PENDING_DAYS};
 use crate::mail::forwarding_code;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const MAX_ACTIVATION_CHARS: usize = 65536;
@@ -406,9 +406,9 @@ fn incoming_view(row: Row) -> MailForwarding {
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<MailForwardings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let outgoing: Vec<Row> = sqlx::query_as(&format!(
         "{SELECT} WHERE f.account_id = $1 ORDER BY f.created_at"
     ))
@@ -469,10 +469,10 @@ async fn local_person(
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<CreateMailForwarding>,
 ) -> AppResult<(StatusCode, Json<MailForwarding>)> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address_id =
         Uuid::parse_str(&req.forwarder_address_id).map_err(|_| AppError::not_found("not found"))?;
     let id = Uuid::parse_str(&req.id)
@@ -915,10 +915,10 @@ async fn create_outside(
 )]
 pub async fn reinvite(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, _) = lock(&mut tx, user_id, &id).await?;
     let kind: String = sqlx::query_scalar("SELECT kind FROM mail_forwardings WHERE id = $1")
@@ -1124,10 +1124,10 @@ async fn lock(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, _, _, _) = lock(&mut tx, user_id, &id).await?;
     let address: Uuid = sqlx::query_scalar(
@@ -1144,12 +1144,12 @@ pub async fn delete(
 /// Moves a forwarding the forwarder owns from one state to another.
 async fn forwarder_moves(
     state: &AppState,
-    user: &AuthUser,
+    user: &AuthAccount,
     id: &str,
     from: &str,
     to: &str,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, _) = lock(&mut tx, user_id, id).await?;
     if side != Side::Forwarder {
@@ -1193,10 +1193,10 @@ async fn forwarder_moves(
 )]
 pub async fn send_code(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, _) = lock(&mut tx, user_id, &id).await?;
     if side != Side::Forwarder {
@@ -1273,11 +1273,11 @@ async fn clear_code(
 )]
 pub async fn verify(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<ForwardingCode>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let typed = req.code.trim();
     if !forwarding_code::well_formed(typed) {
         return Err(AppError::bad_request("a verification code is six digits"));
@@ -1396,7 +1396,7 @@ pub async fn verify(
 )]
 pub async fn pause(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwarding>> {
     forwarder_moves(&state, &user, &id, "active", "paused").await
@@ -1413,7 +1413,7 @@ pub async fn pause(
 )]
 pub async fn resume(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwarding>> {
     forwarder_moves(&state, &user, &id, "paused", "active").await
@@ -1432,11 +1432,11 @@ pub async fn resume(
 )]
 pub async fn conditions(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<MailForwardingConditions>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     check_conditions(&req.conditions)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, _, _) = lock(&mut tx, user_id, &id).await?;
@@ -1473,11 +1473,11 @@ pub async fn conditions(
 )]
 pub async fn renew(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<RenewMailForwarding>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, forwardee_address) = lock(&mut tx, user_id, &id).await?;
     if side != Side::Forwarder {
@@ -1524,10 +1524,10 @@ pub async fn renew(
 )]
 pub async fn activation(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailForwardingActivation>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(String, String, String, OffsetDateTime)> = sqlx::query_as(
         "SELECT a.address, b.address, f.activation, f.expires_at
@@ -1572,11 +1572,11 @@ pub async fn activation(
 )]
 pub async fn accept(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<AcceptMailForwarding>,
 ) -> AppResult<Json<MailForwarding>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let public_key = base64(&req.public_key, "publicKey")?;
     let envelope = account_record::decode_record_b64(
         &req.private_key_envelope,
@@ -1688,10 +1688,10 @@ pub async fn accept(
 )]
 pub async fn decline(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, _) = lock(&mut tx, user_id, &id).await?;
     // Before it is verified, the forwardee isn't shown it.
@@ -1730,10 +1730,10 @@ pub async fn decline(
 )]
 pub async fn delete_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((address, key)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = Uuid::parse_str(&address).map_err(|_| AppError::not_found("not found"))?;
     let key = Uuid::parse_str(&key).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;

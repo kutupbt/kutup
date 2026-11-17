@@ -46,7 +46,7 @@ impl Keyring {
             client,
             &format!("/collections/{}/epochs", col.id),
             &col.id,
-            &col.owner_user_id,
+            &col.owner_account_id,
             col.key_epoch,
             Some(&col.epoch_statement_hash),
             current_key,

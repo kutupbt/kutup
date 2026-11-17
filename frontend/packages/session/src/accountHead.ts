@@ -760,13 +760,13 @@ const clients = new Map<string, { masterKeys: MasterKeys; client: Promise<Accoun
  * again when the master key changes), over this origin's store.
  */
 export function accountHead(session: {
-  userId: string
+  accountId: string
   masterKeys: MasterKeys
   roots: AccountRoots
   envelopeBinding: string
 }): Promise<AccountHeadClient> {
   const masterKeys = session.masterKeys
-  const known = clients.get(session.userId)
+  const known = clients.get(session.accountId)
   if (known?.masterKeys === masterKeys) return known.client
   if (known) void known.client.then((client) => client.close(), () => undefined)
   watchSignOut()
@@ -777,9 +777,9 @@ export function accountHead(session: {
   const client = lazyEngine(masterKeys, session.roots, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store, api, Date.now, records))
   // Not kept when it failed: the next call tries again.
   client.catch(() => {
-    if (clients.get(session.userId)?.client === client) clients.delete(session.userId)
+    if (clients.get(session.accountId)?.client === client) clients.delete(session.accountId)
   })
-  clients.set(session.userId, { masterKeys, client })
+  clients.set(session.accountId, { masterKeys, client })
   return client
 }
 

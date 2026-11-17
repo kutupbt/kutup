@@ -70,7 +70,7 @@ function limitName(e: AdminActivityEntry, t: TFunction): string {
  */
 export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
   const admin =
-    e.adminUserId === SYSTEM_ADMIN ? t('admin.activity.system') : (e.adminUsername ?? t('admin.activity.deletedUser'))
+    e.adminAccountId === SYSTEM_ADMIN ? t('admin.activity.system') : (e.adminUsername ?? t('admin.activity.deletedUser'))
   const target = e.targetUsername ?? (text(e.payload.username) || t('admin.activity.deletedUser'))
   const key = ACTION_KEYS[e.action]
   const values = {

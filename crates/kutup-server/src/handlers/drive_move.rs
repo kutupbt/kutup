@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::files::validate_envelope;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -94,11 +94,11 @@ pub(crate) async fn writable_folder(
 )]
 pub async fn move_file(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<MoveFileRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let from = Uuid::parse_str(&req.from_collection_id)
         .map_err(|_| AppError::bad_request("invalid request"))?;
@@ -207,11 +207,11 @@ pub struct MoveCollectionRequest {
 )]
 pub async fn move_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<MoveCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let folder = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let parent = req
         .parent_collection_id

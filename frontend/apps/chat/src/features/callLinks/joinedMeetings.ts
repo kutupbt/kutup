@@ -15,7 +15,7 @@ import type { JoinedMeeting } from './meetingHistory'
 
 const SCOPE = 'joinedMeetings'
 
-type Account = Pick<Session, 'userId' | 'masterKeys' | 'roots' | 'envelopeBinding'>
+type Account = Pick<Session, 'accountId' | 'masterKeys' | 'roots' | 'envelopeBinding'>
 
 /** The count the server allows when a batch would pass it (`scopeFull`), or null for any other error. */
 function scopeFull(error: unknown): number | null {
@@ -32,7 +32,7 @@ export async function listJoinedMeetings(session: Account): Promise<JoinedMeetin
   for (const [id, stored] of copy.records) {
     try {
       const opened = wasm.callLinkOpenJoined(session.masterKeys, session.envelopeBinding, id, stored.envelope)
-      entries.push({ id, ...opened, roomId: callLinkRoomId(wasm, opened.fragment), account: session.userId })
+      entries.push({ id, ...opened, roomId: callLinkRoomId(wasm, opened.fragment), account: session.accountId })
     } catch {
       // A record this account's key does not open is not shown.
     }

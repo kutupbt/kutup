@@ -196,14 +196,14 @@ let shared: RevisionStore | null = null
 /** By account: the guard, for the master key it was made with. */
 const guards = new Map<string, { masterKeys: MasterKeys; binding: string; guard: RevisionGuard }>()
 /** Set by tests: keys that need no WASM. */
-let testKeys: ((userId: string) => GuardKeys) | null = null
+let testKeys: ((accountId: string) => GuardKeys) | null = null
 
 /**
  * The account's guard over the browser's store: its entries are sealed for
  * the account's master key and key binding (`envelopeBinding`).
  */
 export function revisionGuard(session: {
-  userId: string
+  accountId: string
   masterKeys: MasterKeys
   roots: { objectIdKey: ObjectIdKey }
   envelopeBinding: string
@@ -211,14 +211,14 @@ export function revisionGuard(session: {
   const masterKeys = session.masterKeys
   const objectIdKey = session.roots.objectIdKey
   const binding = session.envelopeBinding
-  const known = guards.get(session.userId)
+  const known = guards.get(session.accountId)
   // Made again when the master key or the binding is another (the keys are both).
   if (known && known.masterKeys === masterKeys && known.binding === binding) return known.guard
   shared ??= indexedDbRevisionStore()
   let keys: Promise<GuardKeys> | null = null
   const forTests = testKeys
   const load = (): Promise<GuardKeys> => {
-    if (forTests) return Promise.resolve(forTests(session.userId))
+    if (forTests) return Promise.resolve(forTests(session.accountId))
     keys ??= getCryptoWasm()
       .then((wasm): GuardKeys => new wasm.RevisionGuardKeys(masterKeys, objectIdKey, binding))
       .catch((error: unknown) => {
@@ -229,7 +229,7 @@ export function revisionGuard(session: {
     return keys
   }
   const guard = new RevisionGuard(shared, load)
-  guards.set(session.userId, { masterKeys, binding, guard })
+  guards.set(session.accountId, { masterKeys, binding, guard })
   return guard
 }
 

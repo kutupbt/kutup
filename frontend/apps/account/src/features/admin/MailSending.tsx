@@ -72,7 +72,7 @@ export function SendingState({ sender }: { sender: MailSender }) {
 }
 
 /** The user page's "Mail sending" card: one account, even before it sends. */
-export function MailSendingCard({ userId }: { userId: string }) {
+export function MailSendingCard({ accountId: userId }: { accountId: string }) {
   const { t } = useTranslation()
   const [editing, setEditing] = useState(false)
   const sender = useQuery({
@@ -99,11 +99,11 @@ export function MailSendingCard({ userId }: { userId: string }) {
         </Fact>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => update.mutate({ userId, change: { paused: !s.pausedReason } })}>
+        <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => update.mutate({ accountId: userId, change: { paused: !s.pausedReason } })}>
           {s.pausedReason ? t('admin.mailSending.resume') : t('admin.mailSending.pause')}
         </Button>
         {s.flagReason ? (
-          <Button size="sm" variant="ghost" onClick={() => update.mutate({ userId, change: { clearFlag: true } })}>
+          <Button size="sm" variant="ghost" onClick={() => update.mutate({ accountId: userId, change: { clearFlag: true } })}>
             {t('admin.mailSending.clearFlag')}
           </Button>
         ) : null}
@@ -112,7 +112,7 @@ export function MailSendingCard({ userId }: { userId: string }) {
         </Button>
       </div>
       {editing ? (
-        <LimitsDialog sender={s} pending={update.isPending} onClose={() => setEditing(false)} onSave={(change) => update.mutate({ userId, change })} />
+        <LimitsDialog sender={s} pending={update.isPending} onClose={() => setEditing(false)} onSave={(change) => update.mutate({ accountId: userId, change })} />
       ) : null}
     </Card>
   )

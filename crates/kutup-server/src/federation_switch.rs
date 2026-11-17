@@ -24,7 +24,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The site setting a new account's switch starts from (`on`, `off`).
@@ -186,10 +186,10 @@ pub struct FederationRequest {
 )]
 pub async fn put_federation(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<FederationRequest>,
 ) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     if req.on {
         turn_on(&mut tx, user_id, req.document_id, "settings").await?;

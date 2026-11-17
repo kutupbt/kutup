@@ -785,7 +785,7 @@ fn registration_payload(
         common::try_opaque_register_answer(c, base, PASSWORD, &binding, None, setup_bearer)
             .unwrap_or_else(|(status, body)| panic!("register/start: {status} {body}"));
     let account_id = match setup {
-        Some(first) => first["userId"].as_str().unwrap().to_owned(),
+        Some(first) => first["accountId"].as_str().unwrap().to_owned(),
         None => started["accountId"].as_str().unwrap().to_owned(),
     };
     let person = AccountRef::new(&server_name(c, base), &account_id).unwrap();
@@ -1458,7 +1458,7 @@ fn drive_round_trip(
         "read public Drive share",
     );
     assert_eq!(public_link_record["targetId"], collection_id);
-    assert_eq!(public_link_record["ownerUserId"], owner_user_id);
+    assert_eq!(public_link_record["ownerAccountId"], owner_user_id);
     assert_eq!(public_link_record["collectionKeyEpoch"], 1);
     assert_eq!(
         drive_envelope::open_b64(

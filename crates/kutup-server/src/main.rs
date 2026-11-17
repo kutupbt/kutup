@@ -964,7 +964,7 @@ fn build_router(state: AppState) -> Router {
             "/api/auth/forks/consume",
             post(session_routes::consume_fork).route_layer(from_fn(middleware::rate_limit_fork)),
         )
-        // --- User routes (authenticated via the AuthUser extractor) ---
+        // --- User routes (authenticated via the AuthAccount extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
         .route(
             "/api/admin/names/:name/close",
@@ -1566,7 +1566,7 @@ fn build_router(state: AppState) -> Router {
             "/api/device-ticket",
             post(account_devices::create_device_ticket),
         )
-        // --- Chat (E2EE messaging; authenticated via AuthUser except the WS, which
+        // --- Chat (E2EE messaging; authenticated via AuthAccount except the WS, which
         // validates its token pre-upgrade like the collab WS) ---
         .route(
             "/api/chat/device",
@@ -1875,7 +1875,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/media/storage", get(chat_media::storage_summary))
         // --- tus.io resumable uploads. The OPTIONS discovery is served by the
         // `tus_options_passthrough` layer (mirroring Fiber, which lets non-preflight
-        // OPTIONS reach the handler); the rest authenticate via the AuthUser extractor
+        // OPTIONS reach the handler); the rest authenticate via the AuthAccount extractor
         // inside each handler. ---
         .route("/api/uploads", post(tus::create))
         .route(
@@ -2390,7 +2390,7 @@ fn build_router(state: AppState) -> Router {
             "/api/drive/federation/shares/:shareId/files/:fileId",
             delete(drive_federation::proxy_delete),
         )
-        // --- Admin (authenticated + isAdmin via the AdminUser extractor; a stricter
+        // --- Admin (authenticated + isAdmin via the AdminAccount extractor; a stricter
         //     per-IP rate limit fronts every admin route). ---
         .merge(
             Router::new()

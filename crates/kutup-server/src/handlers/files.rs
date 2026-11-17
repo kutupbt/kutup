@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{FileRow, FileThumbnails, MessageResponse, UploadResult};
 use crate::AppState;
 
@@ -101,10 +101,10 @@ pub struct ClaimSeedResponse {
 )]
 pub async fn list_files(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
 
     if !can_access_collection(&state.pool, user_id, coll_id).await? {
@@ -127,8 +127,11 @@ pub async fn list_files(
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Files in every folder the account can read", body = Vec<FileRow>))
 )]
-pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn list_all_files(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let out = file_rows(
         &state.pool,
         "f.collection_id IN (
@@ -160,10 +163,10 @@ pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> Ap
 )]
 pub async fn upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     // The upload limit is a setting, the site's or the account's own
     // (docs/plans/drive-block-format.md §7), counted as the file arrives.
     let mut budget = crate::drive_blob::BodyBudget::new(
@@ -410,11 +413,11 @@ pub async fn upload(
 )]
 pub async fn download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let exists: Option<Uuid> = sqlx::query_scalar(
@@ -475,11 +478,11 @@ pub(crate) const ORIGINAL: &str = "original";
 )]
 pub async fn download_original(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::not_found("not found"));
@@ -516,10 +519,13 @@ pub struct DriveLimits {
     security(("BearerAuth" = [])),
     responses((status = 200, body = DriveLimits))
 )]
-pub async fn limits(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<DriveLimits>> {
+pub async fn limits(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<DriveLimits>> {
     use crate::site_settings as s;
     let pool = &state.pool;
-    let account = trusted_uuid(&user.user_id)?;
+    let account = trusted_uuid(&user.account_id)?;
     Ok(Json(DriveLimits {
         upload_max_bytes: s::DRIVE_UPLOAD_MAX_BYTES.load_for(pool, account).await?,
         version_max_bytes: s::DRIVE_VERSION_MAX_BYTES.load_for(pool, account).await?,
@@ -550,11 +556,11 @@ pub async fn limits(State(state): State<AppState>, user: AuthUser) -> AppResult<
 )]
 pub async fn update_metadata(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateFileMetadataRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     if req.metadata_envelope.is_empty() || req.metadata_revision <= 1 {
@@ -645,10 +651,10 @@ pub async fn update_metadata(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(Uuid, Uuid)> = sqlx::query_as(
@@ -683,10 +689,10 @@ pub async fn delete(
 )]
 pub async fn claim_seed(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     // Seeding writes the document's first state: an editor's job.
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
@@ -754,8 +760,7 @@ pub(crate) async fn file_rows(
     struct Row {
         id: Uuid,
         collection_id: Uuid,
-        #[sqlx(rename = "uploader_account_id")]
-        uploader_user_id: Uuid,
+        uploader_account_id: Uuid,
         metadata_envelope: String,
         file_key_envelope: String,
         key_epoch: i32,
@@ -818,7 +823,7 @@ pub(crate) async fn file_rows(
         .map(|r| FileRow {
             id: r.id.to_string(),
             collection_id: r.collection_id.to_string(),
-            uploader_user_id: r.uploader_user_id.to_string(),
+            uploader_account_id: r.uploader_account_id.to_string(),
             metadata_envelope: r.metadata_envelope,
             file_key_envelope: r.file_key_envelope,
             key_epoch: r.key_epoch,

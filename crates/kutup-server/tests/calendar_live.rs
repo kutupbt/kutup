@@ -242,7 +242,7 @@ fn calendars_and_events() {
 
     // What the server hands back opens: the passphrase, the key, the name.
     assert_eq!(created["keyGeneration"], 1);
-    assert_eq!(created["ownerId"], ada.user.id.as_str());
+    assert_eq!(created["ownerAccountId"], ada.user.id.as_str());
     let opened = cal::open_own_passphrase(
         &CalendarShareEnvelopeV1::decode_b64(created["passphraseShare"].as_str().unwrap()).unwrap(),
         &id,

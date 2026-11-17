@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::mail_keys::{begin_list_change, OwnMailAddress, UpdateKeyListRequest};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 fn coded(error: AppError, code: &str) -> AppError {
@@ -99,10 +99,10 @@ pub struct AddressOrderRequest {
 )]
 pub async fn order(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<AddressOrderRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let ids: Vec<Uuid> = request
         .ids
         .iter()
@@ -207,11 +207,11 @@ fn address_id(id: &str) -> AppResult<Uuid> {
 )]
 pub async fn disable(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateKeyListRequest>,
 ) -> AppResult<Json<OwnMailAddress>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address_id(&id)?;
     // The address's row is held from here (the list change locks it).
     let mut change = begin_list_change(&state, user_id, &id, &request.key_list).await?;
@@ -258,11 +258,11 @@ pub async fn disable(
 )]
 pub async fn enable(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateKeyListRequest>,
 ) -> AppResult<Json<OwnMailAddress>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address_id(&id)?;
     let mut change = begin_list_change(&state, user_id, &id, &request.key_list).await?;
     if !custom_address(&mut change.tx, user_id, address).await? {
@@ -308,10 +308,10 @@ pub async fn enable(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address_id(&id)?;
     let mut tx = state.pool.begin().await?;
     let disabled = custom_address(&mut tx, user_id, address).await?;

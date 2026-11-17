@@ -52,11 +52,11 @@ function asDevice(header: string) {
  * what its frames are signed under. The server's name comes from its public
  * settings (fetched once per page).
  */
-export async function ownAccount(session: Pick<Session, 'userId'>): Promise<string> {
+export async function ownAccount(session: Pick<Session, 'accountId'>): Promise<string> {
   const settings = await loadServerSettings<{ chat?: { serverName?: string } }>()
   const server = settings.chat?.serverName
   if (!server) throw new Error('the server did not publish its name')
-  return accountKeyOf({ server, accountId: session.userId })
+  return accountKeyOf({ server, accountId: session.accountId })
 }
 
 function errorCode(error: unknown, status: number): string | undefined {

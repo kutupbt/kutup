@@ -20,7 +20,7 @@ pub struct PublicShare {
     #[serde(default)]
     pub collection_key_epoch: u32,
     #[serde(default)]
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     /// Signs the folder's key history.
     #[serde(default)]
     pub owner_authority_public_key: String,

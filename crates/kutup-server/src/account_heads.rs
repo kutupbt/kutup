@@ -37,7 +37,7 @@ pub const PAGE: i64 = 200;
 
 /// A listed write's account, locked for its transaction ([`lock`]).
 pub struct Locked {
-    user_id: Uuid,
+    account_id: Uuid,
     incarnation_id: String,
     /// The account's key binding, which every head it keeps names.
     binding: String,
@@ -108,7 +108,7 @@ pub async fn lock(
                 .with_details(json!({ "code": "setupRequired" }))
         })?;
     Ok(Locked {
-        user_id,
+        account_id: user_id,
         incarnation_id,
         binding,
         master_key_generation: u32::try_from(master_key_generation)
@@ -202,7 +202,7 @@ pub async fn advance(
     locked: &Locked,
     next: Option<&NextHead>,
 ) -> AppResult<()> {
-    let user_id = locked.user_id;
+    let user_id = locked.account_id;
     // The newest head (the account row, locked by `lock`, already orders the
     // account's listed writes; the primary key below is the second guard).
     let current: Option<(i64, Vec<u8>)> = sqlx::query_as(
@@ -243,7 +243,7 @@ async fn insert(
         "INSERT INTO account_heads (account_id, sequence, sealed, incarnation_id)
          VALUES ($1, $2, $3, $4)",
     )
-    .bind(locked.user_id)
+    .bind(locked.account_id)
     .bind(next.sequence)
     .bind(&next.sealed)
     .bind(&locked.incarnation_id)
@@ -259,7 +259,7 @@ async fn insert(
     }
     // RETENTION + 1 kept: from `next - RETENTION` to `next`.
     sqlx::query("DELETE FROM account_heads WHERE account_id = $1 AND sequence < $2")
-        .bind(locked.user_id)
+        .bind(locked.account_id)
         .bind(next.sequence - RETENTION)
         .execute(&mut **tx)
         .await?;
@@ -506,10 +506,10 @@ pub async fn start(
         return Err(AppError::bad_request("a chain starts at sequence 1"));
     }
     next.check(locked)?;
-    if latest(&mut **tx, locked.user_id).await?.is_some() {
+    if latest(&mut **tx, locked.account_id).await?.is_some() {
         return Err(head_conflict(None));
     }
-    if basis(&mut *tx, locked.user_id).await? != expected {
+    if basis(&mut *tx, locked.account_id).await? != expected {
         return Err(head_conflict(None));
     }
     insert(tx, locked, next, None).await
@@ -576,7 +576,7 @@ mod tests {
         .await
         .unwrap();
         let locked = Locked {
-            user_id,
+            account_id: user_id,
             incarnation_id: incarnation.clone(),
             binding: BINDING.into(),
             master_key_generation: 1,

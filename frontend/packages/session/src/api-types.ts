@@ -2,7 +2,7 @@
 
 export interface CollectionRow {
   id: string
-  ownerUserId: string
+  ownerAccountId: string
   nameEnvelope: string
   ownerKeyEnvelope?: string
   namedShareEnvelope?: string
@@ -10,7 +10,7 @@ export interface CollectionRow {
   nameRevision: number
   epochStatement: string
   epochStatementHash: string
-  /** A shared folder's owner's server; with `ownerUserId`, the owner. */
+  /** A shared folder's owner's server; with `ownerAccountId`, the owner. */
   ownerServer?: string
   /** Shown only: the owner's address now. */
   ownerAccount?: string
@@ -40,7 +40,7 @@ export interface FileKeyHistoryEntry {
 export interface FileRow {
   id: string
   collectionId: string
-  uploaderUserId: string
+  uploaderAccountId: string
   metadataEnvelope: string
   fileKeyEnvelope: string
   /** The folder epoch the file key is wrapped at. */
@@ -112,7 +112,7 @@ export interface UserRow {
 
 export interface LoginResponse {
   accessToken: string
-  userId: string
+  accountId: string
   username: string
   masterKeyEnvelope: string
   /** The account's root records (docs/plans/identity-root.md), with the session only. */
@@ -136,7 +136,7 @@ export interface IncomingShare {
   nameRevision: number
   epochStatement: string
   epochStatementHash: string
-  ownerUserId: string
+  ownerAccountId: string
   ownerAccount: string
   ownerIncarnationId: string
   ownerSigningPublicKey: string
@@ -148,8 +148,8 @@ export interface IncomingShare {
 }
 
 export interface AdminStats {
-  totalUsers: number
-  activeUsers: number
+  totalAccounts: number
+  activeAccounts: number
   totalFiles: number
   totalStorageUsedBytes: number
   totalCollections: number
@@ -193,7 +193,7 @@ export interface CreatedRegistrationCode extends RegistrationCode {
 }
 
 export interface RegistrationCodeUse {
-  userId: string
+  accountId: string
   username: string
   usedAt: string
 }
@@ -500,9 +500,9 @@ export interface AdminActivityEntry {
   id: number
   /** User, settings, and `federation.*` mutation action identifiers. */
   action: string
-  adminUserId: string
+  adminAccountId: string
   adminUsername: string | null
-  targetUserId: string | null
+  targetAccountId: string | null
   targetUsername: string | null
   payload: Record<string, unknown>
   occurredAt: string
@@ -515,7 +515,7 @@ export interface AdminActivityResponse {
 }
 
 export interface UserByAddressResponse {
-  userId: string
+  accountId: string
   account: string
   driveHpkePublicKey: string
   accountIncarnationId: string
@@ -528,7 +528,7 @@ export interface PublicShareData {
   targetId: string
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
-  ownerUserId: string
+  ownerAccountId: string
   expiresAt?: string
 }
 

@@ -91,7 +91,7 @@ function openSignIn() {
   return { request: 'ke1', finish: vi.fn(), openMasterKey: vi.fn(() => Promise.resolve(new Uint8Array(32))), register: vi.fn(), close: vi.fn() }
 }
 
-const session = { accessToken: 'a', sessionId: 's', userId: 'u', username: 'alice', masterKeyEnvelope: 'm', publicKey: 'p', keyBinding: 'kb' }
+const session = { accessToken: 'a', sessionId: 's', accountId: 'u', username: 'alice', masterKeyEnvelope: 'm', publicKey: 'p', keyBinding: 'kb' }
 
 describe('signIn', () => {
   it('ends the sign-in and drops the keys when the server publishes another Drive key', async () => {
@@ -190,7 +190,7 @@ describe('generateAccountKeys', () => {
 
 describe('registerAndSignIn', () => {
   it('creates the account once, and its session comes with it; the password worker ends', async () => {
-    post.mockResolvedValue({ data: { userId: 'u1', accessToken: 'a', sessionId: 's' } })
+    post.mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a', sessionId: 's' } })
     activateSession.mockRejectedValueOnce(new Error('storage'))
     const k = keys()
     await expect(registerAndSignIn('a', k)).rejects.toThrow('storage')
@@ -219,7 +219,7 @@ describe('registerAndSignIn', () => {
   })
 
   it('registers again after a failed registration', async () => {
-    post.mockRejectedValueOnce(refused(429)).mockResolvedValue({ data: { userId: 'u1', accessToken: 'a' } })
+    post.mockRejectedValueOnce(refused(429)).mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a' } })
     const k = keys()
     await expect(registerAndSignIn('a', k)).rejects.toBeInstanceOf(AxiosError)
     await registerAndSignIn('a', k)
@@ -227,7 +227,7 @@ describe('registerAndSignIn', () => {
   })
 
   it('a record made under a server key since changed is made again, same binding, and sent once more', async () => {
-    post.mockRejectedValueOnce(refused(409, 'opaqueKeyStale')).mockResolvedValue({ data: { userId: 'u1', accessToken: 'a' } })
+    post.mockRejectedValueOnce(refused(409, 'opaqueKeyStale')).mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a' } })
     const second = '22222222-2222-4222-8222-222222222222'
     opaque.registerWith.mockResolvedValue({ opaqueRecord: 'record-2', opaqueServerKeyId: 2, masterKeyEnvelope: 'envelope-2', accountId: second, accountIdProof: 'proof-2' })
     const k = keys()
@@ -240,7 +240,7 @@ describe('registerAndSignIn', () => {
   })
 
   it('a binding taken meanwhile is drawn again: the records sealed again, the phrase kept', async () => {
-    post.mockRejectedValueOnce(refused(409, 'keyBindingTaken')).mockResolvedValue({ data: { userId: 'u1', accessToken: 'a' } })
+    post.mockRejectedValueOnce(refused(409, 'keyBindingTaken')).mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a' } })
     opaque.registerWith.mockResolvedValue({ opaqueRecord: 'record-2', opaqueServerKeyId: 1, masterKeyEnvelope: 'envelope-2' })
     const k = keys()
     await registerAndSignIn('a', k)
@@ -262,7 +262,7 @@ describe('registerAndSignIn', () => {
 
 describe('completeSetup', () => {
   it('sends the new keys with their Drive key binding', async () => {
-    post.mockResolvedValue({ data: { userId: 'u1', accessToken: 'a', sessionId: 's' } })
+    post.mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a', sessionId: 's' } })
     const { completeSetup } = await import('./flows')
     const accountId = '33333333-3333-4333-8333-333333333333'
     await completeSetup({ name: 'a@kutup.dev', username: 'a', accountId, setupToken: 'setup' }, keys())

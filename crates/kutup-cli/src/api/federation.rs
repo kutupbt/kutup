@@ -28,7 +28,7 @@ pub struct IncomingShare {
     #[serde(default)]
     pub epoch_statement_hash: String,
     #[serde(default)]
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     #[serde(default)]
     pub owner_account: String,
     #[serde(default)]

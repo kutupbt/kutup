@@ -15,8 +15,8 @@ use time::OffsetDateTime;
 /// flattened here as `exp`/`iat`/`sub`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    #[serde(rename = "userId")]
-    pub user_id: String,
+    #[serde(rename = "accountId")]
+    pub account_id: String,
     #[serde(rename = "isAdmin")]
     pub is_admin: bool,
     /// Registered `sub`. Empty/absent for access & refresh tokens; "setup" / "pre-auth"
@@ -50,7 +50,7 @@ fn sign(claims: &Claims, secret: &str) -> Result<String, jsonwebtoken::errors::E
 fn base_claims(user_id: &str, is_admin: bool, sub: &str, ttl_secs: i64) -> Claims {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     Claims {
-        user_id: user_id.to_string(),
+        account_id: user_id.to_string(),
         is_admin,
         sub: sub.to_string(),
         sid: String::new(),
@@ -119,7 +119,7 @@ fn special(token: &str, secret: &str, sub: &str) -> Result<(String, Vec<u8>), St
         .ok()
         .filter(|epoch| epoch.len() == 16)
         .ok_or_else(|| "token has no credential epoch".to_string())?;
-    Ok((claims.user_id, epoch))
+    Ok((claims.account_id, epoch))
 }
 
 /// Verifies an HS256 token's signature + expiry — mirrors `ValidateToken`. Rejects
@@ -174,7 +174,7 @@ pub fn validate_access_token(token: &str, secret: &str) -> Result<(String, Strin
     if claims.sid.is_empty() {
         return Err("access token has no session".to_string());
     }
-    Ok((claims.user_id, claims.sid))
+    Ok((claims.account_id, claims.sid))
 }
 
 #[cfg(test)]
@@ -187,7 +187,7 @@ mod tests {
     fn access_token_roundtrips_with_claims() {
         let t = generate_access_token("u1", true, "s1", SECRET).unwrap();
         let c = validate_token(&t, SECRET).unwrap();
-        assert_eq!(c.user_id, "u1");
+        assert_eq!(c.account_id, "u1");
         assert!(c.is_admin);
         assert_eq!(c.sub, "");
         assert_eq!(c.sid, "s1");
@@ -248,7 +248,7 @@ mod tests {
     fn access_validation_requires_a_session() {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let claims = Claims {
-            user_id: "u5".into(),
+            account_id: "u5".into(),
             is_admin: false,
             sub: String::new(),
             sid: String::new(),
@@ -265,7 +265,7 @@ mod tests {
         // Hand-roll an already-expired access token.
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let claims = Claims {
-            user_id: "u6".into(),
+            account_id: "u6".into(),
             is_admin: false,
             sub: String::new(),
             sid: String::new(),

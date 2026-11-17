@@ -697,7 +697,7 @@ pub fn share(c: &Client, base: &str, owner: &User, folder: &Folder, to: &User, c
         &owner.token,
     )
     .json(&json!({
-        "recipientUserId": to.id,
+        "recipientAccountId": to.id,
         "namedShareEnvelope": envelope,
         "canUpload": can_upload,
         "canDelete": false,
@@ -1175,7 +1175,7 @@ fn setup_keys(
     let setup_token = first_login["setupToken"].as_str().unwrap();
     let person = AccountRef::new(
         &server_domain(c, base),
-        first_login["userId"].as_str().unwrap(),
+        first_login["accountId"].as_str().unwrap(),
     )
     .unwrap();
     let mut master_key = [0u8; 32];

@@ -29,7 +29,7 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::public_fetch::{self, Checks, Options};
 use crate::ratelimit::{Limit, RateLimiter};
 
@@ -132,8 +132,8 @@ pub struct ImageRequest {
     ),
     security(("BearerAuth" = []))
 )]
-pub async fn fetch(auth: AuthUser, Json(request): Json<ImageRequest>) -> AppResult<Response> {
-    if !MAIL_IMAGES.allow(&auth.user_id) {
+pub async fn fetch(auth: AuthAccount, Json(request): Json<ImageRequest>) -> AppResult<Response> {
+    if !MAIL_IMAGES.allow(&auth.account_id) {
         return Err(AppError::too_many_requests(
             "too many images; try again shortly",
         ));
@@ -143,10 +143,10 @@ pub async fn fetch(auth: AuthUser, Json(request): Json<ImageRequest>) -> AppResu
         return Ok(tracker_response(provider));
     }
     let _slot = AT_ONCE
-        .take(&auth.user_id)
+        .take(&auth.account_id)
         .ok_or_else(|| AppError::too_many_requests("too many images at once; try again shortly"))?;
     // The most this fetch may bring, held until it is known; never given back on failure.
-    if !BYTES.reserve(&auth.user_id, IMAGE_LIMIT_BYTES as f64) {
+    if !BYTES.reserve(&auth.account_id, IMAGE_LIMIT_BYTES as f64) {
         return Err(AppError::too_many_requests(
             "too many image bytes this minute; try again shortly",
         ));
@@ -166,7 +166,7 @@ pub async fn fetch(auth: AuthUser, Json(request): Json<ImageRequest>) -> AppResu
         Fetched::Image(mime, body) => (mime, body),
         Fetched::Tracker(provider) => return Ok(tracker_response(provider)),
     };
-    BYTES.give_back(&auth.user_id, (IMAGE_LIMIT_BYTES - body.len()) as f64);
+    BYTES.give_back(&auth.account_id, (IMAGE_LIMIT_BYTES - body.len()) as f64);
     Ok((
         StatusCode::OK,
         [

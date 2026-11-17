@@ -71,7 +71,7 @@ export interface DefaultReminders {
 export interface CalendarRow {
   id: string
   /** The owner's account id (on this server): who shared the passphrase. */
-  ownerId: string
+  ownerAccountId: string
   publicKey: string
   fingerprint: string
   lockedSecretKey: string
@@ -161,7 +161,7 @@ async function unlock(session: Session, row: CalendarRow): Promise<UnlockedCalen
   let found = unlocked.get(cacheKey)
   if (!found) {
     found = (async () => {
-      if (row.ownerId !== session.userId) {
+      if (row.ownerAccountId !== session.accountId) {
         // Shared calendars come in E3, with their owners' verified keys.
         throw new Error('a calendar of another account')
       }

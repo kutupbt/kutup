@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::registration;
 use crate::AppState;
 
@@ -73,7 +73,7 @@ pub struct CreatedRegistrationCode {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistrationCodeUse {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub username: String,
     #[serde(with = "time::serde::rfc3339")]
     pub used_at: OffsetDateTime,
@@ -145,7 +145,7 @@ async fn fetch(state: &AppState, id: Uuid) -> AppResult<RegistrationCodeRow> {
 )]
 pub async fn create(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(req): Json<CreateRegistrationCode>,
 ) -> AppResult<Response> {
     let note = req.note.trim();
@@ -168,8 +168,8 @@ pub async fn create(
             "a code admits 1 to 100000 accounts, or any number",
         ));
     }
-    let admin_id =
-        Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("invalid session"))?;
+    let admin_id = Uuid::parse_str(&admin.account_id)
+        .map_err(|_| AppError::unauthorized("invalid session"))?;
     let key = registration::codes_key(&state.pool).await?;
     let code = registration::generate();
     let canonical = registration::canonical(&code).expect("a generated code reads back");
@@ -188,7 +188,7 @@ pub async fn create(
     let row = fetch(&state, id).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "registration_code.created",
         None,
         json!({
@@ -216,7 +216,7 @@ pub async fn create(
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The codes", body = Vec<RegistrationCodeRow>))
 )]
-pub async fn list(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
+pub async fn list(State(state): State<AppState>, _admin: AdminAccount) -> AppResult<Response> {
     let rows: Vec<Row> = sqlx::query_as(&format!("{ROW_SELECT} ORDER BY c.created_at DESC"))
         .fetch_all(&state.pool)
         .await?;
@@ -238,11 +238,11 @@ pub async fn list(State(state): State<AppState>, _admin: AdminUser) -> AppResult
 )]
 pub async fn revoke(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
-    let admin_id =
-        Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("invalid session"))?;
+    let admin_id = Uuid::parse_str(&admin.account_id)
+        .map_err(|_| AppError::unauthorized("invalid session"))?;
     let revoked = sqlx::query(
         "UPDATE registration_codes SET revoked_at = now(), revoked_by_account_id = $2
           WHERE id = $1 AND revoked_at IS NULL",
@@ -257,7 +257,7 @@ pub async fn revoke(
     if revoked {
         audit(
             &state.pool,
-            &admin.user_id,
+            &admin.account_id,
             "registration_code.revoked",
             None,
             json!({ "id": id, "hint": row.hint }),
@@ -282,7 +282,7 @@ pub async fn revoke(
 )]
 pub async fn uses(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     fetch(&state, id).await?;
@@ -297,7 +297,7 @@ pub async fn uses(
     Ok(Json(
         rows.into_iter()
             .map(|(user_id, username, used_at)| RegistrationCodeUse {
-                user_id,
+                account_id: user_id,
                 username,
                 used_at,
             })
@@ -330,7 +330,7 @@ pub struct SignedUpWith {
 )]
 pub async fn user_code(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Path(user_id): Path<Uuid>,
 ) -> AppResult<Response> {
     let row: Option<(Uuid, String, String, Option<String>, OffsetDateTime)> = sqlx::query_as(

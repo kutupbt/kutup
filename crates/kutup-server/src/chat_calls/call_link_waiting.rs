@@ -30,7 +30,7 @@ use super::call_links::{
     vouched_name, SEALED_NAME_BYTES,
 };
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// People who can wait at one meeting at a time.
@@ -157,7 +157,7 @@ pub struct DecideKnockRequest {
 )]
 pub(crate) async fn set_waiting_room(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Path(room_id): Path<String>,
     Json(request): Json<SetWaitingRoomRequest>,
 ) -> AppResult<StatusCode> {

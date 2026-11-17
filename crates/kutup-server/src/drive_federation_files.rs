@@ -35,7 +35,7 @@ use crate::drive_federation_ranges::ContentReadQuery;
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationDirection, FederationStack};
 use crate::handlers::{random_token, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// A note's or place list's saved state is bounded well below this.
@@ -73,7 +73,7 @@ pub struct FileInviteResponse {
     pub key_generation: i32,
     /// They may edit it.
     pub can_edit: bool,
-    pub owner_user_id: Uuid,
+    pub owner_account_id: Uuid,
     pub owner_account: String,
     pub owner_incarnation_id: String,
     pub owner_signing_public_key: String,
@@ -124,7 +124,7 @@ pub struct IncomingFileShareNow {
     pub share_envelope: String,
     pub key_generation: i32,
     pub can_edit: bool,
-    pub owner_user_id: Uuid,
+    pub owner_account_id: Uuid,
     pub owner_account: String,
     pub owner_incarnation_id: String,
     pub owner_signing_public_key: String,
@@ -148,7 +148,7 @@ pub struct IncomingFileShareNow {
 )]
 pub async fn create_federated_file_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<CreateFederatedFileShareRequest>,
 ) -> AppResult<Response> {
@@ -156,7 +156,7 @@ pub async fn create_federated_file_share(
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let federation = configured_stack(&state)?;
@@ -175,7 +175,7 @@ pub async fn create_federated_file_share(
         )
         .await
         .map_err(gateway_error)?;
-    let owner = trusted_uuid(&user.user_id)?;
+    let owner = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let generation: Option<i32> = sqlx::query_scalar(
         "SELECT f.key_generation FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
@@ -213,7 +213,7 @@ pub async fn create_federated_file_share(
         })?;
     let recipient_username = crate::drive_federation::recipient_label(
         &state,
-        &user.user_id,
+        &user.account_id,
         &recipient,
         &envelope.recipient_incarnation_id,
     )
@@ -380,7 +380,7 @@ pub async fn get_file_invite(
                     share_envelope: share.share_envelope,
                     key_generation: share.key_generation,
                     can_edit: share.can_edit,
-                    owner_user_id,
+                    owner_account_id: owner_user_id,
                     owner_account: format!(
                         "{}@{}",
                         username.ok_or_else(unavailable)?,
@@ -568,7 +568,7 @@ async fn fetch_verified_file_invite(
                 u32::try_from(invite.key_generation).unwrap_or(0),
                 &kutup_crypto::account_ref::AccountRef::new(
                     server,
-                    &invite.owner_user_id.to_string(),
+                    &invite.owner_account_id.to_string(),
                 )?,
                 &invite.owner_incarnation_id,
                 &canonical_public_key(&invite.owner_signing_public_key)
@@ -607,20 +607,20 @@ async fn local_incarnation(state: &AppState, user_id: Uuid) -> AppResult<String>
 )]
 pub async fn accept_file_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<AcceptFederatedFileShareRequest>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let federation = configured_stack(&state)?;
     let server = canonical_domain(&request.server)?;
     validate_capability(&request.capability)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let incarnation = local_incarnation(&state, user_id).await?;
     let invite = fetch_verified_file_invite(
         federation,
@@ -644,7 +644,7 @@ pub async fn accept_file_share(
     .bind(&request.capability)
     .bind(capability_hash(&request.capability))
     .bind(invite.file.id)
-    .bind(invite.owner_user_id)
+    .bind(invite.owner_account_id)
     .bind(&invite.owner_account)
     .bind(&invite.owner_incarnation_id)
     .bind(&invite.owner_signing_public_key)
@@ -663,9 +663,9 @@ pub async fn accept_file_share(
 )]
 pub async fn list_file_shares(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<IncomingFileShare>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(
         sqlx::query_as(
             "SELECT id, owner_server, remote_file_id, owner_account, created_at
@@ -682,14 +682,14 @@ struct IncomingSecret {
     remote_domain: String,
     remote_capability: String,
     remote_file_id: Uuid,
-    owner_user_id: Uuid,
+    owner_account_id: Uuid,
     owner_incarnation_id: String,
     owner_signing_public_key: String,
     created_at: OffsetDateTime,
 }
 
-async fn incoming(state: &AppState, user: &AuthUser, id: &str) -> AppResult<IncomingSecret> {
-    let user_id = trusted_uuid(&user.user_id)?;
+async fn incoming(state: &AppState, user: &AuthAccount, id: &str) -> AppResult<IncomingSecret> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(id).map_err(|_| AppError::not_found("share not found"))?;
     type Row = (
         Uuid,
@@ -716,7 +716,7 @@ async fn incoming(state: &AppState, user: &AuthUser, id: &str) -> AppResult<Inco
         remote_domain: row.1,
         remote_capability: row.2,
         remote_file_id: row.3,
-        owner_user_id: row.4,
+        owner_account_id: row.4,
         owner_incarnation_id: row.5,
         owner_signing_public_key: row.6,
         created_at: row.7,
@@ -736,12 +736,12 @@ async fn incoming(state: &AppState, user: &AuthUser, id: &str) -> AppResult<Inco
 )]
 pub async fn get_file_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
     let share = incoming(&state, &user, &id).await?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let incarnation = local_incarnation(&state, user_id).await?;
     let invite = fetch_verified_file_invite(
         federation,
@@ -752,7 +752,7 @@ pub async fn get_file_share(
     )
     .await?;
     if invite.file.id != share.remote_file_id
-        || invite.owner_user_id != share.owner_user_id
+        || invite.owner_account_id != share.owner_account_id
         || invite.owner_incarnation_id != share.owner_incarnation_id
         || invite.owner_signing_public_key != share.owner_signing_public_key
     {
@@ -767,7 +767,7 @@ pub async fn get_file_share(
         share_envelope: invite.share_envelope,
         key_generation: invite.key_generation,
         can_edit: invite.can_edit,
-        owner_user_id: invite.owner_user_id,
+        owner_account_id: invite.owner_account_id,
         owner_account: invite.owner_account,
         owner_incarnation_id: invite.owner_incarnation_id,
         owner_signing_public_key: invite.owner_signing_public_key,
@@ -792,7 +792,7 @@ pub async fn get_file_share(
 )]
 pub async fn proxy_file_content(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
@@ -800,7 +800,7 @@ pub async fn proxy_file_content(
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming(&state, &user, &id).await?;
@@ -826,14 +826,14 @@ pub async fn proxy_file_content(
 )]
 pub async fn proxy_file_state(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = incoming(&state, &user, &id).await?;
@@ -871,7 +871,7 @@ pub async fn proxy_file_state(
 )]
 pub async fn remove_file_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let share = incoming(&state, &user, &id).await?;
@@ -976,14 +976,14 @@ pub async fn get_folder_file_state(
 )]
 pub async fn proxy_folder_file_state(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((share_id, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     // Another server: only for an account that talks to them
     // (crate::federation_switch).
     crate::federation_switch::ensure_federates(
         &state.pool,
-        crate::handlers::trusted_uuid(&user.user_id)?,
+        crate::handlers::trusted_uuid(&user.account_id)?,
     )
     .await?;
     let share = crate::drive_federation::incoming_share(&state, &user, &share_id).await?;

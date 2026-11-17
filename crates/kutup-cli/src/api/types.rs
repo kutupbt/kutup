@@ -63,7 +63,7 @@ pub struct LoginResponse {
     #[serde(default)]
     pub refresh_token: String,
     #[serde(default)]
-    pub user_id: String,
+    pub account_id: String,
     #[serde(default)]
     pub username: String,
     #[serde(default)]
@@ -174,7 +174,7 @@ pub struct SetupTotpResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserMe {
+pub struct AccountMe {
     pub id: String,
     /// The account's permanent id and its server.
     pub account_id: String,
@@ -206,7 +206,7 @@ pub struct UserMe {
 pub struct Collection {
     pub id: String,
     #[serde(default)]
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     #[serde(default)]
     pub name_envelope: String,
     #[serde(default)]
@@ -419,7 +419,7 @@ pub struct UploadResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareRequest {
-    pub recipient_user_id: String,
+    pub recipient_account_id: String,
     pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,

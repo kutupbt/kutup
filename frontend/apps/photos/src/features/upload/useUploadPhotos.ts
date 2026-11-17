@@ -122,7 +122,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
       const paired = still?.value
       if (paired && looksLive(paired.media, media)) media = { ...(media ?? {}), liveOf: paired.id }
       let uploaded
-      const owner = getSession()?.userId
+      const owner = getSession()?.accountId
       const folderKey = folder.key
       try {
         // Cameras reuse names: a different photo under a taken one is kept

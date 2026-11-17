@@ -186,7 +186,7 @@ export type CheckedAddress = Omit<AddressRow, 'keys'> & {
  * on already is left alone, whatever the server says. Another tab doing the
  * same is safe: the server takes the first list and refuses the second (409).
  */
-export async function settleOwedKeyLists(session: Pick<Session, 'masterKeys' | 'roots' | 'userId' | 'envelopeBinding'>, rows: AddressRow[]): Promise<boolean> {
+export async function settleOwedKeyLists(session: Pick<Session, 'masterKeys' | 'roots' | 'accountId' | 'envelopeBinding'>, rows: AddressRow[]): Promise<boolean> {
   const owed = rows.filter((row) => row.keyListOwed && row.keyList)
   if (owed.length === 0) return false
   let signed = false
@@ -235,7 +235,7 @@ export type CheckedKey<K> = K & { listed: boolean }
  * `OwnKeyListRolledBack` when `strict`, else is null.
  */
 export async function checkedAddresses<T extends OwnRow<ListedKey & { publicKey: string }>>(
-  session: Pick<Session, 'masterKeys' | 'roots' | 'userId' | 'envelopeBinding'>,
+  session: Pick<Session, 'masterKeys' | 'roots' | 'accountId' | 'envelopeBinding'>,
   rows: T[],
   options: { strict?: boolean } = {},
 ): Promise<(Omit<T, 'keys'> & { keys: CheckedKey<T['keys'][number]>[]; verifiedList: SignedMailKeyList | null })[]> {
@@ -252,7 +252,7 @@ export async function checkedAddresses<T extends OwnRow<ListedKey & { publicKey:
 }
 
 async function ownList(
-  session: Pick<Session, 'masterKeys' | 'roots' | 'userId' | 'envelopeBinding'>,
+  session: Pick<Session, 'masterKeys' | 'roots' | 'accountId' | 'envelopeBinding'>,
   authorityPublicKey: string,
   row: OwnRow<unknown>,
   strict: boolean,

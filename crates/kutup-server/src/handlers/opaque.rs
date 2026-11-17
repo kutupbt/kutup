@@ -213,7 +213,7 @@ pub async fn login_start(
     type Account = (Uuid, Option<String>, Option<Vec<u8>>, Option<i16>, String);
     let (canonical, account): (String, Option<Account>) = match &reauth {
         Some((caller, _)) => {
-            let caller_id = crate::handlers::trusted_uuid(&caller.user_id)?;
+            let caller_id = crate::handlers::trusted_uuid(&caller.account_id)?;
             let account: Account = sqlx::query_as(
                 "SELECT u.id, u.key_binding, u.opaque_record, u.opaque_server_key_id, n.folded
                    FROM accounts u JOIN account_names n ON n.account_id = u.id AND n.state = 'current'
@@ -263,7 +263,7 @@ pub async fn login_start(
     // The attempt counts before any OPAQUE work.
     let mut asker = auth_check::Client::from_headers(&state, &headers, peer).await?;
     if let Some((caller, _)) = &reauth {
-        asker = asker.signed_in_as(crate::handlers::trusted_uuid(&caller.user_id)?);
+        asker = asker.signed_in_as(crate::handlers::trusted_uuid(&caller.account_id)?);
     }
     let epoch = record.map(|(record, _)| auth_check::credential_epoch(record));
     let guard = auth_check::guard(&asker, user_id, &canonical, epoch.as_ref().map(|e| &e[..]))?;
@@ -679,7 +679,7 @@ pub async fn register_start(
             .ok_or_else(grants::invalid)?;
             if purpose == Purpose::AdminReset {
                 // A new key binding for the account the admin may reset.
-                if grant.target_user_id.is_none() {
+                if grant.target_account_id.is_none() {
                     return Err(grants::invalid());
                 }
                 key_binding_unused(&state, &req.key_binding).await?;
@@ -687,7 +687,7 @@ pub async fn register_start(
                 // The account's own key binding: a new password for it.
                 let own: Option<String> =
                     sqlx::query_scalar("SELECT key_binding FROM accounts WHERE id = $1")
-                        .bind(grant.user_id)
+                        .bind(grant.account_id)
                         .fetch_optional(&state.pool)
                         .await?;
                 if own.as_deref() != Some(req.key_binding.as_str()) {
@@ -817,7 +817,7 @@ pub async fn register_finish(
     .get();
     let current: Option<i32> =
         sqlx::query_scalar("SELECT master_key_generation FROM accounts WHERE id = $1 FOR UPDATE")
-            .bind(grant.user_id)
+            .bind(grant.account_id)
             .fetch_optional(&mut *tx)
             .await?;
     if current.and_then(|g| u32::try_from(g).ok()) != Some(envelope_generation) {
@@ -833,7 +833,7 @@ pub async fn register_finish(
            AND (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
            AND (NOT $7 OR opaque_server_key_id IS DISTINCT FROM $5)",
     )
-    .bind(grant.user_id)
+    .bind(grant.account_id)
     .bind(&req.key_binding)
     .bind(&record)
     .bind(kutup_crypto::opaque::SUITE as i16)
@@ -845,24 +845,24 @@ pub async fn register_finish(
     if updated.rows_affected() != 1 {
         return Err(grants::invalid());
     }
-    grants::end_all(&mut tx, grant.user_id).await?;
+    grants::end_all(&mut tx, grant.account_id).await?;
     // The sign-ins it ends end with it, in this transaction.
     let kind = match purpose {
         // This sign-in goes on; the account's others end.
         Purpose::PasswordChange => {
-            crate::sessions::revoke_all_for_user_in(&mut tx, grant.user_id, grant.session_id)
+            crate::sessions::revoke_all_for_user_in(&mut tx, grant.account_id, grant.session_id)
                 .await?;
             security_events::Kind::PasswordChange
         }
         Purpose::Recovery => {
-            crate::sessions::revoke_all_for_user_in(&mut tx, grant.user_id, None).await?;
+            crate::sessions::revoke_all_for_user_in(&mut tx, grant.account_id, None).await?;
             // The recovery phrase also turns every second factor off, as
             // Proton's lost-2FA path does (docs/plans/security-keys.md, D2):
             // a lost authenticator would otherwise lock the account out.
-            if crate::two_factor::turn_off(&mut tx, grant.user_id).await? {
+            if crate::two_factor::turn_off(&mut tx, grant.account_id).await? {
                 security_events::record(
                     &mut tx,
-                    grant.user_id,
+                    grant.account_id,
                     security_events::Kind::TwoFactorOff,
                     grant.session_id,
                     None,
@@ -876,8 +876,8 @@ pub async fn register_finish(
         // one here unseen).
         _ => security_events::Kind::Rotate,
     };
-    security_events::record(&mut tx, grant.user_id, kind, grant.session_id, None).await?;
+    security_events::record(&mut tx, grant.account_id, kind, grant.session_id, None).await?;
     tx.commit().await?;
-    tracing::info!(user_id = %grant.user_id, kind = kind.as_str(), "account credential changed");
+    tracing::info!(user_id = %grant.account_id, kind = kind.as_str(), "account credential changed");
     Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }

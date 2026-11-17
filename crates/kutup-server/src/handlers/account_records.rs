@@ -30,7 +30,7 @@ use uuid::Uuid;
 use crate::account_heads::{self, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::site_settings::{
     NumericSetting, ACCOUNT_RECORDS_BATCH_ITEMS, ACCOUNT_RECORDS_CALENDAR_SETTINGS,
     ACCOUNT_RECORDS_CHAT_ATTACHMENTS, ACCOUNT_RECORDS_CHAT_CONTACTS, ACCOUNT_RECORDS_CHAT_GROUPS,
@@ -150,11 +150,11 @@ pub struct FeedPage {
 )]
 pub async fn feed(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(scope): Path<String>,
     Query(query): Query<FeedQuery>,
 ) -> AppResult<Json<FeedPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     read_allowed(user_id)?;
     let scope = scope_named(&scope)?;
     let after = query.after.unwrap_or(0);
@@ -269,10 +269,10 @@ pub(crate) async fn page(
 )]
 pub async fn get_one(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((scope, id)): Path<(String, String)>,
 ) -> AppResult<Json<RecordView>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     read_allowed(user_id)?;
     let scope = scope_named(&scope)?;
     scope
@@ -374,10 +374,10 @@ struct Put {
 )]
 pub async fn batch(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(batch): Json<Batch>,
 ) -> AppResult<Json<BatchResult>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let items = batch.puts.len() + batch.deletes.len();
     if items == 0 {
         return Err(AppError::bad_request("the batch is empty"));

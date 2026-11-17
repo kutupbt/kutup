@@ -445,7 +445,7 @@ impl Client {
 
     // --- User ---
 
-    pub fn me(&self) -> Result<UserMe> {
+    pub fn me(&self) -> Result<AccountMe> {
         let resp = self.get("/user/me")?;
         decode_json(resp)
     }

@@ -44,8 +44,7 @@ pub struct Group {
 /// Someone a group's mail goes to: an active account with a primary key.
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct Receiver {
-    #[sqlx(rename = "account_id")]
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub address_id: Uuid,
     pub address: String,
     pub public_key: Vec<u8>,
@@ -251,7 +250,7 @@ pub async fn store_list(
                 tx,
                 NewMessage {
                     id: Uuid::new_v4(),
-                    user_id: Some(receiver.user_id),
+                    account_id: Some(receiver.account_id),
                     address_id: receiver.address_id,
                     thread_id: None,
                     direction: row.direction,
@@ -484,7 +483,7 @@ pub async fn store_shared_copy(
         tx,
         NewMessage {
             id,
-            user_id: None,
+            account_id: None,
             address_id,
             thread_id: None,
             direction: row.direction,
@@ -589,7 +588,7 @@ mod tests {
     #[test]
     fn large_lists_are_stored_in_chunks() {
         let receiver = Receiver {
-            user_id: Uuid::nil(),
+            account_id: Uuid::nil(),
             address_id: Uuid::nil(),
             address: "a@kutup.test".into(),
             public_key: Vec::new(),

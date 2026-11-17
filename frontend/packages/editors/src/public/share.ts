@@ -36,7 +36,7 @@ interface ShareInfo {
   targetId: string
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
-  ownerUserId: string
+  ownerAccountId: string
   /** Who shared it (`alice@example.org`): the page says so. */
   ownerAccount: string
   /** Signs the folder's key history. */
@@ -164,7 +164,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
   try {
     collectionKey = await openPublicLinkCollectionKeyV1(share.collectionKeyEnvelope, key, {
       collectionId: share.targetId,
-      ownerUserId: share.ownerUserId,
+      ownerAccountId: share.ownerAccountId,
       epoch: share.collectionKeyEpoch,
     })
   } catch {
@@ -179,7 +179,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
       .get<EpochLinkV1[]>(`${shareBase(token)}/epochs`)
       .then(({ data: chain }) => {
         if (chain.length !== share.collectionKeyEpoch) throw new Error('incomplete folder key history')
-        return unlockCollectionKeyring(collectionKey, share.targetId, share.ownerUserId, share.ownerAuthorityPublicKey, chain)
+        return unlockCollectionKeyring(collectionKey, share.targetId, share.ownerAccountId, share.ownerAuthorityPublicKey, chain)
       })
     return keyring.then((keys) => {
       const key = keys[epoch - 1]
@@ -221,7 +221,7 @@ async function loadFile(share: ShareInfo, key: Uint8Array): Promise<PublicFile> 
   try {
     fileKey = await openPublicLinkFileKeyV1(share.collectionKeyEnvelope, key, {
       fileId: share.targetId,
-      ownerUserId: share.ownerUserId,
+      ownerAccountId: share.ownerAccountId,
       generation: share.collectionKeyEpoch,
     })
   } catch {

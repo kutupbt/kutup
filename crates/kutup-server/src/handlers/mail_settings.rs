@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::mail::{delete_for_good, mailbox, UpdatedMailMessages};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq, Eq, sqlx::FromRow)]
@@ -147,8 +147,11 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The account's mail settings", body = MailSettings))
 )]
-pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailSettings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn get(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<MailSettings>> {
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(settings_of(&state, user_id).await?))
 }
 
@@ -194,10 +197,10 @@ pub struct UpdateMailSettings {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<UpdateMailSettings>,
 ) -> AppResult<Json<MailSettings>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if request
         .auto_delete_days
         .is_some_and(|days| days != 0 && days != 30)
@@ -352,10 +355,10 @@ pub struct EmptyMailFolder {
 )]
 pub async fn empty(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<EmptyMailFolder>,
 ) -> AppResult<Json<UpdatedMailMessages>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let folder = match request.folder.as_str() {
         "trash" => "trash",
         "spam" => "spam",

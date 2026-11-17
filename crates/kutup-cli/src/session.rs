@@ -50,7 +50,7 @@ pub struct Session {
     pub envelope_binding: String,
     /// The account's permanent id (`users.id`) and its server's name: who
     /// this account is to everyone (docs/plans/account-ids.md).
-    pub user_id: String,
+    pub account_id: String,
     pub server_name: String,
     /// Shown only: the account's username, as `/user/me` last said.
     pub username: String,
@@ -121,7 +121,7 @@ impl Session {
 
     /// This account as every share and binding names it.
     pub fn person(&self) -> Result<kutup_crypto::account_ref::AccountRef> {
-        kutup_crypto::account_ref::AccountRef::new(&self.server_name, &self.user_id)
+        kutup_crypto::account_ref::AccountRef::new(&self.server_name, &self.account_id)
             .map_err(|_| anyhow!("this session's account is not known: run 'kutup login' again"))
     }
 }
@@ -733,7 +733,7 @@ pub struct SyncFileState {
 #[serde(rename_all = "camelCase")]
 pub struct CollabDevice {
     pub server: String,
-    pub user_id: String,
+    pub account_id: String,
     pub device_id: u32,
     /// The Ed25519 seed, base64.
     pub seed: String,

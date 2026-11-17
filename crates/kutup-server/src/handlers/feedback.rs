@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
-use crate::middleware::{AdminUser, AuthUser};
+use crate::middleware::{AdminAccount, AuthAccount};
 use crate::{ratelimit, AppState};
 
 /// What a person sends.
@@ -96,7 +96,7 @@ fn clean_details(details: Option<Map<String, Value>>) -> AppResult<Option<Value>
 )]
 pub async fn send_feedback(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<SendFeedbackRequest>,
 ) -> AppResult<Response> {
     if !KINDS.contains(&req.kind.as_str()) {
@@ -113,13 +113,13 @@ pub async fn send_feedback(
         return Err(AppError::bad_request("the message is too long"));
     }
     let details = clean_details(req.details)?;
-    if !ratelimit::FEEDBACK.allow(&user.user_id) {
+    if !ratelimit::FEEDBACK.allow(&user.account_id) {
         return Err(AppError::too_many_requests(
             "too much feedback; try again later",
         ));
     }
     let user_id =
-        Uuid::parse_str(&user.user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+        Uuid::parse_str(&user.account_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     sqlx::query(
         "INSERT INTO feedback (account_id, kind, app, message, details) VALUES ($1, $2, $3, $4, $5)",
     )
@@ -146,8 +146,8 @@ pub struct FeedbackItem {
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     /// Absent when the account was deleted since.
-    user_id: Option<Uuid>,
-    user_username: Option<String>,
+    account_id: Option<Uuid>,
+    username: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     resolved_at: Option<OffsetDateTime>,
     /// `done`, `dismissed` or `forwarded`.
@@ -189,7 +189,7 @@ type FeedbackRow = (
 )]
 pub async fn list_feedback(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Query(q): Query<FeedbackQuery>,
 ) -> AppResult<Response> {
     let resolved = match q.status.as_deref() {
@@ -234,8 +234,8 @@ pub async fn list_feedback(
                 message,
                 details,
                 created_at,
-                user_id,
-                user_username,
+                account_id: user_id,
+                username: user_username,
                 resolved_at,
                 resolution,
                 github_url,
@@ -287,7 +287,7 @@ fn is_issue_of(url: &str, repository: &str) -> bool {
 )]
 pub async fn resolve_feedback(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(req): Json<ResolveFeedbackRequest>,
 ) -> AppResult<Response> {
@@ -318,7 +318,7 @@ pub async fn resolve_feedback(
         _ => None,
     };
     let admin_uuid =
-        Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+        Uuid::parse_str(&admin.account_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     let owner: Option<Option<Uuid>> = sqlx::query_scalar(
         "UPDATE feedback
             SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = $3, github_url = $4
@@ -336,7 +336,7 @@ pub async fn resolve_feedback(
     };
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "feedback.resolve",
         owner,
         json!({ "feedbackId": id, "resolution": req.resolution, "githubUrl": github_url }),
@@ -356,7 +356,7 @@ pub async fn resolve_feedback(
 )]
 pub async fn delete_feedback(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -370,7 +370,7 @@ pub async fn delete_feedback(
     };
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "feedback.delete",
         owner,
         json!({ "feedbackId": id }),

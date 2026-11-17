@@ -845,11 +845,11 @@ export function useContentSearch(): ContentSearch | null {
     if (!account.data || typeof indexedDB === 'undefined') return
     let live = true
     const data = account.data
-    let promise = opened.get(session.userId)
+    let promise = opened.get(session.accountId)
     if (!promise) {
       promise = ContentSearch.open(session.masterKeys, session.roots.objectIdKey, session.envelopeBinding, data)
-      opened.set(session.userId, promise)
-      promise.catch(() => opened.delete(session.userId))
+      opened.set(session.accountId, promise)
+      promise.catch(() => opened.delete(session.accountId))
     }
     promise
       .then((s) => {
@@ -860,7 +860,7 @@ export function useContentSearch(): ContentSearch | null {
     return () => {
       live = false
     }
-  }, [account.data, session.userId, session.masterKeys, session.roots.objectIdKey, session.envelopeBinding])
+  }, [account.data, session.accountId, session.masterKeys, session.roots.objectIdKey, session.envelopeBinding])
   return search
 }
 

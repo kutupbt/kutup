@@ -24,7 +24,7 @@ use crate::mail::domains::name;
 use crate::mail::domains::records::{dkim_target, DKIM_SELECTORS};
 use crate::mail::domains::settings::{Mode, Settings};
 use crate::mail::domains::store::{self, Row};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::ratelimit::MAIL_DOMAIN_CHECKS;
 use crate::AppState;
 
@@ -213,9 +213,12 @@ async fn view(state: &AppState, row: &Row, settings: &Settings) -> AppResult<Mai
     security(("BearerAuth" = [])),
     responses((status = 200, body = MailDomains), (status = 404, description = "No Mail here"))
 )]
-pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailDomains>> {
+pub async fn list(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<MailDomains>> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     // The domains of the organization the account manages; none yet (or
     // not its to manage): an empty list under the site's limit.
     let site = Settings::load(&state.pool).await?;
@@ -256,11 +259,11 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Js
 )]
 pub async fn add(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<AddDomain>,
 ) -> AppResult<(StatusCode, Json<MailDomain>)> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let name = name::normalize(&input.name, &state.config.chat_server_name)
         .map_err(|refusal| coded(AppError::bad_request("not a domain to add"), refusal.code()))?;
     let mut site = Settings::load(&state.pool).await?;
@@ -326,12 +329,12 @@ impl Drop for Running {
 )]
 pub async fn get(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Query(query): Query<Refresh>,
 ) -> AppResult<Json<MailDomain>> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
     let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
     let settings = Settings::load(&state.pool)
@@ -381,11 +384,11 @@ pub async fn get(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
     let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
     store::remove(&state.pool, organization, id).await?;
@@ -405,12 +408,12 @@ pub async fn delete(
 )]
 pub async fn catch_all(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(input): Json<CatchAll>,
 ) -> AppResult<StatusCode> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
     let address = input
         .address_id
@@ -468,11 +471,11 @@ pub struct CreatedAddress {
 )]
 pub async fn create_address(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<NewAddress>,
 ) -> AppResult<(StatusCode, Json<CreatedAddress>)> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let domain_id =
         Uuid::parse_str(&input.domain_id).map_err(|_| AppError::not_found("no such domain"))?;
     let local = input.local.trim().to_lowercase();

@@ -72,7 +72,7 @@ fn code(r: Response) -> (u16, String) {
 fn key_share(key: &GeneratedAddressKey, group: &str, member: &User) -> Value {
     let incarnation = member.identity.incarnation_id();
     json!({
-        "userId": member.id,
+        "accountId": member.id,
         "share": b64(&mail_key::seal_group_key_share(
             &key.secret_key,
             group,
@@ -86,7 +86,7 @@ fn key_share(key: &GeneratedAddressKey, group: &str, member: &User) -> Value {
 fn signer_share(signer: &GroupSigningKey, group: &str, member: &User) -> Value {
     let incarnation = member.identity.incarnation_id();
     json!({
-        "userId": member.id,
+        "accountId": member.id,
         "share": b64(&seal_group_signing_share(
             signer,
             group,
@@ -279,8 +279,8 @@ fn group_key_lists_are_signed_by_the_groups_signers_only() {
 
     // Bob becomes a manager: the group key and the signing key both, or nothing.
     let with_bob = json!([
-        { "userId": alice.id, "role": "owner", "canSendAs": true },
-        { "userId": bob.id, "role": "manager" },
+        { "accountId": alice.id, "role": "owner", "canSendAs": true },
+        { "accountId": bob.id, "role": "manager" },
     ]);
     let k1_for_bob = || {
         let mut share = key_share(&k1, &id, &bob);
@@ -350,8 +350,8 @@ fn group_key_lists_are_signed_by_the_groups_signers_only() {
 
     // Bob may no longer sign (demoted): only with a new signer and its handover.
     let bob_member = json!([
-        { "userId": alice.id, "role": "owner", "canSendAs": true },
-        { "userId": bob.id, "role": "member" },
+        { "accountId": alice.id, "role": "owner", "canSendAs": true },
+        { "accountId": bob.id, "role": "member" },
     ]);
     assert_eq!(
         code(members(
@@ -412,7 +412,7 @@ fn group_key_lists_are_signed_by_the_groups_signers_only() {
     chain.lists.push(three);
 
     // A rotation that still shares with someone removed: refused.
-    let alice_only = json!([{ "userId": alice.id, "role": "owner", "canSendAs": true }]);
+    let alice_only = json!([{ "accountId": alice.id, "role": "owner", "canSendAs": true }]);
     let k4 = new_key(&address);
     let four = chain.next(&b, &k4, false);
     assert_eq!(
@@ -469,7 +469,7 @@ fn a_rotation_waiting_on_a_removal_is_checked_against_who_stays() {
         &alice,
         &id,
         json!({
-            "members": [{ "userId": alice.id, "role": "owner", "canSendAs": true }, { "userId": bob.id, "role": "member" }],
+            "members": [{ "accountId": alice.id, "role": "owner", "canSendAs": true }, { "accountId": bob.id, "role": "member" }],
             "keyShares": [k1_share],
         }),
     );
@@ -532,8 +532,8 @@ fn a_reset_member_gets_the_keys_sealed_again() {
     let (alice, mut bob) = (register(&live.c, &live.base), register(&live.c, &live.base));
     let (id, _address, k1, _a, _chain) = shared_mailbox(&live, &alice);
     let both = json!([
-        { "userId": alice.id, "role": "owner", "canSendAs": true },
-        { "userId": bob.id, "role": "member" },
+        { "accountId": alice.id, "role": "owner", "canSendAs": true },
+        { "accountId": bob.id, "role": "member" },
     ]);
     let share_for_bob = |bob: &User| {
         let mut share = key_share(&k1, &id, bob);
@@ -577,7 +577,7 @@ fn a_reset_member_gets_the_keys_sealed_again() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|m| m["userId"] == bob.id.as_str())
+        .find(|m| m["accountId"] == bob.id.as_str())
         .unwrap();
     assert_eq!(bob_row["needsKeys"], true);
 
@@ -658,9 +658,9 @@ fn a_deleted_or_deactivated_manager_means_a_new_signer() {
     );
     let (id, address, k1, a, mut chain) = shared_mailbox(&live, &alice);
     let with_managers = json!([
-        { "userId": alice.id, "role": "owner", "canSendAs": true },
-        { "userId": bob.id, "role": "manager" },
-        { "userId": carol.id, "role": "manager" },
+        { "accountId": alice.id, "role": "owner", "canSendAs": true },
+        { "accountId": bob.id, "role": "manager" },
+        { "accountId": carol.id, "role": "manager" },
     ]);
     let k1_for = |user: &User| {
         let mut share = key_share(&k1, &id, user);
@@ -775,8 +775,8 @@ fn a_shared_mailbox_signature_is_set_by_its_owners_and_managers() {
     let mut share = key_share(&k1, &id, &bob);
     share["groupFingerprint"] = json!(hex::encode(k1.fingerprint));
     let both = json!([
-        { "userId": alice.id, "role": "owner", "canSendAs": true },
-        { "userId": bob.id, "role": "member", "canSendAs": true },
+        { "accountId": alice.id, "role": "owner", "canSendAs": true },
+        { "accountId": bob.id, "role": "member", "canSendAs": true },
     ]);
     assert_eq!(
         members(

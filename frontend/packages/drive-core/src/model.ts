@@ -31,7 +31,7 @@ export interface Folder {
   key: Uint8Array | null
   keyEpoch: number
   /** Who owns it and whose authority signs its key history. */
-  ownerUserId: string
+  ownerAccountId: string
   ownerAuthorityPublicKey: string
   /** The current epoch's statement hash: a new one means a new keyring. */
   epochStatementHash: string
@@ -60,7 +60,7 @@ export interface Folder {
 export interface DriveFile {
   id: string
   collectionId: string
-  uploaderUserId: string | null
+  uploaderAccountId: string | null
   /** The folder epoch the file key is wrapped at; below the folder's, the file is re-keyed before it is written to or moved. */
   keyEpoch: number
   /** The generation of the file's current key (docs/plans/drive-move.md). */

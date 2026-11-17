@@ -6,7 +6,7 @@ export const PERSISTED_SESSION_KEY = 'kutup.session'
 export interface PersistedSession {
   v: 1
   sessionId: string
-  userId: string
+  accountId: string
   /** A WebSession local-state envelope; its key is held by the server. */
   blob: string
 }
@@ -19,7 +19,7 @@ export function readPersisted(): PersistedSession | null {
     if (
       value.v !== 1 ||
       typeof value.sessionId !== 'string' ||
-      typeof value.userId !== 'string' ||
+      typeof value.accountId !== 'string' ||
       typeof value.blob !== 'string'
     ) {
       return null

@@ -442,13 +442,13 @@ export async function loadGroups(session: Session): Promise<Omit<ContactGroup, '
 }
 
 /** The ids of the groups the account keeps, read at most every few seconds. */
-let knownGroups: { userId: string; at: number; ids: Promise<Set<string>> } | null = null
+let knownGroups: { accountId: string; at: number; ids: Promise<Set<string>> } | null = null
 async function groupIds(session: Session): Promise<Set<string>> {
   const now = Date.now()
-  if (!knownGroups || knownGroups.userId !== session.userId || now - knownGroups.at > 5000) {
+  if (!knownGroups || knownGroups.accountId !== session.accountId || now - knownGroups.at > 5000) {
     const ids = (async () => new Set((await (await accountHead(session)).records(GROUPS_SCOPE)).records.keys()))()
     ids.catch(() => (knownGroups = null))
-    knownGroups = { userId: session.userId, at: now, ids }
+    knownGroups = { accountId: session.accountId, at: now, ids }
   }
   return knownGroups.ids
 }

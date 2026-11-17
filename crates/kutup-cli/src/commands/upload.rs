@@ -243,7 +243,7 @@ impl Uploads<'_> {
             name,
             &parent.id,
             &parent.hash_key,
-            &self.session.user_id,
+            &self.session.account_id,
             self.session,
         ) {
             Ok((id, key)) => Ok(Target {

@@ -158,7 +158,7 @@ fn share_revocation_contract() {
         .unwrap()
         .status()
     };
-    let alice_kept = json!([{ "userId": alice.id, "namedShareEnvelope": named_share(&owner, &folder.id, &key2, 2, &alice) }]);
+    let alice_kept = json!([{ "accountId": alice.id, "namedShareEnvelope": named_share(&owner, &folder.id, &key2, 2, &alice) }]);
     // Refused: Bob neither kept nor removed (he would be dropped silently).
     assert_eq!(
         rotate(body(alice_kept.clone(), json!([])), &owner.token),
@@ -170,7 +170,7 @@ fn share_revocation_contract() {
         StatusCode::NOT_FOUND
     );
     // Refused: a kept member's share sealed at the wrong epoch.
-    let stale_share = json!([{ "userId": alice.id, "namedShareEnvelope": named_share(&owner, &folder.id, &key2, 1, &alice) }]);
+    let stale_share = json!([{ "accountId": alice.id, "namedShareEnvelope": named_share(&owner, &folder.id, &key2, 1, &alice) }]);
     assert_eq!(
         rotate(body(stale_share, json!([bob.id])), &owner.token),
         StatusCode::BAD_REQUEST

@@ -35,7 +35,7 @@ export async function persistKeys(sessionId: string, keys: SessionKeys): Promise
       LocalStatePurpose.WebSession,
       profileFor(sessionId),
     )
-    writePersisted({ v: 1, sessionId, userId: keys.userId, blob })
+    writePersisted({ v: 1, sessionId, accountId: keys.accountId, blob })
   } finally {
     localKey.fill(0)
   }
@@ -54,7 +54,7 @@ export async function persistDevice(device: DeviceKeys | null): Promise<void> {
   // Only a sign-in this origin keeps is sealed again (never starts keeping one).
   if (readPersisted()?.sessionId !== session.sessionId) return
   const keys: SessionKeys = {
-    userId: session.userId,
+    accountId: session.accountId,
     masterKey: session.masterKey,
     masterKeys: session.masterKeys,
     roots: session.roots,

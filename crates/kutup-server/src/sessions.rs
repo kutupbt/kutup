@@ -198,7 +198,7 @@ pub async fn create(
 #[derive(Clone, Debug)]
 pub struct LiveSession {
     pub session_id: Uuid,
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub client: ClientType,
     pub is_admin: bool,
     /// A digest of the account's security state (its password hash, 2FA
@@ -239,7 +239,7 @@ pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<L
         ClientType::parse(&client_type).ok_or_else(|| AppError::unauthorized("unauthorized"))?;
     Ok(LiveSession {
         session_id,
-        user_id,
+        account_id: user_id,
         client,
         is_admin,
         version,
@@ -326,7 +326,7 @@ pub async fn refresh(
         return Ok(RefreshOutcome::Rotated {
             session: LiveSession {
                 session_id: id,
-                user_id,
+                account_id: user_id,
                 client,
                 is_admin,
                 // A refresh answers no account request; the next one says it.
@@ -371,7 +371,7 @@ pub async fn refresh(
     Ok(RefreshOutcome::Grace {
         session: LiveSession {
             session_id: id,
-            user_id,
+            account_id: user_id,
             client,
             is_admin,
             version: String::new(),
@@ -602,7 +602,7 @@ pub async fn create_fork(
 
 pub struct ConsumedFork {
     pub issued: IssuedSession,
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub is_admin: bool,
     pub payload: Vec<u8>,
 }
@@ -669,7 +669,7 @@ pub async fn consume_fork(
             session_id,
             refresh_token,
         },
-        user_id,
+        account_id: user_id,
         is_admin,
         payload,
     })

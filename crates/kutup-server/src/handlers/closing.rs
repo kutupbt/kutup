@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::account_closing::{self, ClosingBy};
 use crate::error::{AppError, AppResult};
 use crate::grants::{self, Purpose};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::security_events::{self, Kind};
 use crate::AppState;
 
@@ -58,10 +58,10 @@ impl Closed {
 )]
 pub async fn close(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<GrantRequest>,
 ) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let (protected, last_admin): (bool, bool) = sqlx::query_as(
         "SELECT is_break_glass,
                 is_admin AND NOT EXISTS (SELECT 1 FROM accounts o
@@ -122,7 +122,7 @@ pub async fn keep(
     let Some((_, grant)) = grants::take(&mut *tx, &req.grant, &[Purpose::Keep]).await? else {
         return Err(grants::invalid());
     };
-    let account: Uuid = grant.user_id;
+    let account: Uuid = grant.account_id;
     if !account_closing::keep(&mut tx, account).await? {
         return Err(grants::invalid());
     }

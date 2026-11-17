@@ -27,7 +27,7 @@ use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::{AdminUser, AuthUser};
+use crate::middleware::{AdminAccount, AuthAccount};
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
@@ -581,10 +581,10 @@ fn config_response(
 )]
 pub async fn get_config(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<MapConfigResponse>> {
     let settings = state.maps.settings(&state.pool).await?;
-    let preferences = preferences_of(&state.pool, trusted_uuid(&user.user_id)?).await?;
+    let preferences = preferences_of(&state.pool, trusted_uuid(&user.account_id)?).await?;
     Ok(Json(config_response(
         &settings,
         preferences,
@@ -604,7 +604,7 @@ pub async fn get_config(
 )]
 pub async fn put_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<MapPreferences>,
 ) -> AppResult<Json<MapConfigResponse>> {
     let settings = state.maps.settings(&state.pool).await?;
@@ -613,7 +613,7 @@ pub async fn put_preferences(
             return Err(AppError::bad_request("that map provider is not offered"));
         }
     }
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if let Some(folder) = request.save_folder_id {
         let owned: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM drive_collections
@@ -675,7 +675,7 @@ pub struct MapSettingsView {
 )]
 pub async fn admin_get(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<MapSettingsView>> {
     let settings = load_settings(&state.pool).await?;
     state.maps.replace_settings(settings.clone());
@@ -696,7 +696,7 @@ pub async fn admin_get(
 )]
 pub async fn admin_put(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(settings): Json<MapSettings>,
 ) -> AppResult<Json<MapSettingsView>> {
     settings
@@ -714,7 +714,7 @@ pub async fn admin_put(
     .await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "maps.settings.update",
         None,
         serde_json::json!({
@@ -862,10 +862,10 @@ fn relay_response(body: Vec<u8>, content_type: &str, upstream: &Upstream) -> Res
 )]
 pub async fn proxy(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((provider, path)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    if !PROXY_LIMIT.allow(&user.user_id) {
+    if !PROXY_LIMIT.allow(&user.account_id) {
         return Err(AppError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "too many map requests",

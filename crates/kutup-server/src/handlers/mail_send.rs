@@ -27,7 +27,7 @@ use crate::handlers::mail::{delete_for_good, MailMessage, Row, ROW_COLUMNS};
 use crate::handlers::{octet_stream_response, trusted_uuid};
 use crate::mail::headers::{self, Mailbox, Readable};
 use crate::mail::{insert_message, NewMessage};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The largest message, attachments included (Proton's limit).
@@ -540,10 +540,10 @@ async fn row(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<MailMessage
 )]
 pub async fn create_draft(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     mut multipart: Multipart,
 ) -> AppResult<Json<MailMessage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let parts = read_parts(
         &mut multipart,
         &[("meta", 256 * 1024), ("body", MAX_DRAFT_BODY_BYTES)],
@@ -572,7 +572,7 @@ pub async fn create_draft(
             &mut tx,
             NewMessage {
                 id,
-                user_id: Some(user_id),
+                account_id: Some(user_id),
                 address_id: sender.address_id,
                 thread_id: thread,
                 direction: "outbound",
@@ -620,11 +620,11 @@ pub async fn create_draft(
 )]
 pub async fn update_draft(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     mut multipart: Multipart,
 ) -> AppResult<Json<MailMessage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     if crate::handlers::mail_outbox::draft_held(&state, id).await? {
         return Err(
@@ -750,11 +750,11 @@ async fn own_draft(state: &AppState, user_id: Uuid, id: &str) -> AppResult<Uuid>
 )]
 pub async fn add_draft_attachment(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     mut multipart: Multipart,
 ) -> AppResult<Json<DraftAttachment>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let draft = own_draft(&state, user_id, &id).await?;
     if crate::handlers::mail_outbox::draft_held(&state, draft).await? {
         return Err(
@@ -838,10 +838,10 @@ pub async fn add_draft_attachment(
 )]
 pub async fn list_draft_attachments(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<Vec<DraftAttachment>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let draft = own_draft(&state, user_id, &id).await?;
     let rows: Vec<(Uuid, i64)> = sqlx::query_as(
         "SELECT id, size_bytes FROM mail_draft_attachments WHERE message_id = $1 ORDER BY created_at, id",
@@ -873,10 +873,10 @@ pub async fn list_draft_attachments(
 )]
 pub async fn draft_attachment_content(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((id, attachment)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let draft = own_draft(&state, user_id, &id).await?;
     let attachment = Uuid::parse_str(&attachment).map_err(|_| AppError::not_found("not found"))?;
     let key: String = sqlx::query_scalar(
@@ -909,10 +909,10 @@ pub async fn draft_attachment_content(
 )]
 pub async fn delete_draft_attachment(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((id, attachment)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let draft = own_draft(&state, user_id, &id).await?;
     if crate::handlers::mail_outbox::draft_held(&state, draft).await? {
         return Err(
@@ -998,11 +998,11 @@ struct LocalCopy {
 )]
 pub async fn send(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     mut multipart: Multipart,
 ) -> AppResult<axum::response::Response> {
     use axum::response::IntoResponse;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let pgp_parts: Vec<String> = (0..MAX_RECIPIENTS).map(|i| format!("pgp{i}")).collect();
     let mut limits = vec![
         ("meta", 512 * 1024),
@@ -1253,7 +1253,7 @@ pub(crate) async fn deliver(
     // members of two of the lists get it once.
     let mut reached: std::collections::BTreeSet<Uuid> = local
         .iter()
-        .filter_map(|(_, recipient, _)| recipient.as_ref().map(|r| r.user_id))
+        .filter_map(|(_, recipient, _)| recipient.as_ref().map(|r| r.account_id))
         .collect();
     reached.insert(user_id);
     let mut list_sends = Vec::new();
@@ -1291,7 +1291,7 @@ pub(crate) async fn deliver(
         }
         let mut members = Vec::new();
         for receiver in crate::mail::groups::receivers(&state.pool, &group).await? {
-            if !reached.insert(receiver.user_id) {
+            if !reached.insert(receiver.account_id) {
                 continue;
             }
             let Some(encoded) = meta.key_packets.get(&receiver.address) else {
@@ -1392,7 +1392,7 @@ pub(crate) async fn deliver(
             });
             continue;
         };
-        let key = crate::mail::object_key(recipient.user_id, Uuid::new_v4());
+        let key = crate::mail::object_key(recipient.account_id, Uuid::new_v4());
         let (copy, protection) = match &packet {
             Some(packet) => ([packet.as_slice(), data].concat(), "end_to_end"),
             // Encrypt was off for them: the readable message, encrypted here
@@ -1439,7 +1439,7 @@ pub(crate) async fn deliver(
     let recorded: AppResult<Vec<SendRecipient>> = async {
         let mut tx = state.pool.begin().await?;
         // Lock every account in one order, so two sends cannot deadlock.
-        let mut accounts: Vec<Uuid> = copies.iter().map(|c| c.recipient.user_id).collect();
+        let mut accounts: Vec<Uuid> = copies.iter().map(|c| c.recipient.account_id).collect();
         accounts.push(user_id);
         accounts.sort();
         accounts.dedup();
@@ -1464,7 +1464,7 @@ pub(crate) async fn deliver(
             &mut tx,
             NewMessage {
                 id,
-                user_id: from_group.is_none().then_some(user_id),
+                account_id: from_group.is_none().then_some(user_id),
                 address_id: sender.address_id,
                 thread_id: thread,
                 direction: "outbound",
@@ -1511,7 +1511,7 @@ pub(crate) async fn deliver(
         .fetch_all(&mut *tx)
         .await?;
         for copy in &copies {
-            let pool = pools.get_mut(&copy.recipient.user_id).expect("locked");
+            let pool = pools.get_mut(&copy.recipient.account_id).expect("locked");
             if !pool.fits(copy.size, 0) {
                 results.push(SendRecipient {
                     address: copy.address.clone(),
@@ -1524,7 +1524,7 @@ pub(crate) async fn deliver(
                 &mut tx,
                 NewMessage {
                     id: copy_id,
-                    user_id: Some(copy.recipient.user_id),
+                    account_id: Some(copy.recipient.account_id),
                     address_id: copy.recipient.address_id,
                     thread_id: None,
                     direction: "inbound",
@@ -1547,7 +1547,7 @@ pub(crate) async fn deliver(
             if stored {
                 pool.used += copy.size;
                 delivered.push(crate::mail::auto_reply::Delivered {
-                    user_id: copy.recipient.user_id,
+                    account_id: copy.recipient.account_id,
                     message: copy_id,
                 });
                 if forwarding.contains(&copy.recipient.address_id) {

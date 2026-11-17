@@ -31,7 +31,7 @@ use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
 use crate::handlers::chat::canonical_profile_version;
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const JSON_CONTENT_TYPE: &str = "application/json";
@@ -97,7 +97,7 @@ pub struct FederatedProfileKey {
     pub profile_version: String,
 }
 
-struct LocalUser {
+struct LocalAccount {
     id: Uuid,
     incarnation: String,
     signing_public_key: String,
@@ -111,7 +111,7 @@ fn decode_envelope(envelope: &str) -> AppResult<ProfileKeyEnvelopeV1> {
         .map_err(|_| AppError::bad_request("invalid profile key envelope"))
 }
 
-async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option<LocalUser>> {
+async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option<LocalAccount>> {
     let row: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT id, account_incarnation_id, drive_signing_public_key
          FROM accounts WHERE id = $1 AND is_active = true
@@ -124,7 +124,7 @@ async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option
     .fetch_optional(pool)
     .await?;
     Ok(row.and_then(|(id, incarnation, signing)| {
-        signing.map(|signing_public_key| LocalUser {
+        signing.map(|signing_public_key| LocalAccount {
             id,
             incarnation,
             signing_public_key,
@@ -220,9 +220,9 @@ async fn store(
 )]
 pub async fn list_people(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<DrivePeopleResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let domain = state.config.chat_server_name.as_str();
     type LocalRow = (Uuid, String, String, String, i16, Option<String>);
     let local: Vec<LocalRow> = sqlx::query_as(
@@ -338,13 +338,13 @@ pub async fn list_people(
 )]
 pub async fn put_profile_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<PutProfileKeyRequest>,
 ) -> AppResult<Response> {
     if !canonical_profile_version(&request.profile_version) {
         return Err(AppError::bad_request("invalid profile version"));
     }
-    let me = local_user(&state.pool, trusted_uuid(&user.user_id)?, false)
+    let me = local_user(&state.pool, trusted_uuid(&user.account_id)?, false)
         .await?
         .ok_or_else(|| AppError::conflict("account identity is unavailable"))?;
     let local_domain = state.config.chat_server_name.as_str();

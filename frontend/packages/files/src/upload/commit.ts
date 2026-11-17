@@ -13,7 +13,7 @@ import { getSession } from '@kutup/session/store'
 export async function manifestSigner(): Promise<ManifestSigner> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  return manifestSignerOf(session.roots.identityRoot, session.userId)
+  return manifestSignerOf(session.roots.identityRoot, session.accountId)
 }
 
 /** The file's next metadata, sealed at `metadataRevision`. */

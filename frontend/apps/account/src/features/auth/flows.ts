@@ -36,7 +36,7 @@ import { clearSession, setAccessToken } from '@kutup/session/store'
 interface LoginResponse {
   accessToken: string
   sessionId: string
-  userId: string
+  accountId: string
   username: string
   masterKeyEnvelope: string
   /** The account's root records and the authority they must give (docs/plans/identity-root.md); with the session. */
@@ -150,7 +150,7 @@ export async function signIn(name: string, password: string): Promise<SignInResu
   const { data, signIn: opened } = await opaqueLogin<LoginResponse>(password, { purpose: 'session', name })
   if (data.requiresSetup && data.setupToken) {
     opened.close()
-    return { kind: 'setup', setup: { name, username: data.username, accountId: data.userId, setupToken: data.setupToken } }
+    return { kind: 'setup', setup: { name, username: data.username, accountId: data.accountId, setupToken: data.setupToken } }
   }
   if (data.requiresTotp && data.preAuthToken) {
     return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, signIn: opened } }
@@ -217,7 +217,7 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
       privateKey.fill(0)
       throw new Error("the server publishes another Drive key than this account's")
     }
-    await activate(data, { userId: data.userId, masterKey, masterKeys, roots, privateKey, publicKey, keyBinding: binding })
+    await activate(data, { accountId: data.accountId, masterKey, masterKeys, roots, privateKey, publicKey, keyBinding: binding })
     // A new server setup: the password just used (held by the sign-in's
     // worker) is registered again under it, without asking. A failure leaves
     // the old record, and the next sign-in asks again.
@@ -359,7 +359,7 @@ function registrationBody(keys: AccountKeys) {
 
 function sessionKeys(keys: AccountKeys): SessionKeys {
   return {
-    userId: '',
+    accountId: '',
     masterKey: keys.masterKey,
     // A new account's: generation 1, no keyring.
     masterKeys: firstMasterKeys(keys.masterKey),
@@ -406,7 +406,7 @@ export async function registerAndSignIn(
     })
     registered.set(keys, done)
   }
-  await activate(done.data, { ...sessionKeys(done.keys), userId: done.data.userId })
+  await activate(done.data, { ...sessionKeys(done.keys), accountId: done.data.accountId })
   releaseAccountKeys(keys)
 }
 
@@ -429,7 +429,7 @@ export async function completeSetup(setup: PendingSetup, keys: AccountKeys): Pro
     )
     registered.set(keys, done)
   }
-  await activate(done.data, { ...sessionKeys(done.keys), userId: done.data.userId })
+  await activate(done.data, { ...sessionKeys(done.keys), accountId: done.data.accountId })
   releaseAccountKeys(keys)
 }
 

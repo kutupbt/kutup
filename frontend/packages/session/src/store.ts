@@ -13,7 +13,7 @@ import type { DeviceKeys } from './keys'
 export interface Session {
   /** The server-side session (auth_sessions.id) this app origin holds. */
   sessionId: string
-  userId: string
+  accountId: string
   /** The account's Kutup address (`username@<domain>`): its identity, shown in menus. */
   address: string
   /**

@@ -86,7 +86,7 @@ export async function replaceContent(folder: Folder, listed: DriveFile, file: Fi
   if (!holder.fileKey || !holder.name) throw new Error('file is not open')
   const sha256 = opts.sha256 ?? (await hashBlob(file, opts.signal))
   const media = await readMedia(file, opts.signal)
-  const owner = getSession()?.userId
+  const owner = getSession()?.accountId
   try {
     const done = await streamVersionUpload({
       file,
@@ -159,7 +159,7 @@ export async function cancelVersionUpload(fileId: string, uploadId: string): Pro
     // One the server already let go is fine.
     if ((error as { response?: { status?: number } }).response?.status !== 404) throw error
   })
-  const owner = getSession()?.userId
+  const owner = getSession()?.accountId
   const remembered = owner ? (await pendingUploads.list(owner)).find((p) => p.fileId === fileId && uploadIdOf(p.uploadUrl) === uploadId) : undefined
   if (remembered) await pendingUploads.remove(fileId)
 }

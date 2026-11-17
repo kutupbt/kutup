@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const refresh = vi.fn<() => Promise<{ accessToken: string; sessionId: string }>>()
-const persisted = vi.fn<() => { v: 1; sessionId: string; userId: string; blob: string } | null>()
+const persisted = vi.fn<() => { v: 1; sessionId: string; accountId: string; blob: string } | null>()
 vi.mock('@kutup/session/client', () => ({ refreshAccessToken: () => refresh() }))
 vi.mock('@kutup/session/persistedStore', () => ({ readPersisted: () => persisted() }))
 
@@ -35,7 +35,7 @@ describe('meeting host tokens', () => {
     expect(await verifiedHostAccount()).toBeNull()
     expect(refresh).not.toHaveBeenCalled()
 
-    persisted.mockReturnValue({ v: 1, sessionId: 's1', userId: 'alice', blob: 'x' })
+    persisted.mockReturnValue({ v: 1, sessionId: 's1', accountId: 'alice', blob: 'x' })
     refresh.mockResolvedValue({ accessToken: 't', sessionId: 's1' })
     expect(await verifiedHostAccount()).toBe('alice')
 

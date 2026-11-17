@@ -40,7 +40,7 @@ function httpError(status: number) {
 }
 const networkError = new AxiosError('Network Error', 'ERR_NETWORK')
 const keys = {
-  userId: 'u1',
+  accountId: 'u1',
   masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)),
   roots: testRoots(0),
   privateKey: new Uint8Array(32),
@@ -51,7 +51,7 @@ const keys = {
 beforeEach(() => {
   localStorage.clear()
   vi.clearAllMocks()
-  writePersisted({ v: 1, sessionId: 'S1', userId: 'u1', blob: 'BLOB' })
+  writePersisted({ v: 1, sessionId: 'S1', accountId: 'u1', blob: 'BLOB' })
   refresh.mockResolvedValue({ accessToken: 'AT', sessionId: 'S1' })
   get.mockResolvedValue({ data: { key: 'A'.repeat(43) + '=' } })
   wasm.mockResolvedValue({})
@@ -65,7 +65,7 @@ describe('restoreSession', () => {
     expect(open).toHaveBeenCalledWith('BLOB', expect.any(Uint8Array), 3, 'web-drive:S1')
     // The profile came alongside the key, under the fresh token.
     expect(fetchProfile).toHaveBeenCalledWith('AT')
-    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), 'AT', 'S1', { id: 'u1' })
+    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'u1' }), 'AT', 'S1', { id: 'u1' })
   })
 
   it('ends the sign-in when the server names another key binding', async () => {

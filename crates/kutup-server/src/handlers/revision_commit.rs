@@ -26,7 +26,7 @@ use super::tus_versions::Landing;
 use crate::drive_blob::{revision_conflict, BlockBlob};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -65,8 +65,7 @@ pub struct CommitRevisionResponse {
 #[derive(sqlx::FromRow)]
 struct Uploaded {
     id: Uuid,
-    #[sqlx(rename = "account_id")]
-    user_id: Uuid,
+    account_id: Uuid,
     kind: String,
     collection_id: Uuid,
     total_bytes: i64,
@@ -104,11 +103,11 @@ struct Uploaded {
 )]
 pub async fn commit(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((id, revision)): Path<(String, String)>,
     Json(request): Json<CommitRevisionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let revision_id = Uuid::parse_str(&revision).map_err(|_| AppError::not_found("not found"))?;
     if request.metadata_envelope.is_empty() || request.metadata_revision < 1 {
@@ -131,7 +130,7 @@ pub async fn commit(
     .fetch_optional(&mut *tx)
     .await?;
     // Only its uploader commits it.
-    let Some(mut row) = row.filter(|row| row.user_id == user_id) else {
+    let Some(mut row) = row.filter(|row| row.account_id == user_id) else {
         drop(tx);
         return Err(already_committed(&state, user_id, file_id, revision_id).await?);
     };
@@ -187,7 +186,7 @@ pub async fn commit(
         }
         "version" => {
             let landing = Landing {
-                user_id,
+                account_id: user_id,
                 upload_id: row.id,
                 file_id,
                 collection_id: row.collection_id,

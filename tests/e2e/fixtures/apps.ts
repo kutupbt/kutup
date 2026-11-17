@@ -186,8 +186,8 @@ function learnAccountId(page: Page, account: Account): () => Promise<void> {
     if (!response.ok() || !(path.endsWith('/api/auth/login/finish') || path.endsWith('/api/auth/register'))) return
     answers.push(
       response.json().then(
-        (body: { userId?: unknown }) => {
-          if (typeof body.userId === 'string') accountIds.set(account.address, body.userId)
+        (body: { accountId?: unknown }) => {
+          if (typeof body.accountId === 'string') accountIds.set(account.address, body.accountId)
         },
         () => {},
       ),

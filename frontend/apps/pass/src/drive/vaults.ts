@@ -45,7 +45,7 @@ export function useVaultFiles() {
   const identity = useDriveIdentity()
   const queryClient = useQueryClient()
   const listing = useQuery({
-    queryKey: [...allFilesKey, identity.data?.userId],
+    queryKey: [...allFilesKey, identity.data?.accountId],
     enabled: Boolean(folders.data),
     queryFn: () => loadAllFiles(folders.data!.all, queryClient),
   })

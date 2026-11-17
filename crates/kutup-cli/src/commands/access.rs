@@ -23,7 +23,7 @@ use kutup_crypto::named_share::NamedShareEnvelopeV1;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Member {
-    user_id: String,
+    account_id: String,
     account: String,
     account_incarnation_id: String,
     drive_public_key: String,
@@ -131,8 +131,8 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     let removed_member: Vec<String> = access
         .members
         .iter()
-        .filter(|m| m.account.to_lowercase() == who_lower || m.user_id == who)
-        .map(|m| m.user_id.clone())
+        .filter(|m| m.account.to_lowercase() == who_lower || m.account_id == who)
+        .map(|m| m.account_id.clone())
         .collect();
     let removed_federated: Vec<String> = access
         .federated_shares
@@ -161,7 +161,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     let next = col.key_epoch + 1;
     let mut new_key = [0u8; 32];
     kutup_crypto::primitives::random(&mut new_key);
-    let owner = &col.owner_user_id;
+    let owner = &col.owner_account_id;
     let context =
         |purpose, revision| DriveEnvelopeContextV1::new(purpose, next, revision, &col.id, owner);
     let statement = CollectionEpochStatementV1::create(
@@ -204,13 +204,13 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     let members = access
         .members
         .iter()
-        .filter(|m| !removed_member.contains(&m.user_id))
+        .filter(|m| !removed_member.contains(&m.account_id))
         .map(|m| {
             Ok(serde_json::json!({
-                "userId": m.user_id,
+                "accountId": m.account_id,
                 "namedShareEnvelope": seal(
                     &m.drive_public_key,
-                    &AccountRef::new(&sender.server, &m.user_id).context("member")?,
+                    &AccountRef::new(&sender.server, &m.account_id).context("member")?,
                     &m.account_incarnation_id,
                 )?,
             }))

@@ -20,7 +20,7 @@ import { asNameTaken, atTopLevel, availableHashes, findAvailableName, hashGenera
 
 interface TrashFolderRow {
   id: string
-  ownerUserId: string
+  ownerAccountId: string
   nameEnvelope: string
   ownerKeyEnvelope: string
   keyEpoch: number
@@ -42,7 +42,7 @@ interface TrashFileRow {
   keyEpoch: number
   keyGeneration: number
   metadataRevision: number
-  collectionOwnerUserId: string
+  collectionOwnerAccountId: string
   collectionOwnerKeyEnvelope: string
   collectionKeyEpoch: number
   collectionEpochStatement: string
@@ -65,7 +65,7 @@ export interface TrashEntry {
   /** Files: the folder it comes back to, as far as naming it there needs. */
   folder?: KeyringFolder
   /** Folders: what renaming it on the way back needs. */
-  renamable?: { key: Uint8Array; keyEpoch: number; nameRevision: number; ownerUserId: string; parentCollectionId: string | null }
+  renamable?: { key: Uint8Array; keyEpoch: number; nameRevision: number; ownerAccountId: string; parentCollectionId: string | null }
 }
 
 export const trashKey = ['trash'] as const
@@ -95,7 +95,7 @@ export function useTrash() {
                   key: opened.collectionKey,
                   keyEpoch: row.keyEpoch,
                   nameRevision: row.nameRevision,
-                  ownerUserId: row.ownerUserId,
+                  ownerAccountId: row.ownerAccountId,
                   parentCollectionId: row.parentCollectionId ?? null,
                 }
               : undefined,
@@ -108,7 +108,7 @@ export function useTrash() {
           const opened = await openOwnedCollectionKeyV1(
             {
               id: row.collectionId,
-              ownerUserId: row.collectionOwnerUserId,
+              ownerAccountId: row.collectionOwnerAccountId,
               ownerKeyEnvelope: row.collectionOwnerKeyEnvelope,
               keyEpoch: row.collectionKeyEpoch,
               epochStatement: row.collectionEpochStatement,
@@ -123,7 +123,7 @@ export function useTrash() {
                 source: 'owned',
                 key,
                 keyEpoch: row.collectionKeyEpoch,
-                ownerUserId: row.collectionOwnerUserId,
+                ownerAccountId: row.collectionOwnerAccountId,
                 ownerAuthorityPublicKey: me.authorityPublicKey,
                 epochStatementHash: row.collectionEpochStatementHash,
               }
@@ -135,7 +135,7 @@ export function useTrash() {
                       source: 'owned',
                       key,
                       keyEpoch: row.collectionKeyEpoch,
-                      ownerUserId: row.collectionOwnerUserId,
+                      ownerAccountId: row.collectionOwnerAccountId,
                       ownerAuthorityPublicKey: me.authorityPublicKey,
                       epochStatementHash: row.collectionEpochStatementHash,
                     },
@@ -251,7 +251,7 @@ async function renameBody(entry: TrashEntry, place: NamePlace, name: string, has
   const folder = entry.renamable
   if (!folder) throw new Error('folder is not open')
   const next = await renameOwnedCollectionV1(
-    { id: entry.id, ownerUserId: folder.ownerUserId, keyEpoch: folder.keyEpoch, nameRevision: folder.nameRevision },
+    { id: entry.id, ownerAccountId: folder.ownerAccountId, keyEpoch: folder.keyEpoch, nameRevision: folder.nameRevision },
     folder.key,
     name,
   )

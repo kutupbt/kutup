@@ -16,7 +16,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One root record, checked.
@@ -219,8 +219,8 @@ pub struct AccountRootsResponse {
     security(("BearerAuth" = [])),
     responses((status = 200, body = AccountRootsResponse))
 )]
-pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+pub async fn get(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let keys = account_keys(&state.pool, user_id).await?;
     Ok(Json(AccountRootsResponse {
         account_roots: keys.account_roots,

@@ -17,12 +17,12 @@ import { getClientType } from './client'
 import { readPersisted } from './persistedStore'
 import { getSession, type Session } from './store'
 
-function storageKey(userId: string): string {
-  return `kutup.account.manifestPins:${userId}`
+function storageKey(accountId: string): string {
+  return `kutup.account.manifestPins:${accountId}`
 }
 
 function profile(session: Session): string {
-  return `${getClientType()}:${session.userId}`
+  return `${getClientType()}:${session.accountId}`
 }
 
 /** This origin keeps the sign-in: its pins are kept too. */
@@ -30,7 +30,7 @@ function keeps(session: Session): boolean {
   return readPersisted()?.sessionId === session.sessionId
 }
 
-let store: { userId: string; pins: Promise<Map<string, AccountManifestPin>> } | null = null
+let store: { accountId: string; pins: Promise<Map<string, AccountManifestPin>> } | null = null
 let writes: Promise<unknown> = Promise.resolve()
 
 function signedIn(): Session {
@@ -42,7 +42,7 @@ function signedIn(): Session {
 /** The pins this origin keeps sealed for the account, or none. */
 async function readSealed(session: Session): Promise<AccountManifestPin[]> {
   try {
-    const sealed = localStorage.getItem(storageKey(session.userId))
+    const sealed = localStorage.getItem(storageKey(session.accountId))
     if (!sealed) return []
     return await openManifestPins(sealed, session.masterKeys, profile(session))
   } catch {
@@ -81,7 +81,7 @@ async function persist(session: Session, pins: Map<string, AccountManifestPin>, 
       if (forget) merged.delete(forget)
       for (const [account, pin] of merged) pins.set(account, pin)
       localStorage.setItem(
-        storageKey(session.userId),
+        storageKey(session.accountId),
         await sealManifestPins([...merged.values()], session.masterKeys, profile(session)),
       )
     } catch {
@@ -98,7 +98,7 @@ async function load(session: Session): Promise<Map<string, AccountManifestPin>> 
 }
 
 function pinsOf(session: Session): Promise<Map<string, AccountManifestPin>> {
-  if (!store || store.userId !== session.userId) store = { userId: session.userId, pins: load(session) }
+  if (!store || store.accountId !== session.accountId) store = { accountId: session.accountId, pins: load(session) }
   return store.pins
 }
 

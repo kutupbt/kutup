@@ -12,7 +12,7 @@ use serde_json::json;
 use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::ratelimit::{self, FirstFrom, Per, Section, Spec, Unit};
 use crate::AppState;
 
@@ -109,7 +109,7 @@ pub(crate) fn entry(spec: &Spec, stored: &HashMap<String, String>) -> RateLimitE
 )]
 pub async fn list(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<RateLimitsResponse>> {
     let stored = ratelimit::reload(&state.pool).await?;
     Ok(Json(RateLimitsResponse {
@@ -138,7 +138,7 @@ pub async fn list(
 )]
 pub async fn update(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(key): Path<String>,
     Json(request): Json<UpdateRateLimitRequest>,
 ) -> AppResult<Json<RateLimitEntry>> {
@@ -178,7 +178,7 @@ pub async fn update(
     let stored = ratelimit::reload(&state.pool).await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "settings.rate_limit",
         None,
         json!({

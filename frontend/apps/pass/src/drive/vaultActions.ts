@@ -73,7 +73,7 @@ export function moveTargets(folders: readonly Folder[], vault: VaultFile): Folde
         f.key &&
         f.canUpload &&
         (f.source === 'owned' || f.source === 'shared') &&
-        f.ownerUserId === vault.folder.ownerUserId,
+        f.ownerAccountId === vault.folder.ownerAccountId,
     )
     .sort((a, b) => Number(b.isRoot) - Number(a.isRoot) || (a.name ?? '').localeCompare(b.name ?? ''))
 }

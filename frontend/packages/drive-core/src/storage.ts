@@ -159,7 +159,7 @@ export function useOwnFiles(enabled = true) {
     const folder = readable[i]
     if (!folder) return
     for (const file of list.data ?? []) {
-      if (file.uploaderUserId !== session.userId || !file.name || seen.has(file.id)) continue
+      if (file.uploaderAccountId !== session.accountId || !file.name || seen.has(file.id)) continue
       seen.add(file.id)
       files.push({ folder, file })
     }

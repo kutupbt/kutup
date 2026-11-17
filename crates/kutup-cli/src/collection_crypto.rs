@@ -83,7 +83,7 @@ pub fn open_key(col: &Collection, roots: &AccountRoots, session: &Session) -> Re
             col.owner_server
                 .as_deref()
                 .ok_or_else(|| anyhow!("share owner server is missing"))?,
-            &col.owner_user_id,
+            &col.owner_account_id,
         )
         .context("share owner")?;
         let owner_incarnation = col
@@ -119,7 +119,7 @@ pub fn open_key(col: &Collection, roots: &AccountRoots, session: &Session) -> Re
             &roots.drive,
             DriveEnvelopeContextV1::owner_collection_key(
                 &col.id,
-                &col.owner_user_id,
+                &col.owner_account_id,
                 col.key_epoch,
                 roots.drive_generation,
             )?,
@@ -139,7 +139,7 @@ pub fn open_name(col: &Collection, collection_key: &[u8]) -> Result<String> {
             col.key_epoch,
             col.name_revision,
             &col.id,
-            &col.owner_user_id,
+            &col.owner_account_id,
         )?,
     )?;
     String::from_utf8(plaintext).context("collection name is not UTF-8")
@@ -162,7 +162,7 @@ pub fn rename_request(
             col.key_epoch,
             name_revision,
             &col.id,
-            &col.owner_user_id,
+            &col.owner_account_id,
         )?,
     )?;
     Ok(RenameCollectionRequest {
@@ -187,7 +187,7 @@ fn verify_epoch(col: &Collection, roots: &AccountRoots, collection_key: &[u8]) -
             .to_vec()
     };
     statement.verify_authority(&authority)?;
-    statement.verify_current_binding(&col.id, &col.owner_user_id, col.key_epoch)?;
+    statement.verify_current_binding(&col.id, &col.owner_account_id, col.key_epoch)?;
     statement.verify_collection_key(collection_key)?;
     if statement.statement_hash() != col.epoch_statement_hash {
         bail!("collection epoch statement hash mismatch");
@@ -226,7 +226,7 @@ mod tests {
             Collection {
                 name_hash: None,
                 id: created.id,
-                owner_user_id: owner_user_id.into(),
+                owner_account_id: owner_user_id.into(),
                 name_envelope: created.name_envelope,
                 owner_key_envelope: Some(created.owner_key_envelope),
                 named_share_envelope: None,
@@ -272,7 +272,7 @@ mod tests {
                 1,
                 2,
                 &collection.id,
-                &collection.owner_user_id,
+                &collection.owner_account_id,
             )
             .unwrap(),
         )

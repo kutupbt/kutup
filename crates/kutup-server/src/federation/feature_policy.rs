@@ -20,7 +20,7 @@ use uuid::Uuid;
 use super::identity::insert_system_audit;
 use super::{AuthenticatedFederationRequest, FederationRequestSpec, FederationStack};
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 use kutup_federation_proto::FederationFeature;
 use reqwest::Method;
@@ -397,7 +397,7 @@ async fn fetch_remote_envelope(
 
 pub(crate) async fn get_local_feature_policy(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    _auth: AuthAccount,
     Path(feature): Path<String>,
     Query(query): Query<PolicySequenceQuery>,
 ) -> AppResult<Response> {

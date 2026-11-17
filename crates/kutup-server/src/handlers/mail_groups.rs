@@ -19,7 +19,7 @@ use crate::account_data::KeyOwner;
 use crate::error::{AppError, AppResult};
 use crate::mail::group_keys::{self, NewGroupKey, ShareInput};
 use crate::mail::groups::{self, Sender};
-use crate::middleware::{AdminUser, AuthUser};
+use crate::middleware::{AdminAccount, AuthAccount};
 use crate::AppState;
 
 /// Most members a group may have.
@@ -68,8 +68,7 @@ pub struct MailGroup {
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MailGroupMember {
-    #[sqlx(rename = "account_id")]
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub username: String,
     /// The member's Kutup address.
     pub address: String,
@@ -270,10 +269,10 @@ pub struct MailGroupRecipients {
 )]
 pub async fn recipients(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<RecipientsQuery>,
 ) -> AppResult<Json<MailGroupRecipients>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address =
         kutup_crypto::mail_key::canonical_address(query.email.trim().to_lowercase().as_str())
             .map_err(|_| AppError::not_found("not found"))?;
@@ -315,9 +314,9 @@ pub async fn recipients(
 )]
 pub async fn my_groups(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<MailGroup>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let groups = sqlx::query_as(&format!(
         "SELECT {GROUP_COLUMNS} FROM mail_groups g
           WHERE EXISTS (SELECT 1 FROM mail_group_members m WHERE m.group_id = g.id AND m.account_id = $1)
@@ -344,10 +343,10 @@ pub async fn my_groups(
 )]
 pub async fn group_detail(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     if standing(&state, user_id, &group).await? == Standing::None {
@@ -451,11 +450,11 @@ async fn apply_update(
 )]
 pub async fn update_group(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(change): Json<UpdateMailGroup>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     let standing = standing(&state, user_id, &group).await?;
@@ -468,7 +467,7 @@ pub async fn update_group(
         ));
     }
     apply_update(&state, &group, &change).await?;
-    audit(&state.pool, &user.user_id, "mail_group.update", None, json!({ "groupId": group.id, "address": group.address, "change": {
+    audit(&state.pool, &user.account_id, "mail_group.update", None, json!({ "groupId": group.id, "address": group.address, "change": {
         "displayName": change.display_name, "description": change.description, "postPolicy": change.post_policy,
         "signature": change.signature.is_some(),
     } })).await;
@@ -478,7 +477,7 @@ pub async fn update_group(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MailGroupMemberInput {
-    pub user_id: String,
+    pub account_id: String,
     pub role: String,
     #[serde(default)]
     pub can_send_as: bool,
@@ -610,8 +609,8 @@ fn sorted_ids(shares: &[ShareInput]) -> AppResult<Vec<Uuid>> {
     let mut ids = shares
         .iter()
         .map(|share| {
-            Uuid::parse_str(&share.user_id)
-                .map_err(|_| AppError::bad_request("userId must be an account id"))
+            Uuid::parse_str(&share.account_id)
+                .map_err(|_| AppError::bad_request("accountId must be an account id"))
         })
         .collect::<AppResult<Vec<_>>>()?;
     ids.sort();
@@ -639,7 +638,7 @@ async fn check_signer_changes(
     let before: Vec<Uuid> = current
         .iter()
         .filter(|member| signs(&member.role) && member.active)
-        .map(|member| member.user_id)
+        .map(|member| member.account_id)
         .collect();
     let signing: Vec<Uuid> = after
         .iter()
@@ -717,13 +716,13 @@ async fn check_key_changes(
             .await?;
     let added: Vec<Uuid> = after
         .iter()
-        .filter(|id| !current.iter().any(|m| m.user_id == **id))
+        .filter(|id| !current.iter().any(|m| m.account_id == **id))
         .copied()
         .collect();
     let removed: Vec<Uuid> = current
         .iter()
-        .filter(|m| !after.contains(&m.user_id))
-        .map(|m| m.user_id)
+        .filter(|m| !after.contains(&m.account_id))
+        .map(|m| m.account_id)
         .collect();
     let staying: Vec<Uuid> = after
         .iter()
@@ -752,7 +751,7 @@ async fn check_key_changes(
             .collect();
         let mut covered: Vec<Uuid> = for_key
             .iter()
-            .filter_map(|s| Uuid::parse_str(&s.user_id).ok())
+            .filter_map(|s| Uuid::parse_str(&s.account_id).ok())
             .collect();
         covered.sort();
         if covered.windows(2).any(|pair| pair[0] == pair[1]) || covered.len() != for_key.len() {
@@ -782,7 +781,7 @@ async fn check_key_changes(
             let mut covered: Vec<Uuid> = key
                 .shares
                 .iter()
-                .filter_map(|s| Uuid::parse_str(&s.user_id).ok())
+                .filter_map(|s| Uuid::parse_str(&s.account_id).ok())
                 .collect();
             covered.sort();
             covered.dedup();
@@ -826,11 +825,11 @@ async fn check_key_changes(
 )]
 pub async fn set_members(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(input): Json<SetMailGroupMembers>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     let standing = standing(&state, user_id, &group).await?;
@@ -849,8 +848,8 @@ pub async fn set_members(
     }
     let mut wanted: Vec<(Uuid, String, bool)> = Vec::with_capacity(input.members.len());
     for member in &input.members {
-        let member_id = Uuid::parse_str(&member.user_id)
-            .map_err(|_| AppError::bad_request("userId must be an account id"))?;
+        let member_id = Uuid::parse_str(&member.account_id)
+            .map_err(|_| AppError::bad_request("accountId must be an account id"))?;
         if !ROLES.contains(&member.role.as_str()) {
             return Err(AppError::bad_request(
                 "role must be owner, manager or member",
@@ -889,7 +888,7 @@ pub async fn set_members(
         let owners_before: Vec<Uuid> = current
             .iter()
             .filter(|m| m.role == "owner")
-            .map(|m| m.user_id)
+            .map(|m| m.account_id)
             .collect();
         let owners_after: Vec<Uuid> = wanted
             .iter()
@@ -995,17 +994,17 @@ pub async fn set_members(
     // id; the address is a snapshot (docs/plans/account-ids.md).
     let removed: Vec<Uuid> = current
         .iter()
-        .filter(|m| !ids.contains(&m.user_id))
-        .map(|m| m.user_id)
+        .filter(|m| !ids.contains(&m.account_id))
+        .map(|m| m.account_id)
         .collect();
     let added: Vec<Uuid> = ids
         .iter()
-        .filter(|id| !current.iter().any(|m| m.user_id == **id))
+        .filter(|id| !current.iter().any(|m| m.account_id == **id))
         .copied()
         .collect();
     audit(
         &state.pool,
-        &user.user_id,
+        &user.account_id,
         "mail_group.members",
         None,
         json!({
@@ -1028,9 +1027,9 @@ pub async fn set_members(
 )]
 pub async fn admin_list(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
 ) -> AppResult<Json<Vec<MailGroup>>> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let groups = sqlx::query_as(&format!(
         "SELECT {GROUP_COLUMNS} FROM mail_groups g
           ORDER BY (g.system_role IS NULL), g.address"
@@ -1112,10 +1111,10 @@ pub(crate) async fn group_name_free(state: &AppState, name: &str) -> AppResult<S
 )]
 pub async fn admin_create(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(input): Json<CreateMailGroup>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let requested_id = Uuid::parse_str(&input.id)
         .ok()
         .filter(|id| id.hyphenated().to_string() == input.id)
@@ -1166,7 +1165,7 @@ pub async fn admin_create(
             let mut covered: Vec<Uuid> = key
                 .shares
                 .iter()
-                .filter_map(|s| Uuid::parse_str(&s.user_id).ok())
+                .filter_map(|s| Uuid::parse_str(&s.account_id).ok())
                 .collect();
             covered.sort();
             covered.dedup();
@@ -1259,7 +1258,7 @@ pub async fn admin_create(
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "mail_group.create",
         None,
         json!({
@@ -1292,11 +1291,11 @@ pub struct AdminUpdateMailGroup {
 )]
 pub async fn admin_update(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(change): Json<AdminUpdateMailGroup>,
 ) -> AppResult<Json<MailGroupDetail>> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, admin_id, id).await?;
     if let Some(quota) = change.storage_quota_bytes {
@@ -1321,7 +1320,7 @@ pub async fn admin_update(
         },
     )
     .await?;
-    audit(&state.pool, &admin.user_id, "mail_group.update", None, json!({
+    audit(&state.pool, &admin.account_id, "mail_group.update", None, json!({
         "groupId": group.id, "address": group.address, "quota": change.storage_quota_bytes, "postPolicy": change.post_policy,
     }))
     .await;
@@ -1344,10 +1343,10 @@ pub async fn admin_update(
 )]
 pub async fn admin_delete(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<axum::http::StatusCode> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, admin_id, id).await?;
     if group.system_role.is_some() {
@@ -1377,7 +1376,7 @@ pub async fn admin_delete(
     }
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "mail_group.delete",
         None,
         json!({ "groupId": group.id, "address": group.address }),
@@ -1461,11 +1460,11 @@ pub struct MailGroupKeys {
 )]
 pub async fn group_keys(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailGroupKeys>> {
     use base64::Engine as _;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     if group.my_role.is_none() || group.kind != "shared" {
@@ -1544,11 +1543,11 @@ pub struct RotateGroupKey {
 )]
 pub async fn rotate_group_key(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(input): Json<RotateGroupKey>,
 ) -> AppResult<Json<String>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let group = group_row(&state, user_id, id).await?;
     let standing = standing(&state, user_id, &group).await?;
@@ -1571,13 +1570,13 @@ pub async fn rotate_group_key(
     let members: Vec<Uuid> = current
         .iter()
         .filter(|m| m.active)
-        .map(|m| m.user_id)
+        .map(|m| m.account_id)
         .collect();
     let mut covered: Vec<Uuid> = input
         .key
         .shares
         .iter()
-        .filter_map(|s| Uuid::parse_str(&s.user_id).ok())
+        .filter_map(|s| Uuid::parse_str(&s.account_id).ok())
         .collect();
     covered.sort();
     covered.dedup();
@@ -1596,7 +1595,7 @@ pub async fn rotate_group_key(
             let mut holders: Vec<Uuid> = current
                 .iter()
                 .filter(|member| signs(&member.role) && member.active)
-                .map(|member| member.user_id)
+                .map(|member| member.account_id)
                 .collect();
             holders.sort();
             if sorted_ids(&signer.shares)? != holders {
@@ -1622,7 +1621,7 @@ pub async fn rotate_group_key(
     tx.commit().await?;
     audit(
         &state.pool,
-        &user.user_id,
+        &user.account_id,
         "mail_group.key",
         None,
         json!({ "groupId": group.id, "address": group.address, "fingerprint": fingerprint }),
@@ -1640,8 +1639,7 @@ pub struct ResolveQuery {
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAccountRef {
-    #[sqlx(rename = "account_id")]
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub username: String,
     pub address: String,
 }
@@ -1662,7 +1660,7 @@ pub struct MailAccountRef {
 )]
 pub async fn resolve_account(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Query(query): Query<ResolveQuery>,
 ) -> AppResult<Json<MailAccountRef>> {
     let address = crate::mail::typed_address(&query.address)
@@ -1682,7 +1680,7 @@ pub async fn resolve_account(
         return Err(AppError::not_found("not found"));
     };
     let account = MailAccountRef {
-        user_id,
+        account_id: user_id,
         username,
         address,
     };
@@ -1724,10 +1722,10 @@ pub struct MailGroupEntry {
 )]
 pub async fn directory(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<DirectoryQuery>,
 ) -> AppResult<Json<Vec<MailGroupEntry>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let q: String = query.q.trim().to_lowercase().chars().take(100).collect();
     if q.is_empty() {
         return Ok(Json(Vec::new()));

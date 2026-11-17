@@ -90,7 +90,7 @@ function toAlbum(folder: Folder, itemCount: number): Album | null {
 export function useAlbums() {
   const identity = useDriveIdentity()
   return useQuery({
-    queryKey: [...albumsKey, identity.data?.userId],
+    queryKey: [...albumsKey, identity.data?.accountId],
     enabled: identity.isSuccess,
     queryFn: async (): Promise<Album[]> => {
       const me = identity.data!
@@ -127,7 +127,7 @@ function folderFor(index: FolderIndex | undefined, row: FileRow, album: Album): 
     name: null,
     key: null,
     keyEpoch: row.keyEpoch,
-    ownerUserId: '',
+    ownerAccountId: '',
     ownerAuthorityPublicKey: '',
     epochStatementHash: '',
     nameRevision: 1,
@@ -293,7 +293,7 @@ export async function rotateAlbum(
 
 /** A new album, empty. */
 export async function createAlbum(me: DriveIdentity, name: string): Promise<Album> {
-  const created = await createOwnedCollectionV1(me, me.userId, name.trim(), null)
+  const created = await createOwnedCollectionV1(me, me.accountId, name.trim(), null)
   await api.post('/albums', created.payload)
   const now = new Date().toISOString()
   return toAlbum(
@@ -304,7 +304,7 @@ export async function createAlbum(me: DriveIdentity, name: string): Promise<Albu
       name: name.trim(),
       key: created.collectionKey,
       keyEpoch: 1,
-      ownerUserId: me.userId,
+      ownerAccountId: me.accountId,
       ownerAuthorityPublicKey: me.authorityPublicKey,
       epochStatementHash: created.epochStatementHash,
       nameRevision: 1,
@@ -360,7 +360,7 @@ export function useRemoveFromAlbum() {
 export function useRenameAlbum() {
   return useAlbumMutation(async ({ album, name }: { album: Album; name: string }) => {
     const next = await renameOwnedCollectionV1(
-      { id: album.id, ownerUserId: album.folder.ownerUserId, keyEpoch: album.folder.keyEpoch, nameRevision: album.folder.nameRevision },
+      { id: album.id, ownerAccountId: album.folder.ownerAccountId, keyEpoch: album.folder.keyEpoch, nameRevision: album.folder.nameRevision },
       album.key,
       name.trim(),
     )

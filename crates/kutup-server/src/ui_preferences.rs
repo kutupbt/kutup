@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const THEMES: [&str; 3] = ["light", "dark", "system"];
@@ -51,9 +51,9 @@ impl UiPreferences {
 )]
 pub async fn get_ui_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<UiPreferences>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let row: Option<(Option<String>, Option<String>)> =
         sqlx::query_as("SELECT theme, language FROM account_ui_preferences WHERE account_id = $1")
             .bind(user_id)
@@ -78,11 +78,11 @@ pub async fn get_ui_preferences(
 )]
 pub async fn put_ui_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<UiPreferences>,
 ) -> AppResult<Json<UiPreferences>> {
     request.validate()?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     sqlx::query(
         "INSERT INTO account_ui_preferences (account_id, theme, language, updated_at)
          VALUES ($1, $2, $3, now())

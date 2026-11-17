@@ -1,5 +1,5 @@
 //! Admin handlers — user CRUD, aggregate stats, the registration toggle, and the
-//! audit-log feed. Every route is behind the `AdminUser` extractor (authenticated +
+//! audit-log feed. Every route is behind the `AdminAccount` extractor (authenticated +
 //! `isAdmin`), so the handlers trust the caller.
 //!
 //! Every mutating handler writes an `admin_audit_log` row (who did what to whom,
@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::federation::{FederationDirection, FederationPolicyFeature};
 use crate::jobs;
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::AppState;
 
 /// Best-effort audit-log write, chained (`crate::audit_log`). The payload
@@ -50,7 +50,7 @@ pub(crate) async fn audit(
 /// (repeats within minutes folded; docs/plans/server-personal-data.md, A8).
 pub(crate) async fn viewed(
     state: &AppState,
-    admin: &AdminUser,
+    admin: &AdminAccount,
     target: Uuid,
     view: &str,
 ) -> AppResult<()> {
@@ -63,7 +63,7 @@ pub(crate) async fn viewed(
     }
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "admin.view",
         Some(target),
         serde_json::json!({ "view": view }),
@@ -99,9 +99,9 @@ async fn is_break_glass(state: &AppState, id: Uuid) -> AppResult<bool> {
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
-#[schema(as = AdminUserRow)]
+#[schema(as = AdminAccountRow)]
 #[serde(rename_all = "camelCase")]
-struct UserRow {
+struct AccountRow {
     id: Uuid,
     username: String,
     storage_quota_bytes: i64,
@@ -163,10 +163,13 @@ struct UserRow {
     path = "/api/admin/users",
     tag = "admin",
     security(("BearerAuth" = [])),
-    responses((status = 200, description = "All user accounts", body = Vec<UserRow>))
+    responses((status = 200, description = "All user accounts", body = Vec<AccountRow>))
 )]
-pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
-    let users: Vec<UserRow> = sqlx::query_as(
+pub async fn list_users(
+    State(state): State<AppState>,
+    _admin: AdminAccount,
+) -> AppResult<Response> {
+    let users: Vec<AccountRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
                   is_admin, is_active, state, suspended_reason, closes_at,
                   legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
@@ -209,14 +212,15 @@ impl TempRegistration {
 async fn take_reset_grant(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     token: &str,
-    admin: &AdminUser,
+    admin: &AdminAccount,
     target: Uuid,
 ) -> AppResult<()> {
-    let admin_id = Uuid::parse_str(&admin.user_id).map_err(|_| AppError::forbidden("forbidden"))?;
+    let admin_id =
+        Uuid::parse_str(&admin.account_id).map_err(|_| AppError::forbidden("forbidden"))?;
     match crate::grants::take(&mut **tx, token, &[crate::grants::Purpose::AdminReset]).await? {
         Some((_, grant))
-            if grant.user_id == admin_id
-                && grant.target_user_id == Some(target)
+            if grant.account_id == admin_id
+                && grant.target_account_id == Some(target)
                 && grant.session_id == Some(admin.session_id) =>
         {
             Ok(())
@@ -227,7 +231,7 @@ async fn take_reset_grant(
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct CreateUserRequest {
+pub struct CreateAccountRequest {
     username: String,
     /// The temporary password, registered by the administrator's client.
     #[serde(flatten)]
@@ -244,13 +248,13 @@ pub struct CreateUserRequest {
     path = "/api/admin/users",
     tag = "admin",
     security(("BearerAuth" = [])),
-    request_body = crate::models::CreateAdminUserRequest,
+    request_body = crate::models::CreateAdminAccountRequest,
     responses((status = 201, description = "First-login account created"))
 )]
 pub async fn create_user(
     State(state): State<AppState>,
-    admin: AdminUser,
-    Json(mut req): Json<CreateUserRequest>,
+    admin: AdminAccount,
+    Json(mut req): Json<CreateAccountRequest>,
 ) -> AppResult<Response> {
     let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     if req.username.is_empty() {
@@ -322,7 +326,7 @@ pub async fn create_user(
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "user.create",
         Some(new_id),
         json!({
@@ -340,7 +344,7 @@ pub async fn create_user(
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct UpdateUserRequest {
+pub struct UpdateAccountRequest {
     storage_quota_bytes: Option<i64>,
     is_active: Option<bool>,
     suspended_reason: Option<String>,
@@ -356,14 +360,14 @@ pub struct UpdateUserRequest {
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
-    request_body = crate::models::UpdateAdminUserRequest,
+    request_body = crate::models::UpdateAdminAccountRequest,
     responses((status = 200, description = "User updated"))
 )]
 pub async fn update_user(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
-    Json(req): Json<UpdateUserRequest>,
+    Json(req): Json<UpdateAccountRequest>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
@@ -444,7 +448,7 @@ pub async fn update_user(
                     target,
                     crate::security_events::Kind::AccountKept,
                     None,
-                    Some(crate::handlers::trusted_uuid(&admin.user_id)?),
+                    Some(crate::handlers::trusted_uuid(&admin.account_id)?),
                 )
                 .await?;
             }
@@ -474,7 +478,7 @@ pub async fn update_user(
             crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
             // Their public links are down with them (link_reports::ensure_link_up):
             // reports on those links are answered.
-            if let Ok(admin_uuid) = Uuid::parse_str(&admin.user_id) {
+            if let Ok(admin_uuid) = Uuid::parse_str(&admin.account_id) {
                 crate::handlers::link_reports::resolve_reports_of_owner(
                     &state.pool,
                     target,
@@ -501,7 +505,7 @@ pub async fn update_user(
         }
         crate::audit_log::append_in(
             &mut tx,
-            crate::handlers::trusted_uuid(&admin.user_id)?,
+            crate::handlers::trusted_uuid(&admin.account_id)?,
             "user.federation",
             Some(target),
             &json!({ "username": target_username, "federation": federation }),
@@ -526,7 +530,7 @@ pub async fn update_user(
             .await?;
         crate::audit_log::append_in(
             &mut tx,
-            crate::handlers::trusted_uuid(&admin.user_id)?,
+            crate::handlers::trusted_uuid(&admin.account_id)?,
             "user.publicSharing",
             Some(target),
             &json!({ "username": target_username, "publicSharing": sharing }),
@@ -565,7 +569,7 @@ pub async fn update_user(
     }
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "user.update",
         Some(target),
         json!({"username": target_username, "changes": changes}),
@@ -585,7 +589,7 @@ pub async fn update_user(
 )]
 pub async fn delete_user(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -613,7 +617,7 @@ pub async fn delete_user(
     .await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "user.delete",
         Some(target),
         json!({
@@ -637,7 +641,7 @@ pub async fn delete_user(
 )]
 pub async fn close_user(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -680,7 +684,7 @@ pub async fn close_user(
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "user.close",
         Some(target),
         json!({ "username": username, "closesAt": closes_at.unix_timestamp() }),
@@ -711,7 +715,7 @@ pub struct LegalHoldRequest {
 )]
 pub async fn set_legal_hold(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(req): Json<LegalHoldRequest>,
 ) -> AppResult<Response> {
@@ -722,7 +726,7 @@ pub async fn set_legal_hold(
             "a hold needs a reference of 1 to 200 characters",
         ));
     }
-    let admin_id = crate::handlers::trusted_uuid(&admin.user_id)?;
+    let admin_id = crate::handlers::trusted_uuid(&admin.account_id)?;
     let set = sqlx::query(
         "UPDATE accounts SET legal_hold_reference = $2, legal_hold_at = now(), legal_hold_by_account_id = $3
           WHERE id = $1 AND deleting_at IS NULL",
@@ -747,7 +751,7 @@ pub async fn set_legal_hold(
     }
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "user.legalHold.set",
         Some(target),
         json!({ "reference": reference }),
@@ -768,7 +772,7 @@ pub async fn set_legal_hold(
 )]
 pub async fn clear_legal_hold(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -787,7 +791,7 @@ pub async fn clear_legal_hold(
     if let Some(reference) = previous {
         audit(
             &state.pool,
-            &admin.user_id,
+            &admin.account_id,
             "user.legalHold.clear",
             Some(target),
             json!({ "reference": reference }),
@@ -975,7 +979,7 @@ pub(crate) async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppR
 )]
 pub async fn force_disable_2fa(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -995,13 +999,13 @@ pub async fn force_disable_2fa(
         target,
         crate::security_events::Kind::TwoFactorOff,
         None,
-        Uuid::parse_str(&admin.user_id).ok(),
+        Uuid::parse_str(&admin.account_id).ok(),
     )
     .await?;
     tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "user.2fa_disable",
         Some(target),
         json!({"username": username}),
@@ -1014,8 +1018,8 @@ pub async fn force_disable_2fa(
 #[schema(as = AdminStatsResponse)]
 #[serde(rename_all = "camelCase")]
 struct StatsResponse {
-    total_users: i64,
-    active_users: i64,
+    total_accounts: i64,
+    active_accounts: i64,
     total_files: i64,
     /// DB sum — logical per-account usage.
     #[serde(rename = "totalStorageUsedBytes")]
@@ -1036,7 +1040,7 @@ struct StatsResponse {
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Aggregate instance stats", body = StatsResponse))
 )]
-pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
+pub async fn get_stats(State(state): State<AppState>, _admin: AdminAccount) -> AppResult<Response> {
     let scalar = |sql: &'static str| {
         let pool = state.pool.clone();
         async move {
@@ -1062,8 +1066,8 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
     }
 
     let stats = StatsResponse {
-        total_users: scalar("SELECT COUNT(*) FROM accounts").await,
-        active_users: scalar("SELECT COUNT(*) FROM accounts WHERE is_active = true").await,
+        total_accounts: scalar("SELECT COUNT(*) FROM accounts").await,
+        active_accounts: scalar("SELECT COUNT(*) FROM accounts WHERE is_active = true").await,
         total_files: scalar("SELECT COUNT(*) FROM drive_files").await,
         // ::bigint — SUM(bigint) yields NUMERIC, which sqlx cannot decode as i64;
         // without the cast this silently fell back to 0 via unwrap_or.
@@ -1086,7 +1090,10 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Site settings", body = crate::models::AdminSettingsResponse))
 )]
-pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
+pub async fn get_settings(
+    State(state): State<AppState>,
+    _admin: AdminAccount,
+) -> AppResult<Response> {
     let registration_mode = crate::registration::mode(&state).await?;
     let public_sharing = crate::public_sharing::site(&state.pool).await?;
     let federation_default = crate::federation_switch::site_default(&state.pool).await?;
@@ -1185,7 +1192,7 @@ fn present<'de, D: serde::Deserializer<'de>>(
 )]
 pub async fn update_settings(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
     if req.registration_mode.is_none()
@@ -1395,7 +1402,7 @@ pub async fn update_settings(
     transaction.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "settings.update",
         None,
         json!({
@@ -1713,7 +1720,7 @@ pub struct RepinFederationPeerRequest {
 )]
 pub async fn get_federation_control_plane(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Response> {
     type FeatureRow = (String, String, String);
     let global_enabled: bool =
@@ -1972,7 +1979,7 @@ pub async fn get_federation_control_plane(
 )]
 pub async fn update_federation_policy(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(req): Json<UpdateFederationPolicyRequest>,
 ) -> AppResult<Response> {
     let feature = canonical_federation_feature(&req.feature)?;
@@ -1999,7 +2006,7 @@ pub async fn update_federation_policy(
     wake_federation_outbox(&state.pool, None).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "federation.policy.update",
         None,
         json!({"globalEnabled": req.global_enabled, "feature": feature,
@@ -2020,7 +2027,7 @@ pub async fn update_federation_policy(
 )]
 pub async fn upsert_federation_domain_rule(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path((feature, domain)): Path<(String, String)>,
     Json(req): Json<UpsertFederationDomainRuleRequest>,
 ) -> AppResult<Response> {
@@ -2054,7 +2061,7 @@ pub async fn upsert_federation_domain_rule(
     wake_federation_outbox(&state.pool, Some(&domain)).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "federation.rule.upsert",
         None,
         json!({"domain": domain, "feature": feature, "inbound": req.inbound,
@@ -2074,7 +2081,7 @@ pub async fn upsert_federation_domain_rule(
 )]
 pub async fn delete_federation_domain_rule(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path((feature, domain)): Path<(String, String)>,
 ) -> AppResult<Response> {
     let feature = canonical_federation_feature(&feature)?;
@@ -2091,7 +2098,7 @@ pub async fn delete_federation_domain_rule(
     wake_federation_outbox(&state.pool, Some(&domain)).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "federation.rule.delete",
         None,
         json!({"domain": domain, "feature": feature}),
@@ -2113,7 +2120,7 @@ pub async fn delete_federation_domain_rule(
 )]
 pub async fn get_federation_peer_evidence(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Path(domain): Path<String>,
 ) -> AppResult<Response> {
     let domain = canonical_federation_domain(&domain)?;
@@ -2188,7 +2195,7 @@ pub async fn get_federation_peer_evidence(
 )]
 pub async fn verify_federation_peer(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(domain): Path<String>,
     Json(req): Json<VerifyFederationPeerRequest>,
 ) -> AppResult<Response> {
@@ -2197,7 +2204,7 @@ pub async fn verify_federation_peer(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::bad_request("federation is not configured"))?;
-    let admin_id = Uuid::parse_str(&admin.user_id)
+    let admin_id = Uuid::parse_str(&admin.account_id)
         .map_err(|_| AppError::internal("invalid administrator identity"))?;
     federation
         .trust()
@@ -2223,7 +2230,7 @@ pub async fn verify_federation_peer(
 )]
 pub async fn retry_federation_peer(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(domain): Path<String>,
 ) -> AppResult<Response> {
     let domain = canonical_federation_domain(&domain)?;
@@ -2231,7 +2238,7 @@ pub async fn retry_federation_peer(
     wake_federation_outbox(&state.pool, Some(&domain)).await?;
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "federation.peer.retry",
         None,
         json!({"domain": domain, "refreshed": result.is_ok(), "error": result.err()}),
@@ -2250,7 +2257,7 @@ pub async fn retry_federation_peer(
 )]
 pub async fn bulk_retry_federation_peers(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(req): Json<BulkRetryFederationPeersRequest>,
 ) -> AppResult<Response> {
     if req.domains.is_empty() {
@@ -2289,7 +2296,7 @@ pub async fn bulk_retry_federation_peers(
     results.sort_by(|left, right| left.domain.cmp(&right.domain));
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "federation.peer.retry-bulk",
         None,
         json!({"results": results.iter().map(|result| json!({
@@ -2354,7 +2361,7 @@ async fn retry_peer_resolution(state: &AppState, domain: &str) -> Result<(), Str
 )]
 pub async fn repin_federation_peer(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(domain): Path<String>,
     Json(req): Json<RepinFederationPeerRequest>,
 ) -> AppResult<Response> {
@@ -2363,7 +2370,7 @@ pub async fn repin_federation_peer(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::bad_request("federation is not configured"))?;
-    let admin_id = Uuid::parse_str(&admin.user_id)
+    let admin_id = Uuid::parse_str(&admin.account_id)
         .map_err(|_| AppError::internal("invalid administrator identity"))?;
     federation
         .trust()
@@ -2445,7 +2452,7 @@ pub struct RotateTempPasswordRequest {
 )]
 pub async fn rotate_temp_password(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(req): Json<RotateTempPasswordRequest>,
 ) -> AppResult<Response> {
@@ -2497,14 +2504,14 @@ pub async fn rotate_temp_password(
         target,
         crate::security_events::Kind::AdminReset,
         None,
-        Uuid::parse_str(&admin.user_id).ok(),
+        Uuid::parse_str(&admin.account_id).ok(),
     )
     .await?;
     tx.commit().await?;
 
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "user.rotate_temp_password",
         Some(target),
         json!({"username": username}),
@@ -2539,12 +2546,13 @@ pub struct ResetGrantRequest {
 )]
 pub async fn reset_grant(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(req): Json<ResetGrantRequest>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let admin_id = Uuid::parse_str(&admin.user_id).map_err(|_| AppError::forbidden("forbidden"))?;
+    let admin_id =
+        Uuid::parse_str(&admin.account_id).map_err(|_| AppError::forbidden("forbidden"))?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
         .bind(target)
         .fetch_one(&state.pool)
@@ -2556,8 +2564,8 @@ pub async fn reset_grant(
     match crate::grants::take(&mut *tx, &req.grant, &[crate::grants::Purpose::AdminReset]).await? {
         // The admin's own, untargeted, from this session.
         Some((_, grant))
-            if grant.user_id == admin_id
-                && grant.target_user_id.is_none()
+            if grant.account_id == admin_id
+                && grant.target_account_id.is_none()
                 && grant.session_id == Some(admin.session_id) => {}
         _ => return Err(crate::grants::invalid()),
     }
@@ -2577,7 +2585,7 @@ pub async fn reset_grant(
 // No Debug: it carries a one-time grant (or tokens).
 #[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
-pub struct WipeUserRequest {
+pub struct ResetKeysRequest {
     /// An admin-reset grant for this account (`reset-grant`).
     grant: String,
     /// The temporary password it starts again with, registered by the
@@ -2598,14 +2606,14 @@ pub struct WipeUserRequest {
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
-    request_body = WipeUserRequest,
+    request_body = ResetKeysRequest,
     responses((status = 200, description = "Account wiped + reset to first-login"))
 )]
 pub async fn wipe_user(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
-    Json(req): Json<WipeUserRequest>,
+    Json(req): Json<ResetKeysRequest>,
 ) -> AppResult<Response> {
     let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -2742,7 +2750,7 @@ pub async fn wipe_user(
         target,
         crate::security_events::Kind::AccountReset,
         None,
-        Uuid::parse_str(&admin.user_id).ok(),
+        Uuid::parse_str(&admin.account_id).ok(),
     )
     .await?;
     tx.commit().await?;
@@ -2763,7 +2771,7 @@ pub async fn wipe_user(
 
     audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         "user.wipe",
         Some(target),
         json!({"username": username.unwrap_or_default()}),
@@ -2790,10 +2798,10 @@ pub struct ActivityQuery {
 struct ActivityEntry {
     id: i64,
     action: String,
-    admin_user_id: Uuid,
+    admin_account_id: Uuid,
     /// The acting admin's live username — `null` once that account is deleted.
     admin_username: Option<String>,
-    target_user_id: Option<Uuid>,
+    target_account_id: Option<Uuid>,
     /// The target's live username — `null` once deleted; the payload keeps
     /// the at-action-time snapshot.
     target_username: Option<String>,
@@ -2832,7 +2840,7 @@ pub struct ActivityIntegrity {
 )]
 pub async fn activity_verify(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<ActivityIntegrity>> {
     Ok(Json(ActivityIntegrity {
         chain: crate::audit_log::verify(&state.pool).await?,
@@ -2856,7 +2864,7 @@ pub async fn activity_verify(
 )]
 pub async fn activity(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Query(q): Query<ActivityQuery>,
 ) -> AppResult<Response> {
     let limit = q.limit.unwrap_or(50).clamp(1, 100);
@@ -2889,14 +2897,14 @@ pub async fn activity(
 )]
 pub async fn activity_export(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
     Query(q): Query<ActivityQuery>,
 ) -> AppResult<Response> {
     validate_activity_query(&q)?;
     let limit = q.limit.unwrap_or(1000).clamp(1, 5000);
     let entries = load_activity_entries(&state.pool, &q, limit).await?;
     let mut csv = String::from(
-        "id,occurred_at,action,admin_user_id,admin_username,target_user_id,target_username,payload\n",
+        "id,occurred_at,action,admin_account_id,admin_username,target_account_id,target_username,payload\n",
     );
     for entry in entries {
         let values = [
@@ -2906,10 +2914,10 @@ pub async fn activity_export(
                 .format(&time::format_description::well_known::Rfc3339)
                 .map_err(|_| AppError::internal("could not format audit timestamp"))?,
             entry.action,
-            entry.admin_user_id.to_string(),
+            entry.admin_account_id.to_string(),
             entry.admin_username.unwrap_or_default(),
             entry
-                .target_user_id
+                .target_account_id
                 .map(|id| id.to_string())
                 .unwrap_or_default(),
             entry.target_username.unwrap_or_default(),
@@ -3000,9 +3008,9 @@ async fn load_activity_entries(
                 ActivityEntry {
                     id,
                     action,
-                    admin_user_id: admin_id,
+                    admin_account_id: admin_id,
                     admin_username: a_username,
-                    target_user_id: target_id,
+                    target_account_id: target_id,
                     target_username: t_username,
                     payload,
                     occurred_at: at,

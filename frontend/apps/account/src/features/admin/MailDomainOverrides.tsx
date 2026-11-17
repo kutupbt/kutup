@@ -37,7 +37,7 @@ function parsed(value: string): number | null {
  * organization's (docs/plans/organizations.md §7), addresses its own; each
  * left empty keeps the site's value.
  */
-export function MailDomainOverridesCard({ userId }: { userId: string }) {
+export function MailDomainOverridesCard({ accountId: userId }: { accountId: string }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const key = [...adminKey, 'mail', 'domains', 'overrides', userId] as const

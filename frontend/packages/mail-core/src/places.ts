@@ -32,7 +32,7 @@ export const MAIL_NAME_SCOPE = 'mail-name'
  */
 const HEAD_SCOPE = 'mailNames'
 
-type HeadSession = { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; userId: string }
+type HeadSession = { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; accountId: string }
 
 /**
  * The head's index of the mail names, or null when it cannot vouch (this
@@ -76,7 +76,7 @@ function unnamedFolder(): string {
 
 /** Opens a sealed name and checks it is not older than one seen; `null` when it does not open. */
 export async function openGuardedName(
-  session: { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; userId: string },
+  session: { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; accountId: string },
   kind: MailNameKind,
   id: string,
   sealed: string,
@@ -92,7 +92,7 @@ export async function openGuardedName(
 
 /** Seals `name` for `kind`/`id` above every revision seen and above `base` (the name a rename started from). */
 export async function sealGuardedName(
-  session: { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; userId: string },
+  session: { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; accountId: string },
   kind: MailNameKind,
   id: string,
   name: string,
@@ -178,7 +178,7 @@ export function usePlaces() {
   })
 }
 
-type NameSession = { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; userId: string }
+type NameSession = { masterKeys: MasterKeys; roots: AccountRoots; envelopeBinding: string; accountId: string }
 
 /** The account's folders and labels, read now, with their names opened and held to the account head. */
 export async function loadPlaces(session: NameSession): Promise<MailPlaces> {

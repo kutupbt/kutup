@@ -8,10 +8,10 @@ const CHAT_DEVICE_REPLACED = 'kutup.chat.replacedDevice'
  * named by its permanent account id. Each server is its own origin, and a
  * server reset clears the origin (instance.ts), so the id alone scopes it.
  */
-export async function chatDeviceDatabaseName(userId: string): Promise<string> {
+export async function chatDeviceDatabaseName(accountId: string): Promise<string> {
   // Opened by whoever asks for the name: the instance check comes first.
   await storageReady()
-  return `kutup.chat.store:${userId}`
+  return `kutup.chat.store:${accountId}`
 }
 
 /**
@@ -19,8 +19,8 @@ export async function chatDeviceDatabaseName(userId: string): Promise<string> {
  * database and private media cache deliberately remain intact so a subsequent
  * device registration can restore acknowledged display history.
  */
-export async function resetLocalChatDevice(userId: string): Promise<void> {
-  const name = await chatDeviceDatabaseName(userId)
+export async function resetLocalChatDevice(accountId: string): Promise<void> {
+  const name = await chatDeviceDatabaseName(accountId)
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(name)
     request.onsuccess = () => resolve()
@@ -33,37 +33,37 @@ export async function resetLocalChatDevice(userId: string): Promise<void> {
   })
 }
 
-export function requestLocalChatDeviceReset(userId: string): void {
-  sessionStorage.setItem(CHAT_DEVICE_RESET_REQUEST, userId)
+export function requestLocalChatDeviceReset(accountId: string): void {
+  sessionStorage.setItem(CHAT_DEVICE_RESET_REQUEST, accountId)
 }
 
 /** Complete a user-confirmed reset after navigation has closed old IDB handles. */
-export async function completeRequestedLocalChatDeviceReset(userId: string): Promise<boolean> {
-  if (sessionStorage.getItem(CHAT_DEVICE_RESET_REQUEST) !== userId) return false
-  await resetLocalChatDevice(userId)
+export async function completeRequestedLocalChatDeviceReset(accountId: string): Promise<boolean> {
+  if (sessionStorage.getItem(CHAT_DEVICE_RESET_REQUEST) !== accountId) return false
+  await resetLocalChatDevice(accountId)
   // The device this browser was is gone for good: once the new one is
   // registered it is revoked (takeReplacedLocalChatDevice), or it would stay
   // in the account's signed device list and in its groups.
-  const previous = readStored(localStorage, `${CHAT_DEVICE_ID}:${userId}`)
-  if (previous) writeStored(localStorage, `${CHAT_DEVICE_REPLACED}:${userId}`, previous)
+  const previous = readStored(localStorage, `${CHAT_DEVICE_ID}:${accountId}`)
+  if (previous) writeStored(localStorage, `${CHAT_DEVICE_REPLACED}:${accountId}`, previous)
   sessionStorage.removeItem(CHAT_DEVICE_RESET_REQUEST)
   return true
 }
 
 /** Record which Chat device this browser is (its id is not a secret). */
-export function rememberLocalChatDevice(userId: string, deviceId: number): void {
-  writeStored(localStorage, `${CHAT_DEVICE_ID}:${userId}`, String(deviceId))
+export function rememberLocalChatDevice(accountId: string, deviceId: number): void {
+  writeStored(localStorage, `${CHAT_DEVICE_ID}:${accountId}`, String(deviceId))
 }
 
 /** The device a reset of this browser replaced and has not yet revoked. */
-export function replacedLocalChatDevice(userId: string): number | null {
-  const value = Number(readStored(localStorage, `${CHAT_DEVICE_REPLACED}:${userId}`))
+export function replacedLocalChatDevice(accountId: string): number | null {
+  const value = Number(readStored(localStorage, `${CHAT_DEVICE_REPLACED}:${accountId}`))
   return Number.isSafeInteger(value) && value >= 1 && value <= 127 ? value : null
 }
 
-export function forgetReplacedLocalChatDevice(userId: string): void {
+export function forgetReplacedLocalChatDevice(accountId: string): void {
   try {
-    localStorage.removeItem(`${CHAT_DEVICE_REPLACED}:${userId}`)
+    localStorage.removeItem(`${CHAT_DEVICE_REPLACED}:${accountId}`)
   } catch {
     // Storage can be unavailable; the revocation is then offered again.
   }

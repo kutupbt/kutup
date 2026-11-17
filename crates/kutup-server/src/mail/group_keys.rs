@@ -29,7 +29,7 @@ use crate::handlers::mail_keys::SignedKeyList;
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShareInput {
-    pub user_id: String,
+    pub account_id: String,
     /// The group key's secret sealed to the member's account key
     /// (`mail_key::seal_group_key_share`), base64.
     pub share: String,
@@ -136,7 +136,7 @@ fn signer_key(value: &str) -> AppResult<[u8; 32]> {
 
 /// A share checked against the member's current account incarnation.
 pub struct CheckedShare {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub share: Vec<u8>,
     pub member_incarnation_id: String,
 }
@@ -155,8 +155,8 @@ pub async fn check_shares(
 ) -> AppResult<Vec<CheckedShare>> {
     let mut checked = Vec::with_capacity(shares.len());
     for input in shares {
-        let user_id = Uuid::parse_str(&input.user_id)
-            .map_err(|_| AppError::bad_request("userId must be an account id"))?;
+        let user_id = Uuid::parse_str(&input.account_id)
+            .map_err(|_| AppError::bad_request("accountId must be an account id"))?;
         let share = decode(&input.share, "share")?;
         let current: Option<(String, i16)> = sqlx::query_as(
             "SELECT account_incarnation_id, identity_suite FROM accounts
@@ -166,14 +166,17 @@ pub async fn check_shares(
         .fetch_optional(&mut *conn)
         .await?;
         let Some((current, suite)) = current else {
-            return Err(AppError::bad_request("a member has no account keys yet")
-                .with_details(serde_json::json!({ "code": "noAccountKey", "userId": user_id })));
+            return Err(
+                AppError::bad_request("a member has no account keys yet").with_details(
+                    serde_json::json!({ "code": "noAccountKey", "accountId": user_id }),
+                ),
+            );
         };
         // Sealed to X-Wing keys only (docs/plans/pq-shares.md).
         if suite < kutup_crypto::identity::IDENTITY_SUITE as i16 {
             let mut error = crate::handlers::identity::keys_pending_upgrade();
             if let Some(details) = error.details.as_mut() {
-                details.insert("userId".into(), serde_json::json!(user_id));
+                details.insert("accountId".into(), serde_json::json!(user_id));
             }
             return Err(error);
         }
@@ -183,10 +186,10 @@ pub async fn check_shares(
             != Some(current.as_str())
         {
             return Err(AppError::conflict("a member's keys changed; try again")
-                .with_details(serde_json::json!({ "code": "keyChanged", "userId": user_id })));
+                .with_details(serde_json::json!({ "code": "keyChanged", "accountId": user_id })));
         }
         checked.push(CheckedShare {
-            user_id,
+            account_id: user_id,
             share,
             member_incarnation_id: current,
         });
@@ -307,7 +310,7 @@ pub async fn publish(
              VALUES ($1, $2, $3, $4)",
         )
         .bind(key_id)
-        .bind(share.user_id)
+        .bind(share.account_id)
         .bind(&share.share)
         .bind(&share.member_incarnation_id)
         .execute(&mut **tx)
@@ -456,7 +459,7 @@ pub async fn add_signing_shares(
         )
         .bind(group_id)
         .bind(signer.as_slice())
-        .bind(share.user_id)
+        .bind(share.account_id)
         .bind(&share.share)
         .bind(&share.member_incarnation_id)
         .execute(&mut **tx)
@@ -488,7 +491,7 @@ pub async fn add_shares(
                SET share = EXCLUDED.share, member_incarnation_id = EXCLUDED.member_incarnation_id, created_at = now()",
         )
         .bind(key_id)
-        .bind(share.user_id)
+        .bind(share.account_id)
         .bind(&share.share)
         .bind(&share.member_incarnation_id)
         .execute(&mut **tx)

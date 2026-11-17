@@ -10,9 +10,9 @@ function entry(action: string, payload: Record<string, unknown>): AdminActivityE
   return {
     id: 1,
     action,
-    adminUserId: 'a1',
+    adminAccountId: 'a1',
     adminUsername: 'admin',
-    targetUserId: 'u1',
+    targetAccountId: 'u1',
     targetUsername: 'bob',
     payload,
     occurredAt: '2026-10-26T00:00:00Z',

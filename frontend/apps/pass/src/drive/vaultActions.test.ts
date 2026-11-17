@@ -8,7 +8,7 @@ const { moveTargets } = await import('./vaultActions')
 
 type F = Parameters<typeof moveTargets>[0][number]
 const folder = (id: string, over: Partial<F> = {}): F =>
-  ({ id, key: new Uint8Array(32), canUpload: true, source: 'owned', ownerUserId: 'me', isRoot: false, name: id, ...over }) as F
+  ({ id, key: new Uint8Array(32), canUpload: true, source: 'owned', ownerAccountId: 'me', isRoot: false, name: id, ...over }) as F
 
 describe('moveTargets', () => {
   it('offers the open folders of the same owner one can write to, never its own, My files first', () => {
@@ -21,7 +21,7 @@ describe('moveTargets', () => {
         folder('root', { isRoot: true }),
         folder('locked', { key: null }),
         folder('readOnly', { canUpload: false }),
-        folder('theirs', { ownerUserId: 'someone' }),
+        folder('theirs', { ownerAccountId: 'someone' }),
         folder('remote', { source: 'remote' }),
         folder('a'),
       ],
