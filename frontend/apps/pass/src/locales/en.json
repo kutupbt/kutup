@@ -11,7 +11,8 @@
   },
   "nav": {
     "vaults": "All vaults",
-    "yourVaults": "Vaults"
+    "yourVaults": "Vaults",
+    "generator": "Generator"
   },
   "vaults": {
     "title": "Vaults",
@@ -212,7 +213,9 @@
     "saved": "Entry saved",
     "saveFailed": "The change could not be made.",
     "untitled": "Untitled",
-    "tagSuggestions": "Tags in this vault"
+    "tagSuggestions": "Tags in this vault",
+    "excludeFromReports": "Exclude from reports",
+    "excludeFromReportsHint": "The security report leaves this entry out (KeePass's quality check off)."
   },
   "detail": {
     "edit": "Edit",
@@ -275,7 +278,26 @@
     "symbols": "Symbols",
     "avoidLookAlikes": "No look-alikes",
     "bits": "About {{bits}} bits of strength",
-    "use": "Use this password"
+    "use": "Use this password",
+    "title": "Password generator",
+    "description": "Passwords and passphrases made on this device; nothing is saved.",
+    "password": "Password",
+    "passphrase": "Passphrase",
+    "copy": "Copy",
+    "value": "Generated value",
+    "custom": "Also use",
+    "exclude": "Never use",
+    "noCharacters": "No characters are left to choose from. Turn a set on, or exclude fewer.",
+    "words_one": "{{count}} word",
+    "words_other": "{{count}} words",
+    "separator": "Separator",
+    "case": "Letters",
+    "cases": {"lower": "lowercase", "first": "Capitalised", "random": "Mixed"},
+    "addNumber": "Add a number",
+    "addSymbol": "Add a symbol",
+    "usePassphrase": "Use this passphrase",
+    "wordlistFailed": "The word list could not be loaded. Check your connection and try again.",
+    "wordlistCredit": "Words from the EFF Large Wordlist, Electronic Frontier Foundation, CC BY 3.0:"
   },
   "strength": {
     "weak": "Weak password",

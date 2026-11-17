@@ -742,10 +742,16 @@ importers:
       sonner:
         specifier: ^2.0.7
         version: 2.0.8(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      zxcvbn:
+        specifier: ^4.4.2
+        version: 4.4.2
     devDependencies:
       '@kutup/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@types/zxcvbn':
+        specifier: ^4.4.4
+        version: 4.4.5
       vite:
         specifier: ^8.1.6
         version: 8.1.6(@types/node@25.4.0)(esbuild@0.25.12)(jiti@2.7.0)

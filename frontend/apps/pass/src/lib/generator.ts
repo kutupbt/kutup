@@ -10,7 +10,15 @@ export interface GeneratorOptions {
   symbols: boolean
   /** Leaves out 0/O, 1/l/I and the like. */
   avoidLookAlikes: boolean
+  /** More characters to draw from, as their own set (at least one of them). */
+  custom: string
+  /** Characters never used, whatever set they are in. */
+  exclude: string
 }
+
+/** The longest password the generator makes (KeePassXC's limit is 128 too). */
+export const MAX_LENGTH = 128
+export const MIN_LENGTH = 4
 
 export const DEFAULT_OPTIONS: GeneratorOptions = {
   length: 20,
@@ -19,6 +27,8 @@ export const DEFAULT_OPTIONS: GeneratorOptions = {
   digits: true,
   symbols: true,
   avoidLookAlikes: false,
+  custom: '',
+  exclude: '',
 }
 
 const SETS = {
@@ -40,13 +50,31 @@ export function randomBelow(n: number): number {
   }
 }
 
+/**
+ * The character sets a password draws from: the chosen built-in ones and
+ * the custom characters, each without excluded characters and (if asked)
+ * look-alikes, each character once; empty sets dropped.
+ */
+export function characterSets(options: GeneratorOptions): string[][] {
+  const excluded = new Set([...options.exclude])
+  const keep = (c: string) => !excluded.has(c) && (!options.avoidLookAlikes || !LOOK_ALIKES.has(c))
+  const chosen = (Object.keys(SETS) as (keyof typeof SETS)[]).filter((name) => options[name]).map((name) => SETS[name])
+  const seen = new Set<string>()
+  const sets: string[][] = []
+  for (const set of [...chosen, options.custom]) {
+    // Whole code points, so an emoji or accented letter isn't split.
+    const chars = [...set].filter((c) => keep(c) && !/\s/.test(c) && !seen.has(c))
+    for (const c of chars) seen.add(c)
+    if (chars.length > 0) sets.push(chars)
+  }
+  return sets
+}
+
 /** A password with at least one character of each chosen set. */
 export function generatePassword(options: GeneratorOptions): string {
-  const sets = (Object.keys(SETS) as (keyof typeof SETS)[])
-    .filter((name) => options[name])
-    .map((name) => SETS[name].split('').filter((c) => !options.avoidLookAlikes || !LOOK_ALIKES.has(c)))
+  const sets = characterSets(options)
   if (sets.length === 0) throw new Error('choose at least one kind of character')
-  const length = Math.max(options.length, sets.length)
+  const length = Math.min(MAX_LENGTH, Math.max(options.length, sets.length))
   const all = sets.flat()
   const chars = sets.map((set) => set[randomBelow(set.length)])
   while (chars.length < length) chars.push(all[randomBelow(all.length)])
@@ -60,10 +88,8 @@ export function generatePassword(options: GeneratorOptions): string {
 
 /** Bits of entropy of a password drawn this way (an estimate for the strength meter). */
 export function entropyBits(options: GeneratorOptions): number {
-  const size = (Object.keys(SETS) as (keyof typeof SETS)[])
-    .filter((name) => options[name])
-    .reduce((sum, name) => sum + SETS[name].split('').filter((c) => !options.avoidLookAlikes || !LOOK_ALIKES.has(c)).length, 0)
-  return size > 0 ? Math.floor(options.length * Math.log2(size)) : 0
+  const size = characterSets(options).reduce((sum, set) => sum + set.length, 0)
+  return size > 0 ? Math.floor(Math.min(options.length, MAX_LENGTH) * Math.log2(size)) : 0
 }
 
 /** A rough strength of any password: weak, fair, strong. */

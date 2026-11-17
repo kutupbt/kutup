@@ -52,6 +52,7 @@ import { deletedGroups, groupTargets } from '../lib/groupMoves'
 import { DEFAULT_MINIMUMS, loadKdfMinimums, meetsMinimums } from '../lib/kdf'
 import { COLUMNS, loadPrefs, savePrefs, SORT_KEYS, sortEntries, tagQuery, vaultTags, type ListPrefs, type SortKey } from '../lib/entryList'
 import { securityReport } from '../lib/report'
+import { useStrength } from '../lib/strength'
 import { VaultSettingsDialog, type SettingsTab } from './VaultSettingsDialog'
 import { SyncBadge } from './SyncBadge'
 import { TheirsKeyDialog } from './TheirsKeyDialog'
@@ -147,7 +148,8 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const [wholeVault, setWholeVault] = useState(false)
   // The vault's own search (kutup_pass::search: fields, -, quotes, *),
   // asked once typing settles; null while there is no search.
-  const weakIds = useMemo(() => securityReport(view).weak.map((e) => e.id), [view])
+  const rate = useStrength()
+  const weakIds = useMemo(() => securityReport(view, new Date(), rate).weak.map((e) => e.id), [view, rate])
   const [found, setFound] = useState<{ query: string; ids: Set<string> } | null>(null)
   useEffect(() => {
     if (!needle) {

@@ -11,7 +11,8 @@
   },
   "nav": {
     "vaults": "Tüm kasalar",
-    "yourVaults": "Kasalar"
+    "yourVaults": "Kasalar",
+    "generator": "Üreteç"
   },
   "vaults": {
     "title": "Kasalar",
@@ -212,7 +213,9 @@
     "saved": "Kayıt kaydedildi",
     "saveFailed": "Değişiklik yapılamadı.",
     "untitled": "Başlıksız",
-    "tagSuggestions": "Bu kasadaki etiketler"
+    "tagSuggestions": "Bu kasadaki etiketler",
+    "excludeFromReports": "Raporlardan hariç tut",
+    "excludeFromReportsHint": "Güvenlik raporu bu kaydı dahil etmez (KeePass'in kalite denetimi kapalı)."
   },
   "detail": {
     "edit": "Düzenle",
@@ -275,7 +278,26 @@
     "symbols": "Simge",
     "avoidLookAlikes": "Benzeyenler olmasın",
     "bits": "Yaklaşık {{bits}} bit güç",
-    "use": "Bu parolayı kullan"
+    "use": "Bu parolayı kullan",
+    "title": "Parola üreteci",
+    "description": "Bu cihazda üretilen parolalar ve parola ifadeleri; hiçbir şey kaydedilmez.",
+    "password": "Parola",
+    "passphrase": "Parola ifadesi",
+    "copy": "Kopyala",
+    "value": "Üretilen değer",
+    "custom": "Şunları da kullan",
+    "exclude": "Şunları hiç kullanma",
+    "noCharacters": "Seçilecek karakter kalmadı. Bir grubu açın ya da daha azını dışarıda bırakın.",
+    "words_one": "{{count}} sözcük",
+    "words_other": "{{count}} sözcük",
+    "separator": "Ayırıcı",
+    "case": "Harfler",
+    "cases": {"lower": "küçük harf", "first": "Baş harfi büyük", "random": "Karışık"},
+    "addNumber": "Bir rakam ekle",
+    "addSymbol": "Bir simge ekle",
+    "usePassphrase": "Bu parola ifadesini kullan",
+    "wordlistFailed": "Sözcük listesi yüklenemedi. Bağlantınızı kontrol edip yeniden deneyin.",
+    "wordlistCredit": "Sözcükler EFF Large Wordlist'ten, Electronic Frontier Foundation, CC BY 3.0:"
   },
   "strength": {
     "weak": "Zayıf parola",

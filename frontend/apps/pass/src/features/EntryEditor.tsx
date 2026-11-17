@@ -29,11 +29,13 @@ interface Draft {
   tags: string
   expires: boolean
   expiry: string
+  /** KeePass's QualityCheck: off leaves the entry out of the security report. */
+  qualityCheck: boolean
 }
 
 function draftOf(entry: EntryView | null, defaultUserName: string): Draft {
   if (!entry) {
-    return { title: '', userName: defaultUserName, password: '', url: '', notes: '', otp: '', custom: [], tags: '', expires: false, expiry: '' }
+    return { title: '', userName: defaultUserName, password: '', url: '', notes: '', otp: '', custom: [], tags: '', expires: false, expiry: '', qualityCheck: true }
   }
   return {
     title: fieldValue(entry, 'Title'),
@@ -47,6 +49,7 @@ function draftOf(entry: EntryView | null, defaultUserName: string): Draft {
     expires: entry.expires,
     // datetime-local wants minutes, local time.
     expiry: entry.expiry ? toLocalInput(entry.expiry) : '',
+    qualityCheck: entry.qualityCheck,
   }
 }
 
@@ -88,7 +91,7 @@ function inputOf(draft: Draft, original: EntryView | null): EntryInput {
     foregroundColor: original?.foregroundColor ?? null,
     backgroundColor: original?.backgroundColor ?? null,
     overrideUrl: original?.overrideUrl ?? '',
-    qualityCheck: original?.qualityCheck ?? true,
+    qualityCheck: draft.qualityCheck,
     expires: draft.expires,
     expiry: draft.expires && draft.expiry ? new Date(draft.expiry).toISOString().replace(/\.\d{3}Z$/, 'Z') : null,
   }
@@ -257,6 +260,13 @@ export function EntryEditor({
             {draft.expires ? (
               <Input type="datetime-local" aria-label={t('entry.expiry')} value={draft.expiry} onChange={(e) => set({ expiry: e.target.value })} />
             ) : null}
+          </div>
+          <div className="flex items-start gap-2">
+            <Checkbox id="entry-exclude-report" checked={!draft.qualityCheck} onCheckedChange={(v) => set({ qualityCheck: v !== true })} />
+            <Label htmlFor="entry-exclude-report" className="font-normal">
+              {t('entry.excludeFromReports')}
+              <span className="block text-xs text-muted-foreground">{t('entry.excludeFromReportsHint')}</span>
+            </Label>
           </div>
           {error ? <Alert variant="error">{error}</Alert> : null}
           <DialogFooter>

@@ -1,4 +1,4 @@
-import { BookUser, CalendarDays, FileType, HardDrive, Images, KeyRound, LockKeyhole, LockKeyholeOpen, Mail as MailIcon, Map as MapIcon, MessagesSquare, Plus, UserRound, Vault } from 'lucide-react'
+import { BookUser, CalendarDays, FileType, HardDrive, Images, KeyRound, LockKeyhole, LockKeyholeOpen, Mail as MailIcon, Map as MapIcon, MessagesSquare, Plus, UserRound, Vault, Wand2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -82,6 +82,7 @@ export function PassShell() {
       nav={
         <>
           <SidebarNavLink to="/" end icon={<KeyRound />} label={t('nav.vaults')} />
+          <SidebarNavLink to="/generator" icon={<Wand2 />} label={t('nav.generator')} />
           {vaults.length > 0 && (
             <li className="px-3 pb-1 pt-4 text-[11px] font-medium uppercase tracking-wider text-chrome-muted">{t('nav.yourVaults')}</li>
           )}

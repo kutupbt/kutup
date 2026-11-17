@@ -28,16 +28,16 @@ but offers no way to see or change it.
 |---|---|---|---|
 | The database (vault) | 31 | 1 | 8 |
 | Groups (folders) | 7 | 1 | 4 |
-| Entries | 10 | 6 | 6 |
+| Entries | 11 | 5 | 6 |
 | Bulk actions and the entry list | 11 | 1 | 3 |
 | Search | 4 | 2 | 1 |
-| Password generator | 2 | 2 | 3 |
+| Password generator | 6 | 1 | 0 |
 | One-time codes, passkeys, SSH, desktop integration | 5 | 3 | 10 |
-| Health report | 2 | 1 | 4 |
+| Health report | 4 | 0 | 3 |
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **86** | **22** | **47** |
+| **All** | **93** | **19** | **43** |
 
 ## The database (vault)
 
@@ -124,7 +124,7 @@ but offers no way to see or change it.
 | References `{REF:P@I:…}` | `Reference.adoc` "Entry Cross-Reference" | ❌ | shown as the raw text; copying copies `{REF:…}`; nothing makes one |
 | Placeholders (`{USERNAME}`, `{DT_…}`, `{T-CONV:…}`) | `Reference.adoc` "Entry Placeholders" | ❌ | shown as typed |
 | Clone an entry (with references, with history) | Entries → Clone (Ctrl+D) | 🟡 | the entry's Clone button (`CloneDialog.tsx`): " - Clone" after the title (in the person's language), the history if asked; beside the entry, its attachments shared. "Replace with references" waits for item 12; no Ctrl+D yet |
-| "Exclude from reports" (quality check) | Properties → Exclude | 🟡 | kept, but the security report ignores it (`lib/report.ts` reports such entries too) and it cannot be changed |
+| "Exclude from reports" (quality check) | Properties → Exclude | ✅ | a switch in the entry editor; the report and `is:weak` leave such entries out |
 | Custom data, properties (UUID, times) | Properties tab | 🟡 | created and modified times shown; the rest kept |
 | Merge review marks | (none) | ✅ | beyond KeePassXC: entries changed on two devices are marked, compared against history and marked reviewed (`EntryDetail.tsx`, spec 77) |
 
@@ -172,13 +172,13 @@ read-only vault has no selection and no dragging.
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
-| Character sets (lower, upper, digits, symbols) | `PasswordGenerator.adoc` | ✅ | `lib/generator.ts`, `features/PasswordGenerator.tsx`: `crypto.getRandomValues` without modulo bias, one of each chosen set |
+| Character sets (lower, upper, digits, symbols) | `PasswordGenerator.adoc` | ✅ | `lib/generator.ts`, `features/GeneratorPanel.tsx`: `@kutup/crypto/random` without modulo bias (a lint rule refuses `Math.random` in the Pass app), one of each chosen set |
 | Exclude look-alikes | "Exclude look-alike characters" | ✅ | |
-| Length | 1–999 | 🟡 | 8–64 |
-| Extended ASCII, math, braces, quotes, dashes groups; custom "also include" and "exclude" characters | advanced options | ❌ | one fixed symbol set |
-| Passphrases (word lists, separator, case, word count) | "Generating Passphrases", EFF lists | ❌ | the file's header says "passphrases" but there is none |
-| Entropy display | bits and a quality bar (zxcvbn) | 🟡 | "About N bits" for generated passwords; typed passwords get a rough weak/fair/strong from the character classes, not zxcvbn |
-| Standalone generator (toolbar, copy without an entry) | Tools → Password Generator | ❌ | only from the password field of the entry editor |
+| Length | 1–999 | ✅ | 4–128 (KeePassXC's own UI caps at 128 too) |
+| Extended ASCII, math, braces, quotes, dashes groups; custom "also include" and "exclude" characters | advanced options | 🟡 | "Also use" (any characters, their own set, at least one used) and "Never use"; no separate extended groups |
+| Passphrases (word lists, separator, case, word count) | "Generating Passphrases", EFF lists | ✅ | `lib/passphrase.ts`: the EFF large list (7,776 words, CC BY 3.0, credited in the generator), served from Kutup's own origin and fetched on first use; 3–20 words, separator, lowercase / capitalised / mixed, an added number or symbol |
+| Entropy display | bits and a quality bar (zxcvbn) | ✅ | bits for what is generated, and zxcvbn's weak / fair / strong (lazily loaded, `lib/strength.ts`) for any password |
+| Standalone generator (toolbar, copy without an entry) | Tools → Password Generator | ✅ | `pass.<domain>/generator` in the sidebar, Copy, its options kept per device; the entry editor's popover is the same panel |
 
 ## One-time codes, passkeys, SSH, desktop integration
 
@@ -207,11 +207,11 @@ read-only vault has no selection and no dragging.
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
-| Weak passwords | Reports → Health check (zxcvbn score) | 🟡 | `features/SecurityPanel.tsx`, `lib/report.ts`: by character classes and length (bits), not zxcvbn |
+| Weak passwords | Reports → Health check (zxcvbn score) | ✅ | `features/SecurityPanel.tsx`, `lib/report.ts`: zxcvbn score 0–1 (the bits estimate until zxcvbn loads) |
 | Reused passwords | Health check | ✅ | grouped by password, within the open vault (not across vaults) |
 | Expired entries | Health check | ✅ | |
 | Soon expiring, old passwords, too short | Health check | ❌ | |
-| Excluded entries respected | "Exclude from reports" | ❌ | see Entries |
+| Excluded entries respected | "Exclude from reports" | ✅ | left out of weak, reused and expired |
 | Breached passwords (HIBP) | Reports → HIBP (online k-anonymity), `keepassxc-cli analyze --hibp` (offline list) | ❌ | nothing leaves the device (`pass.md`, Security report); research 19 §5.12 proposes an opt-in check proxied by the Kutup server |
 | Statistics | Reports → Statistics | ❌ | |
 
