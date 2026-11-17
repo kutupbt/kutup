@@ -30,6 +30,10 @@ pub struct VaultView {
     pub history_max_items: Option<i64>,
     /// In bytes; `None`: unlimited.
     pub history_max_size: Option<i64>,
+    /// The key derivation; `None` for one this code can't set.
+    pub kdf: Option<crate::edit::KdfInput>,
+    /// Whether the file is compressed (GZip).
+    pub compression: bool,
     /// Every group, parents before children, siblings in their order.
     pub groups: Vec<GroupView>,
     /// Every entry, by group in the order above, then in the group's order.
@@ -368,6 +372,11 @@ pub fn view(db: &Database) -> VaultView {
         recycle_bin_enabled: db.meta.recyclebin_enabled.unwrap_or(true),
         history_max_items: limit(db.meta.history_max_items),
         history_max_size: limit(db.meta.history_max_size),
+        kdf: crate::edit::KdfInput::of(&db.config.kdf_config),
+        compression: !matches!(
+            db.config.compression_config,
+            keepass::config::CompressionConfig::None
+        ),
         groups,
         entries,
         custom_icons: custom_icons

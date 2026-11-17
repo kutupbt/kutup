@@ -281,8 +281,12 @@ impl Vault {
         };
         let theirs_under_current_key = !theirs_under_previous_key && theirs_key.is_none();
         let (merged, report) = kutup_pass::merge(base.as_ref(), &self.db, &theirs_db);
+        // Theirs in its own file format and ciphers (a save here upgrades
+        // them): only the settings a merge decides count.
         let mut a = merged.clone();
         a.config = theirs_db.config.clone();
+        a.config.kdf_config = merged.config.kdf_config.clone();
+        a.config.compression_config = merged.config.compression_config.clone();
         let differs_from_theirs = a != theirs_db;
         self.db = merged;
         if let Some(key) = theirs_key {
@@ -538,6 +542,15 @@ struct ImportSample {
 struct ImportFailure {
     error: &'static str,
     detail: String,
+}
+
+/// Derives one key with a key derivation (`kutup_pass::edit::KdfInput`, e.g.
+/// `{ kind: "argon2id", memoryMib, iterations, parallelism }`), for the
+/// vault settings page to time; throws for one out of range.
+#[wasm_bindgen(js_name = deriveOnce)]
+pub fn derive_once(kdf: JsValue) -> Result<(), JsValue> {
+    let kdf: edit::KdfInput = serde_wasm_bindgen::from_value(kdf).map_err(js_error)?;
+    edit::derive_once(&kdf).map_err(js_error)
 }
 
 /// The formats an import can be read as: `[{ id, name }]`.

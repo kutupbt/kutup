@@ -1,7 +1,7 @@
 // Messages between the page and the Kutup Pass worker (./worker.ts).
 
 import type { MasterKeysBytes } from '@kutup/crypto/masterKeys'
-import type { Op } from './types'
+import type { KdfInput, Op } from './types'
 
 type Calls =
   | { call: 'create'; name: string; password: string | null; keyFile: Uint8Array | null; now: number }
@@ -25,6 +25,7 @@ type Calls =
   | { call: 'abandonKeyChange'; handle: number }
   | { call: 'keyParts'; handle: number }
   | { call: 'generateKeyFile' }
+  | { call: 'deriveOnce'; kdf: KdfInput }
   | { call: 'close'; handle: number }
   | { call: 'keepKey'; handle: number; masterKeys: MasterKeysBytes; binding: string; fileId: string; revision: number; generated: boolean }
   | { call: 'openKept'; envelope: string; masterKeys: MasterKeysBytes; binding: string; fileId: string }

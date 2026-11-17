@@ -350,7 +350,8 @@ caller's own)
   },
   "nameHoldDays": 180,
   "oldAddressReceiveDays": 90,
-  "passVaultMaxBytes": 67108864
+  "passVaultMaxBytes": 67108864,
+  "passKdfMinimums": { "argon2MemoryMib": 64, "argon2Iterations": 2, "aesKdfRounds": 100000 }
 }
 ```
 
@@ -359,6 +360,11 @@ upload (an existing vault brought in from KeePassXC or a backup), as
 administrators set it (`PUT /api/admin/settings`; 64 MiB at first). The
 browser opens a vault whole, so this bounds what an upload makes it hold;
 a vault's own saves are never refused by it.
+
+`passKdfMinimums` is the weakest key derivation Kutup Pass sets a vault to,
+as administrators set it (Server settings → Pass): a vault's settings page
+refuses anything weaker, and a vault already weaker opens with a warning and
+an offer to strengthen it.
 
 The chat block also advertises size/retention limits, the canonical federation
 server name when enabled, and the authenticated sealed-sender service-policy

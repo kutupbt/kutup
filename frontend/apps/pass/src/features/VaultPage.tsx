@@ -1,4 +1,4 @@
-import { ArrowLeft, Eye, FileUp, Folder, FolderInput, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
+import { ArrowLeft, Eye, FileUp, Folder, FolderInput, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, Settings, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -44,6 +44,8 @@ import { SecurityPanel } from './SecurityPanel'
 import { IconDialog } from './IconDialog'
 import { iconSources } from '../lib/icons'
 import { deletedGroups, groupTargets } from '../lib/groupMoves'
+import { DEFAULT_MINIMUMS, loadKdfMinimums, meetsMinimums } from '../lib/kdf'
+import { VaultSettingsDialog, type SettingsTab } from './VaultSettingsDialog'
 import { SyncBadge } from './SyncBadge'
 import { TheirsKeyDialog } from './TheirsKeyDialog'
 import { UnlockVault } from './UnlockVault'
@@ -112,6 +114,8 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const [showingKey, setShowingKey] = useState(false)
   const [changingKey, setChangingKey] = useState(false)
   const [forgettingGenerated, setForgettingGenerated] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
+  const minimums = useQuery({ queryKey: ['pass', 'kdf-minimums'], queryFn: loadKdfMinimums, staleTime: Infinity }).data ?? DEFAULT_MINIMUMS
 
   // Another device's save is taken in when the tab comes back, and now and then.
   useEffect(() => {
@@ -237,6 +241,12 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                 </DropdownMenuItem>
               ) : null}
               {session.canEdit ? (
+                <DropdownMenuItem onSelect={() => setSettingsTab('general')}>
+                  <Settings />
+                  {t('settings.open')}
+                </DropdownMenuItem>
+              ) : null}
+              {session.canEdit ? (
                 <DropdownMenuItem onSelect={() => setImporting(true)}>
                   <FileUp />
                   {t('import.open')}
@@ -293,6 +303,14 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
         </Alert>
       ) : null}
       {merge ? <MergeNotice report={merge} onDismiss={() => session.dismissMerge()} /> : null}
+      {session.canEdit && view.kdf && !meetsMinimums(view.kdf, minimums) ? (
+        <Alert variant="warn" title={t('settings.weakTitle')} className="m-3">
+          <p>{t('settings.weakDescription')}</p>
+          <Button size="sm" variant="outline" className="mt-2" onClick={() => setSettingsTab('encryption')}>
+            {t('settings.strengthen')}
+          </Button>
+        </Alert>
+      ) : null}
       <div className="flex min-h-0 flex-1">
         <nav aria-label={t('groups.label')} className={cn('w-56 shrink-0 overflow-y-auto border-r border-border p-2', 'hidden md:block')}>
           <ul className="space-y-0.5 text-sm">
@@ -501,6 +519,16 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
           await renameFile.mutateAsync({ folder: vault.folder, file, name: `${name}.kdbx` })
           await session.apply({ op: 'updateVault', name, description: view.description, defaultUserName: view.defaultUserName })
         }}
+      />
+      <VaultSettingsDialog
+        open={settingsTab !== null}
+        onOpenChange={(open) => !open && setSettingsTab(null)}
+        session={session}
+        view={view}
+        minimums={minimums}
+        tab={settingsTab ?? 'general'}
+        onTabChange={setSettingsTab}
+        onChangeKey={vault ? () => setChangingKey(true) : null}
       />
       {vault ? <ChangeKeyDialog open={changingKey} onOpenChange={setChangingKey} session={session} vault={vault} title={title} /> : null}
       <VaultKeyDialog

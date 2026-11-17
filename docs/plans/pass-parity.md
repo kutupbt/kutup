@@ -26,7 +26,7 @@ but offers no way to see or change it.
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| The database (vault) | 21 | 6 | 13 |
+| The database (vault) | 26 | 1 | 13 |
 | Groups (folders) | 7 | 1 | 4 |
 | Entries | 8 | 6 | 8 |
 | Bulk actions and the entry list | 8 | 1 | 6 |
@@ -37,7 +37,7 @@ but offers no way to see or change it.
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **68** | **28** | **59** |
+| **All** | **73** | **23** | **59** |
 
 ## The database (vault)
 
@@ -53,7 +53,7 @@ but offers no way to see or change it.
 | Duplicate a vault ("Save as") | Database → Save as / Save a copy | ✅ | the vault list's menu: a copy in the same folder sharing the vault's key (said so), its kept key kept for the copy too |
 | Move a vault to another folder | save elsewhere | ✅ | the vault list's menu, among the owner's writable folders (Drive's `moveFile`, now in `drive-core`); the file keeps its id, so its kept key still opens it |
 | Bring in an existing vault (`.kdbx` upload) | Database → Open | ✅ | "Upload a .kdbx" (`features/UploadVaultDialog.tsx`): checked by its header (KeePass 1, KDBX 3.0 and unknown formats refused with their own message) and that its password or key file opens it before anything is uploaded; up to the administrators' `passVaultMaxBytes` (64 MiB at first); its key kept in the account by default; a KDBX 3.1 or 4.0 file is said to be saved as 4.1 at its first change |
-| Description, default user name | Database settings → General | 🟡 | the default user name fills new entries (`EntryEditor.tsx`), but neither can be changed: `updateVault` carries them and the UI only passes the current values on |
+| Description, default user name | Database settings → General | ✅ | Vault settings → General (`features/VaultSettingsDialog.tsx`, [`pass-gaps-2.md`](pass-gaps-2.md) P2); the default user name fills new entries (`EntryEditor.tsx`) |
 | Public metadata (name, icon, colour on the unlock screen) | Database settings → General | ❌ | kept |
 | Change the password | Database settings → Security | ✅ | the vault's menu → "Change vault key…" (`features/ChangeKeyDialog.tsx`, rules in `lib/keyChange.ts`): keep, change (typed twice, or generated) or remove the password, one key part at least; saved straight to Drive or undone (`VaultSession.changeKey`, `abandonKeyChange`), then kept in the account again or the old kept key forgotten; says that Drive's earlier versions still open with the old key and copies already downloaded can't be revoked, and lets the owner delete the earlier versions and the first upload (`DELETE …/versions/original`); spec 168. Not in the CLI |
 | Key file: **create** (generate) | Security → Add Key File → Generate | ✅ | `kdbx::generate_key_file`: 32 random bytes in KeePass's XML v2, byte for byte as KeePassXC writes it (`Name.keyx`); downloaded only, never sent anywhere; the change waits until the person says it is saved |
@@ -63,11 +63,11 @@ but offers no way to see or change it.
 | Key file: **remove** from an existing vault | Security → Remove Key File | ✅ | as above, while a password stays |
 | Key file kept with the sign-in | (none) | ✅ | beyond KeePassXC: the derived key element sealed under the account key (`crates/kutup-pass/src/kept.rs`), so the website and `kutup sync` open it without the file |
 | YubiKey / OnlyKey challenge-response | `keys/ChallengeResponseKey.cpp`, `keys/drivers` | ❌ | neither open, create, add nor remove: the crate's challenge-response feature is off, and the web would need WebHID (Chromium only; research 19 "Unlocking…") |
-| KDF settings (Argon2d/id, AES-KDF; memory, iterations, parallelism; "1 second" benchmark) | Security → Encryption | ❌ | new vaults get Argon2id 64 MiB, 10 iterations, fixed (`crates/kutup-pass/src/edit.rs`); an existing vault's KDF is kept; no setting |
+| KDF settings (Argon2d/id, AES-KDF; memory, iterations, parallelism; "1 second" benchmark) | Security → Encryption | ✅ | Vault settings → Encryption (`setVaultConfig`): Argon2id, Argon2d or AES-KDF with their parameters; "Benchmark 1 s" times one derivation in the worker and scales the passes or rounds; refused below the administrators' minimums (`passKdfMinimums`, Server settings → Pass; 64 MiB and 2 passes, 100,000 rounds at first) and above what any device could open; a vault already below them opens with a warning and Strengthen. A change merges by `settingsChanged`, so another device's save never undoes it. New vaults get Argon2id 64 MiB, 10 passes |
 | Cipher (AES-256, ChaCha20, Twofish) | Encryption → advanced | ❌ | kept; new vaults the crate's default |
-| Recycle bin on/off | Settings → General | 🟡 | honoured (deletes go for good with it off), made when first needed; no switch |
-| History limits (items, size) | Settings → General | 🟡 | honoured on every edit; new vaults 10 items / 6 MiB as KeePassXC; no setting |
-| Compression | Settings → General | 🟡 | kept as it is; no setting |
+| Recycle bin on/off | Settings → General | ✅ | Vault settings → General; made when first needed; deletes go for good with it off. Choosing another group as the bin: not offered |
+| History limits (items, size) | Settings → General | ✅ | Vault settings → General: items (0–1000) and MiB per entry, each or no limit; a lower limit trims every entry's history at once (said before saving); new vaults 10 items / 6 MiB as KeePassXC |
+| Compression | Settings → General | ✅ | Vault settings → Encryption: GZip on or off |
 | Maintenance (purge unused icons) | Settings → Maintenance | ❌ | unused pictures stay in the vault, as KeePass apps do |
 | Autosave, backup before save | Settings → Saving | ✅ | every edit saves at once as a new Drive version (`sync/vaultSession.ts`); Drive's versions are the backups |
 | Merge another database into this one | Database → Merge from database | ❌ | versions of the **same** vault merge by themselves (below); there is no "merge this other `.kdbx` in" |
@@ -278,9 +278,7 @@ What people hit first, then what blocks moving from KeePassXC:
    leaves.
 4. ~~**Move groups** and restore deleted groups~~: done
    ([`pass-gaps-2.md`](pass-gaps-2.md) P1).
-5. **Vault settings**: description, default user name, recycle bin on/off,
-   history limits, KDF (Argon2id memory and iterations, with a "how long
-   to open" test), compression.
+5. ~~**Vault settings**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md) P2).
 6. **List and search**: sort (title, user name, modified, created,
    expiry), more columns, search modifiers (`title:`, `url:`, `tag:`,
    `is:expired`…), custom fields in search, a tag list in the sidebar.

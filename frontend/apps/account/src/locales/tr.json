@@ -1177,6 +1177,14 @@
         "mailKeysPerAddress": "Adres başına anahtar",
         "mailKeysPerAddressHint": "Her adres güncel anahtarını ve eski postaları okumak için eskilerini tutar. Zaten daha çok anahtar tutan listeler onları korur."
       },
+      "passLimits": {
+        "passArgon2MinMemoryMib": "En az Argon2 belleği (MiB)",
+        "passArgon2MinMemoryMibHint": "Kasa ayarları Argon2'yi daha az bellekle ayarlayamaz. Zaten altında kalan kasalar bir uyarıyla açılmaya devam eder.",
+        "passArgon2MinIterations": "En az Argon2 geçişi",
+        "passArgon2MinIterationsHint": "Kasa ayarları daha az Argon2 geçişi ayarlayamaz.",
+        "passAesKdfMinRounds": "En az AES-KDF turu",
+        "passAesKdfMinRoundsHint": "Eski uygulamalar için AES-KDF'te tutulan kasalar: kasa ayarları daha az tur ayarlayamaz."
+      },
       "federationLimits": {
         "federationRetryBaseSeconds": "İlk bekleme (saniye)",
         "federationRetryBaseSecondsHint": "Başarısız bir teslimattan sonra; sonraki her bekleme iki katına çıkar.",

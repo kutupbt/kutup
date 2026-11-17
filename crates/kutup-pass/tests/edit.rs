@@ -1189,3 +1189,277 @@ fn recycling_a_group_never_deletes_it_for_good() {
     let op: Op = serde_json::from_str(r#"{"op":"recycleGroup","id":"x"}"#).unwrap();
     assert_eq!(op, Op::RecycleGroup { id: "x".into() });
 }
+
+fn small_argon2(memory_mib: u64, iterations: u64) -> kutup_pass::edit::KdfInput {
+    kutup_pass::edit::KdfInput::Argon2id {
+        memory_mib,
+        iterations,
+        parallelism: 1,
+    }
+}
+
+const ANY: kutup_pass::edit::KdfMinimums = kutup_pass::edit::KdfMinimums {
+    argon2_memory_mib: 1,
+    argon2_iterations: 1,
+    aes_kdf_rounds: 1,
+};
+
+fn update_vault(
+    db: &Database,
+    bin: Option<bool>,
+    history: Option<kutup_pass::edit::HistoryLimits>,
+) -> Op {
+    let v = view::view(db);
+    Op::UpdateVault {
+        name: v.name,
+        description: v.description,
+        default_user_name: v.default_user_name,
+        recycle_bin_enabled: bin,
+        history,
+    }
+}
+
+#[test]
+fn vault_settings_set_the_bin_and_the_history_limits() {
+    use kutup_pass::edit::HistoryLimits;
+    let mut db = vault();
+    let id = add(&mut db, "Banka", 1);
+    for minute in 2..8 {
+        run(
+            &mut db,
+            Op::UpdateEntry {
+                id: id.clone(),
+                entry: input(&[("Title", "Banka"), ("Password", &format!("p{minute}"))]),
+            },
+            minute,
+        );
+    }
+    assert_eq!(entry(&view::view(&db), &id).history_count, 6);
+
+    // The bin off, with its change time.
+    let op = update_vault(&db, Some(false), None);
+    assert!(run(&mut db, op, 9).changed);
+    assert!(!view::view(&db).recycle_bin_enabled);
+    assert_eq!(db.meta.recyclebin_changed, Some(at(9)));
+    let op = update_vault(&db, Some(false), None);
+    assert!(!run(&mut db, op, 10).changed);
+
+    // A lower limit trims every history at once, oldest first.
+    let three = HistoryLimits {
+        max_items: Some(3),
+        max_size: None,
+    };
+    let op = update_vault(&db, None, Some(three));
+    assert!(run(&mut db, op, 11).changed);
+    let v = view::view(&db);
+    assert_eq!((v.history_max_items, v.history_max_size), (Some(3), None));
+    assert_eq!(entry(&v, &id).history_count, 3);
+    let kept = view::history(&db, &db.entries[&eid(&id)]);
+    assert_eq!(value_of(&kept[0], "Password"), "p4");
+    assert_eq!(db.meta.settings_changed, Some(at(11)));
+
+    // Too many refused, nothing changed.
+    let before = shown(&db);
+    let many = HistoryLimits {
+        max_items: Some(1001),
+        max_size: None,
+    };
+    let op = update_vault(&db, None, Some(many));
+    assert!(apply(&mut db, &op, at(12)).is_err());
+    assert_eq!(shown(&db), before);
+
+    // The website's JSON, old and new.
+    let op: Op = serde_json::from_str(r#"{"op":"updateVault","name":"a"}"#).unwrap();
+    assert!(matches!(
+        op,
+        Op::UpdateVault {
+            recycle_bin_enabled: None,
+            history: None,
+            ..
+        }
+    ));
+    let op: Op = serde_json::from_str(
+        r#"{"op":"updateVault","name":"a","recycleBinEnabled":true,"history":{"maxItems":null,"maxSize":1024}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        op,
+        Op::UpdateVault {
+            recycle_bin_enabled: Some(true),
+            history: Some(HistoryLimits {
+                max_items: None,
+                max_size: Some(1024)
+            }),
+            ..
+        }
+    ));
+}
+
+fn value_of(entry: &view::EntryView, key: &str) -> String {
+    entry
+        .fields
+        .iter()
+        .find(|f| f.key == key)
+        .map(|f| f.value.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn the_key_derivation_is_set_within_the_servers_minimums() {
+    use kutup_pass::edit::{KdfInput, KdfMinimums};
+    let mut db = vault();
+    add(&mut db, "Banka", 1);
+    assert_eq!(
+        view::view(&db).kdf,
+        Some(KdfInput::Argon2id {
+            memory_mib: 64,
+            iterations: 10,
+            parallelism: 2
+        })
+    );
+    assert!(view::view(&db).compression);
+    let strict = KdfMinimums {
+        argon2_memory_mib: 64,
+        argon2_iterations: 2,
+        aes_kdf_rounds: 100_000,
+    };
+    // Weaker than the server allows, or out of range: refused, nothing changes.
+    let before = (shown(&db), db.config.clone());
+    for (kdf, minimums) in [
+        (small_argon2(32, 10), strict),
+        (small_argon2(64, 1), strict),
+        (KdfInput::AesKdf { rounds: 99_999 }, strict),
+        (small_argon2(4096, 2), ANY),
+        (small_argon2(64, 0), ANY),
+        (
+            KdfInput::Argon2d {
+                memory_mib: 64,
+                iterations: 2,
+                parallelism: 0,
+            },
+            ANY,
+        ),
+    ] {
+        assert!(apply(
+            &mut db,
+            &Op::SetVaultConfig {
+                kdf,
+                compression: true,
+                minimums,
+            },
+            at(2)
+        )
+        .is_err());
+    }
+    assert_eq!((shown(&db), db.config.clone()), before);
+
+    // Set, shown, and kept through a save.
+    let kdf = KdfInput::Argon2d {
+        memory_mib: 64,
+        iterations: 2,
+        parallelism: 1,
+    };
+    assert!(
+        run(
+            &mut db,
+            Op::SetVaultConfig {
+                kdf,
+                compression: false,
+                minimums: strict,
+            },
+            3
+        )
+        .changed
+    );
+    assert_eq!(db.meta.settings_changed, Some(at(3)));
+    let key = VaultKey::new().with_password("parola");
+    let reopened = open(&save(&db, &key).unwrap(), &key).unwrap();
+    let v = view::view(&reopened);
+    assert_eq!((v.kdf, v.compression), (Some(kdf), false));
+    let op: Op = serde_json::from_str(
+        r#"{"op":"setVaultConfig","kdf":{"kind":"aesKdf","rounds":100000},"compression":true,"minimums":{"argon2MemoryMib":64,"argon2Iterations":2,"aesKdfRounds":100000}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        op,
+        Op::SetVaultConfig {
+            kdf: KdfInput::AesKdf { rounds: 100_000 },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_key_derivation_is_timed_on_an_empty_vault() {
+    kutup_pass::edit::derive_once(&small_argon2(1, 1)).unwrap();
+    assert!(kutup_pass::edit::derive_once(&small_argon2(0, 1)).is_err());
+}
+
+#[test]
+fn another_devices_save_keeps_a_key_derivation_change() {
+    let key = VaultKey::new().with_password("parola");
+    let mut base = vault();
+    let id = add(&mut base, "Banka", 1);
+    let base_bytes = save(&base, &key).unwrap();
+    let base = open(&base_bytes, &key).unwrap();
+
+    // This device changes the key derivation; the other edits an entry.
+    let mut mine = base.clone();
+    run(
+        &mut mine,
+        Op::SetVaultConfig {
+            kdf: small_argon2(1, 3),
+            compression: false,
+            minimums: ANY,
+        },
+        2,
+    );
+    let mut other = base.clone();
+    run(
+        &mut other,
+        Op::UpdateEntry {
+            id: id.clone(),
+            entry: input(&[("Title", "Banka"), ("Password", "yeni")]),
+        },
+        3,
+    );
+    let mine = open(&save(&mine, &key).unwrap(), &key).unwrap();
+    let other = open(&save(&other, &key).unwrap(), &key).unwrap();
+
+    // Either way round, with or without the base: the change and the edit.
+    for (ours, theirs, base) in [
+        (&other, &mine, Some(&base)),
+        (&mine, &other, Some(&base)),
+        (&other, &mine, None),
+        (&mine, &other, None),
+    ] {
+        let (merged, report) = merge(base, ours, theirs);
+        let v = view::view(&merged);
+        assert_eq!(v.kdf, Some(small_argon2(1, 3)));
+        assert!(!v.compression);
+        assert_eq!(value(&v, &id, "Password"), "yeni");
+        assert!(report.metadata_conflicts.is_empty());
+    }
+
+    // Both changed it: the later change wins, and the merge says so.
+    let mut later = base.clone();
+    run(
+        &mut later,
+        Op::SetVaultConfig {
+            kdf: small_argon2(2, 4),
+            compression: true,
+            minimums: ANY,
+        },
+        5,
+    );
+    for (ours, theirs) in [(&mine, &later), (&later, &mine)] {
+        let (merged, report) = merge(Some(&base), ours, theirs);
+        assert_eq!(view::view(&merged).kdf, Some(small_argon2(2, 4)));
+        assert_eq!(
+            report.metadata_conflicts,
+            vec!["encryption settings".to_owned()]
+        );
+        // The merged vault opens after a save.
+        open(&save(&merged, &key).unwrap(), &key).unwrap();
+    }
+}

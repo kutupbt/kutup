@@ -230,7 +230,9 @@ fn later(a: Option<NaiveDateTime>, b: Option<NaiveDateTime>) -> Option<NaiveDate
 
 /// Merges `ours` and `theirs`, the two edited copies of a vault, against
 /// `base`, the version both started from (`None` when it is unknown). The
-/// result keeps ours' configuration (cipher, key derivation, compression).
+/// result keeps ours' file format and ciphers; its key derivation and
+/// compression (the vault's encryption settings) merge three-way, the later
+/// change (`settings_changed`) winning without a base or when both changed.
 pub fn merge(
     base: Option<&Database>,
     ours: &Database,
@@ -244,6 +246,7 @@ pub fn merge(
         report: MergeReport::default(),
     };
     merger.metadata();
+    merger.encryption_settings();
     merger.custom_icons();
     merger.groups();
     merger.entries();
@@ -395,6 +398,37 @@ impl Merger<'_> {
     }
 
     // ----------------------------------------------------------- metadata
+
+    /// The key derivation and compression: what a vault's settings page
+    /// changes (`edit::Op::SetVaultConfig`). Another device's save must not
+    /// undo a change made here, nor this one undo theirs.
+    fn encryption_settings(&mut self) {
+        let settings = |db: &Database| {
+            (
+                db.config.kdf_config.clone(),
+                db.config.compression_config.clone(),
+            )
+        };
+        let (ours, theirs) = (settings(self.ours), settings(self.theirs));
+        let theirs_later = self.theirs.meta.settings_changed > self.ours.meta.settings_changed;
+        let take_theirs = match self.base.map(settings) {
+            Some(base) => match pick(Some(&base), Some(&ours), Some(&theirs)) {
+                Pick::Theirs => true,
+                Pick::Conflict => {
+                    self.report
+                        .metadata_conflicts
+                        .push("encryption settings".to_owned());
+                    theirs_later
+                }
+                Pick::Ours => false,
+            },
+            None => ours != theirs && theirs_later,
+        };
+        if take_theirs {
+            self.out.config.kdf_config = theirs.0;
+            self.out.config.compression_config = theirs.1;
+        }
+    }
 
     fn metadata(&mut self) {
         let theirs = &self.theirs.meta;

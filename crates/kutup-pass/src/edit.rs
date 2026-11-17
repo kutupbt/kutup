@@ -13,7 +13,7 @@ use std::str::FromStr as _;
 
 use base64::Engine as _;
 use chrono::NaiveDateTime;
-use keepass::config::{DatabaseConfig, KdfConfig};
+use keepass::config::{CompressionConfig, DatabaseConfig, KdfConfig};
 use keepass::db::{
     Color, CustomIcon, CustomIconId, Entry, EntryId, GroupId, History, Icon, Times, Value,
 };
@@ -174,7 +174,182 @@ pub enum Op {
         description: String,
         #[serde(default)]
         default_user_name: String,
+        /// The recycle bin on or off; absent keeps it.
+        #[serde(default)]
+        recycle_bin_enabled: Option<bool>,
+        /// The history limits; absent keeps them. Lowering one trims every
+        /// entry's history at once, as KeePassXC does.
+        #[serde(default)]
+        history: Option<HistoryLimits>,
     },
+    /// The vault's key derivation and compression (its settings page's
+    /// Encryption tab). Refused below `minimums` (the server's settings,
+    /// docs/plans/pass-gaps-2.md P2) or above what any device could open.
+    SetVaultConfig {
+        kdf: KdfInput,
+        compression: bool,
+        minimums: KdfMinimums,
+    },
+}
+
+/// History kept per entry; `None` is no limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryLimits {
+    pub max_items: Option<u32>,
+    /// Bytes.
+    pub max_size: Option<u64>,
+}
+
+/// A key derivation as the settings page sets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum KdfInput {
+    Argon2id {
+        memory_mib: u64,
+        iterations: u64,
+        parallelism: u32,
+    },
+    Argon2d {
+        memory_mib: u64,
+        iterations: u64,
+        parallelism: u32,
+    },
+    /// KDBX 3's AES-KDF, kept for older apps.
+    AesKdf { rounds: u64 },
+}
+
+/// The weakest key derivation a vault may be set to (administrators'
+/// settings; a vault already below them still opens).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KdfMinimums {
+    pub argon2_memory_mib: u64,
+    pub argon2_iterations: u64,
+    pub aes_kdf_rounds: u64,
+}
+
+/// The most memory a vault's Argon2 may ask of a device opening it.
+pub const MAX_ARGON2_MEMORY_MIB: u64 = 2048;
+/// The most Argon2 passes.
+pub const MAX_ARGON2_ITERATIONS: u64 = 10_000;
+/// The most Argon2 lanes.
+pub const MAX_ARGON2_PARALLELISM: u32 = 16;
+/// The most AES-KDF rounds.
+pub const MAX_AES_KDF_ROUNDS: u64 = 1_000_000_000;
+/// The most history items a limit may name.
+pub const MAX_HISTORY_ITEMS: u32 = 1000;
+
+impl KdfInput {
+    /// The vault's key derivation, as `KdfConfig`.
+    pub fn of(config: &KdfConfig) -> Option<Self> {
+        match config {
+            KdfConfig::Argon2id {
+                iterations,
+                memory,
+                parallelism,
+                ..
+            } => Some(Self::Argon2id {
+                memory_mib: memory / (1024 * 1024),
+                iterations: *iterations,
+                parallelism: *parallelism,
+            }),
+            KdfConfig::Argon2 {
+                iterations,
+                memory,
+                parallelism,
+                ..
+            } => Some(Self::Argon2d {
+                memory_mib: memory / (1024 * 1024),
+                iterations: *iterations,
+                parallelism: *parallelism,
+            }),
+            KdfConfig::Aes { rounds } => Some(Self::AesKdf { rounds: *rounds }),
+            _ => None,
+        }
+    }
+
+    /// Whether it is at least `minimums`.
+    pub fn meets(&self, minimums: &KdfMinimums) -> bool {
+        match *self {
+            Self::Argon2id {
+                memory_mib,
+                iterations,
+                ..
+            }
+            | Self::Argon2d {
+                memory_mib,
+                iterations,
+                ..
+            } => {
+                memory_mib >= minimums.argon2_memory_mib && iterations >= minimums.argon2_iterations
+            }
+            Self::AesKdf { rounds } => rounds >= minimums.aes_kdf_rounds,
+        }
+    }
+
+    fn config(&self) -> Result<KdfConfig, EditError> {
+        let argon2 = |memory_mib: u64, iterations: u64, parallelism: u32| {
+            if !(1..=MAX_ARGON2_MEMORY_MIB).contains(&memory_mib) {
+                return Err(invalid(format!(
+                    "Argon2 memory is at most {MAX_ARGON2_MEMORY_MIB} MiB"
+                )));
+            }
+            if !(1..=MAX_ARGON2_ITERATIONS).contains(&iterations) {
+                return Err(invalid(format!(
+                    "Argon2 takes 1 to {MAX_ARGON2_ITERATIONS} iterations"
+                )));
+            }
+            if !(1..=MAX_ARGON2_PARALLELISM).contains(&parallelism) {
+                return Err(invalid(format!(
+                    "Argon2 takes 1 to {MAX_ARGON2_PARALLELISM} threads"
+                )));
+            }
+            Ok((memory_mib * 1024 * 1024, iterations, parallelism))
+        };
+        Ok(match *self {
+            Self::Argon2id {
+                memory_mib,
+                iterations,
+                parallelism,
+            } => {
+                let (memory, iterations, parallelism) =
+                    argon2(memory_mib, iterations, parallelism)?;
+                KdfConfig::Argon2id {
+                    iterations,
+                    memory,
+                    parallelism,
+                    version: argon2::Version::Version13,
+                }
+            }
+            Self::Argon2d {
+                memory_mib,
+                iterations,
+                parallelism,
+            } => {
+                let (memory, iterations, parallelism) =
+                    argon2(memory_mib, iterations, parallelism)?;
+                KdfConfig::Argon2 {
+                    iterations,
+                    memory,
+                    parallelism,
+                    version: argon2::Version::Version13,
+                }
+            }
+            Self::AesKdf { rounds } => {
+                if !(1..=MAX_AES_KDF_ROUNDS).contains(&rounds) {
+                    return Err(invalid(format!(
+                        "AES-KDF takes 1 to {MAX_AES_KDF_ROUNDS} rounds"
+                    )));
+                }
+                KdfConfig::Aes { rounds }
+            }
+        })
+    }
 }
 
 /// An entry's editable data.
@@ -601,7 +776,17 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
             name,
             description,
             default_user_name,
+            recycle_bin_enabled,
+            history,
         } => {
+            if history.is_some_and(|h| h.max_items.is_some_and(|n| n > MAX_HISTORY_ITEMS)) {
+                return Err(invalid(format!(
+                    "at most {MAX_HISTORY_ITEMS} history items"
+                )));
+            }
+            if history.is_some_and(|h| h.max_size.is_some_and(|n| n > i64::MAX as u64)) {
+                return Err(invalid("a history size is too large"));
+            }
             let name = check_name(name, "vault name")?;
             let meta = &mut db.meta;
             let mut changed = false;
@@ -622,11 +807,85 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                 meta.default_username_changed = Some(now);
                 changed = true;
             }
+            if let Some(enabled) = recycle_bin_enabled {
+                if meta.recyclebin_enabled.unwrap_or(true) != *enabled {
+                    meta.recyclebin_enabled = Some(*enabled);
+                    meta.recyclebin_changed = Some(now);
+                    changed = true;
+                }
+            }
+            if let Some(limits) = history {
+                // KeePass's "no limit" is -1.
+                let items = limits.max_items.map_or(-1, |n| n as isize);
+                let size = limits.max_size.map_or(-1, |n| n as isize);
+                if meta.history_max_items.unwrap_or(-1) != items
+                    || meta.history_max_size.unwrap_or(-1) != size
+                {
+                    meta.history_max_items = Some(items);
+                    meta.history_max_size = Some(size);
+                    meta.settings_changed = Some(now);
+                    changed = true;
+                    trim_every_history(db);
+                }
+            }
+            Applied { id: None, changed }
+        }
+        Op::SetVaultConfig {
+            kdf,
+            compression,
+            minimums,
+        } => {
+            let config = kdf.config()?;
+            if !kdf.meets(minimums) {
+                return Err(invalid(
+                    "the key derivation is weaker than this server allows",
+                ));
+            }
+            let compression = if *compression {
+                CompressionConfig::GZip
+            } else {
+                CompressionConfig::None
+            };
+            let changed =
+                db.config.kdf_config != config || db.config.compression_config != compression;
+            if changed {
+                db.config.kdf_config = config;
+                db.config.compression_config = compression;
+                db.meta.settings_changed = Some(now);
+            }
             Applied { id: None, changed }
         }
     };
     refs::rebuild(db);
     Ok(applied)
+}
+
+/// Derives one key with `kdf` (an empty vault saved under a throwaway
+/// password), for the settings page to time: KeePassXC's "Benchmark 1 s".
+pub fn derive_once(kdf: &KdfInput) -> Result<(), EditError> {
+    let mut config = DatabaseConfig::default();
+    config.kdf_config = kdf.config()?;
+    let db = Database::with_config(config);
+    crate::save(&db, &crate::VaultKey::new().with_password("benchmark"))
+        .map(|_| ())
+        .map_err(|error| invalid(error.to_string()))
+}
+
+/// Trims every entry's history to the vault's limits (after they changed).
+fn trim_every_history(db: &mut Database) {
+    let ids: Vec<EntryId> = db.entries.keys().copied().collect();
+    for id in ids {
+        let Some(mut items) = db.entries[&id].history.as_ref().map(|h| h.entries.clone()) else {
+            continue;
+        };
+        let before = items.len();
+        trim_history(db, &mut items);
+        if items.len() != before {
+            if let Some(history) = db.entries.get_mut(&id).and_then(|e| e.history.as_mut()) {
+                history.entries = items;
+            }
+        }
+    }
 }
 
 /// The parts of an entry an edit changes; equal when nothing changed.

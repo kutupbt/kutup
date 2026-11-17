@@ -3,7 +3,7 @@
 
 import type { MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import type { Call, Request, Response } from './protocol'
-import type { Applied, EntryView, ImportFailure, ImportFormat, ImportPreview, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
+import type { Applied, EntryView, ImportFailure, ImportFormat, ImportPreview, KdfInput, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
 
 /** Why a vault didn't open, when the vault library says (its message's first word). */
 export type VaultFailure = 'wrongKey' | 'unsupported' | 'damaged' | 'keyFile' | 'emptyKey'
@@ -202,6 +202,17 @@ export interface KeyParts {
 /** A new KeePassXC key file (XML v2), made in the worker: for the person to download, never sent anywhere. */
 export function generateKeyFile(): Promise<Uint8Array> {
   return call({ call: 'generateKeyFile' })
+}
+
+/**
+ * How long one key derivation with `kdf` takes in the worker, in
+ * milliseconds (an empty vault saved under it): the settings page's
+ * benchmark. Throws for settings out of range.
+ */
+export async function timeKdf(kdf: KdfInput): Promise<number> {
+  const start = performance.now()
+  await call({ call: 'deriveOnce', kdf })
+  return performance.now() - start
 }
 
 /** A kept vault key, opened (kutup_pass::kept): bytes in base64. */

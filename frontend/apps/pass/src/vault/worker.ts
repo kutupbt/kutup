@@ -46,6 +46,7 @@ interface PassWasm {
   probeVault(contents: Uint8Array): unknown
   resealKeptKey(envelope: string, masterKeys: MasterKeysBytes, binding: string, from: string, to: string, revision: number): string
   generateKeyFile(): Uint8Array
+  deriveOnce(kdf: unknown): void
 }
 
 let wasm: Promise<PassWasm> | null = null
@@ -111,6 +112,9 @@ async function run(request: Request): Promise<unknown> {
       return vault(request.handle).keyParts()
     case 'generateKeyFile':
       return module.generateKeyFile()
+    case 'deriveOnce':
+      module.deriveOnce(request.kdf)
+      return null
     case 'close': {
       vaults.get(request.handle)?.free()
       vaults.delete(request.handle)

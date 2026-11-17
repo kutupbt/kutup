@@ -72,6 +72,10 @@ export interface VaultView {
   recycleBinEnabled: boolean
   historyMaxItems: number | null
   historyMaxSize: number | null
+  /** The key derivation; null for one Kutup Pass can't set. */
+  kdf: KdfInput | null
+  /** Whether the file is compressed (GZip). */
+  compression: boolean
   groups: GroupView[]
   entries: EntryView[]
   /** The vault's own pictures (KeePass custom icons) a browser can show. */
@@ -129,7 +133,30 @@ export type Op =
   | { op: 'restoreGroups'; ids: string[] }
   | { op: 'emptyRecycleBin' }
   | { op: 'importCsv'; data: string; provider: string | null; groupName: string }
-  | { op: 'updateVault'; name: string; description?: string; defaultUserName?: string }
+  /** The bin and the history limits are kept when absent; lowering a limit trims every history at once. */
+  | { op: 'updateVault'; name: string; description?: string; defaultUserName?: string; recycleBinEnabled?: boolean; history?: HistoryLimits }
+  /** The key derivation and compression, refused below the server's minimums. */
+  | { op: 'setVaultConfig'; kdf: KdfInput; compression: boolean; minimums: KdfMinimums }
+
+/** History kept per entry; null is no limit. */
+export interface HistoryLimits {
+  maxItems: number | null
+  /** Bytes. */
+  maxSize: number | null
+}
+
+/** A key derivation (kutup_pass::edit::KdfInput). */
+export type KdfInput =
+  | { kind: 'argon2id'; memoryMib: number; iterations: number; parallelism: number }
+  | { kind: 'argon2d'; memoryMib: number; iterations: number; parallelism: number }
+  | { kind: 'aesKdf'; rounds: number }
+
+/** The weakest key derivation this server lets a vault be set to (`passKdfMinimums`). */
+export interface KdfMinimums {
+  argon2MemoryMib: number
+  argon2Iterations: number
+  aesKdfRounds: number
+}
 
 export interface Applied {
   id: string | null

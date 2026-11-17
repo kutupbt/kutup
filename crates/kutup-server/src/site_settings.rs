@@ -274,6 +274,7 @@ pub enum SettingSection {
     Backups,
     Mail,
     AccountRecords,
+    Pass,
 }
 
 /// A whole-number setting administrators set: its key, its field in
@@ -1268,6 +1269,43 @@ pub const MAIL_KEYS_PER_ADDRESS: NumericSetting = NumericSetting {
 };
 pub const MAIL_SETTINGS: [NumericSetting; 1] = [MAIL_KEYS_PER_ADDRESS];
 
+/// The weakest key derivation Kutup Pass lets a vault be set to
+/// (docs/plans/pass-gaps-2.md, P2). A vault already below them still opens,
+/// with a warning and an offer to strengthen it. The maxima are the Pass
+/// core's (`kutup_pass::edit::MAX_*`), the most any device is asked to do.
+pub const PASS_ARGON2_MIN_MEMORY_MIB: NumericSetting = NumericSetting {
+    key: "pass_argon2_min_memory_mib",
+    field: "passArgon2MinMemoryMib",
+    default: 64,
+    min: 1,
+    max: 2048,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const PASS_ARGON2_MIN_ITERATIONS: NumericSetting = NumericSetting {
+    key: "pass_argon2_min_iterations",
+    field: "passArgon2MinIterations",
+    default: 2,
+    min: 1,
+    max: 10_000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const PASS_AES_KDF_MIN_ROUNDS: NumericSetting = NumericSetting {
+    key: "pass_aes_kdf_min_rounds",
+    field: "passAesKdfMinRounds",
+    default: 100_000,
+    min: 1,
+    max: 1_000_000_000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const PASS_SETTINGS: [NumericSetting; 3] = [
+    PASS_ARGON2_MIN_MEMORY_MIB,
+    PASS_ARGON2_MIN_ITERATIONS,
+    PASS_AES_KDF_MIN_ROUNDS,
+];
+
 /// The account-records store (docs/plans/account-records.md): the most
 /// records one account keeps in a scope, per scope (a single-record scope
 /// has none), and how the store pages and forgets.
@@ -1496,6 +1534,7 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
         .chain(section(SettingSection::Privacy, &PRIVACY_SETTINGS))
         .chain(section(SettingSection::Backups, &BACKUP_SETTINGS))
         .chain(section(SettingSection::Mail, &MAIL_SETTINGS))
+        .chain(section(SettingSection::Pass, &PASS_SETTINGS))
         .chain(section(
             SettingSection::AccountRecords,
             &ACCOUNT_RECORDS_SETTINGS,

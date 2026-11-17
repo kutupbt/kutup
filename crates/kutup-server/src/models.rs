@@ -62,9 +62,21 @@ pub struct SettingsResponse {
     pub old_address_receive_days: i64,
     /// The largest `.kdbx` file Kutup Pass takes in an upload, in bytes.
     pub pass_vault_max_bytes: i64,
+    /// The weakest key derivation Kutup Pass sets a vault to.
+    pub pass_kdf_minimums: PassKdfMinimums,
     /// Who may open public links: `on`, `off` or `signed_in` (the share
     /// dialogs say why links are off).
     pub public_sharing: crate::public_sharing::PublicSharing,
+}
+
+/// The weakest key derivation Kutup Pass sets a vault to (administrators'
+/// settings): Argon2 memory in MiB and passes, AES-KDF rounds.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PassKdfMinimums {
+    pub argon2_memory_mib: i64,
+    pub argon2_iterations: i64,
+    pub aes_kdf_rounds: i64,
 }
 
 /// What the feedback form offers besides sending to the administrators.

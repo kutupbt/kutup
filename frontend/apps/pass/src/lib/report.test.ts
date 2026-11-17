@@ -42,6 +42,8 @@ function vault(entries: EntryView[]): VaultView {
     recycleBinEnabled: true,
     historyMaxItems: 10,
     historyMaxSize: null,
+    kdf: { kind: 'argon2id', memoryMib: 64, iterations: 10, parallelism: 2 },
+    compression: true,
     groups: [],
     entries,
     customIcons: [],
