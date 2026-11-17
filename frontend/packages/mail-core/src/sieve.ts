@@ -46,30 +46,48 @@ function test(condition: FilterCondition): string {
   return condition.negate ? `not ${body}` : body
 }
 
+/** One filter's `if` block; a place gone since is left out. */
+function block(filter: Pick<MailFilter, 'match' | 'conditions' | 'actions'>, places: SievePlaces): string {
+  const into: string[] = []
+  const folder = filter.actions.folder
+  if (folder && (SYSTEM as readonly string[]).includes(folder)) into.push(folder)
+  else if (folder?.startsWith('custom:')) {
+    const found = places.folders.find((f) => f.id === folder.slice('custom:'.length))
+    if (found) into.push(found.path.split('/').map(pathName).join('/'))
+  }
+  for (const id of filter.actions.labels ?? []) {
+    const label = places.labels.find((l) => l.id === id)
+    if (label) into.push(pathName(label.name))
+  }
+  const lines = [
+    ...into.map((name) => `    fileinto ${quote(name)};`),
+    ...(filter.actions.markRead ? ['    addflag "\\\\Seen";'] : []),
+    ...(filter.actions.star ? ['    addflag "\\\\Flagged";'] : []),
+  ]
+  const tests = filter.conditions.map(test)
+  return `if ${filter.match === 'all' ? 'allof' : 'anyof'} (${tests.join(',\n    ')})\n{\n${lines.join('\n')}\n}`
+}
+
+/** What a script for one filter needs (docs/plans/mail-sieve-editor.md). */
+export const SIEVE_FILTER_REQUIRE = 'require ["fileinto", "imap4flags"];'
+
+/**
+ * One filter as the Sieve editor shows it: the `require` line and its block,
+ * with no spam guard (the server's spam rule is its own) and no name comment
+ * (the dialog has a name field). A filter switched off is shown as it would
+ * run; switching is the list's.
+ */
+export function filterToSieve(filter: Pick<MailFilter, 'match' | 'conditions' | 'actions'>, places: SievePlaces): string {
+  return `${SIEVE_FILTER_REQUIRE}\n\n${block(filter, places)}\n`
+}
+
 /** The filters, in order, as one Sieve script; a place gone since is left out of its filter. */
 export function filtersToSieve(filters: MailFilter[], places: SievePlaces): string {
   const blocks = filters.map((filter) => {
-    const into: string[] = []
-    const folder = filter.actions.folder
-    if (folder && (SYSTEM as readonly string[]).includes(folder)) into.push(folder)
-    else if (folder?.startsWith('custom:')) {
-      const found = places.folders.find((f) => f.id === folder.slice('custom:'.length))
-      if (found) into.push(found.path.split('/').map(pathName).join('/'))
-    }
-    for (const id of filter.actions.labels ?? []) {
-      const label = places.labels.find((l) => l.id === id)
-      if (label) into.push(pathName(label.name))
-    }
-    const lines = [
-      ...into.map((name) => `    fileinto ${quote(name)};`),
-      ...(filter.actions.markRead ? ['    addflag "\\\\Seen";'] : []),
-      ...(filter.actions.star ? ['    addflag "\\\\Flagged";'] : []),
-    ]
-    const tests = filter.conditions.map(test)
     const head = `# ${filter.name.replace(/[\r\n]+/g, ' ')}${filter.enabled ? '' : ' (off)'}`
+    const text = block(filter, places)
     // A filter switched off stays in the script as a comment.
-    const block = `if ${filter.match === 'all' ? 'allof' : 'anyof'} (${tests.join(',\n    ')})\n{\n${lines.join('\n')}\n}`
-    return filter.enabled ? `${head}\n${block}` : `${head}\n${block.replace(/^/gm, '# ')}`
+    return filter.enabled ? `${head}\n${text}` : `${head}\n${text.replace(/^/gm, '# ')}`
   })
   return [
     'require ["include", "environment", "variables", "relational", "comparator-i;ascii-numeric", "spamtest", "fileinto", "imap4flags"];',
@@ -88,10 +106,16 @@ export interface ImportedFilter {
   actions: FilterActions
 }
 
-/** Why part of a script was not taken: `what` is the Sieve text in question. */
+/**
+ * Why part of a script was not taken: `what` is the Sieve text in question
+ * (for a syntax problem, what went wrong), `from` and `to` its offsets in the
+ * script, for the editor's marks.
+ */
 export interface SieveProblem {
   kind: 'syntax' | 'unsupported' | 'unknownPlace' | 'noAction'
   what: string
+  from: number
+  to: number
 }
 
 export interface SieveImport {
@@ -103,35 +127,51 @@ export interface SieveImport {
 // Reading: a tokenizer and a parser for the Sieve grammar (RFC 5228), then
 // the subset Kutup's filters can hold.
 
-type Token =
+type Token = (
   | { kind: 'word'; value: string }
   | { kind: 'tag'; value: string }
   | { kind: 'string'; value: string }
   | { kind: 'number'; value: string }
   | { kind: 'comment'; value: string }
   | { kind: 'punct'; value: string }
+) & { from: number; to: number }
+
+/** A syntax error at `from`..`to` in the script. */
+class SieveSyntaxError extends SyntaxError {
+  constructor(
+    message: string,
+    readonly from: number,
+    readonly to: number,
+  ) {
+    super(message)
+  }
+}
 
 function tokenize(source: string): Token[] {
   const tokens: Token[] = []
   let i = 0
+  const fail = (message: string, from: number, to = source.length): never => {
+    throw new SieveSyntaxError(message, from, Math.max(to, from + 1))
+  }
   while (i < source.length) {
     const c = source[i]
+    const start = i
     if (/\s/.test(c)) {
       i++
     } else if (c === '#') {
       const end = source.indexOf('\n', i)
-      tokens.push({ kind: 'comment', value: source.slice(i + 1, end < 0 ? undefined : end).trim() })
       i = end < 0 ? source.length : end
+      tokens.push({ kind: 'comment', value: source.slice(start + 1, i).trim(), from: start, to: i })
     } else if (source.startsWith('/*', i)) {
       const end = source.indexOf('*/', i + 2)
-      if (end < 0) throw new SyntaxError('an unclosed comment')
-      tokens.push({ kind: 'comment', value: source.slice(i + 2, end).trim() })
+      if (end < 0) fail('an unclosed comment', start)
       i = end + 2
+      tokens.push({ kind: 'comment', value: source.slice(start + 2, end).trim(), from: start, to: i })
     } else if (c === '"') {
       let value = ''
       i++
       for (;;) {
-        if (i >= source.length) throw new SyntaxError('an unclosed string')
+        if (i >= source.length) fail('an unclosed string', start)
         const ch = source[i]
         if (ch === '\\' && i + 1 < source.length) {
           value += source[i + 1]
@@ -144,31 +184,31 @@ function tokenize(source: string): Token[] {
           i++
         }
       }
-      tokens.push({ kind: 'string', value })
+      tokens.push({ kind: 'string', value, from: start, to: i })
     } else if (source.startsWith('text:', i)) {
       // Multi-line strings (`text: … .`): only in actions Kutup has none of.
       const end = source.indexOf('\n.\n', i)
-      if (end < 0) throw new SyntaxError('an unclosed text: string')
-      tokens.push({ kind: 'string', value: source.slice(source.indexOf('\n', i) + 1, end) })
+      if (end < 0) fail('an unclosed text: string', start)
       i = end + 3
+      tokens.push({ kind: 'string', value: source.slice(source.indexOf('\n', start) + 1, end), from: start, to: i })
     } else if (c === ':') {
       const m = /^:[A-Za-z_][\w-]*/.exec(source.slice(i))
-      if (!m) throw new SyntaxError(`an unexpected ":" at ${i}`)
-      tokens.push({ kind: 'tag', value: m[0].slice(1).toLowerCase() })
-      i += m[0].length
+      if (!m) fail('an unexpected ":"', start, start + 1)
+      i += m![0].length
+      tokens.push({ kind: 'tag', value: m![0].slice(1).toLowerCase(), from: start, to: i })
     } else if (/[0-9]/.test(c)) {
       const m = /^[0-9]+[KMG]?/i.exec(source.slice(i))!
-      tokens.push({ kind: 'number', value: m[0] })
       i += m[0].length
+      tokens.push({ kind: 'number', value: m[0], from: start, to: i })
     } else if (/[A-Za-z_]/.test(c)) {
       const m = /^[A-Za-z_][\w.-]*/.exec(source.slice(i))!
-      tokens.push({ kind: 'word', value: m[0].toLowerCase() })
       i += m[0].length
+      tokens.push({ kind: 'word', value: m[0].toLowerCase(), from: start, to: i })
     } else if ('[](){},;'.includes(c)) {
-      tokens.push({ kind: 'punct', value: c })
       i++
+      tokens.push({ kind: 'punct', value: c, from: start, to: i })
     } else {
-      throw new SyntaxError(`an unexpected "${c}"`)
+      fail(`an unexpected "${c}"`, start, start + 1)
     }
   }
   return tokens
@@ -179,9 +219,13 @@ interface Test {
   name: string
   args: Argument[]
   tests: Test[]
+  from: number
+  to: number
 }
 interface Command {
   name: string
+  from: number
+  to: number
   args: Argument[]
   test?: Test
   block?: Command[]
@@ -192,7 +236,18 @@ interface Command {
 class Parser {
   private at = 0
   private lastComment: string | undefined
-  constructor(private readonly tokens: Token[]) {}
+  /** Where the last token taken ends. */
+  private end = 0
+  constructor(
+    private readonly tokens: Token[],
+    private readonly length: number,
+  ) {}
+
+  /** A syntax error at the next token (or the script's end). */
+  private fail(message: string): never {
+    const token = this.peek()
+    throw new SieveSyntaxError(message, token?.from ?? Math.max(this.length - 1, 0), token?.to ?? this.length)
+  }
 
   private peek(): Token | undefined {
     while (this.tokens[this.at]?.kind === 'comment') {
@@ -203,13 +258,15 @@ class Parser {
   }
   private next(): Token {
     const token = this.peek()
-    if (!token) throw new SyntaxError('the script ends too soon')
+    if (!token) this.fail('the script ends too soon')
     this.at++
-    return token
+    this.end = token!.to
+    return token!
   }
   private expect(value: string) {
-    const token = this.next()
-    if (token.kind !== 'punct' || token.value !== value) throw new SyntaxError(`expected "${value}"`)
+    const token = this.peek()
+    if (token?.kind !== 'punct' || token.value !== value) this.fail(`expected "${value}"`)
+    this.next()
   }
   private isPunct(value: string) {
     const token = this.peek()
@@ -221,7 +278,7 @@ class Parser {
     for (;;) {
       const token = this.peek()
       if (!token) {
-        if (inBlock) throw new SyntaxError('a block is not closed')
+        if (inBlock) this.fail('a block is not closed')
         return out
       }
       if (inBlock && token.kind === 'punct' && token.value === '}') return out
@@ -233,8 +290,8 @@ class Parser {
     this.peek()
     const comment = this.lastComment
     this.lastComment = undefined
+    if (this.peek()?.kind !== 'word') this.fail('expected a command')
     const name = this.next()
-    if (name.kind !== 'word') throw new SyntaxError('expected a command')
     const args = this.arguments()
     let test: Test | undefined
     if (name.value === 'if' || name.value === 'elsif') test = this.test()
@@ -242,10 +299,10 @@ class Parser {
       this.next()
       const block = this.commands(true)
       this.expect('}')
-      return { name: name.value, args, test, block, comment }
+      return { name: name.value, args, test, block, comment, from: name.from, to: this.end }
     }
     this.expect(';')
-    return { name: name.value, args, test, comment }
+    return { name: name.value, args, test, comment, from: name.from, to: this.end }
   }
 
   private arguments(): Argument[] {
@@ -260,8 +317,8 @@ class Parser {
         this.next()
         const list: string[] = []
         for (;;) {
+          if (this.peek()?.kind !== 'string') this.fail('expected a string in a list')
           const item = this.next()
-          if (item.kind !== 'string') throw new SyntaxError('expected a string in a list')
           list.push(item.value)
           if (this.isPunct(',')) this.next()
           else break
@@ -273,8 +330,8 @@ class Parser {
   }
 
   private test(): Test {
+    if (this.peek()?.kind !== 'word') this.fail('expected a test')
     const name = this.next()
-    if (name.kind !== 'word') throw new SyntaxError('expected a test')
     const args = this.arguments()
     const tests: Test[] = []
     if (this.isPunct('(')) {
@@ -288,7 +345,7 @@ class Parser {
     } else if (name.value === 'not') {
       tests.push(this.test())
     }
-    return { name: name.value, args, tests }
+    return { name: name.value, args, tests, from: name.from, to: this.end }
   }
 }
 
@@ -314,32 +371,35 @@ function isGuard(command: Command): boolean {
 }
 
 /** One test as Kutup conditions: several keys become several conditions (only where `anyof` keeps their meaning). */
+/** A problem with the range of the test or command it names. */
+const at = (kind: SieveProblem['kind'], what: string, span: { from: number; to: number }): SieveProblem => ({ kind, what, from: span.from, to: span.to })
+
 function conditionsOf(test: Test, negate: boolean, any: boolean): FilterCondition[] | SieveProblem {
   if (test.name === 'not') return conditionsOf(test.tests[0], !negate, any)
   if (test.name === 'exists') {
     const [headers] = strings(test.args)
     if (headers?.value.length === 1 && headers.value[0].toLowerCase() === 'x-attached') return [{ field: 'attachments', op: 'contains', negate, value: '' }]
-    return { kind: 'unsupported', what: show(test) }
+    return at('unsupported', show(test), test)
   }
-  if (test.name !== 'address' && test.name !== 'header') return { kind: 'unsupported', what: show(test) }
+  if (test.name !== 'address' && test.name !== 'header') return at('unsupported', show(test), test)
   const flags = tags(test.args)
   // Only the whole address, as Kutup's sender and recipient match it.
-  if (flags.includes('localpart') || flags.includes('domain') || flags.includes('user') || flags.includes('detail')) return { kind: 'unsupported', what: show(test) }
+  if (flags.includes('localpart') || flags.includes('domain') || flags.includes('user') || flags.includes('detail')) return at('unsupported', show(test), test)
   const comparatorAt = test.args.findIndex((a) => a.kind === 'tag' && a.value === 'comparator')
   const comparator = comparatorAt >= 0 ? (test.args[comparatorAt + 1] as { value: string[] } | undefined)?.value[0] : undefined
-  if (comparator && comparator !== 'i;unicode-casemap' && comparator !== 'i;ascii-casemap') return { kind: 'unsupported', what: show(test) }
+  if (comparator && comparator !== 'i;unicode-casemap' && comparator !== 'i;ascii-casemap') return at('unsupported', show(test), test)
   const rest = strings(test.args).filter((_, i) => !(comparatorAt >= 0 && i === 0))
-  if (rest.length !== 2) return { kind: 'syntax', what: show(test) }
+  if (rest.length !== 2) return at('syntax', show(test), test)
   const [headers, keys] = [rest[0].value.map((h) => h.toLowerCase()), rest[1].value]
   let field: FilterField
   if (headers.length === 1 && headers[0] === 'subject') field = 'subject'
   else if (headers.length === 1 && headers[0] === 'from') field = 'sender'
   else if (headers.length > 0 && headers.every((h) => h === 'to' || h === 'cc' || h === 'bcc')) field = 'recipient'
-  else return { kind: 'unsupported', what: show(test) }
+  else return at('unsupported', show(test), test)
   const kind = flags.find((f) => f === 'is' || f === 'contains' || f === 'matches' || f === 'regex' || f === 'value' || f === 'count') ?? 'is'
-  if (kind !== 'is' && kind !== 'contains' && kind !== 'matches') return { kind: 'unsupported', what: show(test) }
+  if (kind !== 'is' && kind !== 'contains' && kind !== 'matches') return at('unsupported', show(test), test)
   // Several keys are "any of them": one condition each, which needs anyof (or one key).
-  if (keys.length !== 1 && !(any && !negate)) return { kind: 'unsupported', what: show(test) }
+  if (keys.length !== 1 && !(any && !negate)) return at('unsupported', show(test), test)
   return keys.map((key) => {
     let op: FilterOp = kind
     let value = key
@@ -370,9 +430,10 @@ function placeOf(name: string, places: SievePlaces): { folder: string } | { labe
 export function sieveToFilters(script: string, places: SievePlaces): SieveImport {
   let commands: Command[]
   try {
-    commands = new Parser(tokenize(script)).commands(false)
+    commands = new Parser(tokenize(script), script.length).commands(false)
   } catch (error) {
-    return { filters: [], problems: [{ kind: 'syntax', what: error instanceof Error ? error.message : String(error) }] }
+    if (error instanceof SieveSyntaxError) return { filters: [], problems: [{ kind: 'syntax', what: error.message, from: error.from, to: error.to }] }
+    throw error
   }
   const filters: ImportedFilter[] = []
   const problems: SieveProblem[] = []
@@ -381,7 +442,7 @@ export function sieveToFilters(script: string, places: SievePlaces): SieveImport
     if (command.name === 'require' || command.name === 'stop' || command.name === 'keep') continue
     if (command.name === 'if' && isGuard(command)) continue
     if (command.name !== 'if' || !command.test) {
-      problems.push({ kind: 'unsupported', what: command.name })
+      problems.push(at('unsupported', command.name, command))
       continue
     }
     const top = command.test
@@ -400,24 +461,24 @@ export function sieveToFilters(script: string, places: SievePlaces): SieveImport
       const [values] = strings(action.args)
       if (action.name === 'fileinto' && values?.value.length === 1) {
         const place = placeOf(values.value[0], places)
-        if (!place) failed ??= { kind: 'unknownPlace', what: values.value[0] }
+        if (!place) failed ??= at('unknownPlace', values.value[0], action)
         else if ('folder' in place) {
           // The first folder moves it; Sieve's later ones would copy, which Kutup does not.
-          if (actions.folder) failed ??= { kind: 'unsupported', what: `fileinto ${quote(values.value[0])}` }
+          if (actions.folder) failed ??= at('unsupported', `fileinto ${quote(values.value[0])}`, action)
           else actions.folder = place.folder
         } else actions.labels = [...(actions.labels ?? []), place.label]
       } else if ((action.name === 'addflag' || action.name === 'setflag') && values) {
         for (const flag of values.value.flatMap((v) => v.split(/\s+/))) {
           if (flag.toLowerCase() === '\\seen') actions.markRead = true
           else if (flag.toLowerCase() === '\\flagged') actions.star = true
-          else failed ??= { kind: 'unsupported', what: `${action.name} ${quote(flag)}` }
+          else failed ??= at('unsupported', `${action.name} ${quote(flag)}`, action)
         }
       } else if (action.name === 'keep' || action.name === 'stop') {
         // Kutup keeps every message and runs every filter: nothing to do.
-      } else failed ??= { kind: 'unsupported', what: action.name }
+      } else failed ??= at('unsupported', action.name, action)
     }
-    if (!failed && conditions.length === 0) failed = { kind: 'unsupported', what: show(top) }
-    if (!failed && !actions.folder && !actions.labels?.length && !actions.markRead && !actions.star) failed = { kind: 'noAction', what: show(top) }
+    if (!failed && conditions.length === 0) failed = at('unsupported', show(top), top)
+    if (!failed && !actions.folder && !actions.labels?.length && !actions.markRead && !actions.star) failed = at('noAction', show(top), command)
     if (failed) {
       problems.push(failed)
       continue

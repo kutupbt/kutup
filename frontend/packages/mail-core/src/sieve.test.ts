@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MailFilter } from './filters'
-import { filtersToSieve, sieveToFilters, type SievePlaces } from './sieve'
+import { filterToSieve, filtersToSieve, SIEVE_FILTER_REQUIRE, sieveToFilters, type SievePlaces } from './sieve'
 
 const places: SievePlaces = {
   folders: [
@@ -125,6 +125,71 @@ if header :is "subject" "ok" { fileinto "Work"; }`
   })
 
   it('says where a script is broken', () => {
-    expect(sieveToFilters('if header :is "Subject" "x" { fileinto "archive";', places).problems).toEqual([{ kind: 'syntax', what: 'a block is not closed' }])
+    const broken = 'if header :is "Subject" "x" { fileinto "archive";'
+    expect(sieveToFilters(broken, places).problems).toEqual([{ kind: 'syntax', what: 'a block is not closed', from: broken.length - 1, to: broken.length }])
+    // An unclosed string or comment points at where it starts.
+    const string = 'if header :is "Subject" "x { keep; }'
+    expect(sieveToFilters(string, places).problems[0]).toMatchObject({ kind: 'syntax', from: string.indexOf('"x') })
+    const comment = 'keep;\n/* never closed'
+    expect(sieveToFilters(comment, places).problems[0]).toMatchObject({ kind: 'syntax', from: comment.indexOf('/*') })
+    // A token that doesn't fit: marked where it stands.
+    const token = 'if header :is "Subject" "x" ) { keep; }'
+    const problem = sieveToFilters(token, places).problems[0]
+    expect(token.slice(problem.from, problem.to)).toBe(')')
+  })
+
+  it('marks each problem on the text it names', () => {
+    const script = `require ["fileinto", "vacation"];
+if header :contains "Subject" "x" { fileinto "Nowhere"; }
+if header :regex "Subject" "^a" { fileinto "archive"; }
+vacation "away";
+if header :is "Subject" "y" { keep; }`
+    const read = sieveToFilters(script, places)
+    const marked = read.problems.map((p) => [p.kind, script.slice(p.from, p.to)])
+    expect(marked).toEqual([
+      ['unknownPlace', 'fileinto "Nowhere";'],
+      ['unsupported', 'header :regex "Subject" "^a"'],
+      ['unsupported', 'vacation "away";'],
+      ['noAction', 'if header :is "Subject" "y" { keep; }'],
+    ])
+  })
+})
+
+describe('one filter as the Sieve editor shows it', () => {
+  const fields = ['sender', 'recipient', 'subject'] as const
+  const ops = ['contains', 'is', 'begins', 'ends', 'matches'] as const
+
+  it('round-trips every field, operator, negation and action', () => {
+    for (const field of fields) {
+      for (const op of ops) {
+        for (const negate of [false, true]) {
+          for (const match of ['all', 'any'] as const) {
+            const one = filter({
+              match,
+              conditions: [
+                { field, op, negate, value: op === 'matches' ? 'a*b?c' : 'Wörk "x" \\ y' },
+                { field: 'attachments', op: 'contains', negate, value: '' },
+              ],
+              actions: { folder: 'custom:f2', labels: ['l1'], markRead: true, star: true },
+            })
+            const read = sieveToFilters(filterToSieve(one, places), places)
+            expect(read.problems, `${field} ${op} ${negate} ${match}`).toEqual([])
+            expect(read.filters.map(({ match, conditions, actions }) => ({ match, conditions, actions }))).toEqual([{ match, conditions: one.conditions, actions: one.actions }])
+          }
+        }
+      }
+    }
+    for (const folder of ['inbox', 'archive', 'spam', 'trash', 'custom:f1']) {
+      const one = filter({ conditions: [{ field: 'subject', op: 'is', negate: false, value: 'x' }], actions: { folder } })
+      expect(sieveToFilters(filterToSieve(one, places), places).filters[0].actions).toEqual({ folder })
+    }
+  })
+
+  it('has no spam guard or name, and shows a switched-off filter as it would run', () => {
+    const script = filterToSieve(filter({ enabled: false, conditions: [{ field: 'subject', op: 'is', negate: false, value: 'x' }], actions: { star: true } }), places)
+    expect(script.startsWith(SIEVE_FILTER_REQUIRE)).toBe(true)
+    expect(script).not.toContain('spamtest')
+    expect(script).not.toContain('# A filter')
+    expect(sieveToFilters(script, places).filters).toHaveLength(1)
   })
 })
