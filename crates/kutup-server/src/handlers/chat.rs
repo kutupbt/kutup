@@ -1600,13 +1600,14 @@ async fn insert_kem_pool(
 )]
 pub async fn list_devices(State(state): State<AppState>, auth: AuthAccount) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.account_id)?;
-    let rows: Vec<(
+    type DeviceRow = (
         i32,
         i16,
         Option<String>,
         OffsetDateTime,
         Option<OffsetDateTime>,
-    )> = sqlx::query_as(
+    );
+    let rows: Vec<DeviceRow> = sqlx::query_as(
         "SELECT device_id, suite, name, created_at, last_seen_at
          FROM account_devices WHERE account_id = $1 AND suite IS NOT NULL ORDER BY device_id",
     )
