@@ -330,7 +330,7 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
     // `per_account` of one account's, so one account's many never make the
     // others' late. The outer `fire_at` bounds hold for the version locked:
     // a row another server moved on meanwhile is skipped, never sent again.
-    let columns = "a.user_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
+    let columns = "a.account_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
                 e.shared_signed, e.calendar_signed, m.default_reminders_timed,
                 m.default_reminders_all_day, r.reminders, s.zone";
     let joins = "JOIN calendar_events e ON e.id = a.event_id

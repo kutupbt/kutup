@@ -18,7 +18,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
 
     let user_columns: Vec<String> = sqlx::query_scalar(
         "SELECT column_name FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'users'",
+         WHERE table_schema = 'public' AND table_name = 'accounts'",
     )
     .fetch_all(&pool)
     .await
@@ -131,7 +131,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
          FROM pg_index i
          JOIN pg_attribute a
            ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-         WHERE i.indrelid = 'collection_key_epoch_history'::regclass
+         WHERE i.indrelid = 'drive_collection_key_epoch_history'::regclass
            AND i.indisprimary
          ORDER BY array_position(i.indkey, a.attnum)",
     )
@@ -142,7 +142,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
 
     let local_share_columns: Vec<String> = sqlx::query_scalar(
         "SELECT column_name FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'collection_shares'",
+         WHERE table_schema = 'public' AND table_name = 'drive_collection_shares'",
     )
     .fetch_all(&pool)
     .await
@@ -158,7 +158,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
         "SELECT table_name || '.' || column_name
          FROM information_schema.columns
          WHERE table_schema = 'public'
-           AND table_name IN ('federated_outgoing_shares', 'federated_incoming_shares')",
+           AND table_name IN ('drive_federated_outgoing_shares', 'drive_federated_incoming_shares')",
     )
     .fetch_all(&pool)
     .await
@@ -175,7 +175,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
 
     let public_share_columns: Vec<String> = sqlx::query_scalar(
         "SELECT column_name FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'public_shares'",
+         WHERE table_schema = 'public' AND table_name = 'drive_public_shares'",
     )
     .fetch_all(&pool)
     .await
@@ -289,7 +289,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     let origin_user_nullable: String = sqlx::query_scalar(
         "SELECT is_nullable FROM information_schema.columns
          WHERE table_schema='public' AND table_name='chat_media_objects'
-           AND column_name='origin_user_id'",
+           AND column_name='origin_account_id'",
     )
     .fetch_one(&pool)
     .await

@@ -288,7 +288,7 @@ struct MediaRow {
 }
 
 const MEDIA_ROW: &str = "id, destination, sequence, payload->'transaction' AS transaction, state,
-     answer, attempts, sender_user_id";
+     answer, attempts, sender_account_id";
 
 /// Stage an authenticated local sender's remote delivery, or answer a repeat
 /// of it (Signal's model: the client sends its attachment message only once
