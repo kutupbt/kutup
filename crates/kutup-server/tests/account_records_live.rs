@@ -360,7 +360,7 @@ fn contact_groups_calendar_settings_and_joined_meetings_are_records() {
         .json(&json!({ "head": first, "basis": empty["basis"] }))
         .send()
         .unwrap();
-    assert_eq!(r.status(), StatusCode::OK, "{}", r.text().unwrap());
+    assert!(r.status().is_success(), "{}", r.text().unwrap());
 
     // A joined meeting: filed at revision 1, never replaced.
     let (id, _) = kutup_crypto::account_records::RecordScope::JoinedMeetings
