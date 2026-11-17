@@ -2270,8 +2270,7 @@ impl WasmChatClient {
     #[wasm_bindgen(js_name = syncAccountLists)]
     pub async fn sync_account_lists(&mut self) -> std::result::Result<(), JsValue> {
         let mut rng = OsRng.unwrap_err();
-        let _ = self.engine.sync_group_list_if_due(&mut rng).await;
-        let _ = self.engine.sync_contact_list_if_due().await;
+        let _ = self.engine.sync_account_records_if_due(&mut rng).await;
         Ok(())
     }
 
@@ -2992,12 +2991,10 @@ impl WasmChatClient {
                 ));
             }
         }
-        // The account's group list, every so often: groups another device
-        // joined or left (best effort).
-        let _ = self.engine.sync_group_list_if_due(&mut rng).await;
-        // The account's contact list too: what another device changed, and
-        // this device's due writes (best effort).
-        let _ = self.engine.sync_contact_list_if_due().await;
+        // The account's lists, every so often (one loop): groups another
+        // device joined or left, contacts it changed, and this device's due
+        // writes (best effort).
+        let _ = self.engine.sync_account_records_if_due(&mut rng).await;
         let mut report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
         // A reply can promote pending-outgoing to accepted (or a new message
         // can supersede a prior rejection). Publish that newer revision after

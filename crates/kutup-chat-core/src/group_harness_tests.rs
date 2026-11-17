@@ -3718,9 +3718,9 @@ fn group_multi_an_undefined_status_goes_pairwise() {
 fn group_multi_the_own_endorsement_is_fetched_on_its_own_schedule() {
     let world = World::new();
     let mut loner = world.person(0xe5);
-    block_on(loner.engine.sync_group_list_if_due(&mut rng())).unwrap();
+    block_on(loner.engine.sync_account_records_if_due(&mut rng())).unwrap();
     assert_eq!(world.endorsements_issued.get(), 1, "with no group at all");
-    block_on(loner.engine.sync_group_list_if_due(&mut rng())).unwrap();
+    block_on(loner.engine.sync_account_records_if_due(&mut rng())).unwrap();
     assert_eq!(world.endorsements_issued.get(), 1, "once a day");
     let (mut alice, _bob, _carol, _dave, group_id) = exchanged_group(&world);
     let issued = world.endorsements_issued.get();

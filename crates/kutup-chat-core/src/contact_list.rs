@@ -25,9 +25,6 @@ use crate::transport::ContactListWrite;
 /// this often (a block always is).
 const FULL_RETRY_MS: i64 = 30 * 60 * 1000;
 
-/// The list is read again at most this often by a running device.
-const READ_EVERY_MS: i64 = 5 * 60 * 1000;
-
 /// When a block is written (the user's decision: one platform setting).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockTiming {
@@ -675,21 +672,6 @@ impl Engine {
             }
         }
         Ok(taken)
-    }
-
-    /// Reads and follows the list when it wasn't read for a while, then
-    /// writes what is due (best effort).
-    pub async fn sync_contact_list_if_due(&mut self) -> Result<()> {
-        let Some(list) = self.contact_list.as_ref() else {
-            return Ok(());
-        };
-        if list.read_at_ms == 0 || self.now_ms() - list.read_at_ms >= READ_EVERY_MS {
-            self.sync_contact_list().await?;
-        }
-        self.flush_contact_list(false).await?;
-        // The pin list's first meetings go the same way.
-        self.flush_identity_pins(false).await?;
-        Ok(())
     }
 
     /// After an explicit change of `peer`: a block is written at once where

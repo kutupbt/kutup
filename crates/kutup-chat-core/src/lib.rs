@@ -53,6 +53,7 @@ mod group_recover;
 mod group_send;
 mod group_settings;
 mod keys;
+mod records_sync;
 pub use keys::PublishedKeys;
 /// The account's master keys (docs/plans/mk-rotation-exercise.md): the
 /// current one and every older one through the keyring.
