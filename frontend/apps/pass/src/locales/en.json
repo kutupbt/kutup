@@ -164,7 +164,13 @@
     "emptyBin": "Empty recycle bin",
     "emptyBinTitle": "Empty the recycle bin?",
     "emptyBinDescription": "Everything in the recycle bin is deleted for good, on every device that syncs this vault.",
-    "binEmptied": "Recycle bin emptied"
+    "binEmptied": "Recycle bin emptied",
+    "moveTo": "Move to",
+    "moved": "{{name}} moved to {{group}}",
+    "deletedGroups": "Deleted groups",
+    "restore": "Restore",
+    "restored": "{{name}} restored with everything in it",
+    "deletedForGood": "{{name}} deleted for good"
   },
   "entries": {
     "label": "Entries",

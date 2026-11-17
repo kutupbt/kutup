@@ -164,7 +164,13 @@
     "emptyBin": "Geri dönüşüm kutusunu boşalt",
     "emptyBinTitle": "Geri dönüşüm kutusu boşaltılsın mı?",
     "emptyBinDescription": "Geri dönüşüm kutusundaki her şey, bu kasayı eşitleyen her cihazda kalıcı olarak silinir.",
-    "binEmptied": "Geri dönüşüm kutusu boşaltıldı"
+    "binEmptied": "Geri dönüşüm kutusu boşaltıldı",
+    "moveTo": "Şuraya taşı",
+    "moved": "{{name}} taşındı: {{group}}",
+    "deletedGroups": "Silinen gruplar",
+    "restore": "Geri al",
+    "restored": "{{name}} içindekilerle birlikte eski yerine geri alındı",
+    "deletedForGood": "{{name}} kalıcı olarak silindi"
   },
   "entries": {
     "label": "Kayıtlar",

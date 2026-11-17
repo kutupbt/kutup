@@ -1,4 +1,4 @@
-import { ArrowLeft, Eye, FileUp, Folder, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
+import { ArrowLeft, Eye, FileUp, Folder, FolderInput, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -13,6 +13,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@kutup/ui/components/dropdown-menu'
 import { Input } from '@kutup/ui/components/input'
@@ -30,6 +33,7 @@ import { lockVault, useSessionState, useVaultSession } from '../sync/openVaults'
 import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, type EntryInput, type EntryView, type GroupView, type MergeReport } from '../vault/types'
 import { ChangeKeyDialog } from './ChangeKeyDialog'
+import { DeletedGroups } from './DeletedGroups'
 import { EntryDetail } from './EntryDetail'
 import { EntryEditor } from './EntryEditor'
 import { EntryList } from './EntryList'
@@ -39,6 +43,7 @@ import { ImportDialog } from './ImportDialog'
 import { SecurityPanel } from './SecurityPanel'
 import { IconDialog } from './IconDialog'
 import { iconSources } from '../lib/icons'
+import { deletedGroups, groupTargets } from '../lib/groupMoves'
 import { SyncBadge } from './SyncBadge'
 import { TheirsKeyDialog } from './TheirsKeyDialog'
 import { UnlockVault } from './UnlockVault'
@@ -157,7 +162,13 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const groups = view.groups.filter((g) => !g.inRecycleBin)
   const toReview = view.entries.filter((e) => e.review.length > 0 && !e.inRecycleBin).length
   const pictures = useMemo(() => iconSources(view), [view])
-  const { dropProps } = useEntryDrop(session, (message) => toast.success(message))
+  const binGroups = useMemo(() => (viewingBin ? deletedGroups(view) : []), [view, viewingBin])
+  const { dropProps, dragProps } = useEntryDrop(session, (message) => toast.success(message))
+  const moveGroup = (group: GroupView, target: GroupView) =>
+    void session.apply({ op: 'moveGroup', id: group.id, parentId: target.id }).then(
+      () => toast.success(t('groups.moved', { name: group.name, group: target.name })),
+      () => toast.error(t('entry.saveFailed')),
+    )
   const dropHere = 'data-[drop-over=true]:bg-primary/15 data-[drop-over=true]:ring-2 data-[drop-over=true]:ring-primary'
 
   const selectGroup = (id: string | null) => {
@@ -302,6 +313,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                   type="button"
                   onClick={() => selectGroup(g.id)}
                   {...dropProps({ id: g.id, name: g.name, bin: false })}
+                  {...(g.id !== view.rootGroupId ? dragProps(g.id) : {})}
                   className={cn('flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60', dropHere, groupId === g.id && 'bg-accent font-medium')}
                   style={{ paddingInlineStart: `${0.5 + g.depth * 0.75}rem` }}
                 >
@@ -334,6 +346,21 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                             <Pencil />
                             {t('groups.rename')}
                           </DropdownMenuItem>
+                          {groupTargets(view, g).length > 0 ? (
+                            <DropdownMenuSub>
+                              <DropdownMenuSubTrigger>
+                                <FolderInput />
+                                {t('groups.moveTo')}
+                              </DropdownMenuSubTrigger>
+                              <DropdownMenuSubContent className="max-h-80 overflow-y-auto">
+                                {groupTargets(view, g).map((target) => (
+                                  <DropdownMenuItem key={target.id} onSelect={() => moveGroup(g, target)}>
+                                    <span style={{ paddingInlineStart: `${target.depth * 0.75}rem` }}>{target.name}</span>
+                                  </DropdownMenuItem>
+                                ))}
+                              </DropdownMenuSubContent>
+                            </DropdownMenuSub>
+                          ) : null}
                           <DropdownMenuItem onSelect={() => setDeletingGroup(g)}>
                             <Trash2 />
                             {t('groups.delete')}
@@ -372,7 +399,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
               <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('entries.search')} className="pl-8" type="search" />
             </label>
-            {viewingBin && shown.length > 0 && session.canEdit ? (
+            {viewingBin && (shown.length > 0 || binGroups.length > 0) && session.canEdit ? (
               <Button variant="outline" size="sm" className="w-full" onClick={() => setEmptyingBin(true)}>
                 <Trash2 />
                 {t('groups.emptyBin')}
@@ -395,10 +422,13 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
               </Select>
             </div>
           </div>
+          {binGroups.length > 0 ? <DeletedGroups session={session} view={view} groups={binGroups} /> : null}
           {shown.length === 0 ? (
-            <p className="p-4 text-sm text-muted-foreground">
-              {needle ? t('entries.noMatch') : viewingBin ? t('entries.binEmpty') : t('entries.empty', { group: selectedGroup?.name ?? title })}
-            </p>
+            binGroups.length > 0 && !needle ? null : (
+              <p className="p-4 text-sm text-muted-foreground">
+                {needle ? t('entries.noMatch') : viewingBin ? t('entries.binEmpty') : t('entries.empty', { group: selectedGroup?.name ?? title })}
+              </p>
+            )
           ) : (
             <EntryList key={`${groupId ?? ''}:${needle}`} session={session} view={view} shown={shown} currentId={entryId} viewingBin={viewingBin} pictures={pictures} onOpen={openEntry} />
           )}

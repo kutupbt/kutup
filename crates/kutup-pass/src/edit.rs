@@ -8,7 +8,7 @@
 //! merge knows the object was deleted rather than never seen. Times come
 //! from the caller (`now`), so the same code runs in the browser.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::str::FromStr as _;
 
 use base64::Engine as _;
@@ -136,9 +136,25 @@ pub enum Op {
     DeleteGroup {
         id: String,
     },
+    /// A group into the recycle bin and nothing else: refused when the bin
+    /// is off or the group is in it already (a drag never deletes for good).
+    RecycleGroup {
+        id: String,
+    },
+    /// Moves a group (with what it holds) under another, never into the
+    /// recycle bin (that is `DeleteGroup`) and never the bin itself. A group
+    /// in the bin moved out of it is restored there.
     MoveGroup {
         id: String,
         parent_id: String,
+    },
+    /// Takes groups out of the recycle bin, each with what it holds, back
+    /// under the group it was in (KDBX's previous parent group) while that is
+    /// there and not itself in the bin, otherwise under the top group, as
+    /// `RestoreEntries` does for entries. A group inside another one being
+    /// restored comes back with it, where it is. All or nothing.
+    RestoreGroups {
+        ids: Vec<String>,
     },
     EmptyRecycleBin,
     /// Imports another password manager's CSV export (`import::parse`)
@@ -478,9 +494,30 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
             }
             delete_group(db, id, now)
         }
+        Op::RecycleGroup { id } => {
+            let id = group_id(db, id)?;
+            if id == db.root {
+                return Err(invalid("the vault's top group cannot be deleted"));
+            }
+            if !recycle(db) {
+                return Err(invalid(
+                    "the recycle bin is off: the group would be deleted for good",
+                ));
+            }
+            if group_in_recycle_bin(db, id) {
+                return Err(invalid("the group is in the recycle bin already"));
+            }
+            delete_group(db, id, now)
+        }
         Op::MoveGroup { id, parent_id } => {
             let id = group_id(db, id)?;
             let parent = group_id(db, parent_id)?;
+            if Some(id) == recycle_bin(db) {
+                return Err(invalid("the recycle bin stays where it is"));
+            }
+            if group_in_recycle_bin(db, parent) {
+                return Err(invalid("groups go to the recycle bin by being deleted"));
+            }
             if db.groups[&id].parent == Some(parent) {
                 Applied::default()
             } else {
@@ -493,6 +530,42 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                     id: None,
                     changed: true,
                 }
+            }
+        }
+        Op::RestoreGroups { ids } => {
+            // In the order given (restored groups land in it), each once.
+            let mut ids = ids
+                .iter()
+                .map(|id| group_id(db, id))
+                .collect::<Result<Vec<GroupId>, _>>()?;
+            let mut seen = HashSet::new();
+            ids.retain(|id| seen.insert(*id));
+            let bin = recycle_bin(db);
+            if ids
+                .iter()
+                .any(|id| Some(*id) == bin || !group_in_recycle_bin(db, *id))
+            {
+                return Err(invalid("only groups in the recycle bin are restored"));
+            }
+            // A group inside another one being restored comes back with it.
+            let outermost: Vec<GroupId> = ids
+                .iter()
+                .copied()
+                .filter(|id| !has_ancestor_in(db, *id, &seen))
+                .collect();
+            for &id in &outermost {
+                let target = restore_group_target(db, id);
+                if let Some(mut group) = db.group_mut(id) {
+                    // Both exist and the target is outside the bin, so
+                    // never inside the group itself.
+                    if group.move_to(target).is_ok() {
+                        group.times.location_changed = Some(now);
+                    }
+                }
+            }
+            Applied {
+                id: None,
+                changed: !outermost.is_empty(),
             }
         }
         Op::ImportCsv {
@@ -781,6 +854,27 @@ fn restore_target(db: &Database, id: EntryId) -> GroupId {
         .previous_parent_group
         .filter(|group| db.groups.contains_key(group) && !group_in_recycle_bin(db, *group))
         .unwrap_or(db.root)
+}
+
+/// Where a deleted group goes back to: the group it was in, while that is
+/// there and not itself in the recycle bin; otherwise the top group.
+fn restore_group_target(db: &Database, id: GroupId) -> GroupId {
+    db.groups[&id]
+        .previous_parent_group
+        .filter(|group| db.groups.contains_key(group) && !group_in_recycle_bin(db, *group))
+        .unwrap_or(db.root)
+}
+
+/// Whether a group above `id` is one of `ids`.
+fn has_ancestor_in(db: &Database, id: GroupId, ids: &HashSet<GroupId>) -> bool {
+    let mut current = db.groups.get(&id).and_then(|g| g.parent);
+    while let Some(group) = current {
+        if ids.contains(&group) {
+            return true;
+        }
+        current = db.groups.get(&group).and_then(|g| g.parent);
+    }
+    false
 }
 
 /// The recycle bin, made if the vault has none yet.

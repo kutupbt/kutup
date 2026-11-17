@@ -27,7 +27,7 @@ but offers no way to see or change it.
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
 | The database (vault) | 21 | 6 | 13 |
-| Groups (folders) | 5 | 1 | 6 |
+| Groups (folders) | 7 | 1 | 4 |
 | Entries | 8 | 6 | 8 |
 | Bulk actions and the entry list | 8 | 1 | 6 |
 | Search | 1 | 3 | 3 |
@@ -37,7 +37,7 @@ but offers no way to see or change it.
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **66** | **28** | **61** |
+| **All** | **68** | **28** | **59** |
 
 ## The database (vault)
 
@@ -91,9 +91,9 @@ but offers no way to see or change it.
 | Create a group | Groups → New | ✅ | `VaultPage.tsx` group menu, `GroupDialog.tsx` |
 | Nest groups | any depth | ✅ | "New group inside"; the tree indents by depth; phone width uses a picker |
 | Rename | Edit group | ✅ | group menu → Rename |
-| Move a group under another | drag and drop in the tree | ❌ | the core has `moveGroup` (`crates/kutup-pass/src/edit.rs`) and the merge handles moved groups, but no UI calls it |
+| Move a group under another | drag and drop in the tree | ✅ | group menu → Move to (any group outside the bin but itself and what it holds), or drag a group onto another; onto the recycle bin it is deleted (`recycleGroup`, never for good). `moveGroup` refuses the bin and moving the bin ([`pass-gaps-2.md`](pass-gaps-2.md) P1) |
 | Delete a group (to the recycle bin) | Delete group | ✅ | asks first; for good with the bin off |
-| Restore a deleted group | drag out of the bin | ❌ | the bin view lists entries only; a deleted group's entries can come back one at a time, each to the top level |
+| Restore a deleted group | drag out of the bin | ✅ | the bin view lists its groups above the entries: Restore puts one back with everything in it where it was (KDBX's previous parent group, else the top group; `restoreGroups`), Move to another group, or Delete for good |
 | Group notes | Edit group → Notes | ❌ | kept (rename passes them on); not shown or edited |
 | Group icons: custom pictures | Edit group → Icon | ✅ | group menu → Change icon (`IconDialog.tsx`, spec 153) |
 | Group icons: KeePass's built-in set | 69 standard icons | ❌ | kept; no picker |
@@ -276,8 +276,8 @@ What people hit first, then what blocks moving from KeePassXC:
    form, downloaded once), **add** or **remove** a key file, and re-keep
    the new key in the account. Needed too for shared vaults after a member
    leaves.
-4. **Move groups** (`moveGroup` exists in the core) and restore deleted
-   groups (entries already go back to where they were, item 1).
+4. ~~**Move groups** and restore deleted groups~~: done
+   ([`pass-gaps-2.md`](pass-gaps-2.md) P1).
 5. **Vault settings**: description, default user name, recycle bin on/off,
    history limits, KDF (Argon2id memory and iterations, with a "how long
    to open" test), compression.

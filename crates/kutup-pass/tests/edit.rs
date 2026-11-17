@@ -1017,3 +1017,175 @@ fn with_the_bin_off_deleting_is_for_good_and_recycling_is_refused() {
     );
     assert!(entry(&view::view(&db), &b).in_recycle_bin);
 }
+
+#[test]
+fn groups_never_move_into_the_bin_and_the_bin_stays() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let old = group(&mut db, &root, "Eski", 2);
+    run(&mut db, Op::DeleteGroup { id: old.clone() }, 3);
+    let bin = view::view(&db).recycle_bin_id.unwrap();
+    let before = shown(&db);
+    // Into the bin, or into a group inside it: that is a delete.
+    for parent in [&bin, &old] {
+        assert!(apply(
+            &mut db,
+            &Op::MoveGroup {
+                id: work.clone(),
+                parent_id: parent.clone()
+            },
+            at(4)
+        )
+        .is_err());
+    }
+    // The bin itself stays where it is.
+    assert!(apply(
+        &mut db,
+        &Op::MoveGroup {
+            id: bin.clone(),
+            parent_id: work.clone()
+        },
+        at(4)
+    )
+    .is_err());
+    assert_eq!(shown(&db), before);
+    // Moving a deleted group out of the bin restores it there.
+    run(
+        &mut db,
+        Op::MoveGroup {
+            id: old.clone(),
+            parent_id: work.clone(),
+        },
+        5,
+    );
+    let v = view::view(&db);
+    let g = v.groups.iter().find(|g| g.id == old).unwrap();
+    assert_eq!(g.parent_id.as_deref(), Some(work.as_str()));
+    assert!(!g.in_recycle_bin);
+}
+
+#[test]
+fn deleted_groups_are_restored_to_where_they_were_with_what_they_hold() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let servers = group(&mut db, &work, "Sunucular", 2);
+    let inner = group(&mut db, &servers, "Prod", 3);
+    let gone = group(&mut db, &root, "Geçici", 4);
+    let lone = group(&mut db, &gone, "Tek", 5);
+    let db1 = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: inner.clone(),
+            entry: input(&[("Title", "db1")]),
+        },
+        6,
+    )
+    .id
+    .unwrap();
+    run(
+        &mut db,
+        Op::DeleteGroup {
+            id: servers.clone(),
+        },
+        7,
+    );
+    run(&mut db, Op::DeleteGroup { id: lone.clone() }, 8);
+    // Its old parent deleted for good: `lone` comes back to the top.
+    run(&mut db, Op::DeleteGroup { id: gone.clone() }, 9);
+    run(&mut db, Op::DeleteGroup { id: gone.clone() }, 10);
+    assert!(entry(&view::view(&db), &db1).in_recycle_bin);
+
+    // A group not in the bin, or the bin itself, is refused, and nothing changes.
+    let bin = view::view(&db).recycle_bin_id.unwrap();
+    let before = shown(&db);
+    for bad in [&work, &bin] {
+        assert!(apply(
+            &mut db,
+            &Op::RestoreGroups {
+                ids: vec![servers.clone(), bad.clone()]
+            },
+            at(11)
+        )
+        .is_err());
+    }
+    assert_eq!(shown(&db), before);
+
+    // `inner` is inside `servers`: it comes back with it, where it is.
+    run(
+        &mut db,
+        Op::RestoreGroups {
+            ids: vec![
+                inner.clone(),
+                servers.clone(),
+                lone.clone(),
+                servers.clone(),
+            ],
+        },
+        12,
+    );
+    let v = view::view(&db);
+    let parent = |id: &str| {
+        v.groups
+            .iter()
+            .find(|g| g.id == id)
+            .unwrap()
+            .parent_id
+            .clone()
+            .unwrap()
+    };
+    assert_eq!(parent(&servers), work);
+    assert_eq!(parent(&inner), servers);
+    assert_eq!(parent(&lone), root);
+    assert!(v
+        .groups
+        .iter()
+        .filter(|g| [&servers, &inner, &lone].contains(&&g.id))
+        .all(|g| !g.in_recycle_bin));
+    assert!(!entry(&v, &db1).in_recycle_bin);
+    // The restore is a move: it says when.
+    let restored = &db.groups
+        [&kutup_pass::keepass::db::GroupId::from(uuid::Uuid::parse_str(&servers).unwrap())];
+    assert_eq!(restored.times.location_changed, Some(at(12)));
+}
+
+#[test]
+fn restoring_groups_reads_from_the_websites_json() {
+    let op: Op = serde_json::from_str(r#"{"op":"restoreGroups","ids":["a","b"]}"#).unwrap();
+    assert_eq!(
+        op,
+        Op::RestoreGroups {
+            ids: vec!["a".into(), "b".into()]
+        }
+    );
+}
+
+#[test]
+fn recycling_a_group_never_deletes_it_for_good() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let home = group(&mut db, &root, "Ev", 2);
+    run(&mut db, Op::RecycleGroup { id: work.clone() }, 3);
+    let v = view::view(&db);
+    assert!(
+        v.groups
+            .iter()
+            .find(|g| g.id == work)
+            .unwrap()
+            .in_recycle_bin
+    );
+    let before = shown(&db);
+    // In the bin already, the top group, or the bin off: refused, nothing changes.
+    assert!(apply(&mut db, &Op::RecycleGroup { id: work.clone() }, at(4)).is_err());
+    assert!(apply(&mut db, &Op::RecycleGroup { id: root.clone() }, at(4)).is_err());
+    db.meta.recyclebin_enabled = Some(false);
+    let before_off = shown(&db);
+    assert!(apply(&mut db, &Op::RecycleGroup { id: home.clone() }, at(4)).is_err());
+    assert_eq!(shown(&db), before_off);
+    db.meta.recyclebin_enabled = Some(true);
+    assert_eq!(shown(&db), before);
+    let op: Op = serde_json::from_str(r#"{"op":"recycleGroup","id":"x"}"#).unwrap();
+    assert_eq!(op, Op::RecycleGroup { id: "x".into() });
+}

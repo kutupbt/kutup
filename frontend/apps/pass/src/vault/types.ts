@@ -121,7 +121,12 @@ export type Op =
   | { op: 'createGroup'; parentId: string; name: string }
   | { op: 'updateGroup'; id: string; name: string; notes?: string; icon?: number | null }
   | { op: 'deleteGroup'; id: string }
+  /** A group into the recycle bin and nothing else: refused when it is off (a drag never deletes for good). */
+  | { op: 'recycleGroup'; id: string }
+  /** Not into the recycle bin (that is a delete), never the bin itself; out of the bin it restores there. */
   | { op: 'moveGroup'; id: string; parentId: string }
+  /** Groups out of the recycle bin, each with what it holds, back to the group it was in (or the top group). */
+  | { op: 'restoreGroups'; ids: string[] }
   | { op: 'emptyRecycleBin' }
   | { op: 'importCsv'; data: string; provider: string | null; groupName: string }
   | { op: 'updateVault'; name: string; description?: string; defaultUserName?: string }
