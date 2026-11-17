@@ -97,6 +97,8 @@ rust_standalone() {
   cargo check --locked --manifest-path crates/kutup-client-ffi/Cargo.toml --all-targets
   step "Fuzz targets (lockfile current, compile)"
   cargo check --locked --manifest-path fuzz/Cargo.toml --bins
+  step "Vendored keepass crate's own tests"
+  scripts/test-vendored-keepass.sh
 }
 
 rust() {

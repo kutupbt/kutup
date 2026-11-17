@@ -508,6 +508,7 @@ mod tests {
             key: "Username".to_string(),
             value: StringValue {
                 protected: false,
+                protect_in_memory: false,
                 value: Some("user123".to_string()),
             },
         };
@@ -522,6 +523,7 @@ mod tests {
             key: "Password".to_string(),
             value: StringValue {
                 protected: true,
+                protect_in_memory: false,
                 value: Some("cGFzc3dvcmQ=".to_string()),
             },
         };

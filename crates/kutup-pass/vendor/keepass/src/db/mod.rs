@@ -78,6 +78,7 @@ mod database_tests {
     use crate::{db::DatabaseOpenError, Database, DatabaseKey};
 
     #[test]
+    #[ignore = "reads upstream's tests/resources, which the published crate leaves out"]
     fn test_xml() -> Result<(), DatabaseOpenError> {
         let xml = Database::get_xml(
             &mut File::open("tests/resources/test_db_with_password.kdbx")?,

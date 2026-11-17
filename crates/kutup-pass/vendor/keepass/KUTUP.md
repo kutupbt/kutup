@@ -17,4 +17,7 @@ with the workspace's rustfmt settings so `cargo fmt --all -- --check` passes
 To update: replace this directory with the new release from crates.io, delete
 `Cargo.lock`, `.cargo_vcs_info.json` and `.cargo-ok`, keep this file, run the patch script,
 and run `cargo test -p kutup-pass` (the KeePassXC corpus and the merge tests
-must pass). Review the upstream diff first: this code decrypts vaults.
+must pass). The crate's own unit tests run in the rust gate through
+`scripts/test-vendored-keepass.sh` (a copy without upstream's tools and
+dev-dependencies, on the workspace's lockfile); the patch keeps them
+compiling, and ignores the two that read upstream's `tests/resources`. Review the upstream diff first: this code decrypts vaults.

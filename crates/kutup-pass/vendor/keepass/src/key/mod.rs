@@ -372,6 +372,7 @@ mod key_tests {
 
         assert!(DatabaseKey {
             password: None,
+            password_hash: None,
             keyfile: None,
             #[cfg(feature = "challenge_response")]
             challenge_response_key: None,

@@ -236,5 +236,30 @@ LIB2.write_text(lib2.replace("pub use self::key::key_file_element;\n",
     "pub use self::format::xml_db::from_plain_xml;\n#[cfg(feature = \"save_kdbx4\")]\n"
     "/// Public in Kutup's copy (vendor/keepass/KUTUP.md): plain KeePass XML.\n"
     "pub use self::format::xml_db::to_plain_xml;\n", 1))
+# The crate's own unit tests, kept compiling and passing with the patch
+# (scripts/test-vendored-keepass.sh runs them in the rust gate): the new
+# fields in two test initializers, and the two tests that read upstream's
+# tests/resources (not in the published crate) ignored with that reason.
+SRC = ROOT.parents[1]
+def once_src(rel, old, new):
+    path = SRC / rel
+    text = path.read_text()
+    if text.count(old) != 1:
+        sys.exit(f"patch-vendored-keepass: `{old.strip()[:60]}` not found once in {rel}")
+    path.write_text(text.replace(old, new, 1))
+once_src("format/xml_db/entry.rs",
+    '                protected: false,\n                value: Some("user123".to_string()),\n',
+    '                protected: false,\n                protect_in_memory: false,\n                value: Some("user123".to_string()),\n')
+once_src("format/xml_db/entry.rs",
+    '                protected: true,\n                value: Some("cGFzc3dvcmQ=".to_string()),\n',
+    '                protected: true,\n                protect_in_memory: false,\n                value: Some("cGFzc3dvcmQ=".to_string()),\n')
+once_src("key/mod.rs",
+    "        assert!(DatabaseKey {\n            password: None,\n            keyfile: None,\n",
+    "        assert!(DatabaseKey {\n            password: None,\n            password_hash: None,\n            keyfile: None,\n")
+RESOURCES = '    #[test]\n    #[ignore = "reads upstream\'s tests/resources, which the published crate leaves out"]\n'
+once_src("db/mod.rs", "    #[test]\n    fn test_xml() -> Result<(), DatabaseOpenError> {\n",
+    RESOURCES + "    fn test_xml() -> Result<(), DatabaseOpenError> {\n")
+once_src("db/otp.rs", "    #[test]\n    fn kdbx4_entry() -> Result<(), Box<dyn std::error::Error>> {\n",
+    RESOURCES + "    fn kdbx4_entry() -> Result<(), Box<dyn std::error::Error>> {\n")
 subprocess.run(["cargo", "fmt", "--manifest-path", str(ROOT.parents[2] / "Cargo.toml")], check=True)
 print("patch-vendored-keepass: applied and formatted")
