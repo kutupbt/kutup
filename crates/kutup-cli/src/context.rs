@@ -24,6 +24,28 @@ pub fn require_session(profile: &str) -> Result<Ctx> {
 
     let client = Client::new(&session.server, &session.access_token);
 
+    // The server's instance id (docs/plans/api-surface.md §5): another one
+    // than at sign-in means the server was reset, so what this profile keeps
+    // for it no longer belongs to anything there. An unreachable server is
+    // left for the command itself to report.
+    if let Some(current) = client
+        .health()
+        .ok()
+        .and_then(|health| crate::api::instance_id_of(&health))
+    {
+        if session.instance_id.is_empty() {
+            session.instance_id = current;
+            store.save_session(&session)?;
+        } else if session.instance_id != current {
+            store.forget_server_state()?;
+            return Err(NotLoggedIn(format!(
+                "{} was reset since this profile signed in; its local state for it was removed — run 'kutup login' again",
+                session.server
+            ))
+            .into());
+        }
+    }
+
     // Proactively refresh (refresh tokens rotate on every use, so the new one is
     // persisted). A 401 means the server ended this sign-in — revoked from
     // another device, signed out everywhere, or the password was reset — so the

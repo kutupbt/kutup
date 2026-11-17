@@ -79,6 +79,11 @@ pub struct Session {
     pub master_keyring: Vec<String>,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
+    /// The server's instance id at sign-in (docs/plans/api-surface.md §5):
+    /// another one later means the server was reset, and what this profile
+    /// keeps for it is dropped.
+    #[serde(default)]
+    pub instance_id: String,
 }
 
 fn first_generation() -> u32 {
@@ -327,6 +332,28 @@ impl Store {
             let mut t = wtx.open_table(COLLAB_DEVICE)?;
             t.remove("device")?;
         }
+        wtx.commit()?;
+        Ok(())
+    }
+
+    /// Drops everything this profile keeps for its server once the server
+    /// was reset (another instance id): the session, the collaboration
+    /// device, the sync state and the upload resume records. The manifest
+    /// pins stay: they are anti-rollback anchors keyed by account, which a
+    /// server claiming a new id must not be able to erase. Local files a sync
+    /// mirrored are never touched; the next sync treats both sides as new.
+    pub fn forget_server_state(&self) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(SESSION)?;
+            t.remove("data")?;
+            let mut t = wtx.open_table(COLLAB_DEVICE)?;
+            t.remove("device")?;
+        }
+        wtx.delete_table(SYNC_STATE)?;
+        wtx.delete_table(RESUME)?;
+        wtx.open_table(SYNC_STATE)?;
+        wtx.open_table(RESUME)?;
         wtx.commit()?;
         Ok(())
     }
@@ -851,6 +878,31 @@ mod tests {
             assert_eq!(loaded.master_key, "bWtleQ==");
             store.clear_session().unwrap();
             assert!(store.load_session().unwrap().is_none());
+        }
+        {
+            // A reset server: the session, sync state and resume records go.
+            let mut store = Store::open(profile).unwrap();
+            store
+                .save_session(&Session {
+                    instance_id: "old".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            store.sync_state_put("pair|f|a.txt", b"{}").unwrap();
+            {
+                let wtx = store.db.begin_write().unwrap();
+                wtx.open_table(RESUME)
+                    .unwrap()
+                    .insert("c\n/p", b"{}".as_slice())
+                    .unwrap();
+                wtx.commit().unwrap();
+            }
+            store.forget_server_state().unwrap();
+            assert!(store.load_session().unwrap().is_none());
+            use redb::ReadableTableMetadata;
+            let rtx = store.db.begin_read().unwrap();
+            assert!(rtx.open_table(SYNC_STATE).unwrap().is_empty().unwrap());
+            assert!(rtx.open_table(RESUME).unwrap().is_empty().unwrap());
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }

@@ -158,6 +158,15 @@ impl ApiError {
     }
 }
 
+/// The server's instance id in a health answer (docs/plans/api-surface.md §5).
+pub fn instance_id_of(health: &serde_json::Value) -> Option<String> {
+    health
+        .get("instanceId")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
 /// Whether `version` (`major.minor.patch[-pre]`) is below `minimum`; an
 /// unreadable one is not (the server's own check decides then).
 pub(crate) fn version_below(version: &str, minimum: &str) -> bool {
@@ -327,11 +336,7 @@ impl Client {
     /// accepts. `kutup login` reads it first, so a too-old CLI says so before
     /// asking for a password.
     pub fn check_version(&self) -> Result<()> {
-        let resp = self.get("/health")?;
-        if !resp.status().is_success() {
-            return Ok(());
-        }
-        let health: serde_json::Value = resp.json().unwrap_or_default();
+        let health = self.health()?;
         let Some(minimum) = health
             .get("minimumClients")
             .and_then(|m| m.get("cli"))
@@ -350,6 +355,16 @@ impl Client {
             )));
         }
         Ok(())
+    }
+
+    /// `GET /api/health`: anonymous and unversioned; `null` when the
+    /// server answers anything but success.
+    pub fn health(&self) -> Result<serde_json::Value> {
+        let resp = self.http.get(format!("{}/api/health", self.base)).send()?;
+        if !resp.status().is_success() {
+            return Ok(serde_json::Value::Null);
+        }
+        Ok(resp.json().unwrap_or_default())
     }
 
     // --- Auth ---

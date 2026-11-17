@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 
-use crate::api::{Client, TotpRequest};
+use crate::api::{instance_id_of, Client, TotpRequest};
 use crate::commands::prompt_line;
 use crate::config;
 use crate::errors::HeadBlocked;
@@ -312,7 +312,12 @@ pub(crate) fn login_with_password(
         }
     }
 
-    // Step 7: persist the session.
+    // Step 7: persist the session, with the server's instance id.
+    let instance_id = Client::new(server, "")
+        .health()
+        .ok()
+        .and_then(|health| instance_id_of(&health))
+        .unwrap_or_default();
     let mut store = Store::open(profile)?;
     let sess = Session {
         server: server.to_string(),
@@ -333,6 +338,7 @@ pub(crate) fn login_with_password(
         master_keyring: resp.master_keyring,
         storage_quota_bytes: resp.storage_quota_bytes,
         storage_used_bytes: resp.storage_used_bytes,
+        instance_id,
     };
     store.save_session(&sess).context("save session")?;
     Ok(sess)

@@ -6,6 +6,7 @@ import { clearPersisted } from './persistedStore'
 import { clearSession, getAccessToken, setAccessToken } from './store'
 import { noteSessionVersion, SESSION_VERSION_HEADER } from './sessionVersion'
 import { clientHeader } from './release'
+import { INSTANCE_HEADER, noteInstance } from './instance'
 
 /** The server-side session types a web app can hold (X-Kutup-Client). */
 export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps' | 'web-photos' | 'web-office' | 'web-contacts' | 'web-mail' | 'web-pass' | 'web-calendar'
@@ -213,6 +214,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 api.interceptors.response.use(
   (res) => {
     noteSessionVersion(res.headers?.[SESSION_VERSION_HEADER])
+    noteInstance(res.headers?.[INSTANCE_HEADER])
     return res
   },
   async (error) => {

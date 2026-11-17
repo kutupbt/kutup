@@ -118,7 +118,8 @@
     "recoveryCode": "Recovery code",
     "recoveryCodeDescription": "Enter one of the recovery codes you saved when you turned on two-factor authentication. Each code works once.",
     "useRecoveryCode": "Use a recovery code",
-    "useAuthenticator": "Use your authenticator app"
+    "useAuthenticator": "Use your authenticator app",
+    "serverReset": "This server was reset since you last used it here, so this browser removed what it kept for it. Sign in again."
   },
   "newKeys": {
     "continue": "Continue",

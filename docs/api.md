@@ -20,7 +20,7 @@ larger body gets `413`.
 
 Anonymous liveness and identity: `{ "name": "kutup", "version": "…",
 "tusVersions": ["1.0.0"], "apiVersions": [1], "minimumClients": {"cli":
-"0.0.14"} }`. `version` is the release (`YYYY.MDD.N`, `0.0.0-dev` for a
+"0.0.14"}, "instanceId": "…" }`. `version` is the release (`YYYY.MDD.N`, `0.0.0-dev` for a
 developer's build); `minimumClients` lists the client types that have a
 minimum. It touches neither the database nor storage.
 
@@ -33,6 +33,16 @@ its type's minimum gets `426 clientTooOld`. The minimum is the higher of
 the server build's own floor and the one administrators set
 (`GET`/`PUT /api/admin/client-versions`). A request naming no client is not
 checked; a `-dev` version never is.
+
+## Server instance
+
+`instanceId` (health) names this database's lifetime: 16 random bytes
+(base64url) minted when the server first starts on an empty database. A
+restore keeps it; a wipe changes it (`kutup-server reset-instance-id` makes a
+new one on purpose, refused while any account exists). Every `/api/` answer
+carries it in `X-Kutup-Instance`. A client that sees another id than it
+remembers drops what it keeps for this server, but its anti-rollback anchors,
+and signs in again.
 
 ### GET /api/health/ready
 

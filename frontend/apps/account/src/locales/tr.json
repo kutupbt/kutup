@@ -118,7 +118,8 @@
     "recoveryCode": "Kurtarma kodu",
     "recoveryCodeDescription": "İki adımlı doğrulamayı açarken kaydettiğiniz kurtarma kodlarından birini girin. Her kod bir kez çalışır.",
     "useRecoveryCode": "Kurtarma kodu kullan",
-    "useAuthenticator": "Doğrulama uygulamanızı kullanın"
+    "useAuthenticator": "Doğrulama uygulamanızı kullanın",
+    "serverReset": "Bu sunucu buradaki son kullanımınızdan beri sıfırlandı; bu tarayıcı onun için tuttuklarını sildi. Yeniden oturum açın."
   },
   "newKeys": {
     "continue": "Devam",

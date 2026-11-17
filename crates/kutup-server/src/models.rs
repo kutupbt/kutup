@@ -35,6 +35,10 @@ pub struct HealthResponse {
     /// The lowest version per client type, for types that have one.
     #[serde(rename = "minimumClients")]
     pub minimum_clients: std::collections::BTreeMap<String, String>,
+    /// This database's instance id: another one than a client remembers
+    /// means the server was reset (docs/plans/api-surface.md §5).
+    #[serde(rename = "instanceId")]
+    pub instance_id: String,
 }
 
 /// Wraps API error messages — mirrors `handlers.ErrorResponse`.
@@ -579,11 +583,12 @@ mod tests {
             tus_versions: vec!["1.0.0"],
             api_versions: vec![1],
             minimum_clients: [("cli".to_string(), "0.0.14".to_string())].into(),
+            instance_id: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
         })
         .unwrap();
         assert_eq!(
             body,
-            r#"{"name":"kutup","version":"0.0.0-dev","tusVersions":["1.0.0"],"apiVersions":[1],"minimumClients":{"cli":"0.0.14"}}"#
+            r#"{"name":"kutup","version":"0.0.0-dev","tusVersions":["1.0.0"],"apiVersions":[1],"minimumClients":{"cli":"0.0.14"},"instanceId":"AAAAAAAAAAAAAAAAAAAAAA"}"#
         );
     }
 

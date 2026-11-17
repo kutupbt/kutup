@@ -18,6 +18,7 @@ import { activateSession, fetchProfile, KeyBindingMismatchError } from './profil
 import { getSession, updateSession } from './store'
 import { clearPersisted, readPersisted, writePersisted } from './persistedStore'
 import { randomBytes } from '@kutup/crypto/random'
+import { ensureInstance } from './instance'
 
 function profileFor(sessionId: string): string {
   return `${getClientType()}:${sessionId}`
@@ -90,6 +91,9 @@ function ended(): RestoreResult {
  * with the blob intact, so it never costs anybody their sign-in.
  */
 export async function restoreSession(): Promise<RestoreResult> {
+  // Before any local state is read: the data here may be a wiped server's
+  // (docs/plans/api-surface.md §5).
+  await ensureInstance()
   const persisted = readPersisted()
   if (!persisted) return 'none'
 

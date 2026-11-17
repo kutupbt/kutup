@@ -3608,6 +3608,19 @@ CREATE TABLE public.server_generated_keys (
 
 
 --
+-- Name: server_instance; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.server_instance (
+    singleton boolean DEFAULT true NOT NULL,
+    id bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT server_instance_id_check CHECK ((octet_length(id) = 16)),
+    CONSTRAINT server_instance_singleton_check CHECK (singleton)
+);
+
+
+--
 -- Name: site_settings; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5710,6 +5723,14 @@ ALTER TABLE ONLY public.chat_sealed_sender_certificates
 
 ALTER TABLE ONLY public.server_generated_keys
     ADD CONSTRAINT server_generated_keys_pkey PRIMARY KEY (purpose);
+
+
+--
+-- Name: server_instance server_instance_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.server_instance
+    ADD CONSTRAINT server_instance_pkey PRIMARY KEY (singleton);
 
 
 --

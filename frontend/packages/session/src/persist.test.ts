@@ -17,6 +17,8 @@ vi.mock('./profile', async (importOriginal) => ({
   activateSession: (...a: unknown[]) => activateSession(...a),
   fetchProfile: (...a: unknown[]) => fetchProfile(...a),
 }))
+// The instance check has its own tests (instance.test.ts).
+vi.mock('./instance', () => ({ ensureInstance: async () => undefined }))
 const wasm = vi.fn()
 vi.mock('@kutup/crypto/rustWasm', () => ({ getCryptoWasm: () => wasm() }))
 const open = vi.fn()

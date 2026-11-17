@@ -153,6 +153,10 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test share_controls_live -- --nocapture --test-threads 1
+# Client versions and the instance id (docs/plans/api-surface.md §1, §5).
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test client_versions_live -- --nocapture
 # Notices and consents (A3, A4): the federation switch follows its consent.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \

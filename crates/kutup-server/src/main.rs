@@ -51,6 +51,7 @@ mod file_content;
 mod grants;
 mod handlers;
 mod hub;
+mod instance;
 mod job_health;
 mod jobs;
 mod jwt;
@@ -161,6 +162,8 @@ pub struct AppState {
     pub(crate) webauthn: Option<Arc<kutup_crypto::webauthn::RelyingParty>>,
     /// The lowest client version per type (docs/plans/api-surface.md §1.3).
     pub(crate) client_minimums: client_version::ClientMinimums,
+    /// This database's instance id (docs/plans/api-surface.md §5).
+    pub(crate) instance_id: Arc<str>,
 }
 
 const USAGE: &str = "usage: kutup-server [serve]
@@ -169,7 +172,8 @@ const USAGE: &str = "usage: kutup-server [serve]
        kutup-server orphan-sweep [--delete] [--age-floor=<dur>] [--page-sleep=<dur>] [--prefix=<p>]
        kutup-server federation-identity rotate
        kutup-server chat-zk-keys rotate
-       kutup-server feature-policy rotate sealed-sender";
+       kutup-server feature-policy rotate sealed-sender
+       kutup-server reset-instance-id";
 
 /// Whether `rest` (the arguments after the program name) is a command this
 /// build has. `orphan-sweep` checks its own flags.
@@ -184,6 +188,7 @@ fn known_command(rest: &[String]) -> bool {
             | ["federation-identity", "rotate"]
             | ["chat-zk-keys", "rotate"]
             | ["feature-policy", "rotate", "sealed-sender"]
+            | ["reset-instance-id"]
     )
 }
 
@@ -266,6 +271,16 @@ async fn main() -> anyhow::Result<()> {
             "kutup-server: group send endorsement key {key_id} issues from now on; \
              the previous one verifies until its last endorsement expires"
         );
+        return Ok(());
+    }
+    // A new instance id on purpose, on an empty server only
+    // (docs/plans/api-surface.md §5): every client drops what it keeps.
+    if args
+        .get(1..)
+        .is_some_and(|rest| rest == ["reset-instance-id"])
+    {
+        let id = instance::reset(&pool).await?;
+        println!("kutup-server: the instance id is now {id}");
         return Ok(());
     }
     let rotate_sealed_sender_policy = args
@@ -537,8 +552,10 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let client_minimums = client_version::ClientMinimums::load(&pool).await?;
+    let instance_id: Arc<str> = instance::load_or_mint(&pool).await?.into();
     let state = AppState {
         client_minimums,
+        instance_id,
         opaque,
         group_send,
         webauthn,
@@ -2559,6 +2576,10 @@ fn build_router(state: AppState) -> Router {
             state.clone(),
             client_version::client_version_gate,
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            instance::instance_header,
+        ))
         .layer(CatchPanicLayer::new())
         // Outside the handlers and panic recovery, inside CORS: every /api/
         // answer, errors included, carries the API policy.
@@ -2706,6 +2727,7 @@ async fn health(
         tus_versions: vec!["1.0.0"],
         api_versions: client_version::API_VERSIONS.to_vec(),
         minimum_clients: state.client_minimums.snapshot(),
+        instance_id: state.instance_id.to_string(),
     }))
 }
 
@@ -2753,6 +2775,7 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static(file_content::REVISION_CONTENT_HEADER),
             HeaderName::from_static(middleware::SESSION_VERSION_HEADER),
             HeaderName::from_static(client_version::MIN_CLIENT_HEADER),
+            HeaderName::from_static(instance::INSTANCE_HEADER),
             axum::http::header::LOCATION,
         ])
 }
@@ -2816,6 +2839,7 @@ mod command_tests {
             &["orphan-sweep", "--delete"],
             &["federation-identity", "rotate"],
             &["feature-policy", "rotate", "sealed-sender"],
+            &["reset-instance-id"],
         ] {
             assert!(known_command(&args(ok)), "{ok:?}");
         }
