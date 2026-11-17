@@ -979,12 +979,13 @@ mod tests {
             .all(|c| c.is_ascii_lowercase() && !"aeiou".contains(c)));
         let words = GenerateOpts {
             words: Some(5),
+            separator: " ".into(),
             word_case: "first".into(),
             ..opts.clone()
         }
         .make()
         .unwrap();
-        assert_eq!(words.split('-').count(), 5);
+        assert_eq!(words.split(' ').count(), 5);
         assert!(GenerateOpts {
             word_case: "shout".into(),
             words: Some(4),

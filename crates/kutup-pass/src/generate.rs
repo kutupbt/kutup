@@ -235,8 +235,12 @@ mod tests {
     #[test]
     fn passphrases_are_list_words() {
         let list: std::collections::HashSet<&str> = words().into_iter().collect();
-        let p = passphrase(&PassphraseSpec::default());
-        let parts: Vec<&str> = p.split('-').collect();
+        // A space between them: some list words hold a hyphen ("drop-down").
+        let p = passphrase(&PassphraseSpec {
+            separator: " ".into(),
+            ..PassphraseSpec::default()
+        });
+        let parts: Vec<&str> = p.split(' ').collect();
         assert_eq!(parts.len(), 7);
         assert!(parts.iter().all(|w| list.contains(w)));
         let first = passphrase(&PassphraseSpec {

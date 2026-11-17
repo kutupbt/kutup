@@ -24,7 +24,8 @@ describe('passphrases', () => {
   it('joins the asked number of list words, cased and with extras as asked', () => {
     const words = parseWordlist(served)
     const known = new Set(words)
-    const plain = generatePassphrase(words, DEFAULT_PASSPHRASE).split('-')
+    // A space between them: some list words hold a hyphen ("drop-down").
+    const plain = generatePassphrase(words, { ...DEFAULT_PASSPHRASE, separator: ' ' }).split(' ')
     expect(plain).toHaveLength(7)
     expect(plain.every((w) => known.has(w))).toBe(true)
     const capital = generatePassphrase(words, { ...DEFAULT_PASSPHRASE, words: 4, separator: ' ', wordCase: 'first' }).split(' ')
