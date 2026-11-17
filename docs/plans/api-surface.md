@@ -1,6 +1,7 @@
 # API pass: the API surface made once, before the wipe
 
-Status: **proposed** (main, 2026-11-17), for approval before any change.
+Status: **approved** (main, 2026-11-17; decisions in §10). The build starts
+after W7's group 1 (the renames) lands on `wipe/w7`.
 Branch `wipe/api-pass` on `wipe/w7` 4f9ccdd9. It follows W7
 (docs/plans/w7-schema.md): W7 renames the schema, this renames what clients
 and peers see: paths, versions, JSON field names, client storage names, and
@@ -82,7 +83,11 @@ code that every client latches.
   `x-pm-appversion` and the `User-Agent` style the CLI already sends
   (`kutup-cli/<version>`). Browsers can't set headers on a WebSocket
   upgrade, so the three sockets take `?client=<clientType>/<version>`.
-- **Versions.** CLI and FFI: their crate version (semver). Web apps: the
+- **Versions.** CLI and FFI: their crate version (semver; the CLI stays on
+  v0.0.x, and a move to 0.1 or higher is the user's call). The check
+  compares by client type, so semver for `cli` and native types and CalVer
+  for web types never meet; both parse as semver
+  (`2026.1120.0` is a valid semver). Web apps: the
   release version, stamped at build into both server and frontend, replacing
   the `BUILD_VERSION = "dev"` constant: CalVer in semver shape,
   `YYYY.MMDD.N` (sortable, no meaning to maintain). A dev build is
@@ -125,8 +130,7 @@ x-kutup-min-client: cli/0.0.14
   non-standard 499; Proton a 4xx with code 5003. Apps act on `code`, as
   docs/api.md says, so the status matters only to tools.) RFC 9110 wants an
   `Upgrade` header with 426; we send none, as other APIs using 426 for
-  "update the app" do. If that is unwelcome, `400` with the same code works
-  identically for our clients.
+  "update the app" do.
 - `clientTooOld` and `apiVersionUnsupported` join the code table in
   docs/api.md (its test enforces the list).
 - `GET /api/health` gains `apiVersions: [1]`, `instanceId` (§5) and
@@ -994,7 +998,9 @@ again.
 - **Preferences are one JSON value per app** (`kutup.<app>.prefs`), as
   `kutup-calendar-prefs` already is. That is 10 chat keys, 4 mail keys and
   3 calendar keys fewer.
-- **Sign-out clears** everything per-account that is not an anchor.
+- **Sign-out clears** everything per-account that is not an anchor;
+  anchors go too only when the account itself is being deleted
+  (closing or deletion flows).
   Today it clears 4 of the 20-odd per-account names (inventory); the rest
   stay on the device after sign-out, which this fixes at the same time.
   Preferences are kept.
@@ -1262,29 +1268,28 @@ web (ci.yml browser job list).
   columns) depend on W7's names. This branch rebases on the final W7
   before slice 4.
 
-## 10. Questions
+## 10. Decisions (main, 2026-11-17)
 
-1. **426** for `clientTooOld` (proposed), or `400` with the same code?
-2. **Client version in `x-kutup-client`** as `<type>/<version>` (proposed),
-   or a separate `x-kutup-client-version` header?
-3. **Release version** for server and web: CalVer `YYYY.MMDD.N`
-   (proposed), or something else? The CLI keeps its own semver (0.0.x).
-4. **Federation paths `/api/fed/v2/`**, matching the protocol's existing 2
-   (proposed), or reset to `v1` with the labels (more churn, nothing
-   gained)?
-5. **Anchors across an instance change:** keep the revision guard and
-   manifest pins (proposed, §5.2), or drop everything as the sweep item
-   said?
-6. **Restore keeps the instance id** (proposed): clients then report the
-   restore as a rollback. Or should a restore mint a new id, so clients
-   start clean and say "server was reset"?
-7. **Public link fragment `#v1.<base64url>`** (proposed) and the `/s/`
-   redirect between apps: OK?
-8. **Contact link by account id** (`kutup://contact/<server>/<accountId>`,
-   proposed) rather than by address?
-9. **Shape fixes beyond the sweep:** `public-links`, `shared-with-me`,
-   `folder-shares`/`file-shares`, `chat/devices`, `admin/…/reset-keys`
-   and `entitlements`, camelCase path parameters, and the public-link file
-   routes. Take all (proposed), or only the prefix moves?
-10. **Sign-out clears per-account local data** (now most of it stays): take
-   it in slice 3 (proposed)?
+1. `clientTooOld` answers **426**, the code in the body.
+2. The client version goes **inside `x-kutup-client`** as `<type>/<version>`,
+   as Proton's `x-pm-appversion`.
+3. Server and web use **CalVer `YYYY.MMDD.N`**. The CLI keeps its own
+   v0.0.x semver (0.1+ only with the user's OK); its semver is mapped into
+   the minimum check per client type (§1.2).
+4. Federation paths are **`/api/fed/v2/`**, the existing protocol number.
+5. The **anti-rollback anchors are kept** across an instance change (§5.2).
+6. **A restore keeps the instance id.** Clients then see the rollback through
+   the anchors and show the existing rollback banner: a restore is a
+   rollback.
+7. Public link fragments are **`#v1.<base64url>`**, with the `/s/` redirect
+   between apps (§7).
+8. **Contact links by account id:** `kutup://contact/<server>/<accountId>`.
+9. **All the shape fixes are taken** (§2.1): `public-links`,
+   `shared-with-me`, `folder-shares` / `file-shares`, `chat/devices`,
+   `admin/…/reset-keys` and `entitlements`, camelCase path parameters, the
+   public-link file routes.
+10. **Sign-out clears per-account local data**, in slice 3, keeping the
+    anchors unless the account is being deleted.
+
+The `server_instance` table goes into the W7 baseline; main has asked the
+second session.
