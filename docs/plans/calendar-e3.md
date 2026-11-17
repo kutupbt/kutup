@@ -1,6 +1,6 @@
 # Calendar E3: sharing, links and busy/free
 
-Status: plan for review (third session, 2026-11-17). Phase E3 of
+Status: approved by the main session 2026-11-17 with the recommended answers to Q-1 to Q-5 (see "Decisions"). Plan by the third session. Phase E3 of
 [`calendar.md`](calendar.md), on its decisions D-1 to D-4 and the W4 key
 model (a calendar's passphrase shared on account keys,
 `CalendarShareEnvelopeV1`). Nothing is built. Code starts from `wipe/final`
@@ -249,3 +249,27 @@ opened after the wipe.
 - **Q-5. The fragment link's envelope.**
   - Recommended: an AEAD under a key derived per generation, instead of
     Proton's XOR, which would reuse one pad across generations.
+
+## Decisions (the main session, 2026-11-17)
+
+- **Q-1 to Q-5:** the recommended answers. Key generations; same server
+  only in E3, federated calendars later; Proton's organization-only rule for
+  busy times; the API and setting in E3, the participant row with E4; an AEAD
+  per generation for the fragment link.
+- **Event writes:** the server refuses an event write wrapped to anything
+  but the newest generation, so a removed member's stale client can't keep
+  writing under the old key. There is a test for it.
+- **The query-key link:**
+  - it says plainly in the UI (en and tr) that the server sees the calendar
+    in plaintext on each fetch;
+  - it is off by default in the link dialog;
+  - it is an admin site setting (`calendarQueryLinksAllowed`, default
+    allowed, as Proton);
+  - the redaction test stays.
+- **Busy-only ICS:** times only, from the readable columns. It reveals
+  nothing the server can't already see: no counts or fields beyond the
+  blocks themselves.
+- **Removal is rotation in one request:** one transaction. A crash
+  halfway leaves the old generation valid and current, never half-rotated.
+  The new generation becomes current only when every share, the metadata and
+  the links are written, and the member is removed in that same commit.
