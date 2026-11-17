@@ -125,7 +125,7 @@ impl Passphrase {
     }
 
     /// The passphrase whose bytes a share carries.
-    fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != PASSPHRASE_BYTES {
             return Err(CryptoError::InvalidInput(
                 "a passphrase is 32 random bytes".into(),
@@ -135,7 +135,7 @@ impl Passphrase {
     }
 
     /// The 32 bytes a share carries.
-    fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+    pub(crate) fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         Zeroizing::new(
             STANDARD
                 .decode(self.0.as_bytes())
@@ -180,6 +180,13 @@ impl UnlockedCalendarKey {
     }
 
     /// The public key, derived from the secret.
+    /// The key ID of the encryption subkey, as key packets to this key name
+    /// it: a client holding several key generations opens an event with the
+    /// one its key packets name ([`event_key_id`]).
+    pub fn key_id(&self) -> Result<[u8; 8]> {
+        encryption_key_id(&self.public)
+    }
+
     pub fn public_key(&self) -> &[u8] {
         &self.public
     }
@@ -679,6 +686,27 @@ pub fn key_packet_key_id(key_packet: &[u8]) -> Result<[u8; 8]> {
         return Err(CryptoError::InvalidInput("not a single key packet".into()));
     }
     crate::mail_key::key_packet_key_id(key_packet)
+}
+
+/// The key ID an event's key packets are to (both name the same key, as
+/// [`check_sealed_shape`] checks): which key generation opens it.
+pub fn event_key_id(event: &SealedEvent) -> Result<[u8; 8]> {
+    let shared = key_packet_key_id(&event.shared_key_packet)?;
+    if key_packet_key_id(&event.calendar_key_packet)? != shared {
+        return Err(CryptoError::InvalidInput(
+            "an event's key packets name two keys".into(),
+        ));
+    }
+    Ok(shared)
+}
+
+/// The key generation after `generation` (docs/plans/calendar-e3.md §2):
+/// a removed member's rotation makes it.
+pub fn next_key_generation(generation: u32) -> Result<u32> {
+    generation
+        .checked_add(1)
+        .filter(|g| *g > FIRST_KEY_GENERATION)
+        .ok_or_else(|| CryptoError::InvalidInput("no key generation after this one".into()))
 }
 
 /// A public key's encryption subkey's key ID, to compare with

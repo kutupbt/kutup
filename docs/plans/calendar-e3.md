@@ -142,11 +142,15 @@ makes or deletes links.
    - The URL is `https://calendar.<domain>/l/{linkId}#<secret>`.
    - The server stores, per live generation, that generation's passphrase
      sealed under a key derived from the 32-byte link secret (HKDF, label
-     `kutup/calendar/link/v1` in `labels.rs`; AEAD in `kutup-crypto`). This
-     differs from Proton's XOR, so no pad is reused across generations.
-   - The owner's own copy of the secret is sealed to the calendar key, as
-     Proton seals its `CacheKey`. That lets the owner show the URL again and
-     re-seal it on rotation.
+     `kutup/calendar/link-passphrase/v1` in `labels.rs`; AEAD in
+     `kutup-crypto`). This differs from Proton's XOR, so no pad is reused
+     across generations.
+   - The members' copy of the secret is sealed under a key derived from the
+     newest generation's passphrase (label `kutup/calendar/link-secret/v1`),
+     where Proton seals its `CacheKey` to the calendar key. Whoever can
+     unlock the calendar key holds that passphrase, so the access is the same
+     with no second OpenPGP message. That lets the owner show the URL again
+     and re-seal it on rotation.
    - The page fetches `GET /api/calendar/links/{id}/events?start&end` (no
      account; rate limited per IP and per link) with the keys and sealed
      passphrases. It opens them in WASM and shows a read-only calendar.
@@ -220,6 +224,28 @@ Busy-only links need nothing.
 | E3c | App: Share dialog, "Shared with you", accept with the identity check, member list, removal with rotation |
 | E3d | Links: fragment, query and busy-only; the public view; logging redaction |
 | E3e | Busy/free: the setting, the API, the limited member's grid, and Q-4's UI |
+
+**E3a as built** (`feat/calendar-e3`, no schema):
+
+- `kutup_crypto::calendar_link`: `LinkSecret` (32 bytes, base64url in the
+  URL), `seal_link_passphrase` / `open_link_passphrase` and
+  `seal_link_secret` / `open_link_secret`. Each is
+  `version ‖ nonce ‖ XChaCha20-Poly1305`, with the key from HKDF over
+  (calendar id, link id, generation), and the same context as associated
+  data.
+- `calendar::event_key_id` (the generation an event needs),
+  `UnlockedCalendarKey::key_id`, `next_key_generation`. Member shares per
+  generation reuse `seal_passphrase` / `open_passphrase`, which already
+  bind the generation.
+- WASM (`crypto-calendar` only): `shareCalendarPassphrase`,
+  `unlockSharedCalendar`, `calendarEventKeyId`, `UnlockedCalendar.keyId`,
+  `rotateCalendar` (new key, own and member shares, metadata, each link's
+  new copies, all in one result for one request), `createCalendarLink`,
+  `calendarLinkUrlSecret`, `openCalendarLink`.
+- Vectors: `calendar-sharing-v1.json` (a generation-2 member share,
+  refused shares, and the link envelopes with fixed nonces, so their bytes
+  are exact), run in Rust and in `scripts/test-crypto-wasm.mjs`.
+- No account-record purposes or scopes are needed.
 
 Each slice is its own PR from its own worktree (`feat/calendar-e3a…`),
 opened after the wipe.
