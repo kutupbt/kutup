@@ -72,12 +72,12 @@ export function SendingState({ sender }: { sender: MailSender }) {
 }
 
 /** The user page's "Mail sending" card: one account, even before it sends. */
-export function MailSendingCard({ accountId: userId }: { accountId: string }) {
+export function MailSendingCard({ accountId }: { accountId: string }) {
   const { t } = useTranslation()
   const [editing, setEditing] = useState(false)
   const sender = useQuery({
-    queryKey: [...sendersKey, 'one', userId],
-    queryFn: async () => (await api.get<MailSender>(`/admin/users/${userId}/mail-sending`)).data,
+    queryKey: [...sendersKey, 'one', accountId],
+    queryFn: async () => (await api.get<MailSender>(`/admin/users/${accountId}/mail-sending`)).data,
   })
   const update = useUpdateMailSending(() => setEditing(false))
   if (sender.isPending) return <Skeleton className="h-24 w-full" />
@@ -99,11 +99,11 @@ export function MailSendingCard({ accountId: userId }: { accountId: string }) {
         </Fact>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => update.mutate({ accountId: userId, change: { paused: !s.pausedReason } })}>
+        <Button size="sm" variant="outline" disabled={update.isPending} onClick={() => update.mutate({ accountId, change: { paused: !s.pausedReason } })}>
           {s.pausedReason ? t('admin.mailSending.resume') : t('admin.mailSending.pause')}
         </Button>
         {s.flagReason ? (
-          <Button size="sm" variant="ghost" onClick={() => update.mutate({ accountId: userId, change: { clearFlag: true } })}>
+          <Button size="sm" variant="ghost" onClick={() => update.mutate({ accountId, change: { clearFlag: true } })}>
             {t('admin.mailSending.clearFlag')}
           </Button>
         ) : null}
@@ -112,7 +112,7 @@ export function MailSendingCard({ accountId: userId }: { accountId: string }) {
         </Button>
       </div>
       {editing ? (
-        <LimitsDialog sender={s} pending={update.isPending} onClose={() => setEditing(false)} onSave={(change) => update.mutate({ accountId: userId, change })} />
+        <LimitsDialog sender={s} pending={update.isPending} onClose={() => setEditing(false)} onSave={(change) => update.mutate({ accountId, change })} />
       ) : null}
     </Card>
   )

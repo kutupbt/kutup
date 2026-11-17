@@ -367,7 +367,7 @@ pub async fn get_file_invite(
         .bind(share.file_id)
         .fetch_one(&state.pool)
         .await?;
-            let (owner_user_id, username, incarnation, signing) = owner;
+            let (owner_account_id, username, incarnation, signing) = owner;
             let unavailable = || AppError::conflict("owner identity is unavailable");
             signed_json(
                 federation,
@@ -380,7 +380,7 @@ pub async fn get_file_invite(
                     share_envelope: share.share_envelope,
                     key_generation: share.key_generation,
                     can_edit: share.can_edit,
-                    owner_account_id: owner_user_id,
+                    owner_account_id,
                     owner_account: format!(
                         "{}@{}",
                         username.ok_or_else(unavailable)?,

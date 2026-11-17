@@ -131,9 +131,9 @@ type Pending =
   | { kind: 'release' }
 
 /** Which referral code the account signed up with (docs/plans/registration-codes.md). */
-function SignedUpWithFact({ accountId: userId }: { accountId: string }) {
+function SignedUpWithFact({ accountId }: { accountId: string }) {
   const { t, i18n } = useTranslation()
-  const code = useUserRegistrationCode(userId)
+  const code = useUserRegistrationCode(accountId)
   if (code.isPending || code.isError) return null
   return (
     <Fact label={t('admin.user.signedUpWith')}>

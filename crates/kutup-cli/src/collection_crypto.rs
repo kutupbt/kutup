@@ -17,7 +17,7 @@ use kutup_crypto::named_share::NamedShareEnvelopeV1;
 pub fn create_owned(
     name: &str,
     parent_collection_id: Option<String>,
-    owner_user_id: &str,
+    owner_account_id: &str,
     session: &Session,
 ) -> Result<(CreateCollectionRequest, [u8; 32])> {
     let roots = session.roots()?;
@@ -29,7 +29,7 @@ pub fn create_owned(
         &roots.drive,
         DriveEnvelopeContextV1::owner_collection_key(
             &id,
-            owner_user_id,
+            owner_account_id,
             1,
             roots.drive_generation,
         )?,
@@ -42,13 +42,13 @@ pub fn create_owned(
             1,
             1,
             &id,
-            owner_user_id,
+            owner_account_id,
         )?,
     )?;
     let identity = AccountIdentityKeysV1::derive(&roots.identity)?;
     let epoch_statement = CollectionEpochStatementV1::create(
         &id,
-        owner_user_id,
+        owner_account_id,
         1,
         None,
         &collection_key,
@@ -218,15 +218,15 @@ mod tests {
     use super::*;
 
     fn owned_collection(session: &Session) -> (Collection, [u8; 32]) {
-        let owner_user_id = "11111111-1111-4111-8111-111111111111";
+        let owner_account_id = "11111111-1111-4111-8111-111111111111";
         let (created, collection_key) =
-            create_owned("Design notes", None, owner_user_id, session).unwrap();
+            create_owned("Design notes", None, owner_account_id, session).unwrap();
         let statement = CollectionEpochStatementV1::decode_b64(&created.epoch_statement).unwrap();
         (
             Collection {
                 name_hash: None,
                 id: created.id,
-                owner_account_id: owner_user_id.into(),
+                owner_account_id: owner_account_id.into(),
                 name_envelope: created.name_envelope,
                 owner_key_envelope: Some(created.owner_key_envelope),
                 named_share_envelope: None,

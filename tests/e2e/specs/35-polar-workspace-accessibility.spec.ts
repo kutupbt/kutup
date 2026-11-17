@@ -11,8 +11,8 @@ const DESKTOP = { width: 1440, height: 900 }
 /** Theme and language are kept per app origin, as each app stores them. */
 async function setPreferences(page: Page, preferences: { theme?: ThemePreference; language?: 'en' | 'tr' }) {
   await page.evaluate(({ theme, language }) => {
-    if (theme) localStorage.setItem('kutup-theme', theme)
-    if (language) localStorage.setItem('kutup-lang', language)
+    if (theme) localStorage.setItem('kutup.ui.theme', theme)
+    if (language) localStorage.setItem('kutup.ui.language', language)
   }, preferences)
   await page.reload()
   await page.waitForLoadState('domcontentloaded')

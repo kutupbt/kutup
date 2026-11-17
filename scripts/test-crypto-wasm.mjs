@@ -268,24 +268,24 @@ assert.throws(
 // root's generation in the revision slot; only their typed exports seal them.
 {
   const v = vectors.driveOwnerKeys
-  const folderArgs = [v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerUserId, v.collectionEpoch]
-  const linkArgs = [v.driveRoot, v.driveRootGeneration, v.linkId, v.ownerUserId]
+  const folderArgs = [v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerAccountId, v.collectionEpoch]
+  const linkArgs = [v.driveRoot, v.driveRootGeneration, v.linkId, v.ownerAccountId]
   assert.equal(crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, ...folderArgs), v.collectionKey)
   assert.equal(crypto.openOwnerLinkKey(v.linkKeyEnvelope, ...linkArgs), v.linkKey)
   assert.equal(crypto.openOwnerCollectionKey(crypto.sealOwnerCollectionKey(v.collectionKey, ...folderArgs), ...folderArgs), v.collectionKey)
   assert.equal(crypto.openOwnerLinkKey(crypto.sealOwnerLinkKey(v.linkKey, ...linkArgs), ...linkArgs), v.linkKey)
   // The same root at another generation, or another epoch: refused.
-  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, 1, v.collectionId, v.ownerUserId, v.collectionEpoch))
-  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerUserId, v.collectionEpoch + 1))
-  assert.throws(() => crypto.openOwnerLinkKey(v.linkKeyEnvelope, v.driveRoot, 0, v.linkId, v.ownerUserId), /never 0/)
+  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, 1, v.collectionId, v.ownerAccountId, v.collectionEpoch))
+  assert.throws(() => crypto.openOwnerCollectionKey(v.collectionKeyEnvelope, v.driveRoot, v.driveRootGeneration, v.collectionId, v.ownerAccountId, v.collectionEpoch + 1))
+  assert.throws(() => crypto.openOwnerLinkKey(v.linkKeyEnvelope, v.driveRoot, 0, v.linkId, v.ownerAccountId), /never 0/)
   // The generic export refuses both purposes.
   for (const purpose of [1, 9]) {
     assert.throws(
-      () => crypto.sealDriveEnvelope(v.collectionKey, v.driveRoot, purpose, 1, 1n, v.collectionId, v.ownerUserId),
+      () => crypto.sealDriveEnvelope(v.collectionKey, v.driveRoot, purpose, 1, 1n, v.collectionId, v.ownerAccountId),
       /typed export/,
     )
     assert.throws(
-      () => crypto.openDriveEnvelope(v.collectionKeyEnvelope, v.driveRoot, purpose, v.collectionEpoch, BigInt(v.driveRootGeneration), v.collectionId, v.ownerUserId),
+      () => crypto.openDriveEnvelope(v.collectionKeyEnvelope, v.driveRoot, purpose, v.collectionEpoch, BigInt(v.driveRootGeneration), v.collectionId, v.ownerAccountId),
       /typed export/,
     )
   }
@@ -648,21 +648,21 @@ const ringChain = ring.chain.map((link) => ({
   previousKeyEnvelope: link.previousKeyEnvelope ?? undefined,
 }))
 assert.deepEqual(
-  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, ringChain),
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, ringChain),
   ring.keys,
 )
 assert.throws(() =>
-  crypto.unlockCollectionKeyring(ring.keys[1], ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, ringChain),
+  crypto.unlockCollectionKeyring(ring.keys[1], ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, ringChain),
 )
 assert.throws(() =>
-  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, [
     ringChain[0],
     ringChain[2],
   ]),
 )
-const resealedPrevious = crypto.sealPreviousCollectionKey(ring.keys[1], ring.keys[2], ring.collectionId, ring.ownerUserId, 3)
+const resealedPrevious = crypto.sealPreviousCollectionKey(ring.keys[1], ring.keys[2], ring.collectionId, ring.ownerAccountId, 3)
 assert.deepEqual(
-  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerUserId, ring.authorityPublicKey, [
+  crypto.unlockCollectionKeyring(ring.keys.at(-1), ring.collectionId, ring.ownerAccountId, ring.authorityPublicKey, [
     ringChain[0],
     ringChain[1],
     { ...ringChain[2], previousKeyEnvelope: resealedPrevious },

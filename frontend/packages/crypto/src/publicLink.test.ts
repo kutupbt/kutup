@@ -75,8 +75,8 @@ describe('public-link collection-key envelope', () => {
 describe('owner copies under the Drive root (vectors shared with Rust)', () => {
   const v = vectors.driveOwnerKeys
   const roots = { driveRoot: v.driveRoot as DriveRoot, driveGeneration: v.driveRootGeneration }
-  const folder = { collectionId: v.collectionId, ownerAccountId: v.ownerUserId, epoch: v.collectionEpoch }
-  const link = { linkId: v.linkId, ownerAccountId: v.ownerUserId }
+  const folder = { collectionId: v.collectionId, ownerAccountId: v.ownerAccountId, epoch: v.collectionEpoch }
+  const link = { linkId: v.linkId, ownerAccountId: v.ownerAccountId }
 
   it('opens the checked-in owner copies and round-trips new ones', async () => {
     expect(await openOwnerCollectionKey(v.collectionKeyEnvelope, roots, folder)).toEqual(fromBase64(v.collectionKey))

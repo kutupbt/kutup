@@ -221,7 +221,7 @@ pub struct Collection {
     pub epoch_statement: String,
     #[serde(default)]
     pub epoch_statement_hash: String,
-    /// A shared folder's owner's server; with `owner_user_id`, the owner.
+    /// A shared folder's owner's server; with `owner_account_id`, the owner.
     #[serde(default)]
     pub owner_server: Option<String>,
     /// Shown only: the owner's address now.

@@ -37,8 +37,8 @@ export function useUpdateMailSending(onDone?: () => void) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ accountId: userId, change }: { accountId: string; change: Change }) => {
-      await api.put(`/admin/users/${userId}/mail-sending`, change)
+    mutationFn: async ({ accountId, change }: { accountId: string; change: Change }) => {
+      await api.put(`/admin/users/${accountId}/mail-sending`, change)
     },
     onSuccess: async () => {
       onDone?.()

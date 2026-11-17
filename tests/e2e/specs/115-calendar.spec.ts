@@ -7,7 +7,7 @@ const WEEK = '/?view=week&date=2026-10-29'
 /** Shows calendars in Istanbul's time, weeks from Monday, a 24-hour clock: what the times below are read in. */
 async function istanbul(context: BrowserContext) {
   await context.addInitScript(() => {
-    localStorage.setItem('kutup-calendar-prefs', JSON.stringify({ zone: 'Europe/Istanbul', weekStart: 1, hour12: false }))
+    localStorage.setItem('kutup.calendar.prefs', JSON.stringify({ zone: 'Europe/Istanbul', weekStart: 1, hour12: false }))
   })
 }
 

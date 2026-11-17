@@ -1329,12 +1329,12 @@ fn drive_round_trip(
             .unwrap(),
         "get Drive collection owner",
     );
-    let owner_user_id = alice_me["id"].as_str().unwrap();
+    let owner_account_id = alice_me["id"].as_str().unwrap();
     let collection_id = uuid::Uuid::new_v4().to_string();
     let collection_key = [0x45; 32];
     let owner_key_context = DriveEnvelopeContextV1::owner_collection_key(
         &collection_id,
-        owner_user_id,
+        owner_account_id,
         1,
         alice_roots.drive_generation,
     )
@@ -1344,7 +1344,7 @@ fn drive_round_trip(
         1,
         1,
         &collection_id,
-        owner_user_id,
+        owner_account_id,
     )
     .unwrap();
     let owner_key_envelope = drive_envelope::seal_under_drive_root(
@@ -1358,7 +1358,7 @@ fn drive_round_trip(
             .unwrap();
     let epoch_statement = CollectionEpochStatementV1::create(
         &collection_id,
-        owner_user_id,
+        owner_account_id,
         1,
         None,
         &collection_key,
@@ -1420,7 +1420,7 @@ fn drive_round_trip(
         1,
         1,
         &collection_id,
-        owner_user_id,
+        owner_account_id,
     )
     .unwrap();
     let public_link_envelope =
@@ -1439,7 +1439,7 @@ fn drive_round_trip(
                     &alice_roots.drive,
                     DriveEnvelopeContextV1::owner_link_key(
                         &public_link_id,
-                        owner_user_id,
+                        owner_account_id,
                         alice_roots.drive_generation,
                     )
                     .unwrap(),
@@ -1458,7 +1458,7 @@ fn drive_round_trip(
         "read public Drive share",
     );
     assert_eq!(public_link_record["targetId"], collection_id);
-    assert_eq!(public_link_record["ownerAccountId"], owner_user_id);
+    assert_eq!(public_link_record["ownerAccountId"], owner_account_id);
     assert_eq!(public_link_record["collectionKeyEpoch"], 1);
     assert_eq!(
         drive_envelope::open_b64(
@@ -1479,7 +1479,7 @@ fn drive_round_trip(
             2,
             1,
             &collection_id,
-            owner_user_id,
+            owner_account_id,
         )
         .unwrap(),
     )
@@ -1523,7 +1523,7 @@ fn drive_round_trip(
         bob_identity.incarnation_id()
     );
     // The two people, as every share names them: server and account id.
-    let alice_ref = AccountRef::new("a.test", owner_user_id).unwrap();
+    let alice_ref = AccountRef::new("a.test", owner_account_id).unwrap();
     let bob_ref = AccountRef::new("b.test", remote_user["accountId"].as_str().unwrap()).unwrap();
     // The same account by its id, asked of B through A (federation, never
     // a URL from the query): the address now and the same keys.
@@ -1644,7 +1644,7 @@ fn drive_round_trip(
         .verify_authority(&alice_identity.authority_public_key())
         .unwrap();
     accepted_epoch
-        .verify_current_binding(&collection_id, owner_user_id, 1)
+        .verify_current_binding(&collection_id, owner_account_id, 1)
         .unwrap();
     accepted_epoch
         .verify_collection_key(&collection_key)
@@ -1668,7 +1668,7 @@ fn drive_round_trip(
                 1,
                 1,
                 &collection_id,
-                owner_user_id,
+                owner_account_id,
             )
             .unwrap(),
         )
@@ -1993,7 +1993,7 @@ fn drive_round_trip(
     // the folder to a new key and keeps Bob; Bob's server follows it only
     // along the signed history. Then the owner removes Bob. ---
     let rotation_ctx = |purpose, epoch, revision| {
-        DriveEnvelopeContextV1::new(purpose, epoch, revision, &collection_id, owner_user_id)
+        DriveEnvelopeContextV1::new(purpose, epoch, revision, &collection_id, owner_account_id)
             .unwrap()
     };
     let access = json_response(
@@ -2043,7 +2043,7 @@ fn drive_round_trip(
      -> (CollectionEpochStatementV1, u16) {
         let statement = CollectionEpochStatementV1::create(
             &collection_id,
-            owner_user_id,
+            owner_account_id,
             epoch,
             Some(previous_hash),
             key,
@@ -2057,10 +2057,10 @@ fn drive_round_trip(
                 "fromEpoch": epoch - 1,
                 "epochStatement": statement.encode_b64(),
                 "ownerKeyEnvelope": drive_envelope::seal_under_drive_root(key, &alice_roots.drive,
-                    DriveEnvelopeContextV1::owner_collection_key(&collection_id, owner_user_id, epoch,
+                    DriveEnvelopeContextV1::owner_collection_key(&collection_id, owner_account_id, epoch,
                         alice_roots.drive_generation).unwrap()).unwrap(),
                 "previousKeyEnvelope": kutup_crypto::collection_keyring::seal_previous_key(
-                    previous_key, key, &collection_id, owner_user_id, epoch).unwrap(),
+                    previous_key, key, &collection_id, owner_account_id, epoch).unwrap(),
                 "nameEnvelope": drive_envelope::seal_b64(b"Federated V2 collection", key,
                     rotation_ctx(DriveEnvelopePurpose::CollectionName, epoch, revision)).unwrap(),
                 "publicLinks": [{
@@ -2142,7 +2142,7 @@ fn drive_round_trip(
     let keys = kutup_crypto::collection_keyring::unlock(
         &key2,
         &collection_id,
-        owner_user_id,
+        owner_account_id,
         &alice_identity.authority_public_key(),
         &links,
     )

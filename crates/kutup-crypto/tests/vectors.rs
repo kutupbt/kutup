@@ -243,7 +243,7 @@ struct ThumbnailVec {
 #[serde(rename_all = "camelCase")]
 struct KeyringVec {
     collection_id: String,
-    owner_user_id: String,
+    owner_account_id: String,
     authority_public_key: String,
     keys: Vec<String>,
     chain: Vec<KeyringLinkVec>,
@@ -711,7 +711,7 @@ fn collection_keyring_matches_canonical_vector() {
     let keys = collection_keyring::unlock(
         &current,
         &v.collection_id,
-        &v.owner_user_id,
+        &v.owner_account_id,
         &b64(&v.authority_public_key),
         &chain,
     )
@@ -724,7 +724,7 @@ fn collection_keyring_matches_canonical_vector() {
     assert!(collection_keyring::unlock(
         &b64(&v.keys[1]),
         &v.collection_id,
-        &v.owner_user_id,
+        &v.owner_account_id,
         &b64(&v.authority_public_key),
         &chain,
     )
@@ -1088,7 +1088,7 @@ fn print_drive_owner_key_vectors() {
         "description": "An owned folder's key and a link's owner copy under the Drive root; the revision slot is the root's generation (kutup-crypto/src/drive_envelope.rs).",
         "driveRoot": e(&root),
         "driveRootGeneration": generation.get(),
-        "ownerUserId": owner,
+        "ownerAccountId": owner,
         "collectionId": folder,
         "collectionEpoch": 3,
         "collectionKey": e(&[0x64; 32]),
@@ -1113,13 +1113,14 @@ fn drive_owner_key_vector() {
     let epoch = v["collectionEpoch"].as_u64().unwrap() as u32;
     let collection = DriveEnvelopeContextV1::owner_collection_key(
         &s("collectionId"),
-        &s("ownerUserId"),
+        &s("ownerAccountId"),
         epoch,
         generation,
     )
     .unwrap();
-    let link = DriveEnvelopeContextV1::owner_link_key(&s("linkId"), &s("ownerUserId"), generation)
-        .unwrap();
+    let link =
+        DriveEnvelopeContextV1::owner_link_key(&s("linkId"), &s("ownerAccountId"), generation)
+            .unwrap();
     for (scope, key, nonce, envelope) in [
         (
             collection,
@@ -1145,7 +1146,7 @@ fn drive_owner_key_vector() {
     // The generation is bound: the same root at another generation fails.
     let first = DriveEnvelopeContextV1::owner_collection_key(
         &s("collectionId"),
-        &s("ownerUserId"),
+        &s("ownerAccountId"),
         epoch,
         RootGeneration::FIRST,
     )

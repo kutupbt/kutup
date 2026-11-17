@@ -23,7 +23,7 @@ async function cutFirst(context: BrowserContext, pattern: RegExp): Promise<() =>
 /** The Mail page's own bundle, as its index.html names it. */
 async function mailEntry(request: APIRequestContext): Promise<RegExp> {
   const html = await (await request.get(appUrl('mail'))).text()
-  expect(html, 'the reload guard is in the page').toContain('kutup-reload:')
+  expect(html, 'the reload guard is in the page').toContain('kutup.ui.reload:')
   const src = /<script type="module"[^>]*src="([^"]+)"/.exec(html)?.[1]
   if (!src) throw new Error('no entry script in mail/index.html')
   return new RegExp(`${src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
@@ -54,7 +54,7 @@ test('an app whose own bundle was cut off reloads itself once', async ({ browser
   await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
   expect(entry()).toBeGreaterThanOrEqual(2)
   // Once per load: the flag that stops a loop clears after the page drew.
-  await expect.poll(() => page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.startsWith('kutup-reload:')).length), { timeout: 15_000 }).toBe(0)
+  await expect.poll(() => page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.startsWith('kutup.ui.reload:')).length), { timeout: 15_000 }).toBe(0)
   await context.close()
 })
 

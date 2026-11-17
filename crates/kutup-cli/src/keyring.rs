@@ -68,7 +68,7 @@ impl Keyring {
         client: &Client,
         history_path: &str,
         collection_id: &str,
-        owner_user_id: &str,
+        owner_account_id: &str,
         key_epoch: u32,
         statement_hash: Option<&str>,
         current_key: &[u8],
@@ -97,7 +97,7 @@ impl Keyring {
         let keys = collection_keyring::unlock(
             current_key,
             collection_id,
-            owner_user_id,
+            owner_account_id,
             &authority()?,
             &chain,
         )

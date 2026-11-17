@@ -238,7 +238,7 @@ export async function submitThroughRateLimit(
  * before closing the tab.
  */
 async function sessionSaved(page: Page): Promise<void> {
-  await page.waitForFunction(() => localStorage.getItem('kutup-session') !== null, undefined, { timeout: 30_000 })
+  await page.waitForFunction(() => localStorage.getItem('kutup.session') !== null, undefined, { timeout: 30_000 })
 }
 
 /** Opens Drive on a signed-in context and waits for its listing. */

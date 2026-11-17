@@ -58,7 +58,7 @@ test('calendar reminders: the editor, a calendar’s defaults, and one firing wh
   const account = newAccount('calremind', PASSWORD)
   const context = await browser.newContext({ viewport: { width: 1400, height: 1000 } })
   await context.addInitScript((zone) => {
-    localStorage.setItem('kutup-calendar-prefs', JSON.stringify({ zone, weekStart: 1, hour12: false }))
+    localStorage.setItem('kutup.calendar.prefs', JSON.stringify({ zone, weekStart: 1, hour12: false }))
   }, ZONE)
   await recordNotifications(context)
   await registerAccount(context, account)

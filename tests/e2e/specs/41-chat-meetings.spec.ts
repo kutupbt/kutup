@@ -152,7 +152,7 @@ test('someone without an account joins a scheduled meeting through its link', as
   const entry = chat.locator(`[data-testid="chat-meeting-history-entry"][data-title="${title}"]`)
   await expect(entry).toHaveCount(1, { timeout: 30_000 })
   await expect(entry.getByTestId('chat-meeting-rejoin')).toHaveAttribute('href', url)
-  await expect.poll(() => chat.evaluate(() => localStorage.getItem('kutup-meeting-history')), { timeout: 30_000 }).toBe('[]')
+  await expect.poll(() => chat.evaluate(() => localStorage.getItem('kutup.chat.meetingHistory')), { timeout: 30_000 }).toBe('[]')
   const recordedBody = (await recorded).postData() ?? ''
   expect(Object.keys(JSON.parse(recordedBody) as Record<string, unknown>).sort()).toEqual(['entry', 'id'])
   expect(recordedBody).not.toContain('Team sync')
@@ -161,7 +161,7 @@ test('someone without an account joins a scheduled meeting through its link', as
   await expect(entry).toHaveCount(1, { timeout: 60_000 })
   // The guest has no account: their stays are kept nowhere, so they cannot
   // end up in the list of whoever signs in to this browser next.
-  expect(await guest.evaluate(() => localStorage.getItem('kutup-meeting-history'))).toBeNull()
+  expect(await guest.evaluate(() => localStorage.getItem('kutup.chat.meetingHistory'))).toBeNull()
 
   // Renaming it changes what a holder of the link sees.
   await meeting(chat, title).getByTestId('chat-meeting-edit').click()
@@ -263,7 +263,7 @@ test('after its owner signs out, their meeting in that browser waits like anyone
   await signedOut.goto(url)
   await expect(signedOut.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
   await expect(signedOut.getByTestId('chat-link-call-has-waiting-room')).toBeVisible()
-  expect(await signedOut.evaluate(() => localStorage.getItem('kutup-meeting-hosts'))).toBeNull()
+  expect(await signedOut.evaluate(() => localStorage.getItem('kutup.chat.meetingHosts'))).toBeNull()
   await context.close()
 })
 

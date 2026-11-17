@@ -14,7 +14,7 @@ test('an unreachable server is retried, with no repair offered', async ({ browse
   const context = await browser.newContext()
   await registerAccount(context, newAccount('openfail', PASSWORD))
   const page = await openChat(context)
-  const deviceBefore = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('kutup:chat:device-id')).map((key) => localStorage.getItem(key)))
+  const deviceBefore = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('kutup.chat.deviceId')).map((key) => localStorage.getItem(key)))
 
   await page.route('**/api/chat/**', (route) => route.fulfill({ status: 502, body: '' }))
   await page.reload()
@@ -27,7 +27,7 @@ test('an unreachable server is retried, with no repair offered', async ({ browse
   // same device.
   await page.unroute('**/api/chat/**')
   await openChats(page)
-  const deviceAfter = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('kutup:chat:device-id')).map((key) => localStorage.getItem(key)))
+  const deviceAfter = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('kutup.chat.deviceId')).map((key) => localStorage.getItem(key)))
   expect(deviceAfter).toEqual(deviceBefore)
   expect(deviceAfter.length).toBe(1)
 

@@ -278,10 +278,10 @@ pub async fn create(
             return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
         }
     };
-    let Some((owner_user_id, key_epoch)) = collection else {
+    let Some((owner_account_id, key_epoch)) = collection else {
         return tus_text(StatusCode::FORBIDDEN, "forbidden");
     };
-    let is_owner = owner_user_id == user_id;
+    let is_owner = owner_account_id == user_id;
 
     if !is_owner {
         let can_upload: Option<bool> = match sqlx::query_scalar(

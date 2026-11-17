@@ -1510,7 +1510,7 @@ pub fn create_collection_epoch_statement(
     identity_root_base64: &str,
     collection_key_base64: &str,
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     epoch: u32,
     previous_statement_hash: &str,
 ) -> Result<String, JsValue> {
@@ -1525,7 +1525,7 @@ pub fn create_collection_epoch_statement(
     .map_err(|error| js_error(&error.to_string()))?;
     let statement = kutup_crypto::collection_epoch::CollectionEpochStatementV1::create(
         collection_id,
-        owner_user_id,
+        owner_account_id,
         epoch,
         (!previous_statement_hash.is_empty()).then_some(previous_statement_hash),
         &collection_key,
@@ -1582,7 +1582,7 @@ pub fn seal_previous_collection_key(
     previous_key_base64: &str,
     key_base64: &str,
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     epoch: u32,
 ) -> Result<String, JsValue> {
     let previous = decode_canonical_base64(previous_key_base64, "previous collection key")?;
@@ -1591,7 +1591,7 @@ pub fn seal_previous_collection_key(
         &previous,
         &key,
         collection_id,
-        owner_user_id,
+        owner_account_id,
         epoch,
     )
     .map_err(|error| js_error(&error.to_string()))
@@ -1613,7 +1613,7 @@ struct EpochLinkJson {
 pub fn unlock_collection_keyring(
     current_key_base64: &str,
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     owner_authority_public_key_base64: &str,
     chain: JsValue,
 ) -> Result<JsValue, JsValue> {
@@ -1633,7 +1633,7 @@ pub fn unlock_collection_keyring(
     let keys = kutup_crypto::collection_keyring::unlock(
         &current,
         collection_id,
-        owner_user_id,
+        owner_account_id,
         &authority,
         &chain,
     )

@@ -227,7 +227,7 @@ pub struct CollectionRow {
     pub name_revision: i64,
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
-    /// A shared folder's owner: their server, with `owner_user_id` their
+    /// A shared folder's owner: their server, with `owner_account_id` their
     /// account id (the share's envelope names them by both).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_server: Option<String>,
@@ -655,7 +655,7 @@ mod tests {
         };
         let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
         assert_eq!(v.get("collectionKeyEpoch").unwrap(), 1);
-        assert_eq!(v.get("ownerUserId").unwrap(), "u1");
+        assert_eq!(v.get("ownerAccountId").unwrap(), "u1");
         assert!(v.get("expiresAt").unwrap().is_null());
     }
 }

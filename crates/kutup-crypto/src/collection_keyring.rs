@@ -28,7 +28,7 @@ pub struct EpochLinkV1 {
 /// The envelope context of the previous-key record stored at `epoch`.
 pub fn previous_key_context(
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     epoch: u32,
 ) -> Result<DriveEnvelopeContextV1> {
     if epoch < 2 {
@@ -41,7 +41,7 @@ pub fn previous_key_context(
         epoch,
         1,
         collection_id,
-        owner_user_id,
+        owner_account_id,
     )
 }
 
@@ -50,13 +50,13 @@ pub fn seal_previous_key(
     previous_key: &[u8],
     key: &[u8],
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     epoch: u32,
 ) -> Result<String> {
     drive_envelope::seal_b64(
         previous_key,
         key,
-        previous_key_context(collection_id, owner_user_id, epoch)?,
+        previous_key_context(collection_id, owner_account_id, epoch)?,
     )
 }
 
@@ -66,13 +66,13 @@ pub fn seal_previous_key(
 /// party holding no key (a federated recipient's server) pins and compares.
 pub fn verify_history(
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     owner_authority_public_key: &[u8],
     chain: &[EpochLinkV1],
 ) -> Result<Vec<String>> {
     Ok(verified_statements(
         collection_id,
-        owner_user_id,
+        owner_account_id,
         owner_authority_public_key,
         chain,
     )?
@@ -83,7 +83,7 @@ pub fn verify_history(
 
 fn verified_statements(
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     owner_authority_public_key: &[u8],
     chain: &[EpochLinkV1],
 ) -> Result<Vec<CollectionEpochStatementV1>> {
@@ -105,7 +105,7 @@ fn verified_statements(
         statement.verify_authority(owner_authority_public_key)?;
         statement.verify_binding(
             collection_id,
-            owner_user_id,
+            owner_account_id,
             epoch,
             previous_hash.as_deref(),
         )?;
@@ -125,13 +125,13 @@ fn verified_statements(
 pub fn unlock(
     current_key: &[u8],
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     owner_authority_public_key: &[u8],
     chain: &[EpochLinkV1],
 ) -> Result<Vec<Zeroizing<Vec<u8>>>> {
     let statements = verified_statements(
         collection_id,
-        owner_user_id,
+        owner_account_id,
         owner_authority_public_key,
         chain,
     )?;
@@ -153,7 +153,7 @@ pub fn unlock(
         let older = Zeroizing::new(drive_envelope::open_b64(
             envelope,
             newer,
-            previous_key_context(collection_id, owner_user_id, epoch)?,
+            previous_key_context(collection_id, owner_account_id, epoch)?,
         )?);
         statements[index - 1].verify_collection_key(&older)?;
         keys.push(older);
@@ -332,7 +332,7 @@ mod vector {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "collectionId": collection,
-                "ownerUserId": owner,
+                "ownerAccountId": owner,
                 "authorityPublicKey": b64(&authority.verifying_key().to_array::<32>()),
                 "keys": keys.iter().map(|k| b64(k)).collect::<Vec<_>>(),
                 "chain": links,
