@@ -84,6 +84,7 @@ vi.mock('@kutup/crypto/calendar', () => ({
       passphrases: shares.map((s) => ({ keyGeneration: s.keyGeneration, sealed: `pp-${s.keyGeneration}` })),
     }),
   calendarLinkUrlSecret: () => Promise.resolve('URLSECRET'),
+  sealLinkPurpose: (_calendar: unknown, _signer: unknown, calendarId: string, linkId: string, purpose: string) => ({ keyPacket: 'k', dataPacket: `${calendarId}/${linkId}/${purpose}`, signature: 's' }),
 }))
 
 const pins = vi.hoisted(() => ({
@@ -322,21 +323,28 @@ describe('accepting an invitation', () => {
 
 describe('links', () => {
   it('makes a busy link with no key, and a full one whose secret stays in the fragment', async () => {
-    const busy = await createLink(session, calendar, 'busy')
-    expect(server.calls.at(-1)!.body).toEqual({ id: busy.link.id, kind: 'busy' })
+    const busy = await createLink(session, account, calendar, 'busy')
+    expect(server.calls.at(-1)!.body).toEqual({ id: busy.link.id, kind: 'busy', purpose: null })
     expect(busy.urls.ics).toMatch(/\/api\/calendar\/links\/.+\/calendar\.ics$/)
-    const full = await createLink(session, calendar, 'full')
+    const full = await createLink(session, account, calendar, 'full')
     const body = server.calls.at(-1)!.body as Record<string, unknown>
     expect(body).toMatchObject({ kind: 'full', secret: { keyGeneration: 2, sealed: 'sealed-secret' }, passphrases: [{ keyGeneration: 1 }, { keyGeneration: 2 }] })
     expect(JSON.stringify(body)).not.toContain('URLSECRET')
     expect(full.urls.page).toMatch(/\/l\/.+#URLSECRET$/)
   })
 
+  it('seals the owner’s label for the link, bound to the calendar and the link, and sends none when there is none', async () => {
+    const labelled = await createLink(session, account, calendar, 'busy', '  Family  ')
+    expect((server.calls.at(-1)!.body as { purpose: unknown }).purpose).toEqual({ keyPacket: 'k', dataPacket: `cal-1/${labelled.link.id}/Family`, signature: 's' })
+    await createLink(session, account, calendar, 'busy', '   ')
+    expect((server.calls.at(-1)!.body as { purpose: unknown }).purpose).toBeNull()
+  })
+
   it('puts a query link’s key in the address only where the server allows such links', async () => {
-    const query = await createLink(session, calendar, 'query')
+    const query = await createLink(session, account, calendar, 'query')
     expect(query.urls.ics).toMatch(/calendar\.ics\?key=URLSECRET$/)
     server.settings = { calendar: { queryLinksAllowed: false } }
-    await expect(createLink(session, calendar, 'query')).rejects.toThrow()
+    await expect(createLink(session, account, calendar, 'query')).rejects.toThrow()
   })
 
   it('shows a keyed link again from the members’ copy, and stops at the site’s count', async () => {
@@ -344,7 +352,7 @@ describe('links', () => {
     expect(urls.page).toMatch(/\/l\/l1#URLSECRET$/)
     server.settings = { calendar: { linksPerCalendar: 1 } }
     server.links = [{ id: 'l1', kind: 'busy', secret: null, createdAt: '' }]
-    await expect(createLink(session, calendar, 'busy')).rejects.toThrow('at most 1')
+    await expect(createLink(session, account, calendar, 'busy')).rejects.toThrow('at most 1')
   })
 })
 

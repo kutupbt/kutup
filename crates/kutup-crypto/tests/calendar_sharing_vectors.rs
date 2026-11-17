@@ -18,7 +18,7 @@ use kutup_crypto::account_roots::IdentityRoot;
 use kutup_crypto::calendar::{
     generate_calendar_key, next_key_generation, open_own_passphrase, open_passphrase,
     seal_own_passphrase, seal_passphrase, unlock_calendar_key, CalendarMember, CalendarOwner,
-    CalendarShareEnvelopeV1, Passphrase, FIRST_KEY_GENERATION,
+    CalendarShareEnvelopeV1, Passphrase, SealedMetadataV1, FIRST_KEY_GENERATION,
 };
 use kutup_crypto::calendar_link::{self, LinkSecret};
 use kutup_crypto::identity::AccountIdentityKeysV1;
@@ -61,6 +61,11 @@ struct Vectors {
     /// The link secret under this generation's passphrase.
     link_secret: String,
     refused_link_passphrases: Vec<Refused>,
+    /// The link's purpose, sealed to the calendar key and signed by the
+    /// owner's address key (the mail vectors' key, public here).
+    owner_address_public_key: String,
+    link_purpose_text: String,
+    link_purpose: SealedMetadataV1,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -229,6 +234,23 @@ fn write_vectors() {
         },
     ];
 
+    // The owner's address key: the mail vectors' (the browser check opens
+    // its sealed envelope there).
+    let mail: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/vectors/mail-address-key-v1.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let owner_address_secret = b64(mail["secretKey"].as_str().unwrap());
+    let purpose_text = "Family — İstanbul";
+    let link_purpose = calendar
+        .unlocked
+        .seal_link_purpose(calendar_id, link_id, purpose_text, &owner_address_secret)
+        .unwrap();
+
     let vectors = Vectors {
         calendar_id: calendar_id.into(),
         owner_account: OWNER_ACCOUNT.into(),
@@ -252,6 +274,9 @@ fn write_vectors() {
         link_passphrase: calendar_link::encode(&link_passphrase),
         link_secret: calendar_link::encode(&link_secret),
         refused_link_passphrases,
+        owner_address_public_key: mail["publicKey"].as_str().unwrap().to_owned(),
+        link_purpose_text: purpose_text.into(),
+        link_purpose: SealedMetadataV1::of(&link_purpose),
     };
     std::fs::write(PATH, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
 }
@@ -370,4 +395,32 @@ fn calendar_sharing_vectors_open() {
     )
     .unwrap();
     assert_eq!(opened.to_url(), v.link_url_secret);
+
+    // The link's purpose: opens under its calendar and link, signed by the
+    // owner's address key; refused under another link, unverified with
+    // another key.
+    let sealed = v.link_purpose.to_sealed().unwrap();
+    let owner_address = b64(&v.owner_address_public_key);
+    let (purpose, verified) = unlocked
+        .open_link_purpose(&sealed, &v.calendar_id, &v.link_id, &[&owner_address])
+        .unwrap();
+    assert_eq!(purpose, v.link_purpose_text);
+    assert!(verified);
+    assert!(unlocked
+        .open_link_purpose(
+            &sealed,
+            &v.calendar_id,
+            "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+            &[&owner_address]
+        )
+        .is_err());
+    let (_, by_other) = unlocked
+        .open_link_purpose(
+            &sealed,
+            &v.calendar_id,
+            &v.link_id,
+            &[b"not a key".as_slice()],
+        )
+        .unwrap();
+    assert!(!by_other);
 }

@@ -260,7 +260,10 @@
       "deleted": "Link deleted",
       "full_one": "A calendar can have {{count}} link.",
       "full_other": "A calendar can have {{count}} links.",
-      "done": "Done"
+      "done": "Done",
+      "label": "Label (optional)",
+      "labelPlaceholder": "Add a label",
+      "labelHint": "Only you can see the label."
     },
     "invitations": {
       "title": "Shared with you",
@@ -299,6 +302,45 @@
       "body": "A calendar shared with you by {{address}} stays closed: the account behind the address is not the one you met before. Trust the new one only if you know why it changed.",
       "keepClosed": "Keep it closed",
       "trust": "Trust the new identity"
+    }
+  },
+  "busy": {
+    "share": "Show others when I'm busy",
+    "shareHint": "People in your organization can see when you're busy from this calendar: times only, never what or where."
+  },
+  "publicLink": {
+    "opening": "Opening the calendar…",
+    "busyTitle": "Busy times",
+    "fullNote": "Shared by link. The calendar opened in this browser: Kutup's server can't read it.",
+    "busyNote": "Shared by link: when its owner is busy, nothing more.",
+    "weeks": "Weeks",
+    "previous": "Previous week",
+    "next": "Next week",
+    "today": "Today",
+    "allDay": "All day",
+    "busy": "Busy",
+    "untitled": "(no title)",
+    "free": "Nothing",
+    "unreadable_one": "{{count}} event couldn't be opened.",
+    "unreadable_other": "{{count}} events couldn't be opened.",
+    "forApps": {
+      "title": "This link is for calendar apps",
+      "body": "Add it to a calendar app that subscribes to calendar addresses; it doesn't open here."
+    },
+    "errors": {
+      "gone": {
+        "title": "This link doesn't work any more",
+        "body": "Its owner deleted it, or it never existed. Ask them for a new one."
+      },
+      "incomplete": {
+        "title": "This link is incomplete",
+        "body": "The part after the # is missing, and the calendar can't be opened without it. Copy the whole link again."
+      },
+      "unreadable": {
+        "title": "This calendar can't be opened",
+        "body": "The link may have been changed on the way. Copy the whole link again, or ask its owner for a new one."
+      },
+      "events": "The events couldn't be loaded. Try again."
     }
   }
 }

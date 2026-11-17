@@ -107,6 +107,10 @@ export interface UnlockedCalendar {
   sealMetadata(...args: [...KeyArgs, calendarId: string, metadata: CalendarMetadata]): SealedMetadata
   /** The key ID (hex) key packets to this key name: which generation an event needs. */
   readonly keyId: string
+  /** A link's optional purpose, sealed to this calendar's key, bound to it and the link, signed by the owner's address key. */
+  sealLinkPurpose(...args: [...KeyArgs, calendarId: string, linkId: string, purpose: string]): SealedMetadata
+  /** Refused unless the purpose names `calendarId` and `linkId`. */
+  openLinkPurpose(sealed: SealedMetadata, calendarId: string, linkId: string, authorPublicKeys: string[]): { purpose: string; verified: boolean }
   free(): void
 }
 
@@ -217,6 +221,14 @@ interface CalendarWasm {
     linkId: string,
     sealedSecret: string,
   ): string
+  openCalendarLink(
+    urlSecret: string,
+    calendarId: string,
+    linkId: string,
+    keyGeneration: number,
+    sealedPassphrase: string,
+    lockedSecretKey: string,
+  ): UnlockedCalendar
   calendarUtcToLocal(instant: string, tzid: string): string
   calendarLocalToUtc(local: string, tzid: string): string
   calendarTimeZones(): string[]
@@ -354,4 +366,25 @@ export async function createCalendarLink(owner: CalendarAccount, calendarId: str
 /** A full link's URL secret again, from what the members keep (sealed under `own`'s generation). */
 export async function calendarLinkUrlSecret(owner: CalendarAccount, calendarId: string, own: GenerationShare, linkId: string, sealedSecret: string): Promise<string> {
   return (await wasm()).calendarLinkUrlSecret(owner.identityRoot, owner.account, calendarId, own.keyGeneration, own.share, linkId, sealedSecret)
+}
+
+/** Seals a link's purpose with an unlocked calendar, signed by the owner's address key. */
+export function sealLinkPurpose(calendar: UnlockedCalendar, author: SealedMailKey, calendarId: string, linkId: string, purpose: string): SealedMetadata {
+  return calendar.sealLinkPurpose(...keyArgs(author), calendarId, linkId, purpose)
+}
+
+/** One generation's key, as a link's viewer opens it: from the URL's secret and the passphrase the link's page serves. */
+export interface LinkKeyLock {
+  keyGeneration: number
+  sealedPassphrase: string
+  lockedSecretKey: string
+}
+
+/**
+ * A full link's viewer unlocks one generation's key from the URL's secret:
+ * refused under any other secret, calendar, link or generation. No account
+ * and no session take part.
+ */
+export async function openCalendarLink(urlSecret: string, calendarId: string, linkId: string, lock: LinkKeyLock): Promise<UnlockedCalendar> {
+  return (await wasm()).openCalendarLink(urlSecret, calendarId, linkId, lock.keyGeneration, lock.sealedPassphrase, lock.lockedSecretKey)
 }

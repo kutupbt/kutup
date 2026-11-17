@@ -87,6 +87,12 @@ export interface CalendarRow {
   permissions: number
   /** This member's defaults (Proton's DefaultPartDayNotifications and DefaultFullDayNotifications). */
   defaultReminders: DefaultReminders
+  /**
+   * This member shows others when they're busy from this calendar
+   * (docs/plans/calendar-e3.md §4): readable, as the server answers busy
+   * times from it. Absent before E3b: off.
+   */
+  shareBusy?: boolean
   createdAt: string
   updatedAt: string
   /**
@@ -136,6 +142,8 @@ export interface Calendar {
   /** The settings' version and a newer client's fields, sealed again on a change. */
   settingsRest?: Record<string, unknown>
   defaultReminders: DefaultReminders
+  /** Others may see when this member is busy from this calendar (times only). */
+  shareBusy: boolean
   unlocked: UnlockedCalendar
   /** Every generation's unlocked key by its key ID: an event opens with the one its key packets name. */
   keyring: Map<string, UnlockedCalendar>
@@ -366,6 +374,7 @@ export async function loadCalendars(
         settingsId: id,
         settingsRest: own ? settingsRest(own.value) : undefined,
         defaultReminders: row.defaultReminders,
+        shareBusy: row.shareBusy ?? false,
         unlocked: keys.newest,
         keyring: keys.keyring,
         keyGeneration: keys.generation,
@@ -466,6 +475,8 @@ export interface CalendarChange {
   display?: boolean
   /** This member's defaults (Proton's event defaults). */
   defaultReminders?: DefaultReminders
+  /** Show others when this member is busy from this calendar. */
+  shareBusy?: boolean
 }
 
 /**
@@ -492,8 +503,8 @@ export async function updateCalendar(session: Session, account: MailAccount, cal
     )
     await revisionGuard(session).accept(GUARD_SCOPE, calendar.id, revision)
   }
-  if (metadata || change.defaultReminders) {
-    await api.put(`/calendar/calendars/${calendar.id}`, { metadata, defaultReminders: change.defaultReminders })
+  if (metadata || change.defaultReminders || change.shareBusy !== undefined) {
+    await api.put(`/calendar/calendars/${calendar.id}`, { metadata, defaultReminders: change.defaultReminders, shareBusy: change.shareBusy })
   }
 }
 

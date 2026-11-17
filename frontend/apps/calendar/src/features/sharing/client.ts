@@ -11,6 +11,7 @@ import {
   calendarLinkUrlSecret,
   createCalendarLink,
   rotateCalendar,
+  sealLinkPurpose,
   shareCalendarPassphrase,
   unlockSharedCalendar,
   type CalendarAccount,
@@ -111,8 +112,13 @@ export interface LinkRow {
   kind: LinkKind
   /** A full or query link's secret, sealed under the newest generation's passphrase, for the members; null for busy. */
   secret: GenerationSealed | null
+  /** The owner's optional label for it (Proton's), sealed to the calendar key and signed. */
+  purpose?: SealedMetadata | null
   createdAt: string
 }
+
+/** Proton's limit on a link's label; kutup-crypto refuses a longer one. */
+export const MAX_LINK_PURPOSE = 100
 
 /** Where a link leads: the page (fragment or busy links) and the calendar feed other apps subscribe to. */
 export interface LinkUrls {
@@ -514,19 +520,27 @@ export async function linkUrls(kind: LinkKind, linkId: string, secret?: string):
  * every live generation's passphrase; the server keeps only the sealed copies
  * and never sees the secret of a full link.
  */
-export async function createLink(session: Session, calendar: Calendar, kind: LinkKind): Promise<{ link: LinkRow; urls: LinkUrls }> {
+export async function createLink(
+  session: Session,
+  account: MailAccount,
+  calendar: Calendar,
+  kind: LinkKind,
+  label = '',
+): Promise<{ link: LinkRow; urls: LinkUrls }> {
   if (!calendar.owned) throw new Error('only the owner makes links')
   const [settings, existing] = await Promise.all([loadSharingSettings(), loadLinks(calendar.id)])
   if (existing.length >= settings.linksPerCalendar) throw new TooManyLinks(settings.linksPerCalendar)
   if (kind === 'query' && !settings.queryLinksAllowed) throw new Error('this server does not allow links with the key in the address')
   const id = crypto.randomUUID()
+  // Only the owner reads it back; the server keeps it sealed.
+  const purpose = label.trim() ? sealLinkPurpose(calendar.unlocked, account.key, calendar.id, id, label.trim()) : null
   if (kind === 'busy') {
-    const { data } = await api.post<LinkRow>(calendarPath(calendar.id, '/links'), { id, kind })
+    const { data } = await api.post<LinkRow>(calendarPath(calendar.id, '/links'), { id, kind, purpose })
     return { link: data, urls: await linkUrls(kind, id) }
   }
   const keys = await loadKeys(calendar.id)
   const made = await createCalendarLink(await calendarAccount(session), calendar.id, id, sharesOf(keys))
-  const { data } = await api.post<LinkRow>(calendarPath(calendar.id, '/links'), { id, kind, secret: made.secret, passphrases: made.passphrases })
+  const { data } = await api.post<LinkRow>(calendarPath(calendar.id, '/links'), { id, kind, secret: made.secret, passphrases: made.passphrases, purpose })
   return { link: data, urls: await linkUrls(kind, id, made.urlSecret) }
 }
 
@@ -553,6 +567,23 @@ export async function showLink(session: Session, calendar: Calendar, link: LinkR
     link.secret.sealed,
   )
   return linkUrls(link.kind, link.id, secret)
+}
+
+/**
+ * A link's label, opened with whichever of the calendar's generations sealed
+ * it; null when it has none, or none of the owner's keys signed it.
+ */
+export function linkPurpose(account: MailAccount, calendar: Calendar, link: LinkRow): string | null {
+  if (!link.purpose) return null
+  for (const key of calendar.keyring.values()) {
+    try {
+      const opened = key.openLinkPurpose(link.purpose, calendar.id, link.id, account.ownPublicKeys)
+      return opened.verified ? opened.purpose : null
+    } catch {
+      // Another generation's key, or not this link's: try the next.
+    }
+  }
+  return null
 }
 
 export async function deleteLink(calendarId: string, linkId: string): Promise<void> {

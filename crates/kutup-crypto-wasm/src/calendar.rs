@@ -523,6 +523,68 @@ impl UnlockedCalendarJs {
     pub fn key_id(&self) -> Result<String, JsValue> {
         Ok(hex::encode(self.key.key_id().map_err(crypto_error)?))
     }
+
+    /// Seals a link's optional purpose (`SealedMetadataV1`) to this
+    /// calendar's key, bound to the calendar and the link, signed by the
+    /// owner's address key.
+    #[wasm_bindgen(js_name = sealLinkPurpose)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn seal_link_purpose(
+        &self,
+        master_keys_base64: &str,
+        binding: &str,
+        address: &str,
+        envelope_base64: &str,
+        fingerprint_hex: &str,
+        calendar_id: &str,
+        link_id: &str,
+        purpose: &str,
+    ) -> Result<JsValue, JsValue> {
+        let author_secret = open_mail_secret(
+            master_keys_base64,
+            binding,
+            address,
+            envelope_base64,
+            fingerprint_hex,
+        )?;
+        let sealed = self
+            .key
+            .seal_link_purpose(calendar_id, link_id, purpose, &author_secret)
+            .map_err(crypto_error)?;
+        to_js(&SealedMetadataV1::of(&sealed))
+    }
+
+    /// Opens a link's purpose: `{ purpose, verified }`, refused unless it
+    /// names `calendar_id` and `link_id`.
+    #[wasm_bindgen(js_name = openLinkPurpose)]
+    pub fn open_link_purpose(
+        &self,
+        sealed: JsValue,
+        calendar_id: &str,
+        link_id: &str,
+        author_public_keys_base64: Vec<String>,
+    ) -> Result<JsValue, JsValue> {
+        let sealed: SealedMetadataV1 = from_js(sealed, "link purpose")?;
+        let authors = public_keys(&author_public_keys_base64)?;
+        let authors: Vec<&[u8]> = authors.iter().map(Vec::as_slice).collect();
+        let (purpose, verified) = self
+            .key
+            .open_link_purpose(
+                &sealed.to_sealed().map_err(crypto_error)?,
+                calendar_id,
+                link_id,
+                &authors,
+            )
+            .map_err(crypto_error)?;
+        to_js(&OpenedPurpose { purpose, verified })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedPurpose {
+    purpose: String,
+    verified: bool,
 }
 
 /// A link the owner holds: its id and its secret sealed under the current

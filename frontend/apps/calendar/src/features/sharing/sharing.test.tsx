@@ -75,7 +75,7 @@ describe('the link dialog', () => {
     fireEvent.click(screen.getByTestId('link-kind-query'))
     expect(screen.getByText('The server reads this calendar')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('link-create-submit'))
-    await waitFor(() => expect(client.createLink).toHaveBeenCalledWith(expect.anything(), calendar, 'query'))
+    await waitFor(() => expect(client.createLink).toHaveBeenCalledWith(expect.anything(), expect.anything(), calendar, 'query', ''))
     expect(await screen.findByTestId<HTMLInputElement>('link-url-ics')).toHaveValue('https://calendar.kutup.test/api/calendar/links/l1/calendar.ics?key=K')
   })
 

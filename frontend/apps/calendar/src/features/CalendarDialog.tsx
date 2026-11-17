@@ -16,6 +16,7 @@ import { useMailAccount } from '@kutup/mail-core/api'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
+import { Checkbox } from '@kutup/ui/components/checkbox'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Input } from '@kutup/ui/components/input'
@@ -44,6 +45,8 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
   const [confirming, setConfirming] = useState(false)
   // Proton's event defaults: this member's, for timed and all-day events.
   const [defaults, setDefaults] = useState<DefaultReminders>({ timed: [], allDay: [] })
+  // Others may see when this member is busy from it (times only; E3e).
+  const [shareBusy, setShareBusy] = useState(false)
   const owner = !calendar || (calendar.permissions & PERMISSION.owner) !== 0
 
   const save = useCalendarMutation(async () => {
@@ -53,6 +56,7 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
       ...(owner && (name.trim() !== calendar.name || description !== calendar.description) ? { name: name.trim(), description } : {}),
       ...(color !== calendar.color ? { color } : {}),
       ...(JSON.stringify(defaults) !== JSON.stringify(calendar.defaultReminders) ? { defaultReminders: defaults } : {}),
+      ...(shareBusy !== calendar.shareBusy ? { shareBusy } : {}),
     })
     return calendar.id
   })
@@ -71,6 +75,7 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
     setDescription(calendar?.description ?? '')
     setColor(calendar?.color ?? CALENDAR_COLORS[Math.floor(Math.random() * CALENDAR_COLORS.length)])
     setDefaults(calendar?.defaultReminders ?? { timed: [], allDay: [] })
+    setShareBusy(calendar?.shareBusy ?? false)
     save.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset once per opening
   }, [open, calendar])
@@ -146,6 +151,13 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
                 <div className="space-y-1.5">
                   <Label>{t('reminders.defaults.allDay')}</Label>
                   <ReminderList id="calendar-all-day" allDay reminders={defaults.allDay} max={MAX_DEFAULT_REMINDERS} onChange={(allDay) => setDefaults((d) => ({ ...d, allDay }))} />
+                </div>
+                <div className="flex items-start gap-2">
+                  <Checkbox id="calendar-share-busy" checked={shareBusy} onCheckedChange={(v) => setShareBusy(v === true)} className="mt-0.5" data-testid="calendar-share-busy" />
+                  <div className="space-y-0.5">
+                    <Label htmlFor="calendar-share-busy">{t('busy.share')}</Label>
+                    <p className="text-xs text-muted-foreground">{t('busy.shareHint')}</p>
+                  </div>
                 </div>
                 {hasRepeats(defaults.timed) || hasRepeats(defaults.allDay) ? (
                   <p className="text-xs text-destructive" role="alert">

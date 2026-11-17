@@ -285,6 +285,61 @@ impl UnlockedCalendarKey {
         Ok((metadata, verified))
     }
 
+    /// A link's optional purpose (docs/plans/calendar-e3.md §3, Proton's
+    /// link label), sealed to this calendar's key and bound to the calendar
+    /// and the link, signed by the owner's address key: the server holds the
+    /// calendar's public key, so without the signature it could write one.
+    pub fn seal_link_purpose(
+        &self,
+        calendar_id: &str,
+        link_id: &str,
+        purpose: &str,
+        author_secret_key: &[u8],
+    ) -> Result<SealedMetadata> {
+        let sealed = LinkPurposeV1 {
+            version: LINK_PURPOSE_VERSION,
+            calendar_id: calendar_id.to_owned(),
+            link_id: link_id.to_owned(),
+            purpose: purpose.to_owned(),
+        };
+        sealed.check()?;
+        let json = serde_json::to_vec(&sealed).map_err(backend)?;
+        let key = SessionKey::generate();
+        Ok(SealedMetadata {
+            key_packet: key_packet_to(&key, &self.public)?,
+            data_packet: encrypt_data_packet(&key, &json)?,
+            signature: sign_detached(author_secret_key, &json)?,
+        })
+    }
+
+    /// Opens a link's purpose: refused unless it names `calendar_id` and
+    /// `link_id`; `verified` says whether one of the given address keys (the
+    /// owner's) signed it. A purpose sealed under an older key generation
+    /// opens with that generation's key.
+    pub fn open_link_purpose(
+        &self,
+        sealed: &SealedMetadata,
+        calendar_id: &str,
+        link_id: &str,
+        author_public_keys: &[&[u8]],
+    ) -> Result<(String, bool)> {
+        let key = open_key_packet(&sealed.key_packet, &self.secret)?;
+        let json = decrypt_data_packet(&key, &sealed.data_packet)?;
+        crate::format::check_json_version("calendar link purpose", &json, LINK_PURPOSE_VERSION)?;
+        let opened: LinkPurposeV1 = serde_json::from_slice(&json)
+            .map_err(|_| CryptoError::InvalidInput("a link purpose does not parse".into()))?;
+        opened.check()?;
+        if opened.calendar_id != calendar_id || opened.link_id != link_id {
+            return Err(CryptoError::InvalidInput(
+                "the purpose is another link's".into(),
+            ));
+        }
+        Ok((
+            opened.purpose,
+            signed_by(&sealed.signature, &json, author_public_keys),
+        ))
+    }
+
     /// Opens a key packet to this calendar's key.
     pub fn open_key_packet(&self, key_packet: &[u8]) -> Result<SessionKey> {
         open_key_packet(key_packet, &self.secret)
@@ -956,6 +1011,40 @@ impl CalendarMetadataV1 {
             min: self.min,
             extra: self.extra.clone(),
         }
+    }
+}
+
+/// A link purpose's format version.
+const LINK_PURPOSE_VERSION: u16 = 1;
+/// The longest link purpose, in characters (Proton's label limit).
+pub const MAX_LINK_PURPOSE_CHARS: usize = 100;
+
+/// A link's purpose as sealed.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinkPurposeV1 {
+    #[serde(rename = "v")]
+    version: u16,
+    calendar_id: String,
+    link_id: String,
+    purpose: String,
+}
+
+impl LinkPurposeV1 {
+    fn check(&self) -> Result<()> {
+        if self.calendar_id.is_empty()
+            || self.calendar_id.len() > 64
+            || self.link_id.is_empty()
+            || self.link_id.len() > 64
+            || self.purpose.trim().is_empty()
+            || self.purpose.chars().count() > MAX_LINK_PURPOSE_CHARS
+            || self.purpose.chars().any(char::is_control)
+        {
+            return Err(CryptoError::InvalidInput(
+                "a link purpose is invalid".into(),
+            ));
+        }
+        Ok(())
     }
 }
 

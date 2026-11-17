@@ -1467,6 +1467,13 @@ if (build === 'crypto') {
   const shared = asMember(s.memberShare)
   assert.equal(shared.fingerprint, s.calendarFingerprint)
   assert.equal(shared.keyId, s.calendarKeyId)
+  // A link's purpose: opens under its calendar and link, signed by the
+  // owner's address key; what the browser seals opens alike.
+  assert.deepEqual(shared.openLinkPurpose(s.linkPurpose, s.calendarId, s.linkId, [s.ownerAddressPublicKey]), { purpose: s.linkPurposeText, verified: true })
+  assert.throws(() => shared.openLinkPurpose(s.linkPurpose, s.calendarId, '2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e', [s.ownerAddressPublicKey]))
+  const purpose = shared.sealLinkPurpose(...owner, s.calendarId, s.linkId, 'Ev')
+  assert.deepEqual(shared.openLinkPurpose(purpose, s.calendarId, s.linkId, [v.ownerPublicKey]), { purpose: 'Ev', verified: true })
+  assert.throws(() => shared.sealLinkPurpose(...owner, s.calendarId, s.linkId, ' '))
   shared.free()
   for (const refused of s.refusedMemberShares) {
     assert.throws(() => asMember(refused.sealed), undefined, refused.why)

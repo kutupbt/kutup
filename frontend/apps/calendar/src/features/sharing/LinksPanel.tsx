@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
 import { useCalendarMutation, type Calendar } from '@kutup/calendar-core/api'
+import { useMailAccount } from '@kutup/mail-core/api'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -12,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { createLink, deleteLink, loadLinks, loadSharingSettings, showLink, TooManyLinks, type LinkKind, type LinkRow, type LinkUrls } from './client'
+import { createLink, deleteLink, linkPurpose, loadLinks, loadSharingSettings, MAX_LINK_PURPOSE, showLink, TooManyLinks, type LinkKind, type LinkRow, type LinkUrls } from './client'
 
 async function copy(text: string, done: string, failed: string) {
   try {
@@ -55,6 +56,7 @@ function UrlFields({ urls }: { urls: LinkUrls }) {
 export function LinksPanel({ calendar }: { calendar: Calendar }) {
   const { t, i18n } = useTranslation()
   const session = useRequiredSession()
+  const account = useMailAccount()
   const links = useQuery({ queryKey: ['calendar', 'links', calendar.id], queryFn: () => loadLinks(calendar.id) })
   const settings = useQuery({ queryKey: ['calendar', 'sharing-settings'], queryFn: loadSharingSettings, staleTime: Infinity })
   const [creating, setCreating] = useState(false)
@@ -77,8 +79,9 @@ export function LinksPanel({ calendar }: { calendar: Calendar }) {
             <li key={link.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
               <Link2 className="size-4 text-muted-foreground" aria-hidden />
               <span className="min-w-0 flex-1 text-sm">
-                {t(`sharing.links.kind.${link.kind}.name`)}
+                {(account.data && linkPurpose(account.data, calendar, link)) ?? t(`sharing.links.kind.${link.kind}.name`)}
                 <span className="block text-xs text-muted-foreground">
+                  {account.data && linkPurpose(account.data, calendar, link) ? `${t(`sharing.links.kind.${link.kind}.name`)} · ` : ''}
                   {t('sharing.links.created', { date: new Date(link.createdAt).toLocaleDateString(i18n.language) })}
                 </span>
               </span>
@@ -156,8 +159,10 @@ export function LinksPanel({ calendar }: { calendar: Calendar }) {
 function CreateLinkDialog({ calendar, queryAllowed, onClose }: { calendar: Calendar; queryAllowed: boolean; onClose: () => void }) {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  const account = useMailAccount()
   const [kind, setKind] = useState<LinkKind>('busy')
-  const make = useCalendarMutation((k: LinkKind) => createLink(session, calendar, k))
+  const [label, setLabel] = useState('')
+  const make = useCalendarMutation((k: LinkKind) => createLink(session, account.data!, calendar, k, label))
   const kinds: LinkKind[] = queryAllowed ? ['busy', 'full', 'query'] : ['busy', 'full']
 
   return (
@@ -186,6 +191,21 @@ function CreateLinkDialog({ calendar, queryAllowed, onClose }: { calendar: Calen
                 {t('sharing.links.kind.query.warning')}
               </Alert>
             ) : null}
+            <div className="space-y-1.5 pt-2">
+              <Label htmlFor="link-label">{t('sharing.links.label')}</Label>
+              <Input
+                id="link-label"
+                value={label}
+                maxLength={MAX_LINK_PURPOSE}
+                placeholder={t('sharing.links.labelPlaceholder')}
+                onChange={(e) => setLabel(e.target.value)}
+                aria-describedby="link-label-hint"
+                data-testid="link-label"
+              />
+              <p id="link-label-hint" className="text-xs text-muted-foreground">
+                {t('sharing.links.labelHint')}
+              </p>
+            </div>
           </fieldset>
         )}
         {make.error ? (
@@ -201,7 +221,7 @@ function CreateLinkDialog({ calendar, queryAllowed, onClose }: { calendar: Calen
               <Button variant="ghost" onClick={onClose} disabled={make.isPending}>
                 {t('common.cancel')}
               </Button>
-              <Button loading={make.isPending} onClick={() => make.mutate(kind)} data-testid="link-create-submit">
+              <Button loading={make.isPending} disabled={!account.data} onClick={() => make.mutate(kind)} data-testid="link-create-submit">
                 {t('sharing.links.createSubmit')}
               </Button>
             </>

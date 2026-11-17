@@ -276,7 +276,10 @@ differs, only that module changes.
 - `POST …/calendars/{id}/keys/rotate {removeAccountId, fromKeyGeneration,
   keyGeneration, publicKey, lockedSecretKey, ownShare, memberShares:
   [{accountId, share}], metadata, links: [{id, passphrase, secret}]}`.
-  - Pending invitees get the new generation too.
+  - Pending invitees get the new generation too. **E3b requirement:** the
+    server stores their shares beside the members' (an invitation holds a
+    share of every live generation). An accept then hands the member every
+    generation, including ones made while the invitation was pending.
   - It is refused (409) when `fromKeyGeneration` is not the newest.
 - `GET /api/calendar/invitations` → `{invitations: [{id, calendarId, owner,
   permissions, metadata, keys, createdAt, expiresAt}]}`;
@@ -289,8 +292,44 @@ differs, only that module changes.
 - `DELETE …/calendars/{id}/links/{linkId}`.
 - **Site settings in `/api/auth/settings`:** `calendar {queryLinksAllowed,
   membersPerCalendar, linksPerCalendar}`.
-- **The links' optional purpose** (sealed to the calendar key) is not in the
-  dialog yet: it needs a seal-to-calendar call in WASM. It comes with E3d.
+- **A link's optional purpose:** `purpose` (a sealed triple, like the name)
+  on `POST …/links` and on the link rows.
+  - It is sealed to the calendar key with `sealLinkPurpose`, bound to the
+    calendar and the link, and signed by the owner's address key: the
+    server holds the calendar's public key, so without the signature it
+    could write one.
+  - `openLinkPurpose` opens it with whichever generation sealed it.
+  - At most 100 characters; only the owner is shown it.
+- **The public link page** (`/l/{id}#secret`) sits outside the session's
+  boot, so it needs no sign-in and never forks the account app. It talks to
+  the server through `frontend/apps/calendar/src/features/public/publicClient.ts`,
+  with `fetch` and no credentials, never the session's client (no refresh,
+  no sign-in redirect, no instance-id reconciliation that could clear
+  anything on this origin). Routes:
+  - `GET /api/calendar/links/{id}` → `{calendarId, kind, metadata?, keys?:
+    [{keyGeneration, fingerprint, lockedSecretKey, passphrase}]}`. A full
+    link carries the sealed name and each generation's link-sealed
+    passphrase; a busy link carries neither; 404 or 410 means gone;
+  - `GET …/links/{id}/events?start&end[&afterStart&afterId]` →
+    `{events: [{id, event, startUtc, endUtc, fullDay}], next}`;
+  - `GET …/links/{id}/busy?start&end` → `{busy: [{startUtc, endUtc,
+    fullDay}]}`.
+
+  The page can't check the owner's signatures (no account to look their
+  keys up), so nothing on it shows as verified. It is a week's agenda in
+  the viewer's own time zone.
+- **Busy/free (E3e):**
+  - `shareBusy` on the calendar row, set through the existing `PUT
+    …/calendars/{id}` with the member's defaults;
+  - `GET /api/calendar/busy?address&start&end` → `{busy: [{startUtc,
+    endUtc, fullDay}]}` (camelCase UTC, as event rows), its window at most
+    `calendar.busyWindowDays` from the published settings;
+  - the client merges overlaps;
+  - the participant row stays with E4 (Q-4).
+  - No member is limited to busy times in E3 (the presets give `READ`), so
+    the limited member's grid waits for a preset that needs it.
+  - The default for new calendars (a calendar settings record field) is not
+    built.
 
 Each slice is its own PR from its own worktree (`feat/calendar-e3a…`),
 opened after the wipe.

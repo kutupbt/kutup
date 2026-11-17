@@ -260,7 +260,10 @@
       "deleted": "Bağlantı silindi",
       "full_one": "Bir takvimin {{count}} bağlantısı olabilir.",
       "full_other": "Bir takvimin {{count}} bağlantısı olabilir.",
-      "done": "Tamam"
+      "done": "Tamam",
+      "label": "Etiket (isteğe bağlı)",
+      "labelPlaceholder": "Etiket ekle",
+      "labelHint": "Etiketi yalnızca siz görebilirsiniz."
     },
     "invitations": {
       "title": "Sizinle paylaşılanlar",
@@ -299,6 +302,45 @@
       "body": "{{address}} tarafından sizinle paylaşılan bir takvim kapalı kalıyor: adresin arkasındaki hesap, daha önce tanıdığınız hesap değil. Yeni kimliğe yalnızca neden değiştiğini biliyorsanız güvenin.",
       "keepClosed": "Kapalı kalsın",
       "trust": "Yeni kimliğe güven"
+    }
+  },
+  "busy": {
+    "share": "Meşgul olduğumda başkalarına göster",
+    "shareHint": "Kuruluşunuzdaki kişiler bu takvimden ne zaman meşgul olduğunuzu görebilir: yalnızca zamanlar, ne ya da nerede asla."
+  },
+  "publicLink": {
+    "opening": "Takvim açılıyor…",
+    "busyTitle": "Meşgul zamanlar",
+    "fullNote": "Bağlantıyla paylaşıldı. Takvim bu tarayıcıda açıldı: Kutup sunucusu okuyamaz.",
+    "busyNote": "Bağlantıyla paylaşıldı: yalnızca sahibinin ne zaman meşgul olduğu.",
+    "weeks": "Haftalar",
+    "previous": "Önceki hafta",
+    "next": "Sonraki hafta",
+    "today": "Bugün",
+    "allDay": "Tüm gün",
+    "busy": "Meşgul",
+    "untitled": "(başlıksız)",
+    "free": "Bir şey yok",
+    "unreadable_one": "{{count}} etkinlik açılamadı.",
+    "unreadable_other": "{{count}} etkinlik açılamadı.",
+    "forApps": {
+      "title": "Bu bağlantı takvim uygulamaları için",
+      "body": "Takvim adreslerine abone olan bir takvim uygulamasına ekleyin; burada açılmaz."
+    },
+    "errors": {
+      "gone": {
+        "title": "Bu bağlantı artık çalışmıyor",
+        "body": "Sahibi sildi ya da hiç var olmadı. Ondan yenisini isteyin."
+      },
+      "incomplete": {
+        "title": "Bu bağlantı eksik",
+        "body": "# işaretinden sonraki bölüm eksik ve takvim onsuz açılamaz. Bağlantının tamamını yeniden kopyalayın."
+      },
+      "unreadable": {
+        "title": "Bu takvim açılamıyor",
+        "body": "Bağlantı yolda değişmiş olabilir. Tamamını yeniden kopyalayın ya da sahibinden yenisini isteyin."
+      },
+      "events": "Etkinlikler yüklenemedi. Yeniden deneyin."
     }
   }
 }
