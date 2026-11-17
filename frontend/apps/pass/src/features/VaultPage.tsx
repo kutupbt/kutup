@@ -48,6 +48,7 @@ import { ImportDialog } from './ImportDialog'
 import { SecurityPanel } from './SecurityPanel'
 import { IconDialog } from './IconDialog'
 import { iconSources } from '../lib/icons'
+import { builtinIcon, GROUP_DEFAULT_ICON } from '../lib/builtinIcons'
 import { deletedGroups, groupTargets } from '../lib/groupMoves'
 import { DEFAULT_MINIMUMS, loadKdfMinimums, meetsMinimums } from '../lib/kdf'
 import { COLUMNS, loadPrefs, savePrefs, SORT_KEYS, sortEntries, tagQuery, vaultTags, type ListPrefs, type SortKey } from '../lib/entryList'
@@ -74,6 +75,14 @@ export function VaultPage() {
   if (loading) return <ListSkeleton label={t('vaults.loading')} />
   if (!vault) return <EmptyState title={t('vaults.notFoundTitle')} description={t('vaults.notFoundDescription')} />
   return <UnlockVault key={vault.file.id} vault={vault} />
+}
+
+/** A group's icon: its picture, a built-in icon other than the folder, else the folder. */
+function GroupIcon({ group, pictures }: { group: GroupView; pictures: Map<string, string> }) {
+  const picture = group.customIcon ? pictures.get(group.customIcon) : undefined
+  if (picture) return <img src={picture} alt="" className="size-4 shrink-0 object-contain" />
+  const Builtin = group.icon !== GROUP_DEFAULT_ICON ? builtinIcon(group.icon) : null
+  return Builtin ? <Builtin className="size-4 shrink-0" aria-hidden /> : <Folder className="size-4 shrink-0" aria-hidden />
 }
 
 /** How long typing settles before the vault is searched. */
@@ -381,11 +390,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                   className={cn('flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60', dropHere, groupId === g.id && 'bg-accent font-medium')}
                   style={{ paddingInlineStart: `${0.5 + g.depth * 0.75}rem` }}
                 >
-                  {g.customIcon && pictures.get(g.customIcon) ? (
-                    <img src={pictures.get(g.customIcon)} alt="" className="size-4 shrink-0 object-contain" />
-                  ) : (
-                    <Folder className="size-4 shrink-0" aria-hidden />
-                  )}
+                  <GroupIcon group={g} pictures={pictures} />
                   <span className="truncate">{g.name}</span>
                 </button>
                 {session.canEdit ? (
@@ -408,7 +413,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                         <>
                           <DropdownMenuItem onSelect={() => setGroupDialog({ kind: 'rename', group: g })}>
                             <Pencil />
-                            {t('groups.rename')}
+                            {t('groups.edit')}
                           </DropdownMenuItem>
                           {groupTargets(view, g).length > 0 ? (
                             <DropdownMenuSub>
@@ -560,6 +565,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
               </Select>
             </div>
           </div>
+          {selectedGroup?.notes && !viewingBin ? <p className="whitespace-pre-wrap border-b border-border px-3 py-2 text-sm text-muted-foreground">{selectedGroup.notes}</p> : null}
           {binGroups.length > 0 ? <DeletedGroups session={session} view={view} groups={binGroups} /> : null}
           {shown.length === 0 ? (
             binGroups.length > 0 && !needle ? null : (
@@ -606,11 +612,12 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
       <GroupDialog
         open={groupDialog !== null}
         onOpenChange={(open) => !open && setGroupDialog(null)}
-        title={groupDialog?.kind === 'rename' ? t('groups.renameTitle') : t('groups.newTitle')}
+        title={groupDialog?.kind === 'rename' ? t('groups.editTitle') : t('groups.newTitle')}
         initial={groupDialog?.kind === 'rename' ? groupDialog.group.name : ''}
-        onSubmit={async (name) => {
+        notes={groupDialog?.kind === 'rename' ? groupDialog.group.notes : undefined}
+        onSubmit={async (name, notes) => {
           if (groupDialog?.kind === 'rename') {
-            await session.apply({ op: 'updateGroup', id: groupDialog.group.id, name, notes: groupDialog.group.notes })
+            await session.apply({ op: 'updateGroup', id: groupDialog.group.id, name, notes: notes ?? groupDialog.group.notes })
           } else if (groupDialog) {
             const applied = await session.apply({ op: 'createGroup', parentId: groupDialog.parent, name })
             if (applied.id) selectGroup(applied.id)
@@ -623,8 +630,9 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
         name={iconGroup?.name ?? ''}
         view={view}
         current={iconGroup?.customIcon ?? null}
-        onChoose={async (data) => {
-          if (iconGroup) await session.apply({ op: 'setGroupIcon', id: iconGroup.id, data })
+        builtinCurrent={iconGroup?.icon ?? null}
+        onChoose={async (choice) => {
+          if (iconGroup) await session.apply({ op: 'setGroupIcon', id: iconGroup.id, ...('builtin' in choice ? { data: null, builtin: choice.builtin } : { data: choice.data }) })
         }}
       />
       <GroupDialog

@@ -133,12 +133,17 @@ pub enum Op {
         id: String,
         #[serde(default)]
         data: Option<String>,
+        /// One of KeePass's built-in icons (0 to 68) instead of a picture.
+        #[serde(default)]
+        builtin: Option<usize>,
     },
     /// The same for a group (the default being the folder icon).
     SetGroupIcon {
         id: String,
         #[serde(default)]
         data: Option<String>,
+        #[serde(default)]
+        builtin: Option<usize>,
     },
     CreateGroup {
         parent_id: String,
@@ -686,23 +691,17 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                 Ok(())
             })?
         }
-        Op::SetEntryIcon { id, data } => {
+        Op::SetEntryIcon { id, data, builtin } => {
             let id = entry_id(db, id)?;
-            let icon = match data {
-                Some(data) => Icon::Custom(custom_icon(db, data, now)?),
-                None => Icon::BuiltIn(ENTRY_ICON),
-            };
+            let icon = chosen_icon(db, data.as_deref(), *builtin, ENTRY_ICON, now)?;
             edit_entry(db, id, now, |_, e| {
                 e.icon = Some(icon);
                 Ok(())
             })?
         }
-        Op::SetGroupIcon { id, data } => {
+        Op::SetGroupIcon { id, data, builtin } => {
             let id = group_id(db, id)?;
-            let icon = match data {
-                Some(data) => Icon::Custom(custom_icon(db, data, now)?),
-                None => Icon::BuiltIn(GROUP_ICON),
-            };
+            let icon = chosen_icon(db, data.as_deref(), *builtin, GROUP_ICON, now)?;
             let group = db.groups.get_mut(&id).ok_or(EditError::NotFound("group"))?;
             let changed = group.icon.as_ref() != Some(&icon);
             if changed {
@@ -970,6 +969,24 @@ fn trim_every_history(db: &mut Database) {
                 history.entries = items;
             }
         }
+    }
+}
+
+/// The icon an `Op::Set*Icon` asks for: a picture, a built-in icon, or the
+/// default; never both a picture and a built-in one.
+fn chosen_icon(
+    db: &mut Database,
+    data: Option<&str>,
+    builtin: Option<usize>,
+    default: usize,
+    now: NaiveDateTime,
+) -> Result<Icon, EditError> {
+    match (data, builtin) {
+        (Some(_), Some(_)) => Err(invalid("a picture or a built-in icon, not both")),
+        (Some(data), None) => Ok(Icon::Custom(custom_icon(db, data, now)?)),
+        (None, Some(n)) if n < BUILTIN_ICONS => Ok(Icon::BuiltIn(n)),
+        (None, Some(_)) => Err(invalid("no such icon")),
+        (None, None) => Ok(Icon::BuiltIn(default)),
     }
 }
 

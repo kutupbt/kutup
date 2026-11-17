@@ -27,8 +27,8 @@ but offers no way to see or change it.
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
 | The database (vault) | 31 | 1 | 8 |
-| Groups (folders) | 7 | 1 | 4 |
-| Entries | 11 | 5 | 6 |
+| Groups (folders) | 9 | 1 | 2 |
+| Entries | 13 | 5 | 4 |
 | Bulk actions and the entry list | 11 | 1 | 3 |
 | Search | 4 | 2 | 1 |
 | Password generator | 6 | 1 | 0 |
@@ -37,7 +37,7 @@ but offers no way to see or change it.
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **97** | **17** | **41** |
+| **All** | **101** | **17** | **37** |
 
 ## The database (vault)
 
@@ -94,9 +94,9 @@ but offers no way to see or change it.
 | Move a group under another | drag and drop in the tree | ✅ | group menu → Move to (any group outside the bin but itself and what it holds), or drag a group onto another; onto the recycle bin it is deleted (`recycleGroup`, never for good). `moveGroup` refuses the bin and moving the bin ([`pass-gaps-2.md`](pass-gaps-2.md) P1) |
 | Delete a group (to the recycle bin) | Delete group | ✅ | asks first; for good with the bin off |
 | Restore a deleted group | drag out of the bin | ✅ | the bin view lists its groups above the entries: Restore puts one back with everything in it where it was (KDBX's previous parent group, else the top group; `restoreGroups`), Move to another group, or Delete for good |
-| Group notes | Edit group → Notes | ❌ | kept (rename passes them on); not shown or edited |
+| Group notes | Edit group → Notes | ✅ | the group menu's Edit (`GroupDialog.tsx`), shown above the group's entries |
 | Group icons: custom pictures | Edit group → Icon | ✅ | group menu → Change icon (`IconDialog.tsx`, spec 153) |
-| Group icons: KeePass's built-in set | 69 standard icons | ❌ | kept; no picker |
+| Group icons: KeePass's built-in set | 69 standard icons | ✅ | the icon dialog's KeePass icons (`lib/builtinIcons.ts`): drawn with lucide, the number kept, so other KeePass apps show theirs |
 | Per-group auto-type, search and browser settings, expiry | Edit group → Properties / Browser | ❌ | kept |
 | Sort groups A–Z | Groups → Sort | ❌ | tree in the file's order |
 | Show entries of subgroups | (a group shows its own entries) | 🟡 | as KeePassXC: a group shows its own entries only; "All entries" shows every entry outside the bin |
@@ -115,8 +115,8 @@ but offers no way to see or change it.
 | Tags | tag field, tag list in the sidebar | ✅ | edited as comma-separated text with the vault's tags offered; a Tags list in the sidebar with counts, a click searches `tag:"…"` |
 | Icons: website icon | Download favicon | ✅ | through Kutup or off per account (spec 152); can be saved into the vault as a custom icon |
 | Icons: custom pictures | Icon → Custom | ✅ | upload or reuse the vault's pictures (spec 153) |
-| Icons: KeePass's built-in set | 69 standard icons | ❌ | kept; no picker |
-| Foreground and background colour | Advanced → Colours | ❌ | kept |
+| Icons: KeePass's built-in set | 69 standard icons | ✅ | as for groups; a non-default one shows instead of the website's icon |
+| Foreground and background colour | Advanced → Colours | ✅ | the editor's Colours; the list shows the text colour on the title and the background as a bar at the row's edge |
 | Auto-type sequences, window associations | Auto-Type tab | ❌ | kept, not shown (see auto-type below) |
 | Several URLs | Browser integration, `KP2A_URL_n` | 🟡 | extra URLs are ordinary custom fields (the CSV import makes `KP2A_URL_n`); only `URL` gets an open button |
 | URL schemes (`cmd://`, `ssh://`, `{S:…}` in URLs) | `Entry URL Handling` | 🟡 | `http(s)` opens in a new tab; other schemes are shown, not opened (deliberately: a web page cannot run commands) |
@@ -291,7 +291,8 @@ What people hit first, then what blocks moving from KeePassXC:
     and Proton Pass in.
 12. **References and placeholders**: resolve `{REF:…}` when showing and
     copying, at least `{REF:U/P@I:…}`; the common placeholders.
-13. **Built-in KeePass icons** and colours, group notes.
+13. ~~**Built-in KeePass icons** and colours, group notes~~: done
+    ([`pass-gaps-3.md`](pass-gaps-3.md) A3).
 14. **A CLI for entries** (`kutup pass ls|show|clip|add|edit|generate`),
     so scripts need not run `keepassxc-cli` on a synced copy.
 15. **Breach check** (opt-in, proxied k-anonymity, research 19 §5.12) and

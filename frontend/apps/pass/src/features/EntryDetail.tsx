@@ -166,10 +166,10 @@ export function EntryDetail({
       <header className="flex items-start gap-3 border-b border-border p-4">
         {canEdit && !entry.inRecycleBin ? (
           <button type="button" className="rounded-md focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setChangingIcon(true)} aria-label={t('icons.change')} title={t('icons.change')}>
-            <SiteIcon title={title} address={url} picture={picture} className="size-10 text-sm" />
+            <SiteIcon title={title} address={url} picture={picture} builtin={entry.icon} className="size-10 text-sm" />
           </button>
         ) : (
-          <SiteIcon title={title} address={url} picture={picture} className="size-10 text-sm" />
+          <SiteIcon title={title} address={url} picture={picture} builtin={entry.icon} className="size-10 text-sm" />
         )}
         <div className="min-w-0 flex-1">
           <h2 className="truncate font-display text-lg font-semibold tracking-tight">{title}</h2>
@@ -370,9 +370,10 @@ export function EntryDetail({
         name={title}
         view={view}
         current={entry.customIcon}
+        builtinCurrent={entry.icon}
         address={url}
-        onChoose={async (data) => {
-          await session.apply({ op: 'setEntryIcon', id: entry.id, data })
+        onChoose={async (choice) => {
+          await session.apply({ op: 'setEntryIcon', id: entry.id, ...('builtin' in choice ? { data: null, builtin: choice.builtin } : { data: choice.data }) })
         }}
       />
       <ConfirmDestructive

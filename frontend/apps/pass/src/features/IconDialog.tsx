@@ -5,6 +5,7 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { cn } from '@kutup/ui/lib/cn'
+import { BUILTIN_ICONS } from '../lib/builtinIcons'
 import { ICON_TYPES, IconReadError, iconPngOf, iconSource, toIconPng } from '../lib/icons'
 import { iconDomain, siteIconThroughKutup, useSiteIconsMode } from '../sync/siteIcons'
 import type { VaultView } from '../vault/types'
@@ -14,6 +15,9 @@ import type { VaultView } from '../vault/types'
  * the vault): one the vault already has, an uploaded image, or, for an
  * entry, its website's icon through Kutup; or the default icon again.
  */
+/** What the icon dialog chose. */
+export type IconChoice = { data: string | null } | { builtin: number }
+
 export function IconDialog({
   open,
   onOpenChange,
@@ -21,6 +25,7 @@ export function IconDialog({
   view,
   current,
   address,
+  builtinCurrent = null,
   onChoose,
 }: {
   open: boolean
@@ -33,7 +38,10 @@ export function IconDialog({
   /** An entry's URL, for its website's icon; none for a group. */
   address?: string
   /** A PNG (base64), or null for the default icon. */
-  onChoose: (data: string | null) => Promise<void>
+  /** The built-in icon it has now (null for a picture). */
+  builtinCurrent?: number | null
+  /** A picture (PNG, base64), a built-in icon by number, or the default (`data: null`). */
+  onChoose: (choice: IconChoice) => Promise<void>
 }) {
   const { t } = useTranslation()
   const upload = useRef<HTMLInputElement>(null)
@@ -46,11 +54,12 @@ export function IconDialog({
     if (open) setError(null)
   }, [open])
 
-  const choose = async (data: () => Promise<string | null>) => {
+  const choose = async (data: () => Promise<string | null>) => pick(async () => ({ data: await data() }))
+  const pick = async (choice: () => Promise<IconChoice>) => {
     setPending(true)
     setError(null)
     try {
-      await onChoose(await data())
+      await onChoose(await choice())
       onOpenChange(false)
     } catch (failure) {
       setError(failure instanceof IconReadError ? t('icons.unreadable') : failure instanceof NoSiteIconError ? t('icons.noSiteIcon') : t('entry.saveFailed'))
@@ -90,6 +99,27 @@ export function IconDialog({
               </ul>
             </section>
           ) : null}
+          <section aria-labelledby="builtin-icons-label" className="space-y-2">
+            <h3 id="builtin-icons-label" className="text-sm font-medium">
+              {t('icons.builtin')}
+            </h3>
+            <ul className="grid max-h-48 grid-cols-8 gap-1.5 overflow-y-auto" aria-labelledby="builtin-icons-label">
+              {BUILTIN_ICONS.map((Icon, number) => (
+                <li key={number}>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    aria-pressed={!current && builtinCurrent === number}
+                    aria-label={t('icons.pickBuiltin', { number })}
+                    onClick={() => void pick(() => Promise.resolve({ builtin: number }))}
+                    className={cn('grid size-9 place-items-center rounded-md border border-border bg-muted hover:bg-accent', !current && builtinCurrent === number && 'ring-2 ring-primary')}
+                  >
+                    <Icon className="size-5" aria-hidden />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => upload.current?.click()}>
               <ImageUp />

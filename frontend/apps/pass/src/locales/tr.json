@@ -171,7 +171,10 @@
     "deletedGroups": "Silinen gruplar",
     "restore": "Geri al",
     "restored": "{{name}} içindekilerle birlikte eski yerine geri alındı",
-    "deletedForGood": "{{name}} kalıcı olarak silindi"
+    "deletedForGood": "{{name}} kalıcı olarak silindi",
+    "edit": "Düzenle",
+    "editTitle": "Grubu düzenle",
+    "notes": "Notlar"
   },
   "entries": {
     "label": "Kayıtlar",
@@ -215,7 +218,10 @@
     "untitled": "Başlıksız",
     "tagSuggestions": "Bu kasadaki etiketler",
     "excludeFromReports": "Raporlardan hariç tut",
-    "excludeFromReportsHint": "Güvenlik raporu bu kaydı dahil etmez (KeePass'in kalite denetimi kapalı)."
+    "excludeFromReportsHint": "Güvenlik raporu bu kaydı dahil etmez (KeePass'in kalite denetimi kapalı).",
+    "colours": "Renkler",
+    "foregroundColor": "Metin",
+    "backgroundColor": "Arka plan"
   },
   "detail": {
     "edit": "Düzenle",
@@ -358,7 +364,9 @@
     "fromWebsite": "Sitenin simgesini kullan",
     "reset": "Varsayılan simge",
     "unreadable": "Bu dosya resim olarak okunamadı. En fazla 5 MB'lık bir PNG, JPEG, GIF, WebP, BMP ya da ICO resmi seçin.",
-    "noSiteIcon": "Kutup bu sitenin simgesini getiremedi."
+    "noSiteIcon": "Kutup bu sitenin simgesini getiremedi.",
+    "builtin": "KeePass simgeleri",
+    "pickBuiltin": "KeePass simgesi {{number}}"
   },
   "import": {
     "open": "Başka bir uygulamadan içe aktar…",

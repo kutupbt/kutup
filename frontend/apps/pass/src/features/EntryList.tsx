@@ -170,6 +170,8 @@ export function EntryList({
             <li
               key={e.id}
               className={cn('group/entry flex items-center border-b border-border', checked && 'bg-accent/40')}
+              // KeePass's entry colours: the background as a bar at the row's edge, the text as the title's colour.
+              style={e.backgroundColor ? { boxShadow: `inset 4px 0 0 ${e.backgroundColor}` } : undefined}
               draggable={editable}
               onDragStart={editable ? (event) => dragStart(event, e.id) : undefined}
             >
@@ -195,9 +197,11 @@ export function EntryList({
                 aria-current={e.id === currentId ? 'true' : undefined}
                 className={cn('flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-accent/50', e.id === currentId && 'bg-accent')}
               >
-                <SiteIcon title={fieldValue(e, 'Title')} address={fieldValue(e, 'URL')} picture={e.customIcon ? pictures.get(e.customIcon) : null} />
+                <SiteIcon title={fieldValue(e, 'Title')} address={fieldValue(e, 'URL')} picture={e.customIcon ? pictures.get(e.customIcon) : null} builtin={e.icon} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{title}</span>
+                  <span className="block truncate text-sm font-medium" style={e.foregroundColor ? { color: e.foregroundColor } : undefined}>
+                    {title}
+                  </span>
                   {secondLine(e) ? <span className="block truncate text-xs text-muted-foreground">{secondLine(e)}</span> : null}
                   {(shows('modified') && e.modified) || (shows('expiry') && e.expires && e.expiry) ? (
                     <span className="block truncate text-xs text-muted-foreground">

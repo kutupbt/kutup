@@ -32,11 +32,14 @@ interface Draft {
   expiry: string
   /** KeePass's QualityCheck: off leaves the entry out of the security report. */
   qualityCheck: boolean
+  /** `#rrggbb`, or empty for none. */
+  foregroundColor: string
+  backgroundColor: string
 }
 
 function draftOf(entry: EntryView | null, defaultUserName: string): Draft {
   if (!entry) {
-    return { title: '', userName: defaultUserName, password: '', url: '', notes: '', otp: '', custom: [], tags: '', expires: false, expiry: '', qualityCheck: true }
+    return { title: '', userName: defaultUserName, password: '', url: '', notes: '', otp: '', custom: [], tags: '', expires: false, expiry: '', qualityCheck: true, foregroundColor: '', backgroundColor: '' }
   }
   return {
     title: fieldValue(entry, 'Title'),
@@ -51,6 +54,8 @@ function draftOf(entry: EntryView | null, defaultUserName: string): Draft {
     // datetime-local wants minutes, local time.
     expiry: entry.expiry ? toLocalInput(entry.expiry) : '',
     qualityCheck: entry.qualityCheck,
+    foregroundColor: entry.foregroundColor ?? '',
+    backgroundColor: entry.backgroundColor ?? '',
   }
 }
 
@@ -89,8 +94,8 @@ function inputOf(draft: Draft, original: EntryView | null): EntryInput {
       .map((tag) => tag.trim())
       .filter(Boolean),
     icon: original?.icon ?? null,
-    foregroundColor: original?.foregroundColor ?? null,
-    backgroundColor: original?.backgroundColor ?? null,
+    foregroundColor: draft.foregroundColor || null,
+    backgroundColor: draft.backgroundColor || null,
     overrideUrl: original?.overrideUrl ?? '',
     qualityCheck: draft.qualityCheck,
     expires: draft.expires,
@@ -271,6 +276,20 @@ export function EntryEditor({
               <Input type="datetime-local" aria-label={t('entry.expiry')} value={draft.expiry} onChange={(e) => set({ expiry: e.target.value })} />
             ) : null}
           </div>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">{t('entry.colours')}</legend>
+            <div className="flex flex-wrap gap-4">
+              {(['foregroundColor', 'backgroundColor'] as const).map((key) => (
+                <div key={key} className="flex items-center gap-2">
+                  <Checkbox id={`entry-${key}`} checked={draft[key] !== ''} onCheckedChange={(v) => set({ [key]: v === true ? (key === 'foregroundColor' ? '#1d4ed8' : '#fef3c7') : '' })} />
+                  <Label htmlFor={`entry-${key}`} className="font-normal">
+                    {t(`entry.${key}`)}
+                  </Label>
+                  {draft[key] !== '' ? <input type="color" value={draft[key]} onChange={(e) => set({ [key]: e.target.value })} aria-label={t(`entry.${key}`)} className="h-7 w-10 cursor-pointer rounded border border-border bg-transparent" /> : null}
+                </div>
+              ))}
+            </div>
+          </fieldset>
           <div className="flex items-start gap-2">
             <Checkbox id="entry-exclude-report" checked={!draft.qualityCheck} onCheckedChange={(v) => set({ qualityCheck: v !== true })} />
             <Label htmlFor="entry-exclude-report" className="font-normal">

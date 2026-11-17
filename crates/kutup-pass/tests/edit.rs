@@ -516,7 +516,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetEntryIcon {
                 id: id.clone(),
-                data: Some(png(1))
+                data: Some(png(1)),
+                builtin: None
             },
             2
         )
@@ -541,7 +542,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetEntryIcon {
                 id: id.clone(),
-                data: Some(png(1))
+                data: Some(png(1)),
+                builtin: None
             },
             3
         )
@@ -552,7 +554,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetGroupIcon {
                 id: root.clone(),
-                data: Some(png(1))
+                data: Some(png(1)),
+                builtin: None
             },
             4
         )
@@ -581,7 +584,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetEntryIcon {
                 id: id.clone(),
-                data: None
+                data: None,
+                builtin: None
             },
             6
         )
@@ -592,7 +596,8 @@ fn entries_and_groups_take_their_own_pictures() {
             &mut db,
             Op::SetGroupIcon {
                 id: root.clone(),
-                data: None
+                data: None,
+                builtin: None
             },
             7
         )
@@ -615,6 +620,7 @@ fn entries_and_groups_take_their_own_pictures() {
         Op::SetEntryIcon {
             id: id.clone(),
             data: Some(png(2)),
+            builtin: None,
         },
         8,
     );
@@ -624,6 +630,7 @@ fn entries_and_groups_take_their_own_pictures() {
         Op::SetEntryIcon {
             id: other.clone(),
             data: Some(png(3)),
+            builtin: None,
         },
         10,
     );
@@ -653,6 +660,7 @@ fn pictures_are_pngs_of_bounded_size() {
             &Op::SetEntryIcon {
                 id: id.clone(),
                 data: Some(data),
+                builtin: None,
             },
             at(2),
         )
@@ -682,7 +690,8 @@ fn pictures_are_pngs_of_bounded_size() {
             &mut db,
             &Op::SetEntryIcon {
                 id: "nope".into(),
-                data: None
+                data: None,
+                builtin: None
             },
             at(2)
         )
@@ -694,7 +703,8 @@ fn pictures_are_pngs_of_bounded_size() {
             &mut db,
             &Op::SetGroupIcon {
                 id: "nope".into(),
-                data: None
+                data: None,
+                builtin: None
             },
             at(2)
         )
@@ -713,7 +723,8 @@ fn pictures_are_pngs_of_bounded_size() {
         op,
         Op::SetGroupIcon {
             id: "g".into(),
-            data: None
+            data: None,
+            builtin: None
         }
     );
 }
@@ -1716,4 +1727,60 @@ fn deleted_history_items_stay_deleted_through_a_merge() {
     // Merging the same copy changes nothing: no spurious history item.
     let (merged, _) = merge(Some(&base), &mine, &mine);
     assert_eq!(passwords(&merged, &id), ["p2", "p4"]);
+}
+
+#[test]
+fn built_in_icons_are_chosen_by_number() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let id = add(&mut db, "Banka", 1);
+    run(
+        &mut db,
+        Op::SetEntryIcon {
+            id: id.clone(),
+            data: None,
+            builtin: Some(66),
+        },
+        2,
+    );
+    run(
+        &mut db,
+        Op::SetGroupIcon {
+            id: root.clone(),
+            data: None,
+            builtin: Some(60),
+        },
+        3,
+    );
+    let v = view::view(&db);
+    assert_eq!(entry(&v, &id).icon, Some(66));
+    assert_eq!(
+        v.groups.iter().find(|g| g.id == root).unwrap().icon,
+        Some(60)
+    );
+    let before = shown(&db);
+    for op in [
+        Op::SetEntryIcon {
+            id: id.clone(),
+            data: None,
+            builtin: Some(69),
+        },
+        Op::SetEntryIcon {
+            id: id.clone(),
+            data: Some(png(1)),
+            builtin: Some(1),
+        },
+    ] {
+        assert!(apply(&mut db, &op, at(4)).is_err());
+    }
+    assert_eq!(shown(&db), before);
+    let op: Op = serde_json::from_str(r#"{"op":"setGroupIcon","id":"x","builtin":48}"#).unwrap();
+    assert!(matches!(
+        op,
+        Op::SetGroupIcon {
+            builtin: Some(48),
+            data: None,
+            ..
+        }
+    ));
 }
