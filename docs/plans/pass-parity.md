@@ -28,8 +28,8 @@ but offers no way to see or change it.
 |---|---|---|---|
 | The database (vault) | 26 | 1 | 13 |
 | Groups (folders) | 7 | 1 | 4 |
-| Entries | 9 | 5 | 8 |
-| Bulk actions and the entry list | 10 | 1 | 4 |
+| Entries | 10 | 6 | 6 |
+| Bulk actions and the entry list | 11 | 1 | 3 |
 | Search | 4 | 2 | 1 |
 | Password generator | 2 | 2 | 3 |
 | One-time codes, passkeys, SSH, desktop integration | 5 | 3 | 10 |
@@ -37,7 +37,7 @@ but offers no way to see or change it.
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **79** | **21** | **55** |
+| **All** | **81** | **22** | **52** |
 
 ## The database (vault)
 
@@ -110,7 +110,7 @@ but offers no way to see or change it.
 | Protected fields (hidden, in-memory protection) | "Protect" per attribute | ✅ | protected values hidden with reveal; the password is always protected |
 | Attachments | Advanced → Attachments | 🟡 | add (up to 50 MB), download, remove; no rename, no preview, one file at a time |
 | History: list, compare, restore | History tab | ✅ | `HistoryDialog.tsx`, `restoreHistory` |
-| History: delete an item, delete all | History tab → Delete | ❌ | trimmed only by the vault's limits |
+| History: delete an item, delete all | History tab → Delete | ✅ | the History dialog: Delete per version, Delete all versions, asked first; remembered in the entry's `KutupHistoryDeleted` so another device's copy doesn't bring them back ([`pass.md`](pass.md)) |
 | Expiry | Expires + presets | ✅ | date and time; an expired entry warns and shows in the security report; no presets ("in 3 months") |
 | Tags | tag field, tag list in the sidebar | ✅ | edited as comma-separated text with the vault's tags offered; a Tags list in the sidebar with counts, a click searches `tag:"…"` |
 | Icons: website icon | Download favicon | ✅ | through Kutup or off per account (spec 152); can be saved into the vault as a custom icon |
@@ -123,7 +123,7 @@ but offers no way to see or change it.
 | URL override | Properties | ❌ | kept |
 | References `{REF:P@I:…}` | `Reference.adoc` "Entry Cross-Reference" | ❌ | shown as the raw text; copying copies `{REF:…}`; nothing makes one |
 | Placeholders (`{USERNAME}`, `{DT_…}`, `{T-CONV:…}`) | `Reference.adoc` "Entry Placeholders" | ❌ | shown as typed |
-| Clone an entry (with references, with history) | Entries → Clone (Ctrl+D) | ❌ | |
+| Clone an entry (with references, with history) | Entries → Clone (Ctrl+D) | 🟡 | the entry's Clone button (`CloneDialog.tsx`): " - Clone" after the title (in the person's language), the history if asked; beside the entry, its attachments shared. "Replace with references" waits for item 12; no Ctrl+D yet |
 | "Exclude from reports" (quality check) | Properties → Exclude | 🟡 | kept, but the security report ignores it (`lib/report.ts` reports such entries too) and it cannot be changed |
 | Custom data, properties (UUID, times) | Properties tab | 🟡 | created and modified times shown; the rest kept |
 | Merge review marks | (none) | ✅ | beyond KeePassXC: entries changed on two devices are marked, compared against history and marked reviewed (`EntryDetail.tsx`, spec 77) |
@@ -148,7 +148,7 @@ read-only vault has no selection and no dragging.
 | Move several to the recycle bin, delete several | select, Delete | ✅ | asks first, naming the count; for good (said so, "can't be undone") in the bin or with it off |
 | Restore from the recycle bin | drag back | ✅ | one entry or several, each back to the group it was in (KDBX's previous parent group), or the top group when that one is gone or in the bin; or "Move to" another group |
 | Empty the recycle bin | Recycle bin → Empty | ✅ | |
-| Clone several | Clone | ❌ | |
+| Clone several | Clone | ✅ | the selection bar's Clone, one `cloneEntries` edit |
 | Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | 🟡 | entries (one, or the selection) onto a group, or onto the recycle bin while it is on (`recycleEntries`, which refuses rather than delete for good); not groups into groups, no Ctrl to copy |
 | Sort the list | click a column | ✅ | title, user name, URL, modified, created or expiry, up or down, per device (`lib/entryList.ts`); entries without the value last |
 | Choose columns (user name, URL, modified, expiry, attachments, TOTP…) | header menu | ✅ | "Show in the list": user name, URL, modified, expiry, attachments, one-time code, per device; rows keep the icon and title |
@@ -281,7 +281,8 @@ What people hit first, then what blocks moving from KeePassXC:
 5. ~~**Vault settings**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md) P2).
 6. ~~**List and search**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md) P3);
    regular expressions later.
-7. **Clone an entry**; delete history items.
+7. ~~**Clone an entry**; delete history items~~: done
+   ([`pass-gaps-2.md`](pass-gaps-2.md) P4); references in clones wait for item 12.
 8. **SSH keys on the website** and key generation (roadmap).
 9. **Generator**: passphrases (EFF word list), a standalone generator,
    custom and excluded characters, longer lengths; zxcvbn for strength

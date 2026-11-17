@@ -1,4 +1,4 @@
-import { ArchiveRestore, Clock3, FolderInput, Paperclip, Trash2, X } from 'lucide-react'
+import { ArchiveRestore, Clock3, CopyPlus, FolderInput, Paperclip, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -13,6 +13,7 @@ import { hasTotp, type Column } from '../lib/entryList'
 import { emptySelection, inOrder, keepShown, selectAll, selectRange, toggle, type Selection } from '../lib/selection'
 import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, type EntryView, type GroupView, type VaultView } from '../vault/types'
+import { CloneDialog } from './CloneDialog'
 import { DRAG_TYPE } from './entryDrop'
 import { SiteIcon } from './SiteIcon'
 
@@ -54,6 +55,7 @@ export function EntryList({
   const order = useMemo(() => shown.map((e) => e.id), [shown])
   const [selection, setSelection] = useState<Selection>(emptySelection)
   const [confirming, setConfirming] = useState<'recycle' | 'forGood' | null>(null)
+  const [cloning, setCloning] = useState<string[]>([])
   const selected = inOrder(selection, order)
   const forGood = viewingBin || !view.recycleBinEnabled
   const targets = view.groups.filter((g) => !g.inRecycleBin)
@@ -139,6 +141,12 @@ export function EntryList({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+          {!viewingBin ? (
+            <Button variant="ghost" size="sm" onClick={() => setCloning(selected)}>
+              <CopyPlus />
+              {t('clone.open')}
+            </Button>
+          ) : null}
           {viewingBin ? (
             <Button variant="ghost" size="sm" onClick={restore}>
               <ArchiveRestore />
@@ -230,6 +238,15 @@ export function EntryList({
         submit={confirming === 'forGood' ? t('bulk.deleteForGood') : t('bulk.recycle')}
         errorFallback={t('entry.saveFailed')}
         onConfirm={remove}
+      />
+      <CloneDialog
+        session={session}
+        ids={cloning}
+        onOpenChange={(open) => !open && setCloning([])}
+        onCloned={(id) => {
+          setSelection(emptySelection)
+          onOpen(id)
+        }}
       />
     </>
   )

@@ -116,6 +116,10 @@ export type Op =
   /** Several entries into the recycle bin and nothing else: refused when it is off (a drag never deletes for good). */
   | { op: 'recycleEntries'; ids: string[] }
   | { op: 'restoreHistory'; id: string; index: number }
+  /** Copies beside each entry (KeePassXC's Clone); returns the first copy's id. */
+  | { op: 'cloneEntries'; ids: string[]; titleSuffix: string | null; history: boolean }
+  /** Deletes history items (indexes oldest first; null: all), remembered so a merge doesn't bring them back. */
+  | { op: 'deleteHistory'; id: string; indexes: number[] | null }
   | { op: 'clearReview'; id: string }
   | { op: 'addAttachment'; entryId: string; name: string; data: string }
   | { op: 'removeAttachment'; entryId: string; name: string }

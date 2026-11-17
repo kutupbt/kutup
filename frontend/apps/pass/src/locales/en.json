@@ -255,7 +255,14 @@
     "show": "Show",
     "hide": "Hide",
     "restore": "Restore",
-    "unknownTime": "Time unknown"
+    "unknownTime": "Time unknown",
+    "delete": "Delete this version",
+    "deleteAll": "Delete all versions",
+    "deleteTitle": "Delete this version?",
+    "deleteAllTitle": "Delete every earlier version?",
+    "deleteDescription": "It is deleted on every device that syncs this vault, and won't come back from another device's copy. The current version stays.",
+    "deleted": "Version deleted",
+    "deletedAll": "Earlier versions deleted"
   },
   "generator": {
     "open": "Generate a password",
@@ -523,6 +530,19 @@
     "expiresAt": "Expires {{when}}",
     "attachmentCount_one": "{{count}} attachment",
     "attachmentCount_other": "{{count}} attachments"
+  },
+  "clone": {
+    "open": "Clone",
+    "title_one": "Clone entry",
+    "title_other": "Clone {{count}} entries",
+    "description_one": "A copy goes beside it, in the same group.",
+    "description_other": "Each copy goes beside its entry, in the same group.",
+    "suffix": " - Clone",
+    "appendSuffix": "Add “{{suffix}}” to the title",
+    "copyHistory": "Copy the history too",
+    "submit": "Clone",
+    "done_one": "Entry cloned",
+    "done_other": "{{count}} entries cloned"
   },
   "bulk": {
     "toolbar": "Selected entries",

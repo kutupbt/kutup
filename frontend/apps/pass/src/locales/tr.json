@@ -255,7 +255,14 @@
     "show": "Göster",
     "hide": "Gizle",
     "restore": "Geri yükle",
-    "unknownTime": "Zaman bilinmiyor"
+    "unknownTime": "Zaman bilinmiyor",
+    "delete": "Bu sürümü sil",
+    "deleteAll": "Tüm sürümleri sil",
+    "deleteTitle": "Bu sürüm silinsin mi?",
+    "deleteAllTitle": "Tüm eski sürümler silinsin mi?",
+    "deleteDescription": "Bu kasayı eşitleyen her cihazda silinir ve başka bir cihazın kopyasından geri gelmez. Güncel sürüm kalır.",
+    "deleted": "Sürüm silindi",
+    "deletedAll": "Eski sürümler silindi"
   },
   "generator": {
     "open": "Parola üret",
@@ -523,6 +530,19 @@
     "expiresAt": "Son kullanma: {{when}}",
     "attachmentCount_one": "{{count}} ek",
     "attachmentCount_other": "{{count}} ek"
+  },
+  "clone": {
+    "open": "Kopyala",
+    "title_one": "Kaydı kopyala",
+    "title_other": "{{count}} kaydı kopyala",
+    "description_one": "Kopya aynı grupta, yanına konur.",
+    "description_other": "Her kopya aynı grupta, kaydının yanına konur.",
+    "suffix": " - Kopya",
+    "appendSuffix": "Başlığa “{{suffix}}” ekle",
+    "copyHistory": "Geçmişi de kopyala",
+    "submit": "Kopyala",
+    "done_one": "Kayıt kopyalandı",
+    "done_other": "{{count}} kayıt kopyalandı"
   },
   "bulk": {
     "toolbar": "Seçili kayıtlar",

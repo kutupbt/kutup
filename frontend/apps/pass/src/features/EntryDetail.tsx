@@ -1,4 +1,4 @@
-import { ArchiveRestore, Copy, Download, ExternalLink, Eye, EyeOff, FolderInput, History, Paperclip, Pencil, Trash2 } from 'lucide-react'
+import { ArchiveRestore, Copy, CopyPlus, Download, ExternalLink, Eye, EyeOff, FolderInput, History, Paperclip, Pencil, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -11,6 +11,7 @@ import { copyText } from '@kutup/ui/lib/clipboard'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView } from '../vault/types'
+import { CloneDialog } from './CloneDialog'
 import { HistoryDialog } from './HistoryDialog'
 import { SiteIcon } from './SiteIcon'
 import { IconDialog } from './IconDialog'
@@ -103,12 +104,28 @@ function downloadBytes(bytes: Uint8Array, name: string) {
 
 
 /** One entry: its fields to copy, its one-time code, attachments, history and what to do with it. */
-export function EntryDetail({ session, entry, view, onEdit, onGone }: { session: VaultSession; entry: EntryView; view: VaultView; onEdit: () => void; onGone: () => void }) {
+export function EntryDetail({
+  session,
+  entry,
+  view,
+  onEdit,
+  onGone,
+  onOpen,
+}: {
+  session: VaultSession
+  entry: EntryView
+  view: VaultView
+  onEdit: () => void
+  onGone: () => void
+  /** Opens another entry (a clone just made). */
+  onOpen: (id: string) => void
+}) {
   const { t, i18n } = useTranslation()
   const [history, setHistory] = useState(false)
   // Which delete the dialog was opened as: a recycle stays one, whatever the vault says by the time it is confirmed.
   const [confirmDelete, setConfirmDelete] = useState<'recycle' | 'forGood' | null>(null)
   const [changingIcon, setChangingIcon] = useState(false)
+  const [cloning, setCloning] = useState(false)
   const attachInput = useRef<HTMLInputElement>(null)
   const canEdit = session.canEdit
   const title = fieldValue(entry, 'Title') || t('entry.untitled')
@@ -164,10 +181,15 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
                 {t('detail.restore')}
               </Button>
             ) : (
-              <Button variant="outline" size="sm" onClick={onEdit}>
-                <Pencil />
-                {t('detail.edit')}
-              </Button>
+              <>
+                <Button variant="outline" size="sm" onClick={onEdit}>
+                  <Pencil />
+                  {t('detail.edit')}
+                </Button>
+                <Button variant="ghost" size="icon" onClick={() => setCloning(true)} aria-label={t('clone.open')} title={t('clone.open')}>
+                  <CopyPlus />
+                </Button>
+              </>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -331,6 +353,7 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
         </footer>
       </div>
       <HistoryDialog session={session} entry={entry} open={history} onOpenChange={setHistory} />
+      <CloneDialog session={session} ids={cloning ? [entry.id] : []} onOpenChange={setCloning} onCloned={onOpen} />
       <IconDialog
         open={changingIcon}
         onOpenChange={setChangingIcon}

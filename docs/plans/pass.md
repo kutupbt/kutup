@@ -101,6 +101,22 @@ one database, plus a report of what happened.
 - **The review mark** is a custom-data key `KutupMergeReview` on the entry
   (other KeePass apps keep unknown custom data and ignore it), listing the
   fields that conflicted. Kutup Pass shows it and removes it once reviewed.
+- **Deleted history items** are remembered in a custom-data key
+  `KutupHistoryDeleted` on the entry (`merge::HISTORY_DELETED_KEY`;
+  docs/plans/pass-gaps-2.md P4), so a merge with a copy that still holds
+  them doesn't bring them back. Its value is a string: the deleted items'
+  modification times as `YYYY-MM-DDTHH:MM:SSZ` (UTC, KDBX's own format),
+  one per line, oldest first, at most 1,000 (the oldest go first). A merge
+  takes the union of both sides' lists and drops every history item whose
+  modification time is in it; the key is left out when entries are
+  compared, so it never marks an entry changed or conflicting by itself. An
+  implementation that honours it removes the listed items from the entry's
+  history on reading and keeps the key; one that doesn't simply keeps it,
+  as KeePass apps keep unknown custom data. A clone drops it.
+- **Encryption settings** (key derivation and compression) merge three-way
+  as one value; without a base, or when both sides changed them, the later
+  `SettingsChanged` wins and the merge reports "encryption settings"
+  (docs/plans/pass-gaps-2.md P2).
 - **Timestamps are data.** The merged entry's modification time is the later
   of the two, but no rule uses time to pick a winner while a base exists.
 - **Determinism.** The same three inputs always give the same output, so two

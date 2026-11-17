@@ -87,6 +87,25 @@ pub enum Op {
         ids: Vec<String>,
     },
     /// Makes history item `index` (oldest first) the entry's state again.
+    /// Copies entries into the group each is in, as KeePassXC's Clone: a new
+    /// id, the copy's times now, the title with `title_suffix` appended
+    /// when given (" - Clone", in the person's language), and the history
+    /// only when `history`. All or nothing; returns the first copy's id.
+    CloneEntries {
+        ids: Vec<String>,
+        #[serde(default)]
+        title_suffix: Option<String>,
+        #[serde(default)]
+        history: bool,
+    },
+    /// Deletes an entry's history items (`indexes`, oldest first as the
+    /// history lists them; absent: all), remembered so a merge doesn't bring
+    /// them back (`merge::HISTORY_DELETED_KEY`).
+    DeleteHistory {
+        id: String,
+        #[serde(default)]
+        indexes: Option<Vec<usize>>,
+    },
     RestoreHistory {
         id: String,
         index: usize,
@@ -558,6 +577,71 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
             Applied {
                 id: None,
                 changed: !ids.is_empty(),
+            }
+        }
+        Op::CloneEntries {
+            ids,
+            title_suffix,
+            history,
+        } => {
+            let ids = entry_ids(db, ids)?;
+            let suffix = title_suffix.as_deref().unwrap_or("");
+            if suffix.chars().count() > MAX_NAME_CHARS {
+                return Err(invalid("a title suffix is too long"));
+            }
+            let mut first = None;
+            for id in ids {
+                let copy = clone_entry(db, id, suffix, *history, now)?;
+                first.get_or_insert(copy);
+            }
+            Applied {
+                id: first.map(|id| id.uuid().to_string()),
+                changed: first.is_some(),
+            }
+        }
+        Op::DeleteHistory { id, indexes } => {
+            let id = entry_id(db, id)?;
+            let items = db.entries[&id]
+                .history
+                .as_ref()
+                .map(|h| h.entries.clone())
+                .unwrap_or_default();
+            let doomed: BTreeSet<usize> = match indexes {
+                Some(indexes) => {
+                    if indexes.iter().any(|i| *i >= items.len()) {
+                        return Err(EditError::NotFound("history item"));
+                    }
+                    indexes.iter().copied().collect()
+                }
+                None => (0..items.len()).collect(),
+            };
+            if doomed.is_empty() {
+                Applied::default()
+            } else {
+                let entry = db
+                    .entries
+                    .get_mut(&id)
+                    .ok_or(EditError::NotFound("entry"))?;
+                let mut deleted = crate::merge::deleted_history(entry);
+                deleted.extend(
+                    doomed
+                        .iter()
+                        .filter_map(|i| items[*i].times.last_modification),
+                );
+                let kept: Vec<Entry> = items
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| !doomed.contains(i))
+                    .map(|(_, item)| item)
+                    .collect();
+                if let Some(history) = entry.history.as_mut() {
+                    history.entries = kept;
+                }
+                crate::merge::set_deleted_history(entry, &deleted, Some(now));
+                Applied {
+                    id: None,
+                    changed: true,
+                }
             }
         }
         Op::RestoreHistory { id, index } => restore_history(db, entry_id(db, id)?, *index, now)?,
@@ -1088,6 +1172,66 @@ fn create_entry(
         id: Some(id.uuid().to_string()),
         changed: true,
     })
+}
+
+/// A copy of entry `id` beside it (`Op::CloneEntries`).
+fn clone_entry(
+    db: &mut Database,
+    id: EntryId,
+    suffix: &str,
+    history: bool,
+    now: NaiveDateTime,
+) -> Result<EntryId, EditError> {
+    let source = db.entries[&id].clone();
+    let copy_id = EntryId::new();
+    db.group_mut(source.parent)
+        .ok_or(EditError::NotFound("group"))?
+        .add_entry_with_id(copy_id)
+        .map_err(|_| invalid("the entry exists"))?;
+    let mut copy = db.entries[&copy_id].clone();
+    copy.fields = source.fields.clone();
+    if !suffix.is_empty() {
+        if let Some(title) = copy.fields.get_mut("Title") {
+            let protected = title.is_protected();
+            let text = format!("{}{suffix}", title.get());
+            *title = if protected {
+                Value::protected(text)
+            } else {
+                Value::unprotected(text)
+            };
+        } else {
+            copy.fields.insert(
+                "Title".into(),
+                Value::unprotected(suffix.trim_start().to_owned()),
+            );
+        }
+    }
+    copy.tags = source.tags.clone();
+    copy.icon = source.icon.clone();
+    copy.foreground_color = source.foreground_color.clone();
+    copy.background_color = source.background_color.clone();
+    copy.override_url = source.override_url.clone();
+    copy.quality_check = source.quality_check;
+    copy.autotype = source.autotype.clone();
+    // The same attachment data, shared (refs::rebuild counts the copy).
+    copy.attachments = source.attachments.clone();
+    copy.custom_data = source.custom_data.clone();
+    copy.custom_data.remove(REVIEW_KEY);
+    copy.custom_data.remove(crate::merge::HISTORY_DELETED_KEY);
+    copy.times.expires = source.times.expires;
+    copy.times.expiry = source.times.expiry;
+    set_all_times(&mut copy.times, now);
+    if history {
+        copy.history = source.history.clone().map(|mut h| {
+            for item in &mut h.entries {
+                item.id = copy_id;
+                item.custom_data.remove(REVIEW_KEY);
+            }
+            h
+        });
+    }
+    db.entries.insert(copy_id, copy);
+    Ok(copy_id)
 }
 
 fn move_entry(db: &mut Database, id: EntryId, target: GroupId, now: NaiveDateTime) -> Applied {

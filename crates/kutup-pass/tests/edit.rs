@@ -1463,3 +1463,257 @@ fn another_devices_save_keeps_a_key_derivation_change() {
         open(&save(&merged, &key).unwrap(), &key).unwrap();
     }
 }
+
+#[test]
+fn entries_are_cloned_beside_themselves() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let bank = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: work.clone(),
+            entry: EntryInput {
+                fields: vec![
+                    field("Title", "Banka"),
+                    field("Password", "p1"),
+                    field("Müşteri no", "42"),
+                ],
+                tags: vec!["finans".into()],
+                ..EntryInput::default()
+            },
+        },
+        2,
+    )
+    .id
+    .unwrap();
+    run(
+        &mut db,
+        Op::AddAttachment {
+            entry_id: bank.clone(),
+            name: "kart.png".into(),
+            data: "AAEC".into(),
+        },
+        3,
+    );
+    run(
+        &mut db,
+        Op::UpdateEntry {
+            id: bank.clone(),
+            entry: input(&[("Title", "Banka"), ("Password", "p2")]),
+        },
+        4,
+    );
+    let mail = add(&mut db, "Posta", 5);
+
+    // A missing id clones nothing.
+    let before = shown(&db);
+    assert!(apply(
+        &mut db,
+        &Op::CloneEntries {
+            ids: vec![bank.clone(), "nope".into()],
+            title_suffix: None,
+            history: false,
+        },
+        at(6)
+    )
+    .is_err());
+    assert_eq!(shown(&db), before);
+
+    let copy = run(
+        &mut db,
+        Op::CloneEntries {
+            ids: vec![bank.clone(), mail.clone()],
+            title_suffix: Some(" - Kopya".into()),
+            history: true,
+        },
+        7,
+    )
+    .id
+    .unwrap();
+    let v = view::view(&db);
+    assert_eq!(v.entries.len(), 4);
+    let original = entry(&v, &bank);
+    let cloned = entry(&v, &copy);
+    assert_ne!(copy, bank);
+    assert_eq!(cloned.group_id, work);
+    assert_eq!(value(&v, &copy, "Title"), "Banka - Kopya");
+    assert_eq!(value(&v, &copy, "Password"), "p2");
+    assert!(cloned
+        .fields
+        .iter()
+        .any(|f| f.key == "Password" && f.protected));
+    assert_eq!(cloned.tags, original.tags);
+    assert_eq!(cloned.attachments.len(), 1);
+    assert_eq!(cloned.history_count, original.history_count);
+    assert_eq!(cloned.created.as_deref(), Some("2026-10-12T09:07:00Z"));
+    assert!(v
+        .entries
+        .iter()
+        .any(|e| e.id != mail && value(&v, &e.id, "Title") == "Posta - Kopya"));
+
+    // Without history; and it all survives a save.
+    let plain = run(
+        &mut db,
+        Op::CloneEntries {
+            ids: vec![bank.clone()],
+            title_suffix: None,
+            history: false,
+        },
+        8,
+    )
+    .id
+    .unwrap();
+    let key = VaultKey::new().with_password("parola");
+    let reopened = open(&save(&db, &key).unwrap(), &key).unwrap();
+    let v = view::view(&reopened);
+    assert_eq!(value(&v, &plain, "Title"), "Banka");
+    assert_eq!(entry(&v, &plain).history_count, 0);
+    assert_eq!(
+        view::attachment(&reopened, &reopened.entries[&eid(&copy)], "kart.png"),
+        Some(&[0u8, 1, 2][..])
+    );
+    let op: Op = serde_json::from_str(
+        r#"{"op":"cloneEntries","ids":["a"],"titleSuffix":" - Clone","history":true}"#,
+    )
+    .unwrap();
+    assert!(matches!(op, Op::CloneEntries { history: true, .. }));
+}
+
+/// An entry with four earlier versions (passwords p1 to p4, minutes 2 to 5).
+fn with_history() -> (Database, String) {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let id = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: root,
+            entry: input(&[("Title", "Banka"), ("Password", "p1")]),
+        },
+        1,
+    )
+    .id
+    .unwrap();
+    for n in 2..=5 {
+        run(
+            &mut db,
+            Op::UpdateEntry {
+                id: id.clone(),
+                entry: input(&[("Title", "Banka"), ("Password", &format!("p{n}"))]),
+            },
+            n,
+        );
+    }
+    (db, id)
+}
+
+fn passwords(db: &Database, id: &str) -> Vec<String> {
+    view::history(db, &db.entries[&eid(id)])
+        .iter()
+        .map(|item| value_of(item, "Password"))
+        .collect()
+}
+
+#[test]
+fn history_items_are_deleted_one_or_all() {
+    let (mut db, id) = with_history();
+    assert_eq!(passwords(&db, &id), ["p1", "p2", "p3", "p4"]);
+    let before = shown(&db);
+    assert!(apply(
+        &mut db,
+        &Op::DeleteHistory {
+            id: id.clone(),
+            indexes: Some(vec![1, 9])
+        },
+        at(6)
+    )
+    .is_err());
+    assert_eq!(shown(&db), before);
+    run(
+        &mut db,
+        Op::DeleteHistory {
+            id: id.clone(),
+            indexes: Some(vec![1, 2]),
+        },
+        6,
+    );
+    assert_eq!(passwords(&db, &id), ["p1", "p4"]);
+    assert_eq!(
+        kutup_pass::merge::deleted_history(&db.entries[&eid(&id)]).len(),
+        2
+    );
+    // The entry itself is untouched: same value, same time.
+    let v = view::view(&db);
+    assert_eq!(value(&v, &id, "Password"), "p5");
+    assert_eq!(
+        entry(&v, &id).modified.as_deref(),
+        Some("2026-10-12T09:05:00Z")
+    );
+    run(
+        &mut db,
+        Op::DeleteHistory {
+            id: id.clone(),
+            indexes: None,
+        },
+        7,
+    );
+    assert!(passwords(&db, &id).is_empty());
+    assert!(
+        !run(
+            &mut db,
+            Op::DeleteHistory {
+                id: id.clone(),
+                indexes: None
+            },
+            8
+        )
+        .changed
+    );
+}
+
+#[test]
+fn deleted_history_items_stay_deleted_through_a_merge() {
+    let key = VaultKey::new().with_password("parola");
+    let (base, id) = with_history();
+    let base = open(&save(&base, &key).unwrap(), &key).unwrap();
+    let mut mine = base.clone();
+    run(
+        &mut mine,
+        Op::DeleteHistory {
+            id: id.clone(),
+            indexes: Some(vec![0, 2]),
+        },
+        6,
+    );
+    // The other device leaves the history alone, or edits the entry.
+    let untouched = base.clone();
+    let mut edited = base.clone();
+    run(
+        &mut edited,
+        Op::UpdateEntry {
+            id: id.clone(),
+            entry: input(&[("Title", "Banka"), ("Password", "p6")]),
+        },
+        7,
+    );
+    let mine = open(&save(&mine, &key).unwrap(), &key).unwrap();
+    for other in [&untouched, &edited] {
+        for (ours, theirs) in [(&mine, other), (other, &mine)] {
+            for with_base in [Some(&base), None] {
+                let (merged, report) = merge(with_base, ours, theirs);
+                let kept = passwords(&merged, &id);
+                assert!(!kept.contains(&"p1".to_owned()), "{kept:?}");
+                assert!(!kept.contains(&"p3".to_owned()), "{kept:?}");
+                assert!(kept.contains(&"p2".to_owned()) && kept.contains(&"p4".to_owned()));
+                assert_eq!(
+                    kutup_pass::merge::deleted_history(&merged.entries[&eid(&id)]).len(),
+                    2
+                );
+                assert!(report.conflicts.is_empty());
+            }
+        }
+    }
+    // Merging the same copy changes nothing: no spurious history item.
+    let (merged, _) = merge(Some(&base), &mine, &mine);
+    assert_eq!(passwords(&merged, &id), ["p2", "p4"]);
+}

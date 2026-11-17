@@ -577,6 +577,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                 view={view}
                 onEdit={() => setEditing(entry)}
                 onGone={() => void navigate({ pathname: `/v/${fileId}`, search: params.toString() })}
+                onOpen={openEntry}
               />
             </div>
           ) : (
