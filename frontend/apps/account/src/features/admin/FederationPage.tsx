@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Alert } from '@kutup/ui/components/alert'
 import { Card } from '@kutup/ui/components/card'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useFederationPolicy } from './api'
 import { DeliveriesSection } from './federation/DeliveriesSection'
@@ -26,7 +26,7 @@ export function FederationPage() {
   return (
     <PageBody>
       <PageHeader title={t('admin.federation.title')} description={t('admin.federation.description')} />
-      {policy.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+      {policy.isPending ? <FormSkeleton label={t('common.loading')} /> : null}
       {policy.isError ? <Alert variant="error">{apiErrorMessage(policy.error, t('common.tryAgain'))}</Alert> : null}
       {policy.data ? (
         <>

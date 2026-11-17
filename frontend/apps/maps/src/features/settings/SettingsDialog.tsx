@@ -11,7 +11,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Label } from '@kutup/ui/components/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useSaveFolder } from '../lists/lists'
 
@@ -63,7 +63,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           <DialogDescription className="sr-only">{t('settings.saveToHint')}</DialogDescription>
         </DialogHeader>
         {folders.isPending || config.isPending ? (
-          <LoadingPanel label={t('common.loading')} />
+          <FormSkeleton label={t('common.loading')} />
         ) : !config.data || !folders.data || !preferences ? (
           <Alert variant="error">{t('settings.loadFailed')}</Alert>
         ) : (

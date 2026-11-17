@@ -53,13 +53,19 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 7. Native apps: mobile first, then desktop.
 8. Signed builds.
 9. The admin app at `admin.<domain>`.
-10. A strict Content-Security-Policy for every app. Today's policy (set by
-    `frontend/docker/40-kutup-hosts.sh`) allows `'unsafe-inline'` and
+10. A strict Content-Security-Policy for every app. The enforced policy (set
+    by `frontend/docker/40-kutup-hosts.sh`) still allows `'unsafe-inline'` and
     `'unsafe-eval'` scripts and WebSockets to any host (`connect-src … wss:`).
     In an end-to-end encrypted app any injected script could read keys and
-    send them anywhere, so the goal is nonce- or hash-based scripts, no
-    `unsafe-eval` outside the office-editor sandbox origin, and `connect-src`
-    limited to Kutup's own hosts (the edge review, 2026-10-22).
+    send them anywhere (the edge review, 2026-10-22). **Report-only shipped**
+    ([`content-security-policy.md`](content-security-policy.md)): every app
+    sends a strict policy (no inline or eval'd script, `connect-src` its own
+    host plus Chat's SFU and listed map origins, no remote images in Mail)
+    as `Content-Security-Policy-Report-Only`, reported to
+    `POST /api/csp-report`. Left: read the reports from real use and the
+    e2e suites under `E2E_CSP_STRICT=1`, fix what they show (Excalidraw's
+    font subsetting first), then enforce (`KUTUP_CSP_ENFORCE=1`, later the
+    default) and drop the old policy.
 
 ### Shipped in the clean-slate release (2d26c64eb60d, live 2026-10-17)
 
@@ -1449,6 +1455,11 @@ its fix is in the lockfile. Recorded 2026-10-17.
   bindings generator, only with `kutup-client-ffi`'s `bindgen` feature; no
   shipped binary links it; uniffi 0.32.2 still uses askama 0.16, so revisit
   at the next uniffi release).
+- **`chrono`** (RUSTSEC-2026-0543, 2026-11: unmaintained, not a
+  vulnerability, no fixed release): it reaches Pass's vendored `keepass`
+  0.15.2 (`kutup-pass`, `kutup-pass-wasm`, `kutup-cli`) and `kutup-cli`
+  directly. **To do:** move the vendored `keepass` and the CLI from `chrono`
+  to `time` (as the server already uses), then drop the ignore.
 - **`libcrux-chacha20poly1305` 0.0.7** (fixed in 0.0.8; a panic on an
   overlong ciphertext buffer, a crash rather than a disclosure). Not in RustSec,
   so `cargo deny` doesn't see it. It reached `kutup-chat-core` and

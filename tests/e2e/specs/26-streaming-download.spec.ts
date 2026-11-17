@@ -4,7 +4,7 @@
 
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { item, itemAction } from '../fixtures/drive'
 

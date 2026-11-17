@@ -5,7 +5,7 @@
 // deletes it. Whoever prefers can open the GitHub issue from the form
 // instead; nothing goes there unless they submit it on GitHub.
 
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, openDrive, registerAccount, signInAsAdmin } from '../fixtures/apps'
 
 const PASSWORD = 'Deneme123*FeedbackPassword'

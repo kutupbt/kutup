@@ -19,6 +19,7 @@ pub mod closing;
 pub mod collab;
 pub mod collections;
 pub mod contacts;
+pub mod csp_reports;
 pub mod drive_move;
 pub mod feedback;
 pub mod file_assets;

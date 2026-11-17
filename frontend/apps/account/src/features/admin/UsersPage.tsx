@@ -9,8 +9,8 @@ import { Button } from '@kutup/ui/components/button'
 import { Card } from '@kutup/ui/components/card'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { Skeleton } from '@kutup/ui/components/skeleton'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton, Skeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
@@ -90,7 +90,7 @@ export function UsersPage() {
             className="max-w-xs"
           />
         </div>
-        {users.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+        {users.isPending ? <ListSkeleton label={t('common.loading')} /> : null}
         {users.isError ? (
           <div className="p-4">
             <Alert variant="error">{apiErrorMessage(users.error, t('common.tryAgain'))}</Alert>

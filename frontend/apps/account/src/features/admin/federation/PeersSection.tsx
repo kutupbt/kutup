@@ -12,7 +12,8 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Mono } from '@kutup/ui/components/mono'
 import { Fact, Section } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
 import { formatInstant } from '@kutup/ui/lib/format'
@@ -118,7 +119,7 @@ function EvidenceDialog({ domain, onClose }: { domain: string; onClose: () => vo
           <DialogTitle>{t('admin.federation.evidenceTitle', { domain })}</DialogTitle>
           <DialogDescription>{t('admin.federation.evidenceDescription')}</DialogDescription>
         </DialogHeader>
-        {evidence.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+        {evidence.isPending ? <ListSkeleton label={t('common.loading')} rows={3} /> : null}
         {evidence.isError ? <Alert variant="error">{apiErrorMessage(evidence.error, t('common.tryAgain'))}</Alert> : null}
         {evidence.data ? (
           <ol className="space-y-3">

@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Alert } from '@kutup/ui/components/alert'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { Button } from '@kutup/ui/components/button'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -13,7 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@kutup/ui/components/dropdown-menu'
-import { LoadingPanel } from '@kutup/ui/components/states'
+
 import {
   AccessChanged,
   openLinkKey,
@@ -53,7 +54,7 @@ export function AccessList({ folder }: { folder: Folder }) {
   // A removal that would also take people not yet upgraded: asked again.
   const [upgrade, setUpgrade] = useState<{ removal: Removal; error: MembersPendingUpgrade } | null>(null)
 
-  if (access.isPending) return <LoadingPanel label={t('dialogs.access.loading')} />
+  if (access.isPending) return <ListSkeleton label={t('dialogs.access.loading')} rows={3} avatar="round" />
   if (access.isError || !access.data) return <Alert variant="error">{t('dialogs.access.loadFailed')}</Alert>
   const data: FolderAccess = access.data
   const date = (iso: string) => new Date(iso).toLocaleDateString(i18n.language, { dateStyle: 'medium' })

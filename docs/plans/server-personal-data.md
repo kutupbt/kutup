@@ -468,9 +468,9 @@ keeps them; reports on them are operator tooling.
   under the account's key, the account as its row, so it moves with a
   rename.
 - The address mail was forwarded from is in the headers too (`forwarded`
-  stays in clear: such mail is never forwarded again). Not sealed: the
-  mail groups' own signature (it lands with the main session's batch; it
-  seals the same way, under the group's key).
+  stays in clear: such mail is never forwarded again). A shared mailbox's
+  own signature (`mail_groups.signature_sealed`, from the Mail batch) is
+  sealed the same way, under the group's key, the group as its row.
 
 - After review (2026-11-14): a held send's outcome (undo send, scheduled
   mail), which names its recipients, is sealed under the account's data key

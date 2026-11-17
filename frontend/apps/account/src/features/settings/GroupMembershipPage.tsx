@@ -10,7 +10,8 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
 import { Button } from '@kutup/ui/components/button'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 
 /**
@@ -30,7 +31,7 @@ export function GroupMembershipPage() {
     <PageBody>
       <PageHeader title={t('groupMembership.title')} description={t('groupMembership.description')} />
       {groups.isPending ? (
-        <LoadingPanel label={t('common.loading')} />
+        <ListSkeleton label={t('common.loading')} rows={4} />
       ) : groups.isError ? (
         <Alert variant="error">{apiErrorMessage(groups.error, t('common.tryAgain'))}</Alert>
       ) : groups.data.length === 0 ? (

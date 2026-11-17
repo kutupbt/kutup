@@ -144,6 +144,22 @@ stack's self-signed certificate keeps WebKit from registering the worker at
 all, every player falls back; the annotations show that, and spec 191 fails
 on the registration.
 
+### Content-Security-Policy violations
+
+Specs import `test` and `expect` from `fixtures/test.ts`, not from
+`@playwright/test`. Its fixture listens for `securitypolicyviolation` in
+every page and frame of every context (the `context` fixture's and those a
+spec makes with `browser.newContext()`), report-only violations included,
+and attaches what a test saw as `csp-violations` (page, directive, blocked
+origin, disposition; no query strings). By default that is all. With
+`E2E_CSP_STRICT=1` a test that saw any violation fails after its body, which
+is how the strict policy is checked before it is enforced
+([`docs/content-security-policy.md`](../../docs/content-security-policy.md)):
+
+```sh
+E2E_CSP_STRICT=1 npm exec -- playwright test specs/18-rename.spec.ts
+```
+
 ## Mail and outside sending
 
 The isolated stack starts with `MAIL_OUTSIDE_SENDING=on` (no Stalwart, so
@@ -245,6 +261,8 @@ reproduce locally; do not enable secret-bearing raw artifacts.
   selection.
 - `safe-reporter.ts`, `safe-diagnostics.ts`: allow-listed output for sensitive
   Chat/backup runs.
+- `fixtures/test.ts`: `test` and `expect` for every spec, recording
+  Content-Security-Policy violations (`E2E_CSP_STRICT=1` fails on them).
 - `fixtures/apps.ts`: app origins, account registration, first sign-in and
   administrator sign-in through the account app, and opening Drive.
 - `fixtures/chat.ts`: Chat helpers (open, settings, conversations, messages,

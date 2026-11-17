@@ -6,7 +6,7 @@ import { Badge } from '@kutup/ui/components/badge'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
@@ -40,7 +40,7 @@ export function CatchAllDialog({ domain, onClose }: { domain: MailDomain; onClos
           <DialogDescription>{t('domains.catchAll.description')}</DialogDescription>
         </DialogHeader>
         {addresses.isPending ? (
-          <LoadingPanel label={t('common.loading')} />
+          <FormSkeleton label={t('common.loading')} rows={1} />
         ) : (
           <Table>
             <TableHeader>

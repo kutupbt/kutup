@@ -58,7 +58,7 @@ function Choices({ config, onChange, busy }: { config: MapConfig; onChange: (nex
   const { t } = useTranslation()
   const { preferences } = config
   const provider = config.providers.find((p) => p.id === preferences.provider) ?? config.providers[0]
-  const relayed = usesRelay(config.proxy, preferences.viaProxy)
+  const relayed = usesRelay(config.proxy, preferences.viaProxy, provider)
 
   return (
     <div className="space-y-6">
@@ -110,7 +110,7 @@ function Choices({ config, onChange, busy }: { config: MapConfig; onChange: (nex
                 ))}
               </SelectContent>
             </Select>
-            {config.proxy === 'available' ? (
+            {config.proxy === 'available' && provider.direct ? (
               <div className="flex items-start gap-3">
                 <Checkbox
                   id="maps-relay"
@@ -126,7 +126,7 @@ function Choices({ config, onChange, busy }: { config: MapConfig; onChange: (nex
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                {config.proxy === 'enforced' ? t('settings.maps.relayEnforced') : t('settings.maps.relayOff')}
+                {!provider.direct ? t('settings.maps.relayOnly') : config.proxy === 'enforced' ? t('settings.maps.relayEnforced') : t('settings.maps.relayOff')}
               </p>
             )}
           </CardContent>

@@ -1,3 +1,4 @@
+import './zodConfig'
 import '@kutup/crypto/polyfills'
 import '@kutup/ui/styles/fonts'
 import '@kutup/ui/styles/tokens.css'

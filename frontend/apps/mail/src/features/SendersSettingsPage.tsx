@@ -15,7 +15,8 @@ import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
@@ -44,7 +45,7 @@ export function SendersSettingsPage() {
   const [error, setError] = useState<string | undefined>()
   const failed = (e: unknown) => toast.error(apiErrorMessage(e, t('common.tryAgain')))
 
-  if (rules.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (rules.isPending) return <ListSkeleton label={t('common.loading')} rows={4} />
   if (rules.isError) return <Alert variant="error">{apiErrorMessage(rules.error, t('common.tryAgain'))}</Alert>
   const shown = tab === 'all' ? rules.data : rules.data.filter((r) => r.kind === tab)
 

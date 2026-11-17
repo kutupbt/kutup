@@ -53,6 +53,8 @@ export interface MailGroup {
    * signer (a manager hands over; an administrator starts a new chain).
    */
   needsNewSigner: boolean
+  /** A shared mailbox's signature, which writing as it starts with; empty for none. */
+  signature: string
 }
 
 export interface MailGroupMember {
@@ -417,7 +419,7 @@ export async function setMembers(groupId: string, body: MembershipBody): Promise
 
 export async function updateGroup(
   groupId: string,
-  change: { displayName?: string; description?: string; postPolicy?: PostPolicy },
+  change: { displayName?: string; description?: string; postPolicy?: PostPolicy; signature?: string },
 ): Promise<MailGroupDetail> {
   return (await api.patch<MailGroupDetail>(`/mail/groups/${groupId}`, change)).data
 }

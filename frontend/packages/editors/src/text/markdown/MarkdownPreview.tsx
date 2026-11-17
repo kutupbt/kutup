@@ -41,6 +41,7 @@
 import { useEffect, useId, useRef, useState, isValidElement } from 'react'
 import type { ComponentProps, MutableRefObject, ReactElement, ReactNode } from 'react'
 import { Checkbox } from '@kutup/ui/components/checkbox'
+import { styleNonce } from '@kutup/ui/lib/cspNonce'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -210,6 +211,10 @@ function MermaidBlock({ source }: { source: string }) {
           setErr('mermaid output failed to parse')
           return
         }
+        // Mermaid's own <style> (the diagram's theme) comes as markup: it
+        // needs the page's style nonce (docs/content-security-policy.md).
+        const nonce = styleNonce()
+        if (nonce) for (const style of svgEl.querySelectorAll('style')) style.setAttribute('nonce', nonce)
         container.replaceChildren(svgEl)
         setErr('')
       } catch (e) {

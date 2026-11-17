@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { createFolder, createNote, item, itemAction, noteLive, openItem } from '../fixtures/drive'
 

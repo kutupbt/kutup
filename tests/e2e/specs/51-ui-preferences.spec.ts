@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, openDrive, registerAccount, signIn } from '../fixtures/apps'
 
 const PASSWORD = 'Deneme123*UiPreferencesPassword'

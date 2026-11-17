@@ -93,7 +93,17 @@ COPY --from=compress /out /usr/share/nginx/html
 COPY frontend/docker/nginx.conf /etc/nginx/nginx.conf
 COPY frontend/docker/40-kutup-hosts.sh /usr/local/bin/kutup-hosts.sh
 COPY frontend/docker/entrypoint.sh /usr/local/bin/kutup-entrypoint.sh
-RUN chmod +x /usr/local/bin/kutup-hosts.sh /usr/local/bin/kutup-entrypoint.sh && nginx -t
+# The sites kutup-hosts.sh writes at start must load: written here for a
+# representative setup, report-only and enforced, and checked with nginx -t
+# (docs/contributing.md has the same check without an image build).
+RUN chmod +x /usr/local/bin/kutup-hosts.sh /usr/local/bin/kutup-entrypoint.sh \
+    && for enforce in 0 1; do \
+         KUTUP_BASE_DOMAIN=example.test CHAT_SFU_URL=wss://sfu.example.test \
+         KUTUP_MAP_DIRECT_ORIGINS=https://tile.example.test,https://tiles.example.test \
+         KUTUP_CSP_ENFORCE=$enforce /usr/local/bin/kutup-hosts.sh >/dev/null \
+         && nginx -t || exit 1; \
+       done \
+    && rm /etc/nginx/conf.d/kutup.conf
 EXPOSE 80
 STOPSIGNAL SIGQUIT
 ENTRYPOINT ["/usr/local/bin/kutup-entrypoint.sh"]

@@ -9,7 +9,8 @@ import { Button } from '@kutup/ui/components/button'
 import { Card } from '@kutup/ui/components/card'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Tabs, TabsList, TabsTrigger } from '@kutup/ui/components/tabs'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
@@ -69,7 +70,7 @@ export function ReportsPage() {
           <TabsTrigger value="resolved">{t('admin.reports.resolved')}</TabsTrigger>
         </TabsList>
       </Tabs>
-      {reports.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+      {reports.isPending ? <ListSkeleton label={t('common.loading')} /> : null}
       {reports.isError ? <Alert variant="error">{apiErrorMessage(reports.error, t('common.tryAgain'))}</Alert> : null}
       {reports.data && reports.data.length === 0 ? (
         <EmptyState

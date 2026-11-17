@@ -6,7 +6,8 @@ import { toast } from 'sonner'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { downloadFile, downloadFolderZip } from '@kutup/editors/files/downloads'
 import { useLeaveRemoteFileShare, useSharedFiles, type SharedFile } from '@kutup/drive-core/fileShares'
@@ -80,7 +81,7 @@ export function SharedPage() {
     )
   }
 
-  if (folders.isPending || sharedFiles.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (folders.isPending || sharedFiles.isPending) return <ListSkeleton label={t('common.loading')} />
 
   return (
     <div className="flex min-h-[calc(100svh-3.5rem)] flex-col">

@@ -12,7 +12,8 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Mono } from '@kutup/ui/components/mono'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
@@ -50,7 +51,7 @@ export function RegistrationCodesPage() {
   const [showingUses, setShowingUses] = useState<RegistrationCode | null>(null)
   const lang = i18n.language
 
-  if (codes.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (codes.isPending) return <ListSkeleton label={t('common.loading')} />
 
   return (
     <PageBody>
@@ -266,7 +267,7 @@ function UsesDialog({ code, onClose }: { code: RegistrationCode; onClose: () => 
           <DialogTitle>{t('admin.codes.usesTitle', { hint: code.hint })}</DialogTitle>
           <DialogDescription>{code.note || t('admin.codes.noNote')}</DialogDescription>
         </DialogHeader>
-        {uses.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+        {uses.isPending ? <ListSkeleton label={t('common.loading')} rows={3} /> : null}
         {uses.isError ? <Alert variant="error">{apiErrorMessage(uses.error, t('common.tryAgain'))}</Alert> : null}
         {uses.data ? (
           <ul className="divide-y divide-border">

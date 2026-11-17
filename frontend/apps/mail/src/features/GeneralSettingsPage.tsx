@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { ExportMailSection } from './ExportMailSection'
 import { toast } from 'sonner'
 import { PAGE_SIZES, useImageSenders, useMailSettings, useRemoveImageSender, useUpdateMailSettings, type MailSettings } from '@kutup/mail-core/api'
 import { Alert } from '@kutup/ui/components/alert'
@@ -7,7 +8,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useContentSearch, useContentSearchState } from '@kutup/mail-core/contentSearch'
 import { notificationStatus, requestNotifications, showNotification, type NotificationStatus } from '@kutup/ui/lib/desktopNotifications'
@@ -82,7 +83,7 @@ export function GeneralSettingsPage() {
   const update = useUpdateMailSettings()
   const imageSenders = useImageSenders()
   const removeImageSender = useRemoveImageSender()
-  if (settings.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (settings.isPending) return <FormSkeleton label={t('common.loading')} />
   if (settings.isError) return <Alert variant="error">{apiErrorMessage(settings.error, t('common.tryAgain'))}</Alert>
   const save = (change: Partial<MailSettings>) =>
     update.mutate(change, {
@@ -184,9 +185,22 @@ export function GeneralSettingsPage() {
           checked={settings.data.almostAllMail}
           onChange={(on) => save({ almostAllMail: on })}
         />
+        <Setting
+          label={t('general.keepMovedSent')}
+          hint={t('general.keepMovedSentHint')}
+          checked={settings.data.keepMovedSent}
+          onChange={(on) => save({ keepMovedSent: on })}
+        />
+        <Setting
+          label={t('general.unreadFavicon')}
+          hint={t('general.unreadFaviconHint')}
+          checked={settings.data.unreadFavicon}
+          onChange={(on) => save({ unreadFavicon: on })}
+        />
       </div>
       <NotificationSettings />
       <ContentSearchSettings />
+      <ExportMailSection />
       <section className="mt-8 space-y-3" aria-labelledby="images-heading">
         <h2 id="images-heading" className="text-sm font-medium">
           {t('remoteImages.settingsTitle')}

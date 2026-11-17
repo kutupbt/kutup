@@ -11,7 +11,7 @@
 //      name, and comes back under it (or stays in the trash).
 
 import { mkdir, writeFile } from 'node:fs/promises'
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { createFolder, item, itemAction, openItem, openSection, renameItem } from '../fixtures/drive'
 

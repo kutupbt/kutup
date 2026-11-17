@@ -8,7 +8,8 @@ import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { toast } from 'sonner'
@@ -90,7 +91,7 @@ export function MailSendingPage() {
         {t('admin.mailSending.attentionOnly')}
       </label>
       {senders.isPending ? (
-        <LoadingPanel label={t('common.loading')} />
+        <FormSkeleton label={t('common.loading')} />
       ) : senders.isError ? (
         <Alert variant="error">{apiErrorMessage(senders.error, t('common.tryAgain'))}</Alert>
       ) : senders.data.length === 0 ? (

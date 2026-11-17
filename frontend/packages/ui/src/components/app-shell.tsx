@@ -1,5 +1,5 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { Menu, X } from 'lucide-react'
+import { Menu, RotateCw, X } from 'lucide-react'
 import { useEffect, useState, type DragEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, useLocation } from 'react-router-dom'
@@ -7,6 +7,7 @@ import { cn } from '../lib/cn'
 import { BrandLockup } from './brand'
 import { Button } from './button'
 import { Spine } from './spine'
+import { useSidebarRefresh, type SidebarRefresh } from '../lib/sidebarRefresh'
 
 /**
  * The frame every Kutup app shares (Proton's PrivateAppContainer, asec's
@@ -146,6 +147,7 @@ export function SidebarNavLink({
   end,
   trailing,
   drop,
+  refresh,
 }: {
   to: string
   icon: ReactNode
@@ -153,8 +155,11 @@ export function SidebarNavLink({
   end?: boolean
   trailing?: ReactNode
   drop?: SidebarDrop
+  /** Fetches the open place again: a button on the open row, and a click on it while open (Proton's sidebar). */
+  refresh?: SidebarRefresh
 }) {
   const [over, setOver] = useState(false)
+  const refreshing = useSidebarRefresh(to, refresh)
   const dropProps = drop
     ? {
         onDragOver: (e: DragEvent<HTMLLIElement>) => {
@@ -173,13 +178,15 @@ export function SidebarNavLink({
       }
     : {}
   return (
-    <li {...dropProps}>
+    <li {...dropProps} className="group/nav relative">
       <NavLink
         to={to}
         end={end}
+        onClick={refreshing.onClick}
         className={({ isActive }) =>
           cn(
             'relative flex h-9 items-center gap-3 rounded-md px-3 text-sm transition-colors',
+            isActive && refresh && 'pr-9',
             over && 'ring-2 ring-chrome-active',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chrome-active',
             '[&_svg]:size-4 [&_svg]:shrink-0',
@@ -198,6 +205,44 @@ export function SidebarNavLink({
           </>
         )}
       </NavLink>
+      {refresh ? <SidebarRefreshButton to={to} end={end} refresh={refresh} state={refreshing} /> : null}
     </li>
+  )
+}
+
+/** The open row's refresh button: shown on hover or focus, and while it spins. */
+export function SidebarRefreshButton({
+  to,
+  end,
+  refresh,
+  state,
+  className,
+}: {
+  to: string
+  end?: boolean
+  refresh: SidebarRefresh
+  state: ReturnType<typeof useSidebarRefresh>
+  /** Where it sits on the row; the right edge by default. */
+  className?: string
+}) {
+  const location = useLocation()
+  const open = end ? location.pathname === to : location.pathname === to || location.pathname.startsWith(`${to}/`)
+  if (!open) return null
+  return (
+    <button
+      type="button"
+      aria-label={refresh.label}
+      title={refresh.label}
+      aria-busy={state.busy}
+      onClick={state.start}
+      className={cn(
+        'absolute top-1/2 -translate-y-1/2 rounded p-1 text-chrome-muted hover:bg-chrome-accent hover:text-chrome-foreground',
+        className ?? 'right-1.5',
+        'focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chrome-active',
+        state.busy ? 'opacity-100' : 'opacity-0 group-hover/nav:opacity-100 group-hover/place:opacity-100',
+      )}
+    >
+      <RotateCw className={cn('size-3.5', state.busy && 'animate-spin')} aria-hidden />
+    </button>
   )
 }

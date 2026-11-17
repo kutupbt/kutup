@@ -3,7 +3,7 @@
 // destructive. "Repair this browser", which discards the browser's Chat
 // device, is only for a failure of the browser's own state.
 
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
 import { linkDevice, openChat, openChats, openSettings, revokeOtherDevices } from '../fixtures/chat'
 

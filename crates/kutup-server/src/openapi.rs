@@ -352,6 +352,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::feedback::resolve_feedback,
         crate::handlers::feedback::delete_feedback,
         crate::handlers::link_reports::report_public_link,
+        crate::handlers::csp_reports::csp_report,
         crate::handlers::link_reports::list_reports,
         crate::handlers::link_reports::dismiss_report,
         crate::handlers::link_reports::remove_reported_link,
@@ -607,6 +608,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::drive_profile_keys::DrivePeopleResponse,
         crate::drive_profile_keys::DrivePerson,
         crate::maps::MapSettings,
+        crate::maps::MapSettingsView,
         crate::handlers::rate_limits::RateLimitsResponse,
         crate::handlers::rate_limits::RateLimitEntry,
         crate::handlers::rate_limits::RateLimitUnit,
@@ -984,6 +986,7 @@ mod tests {
         for path in [
             "/api/health",
             "/api/health/ready",
+            "/api/csp-report",
             "/api/auth/login/start",
             "/api/auth/login/finish",
             "/api/auth/opaque/register/start",

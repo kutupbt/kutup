@@ -15,6 +15,7 @@ use uuid::Uuid;
 use super::admin::audit;
 use super::mail_keys::{lookup_address, MailKeyLookup};
 use super::trusted_uuid;
+use crate::account_data::KeyOwner;
 use crate::error::{AppError, AppResult};
 use crate::mail::group_keys::{self, NewGroupKey, ShareInput};
 use crate::mail::groups::{self, Sender};
@@ -54,6 +55,14 @@ pub struct MailGroup {
     /// with a new signer (a manager hands over, or an administrator starts a
     /// new chain).
     pub needs_new_signer: bool,
+    /// A shared mailbox's signature (rich text, as an address's own), which
+    /// the composer starts with when someone writes as it; empty for none.
+    #[sqlx(skip)]
+    pub signature: String,
+    /// The signature as stored: sealed under the mailbox's data key
+    /// (docs/plans/server-personal-data.md, A2), opened by [`opened`].
+    #[serde(skip)]
+    pub signature_sealed: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
@@ -92,17 +101,51 @@ const GROUP_COLUMNS: &str = "g.id, g.address, g.display_name, g.description, g.k
     (SELECT role FROM mail_group_members r WHERE r.group_id = g.id AND r.user_id = $1) AS my_role,
     COALESCE((SELECT r.can_send_as OR r.role IN ('owner', 'manager') FROM mail_group_members r
                WHERE r.group_id = g.id AND r.user_id = $1), false) AS my_can_send_as,
-    g.needs_new_signer";
+    g.needs_new_signer, g.signature_sealed";
+
+/// Where a shared mailbox's signature is sealed: under the group's data key
+/// (`account_keys.mail_group_data_keys`), as its messages' headers, so it
+/// goes with the group.
+fn signature_field(group: &str) -> (&'static str, &'static str, &str) {
+    ("mail_groups", "signature", group)
+}
+
+/// `group` with its signature opened (empty when it has none, or its key
+/// is gone).
+async fn opened(state: &AppState, mut group: MailGroup) -> AppResult<MailGroup> {
+    if let Some(sealed) = group.signature_sealed.as_deref() {
+        group.signature = crate::account_data::open_owner(
+            &state.pool,
+            &state.config.opaque_setup_keys,
+            KeyOwner::MailGroup(group.id),
+            signature_field(&group.id.to_string()),
+            sealed,
+        )
+        .await?
+        .and_then(|plain| String::from_utf8(plain.to_vec()).ok())
+        .unwrap_or_default();
+    }
+    Ok(group)
+}
+
+async fn opened_all(state: &AppState, groups: Vec<MailGroup>) -> AppResult<Vec<MailGroup>> {
+    let mut out = Vec::with_capacity(groups.len());
+    for group in groups {
+        out.push(opened(state, group).await?);
+    }
+    Ok(out)
+}
 
 async fn group_row(state: &AppState, caller: Uuid, id: Uuid) -> AppResult<MailGroup> {
-    sqlx::query_as(&format!(
+    let group = sqlx::query_as(&format!(
         "SELECT {GROUP_COLUMNS} FROM mail_groups g WHERE g.id = $2"
     ))
     .bind(caller)
     .bind(id)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or_else(|| AppError::not_found("not found"))
+    .ok_or_else(|| AppError::not_found("not found"))?;
+    opened(state, group).await
 }
 
 async fn members(state: &AppState, id: Uuid) -> AppResult<Vec<MailGroupMember>> {
@@ -274,16 +317,15 @@ pub async fn my_groups(
     user: AuthUser,
 ) -> AppResult<Json<Vec<MailGroup>>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    Ok(Json(
-        sqlx::query_as(&format!(
-            "SELECT {GROUP_COLUMNS} FROM mail_groups g
-              WHERE EXISTS (SELECT 1 FROM mail_group_members m WHERE m.group_id = g.id AND m.user_id = $1)
-              ORDER BY g.address"
-        ))
-        .bind(user_id)
-        .fetch_all(&state.pool)
-        .await?,
+    let groups = sqlx::query_as(&format!(
+        "SELECT {GROUP_COLUMNS} FROM mail_groups g
+          WHERE EXISTS (SELECT 1 FROM mail_group_members m WHERE m.group_id = g.id AND m.user_id = $1)
+          ORDER BY g.address"
     ))
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(opened_all(&state, groups).await?))
 }
 
 /// `GET /api/mail/groups/{id}` — a group and its members, for its members
@@ -319,6 +361,8 @@ pub struct UpdateMailGroup {
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub post_policy: Option<String>,
+    /// A shared mailbox's signature; 10 KB at most, empty to remove it.
+    pub signature: Option<String>,
 }
 
 fn check_text(value: &Option<String>, max: usize, field: &str) -> AppResult<()> {
@@ -337,6 +381,16 @@ async fn apply_update(
 ) -> AppResult<()> {
     check_text(&change.display_name, 200, "displayName")?;
     check_text(&change.description, 1000, "description")?;
+    if let Some(signature) = &change.signature {
+        if group.kind != "shared" && !signature.is_empty() {
+            return Err(AppError::bad_request(
+                "only a shared mailbox is written as, so only it has a signature",
+            ));
+        }
+        if signature.len() > crate::handlers::mail_identity::MAX_SIGNATURE_BYTES {
+            return Err(AppError::bad_request("a signature is 10 KB at most"));
+        }
+    }
     if let Some(policy) = &change.post_policy {
         if !POST_POLICIES.contains(&policy.as_str()) {
             return Err(AppError::bad_request(
@@ -349,15 +403,32 @@ async fn apply_update(
             ));
         }
     }
+    // Sealed under the mailbox's data key; an empty one is none.
+    let sealed = match change.signature.as_deref() {
+        Some("") | None => None,
+        Some(signature) => Some(
+            crate::account_data::seal_owner(
+                &state.pool,
+                &state.config.opaque_setup_keys,
+                KeyOwner::MailGroup(group.id),
+                signature_field(&group.id.to_string()),
+                signature.as_bytes(),
+            )
+            .await?,
+        ),
+    };
     sqlx::query(
         "UPDATE mail_groups SET display_name = COALESCE($2, display_name),
-                description = COALESCE($3, description), post_policy = COALESCE($4, post_policy)
+                description = COALESCE($3, description), post_policy = COALESCE($4, post_policy),
+                signature_sealed = CASE WHEN $5 THEN $6 ELSE signature_sealed END
           WHERE id = $1",
     )
     .bind(group.id)
     .bind(change.display_name.as_deref().map(str::trim))
     .bind(change.description.as_deref().map(str::trim))
     .bind(&change.post_policy)
+    .bind(change.signature.is_some())
+    .bind(sealed)
     .execute(&state.pool)
     .await?;
     Ok(())
@@ -398,6 +469,7 @@ pub async fn update_group(
     apply_update(&state, &group, &change).await?;
     audit(&state.pool, &user.user_id, "mail_group.update", None, json!({ "groupId": group.id, "address": group.address, "change": {
         "displayName": change.display_name, "description": change.description, "postPolicy": change.post_policy,
+        "signature": change.signature.is_some(),
     } })).await;
     Ok(Json(detail(&state, user_id, id).await?))
 }
@@ -956,15 +1028,14 @@ pub async fn admin_list(
     admin: AdminUser,
 ) -> AppResult<Json<Vec<MailGroup>>> {
     let admin_id = trusted_uuid(&admin.user_id)?;
-    Ok(Json(
-        sqlx::query_as(&format!(
-            "SELECT {GROUP_COLUMNS} FROM mail_groups g
-              ORDER BY (g.system_role IS NULL), g.address"
-        ))
-        .bind(admin_id)
-        .fetch_all(&state.pool)
-        .await?,
+    let groups = sqlx::query_as(&format!(
+        "SELECT {GROUP_COLUMNS} FROM mail_groups g
+          ORDER BY (g.system_role IS NULL), g.address"
     ))
+    .bind(admin_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(opened_all(&state, groups).await?))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1242,6 +1313,8 @@ pub async fn admin_update(
             display_name: change.display_name.clone(),
             description: change.description.clone(),
             post_policy: change.post_policy.clone(),
+            // Set in Mail by the mailbox's owners and managers.
+            signature: None,
         },
     )
     .await?;
