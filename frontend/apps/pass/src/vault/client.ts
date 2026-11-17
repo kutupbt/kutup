@@ -109,6 +109,11 @@ export class VaultHandle {
     return call({ call: 'apply', handle: this.handle, op, now: Date.now() })
   }
 
+  /** The ids of the entries matching a search (kutup_pass::search), `weakIds` counting as weak for `is:weak`. */
+  search(query: string, weakIds: string[], now = Date.now()): Promise<string[]> {
+    return call({ call: 'search', handle: this.handle, query, weakIds, now })
+  }
+
   history(entryId: string): Promise<EntryView[]> {
     return call({ call: 'history', handle: this.handle, entryId })
   }

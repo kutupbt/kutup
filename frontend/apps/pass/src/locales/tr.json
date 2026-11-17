@@ -178,7 +178,10 @@
     "noMatch": "Eşleşen kayıt yok.",
     "binEmpty": "Geri dönüşüm kutusu boş.",
     "empty": "{{group}} içinde henüz kayıt yok.",
-    "pick": "Görmek için bir kayıt seçin."
+    "pick": "Görmek için bir kayıt seçin.",
+    "searchHelp": "Başlık, kullanıcı adı, URL, notlar, etiketler ve alanlarda arar. title:, user:, url:, notes:, tag:, group:, attr:, attachment:, password:, is:expired, is:weak, has:totp ile daraltın; -kelime dışarıda bırakır, \"tırnak\" boşlukları korur, * her şeyle eşleşir.",
+    "wholeVault": "Tüm kasa",
+    "searching": "Aranıyor…"
   },
   "entry": {
     "new": "Yeni kayıt",
@@ -208,7 +211,8 @@
     "created": "Kayıt eklendi",
     "saved": "Kayıt kaydedildi",
     "saveFailed": "Değişiklik yapılamadı.",
-    "untitled": "Başlıksız"
+    "untitled": "Başlıksız",
+    "tagSuggestions": "Bu kasadaki etiketler"
   },
   "detail": {
     "edit": "Düzenle",
@@ -490,6 +494,35 @@
     "weakTitle": "Bu kasanın şifrelemesi bu sunucunun istediğinden zayıf",
     "weakDescription": "Kasa yine açılır. Çalınan bir kopyanın kırılması zorlaşsın diye anahtar türetmesini güçlendirin.",
     "strengthen": "Güçlendir"
+  },
+  "tags": {
+    "label": "Etiketler"
+  },
+  "list": {
+    "sort": "Sırala",
+    "by": {
+      "title": "Başlık",
+      "userName": "Kullanıcı adı",
+      "url": "URL",
+      "modified": "Değiştirilme",
+      "created": "Oluşturulma",
+      "expiry": "Son kullanma"
+    },
+    "ascending": "Artan",
+    "descending": "Azalan",
+    "columns": "Listede göster",
+    "column": {
+      "userName": "Kullanıcı adı",
+      "url": "URL",
+      "modified": "Değiştirilme",
+      "expiry": "Son kullanma",
+      "attachments": "Ekler",
+      "totp": "Tek kullanımlık kod"
+    },
+    "modifiedAt": "Değiştirildi: {{when}}",
+    "expiresAt": "Son kullanma: {{when}}",
+    "attachmentCount_one": "{{count}} ek",
+    "attachmentCount_other": "{{count}} ek"
   },
   "bulk": {
     "toolbar": "Seçili kayıtlar",

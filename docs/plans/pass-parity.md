@@ -28,16 +28,16 @@ but offers no way to see or change it.
 |---|---|---|---|
 | The database (vault) | 26 | 1 | 13 |
 | Groups (folders) | 7 | 1 | 4 |
-| Entries | 8 | 6 | 8 |
-| Bulk actions and the entry list | 8 | 1 | 6 |
-| Search | 1 | 3 | 3 |
+| Entries | 9 | 5 | 8 |
+| Bulk actions and the entry list | 10 | 1 | 4 |
+| Search | 4 | 2 | 1 |
 | Password generator | 2 | 2 | 3 |
 | One-time codes, passkeys, SSH, desktop integration | 5 | 3 | 10 |
 | Health report | 2 | 1 | 4 |
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **73** | **23** | **59** |
+| **All** | **79** | **21** | **55** |
 
 ## The database (vault)
 
@@ -112,7 +112,7 @@ but offers no way to see or change it.
 | History: list, compare, restore | History tab | ✅ | `HistoryDialog.tsx`, `restoreHistory` |
 | History: delete an item, delete all | History tab → Delete | ❌ | trimmed only by the vault's limits |
 | Expiry | Expires + presets | ✅ | date and time; an expired entry warns and shows in the security report; no presets ("in 3 months") |
-| Tags | tag field, tag list in the sidebar | 🟡 | edited as comma-separated text and searched, shown on the entry; no tag list or tag filter in the sidebar, no suggestions |
+| Tags | tag field, tag list in the sidebar | ✅ | edited as comma-separated text with the vault's tags offered; a Tags list in the sidebar with counts, a click searches `tag:"…"` |
 | Icons: website icon | Download favicon | ✅ | through Kutup or off per account (spec 152); can be saved into the vault as a custom icon |
 | Icons: custom pictures | Icon → Custom | ✅ | upload or reuse the vault's pictures (spec 153) |
 | Icons: KeePass's built-in set | 69 standard icons | ❌ | kept; no picker |
@@ -150,8 +150,8 @@ read-only vault has no selection and no dragging.
 | Empty the recycle bin | Recycle bin → Empty | ✅ | |
 | Clone several | Clone | ❌ | |
 | Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | 🟡 | entries (one, or the selection) onto a group, or onto the recycle bin while it is on (`recycleEntries`, which refuses rather than delete for good); not groups into groups, no Ctrl to copy |
-| Sort the list | click a column | ❌ | always by title, A–Z (natural order); no other order |
-| Choose columns (user name, URL, modified, expiry, attachments, TOTP…) | header menu | ❌ | each row shows the icon, title and user name (else URL) |
+| Sort the list | click a column | ✅ | title, user name, URL, modified, created or expiry, up or down, per device (`lib/entryList.ts`); entries without the value last |
+| Choose columns (user name, URL, modified, expiry, attachments, TOTP…) | header menu | ✅ | "Show in the list": user name, URL, modified, expiry, attachments, one-time code, per device; rows keep the icon and title |
 | Move entries up and down (manual order) | Entries → Move up/down | ❌ | |
 | Keyboard shortcuts (copy user name/password/TOTP, new entry, search) | `KeyboardShortcuts.adoc`, configurable in 2.8 | ❌ | none |
 | Copy across vaults (move an entry to another vault) | drag between tabs | ❌ | the core can (`crates/kutup-pass/src/refs.rs`: attachments, icons and history move with it); no UI |
@@ -160,11 +160,11 @@ read-only vault has no selection and no dragging.
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
-| Search as you type | search box | ✅ | `VaultPage.tsx` `matches`: case-insensitive substring |
-| Fields searched | all standard fields, attributes, tags, groups | 🟡 | title, user name, URL, notes and tags; not custom fields, attachments' names or group names; protected values not at all (as KeePassXC without a modifier) |
-| Scope | the database or the current group | 🟡 | within the chosen group (its own entries) or "All entries"; never across vaults |
-| Field modifiers (`title:`, `url:`, `user:`, `notes:`, `attr:`, `tag:`, `is:expired`, `is:weak`…) | `DatabaseOperations.adoc` "Modifiers and Fields" | ❌ | |
-| Wildcards, regular expressions, `!` negation, exact `+` | "Wild Card Characters and Logical Operators" | ❌ | |
+| Search as you type | search box | ✅ | the vault's own search in the worker (`crates/kutup-pass/src/search.rs`), once typing settles; folded as Kutup's other searches (Turkish I's, accents, case) |
+| Fields searched | all standard fields, attributes, tags, groups | ✅ | title, user name, URL, notes, tags and unprotected custom fields; attachments' and groups' names with `attachment:` and `group:`; the password with `password:`; protected custom fields never |
+| Scope | the database or the current group | ✅ | the chosen group, or "Whole vault" while searching; never across vaults |
+| Field modifiers (`title:`, `url:`, `user:`, `notes:`, `attr:`, `tag:`, `is:expired`, `is:weak`…) | `DatabaseOperations.adoc` "Modifiers and Fields" | ✅ | KeePassXC's: `title:`/`t:`, `username:`/`user:`/`u:`, `password:`/`p:`, `url:`, `notes:`/`n:`, `attr:`, `attachment:`/`a:`, `group:`/`g:`, `tag:`, `uuid:`, `is:expired`, `is:expired-N`, `is:weak` (the health report's, honouring "exclude from reports"), `has:totp`; the search box's tooltip lists them |
+| Wildcards, regular expressions, `!` negation, exact `+` | "Wild Card Characters and Logical Operators" | 🟡 | `*`, `-` to leave out and `"quotes"` for spaces; no regular expressions, `!` or `+` yet |
 | Saved searches | tag view (`gui/tag/TagView.cpp`) | ❌ | |
 | Search the recycle bin | | 🟡 | only by opening the bin and searching there |
 
@@ -279,9 +279,8 @@ What people hit first, then what blocks moving from KeePassXC:
 4. ~~**Move groups** and restore deleted groups~~: done
    ([`pass-gaps-2.md`](pass-gaps-2.md) P1).
 5. ~~**Vault settings**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md) P2).
-6. **List and search**: sort (title, user name, modified, created,
-   expiry), more columns, search modifiers (`title:`, `url:`, `tag:`,
-   `is:expired`…), custom fields in search, a tag list in the sidebar.
+6. ~~**List and search**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md) P3);
+   regular expressions later.
 7. **Clone an entry**; delete history items.
 8. **SSH keys on the website** and key generation (roadmap).
 9. **Generator**: passphrases (EFF word list), a standalone generator,

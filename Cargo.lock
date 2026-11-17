@@ -3662,6 +3662,7 @@ dependencies = [
  "hex",
  "keepass",
  "kutup-crypto",
+ "kutup-search",
  "proptest",
  "quick-xml",
  "rsa",

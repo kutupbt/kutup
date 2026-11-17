@@ -209,6 +209,26 @@ impl Vault {
             .ok_or_else(|| js_error("no such entry"))
     }
 
+    /// The ids of the entries matching `query` (`kutup_pass::search`: field
+    /// words, `-`, quotes, `*`), in no particular order. `weakIds`: the
+    /// entries the page's health report counts as weak, for `is:weak`.
+    pub fn search(
+        &self,
+        query: &str,
+        weak_ids: Vec<String>,
+        now_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        let weak = weak_ids
+            .iter()
+            .filter_map(|id| uuid::Uuid::parse_str(id).ok().map(EntryId::from))
+            .collect();
+        let context = kutup_pass::search::Context {
+            weak: &weak,
+            now: time(now_ms)?,
+        };
+        to_js(&kutup_pass::search::search(&self.db, query, &context))
+    }
+
     /// An entry's earlier states, oldest first.
     pub fn history(&self, entry_id: &str) -> Result<JsValue, JsValue> {
         to_js(&view::history(&self.db, self.entry(entry_id)?))

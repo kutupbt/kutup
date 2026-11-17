@@ -100,6 +100,7 @@ export function EntryEditor({
   onOpenChange,
   entry,
   defaultUserName,
+  knownTags = [],
   onSave,
 }: {
   open: boolean
@@ -107,6 +108,8 @@ export function EntryEditor({
   /** The entry edited; `null` makes a new one. */
   entry: EntryView | null
   defaultUserName: string
+  /** The vault's tags, offered as suggestions. */
+  knownTags?: string[]
   onSave: (input: EntryInput) => Promise<void>
 }) {
   const { t } = useTranslation()
@@ -233,6 +236,19 @@ export function EntryEditor({
           <Field label={t('entry.tags')} description={t('entry.tagsDescription')}>
             {(field) => <Input {...field} value={draft.tags} onChange={(e) => set({ tags: e.target.value })} />}
           </Field>
+          {(() => {
+            const present = new Set(draft.tags.split(',').map((tag) => tag.trim()).filter(Boolean))
+            const offered = knownTags.filter((tag) => !present.has(tag)).slice(0, 12)
+            return offered.length > 0 ? (
+              <div className="-mt-2 flex flex-wrap items-center gap-1" aria-label={t('entry.tagSuggestions')}>
+                {offered.map((tag) => (
+                  <Button key={tag} type="button" variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={() => set({ tags: [...present, tag].join(', ') })}>
+                    + {tag}
+                  </Button>
+                ))}
+              </div>
+            ) : null
+          })()}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <Checkbox id="entry-expires" checked={draft.expires} onCheckedChange={(v) => set({ expires: v === true })} />

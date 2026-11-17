@@ -1,4 +1,4 @@
-import { ArrowLeft, Eye, FileUp, Folder, FolderInput, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, Settings, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
+import { ArrowDownUp, ArrowLeft, Columns3, Eye, FileUp, Folder, FolderInput, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, Settings, ShieldCheck, Tag, Trash, Trash2, Vault } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -10,8 +10,12 @@ import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -31,7 +35,7 @@ import { VaultKeyDialog } from './VaultKeyDialog'
 import { refreshVaultFile, useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
 import { lockVault, useSessionState, useVaultSession } from '../sync/openVaults'
 import type { VaultSession } from '../sync/vaultSession'
-import { fieldValue, type EntryInput, type EntryView, type GroupView, type MergeReport } from '../vault/types'
+import { type EntryInput, type EntryView, type GroupView, type MergeReport } from '../vault/types'
 import { ChangeKeyDialog } from './ChangeKeyDialog'
 import { DeletedGroups } from './DeletedGroups'
 import { EntryDetail } from './EntryDetail'
@@ -45,6 +49,8 @@ import { IconDialog } from './IconDialog'
 import { iconSources } from '../lib/icons'
 import { deletedGroups, groupTargets } from '../lib/groupMoves'
 import { DEFAULT_MINIMUMS, loadKdfMinimums, meetsMinimums } from '../lib/kdf'
+import { COLUMNS, loadPrefs, savePrefs, SORT_KEYS, sortEntries, tagQuery, vaultTags, type ListPrefs, type SortKey } from '../lib/entryList'
+import { securityReport } from '../lib/report'
 import { VaultSettingsDialog, type SettingsTab } from './VaultSettingsDialog'
 import { SyncBadge } from './SyncBadge'
 import { TheirsKeyDialog } from './TheirsKeyDialog'
@@ -68,13 +74,8 @@ export function VaultPage() {
   return <UnlockVault key={vault.file.id} vault={vault} />
 }
 
-function matches(entry: EntryView, needle: string): boolean {
-  if (!needle) return true
-  const hay = [fieldValue(entry, 'Title'), fieldValue(entry, 'UserName'), fieldValue(entry, 'URL'), fieldValue(entry, 'Notes'), ...entry.tags]
-    .join('\n')
-    .toLocaleLowerCase()
-  return hay.includes(needle)
-}
+/** How long typing settles before the vault is searched. */
+const SEARCH_DELAY_MS = 120
 
 function MergeNotice({ report, onDismiss }: { report: MergeReport; onDismiss: () => void }) {
   const { t } = useTranslation()
@@ -135,17 +136,54 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const bin = view.recycleBinId
   const viewingBin = Boolean(bin && groupId === bin)
   const selectedGroup = groupId ? view.groups.find((g) => g.id === groupId) : undefined
-  const needle = query.trim().toLocaleLowerCase()
+  const needle = query.trim()
+  const [prefs, setPrefsState] = useState<ListPrefs>(loadPrefs)
+  const setPrefs = (next: ListPrefs) => {
+    setPrefsState(next)
+    savePrefs(next)
+  }
+  const [wholeVault, setWholeVault] = useState(false)
+  // The vault's own search (kutup_pass::search: fields, -, quotes, *),
+  // asked once typing settles; null while there is no search.
+  const weakIds = useMemo(() => securityReport(view).weak.map((e) => e.id), [view])
+  const [found, setFound] = useState<{ query: string; ids: Set<string> } | null>(null)
+  useEffect(() => {
+    if (!needle) {
+      setFound(null)
+      return
+    }
+    let current = true
+    const timer = setTimeout(() => {
+      void session
+        .vault()
+        .search(needle, weakIds)
+        .then(
+          (ids) => current && setFound({ query: needle, ids: new Set(ids) }),
+          () => current && setFound({ query: needle, ids: new Set() }),
+        )
+    }, SEARCH_DELAY_MS)
+    return () => {
+      current = false
+      clearTimeout(timer)
+    }
+  }, [session, needle, weakIds])
+  const searching = needle !== '' && found?.query !== needle
   const shown = useMemo(() => {
+    const everywhere = wholeVault && needle !== ''
     const inGroup = (entry: EntryView) => {
-      if (!groupId) return !entry.inRecycleBin
       if (viewingBin) return entry.inRecycleBin
+      if (!groupId || everywhere) return !entry.inRecycleBin
       return entry.groupId === groupId
     }
-    return view.entries
-      .filter((e) => inGroup(e) && matches(e, needle))
-      .sort((a, b) => fieldValue(a, 'Title').localeCompare(fieldValue(b, 'Title'), undefined, { sensitivity: 'base', numeric: true }))
-  }, [view.entries, groupId, viewingBin, needle])
+    // The last answer stays until the next one comes (no flicker while typing).
+    const ids = needle && found ? found.ids : null
+    return sortEntries(
+      view.entries.filter((e) => inGroup(e) && (!ids || ids.has(e.id))),
+      prefs.sort,
+      prefs.descending,
+    )
+  }, [view.entries, groupId, viewingBin, needle, found, wholeVault, prefs.sort, prefs.descending])
+  const tags = useMemo(() => vaultTags(view), [view])
   const entry = entryId ? view.entries.find((e) => e.id === entryId) : undefined
   const kept = secrets.data?.some((s) => s.fileId === fileId) ?? false
   const signedIn = useRequiredSession()
@@ -390,6 +428,30 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                 ) : null}
               </li>
             ))}
+            {tags.length > 0 ? (
+              <li className="pt-3">
+                <h2 className="px-2 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t('tags.label')}</h2>
+                <ul className="space-y-0.5">
+                  {tags.map(({ tag, count }) => (
+                    <li key={tag}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          selectGroup(null)
+                          setQuery(tagQuery(tag))
+                        }}
+                        aria-pressed={query === tagQuery(tag)}
+                        className={cn('flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60', query === tagQuery(tag) && 'bg-accent font-medium')}
+                      >
+                        <Tag className="size-4 shrink-0" aria-hidden />
+                        <span className="flex-1 truncate">{tag}</span>
+                        <span className="text-xs text-muted-foreground">{count}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ) : null}
             {bin ? (
               <li className="flex items-center pt-2">
                 <button
@@ -415,8 +477,58 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
             <label className="relative block">
               <span className="sr-only">{t('entries.search')}</span>
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
-              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('entries.search')} className="pl-8" type="search" />
+              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('entries.search')} className="pl-8" type="search" title={t('entries.searchHelp')} aria-busy={searching || undefined} />
             </label>
+            <div className="flex items-center gap-1">
+              {needle && groupId && !viewingBin ? (
+                <Button variant={wholeVault ? 'secondary' : 'ghost'} size="sm" aria-pressed={wholeVault} onClick={() => setWholeVault(!wholeVault)}>
+                  {t('entries.wholeVault')}
+                </Button>
+              ) : null}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="ml-auto" aria-label={t('list.sort')}>
+                    <ArrowDownUp />
+                    {t(`list.by.${prefs.sort}`)}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>{t('list.sort')}</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup value={prefs.sort} onValueChange={(sort) => setPrefs({ ...prefs, sort: sort as SortKey })}>
+                    {SORT_KEYS.map((key) => (
+                      <DropdownMenuRadioItem key={key} value={key}>
+                        {t(`list.by.${key}`)}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuRadioGroup value={prefs.descending ? 'down' : 'up'} onValueChange={(way) => setPrefs({ ...prefs, descending: way === 'down' })}>
+                    <DropdownMenuRadioItem value="up">{t('list.ascending')}</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="down">{t('list.descending')}</DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="size-8" aria-label={t('list.columns')}>
+                    <Columns3 />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>{t('list.columns')}</DropdownMenuLabel>
+                  {COLUMNS.map((column) => (
+                    <DropdownMenuCheckboxItem
+                      key={column}
+                      checked={prefs.columns.includes(column)}
+                      onCheckedChange={(on) => setPrefs({ ...prefs, columns: on ? COLUMNS.filter((c) => c === column || prefs.columns.includes(c)) : prefs.columns.filter((c) => c !== column) })}
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      {t(`list.column.${column}`)}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
             {viewingBin && (shown.length > 0 || binGroups.length > 0) && session.canEdit ? (
               <Button variant="outline" size="sm" className="w-full" onClick={() => setEmptyingBin(true)}>
                 <Trash2 />
@@ -444,11 +556,11 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
           {shown.length === 0 ? (
             binGroups.length > 0 && !needle ? null : (
               <p className="p-4 text-sm text-muted-foreground">
-                {needle ? t('entries.noMatch') : viewingBin ? t('entries.binEmpty') : t('entries.empty', { group: selectedGroup?.name ?? title })}
+                {needle ? (searching ? t('entries.searching') : t('entries.noMatch')) : viewingBin ? t('entries.binEmpty') : t('entries.empty', { group: selectedGroup?.name ?? title })}
               </p>
             )
           ) : (
-            <EntryList key={`${groupId ?? ''}:${needle}`} session={session} view={view} shown={shown} currentId={entryId} viewingBin={viewingBin} pictures={pictures} onOpen={openEntry} />
+            <EntryList key={`${groupId ?? ''}:${needle}`} session={session} view={view} shown={shown} currentId={entryId} viewingBin={viewingBin} pictures={pictures} columns={prefs.columns} onOpen={openEntry} />
           )}
         </section>
         <section className={cn('min-w-0 flex-1', showingReport ? 'hidden' : !entry && 'hidden md:block')}>
@@ -479,6 +591,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
         onOpenChange={(open) => !open && setEditing(null)}
         entry={editing === 'new' ? null : editing}
         defaultUserName={view.defaultUserName}
+        knownTags={tags.map(({ tag }) => tag)}
         onSave={saveEntry}
       />
       <GroupDialog

@@ -16,6 +16,7 @@ pub mod kdbx;
 pub mod kept;
 pub mod merge;
 mod refs;
+pub mod search;
 pub mod ssh;
 pub mod view;
 
