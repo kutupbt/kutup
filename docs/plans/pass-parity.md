@@ -26,7 +26,7 @@ but offers no way to see or change it.
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| The database (vault) | 26 | 1 | 13 |
+| The database (vault) | 29 | 1 | 10 |
 | Groups (folders) | 7 | 1 | 4 |
 | Entries | 10 | 6 | 6 |
 | Bulk actions and the entry list | 11 | 1 | 3 |
@@ -37,7 +37,7 @@ but offers no way to see or change it.
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **81** | **22** | **52** |
+| **All** | **84** | **22** | **49** |
 
 ## The database (vault)
 
@@ -72,13 +72,13 @@ but offers no way to see or change it.
 | Autosave, backup before save | Settings → Saving | ✅ | every edit saves at once as a new Drive version (`sync/vaultSession.ts`); Drive's versions are the backups |
 | Merge another database into this one | Database → Merge from database | ❌ | versions of the **same** vault merge by themselves (below); there is no "merge this other `.kdbx` in" |
 | Import CSV (column mapping) | `ImportExport.adoc`, CSV wizard | ✅ | `features/ImportDialog.tsx`, `crates/kutup-pass/src/import.rs`: KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome/Edge/Brave, Firefox, Safari, or any CSV with named columns, into a new group of an open vault; preview first (spec 150) |
-| Import 1Password (1PUX, OPVault) | `OPUXReader.cpp`, `OpVaultReader.cpp` | 🟡 | 1Password's CSV only |
-| Import Bitwarden JSON | `BitwardenReader.cpp` | 🟡 | Bitwarden's CSV only (no attachments, no passkeys) |
-| Import Proton Pass (ZIP/JSON) | `ProtonPassReader.cpp` | 🟡 | Proton Pass's CSV only |
+| Import 1Password (1PUX, OPVault) | `OPUXReader.cpp`, `OpVaultReader.cpp` | 🟡 | 1PUX (logins, sections, one-time codes, files as attachments, vaults as groups; `crates/kutup-pass/src/import_json.rs`) and 1Password's CSV; not OPVault |
+| Import Bitwarden JSON | `BitwardenReader.cpp` | ✅ | the unencrypted JSON: logins, cards, identities, SSH keys, custom fields, folders or collections as groups (as KeePassXC); a password-protected export is refused with its own message; earlier passwords and passkeys are reported, not imported |
+| Import Proton Pass (ZIP/JSON) | `ProtonPassReader.cpp` | ✅ | the ZIP or its `data.json`: logins, cards, Wi-Fi, SSH keys, extra fields, vaults as groups; aliases kept as entries (said so); a PGP-encrypted export is refused |
 | Import KeePass 1 (`.kdb`) | `KeePass1Reader.cpp` | ❌ | |
 | Import KeePass XML | Import → KeePass XML | ❌ | |
 | Export KDBX (the file itself) | Save a copy | ✅ | the vault list's menu, "Download .kdbx", also while locked: Drive's layer opened, the KeePass file as it is; the key never in or beside it (said so), and where to see a generated one |
-| Export CSV | `CsvExporter.cpp` | ❌ | |
+| Export CSV | `CsvExporter.cpp` | ✅ | the vault's menu → Export (`ExportDialog.tsx`, `crates/kutup-pass/src/export.rs`): KeePassXC's columns, made in the worker and only downloaded, after the account's password and a warning; the recycle bin left out (KeePassXC includes it) |
 | Export XML | `KdbxXmlWriter.cpp` | ❌ | |
 | Export HTML (paper backup) | `HtmlExporter.cpp` | ❌ | |
 | Auto-open other databases (AutoOpen group) | `DatabaseOperations.adoc` | ❌ | kept; Pass lists every vault anyway |
@@ -289,8 +289,9 @@ What people hit first, then what blocks moving from KeePassXC:
    (and in the report, which should also honour "exclude from reports").
 10. **TOTP**: a setup form (digits, period, algorithm), Steam codes, show
     the QR code.
-11. **Export**: CSV and KeePass XML (with the warnings KeePassXC gives);
-    import KeePass XML, Bitwarden JSON, 1PUX and Proton Pass ZIP.
+11. **Export**: CSV, Bitwarden JSON, 1PUX and Proton Pass ZIP done
+    ([`pass-gaps-2.md`](pass-gaps-2.md) P5a); KeePass XML export and
+    import next (P5b, a patch to the vendored crate).
 12. **References and placeholders**: resolve `{REF:…}` when showing and
     copying, at least `{REF:U/P@I:…}`; the common placeholders.
 13. **Built-in KeePass icons** and colours, group notes.

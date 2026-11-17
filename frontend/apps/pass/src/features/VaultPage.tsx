@@ -1,4 +1,4 @@
-import { ArrowDownUp, ArrowLeft, Columns3, Eye, FileUp, Folder, FolderInput, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, Settings, ShieldCheck, Tag, Trash, Trash2, Vault } from 'lucide-react'
+import { ArrowDownUp, ArrowLeft, Columns3, Eye, FileDown, FileUp, Folder, FolderInput, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, Settings, ShieldCheck, Tag, Trash, Trash2, Vault } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -38,6 +38,7 @@ import type { VaultSession } from '../sync/vaultSession'
 import { type EntryInput, type EntryView, type GroupView, type MergeReport } from '../vault/types'
 import { ChangeKeyDialog } from './ChangeKeyDialog'
 import { DeletedGroups } from './DeletedGroups'
+import { ExportDialog } from './ExportDialog'
 import { EntryDetail } from './EntryDetail'
 import { EntryEditor } from './EntryEditor'
 import { EntryList } from './EntryList'
@@ -116,6 +117,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const [changingKey, setChangingKey] = useState(false)
   const [forgettingGenerated, setForgettingGenerated] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
+  const [exporting, setExporting] = useState(false)
   const minimums = useQuery({ queryKey: ['pass', 'kdf-minimums'], queryFn: loadKdfMinimums, staleTime: Infinity }).data ?? DEFAULT_MINIMUMS
 
   // Another device's save is taken in when the tab comes back, and now and then.
@@ -290,6 +292,10 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                   {t('import.open')}
                 </DropdownMenuItem>
               ) : null}
+              <DropdownMenuItem onSelect={() => setExporting(true)}>
+                <FileDown />
+                {t('export.open')}
+              </DropdownMenuItem>
               {session.canEdit && vault ? (
                 <DropdownMenuItem onSelect={() => setChangingKey(true)}>
                   <KeyRound />
@@ -634,6 +640,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
           await session.apply({ op: 'updateVault', name, description: view.description, defaultUserName: view.defaultUserName })
         }}
       />
+      <ExportDialog session={session} title={title} open={exporting} onOpenChange={setExporting} />
       <VaultSettingsDialog
         open={settingsTab !== null}
         onOpenChange={(open) => !open && setSettingsTab(null)}

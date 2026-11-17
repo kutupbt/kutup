@@ -13,6 +13,7 @@ type Calls =
   | { call: 'attachment'; handle: number; entryId: string; name: string }
   | { call: 'otp'; handle: number; entryId: string; now: number }
   | { call: 'save'; handle: number }
+  | { call: 'exportCsv'; handle: number }
   | {
       call: 'merge'
       handle: number

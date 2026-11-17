@@ -341,7 +341,7 @@
   "import": {
     "open": "Import from another app…",
     "title": "Import passwords",
-    "description": "From another password manager's CSV export: KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome, Edge, Brave, Firefox, Safari or Apple Passwords, or any CSV with named columns.",
+    "description": "From another password manager's export: Bitwarden's JSON, 1Password's 1PUX, Proton Pass's ZIP, or a CSV from KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome, Edge, Brave, Firefox, Safari or Apple Passwords, or any CSV with named columns.",
     "chooseFile": "Choose export file",
     "otherFile": "Choose another file",
     "format": "Format",
@@ -372,8 +372,9 @@
     "deleteExport": "An export file holds your passwords unencrypted. Delete it (and empty the trash) once they are imported.",
     "errors": {
       "empty": "The file has no entries.",
-      "tooLarge": "The file is larger than 20 MB.",
-      "unreadable": "The file could not be read as CSV. Export it again as UTF-8. {{detail}}",
+      "tooLarge": "The file is too large: a CSV is at most 20 MB, other exports 64 MB.",
+      "unreadable": "The file could not be read. Export it again (as UTF-8, for a CSV). {{detail}}",
+      "encrypted": "The export is protected with a password, which Kutup Pass can't open. Export it again without one, import it, then delete the file.",
       "unknownFormat": "These columns do not look like a password export. Pick its format, or name the columns (Title, Username, Password, URL, Notes).",
       "missingColumns": "The file lacks columns this format has: {{detail}}.",
       "tooMany": "The file holds more than 50,000 entries."
@@ -543,6 +544,21 @@
     "submit": "Clone",
     "done_one": "Entry cloned",
     "done_other": "{{count}} entries cloned"
+  },
+  "export": {
+    "open": "Export…",
+    "title": "Export the vault",
+    "description": "A CSV file in KeePassXC's columns, which most password managers read. Entries in the recycle bin are left out.",
+    "warningTitle": "The file is not encrypted",
+    "warning": "Anyone who gets the file can read every password in it. Keep it off shared drives and email, and delete it once you no longer need it.",
+    "password": "Your Kutup password",
+    "passwordHint": "Asked before any export, so nobody at an unlocked screen can take every password at once.",
+    "submit": "Export CSV",
+    "done": "Vault exported",
+    "wrongPassword": "That is not your Kutup password.",
+    "slowDown": "Too many attempts from here. Wait a minute, then try again.",
+    "locked": "Too many wrong passwords: your account is locked for a while, as at sign-in.",
+    "failed": "The export could not be made. Check your connection and try again."
   },
   "bulk": {
     "toolbar": "Selected entries",

@@ -3659,6 +3659,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "csv",
+ "flate2",
  "hex",
  "keepass",
  "kutup-crypto",

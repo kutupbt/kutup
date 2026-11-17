@@ -176,9 +176,10 @@ pub enum Op {
         ids: Vec<String>,
     },
     EmptyRecycleBin,
-    /// Imports another password manager's CSV export (`import::parse`)
-    /// into a new group `group_name` under the top group, its folders as
-    /// groups inside. All or nothing.
+    /// Imports another password manager's export (`import::parse`: CSV,
+    /// Bitwarden JSON, 1Password 1PUX, Proton Pass) into a new group
+    /// `group_name` under the top group, its folders as groups inside, with
+    /// the files a format carries. All or nothing.
     ImportCsv {
         /// The file, base64.
         data: String,
@@ -1536,7 +1537,26 @@ fn import_csv(
             .as_deref()
             .and_then(|id| uuid::Uuid::parse_str(id).ok())
         {
-            if let Some(made) = db.entries.get_mut(&EntryId::from(id)) {
+            let id = EntryId::from(id);
+            // The files a format carried (1PUX), each name once.
+            for file in &entry.attachments {
+                let attachment =
+                    refs::import_attachment(db, &Value::unprotected(file.data.clone()));
+                if let Some(made) = db.entries.get_mut(&id) {
+                    let base = match clip(&file.name) {
+                        name if name.is_empty() => "attachment".to_owned(),
+                        name => name,
+                    };
+                    let mut name = base.clone();
+                    let mut n = 2;
+                    while made.attachments.contains_key(&name) {
+                        name = format!("{base} ({n})");
+                        n += 1;
+                    }
+                    made.attachments.insert(name, attachment);
+                }
+            }
+            if let Some(made) = db.entries.get_mut(&id) {
                 if let Some(created) = entry.created {
                     made.times.creation = Some(created);
                 }

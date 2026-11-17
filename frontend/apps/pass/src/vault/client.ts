@@ -114,6 +114,11 @@ export class VaultHandle {
     return call({ call: 'search', handle: this.handle, query, weakIds, now })
   }
 
+  /** The vault as CSV in KeePassXC's columns, in the clear; the recycle bin left out. */
+  exportCsv(): Promise<string> {
+    return call({ call: 'exportCsv', handle: this.handle })
+  }
+
   history(entryId: string): Promise<EntryView[]> {
     return call({ call: 'history', handle: this.handle, entryId })
   }

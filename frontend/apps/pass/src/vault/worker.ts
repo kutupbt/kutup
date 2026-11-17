@@ -22,6 +22,7 @@ interface WasmVault {
   apply(op: unknown, nowMs: number): unknown
   history(entryId: string): unknown
   search(query: string, weakIds: string[], nowMs: number): unknown
+  exportCsv(): string
   attachment(entryId: string, name: string): Uint8Array
   otp(entryId: string, nowMs: number): unknown
   save(): Uint8Array
@@ -93,6 +94,8 @@ async function run(request: Request): Promise<unknown> {
       return vault(request.handle).apply(request.op, request.now)
     case 'history':
       return vault(request.handle).history(request.entryId)
+    case 'exportCsv':
+      return vault(request.handle).exportCsv()
     case 'search':
       return vault(request.handle).search(request.query, request.weakIds, request.now)
     case 'attachment':

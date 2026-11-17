@@ -229,6 +229,13 @@ impl Vault {
         to_js(&kutup_pass::search::search(&self.db, query, &context))
     }
 
+    /// The vault as CSV in KeePassXC's columns, in the clear (the page asks
+    /// for the account's password first); the recycle bin left out.
+    #[wasm_bindgen(js_name = exportCsv)]
+    pub fn export_csv(&self) -> String {
+        kutup_pass::export::csv(&self.db)
+    }
+
     /// An entry's earlier states, oldest first.
     pub fn history(&self, entry_id: &str) -> Result<JsValue, JsValue> {
         to_js(&view::history(&self.db, self.entry(entry_id)?))
@@ -636,6 +643,7 @@ pub fn import_preview(data: &[u8], provider: Option<String>) -> Result<JsValue, 
             let (code, detail) = match &error {
                 ImportError::Empty => ("empty", String::new()),
                 ImportError::TooLarge => ("tooLarge", String::new()),
+                ImportError::Encrypted => ("encrypted", String::new()),
                 ImportError::Unreadable(why) => ("unreadable", why.clone()),
                 ImportError::UnknownFormat => ("unknownFormat", String::new()),
                 ImportError::MissingColumns(_, columns) => ("missingColumns", columns.clone()),

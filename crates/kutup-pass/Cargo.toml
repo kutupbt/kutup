@@ -28,6 +28,8 @@ quick-xml = "0.42"
 hex = "0.4"
 # Other password managers' exports (import.rs).
 csv = "1"
+# 1Password's and Proton Pass's ZIP exports (zip.rs); already in the build through `keepass`.
+flate2 = "1"
 serde_json.workspace = true
 signature = "2"
 ssh-encoding = { version = "0.2", features = ["alloc"] }

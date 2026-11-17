@@ -293,3 +293,88 @@ fn an_import_lands_in_its_own_group_and_all_or_nothing() {
     .is_err());
     assert_eq!(db, before);
 }
+
+#[test]
+fn a_csv_export_reads_back_as_keepassxc() {
+    use chrono::NaiveDate;
+    use kutup_pass::edit::{apply, new_vault, EntryInput, Op};
+    use kutup_pass::view::{self, FieldView};
+    let now = NaiveDate::from_ymd_opt(2026, 11, 17)
+        .unwrap()
+        .and_hms_opt(9, 0, 0)
+        .unwrap();
+    let mut db = new_vault("Kişisel", now).unwrap();
+    let root = view::view(&db).root_group_id;
+    let work = apply(
+        &mut db,
+        &Op::CreateGroup {
+            parent_id: root.clone(),
+            name: "İş".into(),
+        },
+        now,
+    )
+    .unwrap()
+    .id
+    .unwrap();
+    let field = |key: &str, value: &str| FieldView {
+        key: key.into(),
+        value: value.into(),
+        protected: key == "Password",
+    };
+    for (group, title, notes) in [
+        (&work, "Banka \"Ana\"", "satır 1\nsatır 2"),
+        (&root, "Posta", ""),
+    ] {
+        apply(
+            &mut db,
+            &Op::CreateEntry {
+                group_id: group.clone(),
+                entry: EntryInput {
+                    fields: vec![
+                        field("Title", title),
+                        field("UserName", "ayşe"),
+                        field("Password", "p,1"),
+                        field("URL", "https://x.example"),
+                        field("Notes", notes),
+                    ],
+                    ..EntryInput::default()
+                },
+            },
+            now,
+        )
+        .unwrap();
+    }
+    // A deleted entry stays out of the file.
+    let gone = apply(
+        &mut db,
+        &Op::CreateEntry {
+            group_id: root.clone(),
+            entry: EntryInput {
+                fields: vec![field("Title", "Silinen")],
+                ..EntryInput::default()
+            },
+        },
+        now,
+    )
+    .unwrap()
+    .id
+    .unwrap();
+    apply(&mut db, &Op::DeleteEntry { id: gone }, now).unwrap();
+
+    let csv = kutup_pass::export::csv(&db);
+    assert!(csv.starts_with("\"Group\",\"Title\",\"Username\",\"Password\",\"URL\",\"Notes\",\"TOTP\",\"Icon\",\"Last Modified\",\"Created\"\n"));
+    assert!(!csv.contains("Silinen"));
+    let parsed = kutup_pass::import::parse(csv.as_bytes(), None).unwrap();
+    assert_eq!(parsed.provider, kutup_pass::import::Provider::KeePassXc);
+    assert_eq!(parsed.entries.len(), 2);
+    let bank = parsed
+        .entries
+        .iter()
+        .find(|e| e.title == "Banka \"Ana\"")
+        .unwrap();
+    assert_eq!(bank.group, ["İş"]);
+    assert_eq!(bank.password, "p,1");
+    assert_eq!(bank.notes, "satır 1\nsatır 2");
+    let mail = parsed.entries.iter().find(|e| e.title == "Posta").unwrap();
+    assert!(mail.group.is_empty());
+}
