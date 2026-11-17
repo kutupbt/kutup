@@ -333,3 +333,15 @@ the whole scope (the ledger may hold 100,000 entities):
 
 This replaces the sealed blob first proposed (purpose 33 was never taken):
 a blob of a full ledger (about 60 MB) would be resealed on every write.
+
+### Built: one sync loop in chat-core (2026-11-17)
+
+`Engine::sync_account_records_if_due` (`kutup-chat-core/src/records_sync.rs`)
+replaces the group list's and the contact list's own periodic looks and the
+pins flush they carried: one read mark for the account's lists (every five
+minutes on a running device; a failed read is tried at the next look), then
+each list's due writes, then the group-send endorsements as before. When an
+entry is due stays each list's own rule (a group entry's random delay, a
+block's immediate write on the web): those are what a server could learn
+from timing, not loop plumbing. The web calls it from its account-lists
+timer and its receive pass.
