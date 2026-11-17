@@ -1,6 +1,6 @@
 # Pass: gaps 9, 10, 12, 13 and 14
 
-Status: plan for review (third session, 2026-11-17). It covers items 9, 10,
+Status: approved by the main session 2026-11-17 (see "Decisions"). Plan by the third session. It covers items 9, 10,
 12, 13 and 14 of [`pass-parity.md`](pass-parity.md)'s "Gaps in priority
 order", after [`pass-gaps-2.md`](pass-gaps-2.md). It stacks on
 `feat/pass-xml`. There is no schema change; quick checks only.
@@ -162,3 +162,18 @@ I'll say before anything reaches the 830,000 budget.
     keepassxc-cli does.
   - Alternative: a clipboard crate (`arboard`), a new dependency with X11
     and Wayland bindings.
+
+## Decisions (the main session, 2026-11-17)
+
+- **Q-1:** the zxcvbn JS package, lazily loaded.
+- **Q-2:** passphrases in TypeScript beside the existing generator. All
+  randomness comes from `@kutup/crypto/random`, never `Math.random`; a lint
+  rule enforces it. Generation is not a persistent format, so the
+  Rust/WASM rule doesn't apply.
+- **Q-3:** the built-in icons are drawn with lucide, keeping the icon number.
+- **Q-4:** the platform's clipboard tools. The clear delay is an option
+  (`--clear-after`, default 10 s), and the CLI says plainly when no
+  clipboard tool is found.
+- **Also:** the EFF list is served from Kutup's own origin (the CSP allows
+  no third-party fetch), with its CC BY credit on the app's about or
+  licences page.
