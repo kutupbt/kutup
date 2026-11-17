@@ -585,6 +585,22 @@
     "formats": {"csv": "CSV", "csvHint": "KeePassXC sütunları; çoğu parola yöneticisi okur. Geçmiş, ekler ve simgeler dahil değildir.", "xml": "KeePass XML", "xmlHint": "Her şey: geçmiş, ekler, simgeler ve özel alanlar. KeePass ve Kutup Pass geri okur."},
     "submitXml": "KeePass XML olarak dışa aktar"
   },
+  "totp": {
+    "open": "Tek kullanımlık kodları ayarla",
+    "title": "Tek kullanımlık kodlar",
+    "description": "Sitenin verdiği gizli anahtar (QR kodunun altındaki metin) ve site belirtiyorsa ayarları.",
+    "secret": "Gizli anahtar",
+    "secretHint": "A–Z harfleri ve 2–7 rakamları; boşluklar önemli değil.",
+    "digits": "Basamak",
+    "steam": "Steam Guard",
+    "period": "Her (saniye)",
+    "algorithm": "Algoritma",
+    "badSecret": "Bu gizli anahtar en az 16 karakterlik base32 metni değil.",
+    "qrTitle": "QR kodunu göster",
+    "qrDescription": "Aynı kodları orada da üretmek için başka bir doğrulayıcı uygulamayla tarayın.",
+    "qrWarning": "Bu kodu gören ya da fotoğrafını çeken herkes tek kullanımlık kodlarınızı üretebilir. Kimsenin bakmadığı bir yerde gösterin.",
+    "qrShow": "QR kodunu göster"
+  },
   "bulk": {
     "toolbar": "Seçili kayıtlar",
     "selected_one": "{{count}} seçili",

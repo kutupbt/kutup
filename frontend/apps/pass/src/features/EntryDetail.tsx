@@ -1,4 +1,4 @@
-import { ArchiveRestore, Copy, CopyPlus, Download, ExternalLink, Eye, EyeOff, FolderInput, History, Paperclip, Pencil, Trash2 } from 'lucide-react'
+import { ArchiveRestore, Copy, CopyPlus, Download, ExternalLink, Eye, EyeOff, FolderInput, History, Paperclip, Pencil, QrCode, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -13,6 +13,7 @@ import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView } from '../vault/types'
 import { CloneDialog } from './CloneDialog'
 import { HistoryDialog } from './HistoryDialog'
+import { TotpQrDialog } from './TotpQrDialog'
 import { SiteIcon } from './SiteIcon'
 import { IconDialog } from './IconDialog'
 import { iconSources } from '../lib/icons'
@@ -53,9 +54,10 @@ function SecretValue({ value, label }: { value: string; label: string }) {
   )
 }
 
-function OtpRow({ session, entryId }: { session: VaultSession; entryId: string }) {
+function OtpRow({ session, entryId, uri }: { session: VaultSession; entryId: string; uri: string | null }) {
   const { t } = useTranslation()
   const [otp, setOtp] = useState<OtpView | null>(null)
+  const [showingQr, setShowingQr] = useState(false)
   useEffect(() => {
     let live = true
     const tick = () => {
@@ -78,9 +80,17 @@ function OtpRow({ session, entryId }: { session: VaultSession; entryId: string }
     <Row
       label={t('detail.otp')}
       actions={
-        <Button variant="ghost" size="icon" onClick={() => void copySecret(otp.code, t('detail.copied', { what: t('detail.otp') }), t('detail.clipboardCleared'), t('detail.clipboardNotCleared'))} aria-label={t('detail.copy', { what: t('detail.otp') })}>
-          <Copy />
-        </Button>
+        <>
+          {uri ? (
+            <Button variant="ghost" size="icon" onClick={() => setShowingQr(true)} aria-label={t('totp.qrTitle')} title={t('totp.qrTitle')}>
+              <QrCode />
+            </Button>
+          ) : null}
+          <Button variant="ghost" size="icon" onClick={() => void copySecret(otp.code, t('detail.copied', { what: t('detail.otp') }), t('detail.clipboardCleared'), t('detail.clipboardNotCleared'))} aria-label={t('detail.copy', { what: t('detail.otp') })}>
+            <Copy />
+          </Button>
+          {uri ? <TotpQrDialog uri={uri} open={showingQr} onOpenChange={setShowingQr} /> : null}
+        </>
       }
     >
       <span className="flex items-center gap-3">
@@ -247,7 +257,7 @@ export function EntryDetail({
             </Row>
           ) : null}
           {password ? <SecretValue value={password} label={t('entry.password')} /> : null}
-          <OtpRow session={session} entryId={entry.id} />
+          <OtpRow session={session} entryId={entry.id} uri={/^otpauth:\/\/totp\//i.test(fieldValue(entry, 'otp')) ? fieldValue(entry, 'otp') : null} />
           {url ? (
             <Row
               label={t('entry.url')}

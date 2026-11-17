@@ -32,12 +32,12 @@ but offers no way to see or change it.
 | Bulk actions and the entry list | 11 | 1 | 3 |
 | Search | 4 | 2 | 1 |
 | Password generator | 6 | 1 | 0 |
-| One-time codes, passkeys, SSH, desktop integration | 5 | 3 | 10 |
+| One-time codes, passkeys, SSH, desktop integration | 9 | 1 | 8 |
 | Health report | 4 | 0 | 3 |
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **93** | **19** | **43** |
+| **All** | **97** | **17** | **41** |
 
 ## The database (vault)
 
@@ -185,12 +185,12 @@ read-only vault has no selection and no dragging.
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
 | TOTP: set up from a secret or `otpauth://` | Entry → TOTP → Set up | ✅ | the editor's "One-time code" field (`lib/otp.ts`): a base32 key (SHA-1, 6 digits, 30 s) or an `otpauth://totp/` URI |
-| TOTP: other digits, periods, algorithms | setup dialog (custom settings) | 🟡 | from a URI only (SHA-1/256/512, any period and digits, `crates/kutup-pass/src/view.rs`); no form |
+| TOTP: other digits, periods, algorithms | setup dialog (custom settings) | ✅ | the field's setup form (`TotpSetupDialog.tsx`): secret, 6/7/8 digits or Steam Guard, 15–300 s, SHA-1/256/512, written as KeePassXC's URI; codes in `crates/kutup-pass/src/otp.rs` (RFC 6238 vectors) |
 | TOTP: live code, copy | TOTP column, Ctrl+T | ✅ | `EntryDetail.tsx` `OtpRow`, seconds left, copy (cleared after 30 s) |
-| TOTP: show a QR code (to move to a phone) | TOTP → Show QR code (`src/qrcode`) | ❌ | |
+| TOTP: show a QR code (to move to a phone) | TOTP → Show QR code (`src/qrcode`) | ✅ | the code's QR button (`TotpQrDialog.tsx`, `qrcode.react`), behind a warning, for `otpauth://` entries |
 | TOTP: read a QR code / Google Authenticator export | (no) | ❌ | not in KeePassXC either; research 19 §5.10 "later" |
-| Steam Guard codes | `encoder=steam` | ❌ | the vendored crate's `TOTP` has no Steam encoder |
-| Legacy TOTP fields (`TOTP Seed`/`TOTP Settings`, `TimeOtp-*`) | read | 🟡 | `otp` field only; KeePass 2's `TimeOtp-*` fields show as custom fields |
+| Steam Guard codes | `encoder=steam` | ✅ | `otp.rs`: five characters of Steam's alphabet, from `encoder=steam` or `30;S`; KeePassXC's vectors from the Steam app |
+| Legacy TOTP fields (`TOTP Seed`/`TOTP Settings`, `TimeOtp-*`) | read | ✅ | `otp.rs` reads KeePassXC's older fields and KeePass 2's `TimeOtp-*` (they still show as custom fields too) |
 | Passkeys: kept and shown | `Passkeys.adoc`, `KPEX_PASSKEY_*` attributes | 🟡 | kept; shown only as raw custom fields (private key hidden) |
 | Passkeys: use, register, import, export | through KeePassXC-Browser; Reports → Passkeys | ❌ | needs an extension or native app (research 19 §5.9) |
 | SSH agent: offer KeeAgent keys | `src/sshagent`, entry SSH Agent tab | ✅ (CLI) | `kutup ssh-agent` (`crates/kutup-cli/src/sshagent`, `crates/kutup-pass/src/ssh.rs`): KeeAgent-compatible entries, approval per use (terminal or desktop dialog), forwarded requests flagged, keys listed while locked, `scripts/verify-pass-ssh.sh` |
@@ -284,11 +284,8 @@ What people hit first, then what blocks moving from KeePassXC:
 7. ~~**Clone an entry**; delete history items~~: done
    ([`pass-gaps-2.md`](pass-gaps-2.md) P4); references in clones wait for item 12.
 8. **SSH keys on the website** and key generation (roadmap).
-9. **Generator**: passphrases (EFF word list), a standalone generator,
-   custom and excluded characters, longer lengths; zxcvbn for strength
-   (and in the report, which should also honour "exclude from reports").
-10. **TOTP**: a setup form (digits, period, algorithm), Steam codes, show
-    the QR code.
+9. ~~**Generator**~~: done ([`pass-gaps-3.md`](pass-gaps-3.md) A1).
+10. ~~**TOTP**~~: done ([`pass-gaps-3.md`](pass-gaps-3.md) A2).
 11. ~~**Export and import**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md)
     P5a, P5b): CSV and KeePass XML out; KeePass XML, Bitwarden JSON, 1PUX
     and Proton Pass in.

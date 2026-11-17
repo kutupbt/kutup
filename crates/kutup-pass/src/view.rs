@@ -419,11 +419,10 @@ pub struct OtpView {
 
 /// The entry's current one-time code, if it has a readable TOTP secret.
 pub fn otp(entry: &Entry, unix_seconds: u64) -> Option<OtpView> {
-    let totp = entry.get_otp().ok()?;
-    let code = totp.value_at(unix_seconds);
+    let settings = crate::otp::settings(entry)?;
     Some(OtpView {
-        code: code.code,
-        period: code.period.as_secs(),
-        remaining: code.valid_for.as_secs(),
+        code: crate::otp::code(&settings, unix_seconds),
+        period: settings.period,
+        remaining: settings.period - unix_seconds % settings.period,
     })
 }

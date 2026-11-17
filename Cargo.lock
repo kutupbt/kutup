@@ -3656,6 +3656,7 @@ dependencies = [
 name = "kutup-pass"
 version = "0.1.0"
 dependencies = [
+ "base32",
  "base64 0.22.1",
  "chrono",
  "csv",
@@ -3675,6 +3676,8 @@ dependencies = [
  "ssh-encoding",
  "ssh-key",
  "thiserror 2.0.18",
+ "totp-lite",
+ "url",
  "uuid",
  "zeroize",
 ]

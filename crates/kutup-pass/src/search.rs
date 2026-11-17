@@ -220,7 +220,7 @@ fn term_holds(db: &Database, entry: &Entry, term: &Term, context: &Context<'_>) 
                 false
             }
         }
-        Field::Has => p == "totp" && entry.get_otp().is_ok(),
+        Field::Has => p == "totp" && crate::otp::settings(entry).is_some(),
     }
 }
 

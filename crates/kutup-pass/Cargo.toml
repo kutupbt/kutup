@@ -30,6 +30,10 @@ hex = "0.4"
 csv = "1"
 # 1Password's and Proton Pass's ZIP exports (zip.rs); already in the build through `keepass`.
 flate2 = "1"
+# One-time codes (otp.rs): already in the build through `keepass`'s totp feature.
+totp-lite = "2.0"
+base32 = "0.5"
+url = "2"
 serde_json.workspace = true
 signature = "2"
 ssh-encoding = { version = "0.2", features = ["alloc"] }

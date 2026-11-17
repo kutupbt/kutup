@@ -18,6 +18,7 @@ mod import_xml;
 pub mod kdbx;
 pub mod kept;
 pub mod merge;
+pub mod otp;
 mod refs;
 pub mod search;
 pub mod ssh;

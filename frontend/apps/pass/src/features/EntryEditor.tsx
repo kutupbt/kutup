@@ -1,4 +1,4 @@
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Settings2, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Alert } from '@kutup/ui/components/alert'
@@ -11,6 +11,7 @@ import { Label } from '@kutup/ui/components/label'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Textarea } from '@kutup/ui/components/textarea'
 import { otpFieldValue } from '../lib/otp'
+import { TotpSetupDialog } from './TotpSetupDialog'
 import { strengthOf } from '../lib/generator'
 import type { EntryInput, EntryView, FieldView } from '../vault/types'
 import { fieldValue, STANDARD_FIELDS } from '../vault/types'
@@ -119,6 +120,7 @@ export function EntryEditor({
   const [draft, setDraft] = useState<Draft>(() => draftOf(entry, defaultUserName))
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [settingUpOtp, setSettingUpOtp] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -181,8 +183,16 @@ export function EntryEditor({
             {(field) => <Input {...field} type="url" inputMode="url" value={draft.url} onChange={(e) => set({ url: e.target.value })} placeholder="https://" />}
           </Field>
           <Field label={t('entry.otp')} description={t('entry.otpDescription')}>
-            {(field) => <Input {...field} value={draft.otp} onChange={(e) => set({ otp: e.target.value })} autoComplete="off" spellCheck={false} />}
+            {(field) => (
+              <div className="flex gap-2">
+                <Input {...field} value={draft.otp} onChange={(e) => set({ otp: e.target.value })} autoComplete="off" spellCheck={false} />
+                <Button type="button" variant="outline" size="icon" onClick={() => setSettingUpOtp(true)} aria-label={t('totp.open')} title={t('totp.open')}>
+                  <Settings2 />
+                </Button>
+              </div>
+            )}
           </Field>
+          <TotpSetupDialog open={settingUpOtp} onOpenChange={setSettingUpOtp} value={draft.otp} title={draft.title} userName={draft.userName} onSave={(uri) => set({ otp: uri })} />
           <Field label={t('entry.notes')}>
             {(field) => <Textarea {...field} rows={4} value={draft.notes} onChange={(e) => set({ notes: e.target.value })} />}
           </Field>

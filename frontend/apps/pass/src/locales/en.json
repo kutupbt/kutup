@@ -585,6 +585,22 @@
     "formats": {"csv": "CSV", "csvHint": "KeePassXC's columns; most password managers read it. No history, attachments or icons.", "xml": "KeePass XML", "xmlHint": "Everything: history, attachments, icons and custom fields. KeePass and Kutup Pass read it back."},
     "submitXml": "Export KeePass XML"
   },
+  "totp": {
+    "open": "Set up one-time codes",
+    "title": "One-time codes",
+    "description": "The secret the site gave you (as text, under its QR code), and its settings if the site says so.",
+    "secret": "Secret",
+    "secretHint": "Letters A–Z and digits 2–7; spaces don't matter.",
+    "digits": "Digits",
+    "steam": "Steam Guard",
+    "period": "Every (seconds)",
+    "algorithm": "Algorithm",
+    "badSecret": "That secret isn't base32 text of at least 16 characters.",
+    "qrTitle": "Show QR code",
+    "qrDescription": "Scan it with another authenticator app to make the same codes there.",
+    "qrWarning": "Anyone who sees or photographs this code can make your one-time codes. Show it only where nobody is looking.",
+    "qrShow": "Show the QR code"
+  },
   "bulk": {
     "toolbar": "Selected entries",
     "selected_one": "{{count}} selected",
