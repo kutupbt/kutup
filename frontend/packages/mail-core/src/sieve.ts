@@ -260,8 +260,8 @@ class Parser {
     const token = this.peek()
     if (!token) this.fail('the script ends too soon')
     this.at++
-    this.end = token!.to
-    return token!
+    this.end = token.to
+    return token
   }
   private expect(value: string) {
     const token = this.peek()

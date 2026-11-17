@@ -1,6 +1,6 @@
 # Mail: the Sieve editor (mail-parity F4)
 
-Status: proposed (third session, 2026-11-18), for the main session's approval.
+Status: approved 2026-11-18 (Q-1: the text is not kept; Q-2: per filter; Q-3: server Sieve out, roadmap line added). Built on feat/mail-sieve-editor; spec 200 waits for the browser runs.
 
 ## What Proton does
 
