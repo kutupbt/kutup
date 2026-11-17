@@ -175,6 +175,17 @@ KeePassXC's `dbsettings`:
   through `keepass`), bounded per file and in total. KeePass XML (export and
   import) is P5b: the vendored crate's XML is crate-private and needs a
   patch, attachments included.
+- **As built (P5b, 2026-11-17):** `keepass::from_plain_xml` and
+  `to_plain_xml`, added by `scripts/patch-vendored-keepass.py` (after its
+  formatting step, so its anchors match the formatted code) and described in
+  `vendor/keepass/KUTUP.md`; the KDBX paths are unchanged. Export → KeePass
+  XML writes every attachment in Meta/Binaries; the import copies the whole
+  tree with new ids, protects as the file says (and the password always) and
+  reports attachments the file lacks. Tests: a vault round-trips (twice into
+  one vault, no collision), and KeePassXC's `tests/data/NewDatabase.xml`
+  imports (skipped where the reference checkout isn't beside the repository,
+  as the KDBX corpus). The vendored crate's own unit tests don't compile
+  since the earlier `password_hash` patch and aren't run by any gate.
 
 ## Order and numbers
 

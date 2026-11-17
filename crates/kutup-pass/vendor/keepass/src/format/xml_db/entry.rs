@@ -126,6 +126,8 @@ impl Entry {
                 let fval = String::from_utf8_lossy(&fval).to_string();
 
                 crate::db::Value::protected(fval)
+            } else if field.value.protect_in_memory {
+                crate::db::Value::protected(fval)
             } else {
                 crate::db::Value::unprotected(fval)
             };
@@ -191,11 +193,13 @@ impl Entry {
 
                 StringValue {
                     protected: true,
+                    protect_in_memory: false,
                     value: Some(encoded),
                 }
             } else {
                 StringValue {
                     protected: false,
+                    protect_in_memory: false,
                     value: Some(v.as_str().to_string()),
                 }
             };
@@ -285,6 +289,11 @@ pub struct StringValue {
     #[serde(default, rename = "@Protected", with = "cs_bool")]
     protected: bool,
 
+    /// Kutup's copy (vendor/keepass/KUTUP.md): a value in the clear that
+    /// KeePass keeps protected (plain XML exports).
+    #[serde(default, rename = "@ProtectInMemory", with = "cs_bool")]
+    protect_in_memory: bool,
+
     #[serde(
         default,
         rename = "$value",
@@ -294,6 +303,21 @@ pub struct StringValue {
     value: Option<String>,
 }
 
+impl StringValue {
+    /// Kutup's copy: a value written by a plain cipher made readable again,
+    /// marked `ProtectInMemory` (plain XML exports).
+    pub(crate) fn unprotect_plain(&mut self) {
+        if self.protected {
+            let raw = base64_engine::STANDARD
+                .decode(self.value.as_deref().unwrap_or(""))
+                .unwrap_or_default();
+            self.value = Some(String::from_utf8_lossy(&raw).into_owned());
+            self.protected = false;
+            self.protect_in_memory = true;
+        }
+    }
+}
+
 impl Serialize for StringValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -301,7 +325,12 @@ impl Serialize for StringValue {
     {
         use serde::ser::SerializeStruct;
 
-        if self.protected {
+        if self.protect_in_memory && !self.protected {
+            let mut state = serializer.serialize_struct("StringValue", 2)?;
+            state.serialize_field("@ProtectInMemory", "True")?;
+            state.serialize_field("$value", self.value.as_deref().unwrap_or(""))?;
+            state.end()
+        } else if self.protected {
             let mut state = serializer.serialize_struct("StringValue", 2)?;
             state.serialize_field("@Protected", if self.protected { "True" } else { "False" })?;
 

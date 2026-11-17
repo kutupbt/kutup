@@ -23,6 +23,7 @@ interface WasmVault {
   history(entryId: string): unknown
   search(query: string, weakIds: string[], nowMs: number): unknown
   exportCsv(): string
+  exportKeePassXml(): Uint8Array
   attachment(entryId: string, name: string): Uint8Array
   otp(entryId: string, nowMs: number): unknown
   save(): Uint8Array
@@ -96,6 +97,8 @@ async function run(request: Request): Promise<unknown> {
       return vault(request.handle).history(request.entryId)
     case 'exportCsv':
       return vault(request.handle).exportCsv()
+    case 'exportKeePassXml':
+      return vault(request.handle).exportKeePassXml()
     case 'search':
       return vault(request.handle).search(request.query, request.weakIds, request.now)
     case 'attachment':

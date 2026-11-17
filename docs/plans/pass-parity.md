@@ -26,7 +26,7 @@ but offers no way to see or change it.
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| The database (vault) | 29 | 1 | 10 |
+| The database (vault) | 31 | 1 | 8 |
 | Groups (folders) | 7 | 1 | 4 |
 | Entries | 10 | 6 | 6 |
 | Bulk actions and the entry list | 11 | 1 | 3 |
@@ -37,7 +37,7 @@ but offers no way to see or change it.
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **84** | **22** | **49** |
+| **All** | **86** | **22** | **47** |
 
 ## The database (vault)
 
@@ -76,10 +76,10 @@ but offers no way to see or change it.
 | Import Bitwarden JSON | `BitwardenReader.cpp` | ✅ | the unencrypted JSON: logins, cards, identities, SSH keys, custom fields, folders or collections as groups (as KeePassXC); a password-protected export is refused with its own message; earlier passwords and passkeys are reported, not imported |
 | Import Proton Pass (ZIP/JSON) | `ProtonPassReader.cpp` | ✅ | the ZIP or its `data.json`: logins, cards, Wi-Fi, SSH keys, extra fields, vaults as groups; aliases kept as entries (said so); a PGP-encrypted export is refused |
 | Import KeePass 1 (`.kdb`) | `KeePass1Reader.cpp` | ❌ | |
-| Import KeePass XML | Import → KeePass XML | ❌ | |
+| Import KeePass XML | Import → KeePass XML | ✅ | the import dialog (`crates/kutup-pass/src/import_xml.rs`, through the vendored crate's `from_plain_xml`): the whole tree under a new group, with history, attachments (Meta/Binaries, compressed or not), icons and custom data, new ids throughout; values protected as the file's `ProtectInMemory` and MemoryProtection say, the password always; the source's recycle bin left out; attachments a file names but doesn't hold (KeePassXC's own KDBX 4 XML export) reported |
 | Export KDBX (the file itself) | Save a copy | ✅ | the vault list's menu, "Download .kdbx", also while locked: Drive's layer opened, the KeePass file as it is; the key never in or beside it (said so), and where to see a generated one |
 | Export CSV | `CsvExporter.cpp` | ✅ | the vault's menu → Export (`ExportDialog.tsx`, `crates/kutup-pass/src/export.rs`): KeePassXC's columns, made in the worker and only downloaded, after the account's password and a warning; the recycle bin left out (KeePassXC includes it) |
-| Export XML | `KdbxXmlWriter.cpp` | ❌ | |
+| Export XML | `KdbxXmlWriter.cpp` | ✅ | Export → KeePass XML (`to_plain_xml`, a documented patch to the vendored crate): history, icons and custom data, protected values marked `ProtectInMemory`, and every attachment in Meta/Binaries so the file stands alone (KeePassXC's KDBX 4 XML leaves attachments out); the recycle bin left out |
 | Export HTML (paper backup) | `HtmlExporter.cpp` | ❌ | |
 | Auto-open other databases (AutoOpen group) | `DatabaseOperations.adoc` | ❌ | kept; Pass lists every vault anyway |
 | Statistics (counts, sizes, passkeys, TOTP) | Reports → Statistics | ❌ | |
@@ -289,9 +289,9 @@ What people hit first, then what blocks moving from KeePassXC:
    (and in the report, which should also honour "exclude from reports").
 10. **TOTP**: a setup form (digits, period, algorithm), Steam codes, show
     the QR code.
-11. **Export**: CSV, Bitwarden JSON, 1PUX and Proton Pass ZIP done
-    ([`pass-gaps-2.md`](pass-gaps-2.md) P5a); KeePass XML export and
-    import next (P5b, a patch to the vendored crate).
+11. ~~**Export and import**~~: done ([`pass-gaps-2.md`](pass-gaps-2.md)
+    P5a, P5b): CSV and KeePass XML out; KeePass XML, Bitwarden JSON, 1PUX
+    and Proton Pass in.
 12. **References and placeholders**: resolve `{REF:…}` when showing and
     copying, at least `{REF:U/P@I:…}`; the common placeholders.
 13. **Built-in KeePass icons** and colours, group notes.

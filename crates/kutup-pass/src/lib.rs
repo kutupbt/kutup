@@ -14,6 +14,7 @@ pub mod edit;
 pub mod export;
 pub mod import;
 mod import_json;
+mod import_xml;
 pub mod kdbx;
 pub mod kept;
 pub mod merge;

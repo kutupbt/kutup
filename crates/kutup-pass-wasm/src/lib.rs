@@ -236,6 +236,14 @@ impl Vault {
         kutup_pass::export::csv(&self.db)
     }
 
+    /// The vault as an unencrypted KeePass XML file (history, attachments
+    /// and icons included), in the clear (the page asks for the account's
+    /// password first); the recycle bin left out.
+    #[wasm_bindgen(js_name = exportKeePassXml)]
+    pub fn export_keepass_xml(&self) -> Result<Vec<u8>, JsValue> {
+        kutup_pass::export::keepass_xml(&self.db).map_err(js_error)
+    }
+
     /// An entry's earlier states, oldest first.
     pub fn history(&self, entry_id: &str) -> Result<JsValue, JsValue> {
         to_js(&view::history(&self.db, self.entry(entry_id)?))

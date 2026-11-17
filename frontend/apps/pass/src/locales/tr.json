@@ -341,7 +341,7 @@
   "import": {
     "open": "Başka bir uygulamadan içe aktar…",
     "title": "Parolaları içe aktar",
-    "description": "Başka bir parola yöneticisinin dışa aktarımından: Bitwarden JSON, 1Password 1PUX, Proton Pass ZIP ya da KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome, Edge, Brave, Firefox, Safari veya Apple Parolalar CSV'si ya da sütunları adlandırılmış herhangi bir CSV.",
+    "description": "Başka bir parola yöneticisinin dışa aktarımından: KeePass XML (her şeyiyle), Bitwarden JSON, 1Password 1PUX, Proton Pass ZIP ya da KeePassXC, Bitwarden, 1Password, LastPass, Proton Pass, NordPass, Dashlane, Chrome, Edge, Brave, Firefox, Safari veya Apple Parolalar CSV'si ya da sütunları adlandırılmış herhangi bir CSV.",
     "chooseFile": "Dışa aktarım dosyası seç",
     "otherFile": "Başka bir dosya seç",
     "format": "Biçim",
@@ -548,7 +548,7 @@
   "export": {
     "open": "Dışa aktar…",
     "title": "Kasayı dışa aktar",
-    "description": "Çoğu parola yöneticisinin okuduğu, KeePassXC sütunlarında bir CSV dosyası. Geri dönüşüm kutusundaki kayıtlar dahil edilmez.",
+    "description": "Diğer parola yöneticilerinin okuyabildiği bir dosya. Geri dönüşüm kutusundaki kayıtlar dahil edilmez.",
     "warningTitle": "Dosya şifrelenmemiş",
     "warning": "Dosyayı ele geçiren herkes içindeki tüm parolaları okuyabilir. Paylaşılan sürücülerden ve e-postadan uzak tutun, işiniz bitince silin.",
     "password": "Kutup parolanız",
@@ -558,7 +558,10 @@
     "wrongPassword": "Bu sizin Kutup parolanız değil.",
     "slowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin.",
     "locked": "Çok fazla yanlış parola: hesabınız, oturum açmada olduğu gibi bir süre kilitlendi.",
-    "failed": "Dışa aktarım yapılamadı. Bağlantınızı kontrol edip yeniden deneyin."
+    "failed": "Dışa aktarım yapılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
+    "format": "Biçim",
+    "formats": {"csv": "CSV", "csvHint": "KeePassXC sütunları; çoğu parola yöneticisi okur. Geçmiş, ekler ve simgeler dahil değildir.", "xml": "KeePass XML", "xmlHint": "Her şey: geçmiş, ekler, simgeler ve özel alanlar. KeePass ve Kutup Pass geri okur."},
+    "submitXml": "KeePass XML olarak dışa aktar"
   },
   "bulk": {
     "toolbar": "Seçili kayıtlar",

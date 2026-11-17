@@ -9,7 +9,7 @@ makes the database model's internal fields and two id constructors public, so
 their UUIDs, history items keep their attachments), adds one constructor,
 `DatabaseKey::with_password_hash` (the password's part of the composite key,
 SHA-256 of the password, given instead of the password, so a vault opens with
-what Kutup Pass keeps; docs/plans/pass.md, "Vault secrets"), points the README's relative examples link at upstream (the README is the
+what Kutup Pass keeps; docs/plans/pass.md, "Vault secrets"), adds plain KeePass XML, `from_plain_xml` and `to_plain_xml` (an unencrypted XML file as KeePassXC's and KeePass's XML exports write it: protected values in the clear marked `ProtectInMemory="True"`, attachments in Meta/Binaries so the file stands alone; for Kutup Pass's XML import and export, docs/plans/pass-gaps-2.md P5b; the KDBX read and write paths are unchanged), points the README's relative examples link at upstream (the README is the
 crate's rustdoc), then formats the crate
 with the workspace's rustfmt settings so `cargo fmt --all -- --check` passes
 (upstream's own formatting is not consistent). Neither changes behaviour.

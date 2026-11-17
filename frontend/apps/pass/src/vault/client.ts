@@ -119,6 +119,11 @@ export class VaultHandle {
     return call({ call: 'exportCsv', handle: this.handle })
   }
 
+  /** The vault as an unencrypted KeePass XML file (history, attachments, icons); the recycle bin left out. */
+  exportKeePassXml(): Promise<Uint8Array> {
+    return call({ call: 'exportKeePassXml', handle: this.handle })
+  }
+
   history(entryId: string): Promise<EntryView[]> {
     return call({ call: 'history', handle: this.handle, entryId })
   }

@@ -80,3 +80,19 @@ pub fn csv(db: &Database) -> String {
     }
     out
 }
+
+/// The vault as an unencrypted KeePass XML file (as KeePassXC's and
+/// KeePass's XML exports), complete with history, attachments (in
+/// Meta/Binaries), icons and custom data, through the vendored crate's
+/// `to_plain_xml`. The recycle bin is left out, as in the CSV.
+pub fn keepass_xml(db: &Database) -> Result<Vec<u8>, String> {
+    let mut copy = db.clone();
+    if let Some(bin) = crate::view::recycle_bin(&copy) {
+        if let Some(group) = copy.group_mut(bin) {
+            group.remove();
+        }
+        copy.meta.recyclebin_uuid = None;
+    }
+    crate::refs::rebuild(&mut copy);
+    keepass::to_plain_xml(&copy).map_err(|e| e.to_string())
+}

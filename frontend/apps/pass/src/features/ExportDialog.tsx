@@ -7,11 +7,14 @@ import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
 import { PasswordInput } from '@kutup/ui/components/password-input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import type { VaultSession } from '../sync/vaultSession'
 
-/** Saves `text` as a download named `name`; it goes nowhere else. */
-function downloadText(text: string, name: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }))
+type ExportFormat = 'csv' | 'xml'
+
+/** Saves `contents` as a download named `name`; it goes nowhere else. */
+function downloadFile(contents: string | Uint8Array, type: string, name: string) {
+  const url = URL.createObjectURL(new Blob([contents as BlobPart], { type }))
   try {
     const link = document.createElement('a')
     link.href = url
@@ -33,6 +36,7 @@ function downloadText(text: string, name: string) {
  */
 export function ExportDialog({ session, title, open, onOpenChange }: { session: VaultSession; title: string; open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation()
+  const [format, setFormat] = useState<ExportFormat>('csv')
   const [password, setPassword] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -49,8 +53,9 @@ export function ExportDialog({ session, title, open, onOpenChange }: { session: 
         setError(t('export.wrongPassword'))
         return
       }
-      const csv = await session.vault().exportCsv()
-      downloadText(csv, `${(title || 'vault').replace(/[\\/:*?"<>|]/g, '_')}.csv`)
+      const name = (title || 'vault').replace(/[\\/:*?"<>|]/g, '_')
+      if (format === 'xml') downloadFile(await session.vault().exportKeePassXml(), 'application/xml', `${name}.xml`)
+      else downloadFile(await session.vault().exportCsv(), 'text/csv;charset=utf-8', `${name}.csv`)
       toast.success(t('export.done'))
       onOpenChange(false)
     } catch (failure) {
@@ -79,6 +84,22 @@ export function ExportDialog({ session, title, open, onOpenChange }: { session: 
             if (password) void submit()
           }}
         >
+          <Field label={t('export.format')} description={t(`export.formats.${format}Hint`)}>
+            {(field) => (
+              <Select value={format} onValueChange={(value) => setFormat(value as ExportFormat)}>
+                <SelectTrigger id={field.id}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(['csv', 'xml'] as const).map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {t(`export.formats.${value}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </Field>
           <Alert variant="warn" title={t('export.warningTitle')}>
             {t('export.warning')}
           </Alert>
@@ -91,7 +112,7 @@ export function ExportDialog({ session, title, open, onOpenChange }: { session: 
               {t('common.cancel')}
             </Button>
             <Button type="submit" loading={pending} disabled={!password}>
-              {t('export.submit')}
+              {t(format === 'xml' ? 'export.submitXml' : 'export.submit')}
             </Button>
           </DialogFooter>
         </form>

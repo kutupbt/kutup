@@ -14,6 +14,7 @@ type Calls =
   | { call: 'otp'; handle: number; entryId: string; now: number }
   | { call: 'save'; handle: number }
   | { call: 'exportCsv'; handle: number }
+  | { call: 'exportKeePassXml'; handle: number }
   | {
       call: 'merge'
       handle: number

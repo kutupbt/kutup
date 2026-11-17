@@ -39,11 +39,15 @@ pub enum Provider {
     OnePassword1pux,
     /// Proton Pass's export: its ZIP, or the `data.json` in it.
     ProtonPassExport,
+    /// An unencrypted KeePass XML file (KeePassXC's or KeePass's XML export):
+    /// the whole tree comes in (import_xml.rs).
+    KeePassXml,
 }
 
 impl Provider {
     /// Every format, in the order the import dialog offers them.
-    pub const ALL: [Provider; 14] = [
+    pub const ALL: [Provider; 15] = [
+        Provider::KeePassXml,
         Provider::KeePassXc,
         Provider::BitwardenJson,
         Provider::Bitwarden,
@@ -76,6 +80,7 @@ impl Provider {
             Provider::BitwardenJson => "bitwarden-json",
             Provider::OnePassword1pux => "onepassword-1pux",
             Provider::ProtonPassExport => "protonpass-export",
+            Provider::KeePassXml => "keepass-xml",
         }
     }
 
@@ -96,6 +101,7 @@ impl Provider {
             Provider::BitwardenJson => "Bitwarden (JSON)",
             Provider::OnePassword1pux => "1Password (1PUX)",
             Provider::ProtonPassExport => "Proton Pass (ZIP or JSON)",
+            Provider::KeePassXml => "KeePass XML",
         }
     }
 
@@ -120,7 +126,10 @@ impl Provider {
             Provider::Safari => &["title", "url", "username", "password"],
             Provider::Generic => &[],
             // Not CSV: read by their own structure (import_json.rs).
-            Provider::BitwardenJson | Provider::OnePassword1pux | Provider::ProtonPassExport => &[],
+            Provider::BitwardenJson
+            | Provider::OnePassword1pux
+            | Provider::ProtonPassExport
+            | Provider::KeePassXml => &[],
         }
     }
 }
@@ -425,6 +434,12 @@ pub fn parse(bytes: &[u8], provider: Option<Provider>) -> Result<Parsed, ImportE
     }
     if bytes.len() > MAX_ARCHIVE_BYTES {
         return Err(ImportError::TooLarge);
+    }
+    // KeePass XML, named or recognised.
+    if provider == Some(Provider::KeePassXml)
+        || (provider.is_none() && crate::import_xml::detect(bytes))
+    {
+        return crate::import_xml::preview(bytes);
     }
     // JSON and ZIP exports, named or recognised by their structure.
     let structured = match provider {
@@ -919,7 +934,10 @@ fn read_row(provider: Provider, row: &Row, warnings: &mut Vec<String>) -> Read {
             otp = row.get("otpauth").into();
         }
         // Never read as CSV rows (`parse` hands them to import_json).
-        Provider::BitwardenJson | Provider::OnePassword1pux | Provider::ProtonPassExport => {
+        Provider::BitwardenJson
+        | Provider::OnePassword1pux
+        | Provider::ProtonPassExport
+        | Provider::KeePassXml => {
             return Read::Nothing;
         }
         Provider::Generic => {

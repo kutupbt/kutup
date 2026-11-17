@@ -1506,6 +1506,7 @@ fn import_csv(
         None => None,
     };
     let parsed = crate::import::parse(&bytes, provider).map_err(|e| invalid(e.to_string()))?;
+    let whole_tree = parsed.provider == crate::import::Provider::KeePassXml;
     let root = db.root;
     let top = {
         let name = check_name(group_name, "group name")?;
@@ -1516,6 +1517,13 @@ fn import_csv(
         set_all_times(&mut group.times, now);
         group.id
     };
+    if whole_tree {
+        crate::import_xml::copy_into(db, &bytes, top, now).map_err(|e| invalid(e.to_string()))?;
+        return Ok(Applied {
+            id: Some(top.uuid().to_string()),
+            changed: true,
+        });
+    }
     for entry in &parsed.entries {
         let mut group = top;
         for part in &entry.group {
