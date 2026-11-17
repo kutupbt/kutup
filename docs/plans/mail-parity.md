@@ -5,7 +5,7 @@ Mail feature parity in the end"). This is the gap list: every feature of
 Proton Mail's web client, where Kutup stands, and the order to close the
 gaps. Each slice gets its own plan before it is built; keep this list
 current as they land. Last checked against the code: 2026-11-17
-(`wipe/account-records`).
+(`wipe/account-records` with the Mail batch `batch/main-2026-11-09`).
 
 Read from `WebClients` (2026-10-11): the app in `applications/mail`, its
 settings in `applications/account/src/app/containers/mail/routes.tsx`
@@ -54,10 +54,10 @@ reference only where Proton has nothing.
 | Plain text mode, default font and size, text direction | `DraftTypeSelect.tsx`, `FontFaceSelect.tsx`, `TextDirectionSelect.tsx` | ✅ Settings → Appearance → Composer: mode (Normal, Plain text), text direction, Proton's ten fonts and 10–26 px; the composer's More options switches a message to plain text (text/plain alone, kept in its draft) or right to left; the sent HTML carries the font, size and direction (spec 105) |
 | Docked, minimised, maximised composer | `ComposerModeCards.tsx` | ✅ (dimmed when maximised) |
 | Insert and paste images, inline or attached, emoji | `ComposerInsertImageModal.tsx`, `EditorCustomPastePlugin.ts` | ✅ Insert image, paste or drop: asked Inline or Attachment (Proton's); inline images travel as `cid:` parts in `multipart/related`, kept in the draft and shown again when it opens, and are not listed as files; emoji-mart's picker, as Proton's (spec 106) |
-| Signatures per address, display name | `PMSignatureField.tsx`, `IdentitySection.tsx` | ✅ Mail → Settings → Identity and addresses: a display name and rich signature for each enabled address (custom-domain ones too); shared mailboxes later |
+| Signatures per address, display name | `PMSignatureField.tsx`, `IdentitySection.tsx` | ✅ Mail → Settings → Identity and addresses: a display name and rich signature for each enabled address (custom-domain ones too); a shared mailbox's own signature |
 | From picker (addresses, shared mailboxes, aliases) | `SelectSender.tsx` | ✅ every enabled address of the account and shared mailboxes; ❌ aliases (not built) |
 | Contact groups as recipients, drag between To/Cc/Bcc | `AddressesGroupItem.tsx`, `useAddressesInputDrag.ts` | ✅ contact groups among the suggestions ("Contact group · N members"), adding each member's addresses as recipients of their own (Proton keeps one group chip); recipients dragged between To, Cc and Bcc (spec 107) |
-| Pre-send warnings (keys, recipients) | `SendWithWarningsModal.tsx` | 🔶 per-recipient locks, refusals |
+| Pre-send warnings (keys, recipients) | `SendWithWarningsModal.tsx` | ✅ per-recipient locks and refusals; "Send anyway?" for a no-reply recipient, a missing subject, or an attachment the text mentions but the message lacks (spec 173) |
 | Encrypt and sign: per contact, "Sign external messages" | `ContactEmailSettingsModal.tsx`, `ExternalPGPSettingsSection.tsx` | ✅ Contacts → Email settings: Encrypt, Sign, PGP scheme per address; "Sign outside mail" in General |
 | Contact keys: found online and trusted in one table, several per address, history | `ContactKeysTable.tsx`, `ContactPGPSettings.tsx` | ✅ [`contact-keys.md`](contact-keys.md): WKD/Proton/KOO keys, Trust, Untrust, Use for sending, Download, Remove; expired and revoked kept |
 | Per-message Encrypt and Sign toggles in the composer | (none) | ✅ beyond Proton ([`mail-encrypt-sign.md`](mail-encrypt-sign.md)) |
@@ -77,11 +77,11 @@ reference only where Proton has nothing.
 | Inbox, Drafts, Sent, Starred, Archive, Spam, Trash, All mail | `MailSidebarSystemFolders.tsx` | ✅ |
 | Delete for good, empty a folder | `MessagePermanentDeleteModal.tsx` | ✅ delete chosen, "Delete all" in Trash and Spam |
 | Spam and Trash emptied after 30 days | `AutoDeleteSetting.tsx` | ✅ "Auto-delete unwanted messages" (off by default, as Proton), banner with Enable |
-| Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ✅ All mail in the sidebar, "Exclude Spam/Trash from All mail"; ❌ keep moved messages in Sent |
+| Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ✅ All mail in the sidebar, "Exclude Spam/Trash from All mail"; "Keep messages in Sent" in Settings → General |
 | Custom folders (nested), labels | `FoldersSection.tsx` | ✅ F1, names sealed ([`mail-filters.md`](mail-filters.md)) |
 | Filters, "Always move sender's emails", apply to existing | `FiltersSection.tsx` | ✅ F2 |
 | Block, spam, allow lists | `SpamFiltersSection.tsx` | ✅ F3 (allow needs DMARC) |
-| Sieve editor | `AdvancedFilterModal.tsx` | ❌ F4 not built (filters run Kutup's condition JSON with Sieve's matching rules) |
+| Sieve editor | `AdvancedFilterModal.tsx` | 🔶 Sieve import and export ✅ (spec 174): a script read in the browser, the filters Kutup can hold added and what it cannot take named; filters exported as Sieve. ❌ the editor (filters run Kutup's condition JSON with Sieve's matching rules) |
 | Search on subject and addresses | | ✅ |
 | Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ✅ the search box's options: keyword, location (any folder, label or All mail), start and end date (the end day included, the reader's time zone), sender, recipient (To, Cc, Bcc), address (your own and the distribution lists you are in, Kutup's own: Proton lists your addresses only; a shared mailbox's own), has attachments; kept in the address bar (`q`, `from`, `to`, `since`, `until`, `address`, `filter`); Reset; over the readable fields, no body search yet (spec 111) |
 | Body search in the browser (encrypted local index) | `contentSearch/` | ✅ Advanced search → Search message content (Enable asks first; progress, Pause, Resume; one tab builds at a time; out of room: "For messages newer than …"): subjects and text, quotes left out, indexed in this browser by a Rust/WASM word index (Chat's layout, Turkish folding, word starts) over records sealed per account; hits checked by the server against the place and the other criteria; "Results include message text, searched in this browser."; Settings → General: Delete local search data ([plan](mail-body-search.md); spec 113) |
@@ -109,7 +109,7 @@ reference only where Proton has nothing.
 
 | Feature | Proton | Kutup |
 |---|---|---|
-| Unread count in the title | `useMailboxFavicon.ts` | ✅ (favicon count missing) |
+| Unread count in the title | `useMailboxFavicon.ts` | ✅ in the title and the tab icon |
 | Desktop notifications for new mail | `useNewEmailNotification.ts` | ✅ while Mail is open: "New email received", "From: sender - subject" for each new unread message in the Inbox, Starred or a folder with notifications on (snoozed mail coming back too), one "N new messages" past three (Proton groups on Windows only); a click opens it; Settings → General shows the browser's permission, Enable and Send test notification; a banner asks once (`GET /api/mail/notifications`, `notify_at`; spec 112). Your own mailbox only, as Proton |
 | Web push | | ❌ deferred (2026-10-12): Proton's web app has none (its notifications come while a tab is open, as Kutup's desktop notifications do). Chat's web push could carry it later |
 | Daily email summary | `DailyEmailNotificationToggle` | ❌ |
@@ -120,7 +120,7 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Import from Gmail, Outlook, IMAP (Easy Switch) | `activation/` | ❌ |
-| Export, backup | `ImportExportAppSection.tsx` | 🔶 one message as .eml (More actions → Export) and a message's files as a zip; ❌ whole-mailbox export |
+| Export, backup | `ImportExportAppSection.tsx` | ✅ one message as .eml (More actions → Export); a folder, a label or all mail as a zip of .eml files, read and written in the browser (Settings → General → Export, spec 175) |
 | IMAP and SMTP for desktop clients (Bridge), SMTP tokens | `ProtonMailBridgeSection.tsx`, `SMTPSubmissionSection.tsx` | ❌ (a local bridge, as Proton's, keeps E2EE) |
 | Mobile apps | | ➖ native apps' plans |
 | Offline cache | (none; local search index only) | ❌ ([`browser-storage`](../research/16-browser-storage-architecture.md)) |
@@ -156,8 +156,8 @@ except the rows above still marked ❌ or 🔶.
    (password-protected mail to outside people dropped, 2026-10-12).
 7. **P6 search and notifications:** advanced search, body search in the
    browser, desktop notifications and web push.
-8. **P7 moving in and out:** import (IMAP, Gmail, Outlook), whole-mailbox
-   export, a bridge for desktop clients. Forwarding is done.
+8. **P7 moving in and out:** import (IMAP, Gmail, Outlook), a bridge for
+   desktop clients. Forwarding and export are done.
 9. **P8 organisation:** categories, newsletter view, key transparency
    (Phase E for domains). Several addresses, custom domains and catch-all
    are done.
