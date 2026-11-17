@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/apps'
 
 // Mail groups (docs/plans/mail-groups.md): an administrator makes a shared

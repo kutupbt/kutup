@@ -11,6 +11,7 @@ const base: MapConfig = {
       kind: 'vector',
       url: 'https://tiles.openfreemap.org/styles/liberty',
       proxyUrl: '/api/maps/proxy/openfreemap/styles/liberty',
+      direct: true,
       attribution: 'OpenFreeMap',
     },
     {
@@ -19,6 +20,7 @@ const base: MapConfig = {
       kind: 'raster',
       url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
       proxyUrl: '/api/maps/proxy/openstreetmap/{z}/{x}/{y}.png',
+      direct: true,
       attribution: '© OpenStreetMap contributors',
     },
   ],
@@ -45,14 +47,27 @@ describe('effectiveMap', () => {
     expect(effectiveMap({ ...direct, proxy: 'enforced' }, 'https://x')!.viaProxy).toBe(true)
   })
 
+  it('keeps a provider browsers may not load directly on the relay', () => {
+    const relayOnly = {
+      ...base,
+      providers: base.providers.map((p) => ({ ...p, direct: false })),
+      preferences: { ...base.preferences, viaProxy: false },
+    }
+    const map = effectiveMap(relayOnly, 'https://x')!
+    expect(map.viaProxy).toBe(true)
+    expect(map.url).toBe('https://x/api/maps/proxy/openstreetmap/{z}/{x}/{y}.png')
+  })
+
   it('falls back to the first provider when the chosen one is no longer offered', () => {
     const map = effectiveMap({ ...base, preferences: { ...base.preferences, provider: 'custom' } }, 'https://x')!
     expect(map.provider.id).toBe('openfreemap')
   })
 
   it('reads the relay mode', () => {
-    expect(usesRelay('off', true)).toBe(false)
-    expect(usesRelay('available', false)).toBe(false)
-    expect(usesRelay('enforced', false)).toBe(true)
+    const direct = { direct: true, proxyUrl: '/api/maps/proxy/x' }
+    expect(usesRelay('off', true, { ...direct, proxyUrl: null })).toBe(false)
+    expect(usesRelay('available', false, direct)).toBe(false)
+    expect(usesRelay('available', false, { ...direct, direct: false })).toBe(true)
+    expect(usesRelay('enforced', false, direct)).toBe(true)
   })
 })

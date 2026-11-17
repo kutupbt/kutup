@@ -3,7 +3,7 @@
 // (`docker compose --profile sfu`), so these skip on a stack without one.
 
 import { readFileSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openChats, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 

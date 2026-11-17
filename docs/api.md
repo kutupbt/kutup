@@ -4086,6 +4086,32 @@ Returns `410 Gone` if the share has expired, `403` if the file does not belong t
 
 ---
 
+### POST /api/csp-report
+
+A browser's report of a web app page breaking its Content-Security-Policy,
+enforced or report-only ([`content-security-policy.md`](content-security-policy.md)).
+The apps' policies name it in `report-uri` and, through `Reporting-Endpoints`,
+`report-to kutup-csp`.
+
+**Auth:** None. At most 64 KiB; 60 a minute per address
+(`RATE_LIMIT_CSP_REPORTS_PER_MIN`).
+
+**Request body:** `application/csp-report` (`{"csp-report": {"document-uri",
+"effective-directive", "blocked-uri", "disposition", …}}`) or
+`application/reports+json` (an array of Reporting API reports; only
+`csp-violation` ones are read, at most 20 a body).
+
+The server logs each at warn level with only the page's host, the directive,
+the blocked resource's origin (or its kind: `inline`, `eval`, `data`, `blob`)
+and the disposition; never a path or a query. Nothing is stored.
+
+**Response:** `204 No Content` · `413` too large · `415` another content type ·
+`429` too many.
+
+Every `/api/` response carries `Content-Security-Policy: default-src 'none';
+frame-ancestors 'none'` unless it sets its own, and `/api/` on the editor
+sandbox's host answers `404`.
+
 ### POST /api/share/:token/report
 
 Report a public link to the server's administrators. Anyone may, without an

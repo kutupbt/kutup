@@ -3,7 +3,7 @@
 // lock and never lets go or says it is alive, as a frozen tab does; her other
 // tab must take it over and keep working, instead of waiting for ever.
 
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { apiUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 

@@ -147,11 +147,10 @@ goes beyond Signal parity.
   identifying User-Agent, no bulk downloads, respect caching. The proxy
   sends one identifying User-Agent per server and caches; the admin page
   links the policy.
-- Content Security Policy: each app allows only the providers the admin
-  enabled (and its own origin for the proxy), and none when the relay is
-  enforced. This lands with the per-origin CSP for account, Drive and Chat
-  in phase 5 of docs/plans/multi-app-web-rewrite.md; until then "always"
-  is what the apps do, not what the browser enforces.
+- Content Security Policy: the apps allow their own origin (the relay) and
+  only the provider origins in `KUTUP_MAP_DIRECT_ORIGINS`; the server offers
+  direct loading only for those
+  ([`../content-security-policy.md`](../content-security-policy.md)).
 
 ## Slices
 

@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { ADMIN_PASSWORD, ADMIN_USERNAME, appUrl, newAccount, registerAccount, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
 
 test.describe.serial('administration', () => {

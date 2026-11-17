@@ -5,7 +5,7 @@
 // message request shows no banner until it is accepted, and a dismissed
 // banner stays dismissed on this device.
 
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { apiUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 

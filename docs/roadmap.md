@@ -53,13 +53,19 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 7. Native apps: mobile first, then desktop.
 8. Signed builds.
 9. The admin app at `admin.<domain>`.
-10. A strict Content-Security-Policy for every app. Today's policy (set by
-    `frontend/docker/40-kutup-hosts.sh`) allows `'unsafe-inline'` and
+10. A strict Content-Security-Policy for every app. The enforced policy (set
+    by `frontend/docker/40-kutup-hosts.sh`) still allows `'unsafe-inline'` and
     `'unsafe-eval'` scripts and WebSockets to any host (`connect-src … wss:`).
     In an end-to-end encrypted app any injected script could read keys and
-    send them anywhere, so the goal is nonce- or hash-based scripts, no
-    `unsafe-eval` outside the office-editor sandbox origin, and `connect-src`
-    limited to Kutup's own hosts (the edge review, 2026-10-22).
+    send them anywhere (the edge review, 2026-10-22). **Report-only shipped**
+    ([`content-security-policy.md`](content-security-policy.md)): every app
+    sends a strict policy (no inline or eval'd script, `connect-src` its own
+    host plus Chat's SFU and listed map origins, no remote images in Mail)
+    as `Content-Security-Policy-Report-Only`, reported to
+    `POST /api/csp-report`. Left: read the reports from real use and the
+    e2e suites under `E2E_CSP_STRICT=1`, fix what they show (Excalidraw's
+    font subsetting first), then enforce (`KUTUP_CSP_ENFORCE=1`, later the
+    default) and drop the old policy.
 
 ### Shipped in the clean-slate release (2d26c64eb60d, live 2026-10-17)
 

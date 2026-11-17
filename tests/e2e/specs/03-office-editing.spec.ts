@@ -1,4 +1,4 @@
-import { expect, test, type Browser } from '@playwright/test'
+import { expect, test, type Browser } from '../fixtures/test'
 import { editorCanvases, freshOfficeFile, openOffice, outboundChanges, reloadOffice, write, type OfficeKind } from '../fixtures/office'
 
 const PASSWORD = 'Deneme123*OfficeEditPassword'

@@ -305,7 +305,8 @@ one database, plus a report of what happened.
 - **Page policy.** The pass host allows no inline or eval'd script
   (`script-src 'self' 'wasm-unsafe-eval'`), nothing may frame it
   (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), and its theme and
-  reload guard load as files (`strictCsp` in the shared Vite config). Spec 79
+  reload guard load as files, as every app's now do (the shared Vite
+  config; [`../content-security-policy.md`](../content-security-policy.md)). Spec 79
   checks the headers and that the page breaks none of it.
 - **Entries.** Standard fields, the TOTP secret (`otp`, an otpauth:// URI or
   a base32 key) with a live code, custom fields (hidden or not), tags,

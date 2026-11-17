@@ -247,6 +247,7 @@ pub enum Limit {
     AccountPeerFetches,
     RenameAnnounces,
     // Administration.
+    CspReports,
     Admin,
 }
 
@@ -1135,6 +1136,16 @@ pub static SPECS: &[Spec] = &[
         Peer,
         Federation,
         "Rename announces taken from one peer."
+    ),
+    spec!(
+        CspReports,
+        "csp_reports",
+        Some("RATE_LIMIT_CSP_REPORTS_PER_MIN"),
+        60,
+        Events(MINUTE),
+        Address,
+        Administration,
+        "Content-Security-Policy violation reports, which need no account."
     ),
     spec!(
         Admin,

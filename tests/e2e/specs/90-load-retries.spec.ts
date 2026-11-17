@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type BrowserContext } from '@playwright/test'
+import { expect, test, type APIRequestContext, type BrowserContext } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 // A fetch cut off mid-load (Chrome's net::ERR_NETWORK_CHANGED when the

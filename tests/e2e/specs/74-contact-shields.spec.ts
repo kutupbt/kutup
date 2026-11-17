@@ -4,7 +4,7 @@
 // it green, as in Drive and Chat. An ordinary email address gets no shield
 // (and is never looked up).
 
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 const PASSWORD = 'Deneme123*ContactShieldPassword'

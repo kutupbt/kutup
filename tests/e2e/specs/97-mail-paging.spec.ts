@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { seedDrafts } from '../fixtures/mail'
 

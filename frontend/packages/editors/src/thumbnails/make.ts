@@ -1,3 +1,5 @@
+// Excalidraw's fonts from this origin, for whiteboard thumbnails.
+import '../whiteboard/assets'
 import { THUMBNAIL_MAX_SIDE } from '@kutup/crypto/thumbnail'
 import {
   DRIVE_PREVIEW_GENERATION_LIMITS_V1,

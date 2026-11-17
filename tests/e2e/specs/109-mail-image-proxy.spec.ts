@@ -1,12 +1,12 @@
-import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page, type Request } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { openWhenArrived } from '../fixtures/mail'
 
 // Tracker protection (docs/plans/mail-parity.md, P5), as Proton's "Protect
 // against email tracking": known tracking pixels are counted before anything
 // loads and never load; links lose their tracking parameters; remote images
-// come through the Kutup image proxy, and one it cannot get loads directly
-// only when the reader asks.
+// come through the Kutup image proxy, and one it cannot get stays out: the
+// browser never loads it from the sender's servers.
 
 const PASSWORD = 'Deneme123*MailImageProxyPassword'
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
@@ -88,7 +88,7 @@ test('tracker protection: trackers blocked, links cleaned, images through the pr
   await details.getByRole('button', { name: 'Close', exact: true }).last().click()
 
   // Loading asks the proxy, never the tracker; the image it cannot get
-  // loads directly only when Alice says so.
+  // stays out, with nothing offering to load it directly.
   const proxiedUrls: string[] = []
   // The address goes in the body, never in the URL.
   const asked = (r: Request) => (new URL(r.url()).pathname === '/api/mail/images' && r.method() === 'POST' ? ((r.postDataJSON() as { url?: string }).url ?? '') : null)
@@ -102,11 +102,9 @@ test('tracker protection: trackers blocked, links cleaned, images through the pr
   await proxied
   // The tracker is not even asked of the proxy.
   expect(proxiedUrls.some((url) => url.includes('list-manage'))).toBe(false)
-  await expect(mail.getByText('Tracker protection prevented some images from loading. Load them if you trust the sender.')).toBeVisible({ timeout: 60_000 })
+  await expect(mail.getByText('Some images could not be loaded through Kutup, so they are not shown.')).toBeVisible({ timeout: 60_000 })
+  await expect(mail.getByRole('button', { name: 'Load', exact: true })).toHaveCount(0)
   expect(direct).toEqual([])
-  await mail.getByRole('button', { name: 'Load', exact: true }).click()
-  await expect(body.getByRole('img', { name: 'logo' })).toBeVisible({ timeout: 30_000 })
-  await expect.poll(() => direct.length).toBeGreaterThan(0)
   expect(tracked).toEqual([])
 
   await aliceContext.close()

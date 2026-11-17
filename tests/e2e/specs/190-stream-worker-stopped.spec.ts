@@ -4,7 +4,7 @@
 // must find the page and its block reader as before. Stopped here between
 // two range requests through the DevTools protocol; playback goes on.
 // Chromium only (CDP).
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { driveWithSong, playInQuickLook, seekAndPlay } from '../fixtures/stream'
 
 const PASSWORD = 'Deneme123*StreamWorkerStoppedPassword'

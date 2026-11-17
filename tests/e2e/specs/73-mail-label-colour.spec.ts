@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 // A label (or folder) in any colour, not only the palette's: picked with the

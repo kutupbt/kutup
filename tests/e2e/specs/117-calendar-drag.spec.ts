@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 // The time grid by pointer and keyboard (docs/plans/calendar.md, "Calendar

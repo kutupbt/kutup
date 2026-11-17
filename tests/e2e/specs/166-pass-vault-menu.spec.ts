@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { createFolder } from '../fixtures/drive'
 import { addEntry, createVault, expectSaved, openPass } from '../fixtures/pass'

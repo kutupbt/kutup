@@ -955,7 +955,7 @@
     "removed": "{{address}} adresinden gelen görseller yine sorulacak.",
     "bodyProxy": "Görseller Kutup sunucusu üzerinden yüklenir; gönderen IP adresinizi ve tarayıcınızı görmez, ama iletinin açıldığını ve ne zaman açıldığını yine de anlayabilir.",
     "proxyTitle": "E-posta izlemeye karşı koruma",
-    "proxyHint": "Uzak görseller tarayıcınız yerine Kutup üzerinden gelir; gönderenler IP adresinizi ve tarayıcınızı görmez, ama iletinin açıldığını ve ne zaman açıldığını yine de anlayabilir. Bilinen izleme pikselleri hiç yüklenmez ve bağlantılardaki izleme parametreleri çıkarılır.",
+    "proxyHint": "Bilinen izleme pikselleri hiç istenmez ve bağlantılardaki izleme parametreleri çıkarılır. Uzak görseller her zaman tarayıcınız yerine Kutup üzerinden gelir; gönderenler IP adresinizi ve tarayıcınızı hiç görmez, ama iletinin açıldığını ve ne zaman açıldığını yine de anlayabilir.",
     "embeddedTitle": "Gömülü görselleri otomatik göster",
     "embeddedHint": "İletinin içinde gönderilen görseller hemen gösterilir. Kapalıyken siz yükleyene kadar bekler.",
     "metadataTitle": "Görsel üst verisini kaldır",
@@ -972,9 +972,7 @@
     "linksList": "Temizlenen bağlantılar",
     "unknownProvider": "İzleyici",
     "removed": "Çıkarılanlar: {{names}}",
-    "proxyFailed": "İzleyici koruması bazı görsellerin yüklenmesini engelledi. Gönderene güveniyorsanız yükleyin.",
-    "loadDirect": "Yükle",
-    "loadDirectHint": "Görseller Kutup sunucusu olmadan yüklenecek"
+    "proxyFailed": "Bazı görseller Kutup üzerinden yüklenemedi, bu yüzden gösterilmiyor."
   },
   "schedule": {
     "menu": "Gönderimi planla",

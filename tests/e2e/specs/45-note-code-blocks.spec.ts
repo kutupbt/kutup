@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appOrigin, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 test('in Edit mode a code block reads as in Read mode until the cursor enters it', async ({ browser }) => {

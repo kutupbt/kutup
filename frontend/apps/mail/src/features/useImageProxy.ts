@@ -3,9 +3,10 @@ import { fetchMailImage } from '@kutup/mail-core/api'
 import { trackerOf } from '@kutup/mail-core/trackers'
 
 // The image proxy's side of a message (docs/plans/mail-parity.md, P5), as
-// Proton's: its remote image addresses are checked against the known
-// trackers here (nothing is sent), and once the reader loads images each
-// other one comes through the Kutup server as a blob: URL.
+// Proton's: with tracker protection its remote image addresses are checked
+// against the known trackers here (nothing is sent), and once the reader
+// loads images each other one comes through the Kutup server as a blob: URL.
+// It is the only way a remote image is shown (docs/content-security-policy.md).
 
 const PARALLEL = 6
 
@@ -25,18 +26,21 @@ interface Loaded {
   failed: string[]
 }
 
-export function useImageProxy(urls: string[], { enabled, load }: { enabled: boolean; load: boolean }): ImageProxy {
+export function useImageProxy(
+  urls: string[],
+  { enabled, trackers: checkTrackers = true, load }: { enabled: boolean; trackers?: boolean; load: boolean },
+): ImageProxy {
   const key = urls.join('\n')
-  // Trackers, for the reader's count and so they never load.
+  // Trackers, for the reader's count and so they are never asked for.
   const known = useMemo(() => {
     const found = new Map<string, string>()
-    if (!enabled) return found
+    if (!enabled || !checkTrackers) return found
     for (const url of key ? key.split('\n') : []) {
       const provider = trackerOf(url)
       if (provider) found.set(url, provider)
     }
     return found
-  }, [enabled, key])
+  }, [enabled, checkTrackers, key])
   const [loaded, setLoaded] = useState<Loaded | null>(null)
 
   // The images, a few at a time, shown together once all have answered.
@@ -60,7 +64,7 @@ export function useImageProxy(urls: string[], { enabled, load }: { enabled: bool
         trackers.set(url, '')
       } else {
         images.set(url, null)
-        // Busy or over a limit: a sender can cause that, so it never offers loading directly.
+        // Busy or over a limit: a sender can cause that; not counted as failed.
         if (result.kind === 'failed') failed.push(url)
       }
       return next()

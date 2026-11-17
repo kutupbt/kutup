@@ -6,7 +6,7 @@
 // intercepting this browser's delivery requests: `queued` as when the
 // recipient's server is down, and a refusal as when it refuses for good.
 
-import { expect, test, type Page, type Route } from '@playwright/test'
+import { expect, test, type Page, type Route } from '../fixtures/test'
 import { apiUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 

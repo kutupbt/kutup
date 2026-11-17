@@ -134,6 +134,86 @@ pub struct SessionVersionSlot(std::sync::Arc<std::sync::Mutex<Option<String>>>);
 
 pub const SESSION_VERSION_HEADER: &str = "x-kutup-session-version";
 
+/// The policy every `/api/` answer carries unless it sets its own (a
+/// sandboxing one on proxied images and icons): an API answer opened as a
+/// page runs nothing, loads nothing and cannot be framed
+/// (docs/content-security-policy.md).
+pub const API_CSP: &str = "default-src 'none'; frame-ancestors 'none'";
+
+/// `/api/` answers get [`API_CSP`]; and the OnlyOffice sandbox's host, which
+/// runs eval'd code and must hold nothing worth stealing, gets no API at
+/// all: `404` there, as nginx answers (nginx/nginx.conf).
+pub async fn api_response_policy(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path();
+    let api = path == "/api" || path.starts_with("/api/");
+    if !api {
+        return next.run(req).await;
+    }
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if is_editor_host(&state.config.apps, host) {
+        return AppError::new(axum::http::StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let mut response = next.run(req).await;
+    response
+        .headers_mut()
+        .entry(axum::http::header::CONTENT_SECURITY_POLICY)
+        .or_insert(axum::http::HeaderValue::from_static(API_CSP));
+    response
+}
+
+/// Whether a request's `Host` names the editor sandbox. By host name, as a
+/// proxy passes it on (nginx's `$host` drops the port), unless another app
+/// shares the editor's host name on another port (a development layout):
+/// then by host and port.
+fn is_editor_host(apps: &crate::config::AppOrigins, host_header: &str) -> bool {
+    let Ok(editor) = url::Url::parse(&apps.editor) else {
+        return false;
+    };
+    let Some(editor_host) = editor.host_str().map(str::to_ascii_lowercase) else {
+        return false;
+    };
+    let header = host_header.trim().to_ascii_lowercase();
+    if header.is_empty() {
+        return false;
+    }
+    let others = [
+        &apps.account,
+        &apps.drive,
+        &apps.chat,
+        &apps.office,
+        &apps.maps,
+        &apps.photos,
+        &apps.contacts,
+        &apps.mail,
+        &apps.pass,
+        &apps.calendar,
+    ];
+    let shared = others.iter().any(|origin| {
+        url::Url::parse(origin)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            .is_some_and(|other| other == editor_host)
+    });
+    let Ok(requested) = url::Url::parse(&format!("{}://{header}", editor.scheme())) else {
+        return false;
+    };
+    let requested_host = requested.host_str().unwrap_or_default();
+    if shared {
+        requested_host == editor_host
+            && requested.port_or_known_default() == editor.port_or_known_default()
+    } else {
+        requested_host == editor_host
+    }
+}
+
 /// Stamps `X-Kutup-Session-Version` on every authenticated answer, so each
 /// app (on its own origin) notices a password, 2FA, role or key binding
 /// change made anywhere and re-reads its account (docs/api.md, "Session
@@ -455,6 +535,15 @@ pub async fn rate_limit_report(
     limit(addr, &ratelimit::REPORT, None, req, next).await
 }
 
+/// 60/min/IP — `POST /api/csp-report`.
+pub async fn rate_limit_csp_reports(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::CSP_REPORTS, None, req, next).await
+}
+
 /// 120/min/IP — every `/api/admin/*` route.
 pub async fn rate_limit_admin(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -473,6 +562,33 @@ mod tests {
     use axum::Router;
     use std::sync::LazyLock;
     use tower::ServiceExt;
+
+    #[test]
+    fn the_editor_sandbox_host_is_known_by_name() {
+        let production = crate::config::resolve_app_origins(
+            |name| (name == "KUTUP_BASE_DOMAIN").then(|| "example.org".to_owned()),
+            "production",
+        )
+        .unwrap();
+        assert!(is_editor_host(&production, "editor.example.org"));
+        assert!(is_editor_host(&production, "Editor.Example.org:443"));
+        assert!(!is_editor_host(&production, "drive.example.org"));
+        assert!(!is_editor_host(&production, ""));
+        // Development: every app on its own port of one name only when the
+        // ports say so.
+        let shared = crate::config::resolve_app_origins(
+            |name| match name {
+                "KUTUP_EDITOR_URL" => Some("http://localhost:5176".to_owned()),
+                "KUTUP_DRIVE_URL" => Some("http://localhost:5174".to_owned()),
+                _ => None,
+            },
+            "development",
+        )
+        .unwrap();
+        assert!(is_editor_host(&shared, "localhost:5176"));
+        assert!(!is_editor_host(&shared, "localhost:5174"));
+        assert!(!is_editor_host(&shared, "localhost"));
+    }
 
     static TEST_LIMITER: LazyLock<ratelimit::RateLimiter> =
         LazyLock::new(|| ratelimit::RateLimiter::new(2, std::time::Duration::from_secs(60)));

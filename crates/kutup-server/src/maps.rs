@@ -133,6 +133,34 @@ impl Default for MapSettings {
 }
 
 impl MapSettings {
+    /// Whether browsers may load `id` from the provider itself: its origin
+    /// is in `direct_origins` (`KUTUP_MAP_DIRECT_ORIGINS`), the list the
+    /// apps' Content-Security-Policy allows.
+    fn direct(&self, id: ProviderId, direct_origins: &[String]) -> bool {
+        Upstream::resolve(id, self)
+            .is_some_and(|upstream| direct_origins.contains(&upstream.origin))
+    }
+
+    /// [`Self::validate`], and the relay off only when browsers may load
+    /// every offered provider directly.
+    pub fn validate_with(&self, direct_origins: &[String]) -> Result<(), String> {
+        self.validate()?;
+        if self.enabled
+            && self.proxy == ProxyMode::Off
+            && !self
+                .providers
+                .iter()
+                .all(|id| self.direct(*id, direct_origins))
+        {
+            return Err(
+                "the relay can be off only when every offered provider's origin is in \
+                        KUTUP_MAP_DIRECT_ORIGINS"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         let mut seen = Vec::new();
         for provider in &self.providers {
@@ -242,6 +270,8 @@ impl Upstream {
 
 pub struct MapService {
     client: reqwest::Client,
+    /// `KUTUP_MAP_DIRECT_ORIGINS`: the providers browsers may load directly.
+    direct_origins: Vec<String>,
     cache_dir: PathBuf,
     settings: RwLock<(MapSettings, Instant)>,
     cache: Mutex<CacheIndex>,
@@ -263,7 +293,12 @@ struct CacheMeta {
 }
 
 impl MapService {
-    pub async fn start(pool: &PgPool, cache_dir: &str, server_url: &str) -> anyhow::Result<Self> {
+    pub async fn start(
+        pool: &PgPool,
+        cache_dir: &str,
+        server_url: &str,
+        direct_origins: Vec<String>,
+    ) -> anyhow::Result<Self> {
         let cache_dir = if cache_dir.is_empty() {
             std::env::temp_dir().join("kutup-maps-cache")
         } else {
@@ -289,6 +324,7 @@ impl MapService {
         );
         Ok(Self {
             client,
+            direct_origins,
             cache_dir,
             settings: RwLock::new((settings, Instant::now())),
             cache: Mutex::new(index),
@@ -443,6 +479,9 @@ pub struct MapProviderView {
     pub url: String,
     /// The same through this server's relay; absent when the relay is off.
     pub proxy_url: Option<String>,
+    /// Whether browsers may load it from the provider itself (its origin is
+    /// in `KUTUP_MAP_DIRECT_ORIGINS`); otherwise only through the relay.
+    pub direct: bool,
     pub attribution: String,
 }
 
@@ -492,19 +531,33 @@ async fn preferences_of(pool: &PgPool, user_id: uuid::Uuid) -> AppResult<MapPref
     })
 }
 
-fn config_response(settings: &MapSettings, preferences: MapPreferences) -> MapConfigResponse {
+/// What browsers are offered: each provider through the relay unless it is
+/// off, and directly only when its origin is in `direct_origins`. A provider
+/// that can be reached neither way (the relay off, its origin not listed) is
+/// left out.
+fn config_response(
+    settings: &MapSettings,
+    preferences: MapPreferences,
+    direct_origins: &[String],
+) -> MapConfigResponse {
     let providers = if settings.enabled {
         settings
             .providers
             .iter()
             .filter_map(|id| Upstream::resolve(*id, settings))
-            .map(|upstream| MapProviderView {
-                proxy_url: (settings.proxy != ProxyMode::Off).then(|| upstream.proxied_entry()),
-                id: upstream.id,
-                name: upstream.name,
-                kind: upstream.kind,
-                url: upstream.entry,
-                attribution: upstream.attribution,
+            .filter_map(|upstream| {
+                let direct = direct_origins.contains(&upstream.origin);
+                let proxy_url =
+                    (settings.proxy != ProxyMode::Off).then(|| upstream.proxied_entry());
+                (direct || proxy_url.is_some()).then_some(MapProviderView {
+                    proxy_url,
+                    direct,
+                    id: upstream.id,
+                    name: upstream.name,
+                    kind: upstream.kind,
+                    url: upstream.entry,
+                    attribution: upstream.attribution,
+                })
             })
             .collect()
     } else {
@@ -532,7 +585,11 @@ pub async fn get_config(
 ) -> AppResult<Json<MapConfigResponse>> {
     let settings = state.maps.settings(&state.pool).await?;
     let preferences = preferences_of(&state.pool, trusted_uuid(&user.user_id)?).await?;
-    Ok(Json(config_response(&settings, preferences)))
+    Ok(Json(config_response(
+        &settings,
+        preferences,
+        &state.maps.direct_origins,
+    )))
 }
 
 /// `PUT /api/maps/preferences` — turn maps on or off for yourself and choose
@@ -589,7 +646,23 @@ pub async fn put_preferences(
     .bind(request.save_folder_id)
     .execute(&state.pool)
     .await?;
-    Ok(Json(config_response(&settings, request)))
+    Ok(Json(config_response(
+        &settings,
+        request,
+        &state.maps.direct_origins,
+    )))
+}
+
+/// The administrator's map settings as `GET` and `PUT /api/admin/maps`
+/// answer: the settings and the origins the server was started with.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MapSettingsView {
+    #[serde(flatten)]
+    pub settings: MapSettings,
+    /// `KUTUP_MAP_DIRECT_ORIGINS`: the providers' origins browsers may load
+    /// from directly. Set at start, not here.
+    pub direct_origins: Vec<String>,
 }
 
 /// `GET /api/admin/maps` — the administrator's map settings.
@@ -598,15 +671,18 @@ pub async fn put_preferences(
     path = "/api/admin/maps",
     tag = "admin",
     security(("BearerAuth" = [])),
-    responses((status = 200, description = "Map settings", body = MapSettings))
+    responses((status = 200, description = "Map settings", body = MapSettingsView))
 )]
 pub async fn admin_get(
     State(state): State<AppState>,
     _admin: AdminUser,
-) -> AppResult<Json<MapSettings>> {
+) -> AppResult<Json<MapSettingsView>> {
     let settings = load_settings(&state.pool).await?;
     state.maps.replace_settings(settings.clone());
-    Ok(Json(settings))
+    Ok(Json(MapSettingsView {
+        settings,
+        direct_origins: state.maps.direct_origins.clone(),
+    }))
 }
 
 /// `PUT /api/admin/maps` — replace the map settings.
@@ -616,14 +692,16 @@ pub async fn admin_get(
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = MapSettings,
-    responses((status = 200, description = "Saved", body = MapSettings))
+    responses((status = 200, description = "Saved", body = MapSettingsView))
 )]
 pub async fn admin_put(
     State(state): State<AppState>,
     admin: AdminUser,
     Json(settings): Json<MapSettings>,
-) -> AppResult<Json<MapSettings>> {
-    settings.validate().map_err(AppError::bad_request)?;
+) -> AppResult<Json<MapSettingsView>> {
+    settings
+        .validate_with(&state.maps.direct_origins)
+        .map_err(AppError::bad_request)?;
     let value = serde_json::to_string(&settings)
         .map_err(|error| AppError::internal(format!("map settings: {error}")))?;
     sqlx::query(
@@ -648,7 +726,10 @@ pub async fn admin_put(
     )
     .await;
     state.maps.replace_settings(settings.clone());
-    Ok(Json(settings))
+    Ok(Json(MapSettingsView {
+        settings,
+        direct_origins: state.maps.direct_origins.clone(),
+    }))
 }
 
 // ----- the relay -----
@@ -945,6 +1026,48 @@ mod tests {
         settings.providers = vec![ProviderId::Openstreetmap];
         settings.cache_megabytes = MAX_CACHE_MEGABYTES + 1;
         assert!(settings.validate().is_err(), "cache too large");
+    }
+
+    #[test]
+    fn direct_loading_only_for_listed_origins() {
+        let listed = vec!["https://tile.openstreetmap.org".to_owned()];
+        let mut settings = MapSettings {
+            proxy: ProxyMode::Off,
+            ..MapSettings::default()
+        };
+        // OpenFreeMap is offered but not listed: the relay may not be off.
+        assert!(settings.validate_with(&listed).is_err());
+        settings.providers = vec![ProviderId::Openstreetmap];
+        assert!(settings.validate_with(&listed).is_ok());
+        assert!(settings.validate_with(&[]).is_err());
+
+        let preferences = MapPreferences {
+            enabled: true,
+            provider: None,
+            via_proxy: false,
+            save_folder_id: None,
+        };
+        let available = MapSettings::default();
+        let offered = config_response(&available, preferences.clone(), &listed).providers;
+        let direct: Vec<(ProviderId, bool)> = offered.iter().map(|p| (p.id, p.direct)).collect();
+        assert_eq!(
+            direct,
+            vec![
+                (ProviderId::Openfreemap, false),
+                (ProviderId::Openstreetmap, true)
+            ]
+        );
+        assert!(offered.iter().all(|p| p.proxy_url.is_some()));
+        // The relay off (a setting saved before the list): an unlisted
+        // provider is reachable no way, so it is not offered.
+        let off = MapSettings {
+            proxy: ProxyMode::Off,
+            ..MapSettings::default()
+        };
+        let offered = config_response(&off, preferences, &listed).providers;
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].id, ProviderId::Openstreetmap);
+        assert!(offered[0].proxy_url.is_none());
     }
 
     #[test]

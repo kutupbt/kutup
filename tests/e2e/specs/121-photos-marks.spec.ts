@@ -2,7 +2,7 @@
 // the account's Photos library record (an account record of this account,
 // docs/plans/w1-account-record.md) and comes back after a reload, and the next
 // mark is that record's successor.
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 const PASSWORD = 'correct horse battery staple 121'
