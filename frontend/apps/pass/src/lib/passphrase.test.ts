@@ -30,9 +30,12 @@ describe('passphrases', () => {
     const capital = generatePassphrase(words, { ...DEFAULT_PASSPHRASE, words: 4, separator: ' ', wordCase: 'first' }).split(' ')
     expect(capital).toHaveLength(4)
     expect(capital.every((w) => /^[A-Z]/.test(w) && known.has(w.toLowerCase()))).toBe(true)
-    const extras = generatePassphrase(words, { ...DEFAULT_PASSPHRASE, words: 3, addNumber: true, addSymbol: true })
-    expect(extras).toMatch(/[0-9]/)
-    expect(extras).toMatch(/[!#$%&*+.:;=?@^_~]/)
+    // A space between the words, so the added symbol (it may be "-") stands out.
+    for (let i = 0; i < 50; i++) {
+      const extras = generatePassphrase(words, { ...DEFAULT_PASSPHRASE, words: 3, separator: ' ', addNumber: true, addSymbol: true })
+      expect(extras).toMatch(/[0-9]/)
+      expect(extras).toMatch(/[!#$%&*+\-.:;=?@^_~]/)
+    }
     expect(passphraseBits(DEFAULT_PASSPHRASE)).toBe(90)
   })
 })
