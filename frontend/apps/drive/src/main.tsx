@@ -27,7 +27,7 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem storageKey="kutup-theme">
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem storageKey="kutup.ui.theme">
       <QueryClientProvider client={queryClient}>
         <WebAssemblyGate>
           <App />

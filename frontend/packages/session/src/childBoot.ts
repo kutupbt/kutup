@@ -13,7 +13,7 @@ export type ChildBootResult =
   /** Leaving for the account app; render nothing. */
   | { kind: 'redirecting' }
 
-const ATTEMPTS_KEY = 'kutup-fork-attempts'
+const ATTEMPTS_KEY = 'kutup.session.forkAttempts'
 /** Fork round-trips allowed per tab before showing an error instead of looping. */
 const MAX_ATTEMPTS = 2
 

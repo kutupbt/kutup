@@ -12,7 +12,7 @@ import { randomRecordId } from '@kutup/session/accountRecords'
 // it belongs to no account, and on a shared computer it would otherwise end
 // up in the list of whoever signs in next.
 
-const KEY = 'kutup-meeting-history'
+const KEY = 'kutup.chat.meetingHistory'
 const LIMIT = 30
 
 export interface JoinedMeeting {

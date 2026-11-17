@@ -2333,10 +2333,6 @@ async fn issue_tokens_and_respond(
                     SET_COOKIE,
                     auth_check::known_client_cookie(state, uid).await?,
                 ),
-                (
-                    SET_COOKIE,
-                    auth_check::clear_retired_known_client_cookie(state),
-                ),
             ]),
             Json(body),
         )
@@ -2346,7 +2342,7 @@ async fn issue_tokens_and_respond(
     }
 }
 
-pub(crate) const REFRESH_COOKIE: &str = "refresh_token";
+pub(crate) const REFRESH_COOKIE: &str = "kutup.refresh";
 pub(crate) const CLIENT_HEADER: &str = crate::client_version::CLIENT_HEADER;
 
 /// The refresh cookie: HttpOnly, host-only on the app's own origin (no `Domain`), sent

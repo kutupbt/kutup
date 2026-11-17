@@ -4,7 +4,7 @@ import type {
   CiphertextCacheEntryV1,
 } from './types'
 
-const DATABASE_NAME = 'kutup-private-ciphertext-cache-v1'
+const DATABASE_NAME = 'kutup.files.ciphertextCache'
 const DATABASE_VERSION = 1
 const ENTRY_STORE = 'entries'
 const CHUNK_STORE = 'chunks'

@@ -320,7 +320,6 @@ export function openChat(session: Session, install?: ChatInstall): void {
       resetRenameWatch()
       service.dispose()
     }
-    forgetPlaintextChatState(`${session.username}@${capabilities.serverName}`, session.userId)
     startAccountNames(session, () => set({ namesRevision: state.namesRevision + 1 }))
     const sealed = service.sealedStorage
     setSealedStorage(sealed)
@@ -340,26 +339,6 @@ export function openChat(session: Session, install?: ChatInstall): void {
     })
     await reload(service)
   })()
-}
-
-/**
- * Removes what older versions kept in this browser in plaintext, keyed by the
- * address or the account id: drafts, read positions and owed timers. None of
- * it is read any more (an account that later takes the same username must
- * not inherit it); it is only cleared away.
- */
-function forgetPlaintextChatState(address: string, userId: string): void {
-  for (const key of [
-    `kutup.chat.drafts.v1:${address}`,
-    `kutup:chat:read:${userId}`,
-    `kutup.chat.pending-default-timers.v1:${address}`,
-  ]) {
-    try {
-      window.localStorage.removeItem(key)
-    } catch {
-      // Storage blocked: nothing reads these keys anyway.
-    }
-  }
 }
 
 /**

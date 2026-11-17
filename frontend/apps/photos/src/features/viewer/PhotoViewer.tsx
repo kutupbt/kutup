@@ -33,7 +33,7 @@ import { InfoPanel } from './InfoPanel'
 /** Originals up to this size open in the viewer; larger ones show their large thumbnail. */
 const MAX_IMAGE_BYTES = 50 * 1024 * 1024
 /** Kinds every browser draws; others (HEIC, RAW, TIFF) are tried and may fall back. */
-const INFO_KEY = 'kutup-photos-info'
+const INFO_KEY = 'kutup.photos.info'
 
 // The last few originals, decrypted, for going back and forth. A download
 // is shared by whoever wants it and stopped only once nobody has wanted it

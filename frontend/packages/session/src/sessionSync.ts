@@ -5,7 +5,7 @@
 // Key material never crosses this channel: every tab restores its own keys
 // from the origin's encrypted session blob (see ./persist).
 
-const CHANNEL_NAME = 'kutup-session'
+const CHANNEL_NAME = 'kutup.session'
 
 type Message =
   | { type: 'logout' }

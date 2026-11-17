@@ -23,10 +23,10 @@ export const SERVER_RESET_NOTICE = 'kutup.session.serverReset'
  * anchors never match again; a server that only claims a new id can't make
  * clients forget what they pinned.
  */
-const ANCHOR_DATABASES = ['kutup.drive.revisionsSeen', 'kutup-revisions-v2']
+const ANCHOR_DATABASES = ['kutup.account.revisionsSeen', 'kutup-revisions-v2']
 const ANCHOR_KEY = /^(kutup\.account\.manifestPins:|kutup-manifest-pins:)/
 /** Not account data: the look of the page. Kept too. */
-const KEPT_KEY = /^(kutup\.ui\.|kutup-theme$|kutup-lang$)/
+const KEPT_KEY = /^(kutup\.ui\.(theme|language)$|kutup-theme$|kutup-lang$)/
 
 /** Every Kutup database name this code and earlier versions used, for browsers without indexedDB.databases(). */
 const KNOWN_DATABASES = [

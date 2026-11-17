@@ -17,11 +17,8 @@ import { getClientType } from './client'
 import { readPersisted } from './persistedStore'
 import { getSession, type Session } from './store'
 
-/** Where #365's plain own-account pins were kept: read once, then removed. */
-const PLAIN_PIN_PREFIX = 'kutup_own_manifest_pin_v1:'
-
 function storageKey(userId: string): string {
-  return `kutup-manifest-pins:${userId}`
+  return `kutup.account.manifestPins:${userId}`
 }
 
 function profile(session: Session): string {
@@ -97,31 +94,6 @@ async function persist(session: Session, pins: Map<string, AccountManifestPin>, 
 async function load(session: Session): Promise<Map<string, AccountManifestPin>> {
   const pins = new Map<string, AccountManifestPin>()
   merge(pins, await readSealed(session))
-  // #365's plain own-account pins: taken in, sealed, and only then removed.
-  const plain: string[] = []
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      if (!key?.startsWith(PLAIN_PIN_PREFIX)) continue
-      plain.push(key)
-      try {
-        const pin = JSON.parse(localStorage.getItem(key) ?? 'null') as AccountManifestPin | null
-        if (pin) merge(pins, [pin])
-      } catch {
-        // One unreadable entry: the others still count.
-      }
-    }
-  } catch {
-    // Storage unavailable.
-  }
-  if (plain.length > 0) {
-    await persist(session, pins)
-    try {
-      for (const key of plain) localStorage.removeItem(key)
-    } catch {
-      // Storage unavailable.
-    }
-  }
   return pins
 }
 

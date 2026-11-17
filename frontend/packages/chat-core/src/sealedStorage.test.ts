@@ -32,9 +32,8 @@ describe('SealedStorage', () => {
   it('never takes over a plaintext value', () => {
     const storage = new SealedStorage(wasm, masterKeysBytes(firstMasterKeys(key)), 'scope-a')
     // Plaintext where the sealed value belongs, or under an older key: absent.
-    window.localStorage.setItem(storage.key('read-marks'), JSON.stringify({ 'direct:bob': 5 }))
-    window.localStorage.setItem('kutup:chat:read:u1', JSON.stringify({ 'direct:bob': 5 }))
-    expect(storage.read('read-marks')).toBeUndefined()
+    window.localStorage.setItem(storage.key('readMarks'), JSON.stringify({ 'direct:bob': 5 }))
+    expect(storage.read('readMarks')).toBeUndefined()
   })
 
   it('reads a value it cannot open as absent', () => {

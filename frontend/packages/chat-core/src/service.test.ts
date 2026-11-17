@@ -33,7 +33,7 @@ const engineLocks: EngineLock[] = []
 
 /** The service's lock over the stubbed Web Locks, closed after each test. */
 function testEngineLock(): EngineLock {
-  const lock = new EngineLock('kutup-chat-engine:test', async () => {})
+  const lock = new EngineLock('kutup.chat.engine:test', async () => {})
   engineLocks.push(lock)
   return lock
 }
@@ -69,7 +69,7 @@ describe('ChatService coordination', () => {
     const service = Object.create(ChatService.prototype) as ChatService
     Object.assign(service, {
       client,
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -154,7 +154,7 @@ describe('ChatService coordination', () => {
       client,
       account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -197,7 +197,7 @@ describe('ChatService coordination', () => {
       client,
       account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -244,7 +244,7 @@ describe('ChatService coordination', () => {
       client,
       account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -291,7 +291,7 @@ describe('ChatService coordination', () => {
       client,
       account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -341,7 +341,7 @@ describe('ChatService coordination', () => {
       client,
       account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -377,7 +377,7 @@ describe('ChatService coordination', () => {
       client,
       account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -416,7 +416,7 @@ describe('ChatService coordination', () => {
       client,
       account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -462,7 +462,7 @@ describe('ChatService coordination', () => {
     const service = Object.create(ChatService.prototype) as ChatService
     Object.assign(service, {
       client,
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -523,7 +523,7 @@ describe('ChatService coordination', () => {
       attachmentLedger,
       account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -562,7 +562,7 @@ describe('ChatService coordination', () => {
       },
       attachmentLedger: null,
       attachmentExpiryListeners: new Set([purgeLocal]),
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),
@@ -600,7 +600,7 @@ describe('ChatService coordination', () => {
       deviceId: 2,
       transport,
       client,
-      lockName: 'kutup-chat-engine:test',
+      lockName: 'kutup.chat.engine:test',
       engineLock: testEngineLock(),
       revision: 0,
       historyCache: new Map(),

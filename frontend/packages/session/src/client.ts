@@ -95,7 +95,7 @@ export async function refreshAccessToken(): Promise<RefreshResult> {
     }
   }
   if (typeof navigator !== 'undefined' && navigator.locks) {
-    return navigator.locks.request('kutup-refresh', run)
+    return navigator.locks.request('kutup.session.refresh', run)
   }
   return run()
 }

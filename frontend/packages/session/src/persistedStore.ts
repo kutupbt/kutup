@@ -1,7 +1,7 @@
 // Where an app origin keeps its encrypted session blob (see ./persist). Kept
 // free of API imports so the client can wipe it when a session ends.
 
-export const PERSISTED_SESSION_KEY = 'kutup-session'
+export const PERSISTED_SESSION_KEY = 'kutup.session'
 
 export interface PersistedSession {
   v: 1

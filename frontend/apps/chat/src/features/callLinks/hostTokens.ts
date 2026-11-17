@@ -15,7 +15,7 @@
 import { refreshAccessToken } from '@kutup/session/client'
 import { readPersisted } from '@kutup/session/persistedStore'
 
-const KEY = 'kutup-meeting-hosts'
+const KEY = 'kutup.chat.meetingHosts'
 /** As many as an account can have meetings. */
 const LIMIT = 50
 const ROOM = /^[0-9a-f]{32}$/

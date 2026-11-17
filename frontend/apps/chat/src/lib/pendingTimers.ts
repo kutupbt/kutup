@@ -4,7 +4,7 @@
 // carry it themselves meanwhile, and the timer is set on acceptance. Kept
 // per account by its id, never by its name (docs/plans/account-identity.md).
 
-const PREFIX = 'kutup.chat.pending-default-timers.v2:'
+const PREFIX = 'kutup.chat.pendingTimers:'
 
 function read(userId: string): Record<string, number> {
   try {

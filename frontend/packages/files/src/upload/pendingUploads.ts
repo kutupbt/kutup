@@ -57,7 +57,7 @@ export interface PendingUpload {
  */
 export const PENDING_UPLOAD_LIFETIME_MS = 24 * 60 * 60 * 1000
 
-const DATABASE = 'kutup-pending-uploads'
+const DATABASE = 'kutup.drive.pendingUploads'
 const STORE = 'uploads'
 
 function open(): Promise<IDBDatabase> {
@@ -110,7 +110,7 @@ export const pendingUploads = {
   },
 }
 
-const LOCK_PREFIX = 'kutup-upload:'
+const LOCK_PREFIX = 'kutup.drive.upload:'
 
 /**
  * Mark an upload as running in this tab until `done` settles: a Web Lock,

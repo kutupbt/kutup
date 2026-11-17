@@ -20,7 +20,7 @@ export const AUTO_LOCK_CHOICES = [1, 5, 15, 30, 60, 240, 0] as const
 export type AutoLockMinutes = (typeof AUTO_LOCK_CHOICES)[number]
 export const DEFAULT_AUTO_LOCK: AutoLockMinutes = 15
 
-const STORAGE_KEY = 'kutup-pass-auto-lock-minutes'
+const STORAGE_KEY = 'kutup.pass.autoLockMinutes'
 const CHECK_MS = 15_000
 const ACTIVITY = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const
 
@@ -64,7 +64,7 @@ export function useAutoLockMinutes(): AutoLockMinutes {
  * PIN lock, `sync/pin.ts`), or a click. The same at every way in.
  */
 export type UnlockMode = 'password' | 'pin' | 'click'
-const MODE_KEY = 'kutup-pass-unlock-mode'
+const MODE_KEY = 'kutup.pass.unlockMode'
 let chosenMode: UnlockMode | null = null
 
 /** The mode chosen on this device, if one was. */

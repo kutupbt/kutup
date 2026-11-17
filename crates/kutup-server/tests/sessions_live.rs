@@ -33,7 +33,7 @@ fn set_refresh_cookie(r: &Response) -> Option<String> {
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .find_map(|v| v.strip_prefix("refresh_token="))
+        .find_map(|v| v.strip_prefix("kutup.refresh="))
         .map(|v| v.split(';').next().unwrap_or("").to_string())
 }
 
@@ -80,7 +80,7 @@ fn me_status(c: &Client, base: &str, token: &str) -> StatusCode {
 
 fn refresh_with_cookie(c: &Client, base: &str, cookie: &str) -> Response {
     c.post(format!("{base}/api/auth/refresh"))
-        .header("cookie", format!("refresh_token={cookie}"))
+        .header("cookie", format!("kutup.refresh={cookie}"))
         .send()
         .unwrap()
 }
@@ -298,7 +298,7 @@ fn sessions_and_forks_contract() {
         r.headers()
             .get_all("set-cookie")
             .iter()
-            .any(|v| v.to_str().unwrap_or("").starts_with("refresh_token=;")),
+            .any(|v| v.to_str().unwrap_or("").starts_with("kutup.refresh=;")),
         "a failed web refresh clears the cookie"
     );
 

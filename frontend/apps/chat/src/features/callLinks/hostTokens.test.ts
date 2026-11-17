@@ -22,11 +22,11 @@ describe('meeting host tokens', () => {
     expect(hostTokenFor('bob', ROOM)).toBeNull()
     forgetAccountHostTokens('alice')
     expect(hostTokenFor('alice', ROOM)).toBeNull()
-    expect(localStorage.getItem('kutup-meeting-hosts')).toBeNull()
+    expect(localStorage.getItem('kutup.chat.meetingHosts')).toBeNull()
   })
 
   it('drop the old map that no account owned', () => {
-    localStorage.setItem('kutup-meeting-hosts', JSON.stringify({ [ROOM]: 'token-old' }))
+    localStorage.setItem('kutup.chat.meetingHosts', JSON.stringify({ [ROOM]: 'token-old' }))
     expect(hostTokenFor('alice', ROOM)).toBeNull()
   })
 

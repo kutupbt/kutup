@@ -19,7 +19,7 @@ export interface OutboxRecord {
 
 const STORE = 'vaults'
 
-const databaseName = (userId: string) => `kutup-pass-${userId}`
+const databaseName = (userId: string) => `kutup.pass.outbox:${userId}`
 
 function open(userId: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {

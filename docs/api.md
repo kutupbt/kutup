@@ -512,7 +512,7 @@ the start is the attempt. A right finish gives it back.
   per account, all together (`LOGIN_ACCOUNT_CEILING`, 20 in the same window;
   `LOGIN_ACCOUNT_DAILY_CEILING`, 200 a day; an IPv6 client counts by its /64).
   A client that signed in to the account before carries the HttpOnly
-  `kutup_known` cookie (set at a session's finish and by
+  `kutup.known` cookie (set at a session's finish and by
   `POST /api/auth/forks/consume`, `Path=/api/auth`: no route outside sign-in
   sees it; the same answers clear one a browser may hold at `Path=/api`) and
   is not held by that cap.
@@ -597,7 +597,7 @@ generation the envelope holds (its authenticated header names it too), and
 docs/plans/mk-rotation-exercise.md): the client opens the chain down to
 generation 1 and opens every record under the key of the generation its header
 names. Only a session answer carries them; nothing before the password is
-proved does. For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
+proved does. For `web-account` the refresh token is an HttpOnly, host-only cookie named `kutup.refresh` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
 
 When the account's record is under a setup that is no longer the server's
 current one (`OPAQUE_SETUP_KEYS` rotated), the session also carries
@@ -774,7 +774,7 @@ second one is refused (`403`), so it never serves as a password change.
 ### POST /api/auth/refresh
 
 Rotate the session's refresh token and get a new access token. Web sessions
-present the token in their `refresh_token` cookie and receive the next one the
+present the token in their `kutup.refresh` cookie and receive the next one the
 same way; the CLI presents it in the body and receives the next one in the body.
 A token presented the other way is refused (and does not rotate anything).
 

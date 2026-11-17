@@ -12,7 +12,7 @@ import { activeSealedStorage, subscribeSealed } from './sealedState'
 
 type ReadMarks = Record<string, number>
 
-const NAME = 'read-marks'
+const NAME = 'readMarks'
 const listeners = new Set<() => void>()
 /** `fresh`: this device has no marks yet (first open), so everything starts read. */
 let cache: { storage: SealedStorage | null; marks: ReadMarks; fresh: boolean } | null = null

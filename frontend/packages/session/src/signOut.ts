@@ -46,17 +46,61 @@ export async function signOut(): Promise<boolean> {
   } catch {
     // Unreachable or already ended: the local sign-out still happens.
   }
+  const accountId = getSession()?.userId
   broadcastLogout()
   clearPersisted()
   clearSession()
   clearAccountLists()
+  if (accountId) await clearAccountStorage(accountId)
   return confirmed
 }
 
 /**
+ * The anti-rollback anchors (docs/plans/api-surface.md §5): kept across a
+ * sign-out, so a server can't roll the account back under a later sign-in
+ * on this browser. They go only with the account itself.
+ */
+const ANCHOR = /^kutup\.account\.manifestPins:/
+
+/** This origin's databases named by the account (docs/plans/api-surface.md §6). */
+const ACCOUNT_DATABASES = ['kutup.chat.store', 'kutup.chat.backup', 'kutup.pass.outbox']
+
+/**
+ * What this origin keeps for `accountId` (docs/plans/api-surface.md §6, the
+ * user's decision 10): every `kutup.…:<accountId>` key and database. The
+ * anchors stay unless `withAnchors` (the account is being deleted). A
+ * database another tab still holds open is deleted once that tab lets go.
+ */
+export async function clearAccountStorage(accountId: string, withAnchors = false): Promise<void> {
+  try {
+    const doomed: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key?.startsWith('kutup.') || !key.endsWith(`:${accountId}`)) continue
+      if (!withAnchors && ANCHOR.test(key)) continue
+      doomed.push(key)
+    }
+    for (const key of doomed) localStorage.removeItem(key)
+  } catch {
+    // Storage blocked: nothing kept to clear.
+  }
+  if (typeof indexedDB === 'undefined') return
+  await Promise.all(
+    ACCOUNT_DATABASES.map(
+      (prefix) =>
+        new Promise<void>((resolve) => {
+          const request = indexedDB.deleteDatabase(`${prefix}:${accountId}`)
+          request.onsuccess = () => resolve()
+          request.onerror = () => resolve()
+          request.onblocked = () => resolve()
+        }),
+    ),
+  )
+}
+
+/**
  * Lists this origin keeps per account in localStorage (the Chat and Mail
- * "not in contacts" dismissals): gone with the sign-in, and the old
- * unkeyed copies with them.
+ * "not in contacts" dismissals): gone with the sign-in.
  */
 const ACCOUNT_LISTS = /^kutup\.(chat|mail)\.notInContactsDismissed(:|$)/
 

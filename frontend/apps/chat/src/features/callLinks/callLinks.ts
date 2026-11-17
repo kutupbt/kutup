@@ -213,7 +213,7 @@ export interface MeetingSeat {
   seat: string
 }
 
-const seatKey = (roomId: string) => `kutup-meeting-seat:${roomId}`
+const seatKey = (roomId: string) => `kutup.chat.meetingSeat:${roomId}`
 
 export function meetingSeat(roomId: string): MeetingSeat {
   try {

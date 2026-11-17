@@ -1,13 +1,14 @@
-import { resolveApiBase } from '@kutup/session/apiBase'
-import { hash } from '@kutup/crypto/hash'
+const CHAT_DEVICE_RESET_REQUEST = 'kutup.chat.resetDevice'
+const CHAT_DEVICE_ID = 'kutup.chat.deviceId'
+const CHAT_DEVICE_REPLACED = 'kutup.chat.replacedDevice'
 
-const CHAT_DEVICE_DATABASE_VERSION = 'v2'
-const CHAT_DEVICE_RESET_REQUEST = 'kutup:chat:reset-device'
-const CHAT_DEVICE_ID = 'kutup:chat:device-id'
-const CHAT_DEVICE_REPLACED = 'kutup:chat:replaced-device'
-
+/**
+ * The account's Chat store on this origin (docs/plans/api-surface.md §6):
+ * named by its permanent account id. Each server is its own origin, and a
+ * server reset clears the origin (instance.ts), so the id alone scopes it.
+ */
 export async function chatDeviceDatabaseName(userId: string): Promise<string> {
-  return `kutup-chat-${CHAT_DEVICE_DATABASE_VERSION}:${await chatAccountScope(userId)}`
+  return Promise.resolve(`kutup.chat.store:${userId}`)
 }
 
 /**
@@ -79,13 +80,4 @@ function writeStored(storage: Storage, key: string, value: string): void {
   } catch {
     // Storage can be full or blocked; the old device is then revoked by hand.
   }
-}
-
-async function chatAccountScope(userId: string): Promise<string> {
-  const apiBase = await resolveApiBase()
-  const canonicalServer = new URL(apiBase, window.location.href).href
-  const digest = await hash(new TextEncoder().encode(`${canonicalServer}\0${userId}`))
-  return Array.from(digest.slice(0, 16), byte =>
-    byte.toString(16).padStart(2, '0'),
-  ).join('')
 }

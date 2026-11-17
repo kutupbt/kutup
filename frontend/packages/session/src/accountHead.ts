@@ -227,7 +227,7 @@ function applied(values: HeadIndex, changes: ListedEdit<unknown>['changes']): He
 /** Runs `task` under this origin's lock of `name` (other tabs wait), where the browser has locks. */
 function locked<T>(name: string, task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  return locks ? (locks.request(`kutup-account-head:${name}`, task) as Promise<T>) : task()
+  return locks ? (locks.request(`kutup.account.head:${name}`, task) as Promise<T>) : task()
 }
 
 /** What one check of a head found. */

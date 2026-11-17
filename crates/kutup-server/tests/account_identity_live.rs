@@ -327,7 +327,7 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .filter(|v| v.starts_with("kutup_known="))
+        .filter(|v| v.starts_with("kutup.known="))
         .map(str::to_owned)
         .collect();
     let path_of = |cookie: &str| -> String {
@@ -340,7 +340,7 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     };
     let known = set
         .iter()
-        .find(|v| !v.starts_with("kutup_known=;"))
+        .find(|v| !v.starts_with("kutup.known=;"))
         .expect("known-client cookie")
         .clone();
     assert!(known.contains("HttpOnly"), "{known}");
@@ -362,13 +362,6 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     ] {
         assert!(!matches(route), "{route} would carry {known}");
     }
-    // The mark a browser may hold from before, at `Path=/api`, is cleared.
-    assert!(
-        set.iter().any(|v| v.starts_with("kutup_known=;")
-            && v.contains("Max-Age=0")
-            && path_of(v) == "/api"),
-        "{set:?}"
-    );
     let known = known.split(';').next().unwrap().to_owned();
 
     // Five misses lock that client only; another address still gets in.

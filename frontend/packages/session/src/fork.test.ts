@@ -86,7 +86,7 @@ describe('requestFork', () => {
     expect(target.pathname).toBe('/authorize')
     expect(target.searchParams.get('app')).toBe('drive')
     const state = target.searchParams.get('state')!
-    expect(sessionStorage.getItem(`kutup-fork:${state}`)).toBe('/folders/abc?sort=name')
+    expect(sessionStorage.getItem(`kutup.session.fork:${state}`)).toBe('/folders/abc?sort=name')
   })
 })
 
@@ -123,7 +123,7 @@ describe('consumeFork', () => {
   })
 
   it('wipes the fragment, redeems once, persists, and returns to the saved path', async () => {
-    sessionStorage.setItem('kutup-fork:st', '/folders/abc')
+    sessionStorage.setItem('kutup.session.fork:st', '/folders/abc')
     visit(`/login#selector=SEL&sk=${sk}&state=st`)
     expect(hasForkInLocation()).toBe(true)
     const next = await consumeFork()
@@ -132,18 +132,18 @@ describe('consumeFork', () => {
     expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), 'AT', 'S2')
     expect(persistKeys).toHaveBeenCalledWith('S2', expect.objectContaining({ userId: 'u1' }))
     expect(next).toBe('/folders/abc')
-    expect(sessionStorage.getItem('kutup-fork:st')).toBeNull()
+    expect(sessionStorage.getItem('kutup.session.fork:st')).toBeNull()
   })
 
   it('never returns to another origin', async () => {
-    sessionStorage.setItem('kutup-fork:st', '//evil.example/phish')
+    sessionStorage.setItem('kutup.session.fork:st', '//evil.example/phish')
     visit(`/login#selector=SEL&sk=${sk}&state=st`)
     expect(await consumeFork()).toBe('/')
   })
 
   it('refuses keys for another account', async () => {
     opened.value = encodeKeys({ ...keys, userId: 'someone-else' })
-    sessionStorage.setItem('kutup-fork:st', '/')
+    sessionStorage.setItem('kutup.session.fork:st', '/')
     visit(`/login#selector=SEL&sk=${sk}&state=st`)
     await expect(consumeFork()).rejects.toThrow(/another account/)
     expect(activateSession).not.toHaveBeenCalled()
@@ -162,7 +162,7 @@ describe('consumeFork', () => {
   })
 
   it('redeems a state once: the same link twice is refused', async () => {
-    sessionStorage.setItem('kutup-fork:st', '/folders/abc')
+    sessionStorage.setItem('kutup.session.fork:st', '/folders/abc')
     visit(`/login#selector=SEL&sk=${sk}&state=st`)
     await consumeFork()
     visit(`/login#selector=SEL&sk=${sk}&state=st`)

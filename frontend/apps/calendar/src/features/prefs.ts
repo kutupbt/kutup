@@ -14,7 +14,7 @@ export interface CalendarPrefs {
   hour12: boolean | null
 }
 
-const KEY = 'kutup-calendar-prefs'
+const KEY = 'kutup.calendar.prefs'
 const listeners = new Set<() => void>()
 let cached: CalendarPrefs | null = null
 /** The account's zone, once read (`useAccountZone`): this device's when it chose none. */

@@ -183,7 +183,7 @@ export function memoryRecordsStore(): RecordsStore {
   }
 }
 
-const DB_NAME = 'kutup-account-records'
+const DB_NAME = 'kutup.account.records'
 const RECORDS = 'records'
 const CURSORS = 'cursors'
 

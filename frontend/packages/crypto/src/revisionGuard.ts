@@ -66,7 +66,7 @@ export function memoryRevisionStore(): RevisionStore {
   }
 }
 
-const DB_NAME = 'kutup-revisions-v2'
+const DB_NAME = 'kutup.account.revisionsSeen'
 const STORE = 'seen'
 
 function request<T>(req: IDBRequest<T>): Promise<T> {
@@ -181,7 +181,7 @@ const chains = new Map<string, Promise<unknown>>()
  */
 export function serialized<T>(entry: string, task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  const run = (): Promise<T> => (locks ? (locks.request(`kutup-revision:${entry}`, task) as Promise<T>) : task())
+  const run = (): Promise<T> => (locks ? (locks.request(`kutup.account.revision:${entry}`, task) as Promise<T>) : task())
   const result = (chains.get(entry) ?? Promise.resolve()).then(run, run)
   const settled = result.catch(() => undefined)
   chains.set(entry, settled)

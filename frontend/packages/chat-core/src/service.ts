@@ -456,8 +456,8 @@ export class ChatService {
     await completeRequestedLocalChatDeviceReset(options.userId)
     const databaseName = await chatDeviceDatabaseName(options.userId)
     const scope = databaseName.slice(databaseName.indexOf(':') + 1)
-    const lockName = `kutup-chat-engine:${scope}`
-    const channelName = `kutup-chat-updates:${scope}`
+    const lockName = `kutup.chat.engine:${scope}`
+    const channelName = `kutup.chat.updates:${scope}`
     const wasm = await loadChatWasm()
     const transport = new ApiChatTransport()
     // One lock for opening and for every later operation, so opening does
@@ -2137,7 +2137,7 @@ export class ChatService {
 
   private async withAttachmentLedgerLock<T>(operation: () => Promise<T>): Promise<T> {
     return navigator.locks.request(
-      `${this.lockName}:attachment-ledger`,
+      this.lockName.replace('kutup.chat.engine:', 'kutup.chat.attachmentLedger:'),
       { mode: 'exclusive' },
       operation,
     )

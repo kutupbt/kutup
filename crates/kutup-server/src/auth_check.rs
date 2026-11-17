@@ -64,7 +64,7 @@ pub(crate) fn verify_hash(secret: impl AsRef<[u8]>, hash: &str) -> bool {
 /// The cookie marking a client an account has signed in from: host-only on
 /// each app's origin (set at sign-in and when an app takes its session from
 /// the account app), so reauth and the Pass PIN from any app see it.
-pub(crate) const KNOWN_CLIENT_COOKIE: &str = "kutup_known";
+pub(crate) const KNOWN_CLIENT_COOKIE: &str = "kutup.known";
 /// How long a known client stays known without signing in again.
 const KNOWN_CLIENT_DAYS: i64 = 90;
 
@@ -259,7 +259,7 @@ async fn known_client_key(state: &AppState) -> AppResult<[u8; 32]> {
         .copied()
 }
 
-/// A parsed `kutup_known` value: `user id ‖ issued at (seconds, big-endian)
+/// A parsed `kutup.known` value: `user id ‖ issued at (seconds, big-endian)
 /// ‖ tag`, base64url; the tag is an HMAC over the account, the time and the
 /// account's credential epoch.
 struct KnownClient {
@@ -342,13 +342,6 @@ pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppR
 /// Clears the mark on this origin (signing out).
 pub(crate) fn clear_known_client_cookie(state: &AppState) -> String {
     clear_at(state, "/api/auth")
-}
-
-/// Clears the mark a browser may still hold at `Path=/api`, where it was set
-/// before: sent with every set or clear of the mark, so it reaches no route
-/// outside `/api/auth` again.
-pub(crate) fn clear_retired_known_client_cookie(state: &AppState) -> String {
-    clear_at(state, "/api")
 }
 
 fn clear_at(state: &AppState, path: &str) -> String {

@@ -59,6 +59,6 @@ describe('Administration → Server settings', () => {
     expect(field.getAttribute('max')).toBe('9')
     expect((field as HTMLInputElement).value).toBe('3')
     // The oldest client versions accepted, one row per client type.
-    expect(((await screen.findByLabelText(/Command line/)) as HTMLInputElement).value).toBe('0.0.14')
+    expect(await screen.findByLabelText(/Command line/)).toHaveProperty('value', '0.0.14')
   })
 })

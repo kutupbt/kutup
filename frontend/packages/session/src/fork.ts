@@ -39,7 +39,7 @@ export function isForkChild(value: string | null): value is ForkChild {
   return value === 'drive' || value === 'chat' || value === 'maps' || value === 'photos' || value === 'office' || value === 'contacts' || value === 'mail' || value === 'pass' || value === 'calendar'
 }
 
-const STATE_PREFIX = 'kutup-fork:'
+const STATE_PREFIX = 'kutup.session.fork:'
 /** The child app's path that consumes forks. */
 export const FORK_CONSUME_PATH = '/login'
 

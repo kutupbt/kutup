@@ -177,7 +177,7 @@ function Waiting({ controller, title }: { controller: LinkCallController; title:
   )
 }
 
-const SHOW_ACCOUNT_KEY = 'kutup-meeting-show-account'
+const SHOW_ACCOUNT_KEY = 'kutup.chat.meetingShowAccount'
 
 function rememberedShowAccount(): boolean {
   try {

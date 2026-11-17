@@ -59,7 +59,7 @@ describe('the server instance id', () => {
     sessionStorage.setItem('kutup.session.fork:x', '/')
     await createDatabase('kutup.chat.store:x')
     await createDatabase('kutup.account.records')
-    await createDatabase('kutup.drive.revisionsSeen')
+    await createDatabase('kutup.account.revisionsSeen')
 
     expect(await reconcileInstance('B')).toBe(true)
 
@@ -70,7 +70,7 @@ describe('the server instance id', () => {
     expect(localStorage.getItem('kutup.ui.theme')).toBe('dark')
     expect(localStorage.getItem('other-site')).toBe('kept')
     expect(sessionStorage.getItem('kutup.session.fork:x')).toBeNull()
-    expect(await databaseNames()).toEqual(['kutup.drive.revisionsSeen'])
+    expect(await databaseNames()).toEqual(['kutup.account.revisionsSeen'])
     expect(takeServerResetNotice()).toBe(true)
     expect(takeServerResetNotice()).toBe(false)
   })

@@ -253,7 +253,7 @@ export class ContentSearch {
 
   /** Named by an HMAC under a key from the object-id root: bound to no name, kept across a rotation. */
   static async open(masterKeys: MasterKeys, objectIdKey: ObjectIdKey, binding: string, account: MailAccount): Promise<ContentSearch> {
-    const dbName = `kutup-mail-search:${await mailSearchStoreName(objectIdKey)}`
+    const dbName = `kutup.mail.search:${await mailSearchStoreName(objectIdKey)}`
     const search = new ContentSearch(masterKeys, binding, account, dbName, await mailSearchMatcher())
     await search.exclusive(() => Promise.resolve())
     return search
