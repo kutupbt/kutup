@@ -127,14 +127,15 @@ pub(crate) async fn collection_rows(
     );
     let own: Vec<OwnRow> = sqlx::query_as(
         r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.owner_key_envelope,
-                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash,
+                  c.key_epoch, c.name_revision, c.epoch_statement,
+                  encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
                   c.parent_collection_id, c.color, c.created_at,
                   GREATEST(c.updated_at,
                            COALESCE((SELECT MAX(f.updated_at) FROM drive_files f
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
                            COALESCE((SELECT MAX(sc.created_at) FROM drive_collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
-                  c.name_hash, c.name_hash_generation
+                  encode(c.name_hash, 'hex') AS name_hash, c.name_hash_generation
            FROM drive_collections c WHERE c.owner_account_id = $1 AND c.deleted_at IS NULL
              AND c.kind = $2
            ORDER BY c.created_at ASC"#,
@@ -194,7 +195,8 @@ pub(crate) async fn collection_rows(
 
     let shared: Vec<SharedCollectionDbRow> = sqlx::query_as(
         r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.key_epoch,
-                  c.name_revision, c.epoch_statement, c.epoch_statement_hash,
+                  c.name_revision, c.epoch_statement,
+                  encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
                   c.parent_collection_id, c.color, cs.named_share_envelope,
                   cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
                   c.created_at, GREATEST(c.updated_at,
@@ -203,10 +205,10 @@ pub(crate) async fn collection_rows(
                            COALESCE((SELECT MAX(sc.created_at) FROM drive_collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
                   mailbox_owner.username AS owner_username,
-                  mailbox_owner.account_incarnation_id AS owner_incarnation_id,
+                  encode(mailbox_owner.account_incarnation_id, 'hex') AS owner_incarnation_id,
                   mailbox_owner.drive_signing_public_key AS owner_signing_public_key,
                   mailbox_owner.account_authority_public_key AS owner_authority_public_key,
-                  c.name_hash
+                  encode(c.name_hash, 'hex') AS name_hash
            FROM drive_collections c
            JOIN drive_collection_shares cs ON cs.collection_id = c.id
            JOIN accounts mailbox_owner ON mailbox_owner.id = c.owner_account_id
@@ -383,7 +385,7 @@ pub(crate) async fn create_owned_collection(
               (id, owner_account_id, name_envelope, owner_key_envelope, key_epoch,
                name_revision, epoch_statement, epoch_statement_hash, parent_collection_id, kind,
                name_hash, name_hash_generation)
-           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7,$8,$9,$10)"#,
+           VALUES ($1,$2,$3,$4,1,1,$5,decode($6, 'hex'),$7,$8,decode($9, 'hex'),$10)"#,
     )
     .bind(id)
     .bind(user_id)
@@ -401,7 +403,7 @@ pub(crate) async fn create_owned_collection(
     sqlx::query(
         r#"INSERT INTO drive_collection_key_epoch_history
               (collection_id, epoch, owner_key_envelope, epoch_statement, epoch_statement_hash)
-           VALUES ($1,1,$2,$3,$4)"#,
+           VALUES ($1,1,$2,$3,decode($4, 'hex'))"#,
     )
     .bind(id)
     .bind(&req.owner_key_envelope)
@@ -453,14 +455,15 @@ pub async fn get_collection(
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.owner_key_envelope,
-                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash,
+                  c.key_epoch, c.name_revision, c.epoch_statement,
+                  encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
                   c.parent_collection_id, c.color, c.created_at,
                   GREATEST(c.updated_at,
                            COALESCE((SELECT MAX(f.updated_at) FROM drive_files f
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
                            COALESCE((SELECT MAX(sc.created_at) FROM drive_collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
-                  c.name_hash, c.name_hash_generation
+                  encode(c.name_hash, 'hex') AS name_hash, c.name_hash_generation
            FROM drive_collections c WHERE c.id = $1 AND c.owner_account_id = $2 AND c.deleted_at IS NULL"#,
     )
     .bind(coll_id)
@@ -521,7 +524,9 @@ pub async fn get_collection(
     // share view matches ListCollections + the frontend's FileEditorPage.
     let shared: Option<SharedCollectionDbRow> = sqlx::query_as(
         r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.key_epoch, c.name_revision,
-                  c.epoch_statement, c.epoch_statement_hash, c.parent_collection_id, c.color,
+                  c.epoch_statement,
+                  encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
+                  c.parent_collection_id, c.color,
                   cs.named_share_envelope, cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
                   c.created_at, GREATEST(c.updated_at,
                            COALESCE((SELECT MAX(f.updated_at) FROM drive_files f
@@ -529,10 +534,10 @@ pub async fn get_collection(
                            COALESCE((SELECT MAX(sc.created_at) FROM drive_collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
                   mailbox_owner.username AS owner_username,
-                  mailbox_owner.account_incarnation_id AS owner_incarnation_id,
+                  encode(mailbox_owner.account_incarnation_id, 'hex') AS owner_incarnation_id,
                   mailbox_owner.drive_signing_public_key AS owner_signing_public_key,
                   mailbox_owner.account_authority_public_key AS owner_authority_public_key,
-                  c.name_hash
+                  encode(c.name_hash, 'hex') AS name_hash
            FROM drive_collections c
            JOIN drive_collection_shares cs ON cs.collection_id = c.id
            JOIN accounts mailbox_owner ON mailbox_owner.id = c.owner_account_id
@@ -646,7 +651,7 @@ pub async fn update_collection(
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     let res = sqlx::query(
-        r#"UPDATE drive_collections SET name_envelope = $1, name_revision = $2, name_hash = $6,
+        r#"UPDATE drive_collections SET name_envelope = $1, name_revision = $2, name_hash = decode($6, 'hex'),
                   name_hash_generation = $7, updated_at = NOW()
            WHERE id = $3 AND owner_account_id = $4 AND name_revision = $5 AND deleted_at IS NULL"#,
     )
@@ -810,14 +815,14 @@ pub async fn share_collection(
 
     type IdentityRow = (Option<String>, String, String, String);
     let sender: IdentityRow = sqlx::query_as(
-        "SELECT username, account_incarnation_id, drive_signing_public_key, public_key
+        "SELECT username, encode(account_incarnation_id, 'hex'), drive_signing_public_key, public_key
          FROM accounts WHERE id = $1",
     )
     .bind(sharer_id)
     .fetch_one(&state.pool)
     .await?;
     let recipient: IdentityRow = sqlx::query_as(
-        "SELECT username, account_incarnation_id, drive_signing_public_key, public_key
+        "SELECT username, encode(account_incarnation_id, 'hex'), drive_signing_public_key, public_key
          FROM accounts WHERE id = $1 AND is_active = true",
     )
     .bind(recipient_id)

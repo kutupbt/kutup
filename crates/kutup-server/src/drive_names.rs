@@ -124,11 +124,11 @@ pub async fn ensure_name_free(
     let holder: Option<(String, Uuid, Option<String>)> = match place {
         Place::Folder(folder) => {
             sqlx::query_as(
-                "SELECT 'file', id, content_hash FROM drive_files
-                  WHERE collection_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND id <> $3
+                "SELECT 'file', id, encode(content_hash, 'hex') FROM drive_files
+                  WHERE collection_id = $1 AND name_hash = decode($2, 'hex') AND deleted_at IS NULL AND id <> $3
                  UNION ALL
                  SELECT 'folder', id, NULL FROM drive_collections
-                  WHERE parent_collection_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND id <> $3
+                  WHERE parent_collection_id = $1 AND name_hash = decode($2, 'hex') AND deleted_at IS NULL AND id <> $3
                  LIMIT 1",
             )
             .bind(folder)
@@ -140,7 +140,7 @@ pub async fn ensure_name_free(
         Place::TopLevel(owner) => {
             sqlx::query_as(
                 "SELECT 'folder', id, NULL FROM drive_collections
-                  WHERE owner_account_id = $1 AND parent_collection_id IS NULL AND name_hash = $2
+                  WHERE owner_account_id = $1 AND parent_collection_id IS NULL AND name_hash = decode($2, 'hex')
                     AND deleted_at IS NULL AND id <> $3 AND kind = 'folder'
                  LIMIT 1",
             )

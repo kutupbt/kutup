@@ -326,7 +326,7 @@ fn upload_rows_are_a_file_or_a_version() {
                     file_key_envelope, key_epoch, storage_path, s3_upload_id,
                     name_hash, kind, key_generation)
                  VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, $2, 1,
-                    gen_random_uuid()::text, 's', $1, $3, $4)",
+                    gen_random_uuid()::text, 's', decode($1, 'hex'), $3, $4)",
             )
             .bind(name_hash)
             .bind(key_envelope)

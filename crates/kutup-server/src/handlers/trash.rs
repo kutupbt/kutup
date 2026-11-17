@@ -49,7 +49,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
     );
     let folders: Vec<FolderTuple> = sqlx::query_as(
         r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.owner_key_envelope,
-                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash, c.color,
+                  c.key_epoch, c.name_revision, c.epoch_statement, encode(c.epoch_statement_hash, 'hex'), c.color,
                   (SELECT p.id FROM drive_collections p
                     WHERE p.id = c.parent_collection_id AND p.deleted_at IS NULL),
                   (SELECT COUNT(*) FROM drive_files f WHERE f.trash_root_id = c.id),
@@ -87,7 +87,8 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
                   f.key_epoch, f.key_generation, f.metadata_revision,
                   c.owner_account_id, c.owner_key_envelope, c.key_epoch AS collection_key_epoch,
-                  c.epoch_statement, c.epoch_statement_hash, f.deleted_at,
+                  c.epoch_statement,
+                  encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash, f.deleted_at,
                   sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                   sm.key_generation AS thumb_sm_generation,
                   lg.key_generation AS thumb_lg_generation
@@ -238,7 +239,7 @@ pub async fn restore(
         let place = crate::drive_names::Place::Folder(coll_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
         let (stored_hash, key_generation, revision): (String, i32, i64) = sqlx::query_as(
-            "SELECT name_hash, key_generation, metadata_revision FROM drive_files WHERE id = $1",
+            "SELECT encode(name_hash, 'hex'), key_generation, metadata_revision FROM drive_files WHERE id = $1",
         )
         .bind(root_id)
         .fetch_one(&mut *tx)
@@ -280,7 +281,7 @@ pub async fn restore(
         let name_hash = given_hash.clone().unwrap_or(stored_hash);
         crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(root_id)).await?;
         sqlx::query(
-            "UPDATE drive_files SET deleted_at = NULL, trash_root_id = NULL, name_hash = $2 WHERE id = $1",
+            "UPDATE drive_files SET deleted_at = NULL, trash_root_id = NULL, name_hash = decode($2, 'hex') WHERE id = $1",
         )
         .bind(root_id)
         .bind(&name_hash)
@@ -330,7 +331,7 @@ pub async fn restore(
     crate::drive_names::lock_place(&mut tx, place).await?;
     let (stored_hash, stored_generation, epoch, revision): (String, Option<i32>, i32, i64) =
         sqlx::query_as(
-            "SELECT name_hash, name_hash_generation, key_epoch, name_revision FROM drive_collections WHERE id = $1",
+            "SELECT encode(name_hash, 'hex'), name_hash_generation, key_epoch, name_revision FROM drive_collections WHERE id = $1",
         )
             .bind(root_id)
             .fetch_one(&mut *tx)
@@ -379,7 +380,7 @@ pub async fn restore(
     };
     crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(root_id)).await?;
     sqlx::query(
-        "UPDATE drive_collections SET name_hash = $2, name_hash_generation = $3 WHERE id = $1",
+        "UPDATE drive_collections SET name_hash = decode($2, 'hex'), name_hash_generation = $3 WHERE id = $1",
     )
     .bind(root_id)
     .bind(&name_hash)

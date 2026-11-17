@@ -78,7 +78,7 @@ pub async fn lock(
     session: Uuid,
 ) -> AppResult<Locked> {
     let account: Option<(String, Option<String>, i32)> = sqlx::query_as(
-        "SELECT account_incarnation_id, key_binding::text, master_key_generation FROM accounts
+        "SELECT encode(account_incarnation_id, 'hex'), key_binding::text, master_key_generation FROM accounts
           WHERE id = $1 AND is_active FOR UPDATE",
     )
     .bind(user_id)
@@ -241,7 +241,7 @@ async fn insert(
 ) -> AppResult<()> {
     let inserted = sqlx::query(
         "INSERT INTO account_heads (account_id, sequence, sealed, incarnation_id)
-         VALUES ($1, $2, $3, $4)",
+         VALUES ($1, $2, $3, decode($4, 'hex'))",
     )
     .bind(locked.user_id)
     .bind(next.sequence)
@@ -567,7 +567,7 @@ mod tests {
             "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', $3, '')",
+             VALUES ($1, $2, '', '', '', '', ''::bytea, decode($3, 'hex'), '')",
         )
         .bind(user_id)
         .bind(format!("heads{}", &user_id.simple().to_string()[..12]))

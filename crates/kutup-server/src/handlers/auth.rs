@@ -775,7 +775,7 @@ pub async fn register(
             opaque_record, opaque_suite, opaque_server_key_id,
             recovery_key_verifier, storage_quota_bytes, drive_key_binding,
             key_binding, id, identity_suite, drive_key_binding_epoch
-        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$1::uuid,$16,2,1)
+        ) VALUES ($2,$3,$4,$5,$6,decode($7, 'hex'),decode($8, 'hex'),$9,$10,$11,$12,$13,$14,$15,$1::uuid,$16,2,1)
         RETURNING id"#,
     )
     .bind(&req.key_binding)
@@ -1380,7 +1380,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     };
     // The account's rename chain, of its current incarnation: where it ends.
     let anchor: Option<(i32, String)> = sqlx::query_as(
-        "SELECT r.sequence, r.digest FROM account_renames r
+        "SELECT r.sequence, encode(r.digest, 'hex') FROM account_renames r
            JOIN accounts u ON u.account_incarnation_id = r.incarnation_id
           WHERE u.id = $1 ORDER BY r.sequence DESC LIMIT 1",
     )
@@ -2042,8 +2042,8 @@ pub async fn complete_setup(
               opaque_record = $1, opaque_suite = $9, opaque_server_key_id = $10,
               master_key_envelope = $2, recovery_key_envelope = $3,
               public_key = $4,
-              account_authority_public_key = $5, account_authority_key_id = $6,
-              account_incarnation_id = $7, drive_signing_public_key = $8,
+              account_authority_public_key = $5, account_authority_key_id = decode($6, 'hex'),
+              account_incarnation_id = decode($7, 'hex'), drive_signing_public_key = $8,
               recovery_key_verifier = $11,
               drive_key_binding = $13,
               key_binding = $14::uuid,

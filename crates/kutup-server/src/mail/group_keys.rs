@@ -159,8 +159,8 @@ pub async fn check_shares(
             .map_err(|_| AppError::bad_request("userId must be an account id"))?;
         let share = decode(&input.share, "share")?;
         let current: Option<(String, i16)> = sqlx::query_as(
-            "SELECT account_incarnation_id, identity_suite FROM accounts
-              WHERE id = $1 AND is_active AND NOT is_first_login AND account_incarnation_id <> ''",
+            "SELECT encode(account_incarnation_id, 'hex'), identity_suite FROM accounts
+              WHERE id = $1 AND is_active AND NOT is_first_login AND account_incarnation_id <> ''::bytea",
         )
         .bind(user_id)
         .fetch_optional(&mut *conn)
@@ -304,7 +304,7 @@ pub async fn publish(
     for share in shares {
         sqlx::query(
             "INSERT INTO mail_group_key_shares (group_key_id, account_id, share, member_incarnation_id)
-             VALUES ($1, $2, $3, $4)",
+             VALUES ($1, $2, $3, decode($4, 'hex'))",
         )
         .bind(key_id)
         .bind(share.user_id)
@@ -449,7 +449,7 @@ pub async fn add_signing_shares(
         sqlx::query(
             "INSERT INTO mail_group_signing_shares
                     (group_id, signer_public_key, account_id, share, member_incarnation_id)
-             VALUES ($1, $2, $3, $4, $5)
+             VALUES ($1, $2, $3, $4, decode($5, 'hex'))
              ON CONFLICT (group_id, signer_public_key, account_id) DO UPDATE
                SET share = EXCLUDED.share, member_incarnation_id = EXCLUDED.member_incarnation_id,
                    created_at = now()",
@@ -483,7 +483,7 @@ pub async fn add_shares(
     for share in shares {
         sqlx::query(
             "INSERT INTO mail_group_key_shares (group_key_id, account_id, share, member_incarnation_id)
-             VALUES ($1, $2, $3, $4)
+             VALUES ($1, $2, $3, decode($4, 'hex'))
              ON CONFLICT (group_key_id, account_id) DO UPDATE
                SET share = EXCLUDED.share, member_incarnation_id = EXCLUDED.member_incarnation_id, created_at = now()",
         )

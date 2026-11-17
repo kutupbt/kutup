@@ -52,7 +52,7 @@ impl FederationStack {
         let sequence = i64::try_from(sequence)
             .map_err(|_| anyhow::anyhow!("identity sequence exceeds PostgreSQL BIGINT"))?;
         let rows: Vec<(i64, String, String, serde_json::Value)> = sqlx::query_as(
-            "SELECT sequence, document_hash, key_id, document
+            "SELECT sequence, encode(document_hash, 'hex'), encode(key_id, 'hex'), document
              FROM federation_local_identity_documents
              WHERE sequence <= $1 ORDER BY sequence",
         )

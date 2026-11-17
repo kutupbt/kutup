@@ -179,7 +179,7 @@ async fn store_capped(
     let mut tx = pool.begin().await?;
     let kept: Option<(Value, String)> = sqlx::query_as(
         "SELECT chain, authority_public_key FROM remote_account_renames
-          WHERE domain = $1 AND incarnation_id = $2 FOR UPDATE",
+          WHERE domain = $1 AND incarnation_id = decode($2, 'hex') FOR UPDATE",
     )
     .bind(domain)
     .bind(&entry.incarnation_id)
@@ -220,7 +220,7 @@ async fn store_capped(
                 "INSERT INTO remote_account_renames
                      (domain, incarnation_id, authority_public_key, sequence, head_digest,
                       current_address, state, chain, addresses)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 VALUES ($1, decode($2, 'hex'), $3, $4, $5, $6, $7, $8, $9)
                  ON CONFLICT DO NOTHING",
             )
             .bind(domain)
@@ -259,7 +259,7 @@ async fn store_capped(
                         SET sequence = $3, head_digest = $4, current_address = $5,
                             state = CASE WHEN sequence = $3 AND $6 = 'current' THEN state ELSE $6 END,
                             chain = $7, addresses = $8, updated_at = now()
-                      WHERE domain = $1 AND incarnation_id = $2",
+                      WHERE domain = $1 AND incarnation_id = decode($2, 'hex')",
                 )
                 .bind(domain)
                 .bind(&entry.incarnation_id)
@@ -301,9 +301,9 @@ async fn apply_rows(
     let username = current.rsplit_once('@').map_or("", |(local, _)| local);
     for statement in [
         "UPDATE drive_federated_incoming_shares SET owner_account = $3
-          WHERE owner_server = $1 AND owner_incarnation_id = $2 AND owner_account <> $3",
+          WHERE owner_server = $1 AND owner_incarnation_id = decode($2, 'hex') AND owner_account <> $3",
         "UPDATE drive_federated_incoming_file_shares SET owner_account = $3
-          WHERE owner_server = $1 AND owner_incarnation_id = $2 AND owner_account <> $3",
+          WHERE owner_server = $1 AND owner_incarnation_id = decode($2, 'hex') AND owner_account <> $3",
     ] {
         sqlx::query(statement)
             .bind(domain)
@@ -314,10 +314,10 @@ async fn apply_rows(
     }
     for statement in [
         "UPDATE drive_federated_outgoing_shares SET recipient_username = $3
-          WHERE recipient_server = $1 AND recipient_incarnation_id = $2
+          WHERE recipient_server = $1 AND recipient_incarnation_id = decode($2, 'hex')
             AND recipient_username <> $3",
         "UPDATE drive_federated_outgoing_file_shares SET recipient_username = $3
-          WHERE recipient_server = $1 AND recipient_incarnation_id = $2
+          WHERE recipient_server = $1 AND recipient_incarnation_id = decode($2, 'hex')
             AND recipient_username <> $3",
     ] {
         sqlx::query(statement)
@@ -339,7 +339,7 @@ async fn kept(
 ) -> AppResult<Vec<(ChainEntry, f64)>> {
     type Row = (String, String, String, String, Value, f64);
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT incarnation_id, authority_public_key, current_address, state, chain,
+        "SELECT encode(incarnation_id, 'hex'), authority_public_key, current_address, state, chain,
                 EXTRACT(EPOCH FROM now() - updated_at)::float8
            FROM remote_account_renames
           WHERE domain = $1 AND addresses @> ARRAY[$2]
@@ -742,7 +742,7 @@ pub async fn enqueue(
           WHERE trust_state <> 'quarantined' AND domain <> $3
             AND last_seen_at > now() - make_interval(days => $4)
             AND EXISTS (SELECT 1 FROM accounts u
-                         WHERE u.account_incarnation_id = $1
+                         WHERE u.account_incarnation_id = decode($1, 'hex')
                            AND kutup_account_federates(u.id))
          ON CONFLICT DO NOTHING",
     )
@@ -837,7 +837,7 @@ async fn deliver_one(
     // sent (docs/plans/server-personal-data.md, the federation switch).
     let federates: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM accounts u
-                         WHERE u.account_incarnation_id = $1
+                         WHERE u.account_incarnation_id = decode($1, 'hex')
                            AND kutup_account_federates(u.id))",
     )
     .bind(&incarnation)
@@ -848,7 +848,7 @@ async fn deliver_one(
     }
     let rows: Vec<(Value, String, String)> = sqlx::query_as(
         "SELECT statement, authority_public_key, current FROM account_renames
-          WHERE incarnation_id = $1 ORDER BY sequence",
+          WHERE incarnation_id = decode($1, 'hex') ORDER BY sequence",
     )
     .bind(&incarnation)
     .fetch_all(&state.pool)
@@ -1047,7 +1047,8 @@ mod tests {
 
     async fn clean(pool: &sqlx::PgPool, incarnations: &[String]) {
         sqlx::query(
-            "DELETE FROM remote_account_renames WHERE domain = $1 AND incarnation_id = ANY($2)",
+            "DELETE FROM remote_account_renames WHERE domain = $1
+               AND incarnation_id = ANY(SELECT decode(x, 'hex') FROM unnest($2::text[]) AS x)",
         )
         .bind(PEER)
         .bind(incarnations)
@@ -1133,7 +1134,7 @@ mod tests {
             let incarnation = who.incarnation_id();
             async move {
                 sqlx::query_scalar::<_, String>(
-                    "SELECT state FROM remote_account_renames WHERE domain = $1 AND incarnation_id = $2",
+                    "SELECT state FROM remote_account_renames WHERE domain = $1 AND incarnation_id = decode($2, 'hex')",
                 )
                 .bind(PEER)
                 .bind(incarnation)
@@ -1186,8 +1187,10 @@ mod tests {
         let hers = verify(PEER, entry(&alice, &[&name, &format!("alicia{tag}")])).unwrap();
         assert_eq!(store(&pool, PEER, &hers).await.unwrap(), Stored::Advanced);
         let kept_incarnations: Vec<String> = sqlx::query_scalar(
-            "SELECT incarnation_id FROM remote_account_renames
-              WHERE domain = $1 AND incarnation_id = ANY($2) ORDER BY incarnation_id",
+            "SELECT encode(incarnation_id, 'hex') FROM remote_account_renames
+              WHERE domain = $1
+                AND incarnation_id = ANY(SELECT decode(x, 'hex') FROM unnest($2::text[]) AS x)
+              ORDER BY incarnation_id",
         )
         .bind(PEER)
         .bind(&incarnations[..])

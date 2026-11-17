@@ -65,7 +65,7 @@ async fn store(pool: &PgPool, manifest: &AccountManifestV3) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO remote_account_manifests
              (domain, account_id, sequence, manifest_hash, manifest, fetched_at)
-         VALUES ($1, $2, $3, $4, $5, now())
+         VALUES ($1, $2, $3, decode($4, 'hex'), $5, now())
          ON CONFLICT (domain, account_id) DO UPDATE SET
              sequence = EXCLUDED.sequence,
              manifest_hash = EXCLUDED.manifest_hash,

@@ -121,7 +121,8 @@ pub async fn commit(
     // The upload row first: the lock order its last part takes (`tus::patch`).
     let row: Option<Uploaded> = sqlx::query_as(
         "SELECT id, account_id, kind, collection_id, total_bytes, file_key_envelope, key_epoch,
-                storage_path, s3_upload_id, name_hash, key_generation, content_hash, based_on,
+                storage_path, s3_upload_id, encode(name_hash, 'hex') AS name_hash, key_generation,
+                encode(content_hash, 'hex') AS content_hash, based_on,
                 uploaded_at IS NOT NULL AS uploaded
          FROM drive_uploads WHERE file_id = $1 AND revision_id = $2
          FOR UPDATE",

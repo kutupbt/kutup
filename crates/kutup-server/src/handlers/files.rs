@@ -343,7 +343,7 @@ pub async fn upload(
                               storage_path, encrypted_size_bytes, original_key_generation,
                               name_hash, content_hash, content_revision_id,
                               blob_suite, revision_content_envelope)
-           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,$9,$10,$11,$12,$13)"#,
+           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,decode($9, 'hex'),decode($10, 'hex'),$11,$12,$13)"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -613,7 +613,7 @@ pub async fn update_metadata(
     }
     sqlx::query(
         "UPDATE drive_files SET metadata_envelope = $1, metadata_revision = $2,
-                          name_hash = CASE WHEN $5 THEN $4 ELSE name_hash END, updated_at = NOW()
+                          name_hash = CASE WHEN $5 THEN decode($4, 'hex') ELSE name_hash END, updated_at = NOW()
          WHERE id = $3",
     )
     .bind(&req.metadata_envelope)
@@ -777,7 +777,8 @@ pub(crate) async fn file_rows(
         content_hash: Option<String>,
     }
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        r#"SELECT f.id, f.collection_id, f.uploader_account_id, f.name_hash, f.content_hash,
+        r#"SELECT f.id, f.collection_id, f.uploader_account_id,
+                  encode(f.name_hash, 'hex') AS name_hash, encode(f.content_hash, 'hex') AS content_hash,
                   f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.key_generation,
                   f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
                   f.original_key_generation,

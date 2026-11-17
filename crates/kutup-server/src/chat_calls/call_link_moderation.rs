@@ -109,7 +109,7 @@ pub(super) async fn claim_seat(
 ) -> AppResult<Seat> {
     let existing: Option<(Vec<u8>, bool, bool)> = sqlx::query_as(
         "SELECT seat_hash, removed_at IS NOT NULL, no_screen FROM chat_call_link_seats
-         WHERE room_id = $1 AND participant_id = $2",
+         WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex')",
     )
     .bind(room_id)
     .bind(participant_id)
@@ -130,7 +130,7 @@ pub(super) async fn claim_seat(
             "UPDATE chat_call_link_seats
              SET last_minted_at = NOW(), account_id = $3,
                  role = CASE WHEN $4 THEN $5 ELSE role END
-             WHERE room_id = $1 AND participant_id = $2 AND removed_at IS NULL",
+             WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex') AND removed_at IS NULL",
         )
         .bind(room_id)
         .bind(participant_id)
@@ -166,7 +166,7 @@ pub(super) async fn claim_seat(
     }
     sqlx::query(
         "DELETE FROM chat_call_link_seats
-         WHERE room_id = $1 AND COALESCE(removed_at, last_minted_at) < NOW() - make_interval(secs => $2)",
+         WHERE room_id = decode($1, 'hex') AND COALESCE(removed_at, last_minted_at) < NOW() - make_interval(secs => $2)",
     )
     .bind(room_id)
     .bind(FORGET_SEAT_SECONDS as f64)
@@ -174,7 +174,7 @@ pub(super) async fn claim_seat(
     .await?;
     let taken = sqlx::query(
         "INSERT INTO chat_call_link_seats (room_id, participant_id, seat_hash, role, account_id)
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+         VALUES (decode($1, 'hex'), decode($2, 'hex'), $3, $4, $5) ON CONFLICT DO NOTHING",
     )
     .bind(room_id)
     .bind(participant_id)
@@ -289,7 +289,7 @@ pub(super) async fn asker(
     };
     let seat: Option<Option<i16>> = sqlx::query_scalar(
         "SELECT role FROM chat_call_link_seats
-         WHERE room_id = $1 AND participant_id = $2 AND removed_at IS NULL",
+         WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex') AND removed_at IS NULL",
     )
     .bind(&credentials.room_id)
     .bind(&id)
@@ -337,7 +337,7 @@ async fn seat_role(
 ) -> AppResult<Option<Option<i16>>> {
     Ok(sqlx::query_scalar(
         "SELECT role FROM chat_call_link_seats
-         WHERE room_id = $1 AND participant_id = $2 AND removed_at IS NULL",
+         WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex') AND removed_at IS NULL",
     )
     .bind(room_id)
     .bind(participant_id)
@@ -615,7 +615,7 @@ pub(super) async fn tend(state: &AppState, room_id: &str, meeting: &Admitted) ->
             // whoever comes next.
             sqlx::query(
                 "UPDATE chat_call_links SET hostless_since = NULL
-                 WHERE room_id = $1 AND hostless_since IS NOT NULL",
+                 WHERE room_id = decode($1, 'hex') AND hostless_since IS NOT NULL",
             )
             .bind(room_id)
             .execute(&state.pool)
@@ -633,8 +633,8 @@ pub(super) async fn tend(state: &AppState, room_id: &str, meeting: &Admitted) ->
             .collect();
         // participant_id, role, removed, no_screen
         let seats: Vec<(String, Option<i16>, bool, bool)> = sqlx::query_as(
-            "SELECT participant_id, role, removed_at IS NOT NULL, no_screen FROM chat_call_link_seats
-             WHERE room_id = $1 ORDER BY issued_at, participant_id",
+            "SELECT encode(participant_id, 'hex'), role, removed_at IS NOT NULL, no_screen FROM chat_call_link_seats
+             WHERE room_id = decode($1, 'hex') ORDER BY issued_at, participant_id",
         )
         .bind(room_id)
         .fetch_all(&state.pool)
@@ -654,7 +654,7 @@ pub(super) async fn tend(state: &AppState, room_id: &str, meeting: &Admitted) ->
                 // Remembered from now, so they are kept out while they keep trying.
                 sqlx::query(
                     "UPDATE chat_call_link_seats SET removed_at = NOW()
-                     WHERE room_id = $1 AND participant_id = $2",
+                     WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex')",
                 )
                 .bind(room_id)
                 .bind(id)
@@ -669,7 +669,7 @@ pub(super) async fn tend(state: &AppState, room_id: &str, meeting: &Admitted) ->
         }
         if hosted || others.is_empty() {
             if meeting.hostless_since.is_some() {
-                sqlx::query("UPDATE chat_call_links SET hostless_since = NULL WHERE room_id = $1")
+                sqlx::query("UPDATE chat_call_links SET hostless_since = NULL WHERE room_id = decode($1, 'hex')")
                     .bind(room_id)
                     .execute(&state.pool)
                     .await?;
@@ -681,14 +681,14 @@ pub(super) async fn tend(state: &AppState, room_id: &str, meeting: &Admitted) ->
             Some(since) if (now - since).whole_seconds() >= HOSTLESS_GRACE_SECONDS => {
                 sqlx::query(
                     "UPDATE chat_call_link_seats SET role = $3
-                     WHERE room_id = $1 AND participant_id = $2 AND role IS NULL AND removed_at IS NULL",
+                     WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex') AND role IS NULL AND removed_at IS NULL",
                 )
                 .bind(room_id)
                 .bind(others[0])
                 .bind(CO_HOST)
                 .execute(&state.pool)
                 .await?;
-                sqlx::query("UPDATE chat_call_links SET hostless_since = NULL WHERE room_id = $1")
+                sqlx::query("UPDATE chat_call_links SET hostless_since = NULL WHERE room_id = decode($1, 'hex')")
                     .bind(room_id)
                     .execute(&state.pool)
                     .await?;
@@ -699,7 +699,7 @@ pub(super) async fn tend(state: &AppState, room_id: &str, meeting: &Admitted) ->
             None => {
                 sqlx::query(
                     "UPDATE chat_call_links SET hostless_since = NOW()
-                     WHERE room_id = $1 AND hostless_since IS NULL",
+                     WHERE room_id = decode($1, 'hex') AND hostless_since IS NULL",
                 )
                 .bind(room_id)
                 .execute(&state.pool)
@@ -772,8 +772,8 @@ pub(crate) async fn roles(
     // Asked again: looking after the meeting may have changed the roles.
     let (meeting, asker) = asker(&state, &credentials).await?;
     let rows: Vec<(String, i16)> = sqlx::query_as(
-        "SELECT participant_id, role FROM chat_call_link_seats
-         WHERE room_id = $1 AND role IS NOT NULL AND removed_at IS NULL
+        "SELECT encode(participant_id, 'hex'), role FROM chat_call_link_seats
+         WHERE room_id = decode($1, 'hex') AND role IS NOT NULL AND removed_at IS NULL
          ORDER BY role, issued_at",
     )
     .bind(&credentials.room_id)
@@ -852,7 +852,7 @@ pub(crate) async fn set_co_host(
     }
     sqlx::query(
         "UPDATE chat_call_link_seats SET role = $3
-         WHERE room_id = $1 AND participant_id = $2 AND role IS DISTINCT FROM $4",
+         WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex') AND role IS DISTINCT FROM $4",
     )
     .bind(&request.room_id)
     .bind(&request.participant_id)
@@ -932,7 +932,7 @@ pub(crate) async fn remove_participant(
     let mut tx = state.pool.begin().await?;
     // The door first: once it is shut (the waiting room on, so only the host
     // lets anyone in), disconnecting them is final.
-    sqlx::query("UPDATE chat_call_links SET waiting_room = TRUE WHERE room_id = $1")
+    sqlx::query("UPDATE chat_call_links SET waiting_room = TRUE WHERE room_id = decode($1, 'hex')")
         .bind(room_id)
         .execute(&mut *tx)
         .await?;
@@ -940,7 +940,7 @@ pub(crate) async fn remove_participant(
     // answered by removing them again if they come back (`tend`).
     sqlx::query(
         "UPDATE chat_call_link_seats SET removed_at = NOW(), role = NULL
-         WHERE room_id = $1 AND participant_id = $2",
+         WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex')",
     )
     .bind(room_id)
     .bind(&request.participant_id)
@@ -948,7 +948,7 @@ pub(crate) async fn remove_participant(
     .await?;
     // Nor does the knock they came in by.
     sqlx::query(
-        "UPDATE chat_call_link_knocks SET status = 2 WHERE room_id = $1 AND participant_id = $2",
+        "UPDATE chat_call_link_knocks SET status = 2 WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex')",
     )
     .bind(room_id)
     .bind(&request.participant_id)
@@ -1010,8 +1010,8 @@ pub(crate) async fn mute(
         None => {
             let (meeting, _) = host(&state, &credentials).await?;
             let hosts: Vec<String> = sqlx::query_scalar(
-                "SELECT participant_id FROM chat_call_link_seats
-                 WHERE room_id = $1 AND role IS NOT NULL AND removed_at IS NULL",
+                "SELECT encode(participant_id, 'hex') FROM chat_call_link_seats
+                 WHERE room_id = decode($1, 'hex') AND role IS NOT NULL AND removed_at IS NULL",
             )
             .bind(room_id)
             .fetch_all(&state.pool)
@@ -1101,7 +1101,7 @@ pub(crate) async fn set_screen_share(
     // Kept with the seat, so a token minted when they reconnect says the same.
     sqlx::query(
         "UPDATE chat_call_link_seats SET no_screen = $3
-         WHERE room_id = $1 AND participant_id = $2",
+         WHERE room_id = decode($1, 'hex') AND participant_id = decode($2, 'hex')",
     )
     .bind(room_id)
     .bind(&request.participant_id)
@@ -1172,14 +1172,14 @@ pub(crate) async fn lock(
         },
     )
     .await?;
-    sqlx::query("UPDATE chat_call_links SET locked = $2 WHERE room_id = $1")
+    sqlx::query("UPDATE chat_call_links SET locked = $2 WHERE room_id = decode($1, 'hex')")
         .bind(&request.room_id)
         .bind(request.locked)
         .execute(&state.pool)
         .await?;
     if request.locked {
         sqlx::query(
-            "UPDATE chat_call_link_knocks SET status = 2 WHERE room_id = $1 AND status = 0",
+            "UPDATE chat_call_link_knocks SET status = 2 WHERE room_id = decode($1, 'hex') AND status = 0",
         )
         .bind(&request.room_id)
         .execute(&state.pool)
@@ -1214,27 +1214,28 @@ pub(crate) async fn end(
     // closed first, so a call server that fails leaves everything as it was
     // and asking again closes the right room (closing an empty one first
     // would report success while everyone stays connected).
-    let ended: i64 =
-        sqlx::query_scalar("SELECT sitting FROM chat_call_links WHERE room_id = $1 FOR UPDATE")
-            .bind(room_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let ended: i64 = sqlx::query_scalar(
+        "SELECT sitting FROM chat_call_links WHERE room_id = decode($1, 'hex') FOR UPDATE",
+    )
+    .bind(room_id)
+    .fetch_one(&mut *tx)
+    .await?;
     delete_sfu_room(&state, &sfu_room(room_id, ended)).await?;
     sqlx::query(
         "UPDATE chat_call_links
          SET sitting = sitting + 1, locked = FALSE, hostless_since = NULL
-         WHERE room_id = $1",
+         WHERE room_id = decode($1, 'hex')",
     )
     .bind(room_id)
     .execute(&mut *tx)
     .await?;
     // Nobody keeps a seat or a role, and no knock of this sitting, waiting
     // or let in, gets a token now.
-    sqlx::query("DELETE FROM chat_call_link_seats WHERE room_id = $1")
+    sqlx::query("DELETE FROM chat_call_link_seats WHERE room_id = decode($1, 'hex')")
         .bind(room_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("UPDATE chat_call_link_knocks SET status = 2 WHERE room_id = $1")
+    sqlx::query("UPDATE chat_call_link_knocks SET status = 2 WHERE room_id = decode($1, 'hex')")
         .bind(room_id)
         .execute(&mut *tx)
         .await?;

@@ -166,7 +166,7 @@ pub(crate) async fn set_waiting_room(
     let mut tx = state.pool.begin().await?;
     let updated = sqlx::query(
         "UPDATE chat_call_links SET waiting_room = $3, host_token_hash = $4
-         WHERE room_id = $1 AND owner_account_id = $2",
+         WHERE room_id = decode($1, 'hex') AND owner_account_id = $2",
     )
     .bind(&room_id)
     .bind(owner(&auth)?)
@@ -180,7 +180,7 @@ pub(crate) async fn set_waiting_room(
     }
     if !request.enabled {
         sqlx::query(
-            "UPDATE chat_call_link_knocks SET status = $2 WHERE room_id = $1 AND status = $3",
+            "UPDATE chat_call_link_knocks SET status = $2 WHERE room_id = decode($1, 'hex') AND status = $3",
         )
         .bind(&room_id)
         .bind(ADMITTED)
@@ -241,7 +241,7 @@ pub(crate) async fn knock(
     .await?;
     sqlx::query(
         "DELETE FROM chat_call_link_knocks
-         WHERE room_id = $1 AND last_seen_at < NOW() - make_interval(secs => $2)",
+         WHERE room_id = decode($1, 'hex') AND last_seen_at < NOW() - make_interval(secs => $2)",
     )
     .bind(&request.room_id)
     .bind(FORGET_SECONDS as f64)
@@ -249,7 +249,7 @@ pub(crate) async fn knock(
     .await?;
     let waiting: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM chat_call_link_knocks
-         WHERE room_id = $1 AND status = $2 AND last_seen_at > NOW() - make_interval(secs => $3)",
+         WHERE room_id = decode($1, 'hex') AND status = $2 AND last_seen_at > NOW() - make_interval(secs => $3)",
     )
     .bind(&request.room_id)
     .bind(WAITING)
@@ -262,7 +262,7 @@ pub(crate) async fn knock(
     let knock_id: Uuid = sqlx::query_scalar(
         "INSERT INTO chat_call_link_knocks
             (room_id, participant_id, label, ticket_hash, seat_hash, account_id)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+         VALUES (decode($1, 'hex'), decode($2, 'hex'), $3, $4, $5, $6) RETURNING id",
     )
     .bind(&request.room_id)
     .bind(&request.participant_id)
@@ -304,7 +304,7 @@ pub(crate) async fn leave_knock(
     let presented: [u8; 32] = hash(Suite::V1, base64_exact("ticket", &request.ticket, 32)?).into();
     admitted(&state, &request.room_id, &request.access_token).await?;
     let stored: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT ticket_hash FROM chat_call_link_knocks WHERE id = $1 AND room_id = $2",
+        "SELECT ticket_hash FROM chat_call_link_knocks WHERE id = $1 AND room_id = decode($2, 'hex')",
     )
     .bind(request.knock_id)
     .bind(&request.room_id)
@@ -318,7 +318,7 @@ pub(crate) async fn leave_knock(
         // Only a knock still waiting: one already let in or turned away
         // keeps its outcome (a removal, say, must stand).
         sqlx::query(
-            "DELETE FROM chat_call_link_knocks WHERE id = $1 AND room_id = $2 AND status = $3",
+            "DELETE FROM chat_call_link_knocks WHERE id = $1 AND room_id = decode($2, 'hex') AND status = $3",
         )
         .bind(request.knock_id)
         .bind(&request.room_id)
@@ -354,8 +354,8 @@ pub(crate) async fn knock_status(
     type Row = (Vec<u8>, i16, String, Vec<u8>, Vec<u8>, Option<Uuid>);
     let row: Option<Row> = sqlx::query_as(
         "UPDATE chat_call_link_knocks SET last_seen_at = NOW()
-         WHERE id = $1 AND room_id = $2
-         RETURNING ticket_hash, status, participant_id, label, seat_hash, account_id",
+         WHERE id = $1 AND room_id = decode($2, 'hex')
+         RETURNING ticket_hash, status, encode(participant_id, 'hex'), label, seat_hash, account_id",
     )
     .bind(request.knock_id)
     .bind(&request.room_id)
@@ -439,7 +439,7 @@ pub(crate) async fn knocks(
     let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime, Option<String>)> = sqlx::query_as(
         "SELECT k.id, k.label, k.created_at, u.username
          FROM chat_call_link_knocks k LEFT JOIN accounts u ON u.id = k.account_id
-         WHERE k.room_id = $1 AND k.status = $2
+         WHERE k.room_id = decode($1, 'hex') AND k.status = $2
            AND k.last_seen_at > NOW() - make_interval(secs => $3)
          ORDER BY k.created_at, k.id",
     )
@@ -491,7 +491,7 @@ pub(crate) async fn decide(
     .await?;
     let decided = sqlx::query(
         "UPDATE chat_call_link_knocks SET status = $3
-         WHERE id = $1 AND room_id = $2 AND status = $4",
+         WHERE id = $1 AND room_id = decode($2, 'hex') AND status = $4",
     )
     .bind(request.knock_id)
     .bind(&request.room_id)

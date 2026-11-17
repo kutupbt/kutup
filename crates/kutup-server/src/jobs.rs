@@ -1585,7 +1585,7 @@ mod tests {
             "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
+             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
         )
         .bind(member)
         .bind(format!("member{}", &tag[..12]))
@@ -1793,7 +1793,7 @@ mod tests {
                 "INSERT INTO chat_media_objects
                  (attachment_id,origin_account_id,origin_server,suite,ciphertext_bytes,
                   ciphertext_sha256,retrieval_token_hash,storage_path,created_at)
-                 VALUES ($1,$2,'retention.test',2,$3,$4,$5,$6,$7)",
+                 VALUES ($1,$2,'retention.test',2,$3,decode($4, 'hex'),$5,$6,$7)",
             )
             .bind(attachment_id)
             .bind(user_id)
@@ -1824,7 +1824,7 @@ mod tests {
             "INSERT INTO chat_backups
              (account_id,backup_incarnation_id,suite,protection_domain,root_envelope,
               signer_authorization,signer_authorization_digest)
-             VALUES ($1,$2,1,1,'retention-envelope','{}',repeat('0',64))",
+             VALUES ($1,$2,1,1,'retention-envelope','{}',decode(repeat('00', 32), 'hex'))",
         )
         .bind(user_id)
         .bind(backup_incarnation)
@@ -1834,7 +1834,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO chat_backup_media_objects
              (account_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path,created_at)
-             VALUES ($1,$2,$3,$4,$5,$6)",
+             VALUES ($1,$2,$3,decode($4, 'hex'),$5,$6)",
         )
         .bind(user_id)
         .bind(&protected_media_id)

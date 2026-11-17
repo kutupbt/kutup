@@ -2670,7 +2670,7 @@ pub async fn get_manifest_history(
     }
     let values: Vec<serde_json::Value> = sqlx::query_scalar(
         "SELECT manifest FROM chat_device_manifest_history
-         WHERE account_id = $1 AND incarnation_id = $2 AND version BETWEEN $3 AND $4
+         WHERE account_id = $1 AND incarnation_id = decode($2, 'hex') AND version BETWEEN $3 AND $4
          ORDER BY version LIMIT 65",
     )
     .bind(target_id)
@@ -3544,7 +3544,7 @@ mod sealed_live_tests {
                  public_key, account_authority_public_key,
                  account_authority_key_id, account_incarnation_id, drive_signing_public_key,
                  username)
-             VALUES ($1, '', '', '', '', '', '', '', $2)",
+             VALUES ($1, '', '', '', '', ''::bytea, ''::bytea, '', $2)",
         )
         .bind(id)
         .bind(&name)
@@ -3569,7 +3569,7 @@ mod sealed_live_tests {
         sqlx::query(
             "INSERT INTO chat_device_manifests
                  (account_id, version, manifest_hash, authority_key_id, manifest)
-             VALUES ($1, 1, repeat('a', 64), repeat('b', 64),
+             VALUES ($1, 1, decode(repeat('aa', 32), 'hex'), decode(repeat('bb', 32), 'hex'),
                      '{\"devices\": [{\"deviceId\": 1, \"kind\": \"chat\", \"chat\": {\"directChatSuite\": 1, \"registrationId\": 77}}]}')",
         )
         .bind(id)
@@ -3579,7 +3579,7 @@ mod sealed_live_tests {
         sqlx::query(
             "INSERT INTO chat_delivery_capabilities
                  (account_id, profile_version, profile_revision, capability_hash)
-             VALUES ($1, $2, 1, $3)",
+             VALUES ($1, decode($2, 'hex'), 1, $3)",
         )
         .bind(id)
         .bind("71".repeat(32))

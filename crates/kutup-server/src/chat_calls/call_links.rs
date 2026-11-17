@@ -253,7 +253,7 @@ pub(crate) async fn create(
         Some(old) => Some(
             sqlx::query_scalar(
                 "SELECT sitting FROM chat_call_links
-                 WHERE room_id = $1 AND owner_account_id = $2 FOR UPDATE",
+                 WHERE room_id = decode($1, 'hex') AND owner_account_id = $2 FOR UPDATE",
             )
             .bind(old)
             .bind(owner)
@@ -274,7 +274,7 @@ pub(crate) async fn create(
         if hosts_group_calls(&state) {
             delete_sfu_room(&state, &sfu_room(old, sitting)).await?;
         }
-        sqlx::query("DELETE FROM chat_call_links WHERE room_id = $1 AND owner_account_id = $2")
+        sqlx::query("DELETE FROM chat_call_links WHERE room_id = decode($1, 'hex') AND owner_account_id = $2")
             .bind(old)
             .bind(owner)
             .execute(&mut *tx)
@@ -283,7 +283,7 @@ pub(crate) async fn create(
     let created: Option<OffsetDateTime> = sqlx::query_scalar(
         "INSERT INTO chat_call_links
             (room_id, owner_account_id, nonce, access_token_hash, info, host_token_hash, waiting_room)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         VALUES (decode($1, 'hex'), $2, decode($3, 'hex'), $4, $5, $6, $7)
          ON CONFLICT DO NOTHING
          RETURNING created_at",
     )
@@ -325,7 +325,7 @@ pub(crate) async fn list(
     auth: AuthUser,
 ) -> AppResult<Json<CallLinkList>> {
     let rows: Vec<(String, String, Vec<u8>, bool, OffsetDateTime)> = sqlx::query_as(
-        "SELECT room_id, nonce, info, waiting_room, created_at FROM chat_call_links
+        "SELECT encode(room_id, 'hex'), encode(nonce, 'hex'), info, waiting_room, created_at FROM chat_call_links
          WHERE owner_account_id = $1 ORDER BY created_at DESC, room_id",
     )
     .bind(owner(&auth)?)
@@ -366,7 +366,7 @@ pub(crate) async fn delete(
 ) -> AppResult<StatusCode> {
     hex32("roomId", &room_id)?;
     let sitting: Option<i64> = sqlx::query_scalar(
-        "DELETE FROM chat_call_links WHERE room_id = $1 AND owner_account_id = $2 RETURNING sitting",
+        "DELETE FROM chat_call_links WHERE room_id = decode($1, 'hex') AND owner_account_id = $2 RETURNING sitting",
     )
     .bind(&room_id)
     .bind(owner(&auth)?)
@@ -407,7 +407,7 @@ pub(crate) async fn update_info(
     hex32("roomId", &room_id)?;
     let info = base64_exact("info", &request.info, SEALED_INFO_BYTES)?;
     let updated = sqlx::query(
-        "UPDATE chat_call_links SET info = $3 WHERE room_id = $1 AND owner_account_id = $2",
+        "UPDATE chat_call_links SET info = $3 WHERE room_id = decode($1, 'hex') AND owner_account_id = $2",
     )
     .bind(&room_id)
     .bind(owner(&auth)?)
@@ -477,7 +477,7 @@ pub(super) async fn admitted(
     let stored: Option<Row> = sqlx::query_as(
         "SELECT access_token_hash, info, waiting_room, host_token_hash, locked, sitting,
                 hostless_since
-         FROM chat_call_links WHERE room_id = $1",
+         FROM chat_call_links WHERE room_id = decode($1, 'hex')",
     )
     .bind(room_id)
     .fetch_optional(&state.pool)
