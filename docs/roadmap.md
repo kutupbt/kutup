@@ -1043,6 +1043,12 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   prompt checked on a Mac (the osascript dialog is built but not yet run on
   macOS). `kutup ssh-agent install` (systemd / launchd), desktop approval
   and `status` (noticing another agent in the shell) are built.
+- **Pass WASM size.** The search fold (`kutup_search::fold`, NFKD tables)
+  added about 86 KB gzipped and the JSON/ZIP importers about 46 KB; the
+  budget was raised to 830000 (2026-11-17). Follow-up: in the WASM build,
+  fold through the browser's own `String.prototype.normalize('NFKD')` (an
+  imported JS function), keeping `kutup_search::fold` for native and the CLI:
+  the same results, about 80 KB less. With the bundle split after the wipe.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
   single items between users (research 19 §5).
 
