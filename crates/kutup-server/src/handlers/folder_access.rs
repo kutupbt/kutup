@@ -45,7 +45,7 @@ pub struct EpochLink {
 pub(crate) async fn epoch_chain(pool: &PgPool, collection_id: Uuid) -> AppResult<Vec<EpochLink>> {
     Ok(sqlx::query_as(
         "SELECT epoch, epoch_statement, epoch_statement_hash, previous_key_envelope
-         FROM collection_key_epoch_history WHERE collection_id = $1 ORDER BY epoch",
+         FROM drive_collection_key_epoch_history WHERE collection_id = $1 ORDER BY epoch",
     )
     .bind(collection_id)
     .fetch_all(pool)
@@ -108,7 +108,7 @@ pub async fn epochs(
     let collection_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     // The owner also opens trashed folders' files (the trash lists them).
     let owner: Option<Uuid> =
-        sqlx::query_scalar("SELECT owner_user_id FROM collections WHERE id = $1")
+        sqlx::query_scalar("SELECT owner_account_id FROM drive_collections WHERE id = $1")
             .bind(collection_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -192,8 +192,8 @@ async fn owned_folder(
     lock: bool,
 ) -> AppResult<(i32, i64, String)> {
     let sql = format!(
-        "SELECT key_epoch, name_revision, epoch_statement_hash FROM collections
-         WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL{}",
+        "SELECT key_epoch, name_revision, epoch_statement_hash FROM drive_collections
+         WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL{}",
         if lock { " FOR UPDATE" } else { "" }
     );
     sqlx::query_as(&sql)
@@ -242,7 +242,7 @@ pub async fn access(
     let members: Vec<MemberRow> = sqlx::query_as(
         "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
                 u.drive_signing_public_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
-         FROM collection_shares cs JOIN users u ON u.id = cs.recipient_user_id
+         FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1 ORDER BY cs.created_at",
     )
     .bind(collection_id)
@@ -259,7 +259,7 @@ pub async fn access(
     let links: Vec<LinkRow> = sqlx::query_as(
         "SELECT id, token, owner_link_key_envelope, expires_at, created_at,
                 kutup_target_blocked(share_type, target_id)
-           FROM public_shares
+           FROM drive_public_shares
           WHERE target_id = $1 AND share_type = 'collection' AND owner_removed_at IS NULL
           ORDER BY created_at",
     )
@@ -278,9 +278,9 @@ pub async fn access(
         OffsetDateTime,
     );
     let federated: Vec<FederatedRow> = sqlx::query_as(
-        "SELECT id, recipient_username, recipient_domain, recipient_account_id,
+        "SELECT id, recipient_username, recipient_server, recipient_account_id,
                 named_share_envelope, can_upload, can_delete, upload_quota_bytes, created_at
-         FROM federated_outgoing_shares WHERE collection_id = $1 ORDER BY created_at",
+         FROM drive_federated_outgoing_shares WHERE collection_id = $1 ORDER BY created_at",
     )
     .bind(collection_id)
     .fetch_all(&state.pool)
@@ -464,7 +464,7 @@ async fn rotate_album_items(
     next: i32,
     items: &[KeptAlbumItem],
 ) -> AppResult<()> {
-    let kind: String = sqlx::query_scalar("SELECT kind FROM collections WHERE id = $1")
+    let kind: String = sqlx::query_scalar("SELECT kind FROM drive_collections WHERE id = $1")
         .bind(collection_id)
         .fetch_one(&mut **tx)
         .await?;
@@ -476,7 +476,7 @@ async fn rotate_album_items(
         };
     }
     let current: Vec<(Uuid, i32)> = sqlx::query_as(
-        "SELECT file_id, key_generation FROM album_items WHERE album_id = $1 FOR UPDATE",
+        "SELECT file_id, key_generation FROM photos_album_items WHERE album_id = $1 FOR UPDATE",
     )
     .bind(collection_id)
     .fetch_all(&mut **tx)
@@ -505,7 +505,7 @@ async fn rotate_album_items(
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
         )?;
         sqlx::query(
-            "UPDATE album_items SET file_key_envelope = $3, album_epoch = $4 WHERE album_id = $1 AND file_id = $2",
+            "UPDATE photos_album_items SET file_key_envelope = $3, album_epoch = $4 WHERE album_id = $1 AND file_id = $2",
         )
         .bind(collection_id)
         .bind(item.file_id)
@@ -556,7 +556,7 @@ pub async fn rotate(
     // The owner's identity, which signs the chain and every share.
     let (incarnation, signing_key, authority_key): (String, String, String) = sqlx::query_as(
         "SELECT account_incarnation_id, drive_signing_public_key,
-                    account_authority_public_key FROM users WHERE id = $1",
+                    account_authority_public_key FROM accounts WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&mut *tx)
@@ -612,22 +612,22 @@ pub async fn rotate(
     // Exactly the current access, split into kept and removed.
     let members: Vec<(Uuid, Option<String>, String)> = sqlx::query_as(
         "SELECT u.id, u.username, u.account_incarnation_id
-         FROM collection_shares cs JOIN users u ON u.id = cs.recipient_user_id
+         FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1",
     )
     .bind(collection_id)
     .fetch_all(&mut *tx)
     .await?;
     let links: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM public_shares
+        "SELECT id FROM drive_public_shares
           WHERE target_id = $1 AND share_type = 'collection' AND owner_removed_at IS NULL",
     )
     .bind(collection_id)
     .fetch_all(&mut *tx)
     .await?;
     let federated: Vec<(Uuid, Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, recipient_account_id, recipient_domain, named_share_envelope
-         FROM federated_outgoing_shares WHERE collection_id = $1",
+        "SELECT id, recipient_account_id, recipient_server, named_share_envelope
+         FROM drive_federated_outgoing_shares WHERE collection_id = $1",
     )
     .bind(collection_id)
     .fetch_all(&mut *tx)
@@ -724,7 +724,7 @@ pub async fn rotate(
 
     // Apply it all.
     sqlx::query(
-        "UPDATE collections SET key_epoch = $2, owner_key_envelope = $3, name_envelope = $4,
+        "UPDATE drive_collections SET key_epoch = $2, owner_key_envelope = $3, name_envelope = $4,
                 name_revision = $5, epoch_statement = $6, epoch_statement_hash = $7,
                 updated_at = NOW()
          WHERE id = $1",
@@ -739,7 +739,7 @@ pub async fn rotate(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO collection_key_epoch_history
+        "INSERT INTO drive_collection_key_epoch_history
             (collection_id, epoch, owner_key_envelope, epoch_statement, epoch_statement_hash,
              previous_key_envelope)
          VALUES ($1, $2, $3, $4, $5, $6)",
@@ -754,8 +754,8 @@ pub async fn rotate(
     .await?;
     for member in &req.members {
         sqlx::query(
-            "UPDATE collection_shares SET named_share_envelope = $3
-             WHERE collection_id = $1 AND recipient_user_id = $2",
+            "UPDATE drive_collection_shares SET named_share_envelope = $3
+             WHERE collection_id = $1 AND recipient_account_id = $2",
         )
         .bind(collection_id)
         .bind(member.user_id)
@@ -764,7 +764,7 @@ pub async fn rotate(
         .await?;
     }
     sqlx::query(
-        "DELETE FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = ANY($2)",
+        "DELETE FROM drive_collection_shares WHERE collection_id = $1 AND recipient_account_id = ANY($2)",
     )
     .bind(collection_id)
     .bind(&req.removed.members)
@@ -772,7 +772,7 @@ pub async fn rotate(
     .await?;
     for link in &req.public_links {
         sqlx::query(
-            "UPDATE public_shares SET collection_key_envelope = $2, collection_key_epoch = $3
+            "UPDATE drive_public_shares SET collection_key_envelope = $2, collection_key_epoch = $3
              WHERE id = $1",
         )
         .bind(link.id)
@@ -784,7 +784,7 @@ pub async fn rotate(
     // A blocked link is kept, hidden from its owner: the block outlives it
     // until an operator lifts it (crate::public_sharing).
     sqlx::query(
-        "UPDATE public_shares SET owner_removed_at = now()
+        "UPDATE drive_public_shares SET owner_removed_at = now()
           WHERE target_id = $1 AND share_type = 'collection' AND id = ANY($2)
             AND blocked_at IS NOT NULL",
     )
@@ -793,7 +793,7 @@ pub async fn rotate(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "DELETE FROM public_shares
+        "DELETE FROM drive_public_shares
           WHERE target_id = $1 AND share_type = 'collection' AND id = ANY($2)
             AND blocked_at IS NULL",
     )
@@ -809,7 +809,7 @@ pub async fn rotate(
             .map(|envelope| hex::encode(envelope.recipient_incarnation_id))
             .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
         sqlx::query(
-            "UPDATE federated_outgoing_shares SET named_share_envelope = $2,
+            "UPDATE drive_federated_outgoing_shares SET named_share_envelope = $2,
                                                    recipient_incarnation_id = $3
              WHERE id = $1",
         )
@@ -819,11 +819,13 @@ pub async fn rotate(
         .execute(&mut *tx)
         .await?;
     }
-    sqlx::query("DELETE FROM federated_outgoing_shares WHERE collection_id = $1 AND id = ANY($2)")
-        .bind(collection_id)
-        .bind(&req.removed.federated_shares)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "DELETE FROM drive_federated_outgoing_shares WHERE collection_id = $1 AND id = ANY($2)",
+    )
+    .bind(collection_id)
+    .bind(&req.removed.federated_shares)
+    .execute(&mut *tx)
+    .await?;
     rotate_album_items(&mut tx, collection_id, next, &req.album_items).await?;
     tx.commit().await?;
 
@@ -887,7 +889,7 @@ pub async fn rekey(
     let mut tx = state.pool.begin().await?;
     let file: Option<(Uuid, i32, i32, i64)> = sqlx::query_as(
         "SELECT collection_id, key_epoch, key_generation, metadata_revision
-         FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+         FROM drive_files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
@@ -897,7 +899,7 @@ pub async fn rekey(
     };
     // The folder's epoch, held until commit (a rotation waits).
     let folder_epoch: i32 =
-        sqlx::query_scalar("SELECT key_epoch FROM collections WHERE id = $1 FOR SHARE")
+        sqlx::query_scalar("SELECT key_epoch FROM drive_collections WHERE id = $1 FOR SHARE")
             .bind(collection_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -932,9 +934,9 @@ pub async fn rekey(
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     sqlx::query(
-        "INSERT INTO file_key_history (file_id, generation, previous_key_envelope,
+        "INSERT INTO drive_file_key_history (file_id, generation, previous_key_envelope,
                                        previous_metadata_envelope, previous_metadata_revision)
-         SELECT $1, $2, $3, metadata_envelope, metadata_revision FROM files WHERE id = $1",
+         SELECT $1, $2, $3, metadata_envelope, metadata_revision FROM drive_files WHERE id = $1",
     )
     .bind(file_id)
     .bind(next)
@@ -942,7 +944,7 @@ pub async fn rekey(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE files SET key_epoch = $2, key_generation = $3, file_key_envelope = $4,
+        "UPDATE drive_files SET key_epoch = $2, key_generation = $3, file_key_envelope = $4,
                 metadata_envelope = $5
          WHERE id = $1",
     )

@@ -34,7 +34,7 @@ async fn lock_file(
 ) -> AppResult<(Uuid, i32, i64)> {
     sqlx::query_as(
         "SELECT collection_id, key_generation, metadata_revision
-         FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+         FROM drive_files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut **tx)
@@ -156,15 +156,15 @@ async fn open(
     )
     .await?;
     let open: Option<(Uuid, Uuid, i64, bool)> = sqlx::query_as(
-        "SELECT id, user_id, EXTRACT(EPOCH FROM NOW() - updated_at)::bigint,
+        "SELECT id, account_id, EXTRACT(EPOCH FROM NOW() - updated_at)::bigint,
                 uploaded_at IS NOT NULL
-         FROM uploads WHERE file_id = $1",
+         FROM drive_uploads WHERE file_id = $1",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
     .await?;
     let owns_folder: bool =
-        sqlx::query_scalar("SELECT owner_user_id = $2 FROM collections WHERE id = $1")
+        sqlx::query_scalar("SELECT owner_account_id = $2 FROM drive_collections WHERE id = $1")
             .bind(collection_id)
             .bind(user_id)
             .fetch_one(&mut *tx)
@@ -189,7 +189,7 @@ async fn open(
                 .with_details(details),
         );
     }
-    let key_epoch: i32 = sqlx::query_scalar("SELECT key_epoch FROM files WHERE id = $1")
+    let key_epoch: i32 = sqlx::query_scalar("SELECT key_epoch FROM drive_files WHERE id = $1")
         .bind(file_id)
         .fetch_one(&mut *tx)
         .await?;
@@ -209,8 +209,8 @@ async fn open(
     // The metadata comes with the commit: NULL, never the columns' old
     // default (`uploads_metadata_at_commit`).
     let inserted = sqlx::query(
-        "INSERT INTO uploads
-            (id, user_id, collection_id, file_id, total_bytes,
+        "INSERT INTO drive_uploads
+            (id, account_id, collection_id, file_id, total_bytes,
              key_epoch, storage_path, s3_upload_id,
              kind, key_generation, content_hash, based_on, revision_id, blob_suite,
              metadata_envelope, metadata_revision)
@@ -340,7 +340,7 @@ pub(super) async fn finish(
     {
         drop(tx);
         let _ = state.storage.delete(&landing.storage_path).await;
-        let _ = sqlx::query("DELETE FROM uploads WHERE id = $1")
+        let _ = sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
             .bind(landing.upload_id)
             .execute(&state.pool)
             .await;
@@ -424,7 +424,7 @@ pub(super) async fn discard(state: &AppState, landing: &Landing) {
         .storage
         .abort_multipart(&landing.storage_path, &landing.s3_upload_id)
         .await;
-    let _ = sqlx::query("DELETE FROM uploads WHERE id = $1")
+    let _ = sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
         .bind(landing.upload_id)
         .execute(&state.pool)
         .await;
@@ -446,14 +446,15 @@ async fn record(
     // restore from the editor does). Under the relay's per-file lock (taken
     // in `finish`), so no edit lands in between.
     let seq = super::collab::log_head(&mut **tx, landing.file_id).await?;
-    let doc_key_id: i64 = sqlx::query_scalar("SELECT current_doc_key_id FROM files WHERE id = $1")
-        .bind(landing.file_id)
-        .fetch_one(&mut **tx)
-        .await?;
+    let doc_key_id: i64 =
+        sqlx::query_scalar("SELECT current_doc_key_id FROM drive_files WHERE id = $1")
+            .bind(landing.file_id)
+            .fetch_one(&mut **tx)
+            .await?;
     // Stamped when stored, as a multipart save (`file_versions::store_version`).
     sqlx::query(
-        r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot, doc_key_id,
-                                      author_user_id, size_bytes, keep_forever, kind,
+        r#"INSERT INTO drive_file_versions (id, file_id, storage_path, seq_at_snapshot, doc_key_id,
+                                      author_account_id, size_bytes, keep_forever, kind,
                                       key_generation, parent_version_id, created_at,
                                       blob_suite, revision_content_envelope)
            VALUES ($1, $2, $3, $8, $9, $4, $5, false, 'file', $6, $7, clock_timestamp(),
@@ -479,7 +480,7 @@ async fn record(
     )
     .await?;
     sqlx::query(
-        "UPDATE files SET metadata_envelope = $2, metadata_revision = $3, content_hash = $4,
+        "UPDATE drive_files SET metadata_envelope = $2, metadata_revision = $3, content_hash = $4,
                           updated_at = NOW()
          WHERE id = $1",
     )
@@ -489,7 +490,7 @@ async fn record(
     .bind(content_hash)
     .execute(&mut **tx)
     .await?;
-    sqlx::query("DELETE FROM uploads WHERE id = $1")
+    sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
         .bind(landing.upload_id)
         .execute(&mut **tx)
         .await?;

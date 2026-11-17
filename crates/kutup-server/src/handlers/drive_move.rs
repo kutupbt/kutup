@@ -57,12 +57,12 @@ pub(crate) async fn writable_folder(
     collection_id: Uuid,
 ) -> AppResult<(Uuid, i32)> {
     let folder: Option<(Uuid, i32, bool)> = sqlx::query_as(
-        r#"SELECT c.owner_user_id, c.key_epoch,
-                  c.owner_user_id = $2
-                  OR EXISTS(SELECT 1 FROM collection_shares cs
-                            WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2
+        r#"SELECT c.owner_account_id, c.key_epoch,
+                  c.owner_account_id = $2
+                  OR EXISTS(SELECT 1 FROM drive_collection_shares cs
+                            WHERE cs.collection_id = c.id AND cs.recipient_account_id = $2
                               AND cs.can_upload)
-           FROM collections c WHERE c.id = $1 AND c.deleted_at IS NULL FOR SHARE"#,
+           FROM drive_collections c WHERE c.id = $1 AND c.deleted_at IS NULL FOR SHARE"#,
     )
     .bind(collection_id)
     .bind(user_id)
@@ -110,7 +110,7 @@ pub async fn move_file(
     let mut tx = state.pool.begin().await?;
     let file: Option<(Uuid, i32, i32)> = sqlx::query_as(
         "SELECT collection_id, key_epoch, key_generation
-         FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+         FROM drive_files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
@@ -153,7 +153,7 @@ pub async fn move_file(
     crate::drive_names::lock_place(&mut tx, place).await?;
     crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(file_id)).await?;
     sqlx::query(
-        "UPDATE files SET collection_id = $2, key_epoch = $3, file_key_envelope = $4,
+        "UPDATE drive_files SET collection_id = $2, key_epoch = $3, file_key_envelope = $4,
                           name_hash = $5, content_hash = $6
          WHERE id = $1",
     )
@@ -227,8 +227,8 @@ pub async fn move_collection(
         .execute(&mut *tx)
         .await?;
     let owned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM collections
-                       WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL)",
+        "SELECT EXISTS(SELECT 1 FROM drive_collections
+                       WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL)",
     )
     .bind(folder)
     .bind(user_id)
@@ -241,10 +241,10 @@ pub async fn move_collection(
         // The destination and every folder above it: none may be the folder.
         let (parent_owned, loops): (bool, bool) = sqlx::query_as(
             r#"WITH RECURSIVE above AS (
-                 SELECT id, parent_collection_id FROM collections
-                 WHERE id = $1 AND owner_user_id = $3 AND deleted_at IS NULL
+                 SELECT id, parent_collection_id FROM drive_collections
+                 WHERE id = $1 AND owner_account_id = $3 AND deleted_at IS NULL
                  UNION ALL
-                 SELECT c.id, c.parent_collection_id FROM collections c
+                 SELECT c.id, c.parent_collection_id FROM drive_collections c
                  JOIN above a ON c.id = a.parent_collection_id
                )
                SELECT EXISTS(SELECT 1 FROM above WHERE id = $1),
@@ -271,7 +271,7 @@ pub async fn move_collection(
     let generation =
         crate::drive_names::hash_generation(&mut tx, place, req.name_hash_generation).await?;
     sqlx::query(
-        "UPDATE collections SET parent_collection_id = $2, name_hash = $3, name_hash_generation = $4
+        "UPDATE drive_collections SET parent_collection_id = $2, name_hash = $3, name_hash_generation = $4
          WHERE id = $1",
     )
         .bind(folder)

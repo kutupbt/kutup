@@ -162,8 +162,8 @@ pub async fn create(
         ));
     }
     let inserted = sqlx::query(
-        "INSERT INTO live_location_streams
-             (stream_id, write_verifier, read_verifier, expires_at, creator_user_id)
+        "INSERT INTO chat_live_location_streams
+             (stream_id, write_verifier, read_verifier, expires_at, created_by_account_id)
          VALUES ($1, $2, $3, $4, $5) ON CONFLICT (stream_id) DO NOTHING",
     )
     .bind(&stream_id)
@@ -216,7 +216,7 @@ pub async fn write(
 
     let mut tx = state.pool.begin().await?;
     let row: Option<(Vec<u8>, i64, Option<OffsetDateTime>, OffsetDateTime)> = sqlx::query_as(
-        "SELECT write_verifier, counter, updated_at, expires_at FROM live_location_streams
+        "SELECT write_verifier, counter, updated_at, expires_at FROM chat_live_location_streams
          WHERE stream_id = $1 FOR UPDATE",
     )
     .bind(&stream_id)
@@ -238,7 +238,7 @@ pub async fn write(
         return Err(limited());
     }
     sqlx::query(
-        "UPDATE live_location_streams SET update_bytes = $2, counter = $3, updated_at = $4
+        "UPDATE chat_live_location_streams SET update_bytes = $2, counter = $3, updated_at = $4
          WHERE stream_id = $1",
     )
     .bind(&stream_id)
@@ -268,15 +268,16 @@ pub async fn delete(
 ) -> AppResult<Response> {
     let stream_id = stream_id_of(&stream_id)?;
     let verifier = hashed_secret(&headers, WRITE_HEADER)?;
-    let stored: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT write_verifier FROM live_location_streams WHERE stream_id = $1")
-            .bind(&stream_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let stored: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT write_verifier FROM chat_live_location_streams WHERE stream_id = $1",
+    )
+    .bind(&stream_id)
+    .fetch_optional(&state.pool)
+    .await?;
     if !stored.is_some_and(|stored| kutup_crypto::primitives::ct_eq(&stored, &verifier)) {
         return Err(gone());
     }
-    sqlx::query("DELETE FROM live_location_streams WHERE stream_id = $1")
+    sqlx::query("DELETE FROM chat_live_location_streams WHERE stream_id = $1")
         .bind(&stream_id)
         .execute(&state.pool)
         .await?;
@@ -301,8 +302,8 @@ async fn read_local(
     for_peer: bool,
 ) -> AppResult<LiveLocationResponse> {
     let row: Option<StreamRow> = sqlx::query_as(
-        "SELECT read_verifier, update_bytes, updated_at, expires_at FROM live_location_streams
-         WHERE stream_id = $1 AND (NOT $2 OR kutup_account_federates(creator_user_id))",
+        "SELECT read_verifier, update_bytes, updated_at, expires_at FROM chat_live_location_streams
+         WHERE stream_id = $1 AND (NOT $2 OR kutup_account_federates(created_by_account_id))",
     )
     .bind(stream_id)
     .bind(for_peer)
@@ -510,7 +511,7 @@ pub fn spawn_sweeper(pool: PgPool) {
         let mut tick = tokio::time::interval(SWEEP_INTERVAL);
         loop {
             tick.tick().await;
-            match sqlx::query("DELETE FROM live_location_streams WHERE expires_at <= now()")
+            match sqlx::query("DELETE FROM chat_live_location_streams WHERE expires_at <= now()")
                 .execute(&pool)
                 .await
             {

@@ -482,7 +482,7 @@ pub async fn overrides(
     let organization = organization_of(&state.pool, id).await?;
     crate::handlers::admin::viewed(&state, &admin, id, "mailDomains").await?;
     let max_addresses: Option<i64> = sqlx::query_scalar(
-        "SELECT value FROM user_setting_overrides WHERE user_id = $1 AND key = $2",
+        "SELECT value FROM account_setting_overrides WHERE account_id = $1 AND key = $2",
     )
     .bind(id)
     .bind(ADDRESSES_KEY)
@@ -553,7 +553,7 @@ pub async fn set_overrides(
         )));
     }
     let mut tx = state.pool.begin().await?;
-    let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -569,8 +569,8 @@ pub async fn set_overrides(
     };
     set_or_clear(
         &mut tx,
-        "user_setting_overrides",
-        "user_id",
+        "account_setting_overrides",
+        "account_id",
         id,
         ADDRESSES_KEY,
         input.max_addresses.map(i64::from),

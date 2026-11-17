@@ -300,10 +300,10 @@ async fn apply_rows(
 ) -> AppResult<()> {
     let username = current.rsplit_once('@').map_or("", |(local, _)| local);
     for statement in [
-        "UPDATE federated_incoming_shares SET owner_account = $3
-          WHERE remote_domain = $1 AND owner_incarnation_id = $2 AND owner_account <> $3",
-        "UPDATE federated_incoming_file_shares SET owner_account = $3
-          WHERE remote_domain = $1 AND owner_incarnation_id = $2 AND owner_account <> $3",
+        "UPDATE drive_federated_incoming_shares SET owner_account = $3
+          WHERE owner_server = $1 AND owner_incarnation_id = $2 AND owner_account <> $3",
+        "UPDATE drive_federated_incoming_file_shares SET owner_account = $3
+          WHERE owner_server = $1 AND owner_incarnation_id = $2 AND owner_account <> $3",
     ] {
         sqlx::query(statement)
             .bind(domain)
@@ -313,11 +313,11 @@ async fn apply_rows(
             .await?;
     }
     for statement in [
-        "UPDATE federated_outgoing_shares SET recipient_username = $3
-          WHERE recipient_domain = $1 AND recipient_incarnation_id = $2
+        "UPDATE drive_federated_outgoing_shares SET recipient_username = $3
+          WHERE recipient_server = $1 AND recipient_incarnation_id = $2
             AND recipient_username <> $3",
-        "UPDATE federated_outgoing_file_shares SET recipient_username = $3
-          WHERE recipient_domain = $1 AND recipient_incarnation_id = $2
+        "UPDATE drive_federated_outgoing_file_shares SET recipient_username = $3
+          WHERE recipient_server = $1 AND recipient_incarnation_id = $2
             AND recipient_username <> $3",
     ] {
         sqlx::query(statement)
@@ -741,7 +741,7 @@ pub async fn enqueue(
            FROM federation_peer_identities
           WHERE trust_state <> 'quarantined' AND domain <> $3
             AND last_seen_at > now() - make_interval(days => $4)
-            AND EXISTS (SELECT 1 FROM users u
+            AND EXISTS (SELECT 1 FROM accounts u
                          WHERE u.account_incarnation_id = $1
                            AND kutup_account_federates(u.id))
          ON CONFLICT DO NOTHING",
@@ -836,7 +836,7 @@ async fn deliver_one(
     // An account whose federation went off since this was queued: never
     // sent (docs/plans/server-personal-data.md, the federation switch).
     let federates: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM users u
+        "SELECT EXISTS (SELECT 1 FROM accounts u
                          WHERE u.account_incarnation_id = $1
                            AND kutup_account_federates(u.id))",
     )

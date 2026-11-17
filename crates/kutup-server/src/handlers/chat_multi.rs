@@ -361,7 +361,7 @@ async fn deliver(
         // server, so is one that doesn't talk to other servers, the same way
         // (crate::federation_switch).
         let active: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM users
+            "SELECT id FROM accounts
               WHERE id = $1 AND is_active AND (NOT $2 OR kutup_account_federates(id))
               FOR SHARE",
         )
@@ -437,7 +437,7 @@ async fn deliver(
             // stores nothing again for it, while a device added since gets
             // its copy.
             let claimed: Option<i32> = sqlx::query_scalar(
-                "INSERT INTO chat_multi_send_ids (user_id, device_id, send_id)
+                "INSERT INTO chat_multi_send_ids (account_id, device_id, send_id)
                  VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING 1",
             )
             .bind(recipient.user_id)
@@ -463,7 +463,7 @@ async fn deliver(
             };
             sqlx::query(
                 "INSERT INTO chat_mailbox
-                    (recipient_user_id, recipient_device_id, sealed_sender, sender_device_id,
+                    (recipient_account_id, recipient_device_id, sealed_sender, sender_device_id,
                      envelope_type, suite, content, send_id, shared_payload_id)
                  VALUES ($1, $2, true, 0, $3, $4, $5, $6, $7)",
             )

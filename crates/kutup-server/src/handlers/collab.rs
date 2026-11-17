@@ -184,14 +184,14 @@ async fn file_access(
 ) -> Result<Option<Access>, sqlx::Error> {
     // A folder share or a share of the file itself; either may allow edits.
     let row: Option<(bool, Option<bool>)> = sqlx::query_as(&format!(
-        r#"SELECT c.owner_user_id = $2,
+        r#"SELECT c.owner_account_id = $2,
                   (SELECT bool_or(can) FROM (
-                       SELECT cs.can_upload AS can FROM collection_shares cs
-                        WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2
+                       SELECT cs.can_upload AS can FROM drive_collection_shares cs
+                        WHERE cs.collection_id = c.id AND cs.recipient_account_id = $2
                        UNION ALL
-                       SELECT fs.can_edit AND {current} FROM file_shares fs
-                        WHERE fs.file_id = f.id AND fs.recipient_user_id = $2) shares)
-           FROM files f JOIN collections c ON c.id = f.collection_id
+                       SELECT fs.can_edit AND {current} FROM drive_file_shares fs
+                        WHERE fs.file_id = f.id AND fs.recipient_account_id = $2) shares)
+           FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
            WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
         current = crate::drive_writes::FILE_SHARE_CURRENT,
     ))
@@ -272,7 +272,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
 
     // Username + color for the peer-list (best-effort).
     let (username, color): (String, String) = sqlx::query_as(
-        "SELECT COALESCE(username, ''), COALESCE(color, '') FROM users WHERE id = $1",
+        "SELECT COALESCE(username, ''), COALESCE(color, '') FROM accounts WHERE id = $1",
     )
     .bind(user_uuid)
     .fetch_one(&state.pool)
@@ -281,7 +281,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
 
     // Stamp last_seen_at on every successful upgrade.
     let _ = sqlx::query(
-        "UPDATE devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2",
+        "UPDATE account_devices SET last_seen_at = now() WHERE account_id = $1 AND device_id = $2",
     )
     .bind(user_uuid)
     .bind(device.device_id as i32)
@@ -293,7 +293,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
     // dropped as replays, so a failed read closes the socket before hello.
     let read = async {
         let doc_key_id: i64 =
-            sqlx::query_scalar("SELECT current_doc_key_id FROM files WHERE id = $1")
+            sqlx::query_scalar("SELECT current_doc_key_id FROM drive_files WHERE id = $1")
                 .bind(file_uuid)
                 .fetch_one(&state.pool)
                 .await?;
@@ -476,7 +476,7 @@ async fn claim_base(
         Some(v) => {
             let Ok(vid) = Uuid::parse_str(v) else { return };
             let row: Option<i64> = sqlx::query_scalar(
-                "SELECT doc_key_id FROM file_versions
+                "SELECT doc_key_id FROM drive_file_versions
                  WHERE id = $1 AND file_id = $2 AND kind = 'file' AND seq_at_snapshot = $3",
             )
             .bind(vid)
@@ -548,15 +548,15 @@ pub(crate) fn trimming(delete: &str) -> String {
     format!(
         "WITH gone AS ({delete}),
               floors AS (
-                INSERT INTO file_sender_floors
-                       (file_id, sender_domain, sender_account, sender_device, seq_prefix, sender_seq)
-                SELECT file_id, sender_domain, sender_account, sender_device, sender_seq >> 32,
+                INSERT INTO collab_sender_floors
+                       (file_id, sender_server, sender_account_id, sender_device_id, seq_prefix, sender_seq)
+                SELECT file_id, sender_server, sender_account_id, sender_device_id, sender_seq >> 32,
                        MAX(sender_seq)
                   FROM gone
-                 GROUP BY file_id, sender_domain, sender_account, sender_device, sender_seq >> 32
-                ON CONFLICT (file_id, sender_domain, sender_account, sender_device, seq_prefix)
+                 GROUP BY file_id, sender_server, sender_account_id, sender_device_id, sender_seq >> 32
+                ON CONFLICT (file_id, sender_server, sender_account_id, sender_device_id, seq_prefix)
                 DO UPDATE SET sender_seq =
-                    GREATEST(file_sender_floors.sender_seq, EXCLUDED.sender_seq)
+                    GREATEST(collab_sender_floors.sender_seq, EXCLUDED.sender_seq)
                 RETURNING 1)
          SELECT COUNT(*) FROM gone"
     )
@@ -572,9 +572,9 @@ pub(crate) async fn trim_log_through(
     doc_key_id: i64,
 ) -> sqlx::Result<()> {
     sqlx::query_scalar::<_, i64>(&trimming(
-        "DELETE FROM file_update_log l USING files f
+        "DELETE FROM collab_update_log l USING drive_files f
           WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2
-         RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
+         RETURNING l.file_id, l.sender_server, l.sender_account_id, l.sender_device_id, l.sender_seq",
     ))
     .bind(file_uuid)
     .bind(seq)
@@ -582,7 +582,7 @@ pub(crate) async fn trim_log_through(
     .fetch_one(&mut **tx)
     .await?;
     sqlx::query(
-        "UPDATE files SET collab_log_floor = GREATEST(collab_log_floor, $2)
+        "UPDATE drive_files SET collab_log_floor = GREATEST(collab_log_floor, $2)
          WHERE id = $1 AND current_doc_key_id = $3",
     )
     .bind(file_uuid)
@@ -777,7 +777,7 @@ pub(crate) fn is_presence(kind: u8) -> bool {
 pub(crate) async fn frame_binding(state: &AppState, file_uuid: Uuid, f: &Frame) -> Option<bool> {
     let binding: (i64, i32, i32, i32) = sqlx::query_as(
         "SELECT f.current_doc_key_id, f.key_generation, f.key_epoch, c.key_epoch \
-         FROM files f JOIN collections c ON c.id = f.collection_id \
+         FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id \
          WHERE f.id = $1 AND f.deleted_at IS NULL",
     )
     .bind(file_uuid)
@@ -832,12 +832,12 @@ async fn sender_seq_high(
 ) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT GREATEST(
-             COALESCE((SELECT MAX(sender_seq) FROM file_update_log
-                        WHERE file_id = $1 AND sender_domain = '' AND sender_account = $2
-                          AND sender_device = $3), 0),
-             COALESCE((SELECT MAX(sender_seq) FROM file_sender_floors
-                        WHERE file_id = $1 AND sender_domain = '' AND sender_account = $2
-                          AND sender_device = $3), 0))",
+             COALESCE((SELECT MAX(sender_seq) FROM collab_update_log
+                        WHERE file_id = $1 AND sender_server = '' AND sender_account_id = $2
+                          AND sender_device_id = $3), 0),
+             COALESCE((SELECT MAX(sender_seq) FROM collab_sender_floors
+                        WHERE file_id = $1 AND sender_server = '' AND sender_account_id = $2
+                          AND sender_device_id = $3), 0))",
     )
     .bind(file_uuid)
     .bind(device.user_id)
@@ -871,8 +871,8 @@ pub(crate) async fn log_head<'e, E: sqlx::PgExecutor<'e>>(
 ) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT GREATEST(
-             COALESCE((SELECT MAX(seq) FROM file_update_log WHERE file_id = $1), 0),
-             COALESCE((SELECT collab_log_floor FROM files WHERE id = $1), 0))",
+             COALESCE((SELECT MAX(seq) FROM collab_update_log WHERE file_id = $1), 0),
+             COALESCE((SELECT collab_log_floor FROM drive_files WHERE id = $1), 0))",
     )
     .bind(file_uuid)
     .fetch_one(executor)
@@ -909,9 +909,9 @@ pub(crate) async fn persist_frame(
     // A counter a trim took (see `trimming`) is a replay as much as one
     // still in the log.
     let trimmed: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM file_sender_floors
-                         WHERE file_id = $1 AND sender_domain = $2 AND sender_account = $3
-                           AND sender_device = $4 AND seq_prefix = $5 >> 32
+        "SELECT EXISTS (SELECT 1 FROM collab_sender_floors
+                         WHERE file_id = $1 AND sender_server = $2 AND sender_account_id = $3
+                           AND sender_device_id = $4 AND seq_prefix = $5 >> 32
                            AND sender_seq >= $5)",
     )
     .bind(file_uuid)
@@ -928,13 +928,13 @@ pub(crate) async fn persist_frame(
     }
 
     let seq = sqlx::query_scalar(
-        r#"INSERT INTO file_update_log (file_id, seq, sender_account, sender_seq, doc_key_id, kind,
-                                       frame, sender_domain, sender_device)
+        r#"INSERT INTO collab_update_log (file_id, seq, sender_account_id, sender_seq, doc_key_id, kind,
+                                       frame, sender_server, sender_device_id)
            VALUES (
              $1,
              GREATEST(
-               COALESCE((SELECT MAX(seq) FROM file_update_log WHERE file_id = $1), 0),
-               (SELECT collab_log_floor FROM files WHERE id = $1)
+               COALESCE((SELECT MAX(seq) FROM collab_update_log WHERE file_id = $1), 0),
+               (SELECT collab_log_floor FROM drive_files WHERE id = $1)
              ) + 1,
              $2, $3, $4, $5, $6, $7, $8
            )
@@ -958,7 +958,7 @@ pub(crate) async fn persist_frame(
 /// Streams every frame with `seq > since_seq` to the joining client — mirrors `replayLog`.
 async fn replay_log(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, since_seq: i64) {
     let rows: Vec<(i64, Vec<u8>, String, Uuid)> = match sqlx::query_as(
-        "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
+        "SELECT seq, frame, sender_server, sender_account_id FROM collab_update_log
           WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC",
     )
     .bind(file_uuid)
@@ -981,7 +981,7 @@ async fn replay_log(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, since_s
     }
     // Everything up to `through` has now been sent. A client that was behind
     // the floor (a saved version trimmed past it) also needs that version.
-    let floor: i64 = sqlx::query_scalar("SELECT collab_log_floor FROM files WHERE id = $1")
+    let floor: i64 = sqlx::query_scalar("SELECT collab_log_floor FROM drive_files WHERE id = $1")
         .bind(file_uuid)
         .fetch_optional(&state.pool)
         .await
@@ -1072,7 +1072,7 @@ pub async fn get_frames(
         .unwrap_or(MAX_FRAMES_PER_READ)
         .clamp(1, MAX_FRAMES_PER_READ);
     let rows: Vec<(i64, Vec<u8>, String, Uuid)> = sqlx::query_as(
-        "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
+        "SELECT seq, frame, sender_server, sender_account_id FROM collab_update_log
           WHERE file_id = $1 AND seq > $2
           ORDER BY seq ASC LIMIT $3",
     )
@@ -1082,11 +1082,12 @@ pub async fn get_frames(
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() as i64 > limit;
-    let (floor, current_doc_key_id): (i64, i64) =
-        sqlx::query_as("SELECT collab_log_floor, current_doc_key_id FROM files WHERE id = $1")
-            .bind(file_uuid)
-            .fetch_one(&state.pool)
-            .await?;
+    let (floor, current_doc_key_id): (i64, i64) = sqlx::query_as(
+        "SELECT collab_log_floor, current_doc_key_id FROM drive_files WHERE id = $1",
+    )
+    .bind(file_uuid)
+    .fetch_one(&state.pool)
+    .await?;
     let head_seq = log_head(&state.pool, file_uuid).await?;
     let my_sender_seq_high = sender_seq_high(&state.pool, file_uuid, &device).await?;
     use base64::Engine as _;

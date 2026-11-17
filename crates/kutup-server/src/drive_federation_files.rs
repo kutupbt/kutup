@@ -106,6 +106,7 @@ pub struct AcceptFederatedFileShareRequest {
 #[serde(rename_all = "camelCase")]
 pub struct IncomingFileShare {
     pub id: Uuid,
+    #[sqlx(rename = "owner_server")]
     pub remote_domain: String,
     pub remote_file_id: Uuid,
     pub owner_account: String,
@@ -177,8 +178,8 @@ pub async fn create_federated_file_share(
     let owner = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let generation: Option<i32> = sqlx::query_scalar(
-        "SELECT f.key_generation FROM files f JOIN collections c ON c.id = f.collection_id
-         WHERE f.id = $1 AND c.owner_user_id = $2 AND f.deleted_at IS NULL AND c.deleted_at IS NULL",
+        "SELECT f.key_generation FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+         WHERE f.id = $1 AND c.owner_account_id = $2 AND f.deleted_at IS NULL AND c.deleted_at IS NULL",
     )
     .bind(file_id)
     .bind(owner)
@@ -188,7 +189,7 @@ pub async fn create_federated_file_share(
         return Err(AppError::forbidden("only the owner shares this file"));
     };
     let sender: (String, String) = sqlx::query_as(
-        "SELECT account_incarnation_id, drive_signing_public_key FROM users WHERE id = $1",
+        "SELECT account_incarnation_id, drive_signing_public_key FROM accounts WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&state.pool)
@@ -220,8 +221,8 @@ pub async fn create_federated_file_share(
 
     let capability = random_token(32);
     sqlx::query(
-        "INSERT INTO federated_outgoing_file_shares
-            (file_id, sharer_user_id, recipient_username, recipient_domain,
+        "INSERT INTO drive_federated_outgoing_file_shares
+            (file_id, sharer_account_id, recipient_username, recipient_server,
              recipient_incarnation_id, share_envelope, key_generation, capability_hash, can_edit,
              recipient_account_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
@@ -273,13 +274,13 @@ async fn outgoing_file_share(
     validate_capability(capability).map_err(|_| AppError::not_found("Drive share not found"))?;
     let row: Option<(Uuid, Uuid, String, i32, bool)> = sqlx::query_as(
         "SELECT s.file_id, s.recipient_account_id, s.share_envelope, s.key_generation, s.can_edit
-         FROM federated_outgoing_file_shares s
-         JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
-         JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_domain = $2
-           -- An owner that doesn't talk to other servers has, to them, no
+         FROM drive_federated_outgoing_file_shares s
+         JOIN drive_files f ON f.id = s.file_id AND f.deleted_at IS NULL
+         JOIN drive_collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+         WHERE s.capability_hash = $1 AND s.recipient_server = $2
+           -- An mailbox_owner that doesn't talk to other servers has, to them, no
            -- shares (crate::federation_switch).
-           AND kutup_account_federates(c.owner_user_id)",
+           AND kutup_account_federates(c.owner_account_id)",
     )
     .bind(capability_hash(capability))
     .bind(authenticated.origin())
@@ -298,11 +299,11 @@ async fn outgoing_file_share(
 
 async fn federated_file(state: &AppState, file_id: Uuid) -> AppResult<FederatedDriveFile> {
     sqlx::query_as(&format!(
-        "SELECT f.id, f.collection_id, f.uploader_user_id, f.metadata_envelope,
+        "SELECT f.id, f.collection_id, f.uploader_account_id, f.metadata_envelope,
                 f.file_key_envelope, f.key_epoch, f.key_generation, f.metadata_revision,
                 f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_generation,
                 {} AS key_history, {} AS content_key_generation
-         FROM files f WHERE f.id = $1 AND f.deleted_at IS NULL",
+         FROM drive_files f WHERE f.id = $1 AND f.deleted_at IS NULL",
         crate::models::FILE_KEY_HISTORY_SQL,
         crate::models::CONTENT_KEY_GENERATION_SQL
     ))
@@ -360,7 +361,7 @@ pub async fn get_file_invite(
             let file = federated_file(&state, share.file_id).await?;
             let owner: (Uuid, Option<String>, String, Option<String>) = sqlx::query_as(
             "SELECT u.id, u.username, u.account_incarnation_id, u.drive_signing_public_key
-             FROM files f JOIN collections c ON c.id = f.collection_id JOIN users u ON u.id = c.owner_user_id
+             FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id JOIN accounts u ON u.id = c.owner_account_id
              WHERE f.id = $1",
         )
         .bind(share.file_id)
@@ -447,7 +448,7 @@ pub async fn get_file_content(
             return Ok(part);
         }
         let stored_digest: Option<String> =
-            sqlx::query_scalar("SELECT ciphertext_sha256 FROM files WHERE id = $1")
+            sqlx::query_scalar("SELECT ciphertext_sha256 FROM drive_files WHERE id = $1")
                 .bind(share.file_id)
                 .fetch_one(&state.pool)
                 .await?;
@@ -586,7 +587,7 @@ async fn fetch_verified_file_invite(
 /// The account's current incarnation (an active account's).
 async fn local_incarnation(state: &AppState, user_id: Uuid) -> AppResult<String> {
     sqlx::query_scalar(
-        "SELECT account_incarnation_id FROM users WHERE id = $1 AND is_active = true",
+        "SELECT account_incarnation_id FROM accounts WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -630,13 +631,13 @@ pub async fn accept_file_share(
     )
     .await?;
     let row: IncomingFileShare = sqlx::query_as(
-        "INSERT INTO federated_incoming_file_shares
-            (user_id, remote_domain, remote_capability, capability_hash, remote_file_id,
-             owner_user_id, owner_account, owner_incarnation_id, owner_signing_public_key)
+        "INSERT INTO drive_federated_incoming_file_shares
+            (account_id, owner_server, remote_capability, capability_hash, remote_file_id,
+             owner_account_id, owner_account, owner_incarnation_id, owner_signing_public_key)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         ON CONFLICT (user_id, remote_domain, capability_hash) DO UPDATE SET
+         ON CONFLICT (account_id, owner_server, capability_hash) DO UPDATE SET
              remote_file_id = EXCLUDED.remote_file_id
-         RETURNING id, remote_domain, remote_file_id, owner_account, created_at",
+         RETURNING id, owner_server, remote_file_id, owner_account, created_at",
     )
     .bind(user_id)
     .bind(server)
@@ -667,8 +668,8 @@ pub async fn list_file_shares(
     let user_id = trusted_uuid(&user.user_id)?;
     Ok(Json(
         sqlx::query_as(
-            "SELECT id, remote_domain, remote_file_id, owner_account, created_at
-             FROM federated_incoming_file_shares WHERE user_id = $1 ORDER BY created_at",
+            "SELECT id, owner_server, remote_file_id, owner_account, created_at
+             FROM drive_federated_incoming_file_shares WHERE account_id = $1 ORDER BY created_at",
         )
         .bind(user_id)
         .fetch_all(&state.pool)
@@ -701,9 +702,9 @@ async fn incoming(state: &AppState, user: &AuthUser, id: &str) -> AppResult<Inco
         OffsetDateTime,
     );
     let row: Row = sqlx::query_as(
-        "SELECT id, remote_domain, remote_capability, remote_file_id, owner_user_id,
+        "SELECT id, owner_server, remote_capability, remote_file_id, owner_account_id,
                 owner_incarnation_id, owner_signing_public_key, created_at
-         FROM federated_incoming_file_shares WHERE id = $1 AND user_id = $2",
+         FROM drive_federated_incoming_file_shares WHERE id = $1 AND account_id = $2",
     )
     .bind(id)
     .bind(user_id)
@@ -874,7 +875,7 @@ pub async fn remove_file_share(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let share = incoming(&state, &user, &id).await?;
-    sqlx::query("DELETE FROM federated_incoming_file_shares WHERE id = $1")
+    sqlx::query("DELETE FROM drive_federated_incoming_file_shares WHERE id = $1")
         .bind(share.id)
         .execute(&state.pool)
         .await?;
@@ -884,7 +885,7 @@ pub async fn remove_file_share(
 /// The latest saved Yjs state of `file_id`, as a response body.
 async fn saved_state(state: &AppState, file_id: Uuid) -> AppResult<FileStateResponse> {
     let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
-        "SELECT id, storage_path, key_generation, revision_content_envelope FROM file_versions
+        "SELECT id, storage_path, key_generation, revision_content_envelope FROM drive_file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
          ORDER BY created_at DESC LIMIT 1",
     )
@@ -944,7 +945,7 @@ pub async fn get_folder_file_state(
         let file_id =
             Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
         let in_folder: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM files WHERE id = $1 AND collection_id = $2 AND deleted_at IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM drive_files WHERE id = $1 AND collection_id = $2 AND deleted_at IS NULL)",
         )
         .bind(file_id)
         .bind(share.collection_id)

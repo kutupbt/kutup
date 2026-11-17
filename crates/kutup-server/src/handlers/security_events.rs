@@ -91,7 +91,7 @@ pub async fn list(
     // A cursor is one of the caller's own events, as a page handed it out.
     if let Some(cursor) = query.cursor {
         let known: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM account_security_events WHERE id = $1 AND user_id = $2)",
+            "SELECT EXISTS (SELECT 1 FROM account_security_events WHERE id = $1 AND account_id = $2)",
         )
         .bind(cursor)
         .bind(user_id)

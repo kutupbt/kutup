@@ -73,14 +73,14 @@ pub async fn hold(
         .map_err(|_| AppError::internal("storage"))?;
     let deliver_at: Result<OffsetDateTime, sqlx::Error> = sqlx::query_scalar(
         "WITH held AS (
-             INSERT INTO mail_outbox (id, user_id, draft_id, is_admin, deliver_at, parts_key,
+             INSERT INTO mail_outbox (id, account_id, draft_id, is_admin, deliver_at, parts_key,
                                       parts_version, scheduled)
              VALUES ($1, $2, $3, $4, COALESCE($8, now() + make_interval(secs => $5)), $6, $7,
                      $8::timestamptz IS NOT NULL)
              RETURNING deliver_at
          ), moved AS (
              UPDATE mail_messages SET folder = 'scheduled', folder_changed_at = now()
-              WHERE id = $3 AND user_id = $2 AND folder = 'drafts' AND $8::timestamptz IS NOT NULL
+              WHERE id = $3 AND account_id = $2 AND folder = 'drafts' AND $8::timestamptz IS NOT NULL
          )
          SELECT deliver_at FROM held",
     )
@@ -117,7 +117,7 @@ pub async fn cancel(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<bool
     let row: Option<(String, String)> = sqlx::query_as(
         "WITH taken AS (
              UPDATE mail_outbox SET state = 'cancelled', finished_at = now()
-              WHERE id = $1 AND user_id = $2 AND state = 'pending'
+              WHERE id = $1 AND account_id = $2 AND state = 'pending'
               RETURNING draft_id, parts_key, parts_version
          ), back AS (
              UPDATE mail_messages SET folder = 'drafts', folder_changed_at = now()
@@ -179,7 +179,7 @@ async fn send_due(state: &AppState) -> anyhow::Result<()> {
               WHERE id = (SELECT id FROM mail_outbox
                            WHERE state = 'pending' AND deliver_at <= now()
                            ORDER BY deliver_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-              RETURNING id, user_id, is_admin, parts_key, parts_version",
+              RETURNING id, account_id, is_admin, parts_key, parts_version",
         )
         .fetch_optional(&state.pool)
         .await?;

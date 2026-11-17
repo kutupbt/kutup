@@ -93,7 +93,7 @@ type Row = (
 
 const ROW_SELECT: &str = "SELECT c.id, c.hint, c.note, u.username, c.created_at, c.expires_at,
         c.max_uses, c.uses, c.revoked_at
-   FROM registration_codes c LEFT JOIN users u ON u.id = c.created_by";
+   FROM registration_codes c LEFT JOIN accounts u ON u.id = c.created_by_account_id";
 
 fn to_row(
     (id, hint, note, created_by, created_at, expires_at, max_uses, uses, revoked_at): Row,
@@ -174,7 +174,7 @@ pub async fn create(
     let code = registration::generate();
     let canonical = registration::canonical(&code).expect("a generated code reads back");
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO registration_codes (code_hash, hint, note, created_by, expires_at, max_uses)
+        "INSERT INTO registration_codes (code_hash, hint, note, created_by_account_id, expires_at, max_uses)
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(registration::hash(&key, &canonical).as_slice())
@@ -244,7 +244,7 @@ pub async fn revoke(
     let admin_id =
         Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("invalid session"))?;
     let revoked = sqlx::query(
-        "UPDATE registration_codes SET revoked_at = now(), revoked_by = $2
+        "UPDATE registration_codes SET revoked_at = now(), revoked_by_account_id = $2
           WHERE id = $1 AND revoked_at IS NULL",
     )
     .bind(id)
@@ -288,7 +288,7 @@ pub async fn uses(
     fetch(&state, id).await?;
     let rows: Vec<(Uuid, String, OffsetDateTime)> = sqlx::query_as(
         "SELECT u.id, COALESCE(u.username, ''), r.used_at
-           FROM registration_code_uses r JOIN users u ON u.id = r.user_id
+           FROM registration_code_uses r JOIN accounts u ON u.id = r.account_id
           WHERE r.code_id = $1 ORDER BY r.used_at",
     )
     .bind(id)
@@ -337,8 +337,8 @@ pub async fn user_code(
         "SELECT c.id, c.hint, c.note, creator.username, r.used_at
            FROM registration_code_uses r
            JOIN registration_codes c ON c.id = r.code_id
-           LEFT JOIN users creator ON creator.id = c.created_by
-          WHERE r.user_id = $1",
+           LEFT JOIN accounts creator ON creator.id = c.created_by_account_id
+          WHERE r.account_id = $1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)

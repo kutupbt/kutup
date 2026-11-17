@@ -17,14 +17,14 @@ pub async fn can_write_file(
     file_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar::<_, bool>(&format!(
-        r#"SELECT c.owner_user_id = $2
-                  OR EXISTS(SELECT 1 FROM collection_shares cs
-                            WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2
+        r#"SELECT c.owner_account_id = $2
+                  OR EXISTS(SELECT 1 FROM drive_collection_shares cs
+                            WHERE cs.collection_id = c.id AND cs.recipient_account_id = $2
                               AND cs.can_upload)
-                  OR EXISTS(SELECT 1 FROM file_shares fs
-                            WHERE fs.file_id = f.id AND fs.recipient_user_id = $2
+                  OR EXISTS(SELECT 1 FROM drive_file_shares fs
+                            WHERE fs.file_id = f.id AND fs.recipient_account_id = $2
                               AND fs.can_edit AND {FILE_SHARE_CURRENT})
-           FROM files f JOIN collections c ON c.id = f.collection_id
+           FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
            WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
     ))
     .bind(file_id)
@@ -52,10 +52,10 @@ pub async fn is_file_share_editor(
     file_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar::<_, bool>(&format!(
-        r#"SELECT EXISTS(SELECT 1 FROM file_shares fs
-                  JOIN files f ON f.id = fs.file_id
-                  JOIN collections c ON c.id = f.collection_id
-                  WHERE fs.file_id = $1 AND fs.recipient_user_id = $2 AND fs.can_edit
+        r#"SELECT EXISTS(SELECT 1 FROM drive_file_shares fs
+                  JOIN drive_files f ON f.id = fs.file_id
+                  JOIN drive_collections c ON c.id = f.collection_id
+                  WHERE fs.file_id = $1 AND fs.recipient_account_id = $2 AND fs.can_edit
                     AND f.deleted_at IS NULL AND c.deleted_at IS NULL
                     AND {FILE_SHARE_CURRENT})"#,
     ))
@@ -101,15 +101,15 @@ pub async fn share_headroom(
 ) -> sqlx::Result<i64> {
     let used: i64 = sqlx::query_scalar(
         "SELECT COALESCE((SELECT SUM(CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)
-                          FROM files WHERE collection_id = $1 AND uploader_user_id = $2), 0)::bigint
-              + COALESCE((SELECT SUM(total_bytes) FROM uploads
-                          WHERE collection_id = $1 AND user_id = $2 AND id IS DISTINCT FROM $3), 0)::bigint
-              + COALESCE((SELECT SUM(v.size_bytes) FROM file_versions v JOIN files f ON f.id = v.file_id
-                          WHERE f.collection_id = $1 AND v.author_user_id = $2), 0)::bigint
-              + COALESCE((SELECT SUM(a.size_bytes) FROM file_assets a JOIN files f ON f.id = a.file_id
-                          WHERE f.collection_id = $1 AND a.uploader_user_id = $2), 0)::bigint
-              + COALESCE((SELECT SUM(t.size_bytes) FROM file_thumbnails t JOIN files f ON f.id = t.file_id
-                          WHERE f.collection_id = $1 AND t.uploader_user_id = $2), 0)::bigint",
+                          FROM drive_files WHERE collection_id = $1 AND uploader_account_id = $2), 0)::bigint
+              + COALESCE((SELECT SUM(total_bytes) FROM drive_uploads
+                          WHERE collection_id = $1 AND account_id = $2 AND id IS DISTINCT FROM $3), 0)::bigint
+              + COALESCE((SELECT SUM(v.size_bytes) FROM drive_file_versions v JOIN drive_files f ON f.id = v.file_id
+                          WHERE f.collection_id = $1 AND v.author_account_id = $2), 0)::bigint
+              + COALESCE((SELECT SUM(a.size_bytes) FROM drive_file_assets a JOIN drive_files f ON f.id = a.file_id
+                          WHERE f.collection_id = $1 AND a.uploader_account_id = $2), 0)::bigint
+              + COALESCE((SELECT SUM(t.size_bytes) FROM drive_file_thumbnails t JOIN drive_files f ON f.id = t.file_id
+                          WHERE f.collection_id = $1 AND t.uploader_account_id = $2), 0)::bigint",
     )
     .bind(collection_id)
     .bind(user_id)
@@ -134,8 +134,8 @@ pub async fn claim_file_id(
         .execute(&mut **tx)
         .await?;
     let taken: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM files WHERE id = $1)
-             OR EXISTS (SELECT 1 FROM uploads WHERE file_id = $1 AND id IS DISTINCT FROM $2)",
+        "SELECT EXISTS (SELECT 1 FROM drive_files WHERE id = $1)
+             OR EXISTS (SELECT 1 FROM drive_uploads WHERE file_id = $1 AND id IS DISTINCT FROM $2)",
     )
     .bind(file_id)
     .bind(except_upload)
@@ -174,9 +174,9 @@ pub async fn check_room(
         return Ok(Room::Quota);
     }
     let limit: Option<i64> = sqlx::query_scalar(
-        "SELECT cs.upload_quota_bytes FROM collection_shares cs
-         JOIN collections c ON c.id = cs.collection_id
-         WHERE cs.collection_id = $1 AND cs.recipient_user_id = $2 AND c.owner_user_id <> $2",
+        "SELECT cs.upload_quota_bytes FROM drive_collection_shares cs
+         JOIN drive_collections c ON c.id = cs.collection_id
+         WHERE cs.collection_id = $1 AND cs.recipient_account_id = $2 AND c.owner_account_id <> $2",
     )
     .bind(collection_id)
     .bind(user_id)
@@ -224,7 +224,7 @@ pub async fn lock_file_key(
 ) -> crate::error::AppResult<()> {
     let keys: Option<(i32, i32, i32)> = sqlx::query_as(
         "SELECT f.key_generation, f.key_epoch, c.key_epoch
-         FROM files f JOIN collections c ON c.id = f.collection_id
+         FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
          WHERE f.id = $1 AND f.deleted_at IS NULL FOR SHARE",
     )
     .bind(file_id)

@@ -293,7 +293,7 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
         AND o.state = 'pending') AS outbox_id,
     snoozed_until, expires_at,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
-    (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
+    (SELECT u.username FROM accounts u WHERE u.id = mail_messages.sent_by_account_id) AS sent_by_name";
 
 impl Row {
     /// The message, its headers opened with its mailbox's keys.
@@ -395,7 +395,7 @@ pub(crate) async fn mailbox(
     let group = Uuid::parse_str(group).map_err(|_| AppError::not_found("not found"))?;
     let member: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM mail_group_members m JOIN mail_groups g ON g.id = m.group_id
-                         WHERE m.group_id = $1 AND m.user_id = $2 AND g.kind = 'shared')",
+                         WHERE m.group_id = $1 AND m.account_id = $2 AND g.kind = 'shared')",
     )
     .bind(group)
     .bind(user_id)
@@ -512,7 +512,7 @@ pub async fn search_index(
         None => {
             sqlx::query_as(&format!(
                 "SELECT {ROW_COLUMNS} FROM mail_messages
-                  WHERE owner = $1 AND user_id = $1
+                  WHERE mailbox_owner = $1 AND account_id = $1
                   ORDER BY received_at DESC, id DESC
                   LIMIT $2"
             ))
@@ -524,7 +524,7 @@ pub async fn search_index(
         Some(cursor) => {
             sqlx::query_as(&format!(
                 "SELECT {ROW_COLUMNS} FROM mail_messages
-                  WHERE owner = $1 AND user_id = $1 AND (received_at, id) < ($2, $3)
+                  WHERE mailbox_owner = $1 AND account_id = $1 AND (received_at, id) < ($2, $3)
                   ORDER BY received_at DESC, id DESC
                   LIMIT $4"
             ))
@@ -539,7 +539,7 @@ pub async fn search_index(
     let total: Option<i64> = if before.is_none() {
         Some(
             sqlx::query_scalar(
-                "SELECT count(*) FROM mail_messages WHERE owner = $1 AND user_id = $1",
+                "SELECT count(*) FROM mail_messages WHERE mailbox_owner = $1 AND account_id = $1",
             )
             .bind(user_id)
             .fetch_one(&state.pool)
@@ -603,8 +603,8 @@ pub struct SearchChanges {
 /// Body search's feed: an account's own mail (docs/sync-feeds.md).
 pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Feed::new(
     "mail_messages",
-    "user_id = $1",
-    "owner",
+    "account_id = $1",
+    "mailbox_owner",
     "mail_message_tombstones",
     "mail_change_floors",
 );
@@ -652,7 +652,7 @@ pub async fn search_index_changes(
     let (changed_ids, gone_ids, next, more) = (page.changed, page.gone, page.next, page.more);
     let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT {ROW_COLUMNS} FROM mail_messages
-          WHERE owner = $1 AND user_id = $1 AND id = ANY($2)
+          WHERE mailbox_owner = $1 AND account_id = $1 AND id = ANY($2)
           ORDER BY received_at DESC, id DESC"
     ))
     .bind(user_id)
@@ -661,7 +661,7 @@ pub async fn search_index_changes(
     .await?;
     let gone: Vec<(Uuid, OffsetDateTime)> = sqlx::query_as(
         "SELECT DISTINCT ON (id) id, received_at FROM mail_message_tombstones
-          WHERE owner = $1 AND id = ANY($2)",
+          WHERE mailbox_owner = $1 AND id = ANY($2)",
     )
     .bind(user_id)
     .bind(&gone_ids)
@@ -694,7 +694,7 @@ pub(crate) async fn forget_old_tombstones(pool: &sqlx::PgPool) -> sqlx::Result<u
     // A deleted account's floor goes too (a mailbox owner is an account).
     sqlx::query(
         "DELETE FROM mail_change_floors f
-          WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = f.owner)",
+          WHERE NOT EXISTS (SELECT 1 FROM accounts u WHERE u.id = f.mailbox_owner)",
     )
     .execute(pool)
     .await?;
@@ -897,13 +897,13 @@ pub async fn search_addresses(
         .await?
         .owner();
     let addresses: Vec<String> = sqlx::query_scalar(
-        "SELECT address FROM mail_addresses WHERE user_id = $1 OR group_id = $1
+        "SELECT address FROM mail_addresses WHERE account_id = $1 OR group_id = $1
          UNION
          SELECT a.address
            FROM mail_group_members m
            JOIN mail_groups g ON g.id = m.group_id AND g.kind = 'list'
            JOIN mail_addresses a ON a.group_id = g.id
-          WHERE m.user_id = $1
+          WHERE m.account_id = $1
          ORDER BY 1",
     )
     .bind(owner)
@@ -1002,7 +1002,7 @@ async fn message_rows(
 /// The place and the search, shared by the listings and batch changes: $1
 /// owner, $2 place, $6 search tokens ($18 a word: `sealed::search_where`),
 /// $7 the folder or label, $8 almost all mail.
-const PLACE_WHERE: &str = "owner = $1
+const PLACE_WHERE: &str = "mailbox_owner = $1
         AND CASE $2
               WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
               WHEN 'all_sent' THEN direction = 'outbound'
@@ -1092,7 +1092,7 @@ async fn list_conversations(
     threads.truncate(limit as usize);
     let latest: Vec<Uuid> = threads.iter().map(|t| t.0).collect();
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE owner = $1 AND id = ANY($2)"
+        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE mailbox_owner = $1 AND id = ANY($2)"
     ))
     .bind(owner)
     .bind(&latest)
@@ -1242,7 +1242,7 @@ pub async fn receipt_sent(
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let marked = sqlx::query(
         "UPDATE mail_messages SET receipt_sent = true
-          WHERE id = $1 AND owner = $2 AND direction = 'inbound'",
+          WHERE id = $1 AND mailbox_owner = $2 AND direction = 'inbound'",
     )
     .bind(id)
     .bind(owner)
@@ -1295,7 +1295,7 @@ pub async fn unsubscribe(
         .owner();
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM mail_messages WHERE id = $1 AND owner = $2 AND direction = 'inbound')",
+        "SELECT EXISTS (SELECT 1 FROM mail_messages WHERE id = $1 AND mailbox_owner = $2 AND direction = 'inbound')",
     )
     .bind(id)
     .bind(owner)
@@ -1314,11 +1314,13 @@ pub async fn unsubscribe(
                 )
             })?;
     }
-    sqlx::query("UPDATE mail_messages SET unsubscribed = true WHERE id = $1 AND owner = $2")
-        .bind(id)
-        .bind(owner)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "UPDATE mail_messages SET unsubscribed = true WHERE id = $1 AND mailbox_owner = $2",
+    )
+    .bind(id)
+    .bind(owner)
+    .execute(&state.pool)
+    .await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -1349,7 +1351,7 @@ pub async fn message_content(
     // Each message is written once under its own key, so the plain key is
     // always the stored version.
     let row: Option<(String, Option<Vec<u8>>)> = sqlx::query_as(
-        "SELECT object_key, key_packet FROM mail_messages WHERE id = $1 AND owner = $2",
+        "SELECT object_key, key_packet FROM mail_messages WHERE id = $1 AND mailbox_owner = $2",
     )
     .bind(id)
     .bind(owner)
@@ -1496,7 +1498,7 @@ async fn update_ids(
     let mut tx = state.pool.begin().await?;
     if let Some(custom) = custom {
         let mine: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM mail_folders WHERE user_id = $1 AND id = $2)",
+            "SELECT EXISTS (SELECT 1 FROM mail_folders WHERE account_id = $1 AND id = $2)",
         )
         .bind(user_id)
         .bind(custom)
@@ -1506,12 +1508,13 @@ async fn update_ids(
             return Err(AppError::bad_request("no such folder"));
         }
     }
-    let labels: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM mail_labels WHERE user_id = $1 AND id = ANY($2)")
-            .bind(user_id)
-            .bind(add.iter().chain(&remove).copied().collect::<Vec<_>>())
-            .fetch_one(&mut *tx)
-            .await?;
+    let labels: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mail_labels WHERE account_id = $1 AND id = ANY($2)",
+    )
+    .bind(user_id)
+    .bind(add.iter().chain(&remove).copied().collect::<Vec<_>>())
+    .fetch_one(&mut *tx)
+    .await?;
     let mut wanted: Vec<Uuid> = add.iter().chain(&remove).copied().collect();
     wanted.sort();
     wanted.dedup();
@@ -1528,7 +1531,7 @@ async fn update_ids(
                  custom_folder = CASE WHEN $5::text IS NULL THEN custom_folder ELSE $6 END,
                  -- Moved out of Snoozed: no longer waiting to come back.
                  snoozed_until = CASE WHEN $5::text IS NULL THEN snoozed_until ELSE NULL END
-              WHERE owner = $1 AND id = ANY($2)
+              WHERE mailbox_owner = $1 AND id = ANY($2)
                 AND ($5::text IS NULL OR (
                       folder NOT IN ('drafts', 'scheduled') AND (
                         $5 = 'custom'
@@ -1547,7 +1550,7 @@ async fn update_ids(
     } else {
         // Labels only: every message of yours among the ids counts.
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM mail_messages WHERE owner = $1 AND id = ANY($2)",
+            "SELECT COUNT(*) FROM mail_messages WHERE mailbox_owner = $1 AND id = ANY($2)",
         )
         .bind(owner)
         .bind(ids)
@@ -1558,7 +1561,7 @@ async fn update_ids(
         sqlx::query(
             "INSERT INTO mail_message_labels (message_id, label_id)
              SELECT m.id, l FROM mail_messages m, UNNEST($3::uuid[]) l
-              WHERE m.user_id = $1 AND m.id = ANY($2)
+              WHERE m.account_id = $1 AND m.id = ANY($2)
              ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
@@ -1570,7 +1573,7 @@ async fn update_ids(
     if !remove.is_empty() {
         sqlx::query(
             "DELETE FROM mail_message_labels l USING mail_messages m
-              WHERE l.message_id = m.id AND m.user_id = $1 AND m.id = ANY($2) AND l.label_id = ANY($3)",
+              WHERE l.message_id = m.id AND m.account_id = $1 AND m.id = ANY($2) AND l.label_id = ANY($3)",
         )
         .bind(user_id)
         .bind(ids)
@@ -1628,7 +1631,7 @@ pub async fn snooze_messages(
             }
             sqlx::query(
                 "UPDATE mail_messages SET folder = 'snoozed', snoozed_until = $3
-                  WHERE owner = $1 AND id = ANY($2) AND folder IN ('inbox', 'snoozed')
+                  WHERE mailbox_owner = $1 AND id = ANY($2) AND folder IN ('inbox', 'snoozed')
                     AND direction = 'inbound'",
             )
             .bind(owner)
@@ -1640,7 +1643,7 @@ pub async fn snooze_messages(
         }
         None => sqlx::query(
             "UPDATE mail_messages SET folder = 'inbox', snoozed_until = NULL
-              WHERE owner = $1 AND id = ANY($2) AND folder = 'snoozed'",
+              WHERE mailbox_owner = $1 AND id = ANY($2) AND folder = 'snoozed'",
         )
         .bind(owner)
         .bind(&ids)
@@ -1805,7 +1808,7 @@ pub(crate) async fn delete_for_good(
     let attachments: Vec<(String, i64)> = sqlx::query_as(
         "SELECT a.object_key, a.size_bytes FROM mail_draft_attachments a
            JOIN mail_messages m ON m.id = a.message_id
-          WHERE m.owner = $1 AND m.id = ANY($2) AND m.folder = ANY($3)",
+          WHERE m.mailbox_owner = $1 AND m.id = ANY($2) AND m.folder = ANY($3)",
     )
     .bind(owner)
     .bind(ids)
@@ -1815,7 +1818,7 @@ pub(crate) async fn delete_for_good(
     // A distribution-list copy only drops the member's row: the shared data
     // packet is the group's, released once nobody holds it.
     let deleted: Vec<(String, String, i64, bool)> = sqlx::query_as(
-        "DELETE FROM mail_messages WHERE owner = $1 AND id = ANY($2) AND folder = ANY($3)
+        "DELETE FROM mail_messages WHERE mailbox_owner = $1 AND id = ANY($2) AND folder = ANY($3)
          RETURNING object_key, object_version, size_bytes, key_packet IS NOT NULL",
     )
     .bind(owner)
@@ -1906,18 +1909,18 @@ pub async fn counts(
     };
     let rows: Vec<(String, i64, i64)> = sqlx::query_as(&format!(
         "SELECT m.folder, {unread}, {total}
-           FROM mail_messages m WHERE m.owner = $1 AND m.folder <> 'custom' GROUP BY m.folder
+           FROM mail_messages m WHERE m.mailbox_owner = $1 AND m.folder <> 'custom' GROUP BY m.folder
          UNION ALL
          SELECT 'starred', {unread}, {total}
            FROM mail_messages m
-          WHERE m.owner = $1 AND m.starred AND m.folder NOT IN ('spam', 'trash')
+          WHERE m.mailbox_owner = $1 AND m.starred AND m.folder NOT IN ('spam', 'trash')
          UNION ALL
          SELECT 'folder:' || m.custom_folder, {unread}, {total}
-           FROM mail_messages m WHERE m.owner = $1 AND m.folder = 'custom' GROUP BY m.custom_folder
+           FROM mail_messages m WHERE m.mailbox_owner = $1 AND m.folder = 'custom' GROUP BY m.custom_folder
          UNION ALL
          SELECT 'label:' || l.label_id, {unread}, {total}
            FROM mail_message_labels l JOIN mail_messages m ON m.id = l.message_id
-          WHERE m.owner = $1 AND m.folder NOT IN ('spam', 'trash') GROUP BY l.label_id"
+          WHERE m.mailbox_owner = $1 AND m.folder NOT IN ('spam', 'trash') GROUP BY l.label_id"
     ))
     .bind(owner)
     .fetch_all(&state.pool)
@@ -1958,7 +1961,7 @@ pub async fn thread(
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT {ROW_COLUMNS} FROM mail_messages
-          WHERE owner = $1 AND thread_id = $2
+          WHERE mailbox_owner = $1 AND thread_id = $2
           ORDER BY received_at, id
           LIMIT 500"
     ))

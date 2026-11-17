@@ -110,7 +110,7 @@ pub struct PassSettings {
 async fn site_icons(state: &AppState, user: &AuthUser) -> AppResult<SiteIcons> {
     let user_id = trusted_uuid(&user.user_id)?;
     let stored: Option<String> =
-        sqlx::query_scalar("SELECT site_icons FROM pass_settings WHERE user_id = $1")
+        sqlx::query_scalar("SELECT site_icons FROM pass_settings WHERE account_id = $1")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -154,8 +154,8 @@ pub async fn put_settings(
     let Json(settings) = body.map_err(|_| AppError::bad_request("invalid settings"))?;
     let user_id = trusted_uuid(&user.user_id)?;
     sqlx::query(
-        "INSERT INTO pass_settings (user_id, site_icons) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET site_icons = $2, updated_at = NOW()",
+        "INSERT INTO pass_settings (account_id, site_icons) VALUES ($1, $2)
+         ON CONFLICT (account_id) DO UPDATE SET site_icons = $2, updated_at = NOW()",
     )
     .bind(user_id)
     .bind(settings.site_icons.as_str())

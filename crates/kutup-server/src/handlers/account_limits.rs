@@ -136,7 +136,7 @@ pub struct AccountLimitsResponse {
 /// The account's own values, by key, as stored.
 async fn own_values(state: &AppState, account: Uuid) -> AppResult<HashMap<String, i64>> {
     Ok(sqlx::query_as::<_, (String, i64)>(
-        "SELECT key, value FROM user_setting_overrides WHERE user_id = $1",
+        "SELECT key, value FROM account_setting_overrides WHERE account_id = $1",
     )
     .bind(account)
     .fetch_all(&state.pool)
@@ -202,7 +202,7 @@ fn rate_limit_entry(
 
 /// The account's username, or 404 when there is no such account.
 async fn account_name(state: &AppState, id: Uuid) -> AppResult<Option<String>> {
-    sqlx::query_scalar::<_, Option<String>>("SELECT username FROM users WHERE id = $1")
+    sqlx::query_scalar::<_, Option<String>>("SELECT username FROM accounts WHERE id = $1")
         .bind(id)
         .fetch_optional(&state.pool)
         .await?
@@ -350,8 +350,8 @@ pub async fn update(
     match request.value {
         Some(value) => {
             sqlx::query(
-                "INSERT INTO user_setting_overrides (user_id, key, value) VALUES ($1, $2, $3)
-                 ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                "INSERT INTO account_setting_overrides (account_id, key, value) VALUES ($1, $2, $3)
+                 ON CONFLICT (account_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
             )
             .bind(id)
             .bind(&stored_key)
@@ -360,7 +360,7 @@ pub async fn update(
             .await?;
         }
         None => {
-            sqlx::query("DELETE FROM user_setting_overrides WHERE user_id = $1 AND key = $2")
+            sqlx::query("DELETE FROM account_setting_overrides WHERE account_id = $1 AND key = $2")
                 .bind(id)
                 .bind(&stored_key)
                 .execute(&state.pool)

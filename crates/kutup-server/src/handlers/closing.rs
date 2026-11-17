@@ -64,9 +64,9 @@ pub async fn close(
     let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
     let (protected, last_admin): (bool, bool) = sqlx::query_as(
         "SELECT is_break_glass,
-                is_admin AND NOT EXISTS (SELECT 1 FROM users o
+                is_admin AND NOT EXISTS (SELECT 1 FROM accounts o
                                           WHERE o.is_admin AND o.is_active AND o.id <> u.id)
-           FROM users u WHERE id = $1",
+           FROM accounts u WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
@@ -128,7 +128,7 @@ pub async fn keep(
     }
     security_events::record(&mut tx, account, Kind::AccountKept, None, None).await?;
     let record: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT opaque_record FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT opaque_record FROM accounts WHERE id = $1")
             .bind(account)
             .fetch_one(&mut *tx)
             .await?;

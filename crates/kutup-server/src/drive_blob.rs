@@ -118,9 +118,9 @@ pub async fn ensure_revision_free(
         .execute(&mut **tx)
         .await?;
     let taken: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM files WHERE content_revision_id = $1)
-             OR EXISTS (SELECT 1 FROM file_versions WHERE id = $1)
-             OR EXISTS (SELECT 1 FROM uploads
+        "SELECT EXISTS (SELECT 1 FROM drive_files WHERE content_revision_id = $1)
+             OR EXISTS (SELECT 1 FROM drive_file_versions WHERE id = $1)
+             OR EXISTS (SELECT 1 FROM drive_uploads
                         WHERE revision_id = $1 AND id IS DISTINCT FROM $2)",
     )
     .bind(revision)

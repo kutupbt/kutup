@@ -89,7 +89,7 @@ pub(crate) async fn replace(
         let code = generate();
         let canonical = normalize(&code).expect("a generated code is canonical");
         let stored = sqlx::query(
-            "INSERT INTO two_factor_recovery_codes (user_id, code_mac) VALUES ($1, $2)
+            "INSERT INTO two_factor_recovery_codes (account_id, code_mac) VALUES ($1, $2)
              ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
@@ -115,19 +115,20 @@ pub(crate) async fn spend(
         return Ok(false);
     };
     let key = key(pool).await?;
-    let spent =
-        sqlx::query("DELETE FROM two_factor_recovery_codes WHERE user_id = $1 AND code_mac = $2")
-            .bind(user_id)
-            .bind(&code_mac(key, user_id, &canonical)[..])
-            .execute(&mut **tx)
-            .await?;
+    let spent = sqlx::query(
+        "DELETE FROM two_factor_recovery_codes WHERE account_id = $1 AND code_mac = $2",
+    )
+    .bind(user_id)
+    .bind(&code_mac(key, user_id, &canonical)[..])
+    .execute(&mut **tx)
+    .await?;
     Ok(spent.rows_affected() == 1)
 }
 
 /// How many of the account's codes are left.
 pub(crate) async fn remaining(pool: &PgPool, user_id: Uuid) -> AppResult<i64> {
     Ok(
-        sqlx::query_scalar("SELECT count(*) FROM two_factor_recovery_codes WHERE user_id = $1")
+        sqlx::query_scalar("SELECT count(*) FROM two_factor_recovery_codes WHERE account_id = $1")
             .bind(user_id)
             .fetch_one(pool)
             .await?,
@@ -139,7 +140,7 @@ pub(crate) async fn clear(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM two_factor_recovery_codes WHERE user_id = $1")
+    sqlx::query("DELETE FROM two_factor_recovery_codes WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
@@ -155,14 +156,14 @@ pub(crate) async fn turn_off(
 ) -> AppResult<bool> {
     let was_on = factors_locked(tx, user_id).await?.on();
     sqlx::query(
-        "UPDATE users SET totp_enabled = false, totp_secret_sealed = NULL,
+        "UPDATE accounts SET totp_enabled = false, totp_secret_sealed = NULL,
                           security_keys_require_uv = false
          WHERE id = $1",
     )
     .bind(user_id)
     .execute(&mut **tx)
     .await?;
-    sqlx::query("DELETE FROM user_security_keys WHERE user_id = $1")
+    sqlx::query("DELETE FROM account_security_keys WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
@@ -206,10 +207,10 @@ impl Factors {
 }
 
 const FACTORS: &str = "SELECT u.totp_enabled,
-        (SELECT count(*) FROM user_security_keys k WHERE k.user_id = u.id),
-        (SELECT count(*) FROM user_security_keys k WHERE k.user_id = u.id AND NOT k.compromised),
-        (SELECT count(*) FROM two_factor_recovery_codes c WHERE c.user_id = u.id)
-    FROM users u WHERE u.id = $1";
+        (SELECT count(*) FROM account_security_keys k WHERE k.account_id = u.id),
+        (SELECT count(*) FROM account_security_keys k WHERE k.account_id = u.id AND NOT k.compromised),
+        (SELECT count(*) FROM two_factor_recovery_codes c WHERE c.account_id = u.id)
+    FROM accounts u WHERE u.id = $1";
 
 /// The account's factors.
 pub(crate) async fn factors<'e, E: sqlx::PgExecutor<'e>>(
@@ -237,7 +238,7 @@ pub(crate) async fn factors_locked(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
 ) -> AppResult<Factors> {
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;

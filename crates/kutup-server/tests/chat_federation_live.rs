@@ -503,7 +503,7 @@ fn media_closing_sequence_from_v1(
             let mut tx = pool_a.begin().await?;
             sqlx::query(
                 "INSERT INTO federation_outbox
-                     (kind, destination, sequence, idempotency_key, sender_user_id,
+                     (kind, destination, sequence, idempotency_key, sender_account_id,
                       recipient_account_id, payload, state, error_class)
                  VALUES ('media', 'b.test', $1, $2, $3::uuid, $4::uuid,
                          jsonb_build_object('transaction', $5::jsonb, 'operationId', $6::text),
@@ -1166,7 +1166,7 @@ fn closing_sequence_from_before_v2(
             let mut tx = pool_a.begin().await?;
             sqlx::query(
                 "INSERT INTO federation_outbox
-                     (kind, destination, sequence, idempotency_key, sender_user_id,
+                     (kind, destination, sequence, idempotency_key, sender_account_id,
                       recipient_account_id, payload, state, error_class)
                  VALUES ('chat', 'b.test', $1, $2, $3::uuid, $4::uuid,
                          jsonb_build_object('request', $5::jsonb, 'sender', $3::text),
@@ -3270,7 +3270,7 @@ fn queue_withdrawn_send(a_db: &str) {
         let user = uuid::Uuid::new_v4();
         let mut tx = pool.begin().await.unwrap();
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key, account_authority_key_id,
                 account_incarnation_id, drive_signing_public_key, federation)
              VALUES ($1, $2, '', '', '', '', '', '', '', 'off')",
@@ -3293,7 +3293,7 @@ fn queue_withdrawn_send(a_db: &str) {
         let bob: uuid::Uuid = bob_account().account_id.parse().unwrap();
         sqlx::query(
             "INSERT INTO federation_outbox (id, kind, destination, sequence, idempotency_key,
-                 sender_user_id, recipient_account_id, payload)
+                 sender_account_id, recipient_account_id, payload)
              VALUES ($1, 'chat', 'b.test', $2, $3, $4, $5, $6)",
         )
         .bind(uuid::Uuid::parse_str(WITHDRAWN_ROW_ID).unwrap())

@@ -581,7 +581,7 @@ fn a_taken_address_refuses_the_username_and_reads_never_write() {
     let taken = format!("taken{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
     runtime
         .block_on(
-            sqlx::query("INSERT INTO mail_addresses (user_id, address) VALUES ($1::uuid, $2)")
+            sqlx::query("INSERT INTO mail_addresses (account_id, address) VALUES ($1::uuid, $2)")
                 .bind(&someone.id)
                 .bind(format!("{taken}@{server}"))
                 .execute(&pool),
@@ -589,7 +589,7 @@ fn a_taken_address_refuses_the_username_and_reads_never_write() {
         .unwrap();
     assert_eq!(common::register_named(&c, &base, &taken).as_u16(), 409);
     assert_eq!(
-        count("SELECT count(*) FROM users WHERE username = $1", &taken),
+        count("SELECT count(*) FROM accounts WHERE username = $1", &taken),
         0
     );
 

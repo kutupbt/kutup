@@ -243,7 +243,7 @@ async fn send(
     last_sent: &Mutex<HashMap<(Uuid, i32), Instant>>,
 ) -> anyhow::Result<()> {
     let Some(endpoint) = sqlx::query_scalar::<_, String>(
-        "SELECT endpoint FROM chat_push_subscriptions WHERE user_id = $1 AND device_id = $2",
+        "SELECT endpoint FROM chat_push_subscriptions WHERE account_id = $1 AND device_id = $2",
     )
     .bind(user_id)
     .bind(device_id)
@@ -294,7 +294,7 @@ async fn send(
 }
 
 async fn forget(pool: &PgPool, user_id: Uuid, device_id: i32) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM chat_push_subscriptions WHERE user_id = $1 AND device_id = $2")
+    sqlx::query("DELETE FROM chat_push_subscriptions WHERE account_id = $1 AND device_id = $2")
         .bind(user_id)
         .bind(device_id)
         .execute(pool)
@@ -362,9 +362,9 @@ pub async fn put_subscription(
     )
     .await?;
     sqlx::query(
-        "INSERT INTO chat_push_subscriptions (user_id, device_id, endpoint)
+        "INSERT INTO chat_push_subscriptions (account_id, device_id, endpoint)
          VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, device_id)
+         ON CONFLICT (account_id, device_id)
          DO UPDATE SET endpoint = EXCLUDED.endpoint, updated_at = now()",
     )
     .bind(user_id)

@@ -160,7 +160,7 @@ async fn group_sender(
         .map_err(|_| AppError::bad_request("fromGroup must be a group id"))?;
     let row: Option<(String, bool, String)> = sqlx::query_as(
         "SELECT g.address, m.can_send_as, m.role FROM mail_groups g
-           JOIN mail_group_members m ON m.group_id = g.id AND m.user_id = $2
+           JOIN mail_group_members m ON m.group_id = g.id AND m.account_id = $2
           WHERE g.id = $1 AND g.kind = 'shared'",
     )
     .bind(group_id)
@@ -201,7 +201,7 @@ async fn group_sender(
 async fn from_old_address(state: &AppState, user_id: Uuid, key_id: [u8; 8]) -> AppResult<bool> {
     let keys: Vec<Vec<u8>> = sqlx::query_scalar(
         "SELECT k.public_key FROM mail_address_keys k JOIN mail_addresses a ON a.id = k.address_id
-          WHERE a.user_id = $1 AND a.state <> 'active' AND NOT k.is_forwarding",
+          WHERE a.account_id = $1 AND a.state <> 'active' AND NOT k.is_forwarding",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -229,8 +229,8 @@ async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
         // Old addresses receive only: an account with no current address to
         // send from is refused as such, never sent from an old one.
         let receive_only: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM mail_addresses WHERE user_id = $1 AND state = 'receiving')
-                AND NOT EXISTS (SELECT 1 FROM mail_addresses WHERE user_id = $1 AND state = 'active')",
+            "SELECT EXISTS (SELECT 1 FROM mail_addresses WHERE account_id = $1 AND state = 'receiving')
+                AND NOT EXISTS (SELECT 1 FROM mail_addresses WHERE account_id = $1 AND state = 'active')",
         )
         .bind(user_id)
         .fetch_one(&state.pool)
@@ -264,7 +264,7 @@ async fn sender_for(state: &AppState, user_id: Uuid, from: Option<&str>) -> AppR
         "SELECT a.address, k.public_key, a.domain_id, a.disabled_at IS NOT NULL
            FROM mail_addresses a
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active'",
+          WHERE a.id = $1 AND a.account_id = $2 AND a.state = 'active'",
     )
     .bind(address_id)
     .bind(user_id)
@@ -306,7 +306,7 @@ async fn sender_for(state: &AppState, user_id: Uuid, from: Option<&str>) -> AppR
 async fn own_key_ids(state: &AppState, user_id: Uuid) -> AppResult<Vec<[u8; 8]>> {
     let keys: Vec<Vec<u8>> = sqlx::query_scalar(
         "SELECT k.public_key FROM mail_address_keys k JOIN mail_addresses a ON a.id = k.address_id
-          WHERE a.user_id = $1 AND a.state = 'active' AND a.disabled_at IS NULL
+          WHERE a.account_id = $1 AND a.state = 'active' AND a.disabled_at IS NULL
             AND k.is_primary",
     )
     .bind(user_id)
@@ -431,7 +431,7 @@ async fn own_thread(
         return Ok(None);
     };
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM mail_messages WHERE owner = $1 AND thread_id = $2)",
+        "SELECT EXISTS (SELECT 1 FROM mail_messages WHERE mailbox_owner = $1 AND thread_id = $2)",
     )
     .bind(user_id)
     .bind(thread)
@@ -512,7 +512,7 @@ async fn remove_objects(state: &AppState, objects: &[(String, String)]) {
 
 async fn row(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<MailMessage> {
     let row: Row = sqlx::query_as(&format!(
-        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE owner = $1 AND id = $2"
+        "SELECT {ROW_COLUMNS} FROM mail_messages WHERE mailbox_owner = $1 AND id = $2"
     ))
     .bind(user_id)
     .bind(id)
@@ -653,7 +653,7 @@ pub async fn update_draft(
         let pool = crate::storage_pool::lock(&mut tx, user_id, Default::default()).await?;
         let old: Option<(String, String, i64)> = sqlx::query_as(
             "SELECT object_key, object_version, size_bytes FROM mail_messages
-              WHERE id = $1 AND user_id = $2 AND folder = 'drafts' FOR UPDATE",
+              WHERE id = $1 AND account_id = $2 AND folder = 'drafts' FOR UPDATE",
         )
         .bind(id)
         .bind(user_id)
@@ -678,7 +678,7 @@ pub async fn update_draft(
                     headers = $6, message_id_hash = $7, in_reply_to_hash = $8,
                     references_hashes = $9, search_tokens = $10,
                     attachment_count = $11, sent_at = now(), received_at = now()
-              WHERE id = $1 AND user_id = $2",
+              WHERE id = $1 AND account_id = $2",
         )
         .bind(id)
         .bind(user_id)
@@ -723,7 +723,7 @@ pub struct DraftAttachment {
 async fn own_draft(state: &AppState, user_id: Uuid, id: &str) -> AppResult<Uuid> {
     let id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM mail_messages WHERE id = $1 AND user_id = $2 AND folder = 'drafts')",
+        "SELECT EXISTS (SELECT 1 FROM mail_messages WHERE id = $1 AND account_id = $2 AND folder = 'drafts')",
     )
     .bind(id)
     .bind(user_id)
@@ -796,7 +796,7 @@ pub async fn add_draft_attachment(
             return Err(quota_exceeded());
         }
         sqlx::query(
-            "INSERT INTO mail_draft_attachments (id, message_id, user_id, object_key, size_bytes)
+            "INSERT INTO mail_draft_attachments (id, message_id, account_id, object_key, size_bytes)
              VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(attachment)
@@ -1040,7 +1040,7 @@ pub async fn send(
                 ));
             }
             let waiting: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM mail_outbox WHERE user_id = $1 AND scheduled AND state = 'pending'",
+                "SELECT COUNT(*) FROM mail_outbox WHERE account_id = $1 AND scheduled AND state = 'pending'",
             )
             .bind(user_id)
             .fetch_one(&state.pool)

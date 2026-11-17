@@ -72,7 +72,7 @@ pub async fn store_ceremony(
         .await?;
     sqlx::query(
         "INSERT INTO webauthn_ceremonies
-             (challenge, kind, user_id, bound_to, state, second_factor_proved, expires_at)
+             (challenge, kind, account_id, bound_to, state, second_factor_proved, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7))",
     )
     .bind(&started.challenge)
@@ -87,7 +87,7 @@ pub async fn store_ceremony(
     sqlx::query(
         "DELETE FROM webauthn_ceremonies WHERE challenge IN (
              SELECT challenge FROM webauthn_ceremonies
-             WHERE user_id = $1 AND kind = $2
+             WHERE account_id = $1 AND kind = $2
              ORDER BY expires_at DESC OFFSET $3)",
     )
     .bind(user_id)
@@ -117,7 +117,7 @@ pub async fn take_ceremony(
 ) -> AppResult<Ceremony> {
     sqlx::query_as(
         "DELETE FROM webauthn_ceremonies
-         WHERE challenge = $1 AND kind = $2 AND user_id = $3 AND bound_to = $4
+         WHERE challenge = $1 AND kind = $2 AND account_id = $3 AND bound_to = $4
            AND expires_at > now()
          RETURNING state, second_factor_proved, created_at",
     )
@@ -148,8 +148,8 @@ pub async fn usable_keys<'e, E: PgExecutor<'e>>(
     user_id: Uuid,
 ) -> sqlx::Result<Vec<KeyRow>> {
     sqlx::query_as(
-        "SELECT credential_id, transports FROM user_security_keys
-         WHERE user_id = $1 AND NOT compromised ORDER BY created_at",
+        "SELECT credential_id, transports FROM account_security_keys
+         WHERE account_id = $1 AND NOT compromised ORDER BY created_at",
     )
     .bind(user_id)
     .fetch_all(executor)
@@ -167,7 +167,7 @@ pub fn key_refs(keys: &[KeyRow]) -> Vec<KeyRef<'_>> {
 
 /// Whether the account requires user verification ("Require PIN").
 pub async fn requires_uv<'e, E: PgExecutor<'e>>(executor: E, user_id: Uuid) -> sqlx::Result<bool> {
-    sqlx::query_scalar("SELECT security_keys_require_uv FROM users WHERE id = $1")
+    sqlx::query_scalar("SELECT security_keys_require_uv FROM accounts WHERE id = $1")
         .bind(user_id)
         .fetch_one(executor)
         .await
@@ -249,8 +249,8 @@ pub async fn finish_assertion(
         Err(_) => return Ok(Err(Refused::Invalid)),
     };
     let key: Option<AnsweringKey> = sqlx::query_as(
-        "SELECT id, name, static_state, dynamic_state, last_used_at FROM user_security_keys
-         WHERE user_id = $1 AND credential_id = $2 AND NOT compromised
+        "SELECT id, name, static_state, dynamic_state, last_used_at FROM account_security_keys
+         WHERE account_id = $1 AND credential_id = $2 AND NOT compromised
          FOR UPDATE",
     )
     .bind(user_id)
@@ -282,7 +282,7 @@ pub async fn finish_assertion(
     match checked {
         Ok(asserted) => {
             sqlx::query(
-                "UPDATE user_security_keys
+                "UPDATE account_security_keys
                  SET dynamic_state = $2, sign_count = $3, last_used_at = now()
                  WHERE id = $1",
             )
@@ -299,7 +299,7 @@ pub async fn finish_assertion(
             Ok(Err(Refused::Concurrent))
         }
         Err(AuthenticationRefusal::CounterWentBack) => {
-            sqlx::query("UPDATE user_security_keys SET compromised = true WHERE id = $1")
+            sqlx::query("UPDATE account_security_keys SET compromised = true WHERE id = $1")
                 .bind(key_id)
                 .execute(&mut **tx)
                 .await?;

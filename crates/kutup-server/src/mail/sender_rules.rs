@@ -93,7 +93,7 @@ pub async fn verdict(
     };
     let kind: Option<String> = sqlx::query_scalar(
         "SELECT kind FROM mail_sender_rules
-          WHERE user_id = $1
+          WHERE account_id = $1
             AND pattern IN ($2, $3, (SELECT folded FROM mail_addresses
                                        WHERE folded = kutup_address_folded($2)
                                        LIMIT 1))

@@ -55,7 +55,7 @@ pub async fn get_ui_preferences(
 ) -> AppResult<Json<UiPreferences>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let row: Option<(Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT theme, language FROM user_ui_preferences WHERE user_id = $1")
+        sqlx::query_as("SELECT theme, language FROM account_ui_preferences WHERE account_id = $1")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -84,9 +84,9 @@ pub async fn put_ui_preferences(
     request.validate()?;
     let user_id = trusted_uuid(&user.user_id)?;
     sqlx::query(
-        "INSERT INTO user_ui_preferences (user_id, theme, language, updated_at)
+        "INSERT INTO account_ui_preferences (account_id, theme, language, updated_at)
          VALUES ($1, $2, $3, now())
-         ON CONFLICT (user_id) DO UPDATE SET
+         ON CONFLICT (account_id) DO UPDATE SET
              theme = EXCLUDED.theme,
              language = EXCLUDED.language,
              updated_at = now()",

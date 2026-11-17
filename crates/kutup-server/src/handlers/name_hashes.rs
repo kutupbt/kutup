@@ -48,7 +48,7 @@ pub async fn set_content_hash(
         .ok_or_else(|| AppError::bad_request("invalid content hash"))?;
     let mut tx = state.pool.begin().await?;
     let folder: Option<Uuid> = sqlx::query_scalar(
-        "SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        "SELECT collection_id FROM drive_files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
@@ -59,7 +59,7 @@ pub async fn set_content_hash(
     if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await? {
         writable_folder(&mut tx, user_id, folder).await?;
     }
-    sqlx::query("UPDATE files SET content_hash = $2 WHERE id = $1")
+    sqlx::query("UPDATE drive_files SET content_hash = $2 WHERE id = $1")
         .bind(file_id)
         .bind(&hash)
         .execute(&mut *tx)

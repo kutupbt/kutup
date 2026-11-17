@@ -78,7 +78,7 @@ pub async fn lock(
     session: Uuid,
 ) -> AppResult<Locked> {
     let account: Option<(String, Option<String>, i32)> = sqlx::query_as(
-        "SELECT account_incarnation_id, key_binding, master_key_generation FROM users
+        "SELECT account_incarnation_id, key_binding, master_key_generation FROM accounts
           WHERE id = $1 AND is_active FOR UPDATE",
     )
     .bind(user_id)
@@ -89,7 +89,7 @@ pub async fn lock(
     };
     let live: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM auth_sessions s
-                         WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
+                         WHERE s.id = $1 AND s.account_id = $2 AND s.revoked_at IS NULL
                            AND NOT EXISTS (SELECT 1 FROM auth_sessions p
                                             WHERE p.id = s.parent_session_id
                                               AND p.revoked_at IS NOT NULL))",
@@ -206,7 +206,7 @@ pub async fn advance(
     // The newest head (the account row, locked by `lock`, already orders the
     // account's listed writes; the primary key below is the second guard).
     let current: Option<(i64, Vec<u8>)> = sqlx::query_as(
-        "SELECT sequence, sealed FROM account_heads WHERE user_id = $1
+        "SELECT sequence, sealed FROM account_heads WHERE account_id = $1
          ORDER BY sequence DESC LIMIT 1 FOR UPDATE",
     )
     .bind(user_id)
@@ -240,7 +240,7 @@ async fn insert(
     current: Option<i64>,
 ) -> AppResult<()> {
     let inserted = sqlx::query(
-        "INSERT INTO account_heads (user_id, sequence, sealed, incarnation_id)
+        "INSERT INTO account_heads (account_id, sequence, sealed, incarnation_id)
          VALUES ($1, $2, $3, $4)",
     )
     .bind(locked.user_id)
@@ -258,7 +258,7 @@ async fn insert(
         Err(error) => return Err(error.into()),
     }
     // RETENTION + 1 kept: from `next - RETENTION` to `next`.
-    sqlx::query("DELETE FROM account_heads WHERE user_id = $1 AND sequence < $2")
+    sqlx::query("DELETE FROM account_heads WHERE account_id = $1 AND sequence < $2")
         .bind(locked.user_id)
         .bind(next.sequence - RETENTION)
         .execute(&mut **tx)
@@ -272,7 +272,7 @@ pub async fn latest<'e, E: sqlx::PgExecutor<'e>>(
     user_id: Uuid,
 ) -> AppResult<Option<(i64, Vec<u8>)>> {
     Ok(sqlx::query_as(
-        "SELECT sequence, sealed FROM account_heads WHERE user_id = $1
+        "SELECT sequence, sealed FROM account_heads WHERE account_id = $1
          ORDER BY sequence DESC LIMIT 1",
     )
     .bind(user_id)
@@ -304,7 +304,7 @@ pub async fn segment(
         return Ok(None);
     }
     let heads: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT sealed FROM account_heads WHERE user_id = $1 AND sequence >= $2
+        "SELECT sealed FROM account_heads WHERE account_id = $1 AND sequence >= $2
          ORDER BY sequence LIMIT $3",
     )
     .bind(user_id)
@@ -409,7 +409,7 @@ async fn values(
     // (docs/plans/account-records.md): one query for all of them.
     if let Some(records) = scope.records() {
         let mut values: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT record_id, revision FROM account_records WHERE user_id = $1 AND scope = $2",
+            "SELECT record_id, revision FROM account_records WHERE account_id = $1 AND scope = $2",
         )
         .bind(user_id)
         .bind(records.info().number)
@@ -420,7 +420,7 @@ async fn values(
     }
     let mut values: Vec<(String, i64)> = match scope {
         Scope::Contacts => {
-            sqlx::query_as("SELECT uid, revision FROM contacts WHERE user_id = $1")
+            sqlx::query_as("SELECT uid, revision FROM contacts WHERE account_id = $1")
                 .bind(user_id)
                 .fetch_all(&mut *conn)
                 .await?
@@ -428,9 +428,9 @@ async fn values(
         Scope::MailNames => {
             let rows: Vec<(String, String)> = sqlx::query_as(
                 "SELECT 'folder:' || id, name_sealed FROM mail_folders
-                  WHERE user_id = $1 AND name_sealed IS NOT NULL
-                 UNION ALL SELECT 'label:' || id, name_sealed FROM mail_labels WHERE user_id = $1
-                 UNION ALL SELECT 'filter:' || id, name_sealed FROM mail_filters WHERE user_id = $1",
+                  WHERE account_id = $1 AND name_sealed IS NOT NULL
+                 UNION ALL SELECT 'label:' || id, name_sealed FROM mail_labels WHERE account_id = $1
+                 UNION ALL SELECT 'filter:' || id, name_sealed FROM mail_filters WHERE account_id = $1",
             )
             .bind(user_id)
             .fetch_all(&mut *conn)
@@ -564,7 +564,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         let incarnation = "cd".repeat(32);
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
              VALUES ($1, $2, '', '', '', '', '', $3, '')",
@@ -621,11 +621,12 @@ mod tests {
             tx.commit().await.unwrap();
             sealed.push(bytes);
         }
-        let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM account_heads WHERE user_id = $1")
-            .bind(user_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let kept: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM account_heads WHERE account_id = $1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(kept, RETENTION + 1);
         let current = sealed.last().unwrap();
         let anchored_at = |sequence: i64| {
@@ -693,7 +694,7 @@ mod tests {
         assert_eq!(checked.status, HeadStatus::TooOld);
         // Above the newest: nothing to show.
         assert_eq!(whole(&pool, user_id, total + 1).await.unwrap().len(), 0);
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user_id)
             .execute(&pool)
             .await

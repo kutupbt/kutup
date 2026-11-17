@@ -161,7 +161,7 @@ pub async fn create(
     let client_sealed = sealed_client(&mut conn, user_id, session_id, user_agent).await?;
     sqlx::query(
         "INSERT INTO auth_sessions
-             (id, user_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
+             (id, account_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(session_id)
@@ -202,13 +202,13 @@ pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<L
                     COALESCE(encode(u.opaque_record, 'hex'), '') ||
                     u.totp_enabled::text || ',' ||
                     (SELECT count(*) || '/' || count(*) FILTER (WHERE NOT k.compromised)
-                     FROM user_security_keys k WHERE k.user_id = u.id) || ',' ||
+                     FROM account_security_keys k WHERE k.account_id = u.id) || ',' ||
                     u.is_admin::text || ',' ||
                     length(COALESCE(u.username, '')) || ':' || COALESCE(u.username, '') ||
                     length(COALESCE(u.key_binding, '')) || ':' || COALESCE(u.key_binding, ''),
                     'UTF8')), 'hex')
-         FROM auth_sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
+         FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
+         WHERE s.id = $1 AND s.account_id = $2 AND s.revoked_at IS NULL
            AND s.expires_at > now() AND u.is_active
            -- A forked session lives only while its sign-in does.
            AND NOT EXISTS (SELECT 1 FROM auth_sessions p
@@ -273,8 +273,8 @@ pub async fn refresh(
         Option<OffsetDateTime>,
     );
     let current: Option<Row> = sqlx::query_as(
-        "SELECT s.id, s.user_id, s.client_type, u.is_admin, u.is_active, s.expires_at, s.revoked_at, s.rotated_at
-         FROM auth_sessions s JOIN users u ON u.id = s.user_id
+        "SELECT s.id, s.account_id, s.client_type, u.is_admin, u.is_active, s.expires_at, s.revoked_at, s.rotated_at
+         FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.refresh_token_hash = $1
          FOR UPDATE OF s",
     )
@@ -322,8 +322,8 @@ pub async fn refresh(
     }
 
     let previous: Option<Row> = sqlx::query_as(
-        "SELECT s.id, s.user_id, s.client_type, u.is_admin, u.is_active, s.expires_at, s.revoked_at, s.rotated_at
-         FROM auth_sessions s JOIN users u ON u.id = s.user_id
+        "SELECT s.id, s.account_id, s.client_type, u.is_admin, u.is_active, s.expires_at, s.revoked_at, s.rotated_at
+         FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.previous_refresh_token_hash = $1
          FOR UPDATE OF s",
     )
@@ -410,7 +410,7 @@ pub async fn sign_out(pool: &PgPool, session_id: Uuid) -> AppResult<()> {
 /// Revoke one of the caller's sessions (and its children).
 pub async fn revoke_owned(pool: &PgPool, user_id: Uuid, session_id: Uuid) -> AppResult<bool> {
     let owned: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM auth_sessions WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        "SELECT id FROM auth_sessions WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL",
     )
     .bind(session_id)
     .bind(user_id)
@@ -459,7 +459,7 @@ pub async fn revoke_all_for_user_in(
     };
     sqlx::query(
         "UPDATE auth_sessions SET revoked_at = now()
-         WHERE user_id = $1 AND revoked_at IS NULL
+         WHERE account_id = $1 AND revoked_at IS NULL
            AND ($2::uuid IS NULL OR (id <> $2 AND parent_session_id IS DISTINCT FROM $2))",
     )
     .bind(user_id)
@@ -468,7 +468,7 @@ pub async fn revoke_all_for_user_in(
     .await?;
     sqlx::query(
         "DELETE FROM calendar_push_subscriptions s USING auth_sessions a
-          WHERE s.session_id = a.id AND a.user_id = $1 AND a.revoked_at IS NOT NULL",
+          WHERE s.session_id = a.id AND a.account_id = $1 AND a.revoked_at IS NOT NULL",
     )
     .bind(user_id)
     .execute(&mut **tx)
@@ -500,7 +500,7 @@ pub async fn list(pool: &PgPool, user_id: Uuid) -> AppResult<Vec<SessionRow>> {
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT id, client_type, parent_session_id, client_sealed, created_at, last_used_at
          FROM auth_sessions
-         WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
+         WHERE account_id = $1 AND revoked_at IS NULL AND expires_at > now()
          ORDER BY last_used_at DESC",
     )
     .bind(user_id)
@@ -540,7 +540,7 @@ pub async fn prune_ended(pool: &PgPool, days: i64) -> AppResult<u64> {
                                    >= now() - make_interval(days => $1::int))
             -- A legal hold keeps everything of its account
             -- (docs/plans/server-personal-data.md, A5).
-            AND NOT kutup_account_held(s.user_id)",
+            AND NOT kutup_account_held(s.account_id)",
     )
     .bind(days)
     .execute(pool)
@@ -620,7 +620,7 @@ pub async fn consume_fork(
         return Err(AppError::unauthorized("invalid fork"));
     }
     let parent: Option<(Uuid, bool)> = sqlx::query_as(
-        "SELECT s.user_id, u.is_admin FROM auth_sessions s JOIN users u ON u.id = s.user_id
+        "SELECT s.account_id, u.is_admin FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.is_active
          FOR UPDATE OF s",
     )
@@ -636,7 +636,7 @@ pub async fn consume_fork(
     let client_sealed = sealed_client(&mut tx, user_id, session_id, user_agent).await?;
     sqlx::query(
         "INSERT INTO auth_sessions
-             (id, user_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
+             (id, account_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(session_id)

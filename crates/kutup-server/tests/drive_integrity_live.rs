@@ -307,7 +307,7 @@ fn admin_delete_user_hands_contributions_over() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-        sqlx::query("UPDATE users SET is_admin = true WHERE id = $1::uuid")
+        sqlx::query("UPDATE accounts SET is_admin = true WHERE id = $1::uuid")
             .bind(&admin.id)
             .execute(&pool)
             .await
@@ -364,7 +364,7 @@ fn admin_delete_user_hands_contributions_over() {
     runtime.block_on(async {
         let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
         let left: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM files WHERE id = $1::uuid OR collection_id = $2::uuid",
+            "SELECT COUNT(*) FROM drive_files WHERE id = $1::uuid OR collection_id = $2::uuid",
         )
         .bind(&own.id)
         .bind(&own_folder.id)

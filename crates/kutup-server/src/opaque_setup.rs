@@ -162,14 +162,14 @@ impl OpaqueServer {
         // Older setups no account is registered with any more go.
         sqlx::query(
             "DELETE FROM opaque_server_setups s WHERE s.key_id < $1
-             AND NOT EXISTS (SELECT 1 FROM users u WHERE u.opaque_server_key_id = s.key_id)",
+             AND NOT EXISTS (SELECT 1 FROM accounts u WHERE u.opaque_server_key_id = s.key_id)",
         )
         .bind(current as i16)
         .execute(pool)
         .await
         .map_err(|e| format!("drop retired OPAQUE setups: {e}"))?;
         let stranded: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users WHERE opaque_server_key_id IS NOT NULL
+            "SELECT COUNT(*) FROM accounts WHERE opaque_server_key_id IS NOT NULL
              AND NOT (opaque_server_key_id = ANY($1))",
         )
         .bind(setups.keys().map(|id| *id as i16).collect::<Vec<_>>())

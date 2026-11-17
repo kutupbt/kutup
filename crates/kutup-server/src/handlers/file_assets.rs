@@ -136,7 +136,7 @@ pub(crate) async fn store_asset(
     // exact live file, key generation and content-addressed asset id. The
     // server authenticates only public framing; it never receives the key.
     let (collection_id, key_generation): (Uuid, i32) = sqlx::query_as(
-        "SELECT collection_id, key_generation FROM files WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT collection_id, key_generation FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
@@ -163,7 +163,7 @@ pub(crate) async fn store_asset(
         .await?
         .into_result()?;
     let inserted: Option<i64> = sqlx::query_scalar(
-        r#"INSERT INTO file_assets (file_id, asset_id, size_bytes, uploader_user_id, key_generation)
+        r#"INSERT INTO drive_file_assets (file_id, asset_id, size_bytes, uploader_account_id, key_generation)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (file_id, asset_id) DO NOTHING
            RETURNING size_bytes"#,
@@ -213,7 +213,7 @@ pub(crate) async fn load_asset(
         return Err(AppError::bad_request("invalid assetId"));
     }
     let key_generation: i32 = sqlx::query_scalar(
-        "SELECT key_generation FROM file_assets WHERE file_id = $1 AND asset_id = $2",
+        "SELECT key_generation FROM drive_file_assets WHERE file_id = $1 AND asset_id = $2",
     )
     .bind(fid)
     .bind(asset_id)
@@ -275,7 +275,7 @@ pub(crate) async fn asset_response(
         return Err(AppError::bad_request("invalid assetId"));
     }
     let key_generation: i32 = sqlx::query_scalar(
-        "SELECT key_generation FROM file_assets WHERE file_id = $1 AND asset_id = $2",
+        "SELECT key_generation FROM drive_file_assets WHERE file_id = $1 AND asset_id = $2",
     )
     .bind(fid)
     .bind(asset_id)

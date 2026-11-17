@@ -103,14 +103,14 @@ pub async fn usage(
         r#"SELECT u.storage_quota_bytes, u.storage_used_bytes,
              COALESCE(f.live_bytes, 0)::bigint, COALESCE(f.live_count, 0)::bigint,
              COALESCE(f.trash_bytes, 0)::bigint, COALESCE(f.trash_count, 0)::bigint,
-             COALESCE((SELECT SUM(size_bytes) FROM file_versions WHERE author_user_id = u.id), 0)::bigint,
-             COALESCE((SELECT SUM(size_bytes) FROM file_thumbnails WHERE uploader_user_id = u.id), 0)::bigint,
-             COALESCE((SELECT SUM(size_bytes) FROM file_assets WHERE uploader_user_id = u.id), 0)::bigint,
-             COALESCE((SELECT SUM(logical_bytes) FROM chat_media_references WHERE user_id = u.id), 0)::bigint,
-             (COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_segments WHERE user_id = u.id), 0)
-              + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE user_id = u.id), 0))::bigint,
-             COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE user_id = u.id), 0)::bigint
-           FROM users u
+             COALESCE((SELECT SUM(size_bytes) FROM drive_file_versions WHERE author_account_id = u.id), 0)::bigint,
+             COALESCE((SELECT SUM(size_bytes) FROM drive_file_thumbnails WHERE uploader_account_id = u.id), 0)::bigint,
+             COALESCE((SELECT SUM(size_bytes) FROM drive_file_assets WHERE uploader_account_id = u.id), 0)::bigint,
+             COALESCE((SELECT SUM(logical_bytes) FROM chat_media_references WHERE account_id = u.id), 0)::bigint,
+             (COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_segments WHERE account_id = u.id), 0)
+              + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE account_id = u.id), 0))::bigint,
+             COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE account_id = u.id), 0)::bigint
+           FROM accounts u
            LEFT JOIN LATERAL (
              SELECT SUM(CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)
                       FILTER (WHERE deleted_at IS NULL) AS live_bytes,
@@ -118,7 +118,7 @@ pub async fn usage(
                     SUM(CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)
                       FILTER (WHERE deleted_at IS NOT NULL) AS trash_bytes,
                     COUNT(*) FILTER (WHERE deleted_at IS NOT NULL) AS trash_count
-             FROM files WHERE uploader_user_id = u.id
+             FROM drive_files WHERE uploader_account_id = u.id
            ) f ON true
            WHERE u.id = $1"#,
     )
@@ -128,26 +128,26 @@ pub async fn usage(
     let reserved = crate::storage_pool::reserved(&state.pool, user_id, Default::default()).await?;
     let (contacts_bytes, contacts_count): (i64, i64) = sqlx::query_as(
         "SELECT COALESCE(SUM(octet_length(summary) + octet_length(card)), 0)::bigint, COUNT(*)
-           FROM contacts WHERE user_id = $1",
+           FROM contacts WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
     let (mail_bytes, mail_count): (i64, i64) = sqlx::query_as(
         // Distribution-list copies are the group's storage, not the member's.
-        "SELECT (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = $1 AND key_packet IS NULL), 0)
-               + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE user_id = $1), 0))::bigint,
-                (SELECT COUNT(*) FROM mail_messages WHERE user_id = $1 AND key_packet IS NULL)",
+        "SELECT (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE account_id = $1 AND key_packet IS NULL), 0)
+               + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE account_id = $1), 0))::bigint,
+                (SELECT COUNT(*) FROM mail_messages WHERE account_id = $1 AND key_packet IS NULL)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
     let (calendar_bytes, calendar_count): (i64, i64) = sqlx::query_as(
-        "SELECT (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_id = $1), 0)
+        "SELECT (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_account_id = $1), 0)
                + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e
-                             JOIN calendars c ON c.id = e.calendar_id WHERE c.owner_id = $1), 0))::bigint,
+                             JOIN calendars c ON c.id = e.calendar_id WHERE c.owner_account_id = $1), 0))::bigint,
                 (SELECT COUNT(*) FROM calendar_events e JOIN calendars c ON c.id = e.calendar_id
-                  WHERE c.owner_id = $1)",
+                  WHERE c.owner_account_id = $1)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
@@ -216,8 +216,8 @@ pub async fn version_ages(
     let rows: Vec<(i32, bool, i64, i64)> = sqlx::query_as(&format!(
         "SELECT FLOOR(EXTRACT(EPOCH FROM now() - v.created_at) / 86400)::int AS age,
                 v.keep_forever, SUM(v.size_bytes)::bigint, COUNT(*)::bigint
-           FROM file_versions v
-          WHERE v.author_user_id = $1 AND v.id <> ({newest})
+           FROM drive_file_versions v
+          WHERE v.author_account_id = $1 AND v.id <> ({newest})
           GROUP BY 1, 2
           ORDER BY 1, 2",
         newest = crate::handlers::file_versions::NEWEST_VERSION
@@ -285,8 +285,8 @@ pub async fn prune_versions(
     }
     let rows: Vec<(uuid::Uuid, String, i64)> = sqlx::query_as(&format!(
         "SELECT v.id, v.storage_path, v.size_bytes
-           FROM file_versions v
-          WHERE v.author_user_id = $1
+           FROM drive_file_versions v
+          WHERE v.author_account_id = $1
             AND v.created_at <= now() - make_interval(days => $2)
             AND ($3 OR NOT v.keep_forever)
             AND v.id <> ({newest})

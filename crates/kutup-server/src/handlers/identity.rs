@@ -33,10 +33,11 @@ pub(crate) async fn require_sealable<'e, E: sqlx::PgExecutor<'e>>(
     executor: E,
     user_id: uuid::Uuid,
 ) -> AppResult<()> {
-    let suite: Option<i16> = sqlx::query_scalar("SELECT identity_suite FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_optional(executor)
-        .await?;
+    let suite: Option<i16> =
+        sqlx::query_scalar("SELECT identity_suite FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(executor)
+            .await?;
     match suite {
         Some(suite) if suite < kutup_crypto::identity::IDENTITY_SUITE as i16 => {
             Err(keys_pending_upgrade())
@@ -119,8 +120,8 @@ pub async fn drive_identities(
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT id, username, account_authority_public_key, public_key, drive_signing_public_key,
                 drive_key_binding, identity_suite, drive_key_binding_epoch
-           FROM users
-          WHERE id IN (SELECT kutup_current_user(name) FROM unnest($1::text[]) AS name)
+           FROM accounts
+          WHERE id IN (SELECT kutup_current_account(name) FROM unnest($1::text[]) AS name)
             AND is_active AND NOT is_first_login",
     )
     .bind(&usernames)

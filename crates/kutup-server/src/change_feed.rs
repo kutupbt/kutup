@@ -142,7 +142,7 @@ pub(crate) async fn page(
         });
     };
     let floor: Option<i64> = sqlx::query_scalar(&format!(
-        "SELECT floor_xid FROM {} WHERE owner = $1",
+        "SELECT floor_xid FROM {} WHERE mailbox_owner = $1",
         feed.floors
     ))
     .bind(owner)
@@ -166,7 +166,7 @@ pub(crate) async fn page(
             AND (change_xid, id) > ($2, $3) AND change_xid < $4
          UNION ALL
          SELECT change_xid, id, true FROM {tombstones}
-          WHERE owner = $1
+          WHERE mailbox_owner = $1
             AND (change_xid, id) > ($2, $3) AND change_xid < $4
          ORDER BY 1, 2
          LIMIT $5",
@@ -214,10 +214,10 @@ pub(crate) async fn forget_tombstones(
         "WITH gone AS (
              DELETE FROM {tombstones}
               WHERE deleted_at < now() - make_interval(days => $1)
-             RETURNING owner, change_xid)
-         INSERT INTO {floors} (owner, floor_xid)
-         SELECT owner, max(change_xid) FROM gone GROUP BY owner
-         ON CONFLICT (owner) DO UPDATE
+             RETURNING mailbox_owner, change_xid)
+         INSERT INTO {floors} (mailbox_owner, floor_xid)
+         SELECT mailbox_owner, max(change_xid) FROM gone GROUP BY mailbox_owner
+         ON CONFLICT (mailbox_owner) DO UPDATE
             SET floor_xid = GREATEST({floors}.floor_xid, EXCLUDED.floor_xid)",
         tombstones = feed.tombstones,
         floors = feed.floors,

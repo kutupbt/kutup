@@ -65,8 +65,8 @@ pub async fn create_public_share(
     let key_epoch: i32 = match req.share_type.as_str() {
         "collection" => {
             let key_epoch: Option<i32> = sqlx::query_scalar(
-                "SELECT key_epoch FROM collections \
-                 WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL",
+                "SELECT key_epoch FROM drive_collections \
+                 WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL",
             )
             .bind(target_uuid)
             .bind(user_id)
@@ -94,8 +94,8 @@ pub async fn create_public_share(
         // its current key, sealed under the link key.
         "file" => {
             let generation: Option<i32> = sqlx::query_scalar(
-                "SELECT f.key_generation FROM files f JOIN collections c ON c.id = f.collection_id
-                 WHERE f.id = $1 AND c.owner_user_id = $2
+                "SELECT f.key_generation FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+                 WHERE f.id = $1 AND c.owner_account_id = $2
                    AND f.deleted_at IS NULL AND c.deleted_at IS NULL",
             )
             .bind(target_uuid)
@@ -139,9 +139,9 @@ pub async fn create_public_share(
     };
 
     let id: Uuid = sqlx::query_scalar(
-        r#"INSERT INTO public_shares (id, share_type, target_id, token,
+        r#"INSERT INTO drive_public_shares (id, share_type, target_id, token,
                                       collection_key_envelope, collection_key_epoch,
-                                      owner_user_id, expires_at, owner_link_key_envelope)
+                                      owner_account_id, expires_at, owner_link_key_envelope)
            VALUES ($9,$1,$2,$3,$4,$5,$6,$7,$8)
            RETURNING id"#,
     )
@@ -167,7 +167,7 @@ const MAX_LINK_HOURS: i64 = 10 * 366 * 24;
 /// Whether a shared folder is live (not trashed, not gone).
 async fn collection_live(state: &AppState, collection_id: Uuid) -> AppResult<bool> {
     sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM collections WHERE id = $1 AND deleted_at IS NULL)",
+        "SELECT EXISTS (SELECT 1 FROM drive_collections WHERE id = $1 AND deleted_at IS NULL)",
     )
     .bind(collection_id)
     .fetch_one(&state.pool)
@@ -178,7 +178,7 @@ async fn collection_live(state: &AppState, collection_id: Uuid) -> AppResult<boo
 /// Whether a linked file is live (it and its folder not trashed, not gone).
 async fn file_live(state: &AppState, file_id: Uuid) -> AppResult<bool> {
     sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
+        "SELECT EXISTS (SELECT 1 FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
                         WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL)",
     )
     .bind(file_id)
@@ -257,9 +257,9 @@ pub async fn get_public_share(
     );
     let row: Option<ShareRow> = sqlx::query_as(
         r#"SELECT p.id, p.share_type, p.target_id,
-                  p.collection_key_envelope, p.collection_key_epoch, p.owner_user_id, p.expires_at,
+                  p.collection_key_envelope, p.collection_key_epoch, p.owner_account_id, p.expires_at,
                   u.account_authority_public_key, u.username
-           FROM public_shares p JOIN users u ON u.id = p.owner_user_id WHERE p.token = $1"#,
+           FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id WHERE p.token = $1"#,
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -294,7 +294,7 @@ pub async fn get_public_share(
     };
     let (collection_kind, name_envelope, name_revision) = if share_type == "collection" {
         let row: Option<(String, String, i64)> = sqlx::query_as(
-            "SELECT kind, name_envelope, name_revision FROM collections WHERE id = $1",
+            "SELECT kind, name_envelope, name_revision FROM drive_collections WHERE id = $1",
         )
         .bind(target_id)
         .fetch_optional(&state.pool)
@@ -342,7 +342,7 @@ pub async fn public_share_epochs(
     // Taken down, or its owner's account disabled: the link is gone.
     crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let meta: Option<(Uuid, Option<OffsetDateTime>)> = sqlx::query_as(
-        "SELECT target_id, expires_at FROM public_shares WHERE token = $1 AND share_type = 'collection'",
+        "SELECT target_id, expires_at FROM drive_public_shares WHERE token = $1 AND share_type = 'collection'",
     )
             .bind(&token)
             .fetch_optional(&state.pool)
@@ -399,7 +399,7 @@ pub async fn list_public_share_files(
     // Taken down, or its owner's account disabled: the link is gone.
     crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
-        "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
+        "SELECT target_id, share_type, expires_at FROM drive_public_shares WHERE token = $1",
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -444,7 +444,7 @@ async fn public_files(state: &AppState, filter: &str, id: Uuid) -> AppResult<Vec
         r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
                   f.key_epoch, f.key_generation, f.metadata_revision, f.encrypted_size_bytes,
                   f.created_at, f.original_key_generation, {}, {}
-           FROM files f WHERE {} AND f.deleted_at IS NULL
+           FROM drive_files f WHERE {} AND f.deleted_at IS NULL
            ORDER BY f.created_at DESC"#,
         crate::models::CONTENT_KEY_GENERATION_SQL,
         crate::models::FILE_KEY_HISTORY_SQL,
@@ -501,7 +501,7 @@ async fn link_reaches(
 ) -> AppResult<Uuid> {
     crate::handlers::link_reports::ensure_link_up(&state.pool, token, signed_in).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
-        "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
+        "SELECT target_id, share_type, expires_at FROM drive_public_shares WHERE token = $1",
     )
     .bind(token)
     .fetch_optional(&state.pool)
@@ -516,11 +516,12 @@ async fn link_reaches(
     }
 
     let fid = Uuid::parse_str(file_id).map_err(|_| AppError::not_found("not found"))?;
-    let coll_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
-            .bind(fid)
-            .fetch_optional(&state.pool)
-            .await?;
+    let coll_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT collection_id FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(fid)
+    .fetch_optional(&state.pool)
+    .await?;
     let Some(coll_id) = coll_id else {
         return Err(AppError::not_found("not found"));
     };
@@ -531,7 +532,7 @@ async fn link_reaches(
         match share_type.as_str() {
             "collection" => coll_id == target_id
                 || sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS(SELECT 1 FROM album_items WHERE album_id = $1 AND file_id = $2)",
+                    "SELECT EXISTS(SELECT 1 FROM photos_album_items WHERE album_id = $1 AND file_id = $2)",
                 )
                 .bind(target_id)
                 .bind(fid)
@@ -590,7 +591,7 @@ pub async fn public_share_state(
         .map(|value| Uuid::parse_str(value).map_err(|_| AppError::bad_request("invalid revision")))
         .transpose()?;
     let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
-        "SELECT id, storage_path, key_generation, revision_content_envelope FROM file_versions
+        "SELECT id, storage_path, key_generation, revision_content_envelope FROM drive_file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0 AND ($2::uuid IS NULL OR id = $2)
          ORDER BY created_at DESC LIMIT 1",
     )
@@ -706,7 +707,7 @@ pub async fn public_album_items(
     // Taken down, or its owner's account disabled: the link is gone.
     crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
-        "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
+        "SELECT target_id, share_type, expires_at FROM drive_public_shares WHERE token = $1",
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -718,7 +719,7 @@ pub async fn public_album_items(
         return Err(AppError::new(StatusCode::GONE, "link expired"));
     }
     let is_album: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM collections WHERE id = $1 AND kind = 'album' AND deleted_at IS NULL)",
+        "SELECT EXISTS(SELECT 1 FROM drive_collections WHERE id = $1 AND kind = 'album' AND deleted_at IS NULL)",
     )
     .bind(album_id)
     .fetch_one(&state.pool)
@@ -728,7 +729,7 @@ pub async fn public_album_items(
     }
     let files = public_files(
         &state,
-        "f.id IN (SELECT file_id FROM album_items WHERE album_id = $1)",
+        "f.id IN (SELECT file_id FROM photos_album_items WHERE album_id = $1)",
         album_id,
     )
     .await?;
@@ -747,9 +748,9 @@ pub async fn public_album_items(
         "SELECT i.file_id, i.file_key_envelope, i.key_generation, i.album_epoch,
                 sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                 sm.key_generation AS thumb_sm_generation, lg.key_generation AS thumb_lg_generation
-         FROM album_items i
-         LEFT JOIN file_thumbnails sm ON sm.file_id = i.file_id AND sm.variant = 'sm'
-         LEFT JOIN file_thumbnails lg ON lg.file_id = i.file_id AND lg.variant = 'lg'
+         FROM photos_album_items i
+         LEFT JOIN drive_file_thumbnails sm ON sm.file_id = i.file_id AND sm.variant = 'sm'
+         LEFT JOIN drive_file_thumbnails lg ON lg.file_id = i.file_id AND lg.variant = 'lg'
          WHERE i.album_id = $1",
     )
     .bind(album_id)

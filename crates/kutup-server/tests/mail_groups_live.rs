@@ -510,7 +510,7 @@ fn a_rotation_waiting_on_a_removal_is_checked_against_who_stays() {
     std::thread::sleep(std::time::Duration::from_secs(2));
     runtime
         .block_on(
-            sqlx::query("DELETE FROM mail_group_members WHERE group_id = $1 AND user_id = $2")
+            sqlx::query("DELETE FROM mail_group_members WHERE group_id = $1 AND account_id = $2")
                 .bind(group)
                 .bind(uuid::Uuid::parse_str(&bob.id).unwrap())
                 .execute(&mut *tx),

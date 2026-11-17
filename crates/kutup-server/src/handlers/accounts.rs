@@ -54,7 +54,7 @@ pub(crate) async fn local_identity(
         "SELECT username, public_key, account_incarnation_id, drive_signing_public_key,
                 account_authority_public_key, drive_key_binding, identity_suite,
                 drive_key_binding_epoch
-           FROM users WHERE id = $1 AND is_active AND NOT is_first_login AND username IS NOT NULL
+           FROM accounts WHERE id = $1 AND is_active AND NOT is_first_login AND username IS NOT NULL
             -- To another server, an account that doesn't talk to other
             -- servers is no account (crate::federation_switch).
             AND (NOT $2 OR kutup_account_federates(id))",

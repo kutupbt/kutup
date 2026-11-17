@@ -161,7 +161,7 @@ pub async fn rotate(
         // The object is the generation, 4 bytes big-endian: byte order is
         // number order (no max() for bytea).
         "SELECT DISTINCT ON (purpose) purpose, object FROM account_roots
-          WHERE user_id = $1 AND purpose BETWEEN 22 AND 26
+          WHERE account_id = $1 AND purpose BETWEEN 22 AND 26
           ORDER BY purpose, object DESC",
     )
     .bind(user_id)
@@ -195,7 +195,7 @@ pub async fn rotate(
     account_heads::advance(&mut tx, &locked, Some(&head)).await?;
 
     let updated = sqlx::query(
-        "UPDATE users SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
+        "UPDATE accounts SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
                           master_key_envelope = $6, recovery_key_envelope = $7,
                           recovery_key_verifier = $8, master_key_generation = $9
           WHERE id = $1 AND key_binding = $2 AND master_key_generation = $10 AND is_active",
@@ -218,7 +218,7 @@ pub async fn rotate(
     for (purpose, object, envelope) in &roots {
         sqlx::query(
             "UPDATE account_roots SET envelope = $4
-              WHERE user_id = $1 AND purpose = $2 AND object = $3",
+              WHERE account_id = $1 AND purpose = $2 AND object = $3",
         )
         .bind(user_id)
         .bind(purpose.as_u16() as i16)
@@ -228,7 +228,7 @@ pub async fn rotate(
         .await?;
     }
     sqlx::query(
-        "INSERT INTO account_roots (user_id, purpose, object, envelope) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO account_roots (account_id, purpose, object, envelope) VALUES ($1, $2, $3, $4)",
     )
     .bind(user_id)
     .bind(AccountRecordPurpose::MasterKeyKeyring.as_u16() as i16)

@@ -48,14 +48,14 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         OffsetDateTime,
     );
     let folders: Vec<FolderTuple> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
+        r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.owner_key_envelope,
                   c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash, c.color,
-                  (SELECT p.id FROM collections p
+                  (SELECT p.id FROM drive_collections p
                     WHERE p.id = c.parent_collection_id AND p.deleted_at IS NULL),
-                  (SELECT COUNT(*) FROM files f WHERE f.trash_root_id = c.id),
+                  (SELECT COUNT(*) FROM drive_files f WHERE f.trash_root_id = c.id),
                   c.deleted_at
-           FROM collections c
-           WHERE c.owner_user_id = $1 AND c.trash_root_id = c.id
+           FROM drive_collections c
+           WHERE c.owner_account_id = $1 AND c.trash_root_id = c.id
            ORDER BY c.deleted_at DESC"#,
     )
     .bind(user_id)
@@ -71,6 +71,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
         key_epoch: i32,
         key_generation: i32,
         metadata_revision: i64,
+        #[sqlx(rename = "owner_account_id")]
         owner_user_id: Uuid,
         owner_key_envelope: String,
         collection_key_epoch: i32,
@@ -85,15 +86,15 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Re
     let files: Vec<TrashedFile> = sqlx::query_as(
         r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
                   f.key_epoch, f.key_generation, f.metadata_revision,
-                  c.owner_user_id, c.owner_key_envelope, c.key_epoch AS collection_key_epoch,
+                  c.owner_account_id, c.owner_key_envelope, c.key_epoch AS collection_key_epoch,
                   c.epoch_statement, c.epoch_statement_hash, f.deleted_at,
                   sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                   sm.key_generation AS thumb_sm_generation,
                   lg.key_generation AS thumb_lg_generation
-           FROM files f JOIN collections c ON c.id = f.collection_id
-           LEFT JOIN file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
-           LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
-           WHERE c.owner_user_id = $1 AND f.trash_root_id = f.id
+           FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+           LEFT JOIN drive_file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
+           LEFT JOIN drive_file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
+           WHERE c.owner_account_id = $1 AND f.trash_root_id = f.id
            ORDER BY f.deleted_at DESC"#,
     )
     .bind(user_id)
@@ -212,8 +213,8 @@ pub async fn restore(
 
     // File root?
     let file_coll: Option<Uuid> = sqlx::query_scalar(
-        r#"SELECT f.collection_id FROM files f JOIN collections c ON c.id = f.collection_id
-           WHERE f.id = $1 AND f.trash_root_id = f.id AND c.owner_user_id = $2"#,
+        r#"SELECT f.collection_id FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+           WHERE f.id = $1 AND f.trash_root_id = f.id AND c.owner_account_id = $2"#,
     )
     .bind(root_id)
     .bind(user_id)
@@ -221,7 +222,7 @@ pub async fn restore(
     .await?;
     if let Some(coll_id) = file_coll {
         let parent_live: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM collections WHERE id = $1 AND deleted_at IS NULL",
+            "SELECT COUNT(*) FROM drive_collections WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(coll_id)
         .fetch_one(&mut *tx)
@@ -237,7 +238,7 @@ pub async fn restore(
         let place = crate::drive_names::Place::Folder(coll_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
         let (stored_hash, key_generation, revision): (String, i32, i64) = sqlx::query_as(
-            "SELECT name_hash, key_generation, metadata_revision FROM files WHERE id = $1",
+            "SELECT name_hash, key_generation, metadata_revision FROM drive_files WHERE id = $1",
         )
         .bind(root_id)
         .fetch_one(&mut *tx)
@@ -261,7 +262,7 @@ pub async fn restore(
                 .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
             )?;
             sqlx::query(
-                "UPDATE files SET metadata_envelope = $2, metadata_revision = $3 WHERE id = $1",
+                "UPDATE drive_files SET metadata_envelope = $2, metadata_revision = $3 WHERE id = $1",
             )
             .bind(root_id)
             .bind(envelope)
@@ -279,7 +280,7 @@ pub async fn restore(
         let name_hash = given_hash.clone().unwrap_or(stored_hash);
         crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(root_id)).await?;
         sqlx::query(
-            "UPDATE files SET deleted_at = NULL, trash_root_id = NULL, name_hash = $2 WHERE id = $1",
+            "UPDATE drive_files SET deleted_at = NULL, trash_root_id = NULL, name_hash = $2 WHERE id = $1",
         )
         .bind(root_id)
         .bind(&name_hash)
@@ -295,7 +296,7 @@ pub async fn restore(
 
     // Folder root?
     let parent: Option<Option<Uuid>> = sqlx::query_scalar(
-        "SELECT parent_collection_id FROM collections WHERE id = $1 AND trash_root_id = $1 AND owner_user_id = $2",
+        "SELECT parent_collection_id FROM drive_collections WHERE id = $1 AND trash_root_id = $1 AND owner_account_id = $2",
     )
     .bind(root_id)
     .bind(user_id)
@@ -309,13 +310,13 @@ pub async fn restore(
     let mut lands = parent;
     if let Some(parent_id) = parent {
         let parent_live: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM collections WHERE id = $1 AND deleted_at IS NULL",
+            "SELECT COUNT(*) FROM drive_collections WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(parent_id)
         .fetch_one(&mut *tx)
         .await?;
         if parent_live == 0 {
-            sqlx::query("UPDATE collections SET parent_collection_id = NULL WHERE id = $1")
+            sqlx::query("UPDATE drive_collections SET parent_collection_id = NULL WHERE id = $1")
                 .bind(root_id)
                 .execute(&mut *tx)
                 .await?;
@@ -329,7 +330,7 @@ pub async fn restore(
     crate::drive_names::lock_place(&mut tx, place).await?;
     let (stored_hash, stored_generation, epoch, revision): (String, Option<i32>, i32, i64) =
         sqlx::query_as(
-            "SELECT name_hash, name_hash_generation, key_epoch, name_revision FROM collections WHERE id = $1",
+            "SELECT name_hash, name_hash_generation, key_epoch, name_revision FROM drive_collections WHERE id = $1",
         )
             .bind(root_id)
             .fetch_one(&mut *tx)
@@ -353,12 +354,14 @@ pub async fn restore(
             )
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
         )?;
-        sqlx::query("UPDATE collections SET name_envelope = $2, name_revision = $3 WHERE id = $1")
-            .bind(root_id)
-            .bind(envelope)
-            .bind(next)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE drive_collections SET name_envelope = $2, name_revision = $3 WHERE id = $1",
+        )
+        .bind(root_id)
+        .bind(envelope)
+        .bind(next)
+        .execute(&mut *tx)
+        .await?;
     }
     let (name_hash, generation) = match given_hash {
         Some(hash) => (
@@ -375,22 +378,24 @@ pub async fn restore(
         }
     };
     crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(root_id)).await?;
-    sqlx::query("UPDATE collections SET name_hash = $2, name_hash_generation = $3 WHERE id = $1")
-        .bind(root_id)
-        .bind(&name_hash)
-        .bind(generation)
-        .execute(&mut *tx)
-        .await
-        .map_err(crate::drive_names::map_unique_violation)?;
+    sqlx::query(
+        "UPDATE drive_collections SET name_hash = $2, name_hash_generation = $3 WHERE id = $1",
+    )
+    .bind(root_id)
+    .bind(&name_hash)
+    .bind(generation)
+    .execute(&mut *tx)
+    .await
+    .map_err(crate::drive_names::map_unique_violation)?;
 
     sqlx::query(
-        "UPDATE collections SET deleted_at = NULL, trash_root_id = NULL WHERE trash_root_id = $1",
+        "UPDATE drive_collections SET deleted_at = NULL, trash_root_id = NULL WHERE trash_root_id = $1",
     )
     .bind(root_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE files SET deleted_at = NULL, trash_root_id = NULL WHERE trash_root_id = $1",
+        "UPDATE drive_files SET deleted_at = NULL, trash_root_id = NULL WHERE trash_root_id = $1",
     )
     .bind(root_id)
     .execute(&mut *tx)
@@ -422,8 +427,8 @@ pub async fn destroy(
     let root_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let is_file_root: i64 = sqlx::query_scalar(
-        r#"SELECT COUNT(*) FROM files f JOIN collections c ON c.id = f.collection_id
-           WHERE f.id = $1 AND f.trash_root_id = f.id AND c.owner_user_id = $2"#,
+        r#"SELECT COUNT(*) FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+           WHERE f.id = $1 AND f.trash_root_id = f.id AND c.owner_account_id = $2"#,
     )
     .bind(root_id)
     .bind(user_id)
@@ -445,7 +450,7 @@ pub async fn destroy(
     }
 
     let is_coll_root: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM collections WHERE id = $1 AND trash_root_id = $1 AND owner_user_id = $2",
+        "SELECT COUNT(*) FROM drive_collections WHERE id = $1 AND trash_root_id = $1 AND owner_account_id = $2",
     )
     .bind(root_id)
     .bind(user_id)
@@ -476,7 +481,7 @@ pub async fn empty(State(state): State<AppState>, user: AuthUser) -> AppResult<R
     let user_id = trusted_uuid(&user.user_id)?;
 
     let coll_roots: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM collections WHERE owner_user_id = $1 AND trash_root_id = id",
+        "SELECT id FROM drive_collections WHERE owner_account_id = $1 AND trash_root_id = id",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -488,8 +493,8 @@ pub async fn empty(State(state): State<AppState>, user: AuthUser) -> AppResult<R
     }
 
     let file_roots: Vec<Uuid> = sqlx::query_scalar(
-        r#"SELECT f.id FROM files f JOIN collections c ON c.id = f.collection_id
-           WHERE c.owner_user_id = $1 AND f.trash_root_id = f.id"#,
+        r#"SELECT f.id FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+           WHERE c.owner_account_id = $1 AND f.trash_root_id = f.id"#,
     )
     .bind(user_id)
     .fetch_all(&state.pool)

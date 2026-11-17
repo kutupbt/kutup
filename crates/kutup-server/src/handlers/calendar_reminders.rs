@@ -96,8 +96,8 @@ pub async fn alarms(
         "SELECT e.calendar_id, a.event_id, a.action, a.occurrence_start, a.fire_at
            FROM calendar_alarms a
            JOIN calendar_events e ON e.id = a.event_id
-           JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.user_id = a.user_id
-          WHERE a.user_id = $1 AND a.fire_at >= $2 AND a.fire_at < $3
+           JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.account_id = a.account_id
+          WHERE a.account_id = $1 AND a.fire_at >= $2 AND a.fire_at < $3
             AND ($4::timestamptz IS NULL OR (a.fire_at, a.event_id) > ($4, $5))
           ORDER BY a.fire_at, a.event_id
           LIMIT $6",
@@ -148,7 +148,7 @@ pub async fn settings(
 ) -> AppResult<Json<CalendarSettings>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let zone: Option<String> =
-        sqlx::query_scalar("SELECT zone FROM calendar_user_settings WHERE user_id = $1")
+        sqlx::query_scalar("SELECT zone FROM calendar_account_settings WHERE account_id = $1")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -185,8 +185,8 @@ pub async fn put_settings(
     match &input.zone {
         Some(zone) => {
             sqlx::query(
-                "INSERT INTO calendar_user_settings (user_id, zone) VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO UPDATE SET zone = EXCLUDED.zone, updated_at = now()",
+                "INSERT INTO calendar_account_settings (account_id, zone) VALUES ($1, $2)
+                 ON CONFLICT (account_id) DO UPDATE SET zone = EXCLUDED.zone, updated_at = now()",
             )
             .bind(user_id)
             .bind(zone)
@@ -194,7 +194,7 @@ pub async fn put_settings(
             .await?;
         }
         None => {
-            sqlx::query("DELETE FROM calendar_user_settings WHERE user_id = $1")
+            sqlx::query("DELETE FROM calendar_account_settings WHERE account_id = $1")
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await?;
@@ -260,7 +260,7 @@ pub async fn put_push_subscription(
     let mut tx = state.pool.begin().await?;
     // One subscription change per account at a time: two new browsers at
     // once can't both take the same longest-held one's place and go over.
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -269,7 +269,7 @@ pub async fn put_push_subscription(
     // signed in). Another account in the same browser has its own.
     sqlx::query(
         "DELETE FROM calendar_push_subscriptions
-          WHERE user_id = $1 AND endpoint = $2 AND session_id <> $3",
+          WHERE account_id = $1 AND endpoint = $2 AND session_id <> $3",
     )
     .bind(user_id)
     .bind(&input.endpoint)
@@ -285,7 +285,7 @@ pub async fn put_push_subscription(
         .await?;
     sqlx::query(
         "DELETE FROM calendar_push_subscriptions p USING auth_sessions a
-          WHERE p.user_id = $1 AND a.id = p.session_id
+          WHERE p.account_id = $1 AND a.id = p.session_id
             AND (a.revoked_at IS NOT NULL OR a.expires_at <= now())",
     )
     .bind(user_id)
@@ -294,10 +294,10 @@ pub async fn put_push_subscription(
     sqlx::query(
         "DELETE FROM calendar_push_subscriptions WHERE session_id IN (
            SELECT session_id FROM calendar_push_subscriptions
-            WHERE user_id = $1 AND session_id <> $2
+            WHERE account_id = $1 AND session_id <> $2
             ORDER BY created_at LIMIT 1)
            AND (SELECT count(*) FROM calendar_push_subscriptions
-                 WHERE user_id = $1 AND session_id <> $2) >= $3
+                 WHERE account_id = $1 AND session_id <> $2) >= $3
            AND NOT EXISTS (SELECT 1 FROM calendar_push_subscriptions WHERE session_id = $2)",
     )
     .bind(user_id)
@@ -306,7 +306,7 @@ pub async fn put_push_subscription(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO calendar_push_subscriptions (session_id, user_id, endpoint, p256dh, auth)
+        "INSERT INTO calendar_push_subscriptions (session_id, account_id, endpoint, p256dh, auth)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (session_id) DO UPDATE
             SET endpoint = EXCLUDED.endpoint, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth",

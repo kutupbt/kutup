@@ -52,7 +52,7 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Js
         .filter_map(|r| Uuid::parse_str(&r.id).ok())
         .collect();
     let counts: Vec<(Uuid, i64)> = sqlx::query_as(
-        "SELECT i.album_id, COUNT(*) FROM album_items i JOIN files f ON f.id = i.file_id
+        "SELECT i.album_id, COUNT(*) FROM photos_album_items i JOIN drive_files f ON f.id = i.file_id
          WHERE i.album_id = ANY($1) AND f.deleted_at IS NULL GROUP BY i.album_id",
     )
     .bind(&ids)
@@ -104,10 +104,10 @@ struct AlbumAccess {
 async fn album_access(state: &AppState, user_id: Uuid, album_id: &str) -> AppResult<AlbumAccess> {
     let id = Uuid::parse_str(album_id).map_err(|_| AppError::not_found("album not found"))?;
     let row: Option<(i32, Uuid, Option<bool>)> = sqlx::query_as(
-        "SELECT c.key_epoch, c.owner_user_id,
-                (SELECT cs.can_upload FROM collection_shares cs
-                  WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2)
-         FROM collections c WHERE c.id = $1 AND c.kind = 'album' AND c.deleted_at IS NULL",
+        "SELECT c.key_epoch, c.owner_account_id,
+                (SELECT cs.can_upload FROM drive_collection_shares cs
+                  WHERE cs.collection_id = c.id AND cs.recipient_account_id = $2)
+         FROM drive_collections c WHERE c.id = $1 AND c.kind = 'album' AND c.deleted_at IS NULL",
     )
     .bind(id)
     .bind(user_id)
@@ -151,7 +151,7 @@ pub async fn delete(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let (id, _) = owned_album(&state, user_id, &album).await?;
-    sqlx::query("DELETE FROM collections WHERE id = $1 AND kind = 'album'")
+    sqlx::query("DELETE FROM drive_collections WHERE id = $1 AND kind = 'album'")
         .bind(id)
         .execute(&state.pool)
         .await?;
@@ -192,7 +192,7 @@ pub async fn items(
     let id = album_access(&state, user_id, &album).await?.id;
     let files = file_rows(
         &state.pool,
-        "f.id IN (SELECT file_id FROM album_items WHERE album_id = $1)",
+        "f.id IN (SELECT file_id FROM photos_album_items WHERE album_id = $1)",
         id,
         user_id,
     )
@@ -203,12 +203,13 @@ pub async fn items(
         file_key_envelope: String,
         key_generation: i32,
         album_epoch: i32,
+        #[sqlx(rename = "added_by_account_id")]
         added_by: Option<Uuid>,
         added_at: OffsetDateTime,
     }
     let rows: Vec<Item> = sqlx::query_as(
-        "SELECT file_id, file_key_envelope, key_generation, album_epoch, added_by, added_at
-         FROM album_items WHERE album_id = $1",
+        "SELECT file_id, file_key_envelope, key_generation, album_epoch, added_by_account_id, added_at
+         FROM photos_album_items WHERE album_id = $1",
     )
     .bind(id)
     .fetch_all(&state.pool)
@@ -258,13 +259,13 @@ pub async fn leave(
         ));
     }
     let mut tx = state.pool.begin().await?;
-    sqlx::query("DELETE FROM album_items WHERE album_id = $1 AND added_by = $2")
+    sqlx::query("DELETE FROM photos_album_items WHERE album_id = $1 AND added_by_account_id = $2")
         .bind(access.id)
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     sqlx::query(
-        "DELETE FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
+        "DELETE FROM drive_collection_shares WHERE collection_id = $1 AND recipient_account_id = $2",
     )
     .bind(access.id)
     .bind(user_id)
@@ -301,7 +302,7 @@ pub async fn keys(
     let user_id = trusted_uuid(&user.user_id)?;
     let (id, _) = owned_album(&state, user_id, &album).await?;
     let rows: Vec<(Uuid, String, i32, i32)> = sqlx::query_as(
-        "SELECT file_id, file_key_envelope, key_generation, album_epoch FROM album_items WHERE album_id = $1",
+        "SELECT file_id, file_key_envelope, key_generation, album_epoch FROM photos_album_items WHERE album_id = $1",
     )
     .bind(id)
     .fetch_all(&state.pool)
@@ -378,8 +379,8 @@ pub async fn add_items(
         let file_id =
             Uuid::parse_str(&item.file_id).map_err(|_| AppError::bad_request("invalid file id"))?;
         let generation: Option<i32> = sqlx::query_scalar(
-            "SELECT f.key_generation FROM files f JOIN collections c ON c.id = f.collection_id
-             WHERE f.id = $1 AND c.owner_user_id = $2 AND f.deleted_at IS NULL AND c.deleted_at IS NULL
+            "SELECT f.key_generation FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+             WHERE f.id = $1 AND c.owner_account_id = $2 AND f.deleted_at IS NULL AND c.deleted_at IS NULL
              FOR SHARE OF f",
         )
         .bind(file_id)
@@ -405,7 +406,7 @@ pub async fn add_items(
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
         )?;
         sqlx::query(
-            "INSERT INTO album_items (album_id, file_id, file_key_envelope, key_generation, album_epoch, added_by)
+            "INSERT INTO photos_album_items (album_id, file_id, file_key_envelope, key_generation, album_epoch, added_by_account_id)
              VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (album_id, file_id) DO UPDATE SET
                  file_key_envelope = EXCLUDED.file_key_envelope,
@@ -421,7 +422,7 @@ pub async fn add_items(
         .execute(&mut *tx)
         .await?;
     }
-    sqlx::query("UPDATE collections SET updated_at = now() WHERE id = $1")
+    sqlx::query("UPDATE drive_collections SET updated_at = now() WHERE id = $1")
         .bind(album_id)
         .execute(&mut *tx)
         .await?;
@@ -463,7 +464,7 @@ pub async fn remove_items(
         .map_err(|_| AppError::bad_request("invalid file id"))?;
     // The owner takes out anything; a member what they put in.
     sqlx::query(
-        "DELETE FROM album_items WHERE album_id = $1 AND file_id = ANY($2) AND ($3 OR added_by = $4)",
+        "DELETE FROM photos_album_items WHERE album_id = $1 AND file_id = ANY($2) AND ($3 OR added_by_account_id = $4)",
     )
     .bind(album_id)
     .bind(&ids)

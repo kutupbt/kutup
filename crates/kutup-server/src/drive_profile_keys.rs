@@ -114,7 +114,7 @@ fn decode_envelope(envelope: &str) -> AppResult<ProfileKeyEnvelopeV1> {
 async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option<LocalUser>> {
     let row: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT id, account_incarnation_id, drive_signing_public_key
-         FROM users WHERE id = $1 AND is_active = true
+         FROM accounts WHERE id = $1 AND is_active = true
           -- To another server, an account that doesn't talk to other servers
           -- is no account (crate::federation_switch).
           AND (NOT $2 OR kutup_account_federates(id))",
@@ -140,16 +140,16 @@ fn account_uuid(person: &AccountRef) -> Uuid {
 async fn local_pair_shares(pool: &PgPool, a: Uuid, b: Uuid) -> AppResult<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (
-            SELECT 1 FROM collection_shares cs
-            JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
-            WHERE (c.owner_user_id = $1 AND cs.recipient_user_id = $2)
-               OR (c.owner_user_id = $2 AND cs.recipient_user_id = $1))
+            SELECT 1 FROM drive_collection_shares cs
+            JOIN drive_collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
+            WHERE (c.owner_account_id = $1 AND cs.recipient_account_id = $2)
+               OR (c.owner_account_id = $2 AND cs.recipient_account_id = $1))
          OR EXISTS (
-            SELECT 1 FROM file_shares fs
-            JOIN files f ON f.id = fs.file_id AND f.deleted_at IS NULL
-            JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-            WHERE (c.owner_user_id = $1 AND fs.recipient_user_id = $2)
-               OR (c.owner_user_id = $2 AND fs.recipient_user_id = $1))",
+            SELECT 1 FROM drive_file_shares fs
+            JOIN drive_files f ON f.id = fs.file_id AND f.deleted_at IS NULL
+            JOIN drive_collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+            WHERE (c.owner_account_id = $1 AND fs.recipient_account_id = $2)
+               OR (c.owner_account_id = $2 AND fs.recipient_account_id = $1))",
     )
     .bind(a)
     .bind(b)
@@ -162,12 +162,12 @@ async fn local_pair_shares(pool: &PgPool, a: Uuid, b: Uuid) -> AppResult<bool> {
 async fn remote_pair_shares(pool: &PgPool, local: Uuid, remote: &AccountRef) -> AppResult<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (
-            SELECT 1 FROM federated_outgoing_shares s
-            JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
-            WHERE s.sharer_user_id = $1 AND s.recipient_domain = $2 AND s.recipient_account_id = $3)
+            SELECT 1 FROM drive_federated_outgoing_shares s
+            JOIN drive_collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
+            WHERE s.sharer_account_id = $1 AND s.recipient_server = $2 AND s.recipient_account_id = $3)
          OR EXISTS (
-            SELECT 1 FROM federated_incoming_shares
-            WHERE user_id = $1 AND remote_domain = $2 AND owner_user_id = $3)",
+            SELECT 1 FROM drive_federated_incoming_shares
+            WHERE account_id = $1 AND owner_server = $2 AND owner_account_id = $3)",
     )
     .bind(local)
     .bind(&remote.server)
@@ -187,10 +187,10 @@ async fn store(
 ) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO drive_profile_keys
-             (user_id, direction, peer_server, peer_account_id, peer_incarnation_id, envelope,
+             (account_id, direction, peer_server, peer_account_id, peer_incarnation_id, envelope,
               profile_version)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (user_id, direction, peer_server, peer_account_id) DO UPDATE SET
+         ON CONFLICT (account_id, direction, peer_server, peer_account_id) DO UPDATE SET
              peer_incarnation_id = EXCLUDED.peer_incarnation_id,
              envelope = EXCLUDED.envelope,
              profile_version = EXCLUDED.profile_version,
@@ -228,25 +228,25 @@ pub async fn list_people(
     let local: Vec<LocalRow> = sqlx::query_as(
         "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
                 u.drive_signing_public_key
-         FROM users u
+         FROM accounts u
          WHERE u.is_active = true AND u.username IS NOT NULL AND u.id <> $1 AND u.id IN (
-             SELECT cs.recipient_user_id FROM collection_shares cs
-             JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
-             WHERE c.owner_user_id = $1
+             SELECT cs.recipient_account_id FROM drive_collection_shares cs
+             JOIN drive_collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
+             WHERE c.owner_account_id = $1
              UNION
-             SELECT c.owner_user_id FROM collection_shares cs
-             JOIN collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
-             WHERE cs.recipient_user_id = $1
+             SELECT c.owner_account_id FROM drive_collection_shares cs
+             JOIN drive_collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
+             WHERE cs.recipient_account_id = $1
              UNION
-             SELECT fs.recipient_user_id FROM file_shares fs
-             JOIN files f ON f.id = fs.file_id AND f.deleted_at IS NULL
-             JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-             WHERE c.owner_user_id = $1
+             SELECT fs.recipient_account_id FROM drive_file_shares fs
+             JOIN drive_files f ON f.id = fs.file_id AND f.deleted_at IS NULL
+             JOIN drive_collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+             WHERE c.owner_account_id = $1
              UNION
-             SELECT c.owner_user_id FROM file_shares fs
-             JOIN files f ON f.id = fs.file_id AND f.deleted_at IS NULL
-             JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-             WHERE fs.recipient_user_id = $1)
+             SELECT c.owner_account_id FROM drive_file_shares fs
+             JOIN drive_files f ON f.id = fs.file_id AND f.deleted_at IS NULL
+             JOIN drive_collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
+             WHERE fs.recipient_account_id = $1)
          ORDER BY u.username",
     )
     .bind(user_id)
@@ -256,14 +256,14 @@ pub async fn list_people(
     // last named them by (kept current by rename announces), to show.
     let remote: Vec<(String, Uuid, String)> = sqlx::query_as(
         "SELECT DISTINCT ON (server, account_id) server, account_id, account FROM (
-             SELECT s.recipient_domain AS server, s.recipient_account_id AS account_id,
-                    s.recipient_username || '@' || s.recipient_domain AS account
-               FROM federated_outgoing_shares s
-               JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
-              WHERE s.sharer_user_id = $1
+             SELECT s.recipient_server AS server, s.recipient_account_id AS account_id,
+                    s.recipient_username || '@' || s.recipient_server AS account
+               FROM drive_federated_outgoing_shares s
+               JOIN drive_collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
+              WHERE s.sharer_account_id = $1
              UNION ALL
-             SELECT remote_domain, owner_user_id, owner_account
-               FROM federated_incoming_shares WHERE user_id = $1) people
+             SELECT owner_server, owner_account_id, owner_account
+               FROM drive_federated_incoming_shares WHERE account_id = $1) people
          ORDER BY server, account_id, account",
     )
     .bind(user_id)
@@ -271,7 +271,7 @@ pub async fn list_people(
     .await?;
     let exchanged: Vec<(String, String, Uuid, String, String)> = sqlx::query_as(
         "SELECT direction, peer_server, peer_account_id, envelope, profile_version
-         FROM drive_profile_keys WHERE user_id = $1",
+         FROM drive_profile_keys WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_all(&state.pool)

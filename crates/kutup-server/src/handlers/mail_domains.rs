@@ -488,7 +488,7 @@ pub async fn create_address(
         .for_account(&state.pool, user_id)
         .await?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -510,7 +510,7 @@ pub async fn create_address(
     let address = kutup_crypto::mail_address::canonical(&format!("{local}@{}", domain.name))
         .map_err(|_| coded(AppError::bad_request("not an address"), "invalidAddress"))?;
     let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM mail_addresses WHERE user_id = $1 AND state IN ('active', 'receiving')",
+        "SELECT count(*) FROM mail_addresses WHERE account_id = $1 AND state IN ('active', 'receiving')",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -529,7 +529,7 @@ pub async fn create_address(
     // account's current authority signed continues; after an account reset
     // the address starts a new one.
     let authority: String =
-        sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
+        sqlx::query_scalar("SELECT account_authority_public_key FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -537,7 +537,7 @@ pub async fn create_address(
         "SELECT a.id, l.data, l.signature FROM mail_addresses a
            JOIN LATERAL (SELECT data, signature FROM mail_key_lists
                           WHERE address_id = a.id ORDER BY sequence DESC LIMIT 1) l ON true
-          WHERE a.user_id = $1 AND a.folded = lower($2) AND a.state = 'freed'
+          WHERE a.account_id = $1 AND a.folded = lower($2) AND a.state = 'freed'
           ORDER BY a.created_at DESC LIMIT 1",
     )
     .bind(user_id)
@@ -562,7 +562,7 @@ pub async fn create_address(
                     SET state = 'active', domain_id = $2, receive_until = NULL,
                         disabled_at = now(),
                         position = (SELECT COALESCE(max(position) + 1, 0) FROM mail_addresses
-                                     WHERE user_id = $3 AND state = 'active')
+                                     WHERE account_id = $3 AND state = 'active')
                   WHERE id = $1
                   RETURNING id",
             )
@@ -588,7 +588,7 @@ pub async fn create_address(
         None => {
             sqlx::query_scalar(
                 "UPDATE mail_addresses SET state = 'active'
-              WHERE user_id = $1 AND domain_id = $2 AND folded = lower($3) AND state = 'closed'
+              WHERE account_id = $1 AND domain_id = $2 AND folded = lower($3) AND state = 'closed'
               RETURNING id",
             )
             .bind(user_id)
@@ -604,10 +604,10 @@ pub async fn create_address(
             sqlx::query_scalar(
                 // Last in the account's order (Proton adds an address at the
                 // end; "Set as default" moves it first).
-                "INSERT INTO mail_addresses (user_id, address, domain_id, position)
+                "INSERT INTO mail_addresses (account_id, address, domain_id, position)
                  VALUES ($1, $2, $3,
                          (SELECT COALESCE(max(position) + 1, 0) FROM mail_addresses
-                           WHERE user_id = $1 AND state = 'active'))
+                           WHERE account_id = $1 AND state = 'active'))
                  ON CONFLICT (folded) WHERE state <> 'freed' DO NOTHING RETURNING id",
             )
             .bind(user_id)

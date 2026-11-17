@@ -49,7 +49,7 @@ async fn own_address(
                 // No address with a key yet: the account's own address.
                 None => sqlx::query_scalar(
                     "SELECT id FROM mail_addresses
-                      WHERE user_id = $1 AND state = 'active' AND domain_id IS NULL",
+                      WHERE account_id = $1 AND state = 'active' AND domain_id IS NULL",
                 )
                 .bind(user_id)
                 .fetch_optional(&state.pool)
@@ -59,8 +59,8 @@ async fn own_address(
         }
     };
     sqlx::query_as(
-        "SELECT a.id, a.address, u.username FROM mail_addresses a JOIN users u ON u.id = a.user_id
-          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active'",
+        "SELECT a.id, a.address, u.username FROM mail_addresses a JOIN accounts u ON u.id = a.account_id
+          WHERE a.id = $1 AND a.account_id = $2 AND a.state = 'active'",
     )
     .bind(address_id)
     .bind(user_id)

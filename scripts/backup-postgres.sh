@@ -109,7 +109,7 @@ case "${1:-}" in
     docker compose exec -T postgres pg_restore -U "${database_user:-kutup}" -d "${database:-kutup}" \
       --clean --if-exists --no-owner --section=pre-data --section=data < "$work_dir/keys.dump"
     psql_in -v ON_ERROR_STOP=1 \
-      -c "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = k.user_id)" \
+      -c "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM accounts u WHERE u.id = k.account_id)" \
       -c "DELETE FROM account_keys.mail_group_data_keys k WHERE NOT EXISTS (SELECT 1 FROM mail_groups g WHERE g.id = k.group_id)" \
       >/dev/null
     docker compose exec -T postgres pg_restore -U "${database_user:-kutup}" -d "${database:-kutup}" \

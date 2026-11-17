@@ -227,7 +227,7 @@ pub async fn record_use(
     code_id: Uuid,
     user_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO registration_code_uses (code_id, user_id) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO registration_code_uses (code_id, account_id) VALUES ($1, $2)")
         .bind(code_id)
         .bind(user_id)
         .execute(&mut **tx)

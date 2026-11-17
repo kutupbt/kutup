@@ -39,7 +39,7 @@ pub async fn list(
 ) -> AppResult<Json<Vec<MailImageSender>>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<(String, OffsetDateTime)> = sqlx::query_as(
-        "SELECT address, created_at FROM mail_image_senders WHERE user_id = $1 ORDER BY created_at DESC",
+        "SELECT address, created_at FROM mail_image_senders WHERE account_id = $1 ORDER BY created_at DESC",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -87,7 +87,7 @@ pub async fn add(
     let user_id = trusted_uuid(&user.user_id)?;
     let address = address(&state, &request.address)?;
     let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM mail_image_senders WHERE user_id = $1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM mail_image_senders WHERE account_id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
@@ -95,7 +95,7 @@ pub async fn add(
         return Err(AppError::bad_request("1000 senders at most"));
     }
     sqlx::query(
-        "INSERT INTO mail_image_senders (user_id, address) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        "INSERT INTO mail_image_senders (account_id, address) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(user_id)
     .bind(&address)
@@ -120,7 +120,7 @@ pub async fn delete(
 ) -> AppResult<axum::http::StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let address = address(&state, &request.address)?;
-    sqlx::query("DELETE FROM mail_image_senders WHERE user_id = $1 AND address = $2")
+    sqlx::query("DELETE FROM mail_image_senders WHERE account_id = $1 AND address = $2")
         .bind(user_id)
         .bind(&address)
         .execute(&state.pool)

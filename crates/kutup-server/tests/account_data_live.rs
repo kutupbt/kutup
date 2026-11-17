@@ -27,7 +27,7 @@ impl Db {
         self.runtime
             .block_on(
                 sqlx::query_scalar::<_, i16>(
-                    "SELECT sealing_key_id FROM account_keys.account_data_keys WHERE user_id = $1",
+                    "SELECT sealing_key_id FROM account_keys.account_data_keys WHERE account_id = $1",
                 )
                 .bind(Uuid::parse_str(user_id).unwrap())
                 .fetch_optional(&self.pool),
@@ -39,7 +39,7 @@ impl Db {
     fn drop_key(&self, user_id: &str) {
         self.runtime
             .block_on(
-                sqlx::query("DELETE FROM account_keys.account_data_keys WHERE user_id = $1")
+                sqlx::query("DELETE FROM account_keys.account_data_keys WHERE account_id = $1")
                     .bind(Uuid::parse_str(user_id).unwrap())
                     .execute(&self.pool),
             )
@@ -50,7 +50,7 @@ impl Db {
         self.runtime
             .block_on(
                 sqlx::query_scalar::<_, Option<Vec<u8>>>(
-                    "SELECT totp_secret_sealed FROM users WHERE id = $1",
+                    "SELECT totp_secret_sealed FROM accounts WHERE id = $1",
                 )
                 .bind(Uuid::parse_str(user_id).unwrap())
                 .fetch_one(&self.pool),

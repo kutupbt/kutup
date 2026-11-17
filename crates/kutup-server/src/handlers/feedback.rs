@@ -121,7 +121,7 @@ pub async fn send_feedback(
     let user_id =
         Uuid::parse_str(&user.user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     sqlx::query(
-        "INSERT INTO feedback (user_id, kind, app, message, details) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO feedback (account_id, kind, app, message, details) VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(user_id)
     .bind(&req.kind)
@@ -200,13 +200,13 @@ pub async fn list_feedback(
     let rows: Vec<FeedbackRow> = sqlx::query_as(if resolved {
         "SELECT f.id, f.kind, f.app, f.message, f.details, f.created_at,
                 u.id, u.username, f.resolved_at, f.resolution, f.github_url
-           FROM feedback f LEFT JOIN users u ON u.id = f.user_id
+           FROM feedback f LEFT JOIN accounts u ON u.id = f.account_id
           WHERE f.resolved_at IS NOT NULL
           ORDER BY f.resolved_at DESC LIMIT 100"
     } else {
         "SELECT f.id, f.kind, f.app, f.message, f.details, f.created_at,
                 u.id, u.username, f.resolved_at, f.resolution, f.github_url
-           FROM feedback f LEFT JOIN users u ON u.id = f.user_id
+           FROM feedback f LEFT JOIN accounts u ON u.id = f.account_id
           WHERE f.resolved_at IS NULL
           ORDER BY f.created_at ASC LIMIT 500"
     })
@@ -321,9 +321,9 @@ pub async fn resolve_feedback(
         Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     let owner: Option<Option<Uuid>> = sqlx::query_scalar(
         "UPDATE feedback
-            SET resolved_at = NOW(), resolved_by = $2, resolution = $3, github_url = $4
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = $3, github_url = $4
           WHERE id = $1 AND resolved_at IS NULL
-      RETURNING user_id",
+      RETURNING account_id",
     )
     .bind(id)
     .bind(admin_uuid)
@@ -361,7 +361,7 @@ pub async fn delete_feedback(
 ) -> AppResult<Response> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let owner: Option<Option<Uuid>> =
-        sqlx::query_scalar("DELETE FROM feedback WHERE id = $1 RETURNING user_id")
+        sqlx::query_scalar("DELETE FROM feedback WHERE id = $1 RETURNING account_id")
             .bind(id)
             .fetch_optional(&state.pool)
             .await?;

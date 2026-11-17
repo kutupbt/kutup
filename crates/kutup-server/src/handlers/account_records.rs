@@ -184,12 +184,13 @@ pub(crate) async fn page(
     limit: i64,
 ) -> AppResult<FeedPage> {
     let (head, basis) = account_heads::head_and_basis(tx, user_id).await?;
-    let (current, floor): (i64, i64) =
-        sqlx::query_as("SELECT change_seq, floor_seq FROM account_record_feeds WHERE user_id = $1")
-            .bind(user_id)
-            .fetch_optional(&mut **tx)
-            .await?
-            .unwrap_or((0, 0));
+    let (current, floor): (i64, i64) = sqlx::query_as(
+        "SELECT change_seq, floor_seq FROM account_record_feeds WHERE account_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .unwrap_or((0, 0));
     let encode = |head: Option<Vec<u8>>| head.map(|h| STANDARD.encode(h));
     // A cursor past the counter is not one this account gave; one at or
     // below the floor missed forgotten tombstones. From 0 nothing is missed.
@@ -206,10 +207,10 @@ pub(crate) async fn page(
     }
     let rows: Vec<FeedRow> = sqlx::query_as(
         "SELECT change_seq, record_id, revision, envelope FROM account_records
-          WHERE user_id = $1 AND scope = $2 AND change_seq > $3
+          WHERE account_id = $1 AND scope = $2 AND change_seq > $3
          UNION ALL
          SELECT change_seq, record_id, NULL, NULL FROM account_record_tombstones
-          WHERE user_id = $1 AND scope = $2 AND change_seq > $3 AND $3 > 0
+          WHERE account_id = $1 AND scope = $2 AND change_seq > $3 AND $3 > 0
          ORDER BY 1
          LIMIT $4",
     )
@@ -279,7 +280,7 @@ pub async fn get_one(
         .map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(i64, Vec<u8>, i64)> = sqlx::query_as(
         "SELECT revision, envelope, change_seq FROM account_records
-          WHERE user_id = $1 AND scope = $2 AND record_id = $3",
+          WHERE account_id = $1 AND scope = $2 AND record_id = $3",
     )
     .bind(user_id)
     .bind(scope.info().number)
@@ -462,7 +463,7 @@ pub async fn batch(
     for (scope, id, base) in named {
         let stored: Option<i64> = sqlx::query_scalar(
             "SELECT revision FROM account_records
-              WHERE user_id = $1 AND scope = $2 AND record_id = $3",
+              WHERE account_id = $1 AND scope = $2 AND record_id = $3",
         )
         .bind(user_id)
         .bind(scope.info().number)
@@ -497,7 +498,7 @@ pub async fn batch(
         }
         let removed = deletes.iter().filter(|d| d.0 == scope).count() as i64;
         let count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM account_records WHERE user_id = $1 AND scope = $2",
+            "SELECT count(*) FROM account_records WHERE account_id = $1 AND scope = $2",
         )
         .bind(user_id)
         .bind(scope.info().number)
@@ -512,13 +513,13 @@ pub async fn batch(
     }
 
     // The counter, under the account lock: one number per item.
-    sqlx::query("INSERT INTO account_record_feeds (user_id) VALUES ($1) ON CONFLICT DO NOTHING")
+    sqlx::query("INSERT INTO account_record_feeds (account_id) VALUES ($1) ON CONFLICT DO NOTHING")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     let mut seq: i64 = sqlx::query_scalar(
         "UPDATE account_record_feeds SET change_seq = change_seq + $2
-          WHERE user_id = $1 RETURNING change_seq - $2",
+          WHERE account_id = $1 RETURNING change_seq - $2",
     )
     .bind(user_id)
     .bind(items as i64)
@@ -527,7 +528,7 @@ pub async fn batch(
     for (scope, id, _) in &deletes {
         seq += 1;
         sqlx::query(
-            "DELETE FROM account_records WHERE user_id = $1 AND scope = $2 AND record_id = $3",
+            "DELETE FROM account_records WHERE account_id = $1 AND scope = $2 AND record_id = $3",
         )
         .bind(user_id)
         .bind(scope.info().number)
@@ -535,7 +536,7 @@ pub async fn batch(
         .execute(&mut *tx)
         .await?;
         sqlx::query(
-            "INSERT INTO account_record_tombstones (user_id, scope, record_id, change_seq)
+            "INSERT INTO account_record_tombstones (account_id, scope, record_id, change_seq)
              VALUES ($1, $2, $3, $4)",
         )
         .bind(user_id)
@@ -548,9 +549,9 @@ pub async fn batch(
     for put in &puts {
         seq += 1;
         sqlx::query(
-            "INSERT INTO account_records (user_id, scope, record_id, revision, envelope, change_seq)
+            "INSERT INTO account_records (account_id, scope, record_id, revision, envelope, change_seq)
              VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (user_id, scope, record_id) DO UPDATE
+             ON CONFLICT (account_id, scope, record_id) DO UPDATE
                 SET revision = EXCLUDED.revision, envelope = EXCLUDED.envelope,
                     change_seq = EXCLUDED.change_seq, updated_at = now()",
         )
@@ -573,7 +574,7 @@ pub async fn batch(
 async fn vault_reachable(pool: &sqlx::PgPool, user_id: Uuid, object: &[u8]) -> AppResult<()> {
     let file_id = Uuid::from_slice(object).map_err(|_| AppError::bad_request("bad file id"))?;
     let live: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM files WHERE id = $1 AND deleted_at IS NULL)",
+        "SELECT EXISTS (SELECT 1 FROM drive_files WHERE id = $1 AND deleted_at IS NULL)",
     )
     .bind(file_id)
     .fetch_one(pool)
@@ -611,11 +612,11 @@ pub async fn forget_tombstones(pool: &sqlx::PgPool) -> AppResult<u64> {
         "WITH gone AS (
              DELETE FROM account_record_tombstones
               WHERE deleted_at < now() - make_interval(days => $1::int)
-             RETURNING user_id, change_seq)
+             RETURNING account_id, change_seq)
          UPDATE account_record_feeds f
             SET floor_seq = GREATEST(f.floor_seq, g.top)
-           FROM (SELECT user_id, max(change_seq) AS top FROM gone GROUP BY user_id) g
-          WHERE f.user_id = g.user_id",
+           FROM (SELECT account_id, max(change_seq) AS top FROM gone GROUP BY account_id) g
+          WHERE f.account_id = g.account_id",
     )
     .bind(days)
     .execute(pool)
@@ -631,18 +632,18 @@ pub async fn clear(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM account_records WHERE user_id = $1")
+    sqlx::query("DELETE FROM account_records WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM account_record_tombstones WHERE user_id = $1")
+    sqlx::query("DELETE FROM account_record_tombstones WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
     sqlx::query(
         "UPDATE account_record_feeds
             SET change_seq = change_seq + 1, floor_seq = change_seq + 1
-          WHERE user_id = $1",
+          WHERE account_id = $1",
     )
     .bind(user_id)
     .execute(&mut **tx)
@@ -679,7 +680,7 @@ mod tests {
             .unwrap();
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
              VALUES ($1, $2, '', '', '', '', '', $3, '')",
@@ -693,14 +694,14 @@ mod tests {
         let scope = RecordScope::ChatGroups.info().number;
         let id = |n: u8| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([n; 32]);
         // Seq 1: record a; 2: b deleted 200 days ago; 3: c deleted now; 4: d.
-        sqlx::query("INSERT INTO account_record_feeds (user_id, change_seq) VALUES ($1, 4)")
+        sqlx::query("INSERT INTO account_record_feeds (account_id, change_seq) VALUES ($1, 4)")
             .bind(user_id)
             .execute(&pool)
             .await
             .unwrap();
         for (seq, n) in [(1, 1u8), (4, 4)] {
             sqlx::query(
-                "INSERT INTO account_records (user_id, scope, record_id, revision, envelope, change_seq)
+                "INSERT INTO account_records (account_id, scope, record_id, revision, envelope, change_seq)
                  VALUES ($1, $2, $3, 1, '\\x00', $4)",
             )
             .bind(user_id)
@@ -713,7 +714,7 @@ mod tests {
         }
         for (seq, n, age) in [(2, 2u8, 200), (3, 3, 0)] {
             sqlx::query(
-                "INSERT INTO account_record_tombstones (user_id, scope, record_id, change_seq, deleted_at)
+                "INSERT INTO account_record_tombstones (account_id, scope, record_id, change_seq, deleted_at)
                  VALUES ($1, $2, $3, $4, now() - make_interval(days => $5))",
             )
             .bind(user_id)
@@ -734,7 +735,7 @@ mod tests {
 
         forget_tombstones(&pool).await.unwrap();
         let floor: i64 =
-            sqlx::query_scalar("SELECT floor_seq FROM account_record_feeds WHERE user_id = $1")
+            sqlx::query_scalar("SELECT floor_seq FROM account_record_feeds WHERE account_id = $1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -767,7 +768,7 @@ mod tests {
         let after_reset = read(&pool, user_id, 0).await;
         assert!(after_reset.records.is_empty() && !after_reset.resync);
 
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user_id)
             .execute(&pool)
             .await

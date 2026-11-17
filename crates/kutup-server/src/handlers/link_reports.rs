@@ -51,10 +51,10 @@ pub(crate) async fn resolve_reports_of_owner(
     admin: Uuid,
 ) -> AppResult<()> {
     sqlx::query(
-        "UPDATE public_link_reports r
-            SET resolved_at = NOW(), resolved_by = $2, resolution = 'disabled', link = NULL
-           FROM public_shares p
-          WHERE r.share_id = p.id AND p.owner_user_id = $1 AND r.resolved_at IS NULL",
+        "UPDATE drive_public_link_reports r
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'disabled', link = NULL
+           FROM drive_public_shares p
+          WHERE r.share_id = p.id AND p.owner_account_id = $1 AND r.resolved_at IS NULL",
     )
     .bind(owner)
     .bind(admin)
@@ -132,19 +132,20 @@ pub async fn report_public_link(
         other => other,
     };
     ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
-    let share: Option<Uuid> = sqlx::query_scalar("SELECT id FROM public_shares WHERE token = $1")
-        .bind(&token)
-        .fetch_optional(&state.pool)
-        .await?;
+    let share: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM drive_public_shares WHERE token = $1")
+            .bind(&token)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some(share) = share else {
         return Err(AppError::not_found("not found"));
     };
     // Past the cap, a report is accepted and not stored: the link is already
     // waiting for an administrator.
     sqlx::query(
-        "INSERT INTO public_link_reports (share_id, reason, details, link)
+        "INSERT INTO drive_public_link_reports (share_id, reason, details, link)
          SELECT $1, $2, $3, $4
-          WHERE (SELECT COUNT(*) FROM public_link_reports WHERE share_id = $1 AND resolved_at IS NULL) < $5",
+          WHERE (SELECT COUNT(*) FROM drive_public_link_reports WHERE share_id = $1 AND resolved_at IS NULL) < $5",
     )
     .bind(share)
     .bind(&req.reason)
@@ -239,20 +240,20 @@ pub async fn list_reports(
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at, p.blocked_reason,
                 u.id, u.username, u.is_active,
-                (SELECT COUNT(*) FROM public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
-           FROM public_link_reports r
-           JOIN public_shares p ON p.id = r.share_id
-           JOIN users u ON u.id = p.owner_user_id
+                (SELECT COUNT(*) FROM drive_public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
+           FROM drive_public_link_reports r
+           JOIN drive_public_shares p ON p.id = r.share_id
+           JOIN accounts u ON u.id = p.owner_account_id
           WHERE r.resolved_at IS NOT NULL
           ORDER BY r.resolved_at DESC LIMIT 100"
     } else {
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at, p.blocked_reason,
                 u.id, u.username, u.is_active,
-                (SELECT COUNT(*) FROM public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
-           FROM public_link_reports r
-           JOIN public_shares p ON p.id = r.share_id
-           JOIN users u ON u.id = p.owner_user_id
+                (SELECT COUNT(*) FROM drive_public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
+           FROM drive_public_link_reports r
+           JOIN drive_public_shares p ON p.id = r.share_id
+           JOIN accounts u ON u.id = p.owner_account_id
           WHERE r.resolved_at IS NULL
           ORDER BY r.created_at ASC LIMIT 500"
     })
@@ -305,10 +306,10 @@ pub async fn list_reports(
 async fn open_report(pool: &PgPool, id: &str) -> AppResult<(Uuid, Uuid, Uuid, String)> {
     let id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT p.id, p.owner_user_id, COALESCE(u.username, '')
-           FROM public_link_reports r
-           JOIN public_shares p ON p.id = r.share_id
-           JOIN users u ON u.id = p.owner_user_id
+        "SELECT p.id, p.owner_account_id, COALESCE(u.username, '')
+           FROM drive_public_link_reports r
+           JOIN drive_public_shares p ON p.id = r.share_id
+           JOIN accounts u ON u.id = p.owner_account_id
           WHERE r.id = $1 AND r.resolved_at IS NULL",
     )
     .bind(id)
@@ -338,8 +339,8 @@ pub async fn dismiss_report(
 ) -> AppResult<Response> {
     let (report, share, owner, username) = open_report(&state.pool, &id).await?;
     sqlx::query(
-        "UPDATE public_link_reports
-            SET resolved_at = NOW(), resolved_by = $2, resolution = 'dismissed', link = NULL
+        "UPDATE drive_public_link_reports
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'dismissed', link = NULL
           WHERE id = $1 AND resolved_at IS NULL",
     )
     .bind(report)
@@ -374,13 +375,15 @@ pub async fn remove_reported_link(
 ) -> AppResult<Response> {
     let (report, share, owner, username) = open_report(&state.pool, &id).await?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("UPDATE public_shares SET removed_at = COALESCE(removed_at, NOW()) WHERE id = $1")
-        .bind(share)
-        .execute(&mut *tx)
-        .await?;
     sqlx::query(
-        "UPDATE public_link_reports
-            SET resolved_at = NOW(), resolved_by = $2, resolution = 'removed', link = NULL
+        "UPDATE drive_public_shares SET removed_at = COALESCE(removed_at, NOW()) WHERE id = $1",
+    )
+    .bind(share)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE drive_public_link_reports
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'removed', link = NULL
           WHERE share_id = $1 AND resolved_at IS NULL",
     )
     .bind(share)
@@ -448,11 +451,11 @@ pub async fn block_link(
     let admin_uuid = admin_id(&admin)?;
     let mut tx = state.pool.begin().await?;
     let owner: Option<(Uuid, Option<String>)> = sqlx::query_as(
-        "UPDATE public_shares p
-            SET blocked_at = now(), blocked_reason = $2, blocked_reference = $3, blocked_by = $4
-           FROM users u
-          WHERE p.id = $1 AND u.id = p.owner_user_id
-          RETURNING p.owner_user_id, u.username",
+        "UPDATE drive_public_shares p
+            SET blocked_at = now(), blocked_reason = $2, blocked_reference = $3, blocked_by_account_id = $4
+           FROM accounts u
+          WHERE p.id = $1 AND u.id = p.owner_account_id
+          RETURNING p.owner_account_id, u.username",
     )
     .bind(share)
     .bind(&req.reason)
@@ -465,8 +468,8 @@ pub async fn block_link(
     };
     sqlx::query(
         // The reporter's link stays: under a legal order it may be evidence.
-        "UPDATE public_link_reports
-            SET resolved_at = NOW(), resolved_by = $2, resolution = 'blocked'
+        "UPDATE drive_public_link_reports
+            SET resolved_at = NOW(), resolved_by_account_id = $2, resolution = 'blocked'
           WHERE share_id = $1 AND resolved_at IS NULL",
     )
     .bind(share)
@@ -509,8 +512,8 @@ pub async fn unblock_link(
     let admin_uuid = admin_id(&admin)?;
     let mut tx = state.pool.begin().await?;
     let row: Option<(Uuid, Option<String>, Option<String>, bool)> = sqlx::query_as(
-        "SELECT p.owner_user_id, u.username, p.blocked_reason, p.owner_removed_at IS NOT NULL
-           FROM public_shares p JOIN users u ON u.id = p.owner_user_id
+        "SELECT p.owner_account_id, u.username, p.blocked_reason, p.owner_removed_at IS NOT NULL
+           FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id
           WHERE p.id = $1 FOR UPDATE OF p",
     )
     .bind(share)
@@ -524,15 +527,15 @@ pub async fn unblock_link(
     };
     if owner_removed {
         // Its owner removed it while it was blocked: kept only for the block.
-        sqlx::query("DELETE FROM public_shares WHERE id = $1")
+        sqlx::query("DELETE FROM drive_public_shares WHERE id = $1")
             .bind(share)
             .execute(&mut *tx)
             .await?;
     } else {
         sqlx::query(
-            "UPDATE public_shares
+            "UPDATE drive_public_shares
                 SET blocked_at = NULL, blocked_reason = NULL, blocked_reference = NULL,
-                    blocked_by = NULL
+                    blocked_by_account_id = NULL
               WHERE id = $1",
         )
         .bind(share)

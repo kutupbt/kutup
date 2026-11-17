@@ -80,7 +80,7 @@ impl Live {
         self.runtime
             .block_on(
                 sqlx::query(
-                    "INSERT INTO devices (user_id, device_id, kind, session_id, frame_key,
+                    "INSERT INTO account_devices (account_id, device_id, kind, session_id, frame_key,
                          credential_salt, credential_hash, name)
                      VALUES ($1, $2, 'editor', $3, $4, $5, $6, 'live-test-editor')",
                 )
@@ -227,7 +227,7 @@ fn a_reregistration_carries_the_other_devices_over() {
     assert_eq!(status, StatusCode::OK, "{answer}");
     let user_id = Uuid::parse_str(&ada.account.account_id).unwrap();
     live.sql(
-        "UPDATE devices SET expired_at = now() WHERE user_id = $1 AND device_id = 2",
+        "UPDATE account_devices SET expired_at = now() WHERE account_id = $1 AND device_id = 2",
         user_id,
     );
 
@@ -352,8 +352,8 @@ fn stale_unlisted_rows_hold_no_place_under_the_cap() {
     live.editor(&ada, 2);
     live.editor(&ada, 3);
     live.sql(
-        "UPDATE devices SET created_at = now() - interval '1 hour'
-          WHERE user_id = $1 AND device_id IN (2, 3)",
+        "UPDATE account_devices SET created_at = now() - interval '1 hour'
+          WHERE account_id = $1 AND device_id IN (2, 3)",
         user_id,
     );
     let set_cap = |value: Option<i64>| {
@@ -395,9 +395,11 @@ fn stale_unlisted_rows_hold_no_place_under_the_cap() {
     let ids: Vec<i32> = live
         .runtime
         .block_on(
-            sqlx::query_scalar("SELECT device_id FROM devices WHERE user_id = $1 ORDER BY 1")
-                .bind(user_id)
-                .fetch_all(&live.pool),
+            sqlx::query_scalar(
+                "SELECT device_id FROM account_devices WHERE account_id = $1 ORDER BY 1",
+            )
+            .bind(user_id)
+            .fetch_all(&live.pool),
         )
         .unwrap();
     assert_eq!(ids, vec![1, 2], "the stale rows are gone");
@@ -464,9 +466,11 @@ fn a_sign_in_alone_only_removes_devices() {
     let rows: i64 = live
         .runtime
         .block_on(
-            sqlx::query_scalar("SELECT count(*) FROM devices WHERE user_id = $1 AND device_id = 3")
-                .bind(user_id)
-                .fetch_one(&live.pool),
+            sqlx::query_scalar(
+                "SELECT count(*) FROM account_devices WHERE account_id = $1 AND device_id = 3",
+            )
+            .bind(user_id)
+            .fetch_one(&live.pool),
         )
         .unwrap();
     assert_eq!(rows, 0);

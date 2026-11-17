@@ -169,7 +169,7 @@ pub async fn chat_maintenance_once(
         tracing::warn!(%error, "chat maintenance: retention setting unavailable; mailbox cleanup skipped");
         0
     });
-    match sqlx::query("DELETE FROM device_tickets WHERE expires_at <= now()")
+    match sqlx::query("DELETE FROM account_device_tickets WHERE expires_at <= now()")
         .execute(pool)
         .await
     {
@@ -188,7 +188,7 @@ pub async fn chat_maintenance_once(
         match sqlx::query(
             "DELETE FROM chat_sends
              WHERE created_at < now() - ($1 * interval '1 day')
-               AND NOT kutup_account_held(sender_user_id)",
+               AND NOT kutup_account_held(sender_account_id)",
         )
         .bind(policy.send_retention_days)
         .execute(pool)
@@ -214,10 +214,10 @@ pub async fn chat_maintenance_once(
         // device the account's authority still lists
         // (docs/plans/account-identity-key.md).
         match sqlx::query_as::<_, (Uuid, i32)>(
-            "UPDATE devices SET expired_at = now()
+            "UPDATE account_devices SET expired_at = now()
              WHERE expired_at IS NULL
                AND COALESCE(last_seen_at, created_at) < now() - ($1 * interval '1 day')
-             RETURNING user_id, device_id",
+             RETURNING account_id, device_id",
         )
         .bind(policy.device_expiry_days)
         .fetch_all(pool)
@@ -275,7 +275,7 @@ pub async fn sweep_chat_mailboxes_before(
 ) -> anyhow::Result<u64> {
     Ok(sqlx::query(
         "DELETE FROM chat_mailbox
-          WHERE server_ts < $1 AND NOT kutup_account_held(recipient_user_id)",
+          WHERE server_ts < $1 AND NOT kutup_account_held(recipient_account_id)",
     )
     .bind(cutoff)
     .execute(pool)
@@ -308,17 +308,17 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     loop {
         let rows: Vec<Row> = match sqlx::query_as(
             r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path,
-                  v.author_user_id, v.size_bytes, u.version_retention_days, v.kind
-           FROM file_versions v
-           JOIN files f ON f.id = v.file_id
-           JOIN collections c ON c.id = f.collection_id
-           JOIN users u ON u.id = c.owner_user_id
+                  v.author_account_id, v.size_bytes, u.version_retention_days, v.kind
+           FROM drive_file_versions v
+           JOIN drive_files f ON f.id = v.file_id
+           JOIN drive_collections c ON c.id = f.collection_id
+           JOIN accounts u ON u.id = c.owner_account_id
            WHERE v.file_id IN (
-             SELECT DISTINCT tv.file_id FROM file_versions tv
-               JOIN files tf ON tf.id = tv.file_id
-               JOIN collections tc ON tc.id = tf.collection_id
+             SELECT DISTINCT tv.file_id FROM drive_file_versions tv
+               JOIN drive_files tf ON tf.id = tv.file_id
+               JOIN drive_collections tc ON tc.id = tf.collection_id
              WHERE NOT tv.keep_forever AND tv.created_at < now() - interval '1 day'
-               AND tv.file_id > $1 AND NOT kutup_account_held(tc.owner_user_id)
+               AND tv.file_id > $1 AND NOT kutup_account_held(tc.owner_account_id)
              ORDER BY tv.file_id
              LIMIT 500)
            ORDER BY v.file_id, v.kind, v.created_at DESC"#,
@@ -375,13 +375,13 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     // The original is version zero: superseded by a whole-file version and
     // older than the owner's retention, it goes like any other old version.
     let originals: Vec<(Uuid, String, i64, Uuid)> = sqlx::query_as(
-        r#"SELECT f.id, f.storage_path, f.encrypted_size_bytes, f.uploader_user_id
-           FROM files f
-           JOIN collections c ON c.id = f.collection_id
-           JOIN users u ON u.id = c.owner_user_id
+        r#"SELECT f.id, f.storage_path, f.encrypted_size_bytes, f.uploader_account_id
+           FROM drive_files f
+           JOIN drive_collections c ON c.id = f.collection_id
+           JOIN accounts u ON u.id = c.owner_account_id
            WHERE NOT f.original_pruned AND f.deleted_at IS NULL
              AND f.created_at < now() - make_interval(days => u.version_retention_days)
-             AND EXISTS (SELECT 1 FROM file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
+             AND EXISTS (SELECT 1 FROM drive_file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
            LIMIT 200"#,
     )
     .fetch_all(pool)
@@ -407,12 +407,12 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     // dropped connection (joiners open the saved file and skip the backlog),
     // and no save truncates them: keep a day's worth.
     match sqlx::query_scalar::<_, i64>(&crate::handlers::collab::trimming(
-        "DELETE FROM file_update_log l
+        "DELETE FROM collab_update_log l
           WHERE l.kind IN ($1, $2, $3) AND l.created_at < now() - interval '1 day'
-            AND NOT kutup_account_held((SELECT c.owner_user_id FROM files f
-                                          JOIN collections c ON c.id = f.collection_id
+            AND NOT kutup_account_held((SELECT c.owner_account_id FROM drive_files f
+                                          JOIN drive_collections c ON c.id = f.collection_id
                                          WHERE f.id = l.file_id))
-         RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
+         RETURNING l.file_id, l.sender_server, l.sender_account_id, l.sender_device_id, l.sender_seq",
     ))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_OP))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_LOCK))
@@ -445,7 +445,7 @@ pub(crate) async fn mark_original_removed(
     uploader: Uuid,
 ) -> sqlx::Result<bool> {
     let marked = sqlx::query(
-        "UPDATE files SET original_pruned = true WHERE id = $1 AND NOT original_pruned",
+        "UPDATE drive_files SET original_pruned = true WHERE id = $1 AND NOT original_pruned",
     )
     .bind(file_id)
     .execute(&mut **tx)
@@ -487,7 +487,7 @@ pub(crate) async fn remove_version(
 async fn release_version(pool: &PgPool, version_id: Uuid) -> anyhow::Result<bool> {
     let mut tx = pool.begin().await?;
     let removed: Option<(Uuid, i64)> = sqlx::query_as(
-        "DELETE FROM file_versions WHERE id = $1 RETURNING author_user_id, size_bytes",
+        "DELETE FROM drive_file_versions WHERE id = $1 RETURNING author_account_id, size_bytes",
     )
     .bind(version_id)
     .fetch_optional(&mut *tx)
@@ -518,7 +518,7 @@ async fn account_quota_reconcile(pool: &PgPool) -> usize {
     // updates that row, so none can land between the sum and the write (a
     // single UPDATE … FROM would write sums from before a charge it waited on).
     let drifted: Vec<Uuid> = match sqlx::query_scalar(&format!(
-        "SELECT u.id FROM users u, LATERAL ({}) e
+        "SELECT u.id FROM accounts u, LATERAL ({}) e
          WHERE u.storage_used_bytes <> e.drive_bytes + e.chat_bytes + e.contacts_bytes + e.mail_bytes + e.calendar_bytes",
         reconcile_sums("u.id")
     ))
@@ -535,7 +535,7 @@ async fn account_quota_reconcile(pool: &PgPool) -> usize {
     for uid in drifted {
         let fixed: anyhow::Result<Option<Reconciled>> = async {
             let mut tx = pool.begin().await?;
-            sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+            sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
                 .bind(uid)
                 .execute(&mut *tx)
                 .await?;
@@ -550,7 +550,7 @@ async fn account_quota_reconcile(pool: &PgPool) -> usize {
                 .saturating_add(mail)
                 .saturating_add(calendar);
             let row: Option<i64> = sqlx::query_scalar(
-                "UPDATE users SET storage_used_bytes = $2
+                "UPDATE accounts SET storage_used_bytes = $2
                  WHERE id = $1 AND storage_used_bytes <> $2
                  RETURNING storage_used_bytes",
             )
@@ -589,7 +589,7 @@ fn mail_group_sums(group: &str) -> String {
     format!(
         r#"SELECT (
     COALESCE((SELECT SUM(size_bytes) FROM mail_messages
-               WHERE owner = {group} AND user_id IS NULL AND key_packet IS NULL), 0)
+               WHERE mailbox_owner = {group} AND account_id IS NULL AND key_packet IS NULL), 0)
   + COALESCE((SELECT SUM(size_bytes) FROM mail_group_objects WHERE group_id = {group}), 0)
 )::bigint"#
     )
@@ -665,20 +665,20 @@ async fn mail_group_quota_reconcile(pool: &PgPool) -> usize {
 fn reconcile_sums(user: &str) -> String {
     format!(
         r#"SELECT
-    (COALESCE((SELECT SUM(CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END) FROM files WHERE uploader_user_id = {user}), 0)
-   + COALESCE((SELECT SUM(size_bytes) FROM file_assets WHERE uploader_user_id = {user}), 0)
-   + COALESCE((SELECT SUM(size_bytes) FROM file_thumbnails WHERE uploader_user_id = {user}), 0)
-   + COALESCE((SELECT SUM(size_bytes) FROM file_versions WHERE author_user_id = {user}), 0))::bigint AS drive_bytes,
-    (COALESCE((SELECT SUM(logical_bytes) FROM chat_media_references WHERE user_id = {user}), 0)
-   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_segments WHERE user_id = {user}), 0)
-   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE user_id = {user}), 0)
-   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE user_id = {user}), 0))::bigint AS chat_bytes,
-    COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE user_id = {user}), 0)::bigint AS contacts_bytes,
-    (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = {user} AND key_packet IS NULL), 0)
-   + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE user_id = {user}), 0))::bigint AS mail_bytes,
-    (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_id = {user}), 0)
+    (COALESCE((SELECT SUM(CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END) FROM drive_files WHERE uploader_account_id = {user}), 0)
+   + COALESCE((SELECT SUM(size_bytes) FROM drive_file_assets WHERE uploader_account_id = {user}), 0)
+   + COALESCE((SELECT SUM(size_bytes) FROM drive_file_thumbnails WHERE uploader_account_id = {user}), 0)
+   + COALESCE((SELECT SUM(size_bytes) FROM drive_file_versions WHERE author_account_id = {user}), 0))::bigint AS drive_bytes,
+    (COALESCE((SELECT SUM(logical_bytes) FROM chat_media_references WHERE account_id = {user}), 0)
+   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_segments WHERE account_id = {user}), 0)
+   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE account_id = {user}), 0)
+   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE account_id = {user}), 0))::bigint AS chat_bytes,
+    COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE account_id = {user}), 0)::bigint AS contacts_bytes,
+    (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE account_id = {user} AND key_packet IS NULL), 0)
+   + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE account_id = {user}), 0))::bigint AS mail_bytes,
+    (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_account_id = {user}), 0)
    + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e JOIN calendars c ON c.id = e.calendar_id
-                WHERE c.owner_id = {user}), 0))::bigint AS calendar_bytes"#
+                WHERE c.owner_account_id = {user}), 0))::bigint AS calendar_bytes"#
     )
 }
 
@@ -691,10 +691,10 @@ async fn take_stale_upload(
 ) -> Result<Option<(String, String, bool)>, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let row: Option<(String, String, bool)> = sqlx::query_as(
-        "SELECT storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM uploads
+        "SELECT storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM drive_uploads
          WHERE id = $1 AND updated_at < NOW() - $2 * interval '1 second'
-           AND NOT kutup_account_held((SELECT c.owner_user_id FROM collections c
-                                        WHERE c.id = uploads.collection_id))
+           AND NOT kutup_account_held((SELECT c.owner_account_id FROM drive_collections c
+                                        WHERE c.id = drive_uploads.collection_id))
          FOR UPDATE SKIP LOCKED",
     )
     .bind(id)
@@ -704,7 +704,7 @@ async fn take_stale_upload(
     let Some(row) = row else {
         return Ok(None);
     };
-    sqlx::query("DELETE FROM uploads WHERE id = $1")
+    sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
         .await?;
@@ -738,7 +738,7 @@ pub(crate) async fn sweep_incomplete_multipart(
         // An upload a row still names goes on (a long one), or goes with
         // its row when that is swept.
         let named: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM uploads WHERE s3_upload_id = $1)
+            "SELECT EXISTS (SELECT 1 FROM drive_uploads WHERE s3_upload_id = $1)
                  OR EXISTS (SELECT 1 FROM chat_media_uploads WHERE s3_upload_id = $1)",
         )
         .bind(&upload_id)
@@ -780,9 +780,9 @@ pub async fn uploads_sweep_once(
     let stale: Vec<Uuid> = match sqlx::query_scalar(
         // A held account's uploads stay (docs/plans/server-personal-data.md,
         // A5): its collection's owner is the account.
-        "SELECT id FROM uploads WHERE updated_at < NOW() - $1 * interval '1 second'
-           AND NOT kutup_account_held((SELECT c.owner_user_id FROM collections c
-                                        WHERE c.id = uploads.collection_id))",
+        "SELECT id FROM drive_uploads WHERE updated_at < NOW() - $1 * interval '1 second'
+           AND NOT kutup_account_held((SELECT c.owner_account_id FROM drive_collections c
+                                        WHERE c.id = drive_uploads.collection_id))",
     )
     .bind(UPLOADS_STALE_AFTER_SECS)
     .fetch_all(pool)
@@ -817,7 +817,7 @@ pub async fn uploads_sweep_once(
     let stale_media: Vec<(Uuid, String, String)> = match sqlx::query_as(
         "SELECT id, storage_path, s3_upload_id FROM chat_media_uploads
          WHERE updated_at < NOW() - $1 * interval '1 second'
-           AND NOT kutup_account_held(user_id)",
+           AND NOT kutup_account_held(account_id)",
     )
     .bind(UPLOADS_STALE_AFTER_SECS)
     .fetch_all(pool)
@@ -923,22 +923,22 @@ async fn sweep_expired_chat_backup_staging(
 ) -> anyhow::Result<()> {
     let mut transaction = pool.begin().await?;
     let expired: Vec<(Uuid, Uuid, i64, i64, String)> = sqlx::query_as(
-        "SELECT user_id,object_id,generation,ciphertext_bytes,storage_path
+        "SELECT account_id,object_id,generation,ciphertext_bytes,storage_path
          FROM chat_backup_bases
-         WHERE state='staged' AND expires_at<=NOW() AND NOT kutup_account_held(user_id)
+         WHERE state='staged' AND expires_at<=NOW() AND NOT kutup_account_held(account_id)
          ORDER BY expires_at LIMIT 64 FOR UPDATE SKIP LOCKED",
     )
     .fetch_all(&mut *transaction)
     .await?;
     for (user_id, object_id, generation, bytes, _) in &expired {
-        sqlx::query("DELETE FROM chat_backup_bases WHERE user_id=$1 AND object_id=$2")
+        sqlx::query("DELETE FROM chat_backup_bases WHERE account_id=$1 AND object_id=$2")
             .bind(user_id)
             .bind(object_id)
             .execute(&mut *transaction)
             .await?;
         sqlx::query(
             "DELETE FROM chat_backup_media_reconciliations
-             WHERE user_id=$1 AND target_generation=$2",
+             WHERE account_id=$1 AND target_generation=$2",
         )
         .bind(user_id)
         .bind(generation)
@@ -972,9 +972,9 @@ pub async fn sweep_chat_delivery_media_before(
 ) -> anyhow::Result<()> {
     let mut transaction = pool.begin().await?;
     let expired: Vec<(Uuid, Uuid, Uuid, i64)> = sqlx::query_as(
-        "SELECT id,user_id,attachment_id,logical_bytes
+        "SELECT id,account_id,attachment_id,logical_bytes
          FROM chat_media_references
-         WHERE created_at < $1 AND NOT kutup_account_held(user_id)
+         WHERE created_at < $1 AND NOT kutup_account_held(account_id)
          ORDER BY created_at
          LIMIT 512 FOR UPDATE SKIP LOCKED",
     )
@@ -1184,7 +1184,7 @@ pub async fn purge_file_root(
     // its last part takes them in (`tus::patch`: the upload row, then the
     // file), so the two never deadlock.
     let open_versions: Vec<(Uuid, String, String, bool)> = sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM uploads
+        "SELECT id, storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM drive_uploads
          WHERE file_id = $1 AND kind = 'version' FOR UPDATE",
     )
     .bind(file_id)
@@ -1193,8 +1193,8 @@ pub async fn purge_file_root(
     let row: Option<(i64, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
         // A pruned original was released already.
         "SELECT (CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END),
-                uploader_user_id, collection_id, trash_root_id
-         FROM files WHERE id = $1 FOR UPDATE",
+                uploader_account_id, collection_id, trash_root_id
+         FROM drive_files WHERE id = $1 FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
@@ -1208,7 +1208,7 @@ pub async fn purge_file_root(
         PurgeGuard::InTrashedFolder(root) => {
             // FOR SHARE: a restore of the folder (an UPDATE) waits for us.
             sqlx::query_scalar::<_, bool>(
-                "SELECT trash_root_id IS NOT DISTINCT FROM $2 FROM collections WHERE id = $1 FOR SHARE",
+                "SELECT trash_root_id IS NOT DISTINCT FROM $2 FROM drive_collections WHERE id = $1 FOR SHARE",
             )
             .bind(collection_id)
             .bind(root)
@@ -1227,11 +1227,11 @@ pub async fn purge_file_root(
     // rows in the same order and never deadlock.
     let charged: Vec<(Uuid, i64)> = sqlx::query_as(
         r#"SELECT payer, SUM(size_bytes)::bigint FROM (
-               SELECT uploader_user_id AS payer, size_bytes FROM file_assets WHERE file_id = $1
+               SELECT uploader_account_id AS payer, size_bytes FROM drive_file_assets WHERE file_id = $1
                UNION ALL
-               SELECT uploader_user_id, size_bytes FROM file_thumbnails WHERE file_id = $1
+               SELECT uploader_account_id, size_bytes FROM drive_file_thumbnails WHERE file_id = $1
                UNION ALL
-               SELECT author_user_id, size_bytes FROM file_versions WHERE file_id = $1
+               SELECT author_account_id, size_bytes FROM drive_file_versions WHERE file_id = $1
                UNION ALL
                SELECT $2::uuid, $3::bigint) AS charged
            GROUP BY payer
@@ -1247,19 +1247,19 @@ pub async fn purge_file_root(
             .await?;
     }
     // Links to the file itself (no FK ties them down).
-    sqlx::query("DELETE FROM public_shares WHERE share_type = 'file' AND target_id = $1")
+    sqlx::query("DELETE FROM drive_public_shares WHERE share_type = 'file' AND target_id = $1")
         .bind(file_id)
         .execute(&mut *tx)
         .await?;
     // The open upload of a new version goes with it (its reservation and
     // the file's one upload slot); its parts are aborted after commit.
     for (upload_id, _, _, _) in &open_versions {
-        sqlx::query("DELETE FROM uploads WHERE id = $1")
+        sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
             .bind(upload_id)
             .execute(&mut *tx)
             .await?;
     }
-    sqlx::query("DELETE FROM files WHERE id = $1")
+    sqlx::query("DELETE FROM drive_files WHERE id = $1")
         .bind(file_id)
         .execute(&mut *tx)
         .await?;
@@ -1285,23 +1285,24 @@ pub async fn purge_collection_root(
     root_id: Uuid,
 ) -> anyhow::Result<()> {
     let colls: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM collections WHERE trash_root_id = $1")
+        sqlx::query_scalar("SELECT id FROM drive_collections WHERE trash_root_id = $1")
             .bind(root_id)
             .fetch_all(pool)
             .await?;
     if colls.is_empty() {
         return Ok(());
     }
-    let files: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM files WHERE collection_id = ANY($1)")
-        .bind(&colls)
-        .fetch_all(pool)
-        .await?;
+    let files: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM drive_files WHERE collection_id = ANY($1)")
+            .bind(&colls)
+            .fetch_all(pool)
+            .await?;
     for fid in files {
         purge_file_root(pool, storage, fid, PurgeGuard::InTrashedFolder(root_id)).await?;
     }
     // Only folders still in this trash entry: one restored meanwhile keeps
     // its rows (and its files, which the guard above left alone).
-    sqlx::query("DELETE FROM collections WHERE id = ANY($1) AND trash_root_id = $2")
+    sqlx::query("DELETE FROM drive_collections WHERE id = ANY($1) AND trash_root_id = $2")
         .bind(&colls)
         .bind(root_id)
         .execute(pool)
@@ -1319,9 +1320,9 @@ pub async fn trash_sweep_once(
     let mut purged = 0;
 
     let coll_roots: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM collections WHERE trash_root_id = id \
+        "SELECT id FROM drive_collections WHERE trash_root_id = id \
          AND deleted_at < NOW() - make_interval(days => $1::int) \
-         AND NOT kutup_account_held(owner_user_id)",
+         AND NOT kutup_account_held(owner_account_id)",
     )
     .bind(retention_days)
     .fetch_all(pool)
@@ -1338,10 +1339,10 @@ pub async fn trash_sweep_once(
     }
 
     let file_roots: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT f.id FROM files f JOIN collections c ON c.id = f.collection_id \
+        "SELECT f.id FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id \
          WHERE f.trash_root_id = f.id \
          AND f.deleted_at < NOW() - make_interval(days => $1::int) \
-         AND NOT kutup_account_held(c.owner_user_id)",
+         AND NOT kutup_account_held(c.owner_account_id)",
     )
     .bind(retention_days)
     .fetch_all(pool)
@@ -1450,17 +1451,17 @@ pub async fn run_orphan_sweep(
             fids.dedup();
             // Every key a row still points at (a pruned original's no longer does).
             let referenced: Vec<String> = sqlx::query_scalar(
-                r#"SELECT storage_path FROM files WHERE storage_path = ANY($1) AND NOT original_pruned
+                r#"SELECT storage_path FROM drive_files WHERE storage_path = ANY($1) AND NOT original_pruned
                    UNION ALL
-                   SELECT storage_path FROM file_versions WHERE storage_path = ANY($1)
+                   SELECT storage_path FROM drive_file_versions WHERE storage_path = ANY($1)
                    UNION ALL
                    SELECT 'files/' || file_id::text || '/thumbnails/' || variant
-                     FROM file_thumbnails WHERE file_id = ANY($2)
+                     FROM drive_file_thumbnails WHERE file_id = ANY($2)
                    UNION ALL
                    SELECT 'files/' || file_id::text || '/assets/' || asset_id
-                     FROM file_assets WHERE file_id = ANY($2)
+                     FROM drive_file_assets WHERE file_id = ANY($2)
                    UNION ALL
-                   SELECT storage_path FROM uploads WHERE storage_path = ANY($1)"#,
+                   SELECT storage_path FROM drive_uploads WHERE storage_path = ANY($1)"#,
             )
             .bind(&keys)
             .bind(&fids)
@@ -1581,7 +1582,7 @@ mod tests {
         // (counted nowhere: its object is one of the group's above).
         let member = uuid::Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
              VALUES ($1, $2, '', '', '', '', '', '', '')",
@@ -1605,7 +1606,7 @@ mod tests {
         ] {
             sqlx::query(
                 "INSERT INTO mail_messages (address_id, thread_id, direction, folder,
-                    protection, object_key, size_bytes, user_id, group_id, key_packet)
+                    protection, object_key, size_bytes, account_id, group_id, key_packet)
                  VALUES ($1, $2, 'inbound', 'inbox', 'end_to_end', $3, $4, $5, $6, $7)",
             )
             .bind(address)
@@ -1652,7 +1653,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(member)
             .execute(&pool)
             .await
@@ -1686,7 +1687,7 @@ mod tests {
         let direct_id: uuid::Uuid = sqlx::query_scalar(
             "SELECT m.id
                FROM chat_mailbox m
-               JOIN devices d ON d.user_id = m.recipient_user_id
+               JOIN account_devices d ON d.account_id = m.recipient_account_id
                                   AND d.device_id = m.recipient_device_id
               ORDER BY m.server_ts DESC LIMIT 1",
         )
@@ -1745,13 +1746,14 @@ mod tests {
             .connect(&database_url)
             .await
             .unwrap();
-        let user_id: uuid::Uuid =
-            sqlx::query_scalar("SELECT user_id FROM devices ORDER BY created_at DESC LIMIT 1")
-                .fetch_one(&pool)
-                .await
-                .expect("live Chat user fixture");
+        let user_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT account_id FROM account_devices ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("live Chat user fixture");
         let original_used: i64 =
-            sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE id=$1")
+            sqlx::query_scalar("SELECT storage_used_bytes FROM accounts WHERE id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1789,7 +1791,7 @@ mod tests {
             // Suite 2, the block format: the only suite a new row may name.
             sqlx::query(
                 "INSERT INTO chat_media_objects
-                 (attachment_id,origin_user_id,origin_domain,suite,ciphertext_bytes,
+                 (attachment_id,origin_account_id,origin_server,suite,ciphertext_bytes,
                   ciphertext_sha256,retrieval_token_hash,storage_path,created_at)
                  VALUES ($1,$2,'retention.test',2,$3,$4,$5,$6,$7)",
             )
@@ -1808,7 +1810,7 @@ mod tests {
             .unwrap();
             sqlx::query(
                 "INSERT INTO chat_media_references
-                 (user_id,attachment_id,logical_bytes,created_at) VALUES ($1,$2,$3,$4)",
+                 (account_id,attachment_id,logical_bytes,created_at) VALUES ($1,$2,$3,$4)",
             )
             .bind(user_id)
             .bind(attachment_id)
@@ -1820,7 +1822,7 @@ mod tests {
         }
         sqlx::query(
             "INSERT INTO chat_backups
-             (user_id,backup_incarnation_id,suite,protection_domain,root_envelope,
+             (account_id,backup_incarnation_id,suite,protection_domain,root_envelope,
               signer_authorization,signer_authorization_digest)
              VALUES ($1,$2,1,1,'retention-envelope','{}',repeat('0',64))",
         )
@@ -1831,7 +1833,7 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO chat_backup_media_objects
-             (user_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path,created_at)
+             (account_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path,created_at)
              VALUES ($1,$2,$3,$4,$5,$6)",
         )
         .bind(user_id)
@@ -1847,7 +1849,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO chat_backup_media_references (user_id,media_id,reference_id,created_at)
+            "INSERT INTO chat_backup_media_references (account_id,media_id,reference_id,created_at)
              VALUES ($1,$2,$3,$4)",
         )
         .bind(user_id)
@@ -1873,7 +1875,7 @@ mod tests {
             .await
             .unwrap();
         let at_boundary: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM chat_media_references WHERE user_id=$1")
+            sqlx::query_scalar("SELECT COUNT(*) FROM chat_media_references WHERE account_id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1890,7 +1892,7 @@ mod tests {
             .await
             .unwrap();
         let used_after_expiry: i64 =
-            sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE id=$1")
+            sqlx::query_scalar("SELECT storage_used_bytes FROM accounts WHERE id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1909,7 +1911,7 @@ mod tests {
             i64::try_from(protected_bytes.len()).unwrap()
         );
         let protected_rows: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM chat_backup_media_objects WHERE user_id=$1 AND media_id=$2",
+            "SELECT COUNT(*) FROM chat_backup_media_objects WHERE account_id=$1 AND media_id=$2",
         )
         .bind(user_id)
         .bind(&protected_media_id)
@@ -1919,14 +1921,14 @@ mod tests {
         assert_eq!(protected_rows, 1);
 
         // Reconciliation derives the exact total from both delivery and protected ledgers.
-        sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+123 WHERE id=$1")
+        sqlx::query("UPDATE accounts SET storage_used_bytes=storage_used_bytes+123 WHERE id=$1")
             .bind(user_id)
             .execute(&pool)
             .await
             .unwrap();
         assert!(quota_reconcile_tick(&pool).await >= 1);
         let reconciled: i64 =
-            sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE id=$1")
+            sqlx::query_scalar("SELECT storage_used_bytes FROM accounts WHERE id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1943,13 +1945,13 @@ mod tests {
         sweep_chat_delivery_media_before(&pool, &storage, cutoff)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM chat_backups WHERE user_id=$1")
+        sqlx::query("DELETE FROM chat_backups WHERE account_id=$1")
             .bind(user_id)
             .execute(&pool)
             .await
             .unwrap();
         storage.delete(&protected_path).await.unwrap();
-        sqlx::query("UPDATE users SET storage_used_bytes=$1 WHERE id=$2")
+        sqlx::query("UPDATE accounts SET storage_used_bytes=$1 WHERE id=$2")
             .bind(original_used)
             .bind(user_id)
             .execute(&pool)

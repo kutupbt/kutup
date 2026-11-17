@@ -62,8 +62,8 @@ pub async fn vault_states(State(state): State<AppState>, user: AuthUser) -> AppR
     // foreign key to it). The record id is the file id (canonical text).
     let rows: Vec<(String, bool, bool)> = sqlx::query_as(
         "SELECT r.record_id, f.id IS NOT NULL, f.deleted_at IS NOT NULL
-           FROM account_records r LEFT JOIN files f ON f.id::text = r.record_id
-          WHERE r.user_id = $1 AND r.scope = $2
+           FROM account_records r LEFT JOIN drive_files f ON f.id::text = r.record_id
+          WHERE r.account_id = $1 AND r.scope = $2
           ORDER BY r.record_id",
     )
     .bind(user_id)
@@ -193,7 +193,7 @@ fn refusal(status: StatusCode, error: &'static str, attempts_left: Option<i16>) 
 pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let set: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pass_pins WHERE user_id = $1)")
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pass_pins WHERE account_id = $1)")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
@@ -229,15 +229,15 @@ pub async fn set_pin(
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
         .await?;
     sqlx::query(
-        "INSERT INTO pass_pins (user_id, pin_hash) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET pin_hash = $2, updated_at = NOW()",
+        "INSERT INTO pass_pins (account_id, pin_hash) VALUES ($1, $2)
+         ON CONFLICT (account_id) DO UPDATE SET pin_hash = $2, updated_at = NOW()",
     )
     .bind(user_id)
     .bind(hash)
     .execute(&mut *tx)
     .await?;
     // A new PIN, with the password: every sign-in's tries start again.
-    sqlx::query("DELETE FROM pass_pin_failures WHERE user_id = $1")
+    sqlx::query("DELETE FROM pass_pin_failures WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -267,7 +267,7 @@ pub async fn remove_pin(
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
         .await?;
-    sqlx::query("DELETE FROM pass_pins WHERE user_id = $1")
+    sqlx::query("DELETE FROM pass_pins WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -296,7 +296,7 @@ pub async fn verify_pin(
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let user_id = trusted_uuid(&user.user_id)?;
     let hash: Option<String> =
-        sqlx::query_scalar("SELECT pin_hash FROM pass_pins WHERE user_id = $1")
+        sqlx::query_scalar("SELECT pin_hash FROM pass_pins WHERE account_id = $1")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -315,7 +315,7 @@ pub async fn verify_pin(
     // Reserve a try first: of any number of tries at once, at most the
     // remaining ones reach the check.
     let reserved: Option<i16> = sqlx::query_scalar(
-        "INSERT INTO pass_pin_failures (sign_in_id, user_id, failures) VALUES ($1, $2, 1)
+        "INSERT INTO pass_pin_failures (sign_in_id, account_id, failures) VALUES ($1, $2, 1)
          ON CONFLICT (sign_in_id) DO UPDATE SET failures = pass_pin_failures.failures + 1
          WHERE pass_pin_failures.failures < $3
          RETURNING failures",

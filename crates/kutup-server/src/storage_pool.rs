@@ -85,7 +85,7 @@ pub async fn lock(
     leave: Leave<'_>,
 ) -> sqlx::Result<Pool> {
     let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE",
+        "SELECT storage_quota_bytes, storage_used_bytes FROM accounts WHERE id = $1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_one(&mut **tx)
@@ -119,9 +119,9 @@ pub async fn charge<'e, E: PgExecutor<'e>>(
     // reconciler will correct) is seen rather than hidden by the clamp.
     let (sql, id) = match payer {
         Payer::Account(id) => (
-            "WITH before AS (SELECT storage_used_bytes AS used FROM users WHERE id = $1 FOR UPDATE)
-             UPDATE users SET storage_used_bytes = GREATEST(before.used + $2, 0)
-             FROM before WHERE users.id = $1 RETURNING before.used",
+            "WITH before AS (SELECT storage_used_bytes AS used FROM accounts WHERE id = $1 FOR UPDATE)
+             UPDATE accounts SET storage_used_bytes = GREATEST(before.used + $2, 0)
+             FROM before WHERE accounts.id = $1 RETURNING before.used",
             id,
         ),
         Payer::MailGroup(id) => (
@@ -172,12 +172,12 @@ pub async fn reserved<'e, E: PgExecutor<'e>>(
         None => (None, None),
     };
     sqlx::query_scalar(
-        "SELECT COALESCE((SELECT SUM(total_bytes) FROM uploads
-                           WHERE user_id = $1 AND id IS DISTINCT FROM $2), 0)::bigint
+        "SELECT COALESCE((SELECT SUM(total_bytes) FROM drive_uploads
+                           WHERE account_id = $1 AND id IS DISTINCT FROM $2), 0)::bigint
               + COALESCE((SELECT SUM(total_bytes - received_bytes) FROM chat_media_uploads
-                           WHERE user_id = $1 AND id IS DISTINCT FROM $3), 0)::bigint
+                           WHERE account_id = $1 AND id IS DISTINCT FROM $3), 0)::bigint
               + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_media_federation_inbound_pending
-                           WHERE recipient_user_id = $1
+                           WHERE recipient_account_id = $1
                              AND NOT (origin IS NOT DISTINCT FROM $4 AND sequence IS NOT DISTINCT FROM $5)), 0)::bigint",
     )
     .bind(user_id)

@@ -77,7 +77,7 @@ pub async fn list(
     let user_id = trusted_uuid(&user.user_id)?;
     let keys: Vec<SecurityKeyView> = sqlx::query_as(
         "SELECT id, name, created_at, last_used_at, compromised
-         FROM user_security_keys WHERE user_id = $1 ORDER BY created_at",
+         FROM account_security_keys WHERE account_id = $1 ORDER BY created_at",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -124,16 +124,16 @@ pub async fn register_start(
         super::auth::second_factor_if_on(tx, &state, &user, req.code(), req.security_key.as_ref())
             .await?;
     let (count, name, require_uv): (i64, Option<String>, bool) = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM user_security_keys WHERE user_id = u.id),
+        "SELECT (SELECT count(*) FROM account_security_keys WHERE account_id = u.id),
                 u.username, u.security_keys_require_uv
-         FROM users u WHERE u.id = $1 FOR UPDATE",
+         FROM accounts u WHERE u.id = $1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
     .await?;
     check_limit(&state, user_id, count).await?;
     let existing: Vec<keys::KeyRow> = sqlx::query_as(
-        "SELECT credential_id, transports FROM user_security_keys WHERE user_id = $1",
+        "SELECT credential_id, transports FROM account_security_keys WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -269,14 +269,14 @@ pub async fn register_finish(
         },
     )?;
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM user_security_keys WHERE user_id = $1")
+        sqlx::query_scalar("SELECT count(*) FROM account_security_keys WHERE account_id = $1")
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
     check_limit(&state, user_id, count).await?;
     let inserted: Option<SecurityKeyView> = sqlx::query_as(
-        "INSERT INTO user_security_keys
-             (user_id, credential_id, transports, static_state, dynamic_state, sign_count,
+        "INSERT INTO account_security_keys
+             (account_id, credential_id, transports, static_state, dynamic_state, sign_count,
               aaguid, name)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (credential_id) DO NOTHING
@@ -359,7 +359,7 @@ pub async fn rename(
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let renamed =
-        sqlx::query("UPDATE user_security_keys SET name = $3 WHERE id = $1 AND user_id = $2")
+        sqlx::query("UPDATE account_security_keys SET name = $3 WHERE id = $1 AND account_id = $2")
             .bind(id)
             .bind(user_id)
             .bind(key_name(&req.name)?)
@@ -584,7 +584,7 @@ pub async fn remove(
     }
     let mut tx = super::auth::settle_second_factor(tx, user_id, &outcome).await?;
     let removed: Option<String> = sqlx::query_scalar(
-        "DELETE FROM user_security_keys WHERE id = $1 AND user_id = $2 RETURNING name",
+        "DELETE FROM account_security_keys WHERE id = $1 AND account_id = $2 RETURNING name",
     )
     .bind(id)
     .bind(user_id)
@@ -664,7 +664,7 @@ pub async fn set_require_uv(
             .await?
             .0
     };
-    sqlx::query("UPDATE users SET security_keys_require_uv = $2 WHERE id = $1")
+    sqlx::query("UPDATE accounts SET security_keys_require_uv = $2 WHERE id = $1")
         .bind(user_id)
         .bind(req.require_uv)
         .execute(&mut *tx)

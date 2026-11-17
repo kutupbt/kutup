@@ -4,7 +4,7 @@
 --
 -- Refuses a database that already holds the old chain's tables.
 DO $$ BEGIN
-  IF to_regclass('public.users') IS NOT NULL THEN
+  IF to_regclass('public.accounts') IS NOT NULL THEN
     RAISE EXCEPTION 'this database predates the baseline: start from an empty one';
   END IF;
 END $$;
@@ -63,7 +63,7 @@ END $$;
 CREATE FUNCTION public.kutup_account_federates(account uuid) RETURNS boolean
     LANGUAGE sql STABLE
     AS $$
-    SELECT EXISTS (SELECT 1 FROM users WHERE id = account AND federation = 'on')
+    SELECT EXISTS (SELECT 1 FROM accounts WHERE id = account AND federation = 'on')
 $$;
 
 
@@ -74,7 +74,7 @@ $$;
 CREATE FUNCTION public.kutup_account_held(account uuid) RETURNS boolean
     LANGUAGE sql STABLE
     AS $$
-    SELECT EXISTS (SELECT 1 FROM users WHERE id = account AND legal_hold_reference IS NOT NULL)
+    SELECT EXISTS (SELECT 1 FROM accounts WHERE id = account AND legal_hold_reference IS NOT NULL)
 $$;
 
 
@@ -112,13 +112,13 @@ CREATE FUNCTION public.kutup_fold(name text) RETURNS text
 CREATE TABLE public.account_names (
     folded text NOT NULL,
     name text NOT NULL,
-    user_id uuid,
+    account_id uuid,
     incarnation_id text,
     state text NOT NULL,
     receive_until timestamp with time zone,
     free_at timestamp with time zone,
     CONSTRAINT account_names_check CHECK (((state = 'held'::text) = (free_at IS NOT NULL))),
-    CONSTRAINT account_names_check1 CHECK (((state = 'held'::text) OR (user_id IS NOT NULL))),
+    CONSTRAINT account_names_check1 CHECK (((state = 'held'::text) OR (account_id IS NOT NULL))),
     CONSTRAINT account_names_folded_check CHECK ((folded ~ '^[a-z0-9]{1,32}$'::text)),
     CONSTRAINT account_names_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT account_names_name_check CHECK ((name ~ '^[a-z0-9_-]{3,32}$'::text)),
@@ -127,12 +127,12 @@ CREATE TABLE public.account_names (
 
 
 --
--- Name: kutup_current_user(text); Type: FUNCTION; Schema: public; Owner: -
+-- Name: kutup_current_account(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.kutup_current_user(typed text) RETURNS uuid
+CREATE FUNCTION public.kutup_current_account(typed text) RETURNS uuid
     LANGUAGE sql STABLE STRICT PARALLEL SAFE
-    RETURN (SELECT n.user_id FROM public.account_names n WHERE ((n.folded = public.kutup_fold(kutup_current_user.typed)) AND (n.state = 'current'::text)));
+    RETURN (SELECT n.account_id FROM public.account_names n WHERE ((n.folded = public.kutup_fold(kutup_current_account.typed)) AND (n.state = 'current'::text)));
 
 
 --
@@ -143,7 +143,7 @@ CREATE FUNCTION public.kutup_no_files_in_albums() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM collections WHERE id = NEW.collection_id AND kind = 'album') THEN
+    IF EXISTS (SELECT 1 FROM drive_collections WHERE id = NEW.collection_id AND kind = 'album') THEN
         RAISE EXCEPTION 'albums hold references, not files' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
@@ -159,7 +159,7 @@ CREATE FUNCTION public.kutup_no_folders_in_albums() RETURNS trigger
     AS $$
 BEGIN
     IF NEW.parent_collection_id IS NOT NULL AND EXISTS (
-        SELECT 1 FROM collections WHERE id = NEW.parent_collection_id AND kind = 'album'
+        SELECT 1 FROM drive_collections WHERE id = NEW.parent_collection_id AND kind = 'album'
     ) THEN
         RAISE EXCEPTION 'albums hold no folders' USING ERRCODE = 'check_violation';
     END IF;
@@ -174,11 +174,11 @@ END $$;
 CREATE FUNCTION public.kutup_target_blocked(kind text, target uuid) RETURNS text
     LANGUAGE sql STABLE
     AS $$
-    SELECT b.blocked_reason FROM public_shares b
+    SELECT b.blocked_reason FROM drive_public_shares b
      WHERE b.blocked_at IS NOT NULL
        AND (b.target_id = target
             OR (kind = 'file' AND b.share_type = 'collection'
-                AND b.target_id = (SELECT f.collection_id FROM files f WHERE f.id = target)))
+                AND b.target_id = (SELECT f.collection_id FROM drive_files f WHERE f.id = target)))
      ORDER BY (b.blocked_reason = 'legal_order') DESC, b.blocked_at
      LIMIT 1
 $$;
@@ -237,9 +237,9 @@ CREATE FUNCTION public.mail_messages_tombstone() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    IF OLD.owner = OLD.user_id THEN
-        INSERT INTO mail_message_tombstones (owner, id, received_at, change_xid)
-        VALUES (OLD.owner, OLD.id, OLD.received_at, pg_current_xact_id()::text::bigint)
+    IF OLD.mailbox_owner = OLD.account_id THEN
+        INSERT INTO mail_message_tombstones (mailbox_owner, id, received_at, change_xid)
+        VALUES (OLD.mailbox_owner, OLD.id, OLD.received_at, pg_current_xact_id()::text::bigint)
         ON CONFLICT DO NOTHING;
     END IF;
     RETURN NULL;
@@ -283,7 +283,7 @@ END $$;
 --
 
 CREATE TABLE account_keys.account_data_keys (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     sealing_key_id smallint NOT NULL,
     generation integer NOT NULL,
     wrapped bytea NOT NULL,
@@ -339,7 +339,7 @@ CREATE TABLE account_keys.mail_group_data_keys (
 --
 
 CREATE TABLE public.account_heads (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     sequence bigint NOT NULL,
     sealed bytea NOT NULL,
     incarnation_id text NOT NULL,
@@ -355,7 +355,7 @@ CREATE TABLE public.account_heads (
 --
 
 CREATE TABLE public.account_record_feeds (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     change_seq bigint DEFAULT 0 NOT NULL,
     floor_seq bigint DEFAULT 0 NOT NULL,
     CONSTRAINT account_record_feeds_change_seq_check CHECK ((change_seq >= 0)),
@@ -368,7 +368,7 @@ CREATE TABLE public.account_record_feeds (
 --
 
 CREATE TABLE public.account_record_tombstones (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     scope smallint NOT NULL,
     record_id text NOT NULL,
     change_seq bigint NOT NULL,
@@ -384,7 +384,7 @@ CREATE TABLE public.account_record_tombstones (
 --
 
 CREATE TABLE public.account_records (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     scope smallint NOT NULL,
     record_id text NOT NULL,
     revision bigint NOT NULL,
@@ -407,7 +407,7 @@ CREATE TABLE public.account_records (
 CREATE TABLE public.account_renames (
     incarnation_id text NOT NULL,
     sequence integer NOT NULL,
-    user_id uuid,
+    account_id uuid,
     authority_public_key text NOT NULL,
     previous text NOT NULL,
     current text NOT NULL,
@@ -426,7 +426,7 @@ CREATE TABLE public.account_renames (
 --
 
 CREATE TABLE public.account_roots (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     purpose smallint NOT NULL,
     object bytea NOT NULL,
     envelope bytea NOT NULL,
@@ -442,17 +442,17 @@ CREATE TABLE public.account_roots (
 
 CREATE TABLE public.account_security_events (
     id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     kind text NOT NULL,
     at timestamp with time zone DEFAULT now() NOT NULL,
     acting_session_id uuid,
     acting_client text,
-    admin_user_id uuid,
+    admin_account_id uuid,
     old_name text,
     new_name text,
     count integer DEFAULT 1 NOT NULL,
     client_sealed bytea,
-    CONSTRAINT account_security_events_check CHECK (((kind = ANY (ARRAY['adminReset'::text, 'accountReset'::text, 'nameClosed'::text, 'nameFreed'::text, 'twoFactorOff'::text, 'accountKept'::text])) OR (admin_user_id IS NULL))),
+    CONSTRAINT account_security_events_check CHECK (((kind = ANY (ARRAY['adminReset'::text, 'accountReset'::text, 'nameClosed'::text, 'nameFreed'::text, 'twoFactorOff'::text, 'accountKept'::text])) OR (admin_account_id IS NULL))),
     CONSTRAINT account_security_events_client_sealed_check CHECK (((client_sealed IS NULL) OR ((octet_length(client_sealed) >= 47) AND (octet_length(client_sealed) <= 512)))),
     CONSTRAINT account_security_events_count_check CHECK ((count >= 1)),
     CONSTRAINT account_security_events_kind_check CHECK ((kind = ANY (ARRAY['passwordChange'::text, 'recovery'::text, 'rotate'::text, 'adminReset'::text, 'accountReset'::text, 'rename'::text, 'nameDropped'::text, 'nameClosed'::text, 'nameFreed'::text, 'domainLost'::text, 'twoFactorOn'::text, 'twoFactorOff'::text, 'recoveryCodeUsed'::text, 'recoveryCodesRenewed'::text, 'securityKeyAdded'::text, 'securityKeyRemoved'::text, 'securityKeyCompromised'::text, 'authenticatorOn'::text, 'authenticatorOff'::text, 'orgJoined'::text, 'orgLeft'::text, 'orgRemoved'::text, 'orgAccessGranted'::text, 'orgAccessRevoked'::text, 'orgReset'::text, 'orgSignIn'::text, 'signIn'::text, 'signInFailedPassword'::text, 'signInFailed2fa'::text, 'signOut'::text, 'sessionRevoked'::text, 'allSessionsRevoked'::text, 'adminAccess'::text, 'accountClosing'::text, 'accountKept'::text, 'masterKeyRotated'::text]))),
@@ -479,9 +479,9 @@ CREATE TABLE public.admin_audit_anchor (
 
 CREATE TABLE public.admin_audit_log (
     id bigint NOT NULL,
-    admin_user_id uuid NOT NULL,
+    admin_account_id uuid NOT NULL,
     action text NOT NULL,
-    target_user_id uuid,
+    target_account_id uuid,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     occurred_at timestamp with time zone DEFAULT now() NOT NULL,
     chain_version smallint DEFAULT 1 NOT NULL,
@@ -513,19 +513,19 @@ ALTER SEQUENCE public.admin_audit_log_id_seq OWNED BY public.admin_audit_log.id;
 
 
 --
--- Name: album_items; Type: TABLE; Schema: public; Owner: -
+-- Name: photos_album_items; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.album_items (
+CREATE TABLE public.photos_album_items (
     album_id uuid NOT NULL,
     file_id uuid NOT NULL,
     file_key_envelope text NOT NULL,
     key_generation integer NOT NULL,
     album_epoch integer NOT NULL,
-    added_by uuid,
+    added_by_account_id uuid,
     added_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT album_items_album_epoch_check CHECK ((album_epoch > 0)),
-    CONSTRAINT album_items_key_generation_check CHECK ((key_generation > 0))
+    CONSTRAINT photos_album_items_album_epoch_check CHECK ((album_epoch > 0)),
+    CONSTRAINT photos_album_items_key_generation_check CHECK ((key_generation > 0))
 );
 
 
@@ -535,13 +535,13 @@ CREATE TABLE public.album_items (
 
 CREATE TABLE public.auth_grants (
     token_hash bytea NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     purpose text NOT NULL,
     session_id uuid,
-    target_user_id uuid,
+    target_account_id uuid,
     expires_at timestamp with time zone NOT NULL,
     used_at timestamp with time zone,
-    CONSTRAINT auth_grants_check CHECK (((target_user_id IS NULL) OR (purpose = 'adminReset'::text))),
+    CONSTRAINT auth_grants_check CHECK (((target_account_id IS NULL) OR (purpose = 'adminReset'::text))),
     CONSTRAINT auth_grants_check1 CHECK (((purpose = ANY (ARRAY['recovery'::text, 'keep'::text])) = (session_id IS NULL))),
     CONSTRAINT auth_grants_purpose_check CHECK ((purpose = ANY (ARRAY['pass'::text, 'passwordChange'::text, 'totp'::text, 'adminReset'::text, 'recovery'::text, 'rotate'::text, 'rename'::text, 'close'::text, 'keep'::text, 'masterKeyRotation'::text]))),
     CONSTRAINT auth_grants_token_hash_check CHECK ((octet_length(token_hash) = 32))
@@ -571,7 +571,7 @@ CREATE TABLE public.auth_session_forks (
 
 CREATE TABLE public.auth_sessions (
     id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     client_type text NOT NULL,
     parent_session_id uuid,
     refresh_token_hash bytea NOT NULL,
@@ -611,7 +611,7 @@ CREATE TABLE public.backup_runs (
 --
 
 CREATE TABLE public.calendar_alarm_recomputes (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     calendar_id uuid NOT NULL,
     after_event uuid,
     requested_at timestamp with time zone DEFAULT now() NOT NULL
@@ -623,7 +623,7 @@ CREATE TABLE public.calendar_alarm_recomputes (
 --
 
 CREATE TABLE public.calendar_alarms (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     event_id uuid NOT NULL,
     reminder smallint NOT NULL,
     action text NOT NULL,
@@ -640,7 +640,7 @@ CREATE TABLE public.calendar_alarms (
 
 CREATE TABLE public.calendar_event_reminders (
     event_id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     reminders jsonb NOT NULL,
     CONSTRAINT calendar_event_reminders_reminders_check CHECK ((jsonb_typeof(reminders) = 'array'::text))
 );
@@ -655,7 +655,7 @@ CREATE TABLE public.calendar_events (
     calendar_id uuid NOT NULL,
     uid text NOT NULL,
     author_address_id uuid,
-    author_user_id uuid,
+    author_account_id uuid,
     shared_key_packet bytea NOT NULL,
     calendar_key_packet bytea NOT NULL,
     shared_signed text NOT NULL,
@@ -704,7 +704,7 @@ CREATE TABLE public.calendar_events (
 
 CREATE TABLE public.calendar_members (
     calendar_id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     permissions integer NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     default_reminders_timed jsonb DEFAULT '[{"type": "device", "trigger": "-PT15M"}, {"type": "email", "trigger": "-PT15M"}]'::jsonb NOT NULL,
@@ -723,7 +723,7 @@ CREATE TABLE public.calendar_members (
 
 CREATE TABLE public.calendar_push_subscriptions (
     session_id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     endpoint text NOT NULL,
     p256dh bytea NOT NULL,
     auth bytea NOT NULL,
@@ -735,14 +735,14 @@ CREATE TABLE public.calendar_push_subscriptions (
 
 
 --
--- Name: calendar_user_settings; Type: TABLE; Schema: public; Owner: -
+-- Name: calendar_account_settings; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.calendar_user_settings (
-    user_id uuid NOT NULL,
+CREATE TABLE public.calendar_account_settings (
+    account_id uuid NOT NULL,
     zone text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT calendar_user_settings_zone_check CHECK (((char_length(zone) >= 1) AND (char_length(zone) <= 64)))
+    CONSTRAINT calendar_account_settings_zone_check CHECK (((char_length(zone) >= 1) AND (char_length(zone) <= 64)))
 );
 
 
@@ -752,7 +752,7 @@ CREATE TABLE public.calendar_user_settings (
 
 CREATE TABLE public.calendars (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    owner_id uuid NOT NULL,
+    owner_account_id uuid NOT NULL,
     suite smallint DEFAULT 1 NOT NULL,
     public_key bytea NOT NULL,
     fingerprint text NOT NULL,
@@ -781,7 +781,7 @@ CREATE TABLE public.calendars (
 --
 
 CREATE TABLE public.chat_account_identities (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     identity_key text NOT NULL,
     manifest_version bigint NOT NULL,
     changed_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -810,7 +810,7 @@ CREATE TABLE public.chat_anonymous_rate_counters (
 --
 
 CREATE TABLE public.chat_anonymous_send_ids (
-    recipient_user_id uuid NOT NULL,
+    recipient_account_id uuid NOT NULL,
     capability_hash bytea NOT NULL,
     send_id uuid NOT NULL,
     stored_count integer NOT NULL,
@@ -825,7 +825,7 @@ CREATE TABLE public.chat_anonymous_send_ids (
 --
 
 CREATE TABLE public.chat_backup_bases (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     object_id uuid NOT NULL,
     generation bigint NOT NULL,
     covered_cursor bigint NOT NULL,
@@ -849,7 +849,7 @@ CREATE TABLE public.chat_backup_bases (
 --
 
 CREATE TABLE public.chat_backup_device_heads (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     source_device_id integer NOT NULL,
     last_device_sequence bigint NOT NULL,
     last_segment_digest character(64) NOT NULL,
@@ -865,7 +865,7 @@ CREATE TABLE public.chat_backup_device_heads (
 --
 
 CREATE TABLE public.chat_backup_media_objects (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     media_id bytea NOT NULL,
     ciphertext_bytes bigint NOT NULL,
     ciphertext_sha256 character(64) NOT NULL,
@@ -882,7 +882,7 @@ CREATE TABLE public.chat_backup_media_objects (
 --
 
 CREATE TABLE public.chat_backup_media_operations (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
     request_digest character(64) NOT NULL,
     media_id bytea NOT NULL,
@@ -897,7 +897,7 @@ CREATE TABLE public.chat_backup_media_operations (
 --
 
 CREATE TABLE public.chat_backup_media_reconciliation_entries (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
     reference_id uuid NOT NULL,
     media_id bytea NOT NULL,
@@ -910,7 +910,7 @@ CREATE TABLE public.chat_backup_media_reconciliation_entries (
 --
 
 CREATE TABLE public.chat_backup_media_reconciliation_pages (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
     page_index integer NOT NULL,
     request_digest character(64) NOT NULL,
@@ -925,7 +925,7 @@ CREATE TABLE public.chat_backup_media_reconciliation_pages (
 --
 
 CREATE TABLE public.chat_backup_media_reconciliations (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
     target_generation bigint NOT NULL,
     reference_set_digest character(64) NOT NULL,
@@ -944,7 +944,7 @@ CREATE TABLE public.chat_backup_media_reconciliations (
 --
 
 CREATE TABLE public.chat_backup_media_references (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     media_id bytea NOT NULL,
     reference_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
@@ -956,7 +956,7 @@ CREATE TABLE public.chat_backup_media_references (
 --
 
 CREATE TABLE public.chat_backup_provision_operations (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
     request_digest character(64) NOT NULL,
     backup_incarnation_id uuid NOT NULL,
@@ -970,7 +970,7 @@ CREATE TABLE public.chat_backup_provision_operations (
 --
 
 CREATE TABLE public.chat_backup_segments (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     cursor bigint NOT NULL,
     operation_id uuid NOT NULL,
     source_device_id integer NOT NULL,
@@ -997,7 +997,7 @@ CREATE TABLE public.chat_backup_segments (
 --
 
 CREATE TABLE public.chat_backups (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     backup_incarnation_id uuid NOT NULL,
     suite smallint NOT NULL,
     protection_domain smallint NOT NULL,
@@ -1073,7 +1073,7 @@ CREATE TABLE public.chat_call_link_seats (
 
 CREATE TABLE public.chat_call_links (
     room_id text NOT NULL,
-    owner_user_id uuid NOT NULL,
+    owner_account_id uuid NOT NULL,
     nonce text NOT NULL,
     access_token_hash bytea NOT NULL,
     info bytea NOT NULL,
@@ -1096,7 +1096,7 @@ CREATE TABLE public.chat_call_links (
 --
 
 CREATE TABLE public.chat_delivery_capabilities (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     profile_version character(64) NOT NULL,
     profile_revision bigint NOT NULL,
     capability_hash bytea NOT NULL,
@@ -1111,7 +1111,7 @@ CREATE TABLE public.chat_delivery_capabilities (
 --
 
 CREATE TABLE public.chat_device_manifest_history (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     incarnation_id character(64) NOT NULL,
     version bigint NOT NULL,
     manifest_hash character(64) NOT NULL,
@@ -1131,7 +1131,7 @@ CREATE TABLE public.chat_device_manifest_history (
 --
 
 CREATE TABLE public.chat_device_manifests (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     version bigint NOT NULL,
     manifest_hash text NOT NULL,
     authority_key_id text NOT NULL,
@@ -1257,7 +1257,7 @@ CREATE TABLE public.chat_groups (
 
 CREATE TABLE public.chat_link_tokens (
     token_hash bytea NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     issued_by_device integer NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     used_at timestamp with time zone,
@@ -1272,7 +1272,7 @@ CREATE TABLE public.chat_link_tokens (
 CREATE TABLE public.chat_mailbox (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     cursor bigint NOT NULL,
-    recipient_user_id uuid NOT NULL,
+    recipient_account_id uuid NOT NULL,
     recipient_device_id integer NOT NULL,
     sender_device_id integer NOT NULL,
     envelope_type smallint NOT NULL,
@@ -1313,7 +1313,7 @@ CREATE TABLE public.chat_media_federation_inbound_pending (
     sequence bigint NOT NULL,
     operation_id uuid NOT NULL,
     transaction_digest character(64) NOT NULL,
-    recipient_user_id uuid NOT NULL,
+    recipient_account_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
     ciphertext_bytes bigint NOT NULL,
     lease_id uuid NOT NULL,
@@ -1331,7 +1331,7 @@ CREATE TABLE public.chat_media_federation_inbound_pending (
 --
 
 CREATE TABLE public.chat_media_federation_pull_grants (
-    origin_user_id uuid NOT NULL,
+    origin_account_id uuid NOT NULL,
     destination text NOT NULL,
     operation_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
@@ -1349,8 +1349,8 @@ CREATE TABLE public.chat_media_federation_pull_grants (
 
 CREATE TABLE public.chat_media_objects (
     attachment_id uuid NOT NULL,
-    origin_user_id uuid,
-    origin_domain text NOT NULL,
+    origin_account_id uuid,
+    origin_server text NOT NULL,
     suite smallint NOT NULL,
     ciphertext_bytes bigint NOT NULL,
     ciphertext_sha256 character(64) NOT NULL,
@@ -1368,9 +1368,9 @@ CREATE TABLE public.chat_media_objects (
 --
 
 CREATE TABLE public.chat_media_origin_delivery_operations (
-    origin_user_id uuid NOT NULL,
+    origin_account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
-    recipient_user_id uuid NOT NULL,
+    recipient_account_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
     ciphertext_bytes bigint NOT NULL,
     ciphertext_sha256 character(64) NOT NULL,
@@ -1405,7 +1405,7 @@ CREATE TABLE public.chat_media_rate_counters (
 
 CREATE TABLE public.chat_media_references (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
     logical_bytes bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1419,7 +1419,7 @@ CREATE TABLE public.chat_media_references (
 
 CREATE TABLE public.chat_media_uploads (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
     suite smallint NOT NULL,
     total_bytes bigint NOT NULL,
@@ -1443,7 +1443,7 @@ CREATE TABLE public.chat_media_uploads (
 --
 
 CREATE TABLE public.chat_multi_send_ids (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     device_id integer NOT NULL,
     send_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
@@ -1455,7 +1455,7 @@ CREATE TABLE public.chat_multi_send_ids (
 --
 
 CREATE TABLE public.chat_one_time_kyber_pre_keys (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     device_id integer NOT NULL,
     key_id bigint NOT NULL,
     public_key text NOT NULL,
@@ -1469,7 +1469,7 @@ CREATE TABLE public.chat_one_time_kyber_pre_keys (
 --
 
 CREATE TABLE public.chat_one_time_pre_keys (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     device_id integer NOT NULL,
     key_id bigint NOT NULL,
     public_key text NOT NULL,
@@ -1482,7 +1482,7 @@ CREATE TABLE public.chat_one_time_pre_keys (
 --
 
 CREATE TABLE public.chat_profiles (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     suite smallint NOT NULL,
     version character(64) NOT NULL,
     revision bigint NOT NULL,
@@ -1506,7 +1506,7 @@ CREATE TABLE public.chat_profiles (
 --
 
 CREATE TABLE public.chat_push_subscriptions (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     device_id integer NOT NULL,
     endpoint text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1520,7 +1520,7 @@ CREATE TABLE public.chat_push_subscriptions (
 --
 
 CREATE TABLE public.chat_sends (
-    sender_user_id uuid NOT NULL,
+    sender_account_id uuid NOT NULL,
     sender_device_id integer NOT NULL,
     send_id text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1572,10 +1572,10 @@ CREATE TABLE public.chat_zk_server_keys (
 
 
 --
--- Name: collection_key_epoch_history; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_collection_key_epoch_history; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.collection_key_epoch_history (
+CREATE TABLE public.drive_collection_key_epoch_history (
     collection_id uuid NOT NULL,
     epoch integer NOT NULL,
     owner_key_envelope text NOT NULL,
@@ -1583,37 +1583,37 @@ CREATE TABLE public.collection_key_epoch_history (
     epoch_statement_hash text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     previous_key_envelope text,
-    CONSTRAINT collection_key_epoch_history_epoch_check CHECK ((epoch > 0)),
-    CONSTRAINT collection_key_epoch_history_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT collection_key_epoch_history_previous_key CHECK (((epoch = 1) = (previous_key_envelope IS NULL)))
+    CONSTRAINT drive_collection_key_epoch_history_epoch_check CHECK ((epoch > 0)),
+    CONSTRAINT drive_collection_key_epoch_history_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_collection_key_epoch_history_previous_key CHECK (((epoch = 1) = (previous_key_envelope IS NULL)))
 );
 
 
 --
--- Name: collection_shares; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_collection_shares; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.collection_shares (
+CREATE TABLE public.drive_collection_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     collection_id uuid NOT NULL,
-    sharer_user_id uuid NOT NULL,
-    recipient_user_id uuid NOT NULL,
+    sharer_account_id uuid NOT NULL,
+    recipient_account_id uuid NOT NULL,
     named_share_envelope text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
     can_delete boolean DEFAULT false NOT NULL,
     upload_quota_bytes bigint,
-    CONSTRAINT collection_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096))
+    CONSTRAINT drive_collection_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096))
 );
 
 
 --
--- Name: collections; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_collections; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.collections (
+CREATE TABLE public.drive_collections (
     id uuid NOT NULL,
-    owner_user_id uuid NOT NULL,
+    owner_account_id uuid NOT NULL,
     name_envelope text NOT NULL,
     owner_key_envelope text NOT NULL,
     key_epoch integer NOT NULL,
@@ -1629,14 +1629,14 @@ CREATE TABLE public.collections (
     kind text DEFAULT 'folder'::text NOT NULL,
     name_hash text,
     name_hash_generation integer,
-    CONSTRAINT collections_album_top_level CHECK (((kind = 'folder'::text) OR (parent_collection_id IS NULL))),
-    CONSTRAINT collections_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT collections_folder_name_hash CHECK (((kind <> 'folder'::text) OR (name_hash IS NOT NULL))),
-    CONSTRAINT collections_key_epoch_check CHECK ((key_epoch > 0)),
-    CONSTRAINT collections_kind_check CHECK ((kind = ANY (ARRAY['folder'::text, 'album'::text]))),
-    CONSTRAINT collections_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT collections_name_hash_generation_check CHECK (((name_hash_generation IS NULL) OR ((name_hash_generation > 0) AND (kind = 'folder'::text)))),
-    CONSTRAINT collections_name_revision_check CHECK ((name_revision > 0))
+    CONSTRAINT drive_collections_album_top_level CHECK (((kind = 'folder'::text) OR (parent_collection_id IS NULL))),
+    CONSTRAINT drive_collections_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_collections_folder_name_hash CHECK (((kind <> 'folder'::text) OR (name_hash IS NOT NULL))),
+    CONSTRAINT drive_collections_key_epoch_check CHECK ((key_epoch > 0)),
+    CONSTRAINT drive_collections_kind_check CHECK ((kind = ANY (ARRAY['folder'::text, 'album'::text]))),
+    CONSTRAINT drive_collections_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_collections_name_hash_generation_check CHECK (((name_hash_generation IS NULL) OR ((name_hash_generation > 0) AND (kind = 'folder'::text)))),
+    CONSTRAINT drive_collections_name_revision_check CHECK ((name_revision > 0))
 );
 
 
@@ -1647,7 +1647,7 @@ CREATE TABLE public.collections (
 CREATE TABLE public.consents (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     seq bigint NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     purpose text NOT NULL,
     given boolean NOT NULL,
     document_id uuid,
@@ -1673,18 +1673,18 @@ ALTER TABLE public.consents ALTER COLUMN seq ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
--- Name: contact_emails; Type: TABLE; Schema: public; Owner: -
+-- Name: contacts_emails; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.contact_emails (
+CREATE TABLE public.contacts_emails (
     contact_id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     address text NOT NULL,
     label text,
     "position" integer NOT NULL,
     last_used_at timestamp with time zone,
-    CONSTRAINT contact_emails_address_check CHECK (((address = lower(address)) AND ((length(address) >= 3) AND (length(address) <= 320)))),
-    CONSTRAINT contact_emails_position_check CHECK (("position" >= 0))
+    CONSTRAINT contacts_emails_address_check CHECK (((address = lower(address)) AND ((length(address) >= 3) AND (length(address) <= 320)))),
+    CONSTRAINT contacts_emails_position_check CHECK (("position" >= 0))
 );
 
 
@@ -1694,7 +1694,7 @@ CREATE TABLE public.contact_emails (
 
 CREATE TABLE public.contacts (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     uid text NOT NULL,
     name text NOT NULL,
     summary text NOT NULL,
@@ -1713,25 +1713,25 @@ CREATE TABLE public.contacts (
 
 
 --
--- Name: device_tickets; Type: TABLE; Schema: public; Owner: -
+-- Name: account_device_tickets; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.device_tickets (
+CREATE TABLE public.account_device_tickets (
     token_hash text NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     device_id integer NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT device_tickets_token_hash_check CHECK ((length(token_hash) = 64))
+    CONSTRAINT account_device_tickets_token_hash_check CHECK ((length(token_hash) = 64))
 );
 
 
 --
--- Name: devices; Type: TABLE; Schema: public; Owner: -
+-- Name: account_devices; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.devices (
-    user_id uuid NOT NULL,
+CREATE TABLE public.account_devices (
+    account_id uuid NOT NULL,
     device_id integer NOT NULL,
     suite smallint,
     registration_id bigint,
@@ -1753,11 +1753,11 @@ CREATE TABLE public.devices (
     frame_key bytea,
     CONSTRAINT chat_devices_credential_hash_check CHECK ((octet_length(credential_hash) = 32)),
     CONSTRAINT chat_devices_credential_salt_check CHECK ((octet_length(credential_salt) = 16)),
-    CONSTRAINT devices_device_id_check CHECK (((device_id >= 1) AND (device_id <= 127))),
-    CONSTRAINT devices_frame_key_check CHECK ((octet_length(frame_key) = 32)),
-    CONSTRAINT devices_kind_check CHECK ((kind = ANY (ARRAY['chat'::text, 'editor'::text, 'cli'::text]))),
-    CONSTRAINT devices_kind_keys CHECK (((num_nulls(suite, registration_id, identity_key, signed_pre_key_id, signed_pre_key, signed_pre_key_signature, last_resort_kyber_pre_key_id, last_resort_kyber_pre_key, last_resort_kyber_pre_key_signature) = ANY (ARRAY[0, 9])) AND ((kind <> 'chat'::text) OR (suite IS NOT NULL)) AND ((kind <> 'editor'::text) OR (suite IS NULL)) AND ((kind = 'chat'::text) OR (frame_key IS NOT NULL)))),
-    CONSTRAINT devices_suite_known CHECK ((suite = 1))
+    CONSTRAINT account_devices_device_id_check CHECK (((device_id >= 1) AND (device_id <= 127))),
+    CONSTRAINT account_devices_frame_key_check CHECK ((octet_length(frame_key) = 32)),
+    CONSTRAINT account_devices_kind_check CHECK ((kind = ANY (ARRAY['chat'::text, 'editor'::text, 'cli'::text]))),
+    CONSTRAINT account_devices_kind_keys CHECK (((num_nulls(suite, registration_id, identity_key, signed_pre_key_id, signed_pre_key, signed_pre_key_signature, last_resort_kyber_pre_key_id, last_resort_kyber_pre_key, last_resort_kyber_pre_key_signature) = ANY (ARRAY[0, 9])) AND ((kind <> 'chat'::text) OR (suite IS NOT NULL)) AND ((kind <> 'editor'::text) OR (suite IS NULL)) AND ((kind = 'chat'::text) OR (frame_key IS NOT NULL)))),
+    CONSTRAINT account_devices_suite_known CHECK ((suite = 1))
 );
 
 
@@ -1766,7 +1766,7 @@ CREATE TABLE public.devices (
 --
 
 CREATE TABLE public.document_acknowledgements (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     document_id uuid NOT NULL,
     at timestamp with time zone DEFAULT now() NOT NULL,
     context text NOT NULL,
@@ -1804,7 +1804,7 @@ CREATE TABLE public.drive_federation_mutations (
 --
 
 CREATE TABLE public.drive_profile_keys (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     direction text NOT NULL,
     envelope text NOT NULL,
     profile_version text NOT NULL,
@@ -1821,37 +1821,37 @@ CREATE TABLE public.drive_profile_keys (
 
 
 --
--- Name: federated_incoming_file_shares; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_federated_incoming_file_shares; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.federated_incoming_file_shares (
+CREATE TABLE public.drive_federated_incoming_file_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    remote_domain text NOT NULL,
+    account_id uuid NOT NULL,
+    owner_server text NOT NULL,
     remote_capability text NOT NULL,
     capability_hash text NOT NULL,
     remote_file_id uuid NOT NULL,
-    owner_user_id uuid NOT NULL,
+    owner_account_id uuid NOT NULL,
     owner_account text NOT NULL,
     owner_incarnation_id text NOT NULL,
     owner_signing_public_key text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT federated_incoming_file_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federated_incoming_file_shares_owner_incarnation_id_check CHECK ((owner_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federated_incoming_file_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
-    CONSTRAINT federated_incoming_file_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
-    CONSTRAINT federated_incoming_file_shares_remote_domain_check CHECK ((remote_domain = lower(remote_domain)))
+    CONSTRAINT drive_federated_incoming_file_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_incoming_file_shares_owner_incarnation_id_check CHECK ((owner_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_incoming_file_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
+    CONSTRAINT drive_federated_incoming_file_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
+    CONSTRAINT drive_federated_incoming_file_shares_owner_server_check CHECK ((owner_server = lower(owner_server)))
 );
 
 
 --
--- Name: federated_incoming_shares; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_federated_incoming_shares; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.federated_incoming_shares (
+CREATE TABLE public.drive_federated_incoming_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    remote_domain text NOT NULL,
+    account_id uuid NOT NULL,
+    owner_server text NOT NULL,
     remote_capability text NOT NULL,
     capability_hash text NOT NULL,
     remote_collection_id uuid NOT NULL,
@@ -1861,7 +1861,7 @@ CREATE TABLE public.federated_incoming_shares (
     name_revision bigint NOT NULL,
     epoch_statement text NOT NULL,
     epoch_statement_hash text NOT NULL,
-    owner_user_id uuid NOT NULL,
+    owner_account_id uuid NOT NULL,
     owner_account text NOT NULL,
     owner_incarnation_id text NOT NULL,
     owner_signing_public_key text NOT NULL,
@@ -1871,32 +1871,32 @@ CREATE TABLE public.federated_incoming_shares (
     upload_quota_bytes bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     collection_kind text DEFAULT 'folder'::text NOT NULL,
-    CONSTRAINT federated_incoming_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federated_incoming_shares_collection_kind_check CHECK ((collection_kind = ANY (ARRAY['folder'::text, 'album'::text]))),
-    CONSTRAINT federated_incoming_shares_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federated_incoming_shares_key_epoch_check CHECK ((key_epoch > 0)),
-    CONSTRAINT federated_incoming_shares_name_revision_check CHECK ((name_revision > 0)),
-    CONSTRAINT federated_incoming_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
-    CONSTRAINT federated_incoming_shares_owner_incarnation_id_check CHECK ((owner_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federated_incoming_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
-    CONSTRAINT federated_incoming_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
-    CONSTRAINT federated_incoming_shares_remote_domain_check CHECK ((remote_domain = lower(remote_domain))),
-    CONSTRAINT federated_incoming_shares_remote_domain_check1 CHECK (((length(remote_domain) >= 3) AND (length(remote_domain) <= 253))),
-    CONSTRAINT federated_incoming_shares_remote_domain_check2 CHECK ((remote_domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT federated_incoming_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0)))
+    CONSTRAINT drive_federated_incoming_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_incoming_shares_collection_kind_check CHECK ((collection_kind = ANY (ARRAY['folder'::text, 'album'::text]))),
+    CONSTRAINT drive_federated_incoming_shares_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_incoming_shares_key_epoch_check CHECK ((key_epoch > 0)),
+    CONSTRAINT drive_federated_incoming_shares_name_revision_check CHECK ((name_revision > 0)),
+    CONSTRAINT drive_federated_incoming_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
+    CONSTRAINT drive_federated_incoming_shares_owner_incarnation_id_check CHECK ((owner_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_incoming_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
+    CONSTRAINT drive_federated_incoming_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
+    CONSTRAINT drive_federated_incoming_shares_owner_server_check CHECK ((owner_server = lower(owner_server))),
+    CONSTRAINT drive_federated_incoming_shares_owner_server_check1 CHECK (((length(owner_server) >= 3) AND (length(owner_server) <= 253))),
+    CONSTRAINT drive_federated_incoming_shares_owner_server_check2 CHECK ((owner_server ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
+    CONSTRAINT drive_federated_incoming_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0)))
 );
 
 
 --
--- Name: federated_outgoing_file_shares; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_federated_outgoing_file_shares; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.federated_outgoing_file_shares (
+CREATE TABLE public.drive_federated_outgoing_file_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     file_id uuid NOT NULL,
-    sharer_user_id uuid NOT NULL,
+    sharer_account_id uuid NOT NULL,
     recipient_username text NOT NULL,
-    recipient_domain text NOT NULL,
+    recipient_server text NOT NULL,
     recipient_incarnation_id text NOT NULL,
     share_envelope text NOT NULL,
     key_generation integer NOT NULL,
@@ -1904,26 +1904,26 @@ CREATE TABLE public.federated_outgoing_file_shares (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     can_edit boolean DEFAULT false NOT NULL,
     recipient_account_id uuid NOT NULL,
-    CONSTRAINT federated_outgoing_file_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federated_outgoing_file_shares_key_generation_check CHECK ((key_generation > 0)),
-    CONSTRAINT federated_outgoing_file_shares_recipient_domain_check CHECK ((recipient_domain = lower(recipient_domain))),
-    CONSTRAINT federated_outgoing_file_shares_recipient_domain_check1 CHECK (((length(recipient_domain) >= 3) AND (length(recipient_domain) <= 253))),
-    CONSTRAINT federated_outgoing_file_shares_recipient_incarnation_id_check CHECK ((recipient_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federated_outgoing_file_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
-    CONSTRAINT federated_outgoing_file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096))
+    CONSTRAINT drive_federated_outgoing_file_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_outgoing_file_shares_key_generation_check CHECK ((key_generation > 0)),
+    CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
+    CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
+    CONSTRAINT drive_federated_outgoing_file_shares_recipient_incarnation_id_c CHECK ((recipient_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_outgoing_file_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
+    CONSTRAINT drive_federated_outgoing_file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096))
 );
 
 
 --
--- Name: federated_outgoing_shares; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_federated_outgoing_shares; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.federated_outgoing_shares (
+CREATE TABLE public.drive_federated_outgoing_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     collection_id uuid NOT NULL,
-    sharer_user_id uuid NOT NULL,
+    sharer_account_id uuid NOT NULL,
     recipient_username text NOT NULL,
-    recipient_domain text NOT NULL,
+    recipient_server text NOT NULL,
     named_share_envelope text NOT NULL,
     capability_hash text NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
@@ -1932,14 +1932,14 @@ CREATE TABLE public.federated_outgoing_shares (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     recipient_incarnation_id character(64) NOT NULL,
     recipient_account_id uuid NOT NULL,
-    CONSTRAINT federated_outgoing_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federated_outgoing_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
-    CONSTRAINT federated_outgoing_shares_recipient_domain_check CHECK ((recipient_domain = lower(recipient_domain))),
-    CONSTRAINT federated_outgoing_shares_recipient_domain_check1 CHECK (((length(recipient_domain) >= 3) AND (length(recipient_domain) <= 253))),
-    CONSTRAINT federated_outgoing_shares_recipient_domain_check2 CHECK ((recipient_domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT federated_outgoing_shares_recipient_incarnation_check CHECK ((recipient_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federated_outgoing_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
-    CONSTRAINT federated_outgoing_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0)))
+    CONSTRAINT drive_federated_outgoing_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_outgoing_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
+    CONSTRAINT drive_federated_outgoing_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
+    CONSTRAINT drive_federated_outgoing_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
+    CONSTRAINT drive_federated_outgoing_shares_recipient_server_check2 CHECK ((recipient_server ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
+    CONSTRAINT drive_federated_outgoing_shares_recipient_incarnation_check CHECK ((recipient_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_federated_outgoing_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
+    CONSTRAINT drive_federated_outgoing_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0)))
 );
 
 
@@ -2076,7 +2076,7 @@ CREATE TABLE public.federation_outbox (
     destination text NOT NULL,
     sequence bigint,
     idempotency_key text NOT NULL,
-    sender_user_id uuid,
+    sender_account_id uuid,
     recipient_account_id uuid,
     payload jsonb NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
@@ -2202,14 +2202,14 @@ CREATE TABLE public.federation_sequences (
 
 CREATE TABLE public.feedback (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid,
+    account_id uuid,
     kind text NOT NULL,
     app text NOT NULL,
     message text NOT NULL,
     details jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     resolved_at timestamp with time zone,
-    resolved_by uuid,
+    resolved_by_account_id uuid,
     resolution text,
     github_url text,
     CONSTRAINT feedback_app_check CHECK ((char_length(app) <= 32)),
@@ -2223,91 +2223,91 @@ CREATE TABLE public.feedback (
 
 
 --
--- Name: file_assets; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_file_assets; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.file_assets (
+CREATE TABLE public.drive_file_assets (
     file_id uuid NOT NULL,
     asset_id text NOT NULL,
     size_bytes bigint NOT NULL,
-    uploader_user_id uuid NOT NULL,
+    uploader_account_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     key_generation integer NOT NULL,
-    CONSTRAINT file_assets_size_bytes_check CHECK ((size_bytes >= 0))
+    CONSTRAINT drive_file_assets_size_bytes_check CHECK ((size_bytes >= 0))
 );
 
 
 --
--- Name: file_key_history; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_file_key_history; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.file_key_history (
+CREATE TABLE public.drive_file_key_history (
     file_id uuid NOT NULL,
     generation integer NOT NULL,
     previous_key_envelope text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     previous_metadata_envelope text,
     previous_metadata_revision bigint,
-    CONSTRAINT file_key_history_generation_check CHECK ((generation > 1))
+    CONSTRAINT drive_file_key_history_generation_check CHECK ((generation > 1))
 );
 
 
 --
--- Name: file_sender_floors; Type: TABLE; Schema: public; Owner: -
+-- Name: collab_sender_floors; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.file_sender_floors (
+CREATE TABLE public.collab_sender_floors (
     file_id uuid NOT NULL,
-    sender_domain text NOT NULL,
-    sender_account uuid NOT NULL,
-    sender_device integer NOT NULL,
+    sender_server text NOT NULL,
+    sender_account_id uuid NOT NULL,
+    sender_device_id integer NOT NULL,
     seq_prefix bigint NOT NULL,
     sender_seq bigint NOT NULL
 );
 
 
 --
--- Name: file_shares; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_file_shares; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.file_shares (
+CREATE TABLE public.drive_file_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     file_id uuid NOT NULL,
-    sharer_user_id uuid NOT NULL,
-    recipient_user_id uuid NOT NULL,
+    sharer_account_id uuid NOT NULL,
+    recipient_account_id uuid NOT NULL,
     share_envelope text NOT NULL,
     key_generation integer NOT NULL,
     can_edit boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT file_shares_check CHECK ((sharer_user_id <> recipient_user_id)),
-    CONSTRAINT file_shares_key_generation_check CHECK ((key_generation > 0)),
-    CONSTRAINT file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096))
+    CONSTRAINT drive_file_shares_check CHECK ((sharer_account_id <> recipient_account_id)),
+    CONSTRAINT drive_file_shares_key_generation_check CHECK ((key_generation > 0)),
+    CONSTRAINT drive_file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096))
 );
 
 
 --
--- Name: file_thumbnails; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_file_thumbnails; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.file_thumbnails (
+CREATE TABLE public.drive_file_thumbnails (
     file_id uuid NOT NULL,
     variant text NOT NULL,
     size_bytes bigint NOT NULL,
     s3_version_id text DEFAULT ''::text NOT NULL,
     source_version uuid,
-    uploader_user_id uuid NOT NULL,
+    uploader_account_id uuid NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     key_generation integer NOT NULL,
-    CONSTRAINT file_thumbnails_size_bytes_check CHECK ((size_bytes > 0)),
-    CONSTRAINT file_thumbnails_variant_check CHECK ((variant = ANY (ARRAY['sm'::text, 'lg'::text])))
+    CONSTRAINT drive_file_thumbnails_size_bytes_check CHECK ((size_bytes > 0)),
+    CONSTRAINT drive_file_thumbnails_variant_check CHECK ((variant = ANY (ARRAY['sm'::text, 'lg'::text])))
 );
 
 
 --
--- Name: file_update_log; Type: TABLE; Schema: public; Owner: -
+-- Name: collab_update_log; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.file_update_log (
+CREATE TABLE public.collab_update_log (
     file_id uuid NOT NULL,
     seq bigint NOT NULL,
     doc_key_id bigint NOT NULL,
@@ -2315,24 +2315,24 @@ CREATE TABLE public.file_update_log (
     frame bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     sender_seq bigint DEFAULT 0 NOT NULL,
-    sender_domain text DEFAULT ''::text NOT NULL,
-    sender_account uuid NOT NULL,
-    sender_device integer NOT NULL,
-    CONSTRAINT file_update_log_sender_device_check CHECK (((sender_device >= 1) AND (sender_device <= 127)))
+    sender_server text DEFAULT ''::text NOT NULL,
+    sender_account_id uuid NOT NULL,
+    sender_device_id integer NOT NULL,
+    CONSTRAINT collab_update_log_sender_device_id_check CHECK (((sender_device_id >= 1) AND (sender_device_id <= 127)))
 );
 
 
 --
--- Name: file_versions; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_file_versions; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.file_versions (
+CREATE TABLE public.drive_file_versions (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     file_id uuid NOT NULL,
     storage_path text NOT NULL,
     seq_at_snapshot bigint NOT NULL,
     doc_key_id bigint NOT NULL,
-    author_user_id uuid NOT NULL,
+    author_account_id uuid NOT NULL,
     size_bytes bigint NOT NULL,
     label text,
     keep_forever boolean DEFAULT false NOT NULL,
@@ -2345,19 +2345,19 @@ CREATE TABLE public.file_versions (
     remote_author_account_id uuid,
     blob_suite smallint DEFAULT 2 NOT NULL,
     revision_content_envelope text,
-    CONSTRAINT file_versions_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'yjs'::text]))),
-    CONSTRAINT file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL)))
+    CONSTRAINT drive_file_versions_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'yjs'::text]))),
+    CONSTRAINT drive_file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL)))
 );
 
 
 --
--- Name: files; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_files; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.files (
+CREATE TABLE public.drive_files (
     id uuid NOT NULL,
     collection_id uuid NOT NULL,
-    uploader_user_id uuid NOT NULL,
+    uploader_account_id uuid NOT NULL,
     metadata_envelope text NOT NULL,
     file_key_envelope text NOT NULL,
     key_epoch integer NOT NULL,
@@ -2382,14 +2382,14 @@ CREATE TABLE public.files (
     content_revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
     blob_suite smallint DEFAULT 2 NOT NULL,
     revision_content_envelope text,
-    CONSTRAINT files_ciphertext_sha256_check CHECK (((ciphertext_sha256 IS NULL) OR (ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT files_collab_log_floor_check CHECK ((collab_log_floor >= 0)),
-    CONSTRAINT files_content_hash_check CHECK ((content_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT files_key_epoch_check CHECK ((key_epoch > 0)),
-    CONSTRAINT files_key_generation CHECK ((key_generation > 0)),
-    CONSTRAINT files_metadata_revision_check CHECK ((metadata_revision > 0)),
-    CONSTRAINT files_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT files_original_key_generation CHECK ((original_key_generation > 0))
+    CONSTRAINT drive_files_ciphertext_sha256_check CHECK (((ciphertext_sha256 IS NULL) OR (ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT drive_files_collab_log_floor_check CHECK ((collab_log_floor >= 0)),
+    CONSTRAINT drive_files_content_hash_check CHECK ((content_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_files_key_epoch_check CHECK ((key_epoch > 0)),
+    CONSTRAINT drive_files_key_generation CHECK ((key_generation > 0)),
+    CONSTRAINT drive_files_metadata_revision_check CHECK ((metadata_revision > 0)),
+    CONSTRAINT drive_files_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_files_original_key_generation CHECK ((original_key_generation > 0))
 );
 
 
@@ -2416,7 +2416,7 @@ CREATE TABLE public.legal_documents (
     sha256 bytea NOT NULL,
     required_at_signup boolean DEFAULT false NOT NULL,
     published_at timestamp with time zone DEFAULT now() NOT NULL,
-    published_by uuid,
+    published_by_account_id uuid,
     CONSTRAINT legal_documents_kind_check CHECK ((kind ~ '^[a-z][a-z0-9_]{0,39}$'::text)),
     CONSTRAINT legal_documents_language_check CHECK ((language ~ '^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$'::text)),
     CONSTRAINT legal_documents_sha256_check CHECK ((octet_length(sha256) = 32)),
@@ -2426,10 +2426,10 @@ CREATE TABLE public.legal_documents (
 
 
 --
--- Name: live_location_streams; Type: TABLE; Schema: public; Owner: -
+-- Name: chat_live_location_streams; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.live_location_streams (
+CREATE TABLE public.chat_live_location_streams (
     stream_id bytea NOT NULL,
     write_verifier bytea NOT NULL,
     read_verifier bytea NOT NULL,
@@ -2438,12 +2438,12 @@ CREATE TABLE public.live_location_streams (
     updated_at timestamp with time zone,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    creator_user_id uuid NOT NULL,
-    CONSTRAINT live_location_streams_counter_check CHECK ((counter >= 0)),
-    CONSTRAINT live_location_streams_read_verifier_check CHECK ((octet_length(read_verifier) = 32)),
-    CONSTRAINT live_location_streams_stream_id_check CHECK ((octet_length(stream_id) = 16)),
-    CONSTRAINT live_location_streams_update_bytes_check CHECK (((update_bytes IS NULL) OR (octet_length(update_bytes) = 88))),
-    CONSTRAINT live_location_streams_write_verifier_check CHECK ((octet_length(write_verifier) = 32))
+    created_by_account_id uuid NOT NULL,
+    CONSTRAINT chat_live_location_streams_counter_check CHECK ((counter >= 0)),
+    CONSTRAINT chat_live_location_streams_read_verifier_check CHECK ((octet_length(read_verifier) = 32)),
+    CONSTRAINT chat_live_location_streams_stream_id_check CHECK ((octet_length(stream_id) = 16)),
+    CONSTRAINT chat_live_location_streams_update_bytes_check CHECK (((update_bytes IS NULL) OR (octet_length(update_bytes) = 88))),
+    CONSTRAINT chat_live_location_streams_write_verifier_check CHECK ((octet_length(write_verifier) = 32))
 );
 
 
@@ -2479,7 +2479,7 @@ CREATE TABLE public.mail_address_keys (
 
 CREATE TABLE public.mail_addresses (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid,
+    account_id uuid,
     address text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     group_id uuid,
@@ -2495,7 +2495,7 @@ END) STORED NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
     disabled_at timestamp with time zone,
     CONSTRAINT mail_addresses_address_check CHECK (((address = lower(address)) AND ((length(address) >= 3) AND (length(address) <= 320)))),
-    CONSTRAINT mail_addresses_owner CHECK (((user_id IS NULL) <> (group_id IS NULL))),
+    CONSTRAINT mail_addresses_owner CHECK (((account_id IS NULL) <> (group_id IS NULL))),
     CONSTRAINT mail_addresses_state_check CHECK ((state = ANY (ARRAY['active'::text, 'receiving'::text, 'closed'::text, 'freed'::text])))
 );
 
@@ -2505,7 +2505,7 @@ END) STORED NOT NULL,
 --
 
 CREATE TABLE public.mail_auto_replies (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     enabled boolean DEFAULT false NOT NULL,
     repeat text NOT NULL,
     zone text NOT NULL,
@@ -2532,7 +2532,7 @@ CREATE TABLE public.mail_auto_replies (
 --
 
 CREATE TABLE public.mail_auto_reply_sent (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     sent_at timestamp with time zone DEFAULT now() NOT NULL,
     sender_hash bytea NOT NULL,
     CONSTRAINT mail_auto_reply_sent_sender_hash_check CHECK ((octet_length(sender_hash) = 32))
@@ -2544,7 +2544,7 @@ CREATE TABLE public.mail_auto_reply_sent (
 --
 
 CREATE TABLE public.mail_change_floors (
-    owner uuid NOT NULL,
+    mailbox_owner uuid NOT NULL,
     floor_xid bigint NOT NULL
 );
 
@@ -2575,7 +2575,7 @@ CREATE TABLE public.mail_dkim_keys (
 
 CREATE TABLE public.mail_domain_blocks (
     name text NOT NULL,
-    blocked_by uuid,
+    blocked_by_account_id uuid,
     blocked_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_domain_blocks_name_check CHECK ((name = lower(name)))
 );
@@ -2634,7 +2634,7 @@ CREATE TABLE public.mail_domains (
 CREATE TABLE public.mail_draft_attachments (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     message_id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     object_key text NOT NULL,
     size_bytes bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2648,7 +2648,7 @@ CREATE TABLE public.mail_draft_attachments (
 
 CREATE TABLE public.mail_filter_runs (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     filter_ids uuid[] NOT NULL,
     total integer DEFAULT 0 NOT NULL,
     done integer DEFAULT 0 NOT NULL,
@@ -2665,7 +2665,7 @@ CREATE TABLE public.mail_filter_runs (
 
 CREATE TABLE public.mail_filters (
     id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     name_sealed text NOT NULL,
     enabled boolean DEFAULT true NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
@@ -2688,7 +2688,7 @@ CREATE TABLE public.mail_filters (
 
 CREATE TABLE public.mail_folders (
     id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     parent_id uuid,
     name_sealed text,
     color text NOT NULL,
@@ -2739,7 +2739,7 @@ CREATE TABLE public.mail_forwarding_keys (
 --
 
 CREATE TABLE public.mail_forwarding_quota (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     hour timestamp with time zone DEFAULT date_trunc('hour'::text, now()) NOT NULL,
     created_this_hour integer DEFAULT 0 NOT NULL,
     day date DEFAULT CURRENT_DATE NOT NULL,
@@ -2757,7 +2757,7 @@ CREATE TABLE public.mail_forwarding_quota (
 
 CREATE TABLE public.mail_forwardings (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     forwarder_address_id uuid NOT NULL,
     forwardee_email text NOT NULL,
     forwardee_address_id uuid,
@@ -2821,7 +2821,7 @@ CREATE TABLE public.mail_group_key_lists (
 
 CREATE TABLE public.mail_group_key_shares (
     group_key_id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     share bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     member_incarnation_id text NOT NULL,
@@ -2856,10 +2856,10 @@ CREATE TABLE public.mail_group_keys (
 
 CREATE TABLE public.mail_group_members (
     group_id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     role text NOT NULL,
     can_send_as boolean DEFAULT false NOT NULL,
-    added_by uuid,
+    added_by_account_id uuid,
     added_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_group_members_role_check CHECK ((role = ANY (ARRAY['owner'::text, 'manager'::text, 'member'::text])))
 );
@@ -2903,7 +2903,7 @@ CREATE TABLE public.mail_group_signers (
 CREATE TABLE public.mail_group_signing_shares (
     group_id uuid NOT NULL,
     signer_public_key bytea NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     share bytea NOT NULL,
     member_incarnation_id text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2928,7 +2928,7 @@ CREATE TABLE public.mail_groups (
     storage_quota_bytes bigint NOT NULL,
     storage_used_bytes bigint DEFAULT 0 NOT NULL,
     storage_owner text DEFAULT 'server'::text NOT NULL,
-    created_by uuid,
+    created_by_account_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     needs_new_signer boolean DEFAULT false NOT NULL,
     signature_sealed bytea,
@@ -2963,7 +2963,7 @@ CREATE TABLE public.mail_identities (
 --
 
 CREATE TABLE public.mail_image_senders (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     address text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_image_senders_address_check CHECK (((length(address) >= 3) AND (length(address) <= 320) AND (address = lower(address))))
@@ -2992,7 +2992,7 @@ CREATE TABLE public.mail_key_lists (
 
 CREATE TABLE public.mail_labels (
     id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     name_sealed text NOT NULL,
     color text NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
@@ -3017,7 +3017,7 @@ CREATE TABLE public.mail_message_labels (
 --
 
 CREATE TABLE public.mail_message_tombstones (
-    owner uuid NOT NULL,
+    mailbox_owner uuid NOT NULL,
     id uuid NOT NULL,
     received_at timestamp with time zone NOT NULL,
     change_xid bigint NOT NULL,
@@ -3031,7 +3031,7 @@ CREATE TABLE public.mail_message_tombstones (
 
 CREATE TABLE public.mail_messages (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid,
+    account_id uuid,
     address_id uuid NOT NULL,
     thread_id uuid NOT NULL,
     direction text NOT NULL,
@@ -3048,9 +3048,9 @@ CREATE TABLE public.mail_messages (
     attachment_count integer DEFAULT 0 NOT NULL,
     group_id uuid,
     key_packet bytea,
-    owner uuid GENERATED ALWAYS AS (COALESCE(user_id, group_id)) STORED,
-    sent_by uuid,
-    sender_account uuid GENERATED ALWAYS AS (COALESCE(sent_by, user_id)) STORED,
+    mailbox_owner uuid GENERATED ALWAYS AS (COALESCE(account_id, group_id)) STORED,
+    sent_by_account_id uuid,
+    sender_account_id uuid GENERATED ALWAYS AS (COALESCE(sent_by_account_id, account_id)) STORED,
     custom_folder uuid,
     folder_changed_at timestamp with time zone DEFAULT now() NOT NULL,
     unsubscribed boolean DEFAULT false NOT NULL,
@@ -3074,7 +3074,7 @@ CREATE TABLE public.mail_messages (
     CONSTRAINT mail_messages_in_reply_to_hash_check CHECK ((octet_length(in_reply_to_hash) = 32)),
     CONSTRAINT mail_messages_key_packet_check CHECK (((octet_length(key_packet) >= 1) AND (octet_length(key_packet) <= 4096))),
     CONSTRAINT mail_messages_message_id_hash_check CHECK ((octet_length(message_id_hash) = 32)),
-    CONSTRAINT mail_messages_owner CHECK (((user_id IS NOT NULL) OR (group_id IS NOT NULL))),
+    CONSTRAINT mail_messages_owner CHECK (((account_id IS NOT NULL) OR (group_id IS NOT NULL))),
     CONSTRAINT mail_messages_protection_check CHECK ((protection = ANY (ARRAY['zero_access'::text, 'end_to_end'::text]))),
     CONSTRAINT mail_messages_references_hashes_check CHECK ((cardinality(references_hashes) <= 50)),
     CONSTRAINT mail_messages_search_tokens_check CHECK ((cardinality(search_tokens) <= 4000)),
@@ -3088,7 +3088,7 @@ CREATE TABLE public.mail_messages (
 
 CREATE TABLE public.mail_outbox (
     id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     draft_id uuid NOT NULL,
     is_admin boolean NOT NULL,
     deliver_at timestamp with time zone NOT NULL,
@@ -3109,7 +3109,7 @@ CREATE TABLE public.mail_outbox (
 
 CREATE TABLE public.mail_sender_rules (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     pattern text NOT NULL,
     kind text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -3124,7 +3124,7 @@ CREATE TABLE public.mail_sender_rules (
 
 CREATE TABLE public.mail_sending_events (
     id bigint NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     kind text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_sending_events_kind_check CHECK ((kind = ANY (ARRAY['bounce'::text, 'spam_refused'::text])))
@@ -3155,7 +3155,7 @@ ALTER SEQUENCE public.mail_sending_events_id_seq OWNED BY public.mail_sending_ev
 --
 
 CREATE TABLE public.mail_sending_policies (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     per_hour integer,
     per_day integer,
     paused_at timestamp with time zone,
@@ -3175,7 +3175,7 @@ CREATE TABLE public.mail_sending_policies (
 --
 
 CREATE TABLE public.mail_settings (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     auto_delete_days integer DEFAULT 0 NOT NULL,
     almost_all_mail boolean DEFAULT false NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -3224,7 +3224,7 @@ CREATE TABLE public.mail_settings (
 CREATE TABLE public.opaque_login_states (
     login_id uuid NOT NULL,
     canonical_name text NOT NULL,
-    user_id uuid,
+    account_id uuid,
     purpose text NOT NULL,
     session_id uuid,
     grant_for text,
@@ -3236,7 +3236,7 @@ CREATE TABLE public.opaque_login_states (
     sealed_state bytea NOT NULL,
     credential_epoch bytea,
     expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT opaque_login_states_check CHECK (((purpose = 'reauth'::text) = ((session_id IS NOT NULL) AND (grant_for IS NOT NULL) AND (user_id IS NOT NULL)))),
+    CONSTRAINT opaque_login_states_check CHECK (((purpose = 'reauth'::text) = ((session_id IS NOT NULL) AND (grant_for IS NOT NULL) AND (account_id IS NOT NULL)))),
     CONSTRAINT opaque_login_states_check1 CHECK (((ceiling_account IS NULL) = (ceiling_source IS NULL))),
     CONSTRAINT opaque_login_states_credential_epoch_check CHECK (((credential_epoch IS NULL) OR (length(credential_epoch) = 16))),
     CONSTRAINT opaque_login_states_grant_for_check CHECK ((grant_for = ANY (ARRAY['pass'::text, 'passwordChange'::text, 'totp'::text, 'adminReset'::text, 'verify'::text, 'rename'::text, 'close'::text, 'masterKeyRotation'::text]))),
@@ -3280,7 +3280,7 @@ CREATE TABLE public.organization_key_shares (
     account_id uuid NOT NULL,
     sealed_share bytea,
     envelope bytea,
-    granted_by uuid,
+    granted_by_account_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT organization_key_shares_check CHECK (((sealed_share IS NULL) <> (envelope IS NULL)))
 );
@@ -3329,7 +3329,7 @@ CREATE TABLE public.organization_members (
     created_by_org boolean DEFAULT false NOT NULL,
     private boolean DEFAULT true NOT NULL,
     org_key_state smallint DEFAULT 0 NOT NULL,
-    invited_by uuid,
+    invited_by_account_id uuid,
     invited_at timestamp with time zone,
     joined_at timestamp with time zone,
     CONSTRAINT organization_members_check CHECK (((state = 2) = ((invited_at IS NOT NULL) AND (joined_at IS NULL)))),
@@ -3374,7 +3374,7 @@ CREATE TABLE public.organizations (
 
 CREATE TABLE public.pass_pin_failures (
     sign_in_id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     failures smallint NOT NULL
 );
 
@@ -3384,7 +3384,7 @@ CREATE TABLE public.pass_pin_failures (
 --
 
 CREATE TABLE public.pass_pins (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     pin_hash text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -3395,7 +3395,7 @@ CREATE TABLE public.pass_pins (
 --
 
 CREATE TABLE public.pass_settings (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     site_icons text DEFAULT 'kutup'::text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT pass_settings_site_icons_check CHECK ((site_icons = ANY (ARRAY['kutup'::text, 'off'::text])))
@@ -3407,7 +3407,7 @@ CREATE TABLE public.pass_settings (
 --
 
 CREATE TABLE public.photos_library_folders (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     collection_id uuid NOT NULL,
     added_at timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -3418,17 +3418,17 @@ CREATE TABLE public.photos_library_folders (
 --
 
 CREATE TABLE public.photos_preferences (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     upload_folder_id uuid,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
 --
--- Name: public_link_reports; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_public_link_reports; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.public_link_reports (
+CREATE TABLE public.drive_public_link_reports (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     share_id uuid NOT NULL,
     reason text NOT NULL,
@@ -3436,29 +3436,29 @@ CREATE TABLE public.public_link_reports (
     link text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     resolved_at timestamp with time zone,
-    resolved_by uuid,
+    resolved_by_account_id uuid,
     resolution text,
-    CONSTRAINT public_link_reports_check CHECK (((resolved_at IS NULL) = (resolution IS NULL))),
-    CONSTRAINT public_link_reports_check1 CHECK (((resolved_at IS NULL) OR (link IS NULL))),
-    CONSTRAINT public_link_reports_details_check CHECK ((char_length(details) <= 2000)),
-    CONSTRAINT public_link_reports_link_check CHECK (((link IS NULL) OR (char_length(link) <= 2048))),
-    CONSTRAINT public_link_reports_reason_check CHECK ((reason = ANY (ARRAY['phishing'::text, 'malware'::text, 'illegal'::text, 'abuse'::text, 'other'::text]))),
-    CONSTRAINT public_link_reports_resolution_check CHECK ((resolution = ANY (ARRAY['dismissed'::text, 'removed'::text, 'disabled'::text, 'blocked'::text])))
+    CONSTRAINT drive_public_link_reports_check CHECK (((resolved_at IS NULL) = (resolution IS NULL))),
+    CONSTRAINT drive_public_link_reports_check1 CHECK (((resolved_at IS NULL) OR (link IS NULL))),
+    CONSTRAINT drive_public_link_reports_details_check CHECK ((char_length(details) <= 2000)),
+    CONSTRAINT drive_public_link_reports_link_check CHECK (((link IS NULL) OR (char_length(link) <= 2048))),
+    CONSTRAINT drive_public_link_reports_reason_check CHECK ((reason = ANY (ARRAY['phishing'::text, 'malware'::text, 'illegal'::text, 'abuse'::text, 'other'::text]))),
+    CONSTRAINT drive_public_link_reports_resolution_check CHECK ((resolution = ANY (ARRAY['dismissed'::text, 'removed'::text, 'disabled'::text, 'blocked'::text])))
 );
 
 
 --
--- Name: public_shares; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_public_shares; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.public_shares (
+CREATE TABLE public.drive_public_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     share_type text NOT NULL,
     target_id uuid NOT NULL,
     token text NOT NULL,
     collection_key_envelope text NOT NULL,
     collection_key_epoch integer NOT NULL,
-    owner_user_id uuid NOT NULL,
+    owner_account_id uuid NOT NULL,
     expires_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     owner_link_key_envelope text NOT NULL,
@@ -3466,13 +3466,13 @@ CREATE TABLE public.public_shares (
     blocked_at timestamp with time zone,
     blocked_reason text,
     blocked_reference text,
-    blocked_by uuid,
+    blocked_by_account_id uuid,
     owner_removed_at timestamp with time zone,
-    CONSTRAINT public_shares_blocked CHECK ((((blocked_at IS NULL) = (blocked_reason IS NULL)) AND ((blocked_at IS NOT NULL) OR ((blocked_reference IS NULL) AND (blocked_by IS NULL))) AND ((owner_removed_at IS NULL) OR (blocked_at IS NOT NULL)))),
-    CONSTRAINT public_shares_blocked_reason_check CHECK ((blocked_reason = ANY (ARRAY['legal_order'::text, 'abuse'::text, 'other'::text]))),
-    CONSTRAINT public_shares_blocked_reference_check CHECK (((char_length(blocked_reference) >= 1) AND (char_length(blocked_reference) <= 200))),
-    CONSTRAINT public_shares_collection_key_epoch_check CHECK ((collection_key_epoch > 0)),
-    CONSTRAINT public_shares_share_type_check CHECK ((share_type = ANY (ARRAY['collection'::text, 'file'::text])))
+    CONSTRAINT drive_public_shares_blocked CHECK ((((blocked_at IS NULL) = (blocked_reason IS NULL)) AND ((blocked_at IS NOT NULL) OR ((blocked_reference IS NULL) AND (blocked_by_account_id IS NULL))) AND ((owner_removed_at IS NULL) OR (blocked_at IS NOT NULL)))),
+    CONSTRAINT drive_public_shares_blocked_reason_check CHECK ((blocked_reason = ANY (ARRAY['legal_order'::text, 'abuse'::text, 'other'::text]))),
+    CONSTRAINT drive_public_shares_blocked_reference_check CHECK (((char_length(blocked_reference) >= 1) AND (char_length(blocked_reference) <= 200))),
+    CONSTRAINT drive_public_shares_collection_key_epoch_check CHECK ((collection_key_epoch > 0)),
+    CONSTRAINT drive_public_shares_share_type_check CHECK ((share_type = ANY (ARRAY['collection'::text, 'file'::text])))
 );
 
 
@@ -3482,7 +3482,7 @@ CREATE TABLE public.public_shares (
 
 CREATE TABLE public.registration_code_uses (
     code_id uuid NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     used_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -3496,13 +3496,13 @@ CREATE TABLE public.registration_codes (
     code_hash bytea NOT NULL,
     hint text NOT NULL,
     note text DEFAULT ''::text NOT NULL,
-    created_by uuid,
+    created_by_account_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone,
     max_uses integer,
     uses integer DEFAULT 0 NOT NULL,
     revoked_at timestamp with time zone,
-    revoked_by uuid,
+    revoked_by_account_id uuid,
     CONSTRAINT registration_codes_check CHECK (((max_uses IS NULL) OR (uses <= max_uses))),
     CONSTRAINT registration_codes_code_hash_check CHECK ((octet_length(code_hash) = 32)),
     CONSTRAINT registration_codes_hint_check CHECK (((length(hint) >= 1) AND (length(hint) <= 8))),
@@ -3573,10 +3573,10 @@ CREATE TABLE public.retired_account_ids (
 
 
 --
--- Name: sealed_sender_generated_certificates; Type: TABLE; Schema: public; Owner: -
+-- Name: chat_sealed_sender_certificates; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.sealed_sender_generated_certificates (
+CREATE TABLE public.chat_sealed_sender_certificates (
     certificate_id bigint NOT NULL,
     root_id text NOT NULL,
     root_public_key text NOT NULL,
@@ -3586,11 +3586,11 @@ CREATE TABLE public.sealed_sender_generated_certificates (
     activates_at bigint NOT NULL,
     expires_at bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT sealed_sender_generated_certificates_certificate_id_check CHECK (((certificate_id > 0) AND (certificate_id <= '4294967295'::bigint))),
-    CONSTRAINT sealed_sender_generated_certificates_check CHECK ((activates_at >= published_at)),
-    CONSTRAINT sealed_sender_generated_certificates_check1 CHECK ((expires_at > activates_at)),
-    CONSTRAINT sealed_sender_generated_certificates_online_private_key_check CHECK ((octet_length(online_private_key) = 32)),
-    CONSTRAINT sealed_sender_generated_certificates_root_id_check CHECK ((root_id ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_sealed_sender_certificates_certificate_id_check CHECK (((certificate_id > 0) AND (certificate_id <= '4294967295'::bigint))),
+    CONSTRAINT chat_sealed_sender_certificates_check CHECK ((activates_at >= published_at)),
+    CONSTRAINT chat_sealed_sender_certificates_check1 CHECK ((expires_at > activates_at)),
+    CONSTRAINT chat_sealed_sender_certificates_online_private_key_check CHECK ((octet_length(online_private_key) = 32)),
+    CONSTRAINT chat_sealed_sender_certificates_root_id_check CHECK ((root_id ~ '^[0-9a-f]{64}$'::text))
 );
 
 
@@ -3658,7 +3658,7 @@ ALTER SEQUENCE public.storage_pending_deletions_id_seq OWNED BY public.storage_p
 --
 
 CREATE TABLE public.two_factor_recovery_codes (
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     code_mac bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT two_factor_recovery_codes_code_mac_check CHECK ((octet_length(code_mac) = 32))
@@ -3666,12 +3666,12 @@ CREATE TABLE public.two_factor_recovery_codes (
 
 
 --
--- Name: uploads; Type: TABLE; Schema: public; Owner: -
+-- Name: drive_uploads; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.uploads (
+CREATE TABLE public.drive_uploads (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     collection_id uuid NOT NULL,
     file_id uuid NOT NULL,
     total_bytes bigint NOT NULL,
@@ -3694,20 +3694,20 @@ CREATE TABLE public.uploads (
     revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
     blob_suite smallint DEFAULT 2 NOT NULL,
     uploaded_at timestamp with time zone,
-    CONSTRAINT uploads_key_epoch_check CHECK ((key_epoch > 0)),
-    CONSTRAINT uploads_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'version'::text]))),
-    CONSTRAINT uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (content_hash ~ '^[0-9a-f]{64}$'::text))))),
-    CONSTRAINT uploads_metadata_revision_check CHECK ((metadata_revision > 0)),
-    CONSTRAINT uploads_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT uploads_uploaded_check CHECK (((uploaded_at IS NULL) OR ((blob_suite = 2) AND (received_bytes = total_bytes))))
+    CONSTRAINT drive_uploads_key_epoch_check CHECK ((key_epoch > 0)),
+    CONSTRAINT drive_uploads_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'version'::text]))),
+    CONSTRAINT drive_uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (content_hash ~ '^[0-9a-f]{64}$'::text))))),
+    CONSTRAINT drive_uploads_metadata_revision_check CHECK ((metadata_revision > 0)),
+    CONSTRAINT drive_uploads_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_uploads_uploaded_check CHECK (((uploaded_at IS NULL) OR ((blob_suite = 2) AND (received_bytes = total_bytes))))
 );
 
 
 --
--- Name: user_devices_revocation_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: account_devices_revocation_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE public.user_devices_revocation_seq
+CREATE SEQUENCE public.account_devices_revocation_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -3716,27 +3716,27 @@ CREATE SEQUENCE public.user_devices_revocation_seq
 
 
 --
--- Name: user_map_preferences; Type: TABLE; Schema: public; Owner: -
+-- Name: account_map_preferences; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.user_map_preferences (
-    user_id uuid NOT NULL,
+CREATE TABLE public.account_map_preferences (
+    account_id uuid NOT NULL,
     enabled boolean DEFAULT false NOT NULL,
     provider text,
     via_proxy boolean DEFAULT true NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     save_folder_id uuid,
-    CONSTRAINT user_map_preferences_provider_check CHECK ((provider = ANY (ARRAY['openfreemap'::text, 'openstreetmap'::text, 'custom'::text])))
+    CONSTRAINT account_map_preferences_provider_check CHECK ((provider = ANY (ARRAY['openfreemap'::text, 'openstreetmap'::text, 'custom'::text])))
 );
 
 
 --
--- Name: user_security_keys; Type: TABLE; Schema: public; Owner: -
+-- Name: account_security_keys; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.user_security_keys (
+CREATE TABLE public.account_security_keys (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     credential_id bytea NOT NULL,
     transports bytea NOT NULL,
     static_state bytea NOT NULL,
@@ -3747,46 +3747,46 @@ CREATE TABLE public.user_security_keys (
     compromised boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     last_used_at timestamp with time zone,
-    CONSTRAINT user_security_keys_aaguid_check CHECK ((octet_length(aaguid) = 16)),
-    CONSTRAINT user_security_keys_credential_id_check CHECK (((octet_length(credential_id) >= 16) AND (octet_length(credential_id) <= 1023))),
-    CONSTRAINT user_security_keys_name_check CHECK (((char_length(name) >= 1) AND (char_length(name) <= 128))),
-    CONSTRAINT user_security_keys_sign_count_check CHECK ((sign_count >= 0)),
-    CONSTRAINT user_security_keys_transports_check CHECK ((octet_length(transports) = 1))
+    CONSTRAINT account_security_keys_aaguid_check CHECK ((octet_length(aaguid) = 16)),
+    CONSTRAINT account_security_keys_credential_id_check CHECK (((octet_length(credential_id) >= 16) AND (octet_length(credential_id) <= 1023))),
+    CONSTRAINT account_security_keys_name_check CHECK (((char_length(name) >= 1) AND (char_length(name) <= 128))),
+    CONSTRAINT account_security_keys_sign_count_check CHECK ((sign_count >= 0)),
+    CONSTRAINT account_security_keys_transports_check CHECK ((octet_length(transports) = 1))
 );
 
 
 --
--- Name: user_setting_overrides; Type: TABLE; Schema: public; Owner: -
+-- Name: account_setting_overrides; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.user_setting_overrides (
-    user_id uuid NOT NULL,
+CREATE TABLE public.account_setting_overrides (
+    account_id uuid NOT NULL,
     key text NOT NULL,
     value bigint NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT user_setting_overrides_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text))
+    CONSTRAINT account_setting_overrides_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text))
 );
 
 
 --
--- Name: user_ui_preferences; Type: TABLE; Schema: public; Owner: -
+-- Name: account_ui_preferences; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.user_ui_preferences (
-    user_id uuid NOT NULL,
+CREATE TABLE public.account_ui_preferences (
+    account_id uuid NOT NULL,
     theme text,
     language text,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT user_ui_preferences_language_check CHECK ((language = ANY (ARRAY['en'::text, 'tr'::text]))),
-    CONSTRAINT user_ui_preferences_theme_check CHECK ((theme = ANY (ARRAY['light'::text, 'dark'::text, 'system'::text])))
+    CONSTRAINT account_ui_preferences_language_check CHECK ((language = ANY (ARRAY['en'::text, 'tr'::text]))),
+    CONSTRAINT account_ui_preferences_theme_check CHECK ((theme = ANY (ARRAY['light'::text, 'dark'::text, 'system'::text])))
 );
 
 
 --
--- Name: users; Type: TABLE; Schema: public; Owner: -
+-- Name: accounts; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.users (
+CREATE TABLE public.accounts (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     master_key_envelope text NOT NULL,
     recovery_key_envelope text NOT NULL,
@@ -3825,7 +3825,7 @@ CREATE TABLE public.users (
     purpose_ended_at timestamp with time zone,
     legal_hold_reference text,
     legal_hold_at timestamp with time zone,
-    legal_hold_by uuid,
+    legal_hold_by_account_id uuid,
     suspended_before_close text,
     deleting_at timestamp with time zone,
     deleting_for text,
@@ -3835,33 +3835,33 @@ CREATE TABLE public.users (
     public_sharing text DEFAULT 'on'::text NOT NULL,
     federation text DEFAULT 'on'::text NOT NULL,
     master_key_generation integer DEFAULT 1 NOT NULL,
-    CONSTRAINT users_account_authority_key_id_check CHECK (((account_authority_key_id = ''::bpchar) OR (account_authority_key_id ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT users_account_incarnation_id_check CHECK (((account_incarnation_id = ''::bpchar) OR (account_incarnation_id ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT users_closing CHECK ((((state = 'closing'::text) = (closing_by IS NOT NULL)) AND ((state = 'closing'::text) = (closes_at IS NOT NULL)))),
-    CONSTRAINT users_closing_by_check CHECK ((closing_by = ANY (ARRAY['user'::text, 'admin'::text, 'restore'::text]))),
-    CONSTRAINT users_color_format CHECK (((color IS NULL) OR (color ~ '^#[0-9a-fA-F]{6}$'::text))),
-    CONSTRAINT users_deleting_for_check CHECK ((deleting_for = ANY (ARRAY['delete'::text, 'reset'::text]))),
-    CONSTRAINT users_deletion_attempts_check CHECK ((deletion_attempts >= 0)),
-    CONSTRAINT users_drive_key_binding_epoch_check CHECK ((drive_key_binding_epoch > 0)),
-    CONSTRAINT users_federation_check CHECK ((federation = ANY (ARRAY['on'::text, 'off'::text]))),
-    CONSTRAINT users_identity_suite_check CHECK ((identity_suite = ANY (ARRAY[1, 2]))),
-    CONSTRAINT users_key_binding_check CHECK ((key_binding ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
-    CONSTRAINT users_legal_hold CHECK ((((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)) AND ((legal_hold_reference IS NOT NULL) OR (legal_hold_by IS NULL)))),
-    CONSTRAINT users_legal_hold_reference_check CHECK (((char_length(legal_hold_reference) >= 1) AND (char_length(legal_hold_reference) <= 200))),
-    CONSTRAINT users_master_key_generation_check CHECK ((master_key_generation > 0)),
-    CONSTRAINT users_opaque_check CHECK ((((opaque_record IS NULL) = (opaque_suite IS NULL)) AND ((opaque_record IS NULL) = (opaque_server_key_id IS NULL)))),
-    CONSTRAINT users_opaque_record_check CHECK (((octet_length(opaque_record) >= 1) AND (octet_length(opaque_record) <= 1024))),
-    CONSTRAINT users_opaque_server_key_id_check CHECK ((opaque_server_key_id > 0)),
-    CONSTRAINT users_opaque_suite_check CHECK ((opaque_suite = 1)),
-    CONSTRAINT users_public_sharing_check CHECK ((public_sharing = ANY (ARRAY['on'::text, 'off'::text]))),
-    CONSTRAINT users_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'closing'::text]))),
-    CONSTRAINT users_suspended_before_close CHECK (((suspended_before_close IS NULL) OR (state = 'closing'::text))),
-    CONSTRAINT users_suspended_before_close_check CHECK ((suspended_before_close = ANY (ARRAY['admin'::text, 'operator_order'::text, 'security'::text]))),
-    CONSTRAINT users_suspended_reason CHECK (((state = 'suspended'::text) = (suspended_reason IS NOT NULL))),
-    CONSTRAINT users_suspended_reason_check CHECK ((suspended_reason = ANY (ARRAY['admin'::text, 'operator_order'::text, 'security'::text]))),
-    CONSTRAINT users_totp_secret_sealed_check CHECK (((totp_secret_sealed IS NULL) OR ((octet_length(totp_secret_sealed) >= 47) AND (octet_length(totp_secret_sealed) <= 200)))),
-    CONSTRAINT users_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
-    CONSTRAINT users_version_retention_days_check CHECK ((version_retention_days = ANY (ARRAY[7, 30, 90, 180, 365, 3650])))
+    CONSTRAINT accounts_account_authority_key_id_check CHECK (((account_authority_key_id = ''::bpchar) OR (account_authority_key_id ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT accounts_account_incarnation_id_check CHECK (((account_incarnation_id = ''::bpchar) OR (account_incarnation_id ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT accounts_closing CHECK ((((state = 'closing'::text) = (closing_by IS NOT NULL)) AND ((state = 'closing'::text) = (closes_at IS NOT NULL)))),
+    CONSTRAINT accounts_closing_by_check CHECK ((closing_by = ANY (ARRAY['user'::text, 'admin'::text, 'restore'::text]))),
+    CONSTRAINT accounts_color_format CHECK (((color IS NULL) OR (color ~ '^#[0-9a-fA-F]{6}$'::text))),
+    CONSTRAINT accounts_deleting_for_check CHECK ((deleting_for = ANY (ARRAY['delete'::text, 'reset'::text]))),
+    CONSTRAINT accounts_deletion_attempts_check CHECK ((deletion_attempts >= 0)),
+    CONSTRAINT accounts_drive_key_binding_epoch_check CHECK ((drive_key_binding_epoch > 0)),
+    CONSTRAINT accounts_federation_check CHECK ((federation = ANY (ARRAY['on'::text, 'off'::text]))),
+    CONSTRAINT accounts_identity_suite_check CHECK ((identity_suite = ANY (ARRAY[1, 2]))),
+    CONSTRAINT accounts_key_binding_check CHECK ((key_binding ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
+    CONSTRAINT accounts_legal_hold CHECK ((((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)) AND ((legal_hold_reference IS NOT NULL) OR (legal_hold_by_account_id IS NULL)))),
+    CONSTRAINT accounts_legal_hold_reference_check CHECK (((char_length(legal_hold_reference) >= 1) AND (char_length(legal_hold_reference) <= 200))),
+    CONSTRAINT accounts_master_key_generation_check CHECK ((master_key_generation > 0)),
+    CONSTRAINT accounts_opaque_check CHECK ((((opaque_record IS NULL) = (opaque_suite IS NULL)) AND ((opaque_record IS NULL) = (opaque_server_key_id IS NULL)))),
+    CONSTRAINT accounts_opaque_record_check CHECK (((octet_length(opaque_record) >= 1) AND (octet_length(opaque_record) <= 1024))),
+    CONSTRAINT accounts_opaque_server_key_id_check CHECK ((opaque_server_key_id > 0)),
+    CONSTRAINT accounts_opaque_suite_check CHECK ((opaque_suite = 1)),
+    CONSTRAINT accounts_public_sharing_check CHECK ((public_sharing = ANY (ARRAY['on'::text, 'off'::text]))),
+    CONSTRAINT accounts_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'closing'::text]))),
+    CONSTRAINT accounts_suspended_before_close CHECK (((suspended_before_close IS NULL) OR (state = 'closing'::text))),
+    CONSTRAINT accounts_suspended_before_close_check CHECK ((suspended_before_close = ANY (ARRAY['admin'::text, 'operator_order'::text, 'security'::text]))),
+    CONSTRAINT accounts_suspended_reason CHECK (((state = 'suspended'::text) = (suspended_reason IS NOT NULL))),
+    CONSTRAINT accounts_suspended_reason_check CHECK ((suspended_reason = ANY (ARRAY['admin'::text, 'operator_order'::text, 'security'::text]))),
+    CONSTRAINT accounts_totp_secret_sealed_check CHECK (((totp_secret_sealed IS NULL) OR ((octet_length(totp_secret_sealed) >= 47) AND (octet_length(totp_secret_sealed) <= 200)))),
+    CONSTRAINT accounts_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
+    CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days = ANY (ARRAY[7, 30, 90, 180, 365, 3650])))
 );
 
 
@@ -3872,7 +3872,7 @@ CREATE TABLE public.users (
 CREATE TABLE public.webauthn_ceremonies (
     challenge bytea NOT NULL,
     kind text NOT NULL,
-    user_id uuid NOT NULL,
+    account_id uuid NOT NULL,
     bound_to bytea NOT NULL,
     state bytea NOT NULL,
     second_factor_proved boolean DEFAULT false NOT NULL,
@@ -3917,7 +3917,7 @@ ALTER TABLE ONLY public.storage_pending_deletions ALTER COLUMN id SET DEFAULT ne
 --
 
 ALTER TABLE ONLY account_keys.account_data_keys
-    ADD CONSTRAINT account_data_keys_pkey PRIMARY KEY (user_id, generation);
+    ADD CONSTRAINT account_data_keys_pkey PRIMARY KEY (account_id, generation);
 
 
 --
@@ -3941,7 +3941,7 @@ ALTER TABLE ONLY account_keys.mail_group_data_keys
 --
 
 ALTER TABLE ONLY public.account_heads
-    ADD CONSTRAINT account_heads_pkey PRIMARY KEY (user_id, sequence);
+    ADD CONSTRAINT account_heads_pkey PRIMARY KEY (account_id, sequence);
 
 
 --
@@ -3965,7 +3965,7 @@ ALTER TABLE ONLY public.account_names
 --
 
 ALTER TABLE ONLY public.account_record_feeds
-    ADD CONSTRAINT account_record_feeds_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT account_record_feeds_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -3973,7 +3973,7 @@ ALTER TABLE ONLY public.account_record_feeds
 --
 
 ALTER TABLE ONLY public.account_record_tombstones
-    ADD CONSTRAINT account_record_tombstones_pkey PRIMARY KEY (user_id, change_seq);
+    ADD CONSTRAINT account_record_tombstones_pkey PRIMARY KEY (account_id, change_seq);
 
 
 --
@@ -3981,7 +3981,7 @@ ALTER TABLE ONLY public.account_record_tombstones
 --
 
 ALTER TABLE ONLY public.account_records
-    ADD CONSTRAINT account_records_pkey PRIMARY KEY (user_id, scope, record_id);
+    ADD CONSTRAINT account_records_pkey PRIMARY KEY (account_id, scope, record_id);
 
 
 --
@@ -3997,7 +3997,7 @@ ALTER TABLE ONLY public.account_renames
 --
 
 ALTER TABLE ONLY public.account_roots
-    ADD CONSTRAINT account_roots_pkey PRIMARY KEY (user_id, purpose, object);
+    ADD CONSTRAINT account_roots_pkey PRIMARY KEY (account_id, purpose, object);
 
 
 --
@@ -4025,11 +4025,11 @@ ALTER TABLE ONLY public.admin_audit_log
 
 
 --
--- Name: album_items album_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: photos_album_items photos_album_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.album_items
-    ADD CONSTRAINT album_items_pkey PRIMARY KEY (album_id, file_id);
+ALTER TABLE ONLY public.photos_album_items
+    ADD CONSTRAINT photos_album_items_pkey PRIMARY KEY (album_id, file_id);
 
 
 --
@@ -4077,7 +4077,7 @@ ALTER TABLE ONLY public.backup_runs
 --
 
 ALTER TABLE ONLY public.calendar_alarm_recomputes
-    ADD CONSTRAINT calendar_alarm_recomputes_pkey PRIMARY KEY (user_id, calendar_id);
+    ADD CONSTRAINT calendar_alarm_recomputes_pkey PRIMARY KEY (account_id, calendar_id);
 
 
 --
@@ -4085,7 +4085,7 @@ ALTER TABLE ONLY public.calendar_alarm_recomputes
 --
 
 ALTER TABLE ONLY public.calendar_alarms
-    ADD CONSTRAINT calendar_alarms_pkey PRIMARY KEY (user_id, event_id, reminder);
+    ADD CONSTRAINT calendar_alarms_pkey PRIMARY KEY (account_id, event_id, reminder);
 
 
 --
@@ -4093,7 +4093,7 @@ ALTER TABLE ONLY public.calendar_alarms
 --
 
 ALTER TABLE ONLY public.calendar_event_reminders
-    ADD CONSTRAINT calendar_event_reminders_pkey PRIMARY KEY (event_id, user_id);
+    ADD CONSTRAINT calendar_event_reminders_pkey PRIMARY KEY (event_id, account_id);
 
 
 --
@@ -4109,7 +4109,7 @@ ALTER TABLE ONLY public.calendar_events
 --
 
 ALTER TABLE ONLY public.calendar_members
-    ADD CONSTRAINT calendar_members_pkey PRIMARY KEY (calendar_id, user_id);
+    ADD CONSTRAINT calendar_members_pkey PRIMARY KEY (calendar_id, account_id);
 
 
 --
@@ -4121,19 +4121,19 @@ ALTER TABLE ONLY public.calendar_push_subscriptions
 
 
 --
--- Name: calendar_push_subscriptions calendar_push_subscriptions_user_id_endpoint_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: calendar_push_subscriptions calendar_push_subscriptions_account_id_endpoint_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendar_push_subscriptions
-    ADD CONSTRAINT calendar_push_subscriptions_user_id_endpoint_key UNIQUE (user_id, endpoint);
+    ADD CONSTRAINT calendar_push_subscriptions_account_id_endpoint_key UNIQUE (account_id, endpoint);
 
 
 --
--- Name: calendar_user_settings calendar_user_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: calendar_account_settings calendar_account_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.calendar_user_settings
-    ADD CONSTRAINT calendar_user_settings_pkey PRIMARY KEY (user_id);
+ALTER TABLE ONLY public.calendar_account_settings
+    ADD CONSTRAINT calendar_account_settings_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -4157,7 +4157,7 @@ ALTER TABLE ONLY public.calendars
 --
 
 ALTER TABLE ONLY public.chat_account_identities
-    ADD CONSTRAINT chat_account_identities_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT chat_account_identities_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -4173,7 +4173,7 @@ ALTER TABLE ONLY public.chat_anonymous_rate_counters
 --
 
 ALTER TABLE ONLY public.chat_anonymous_send_ids
-    ADD CONSTRAINT chat_anonymous_send_ids_pkey PRIMARY KEY (recipient_user_id, capability_hash, send_id);
+    ADD CONSTRAINT chat_anonymous_send_ids_pkey PRIMARY KEY (recipient_account_id, capability_hash, send_id);
 
 
 --
@@ -4181,7 +4181,7 @@ ALTER TABLE ONLY public.chat_anonymous_send_ids
 --
 
 ALTER TABLE ONLY public.chat_backup_bases
-    ADD CONSTRAINT chat_backup_bases_pkey PRIMARY KEY (user_id, object_id);
+    ADD CONSTRAINT chat_backup_bases_pkey PRIMARY KEY (account_id, object_id);
 
 
 --
@@ -4193,11 +4193,11 @@ ALTER TABLE ONLY public.chat_backup_bases
 
 
 --
--- Name: chat_backup_bases chat_backup_bases_user_id_generation_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_bases chat_backup_bases_account_id_generation_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_bases
-    ADD CONSTRAINT chat_backup_bases_user_id_generation_key UNIQUE (user_id, generation);
+    ADD CONSTRAINT chat_backup_bases_account_id_generation_key UNIQUE (account_id, generation);
 
 
 --
@@ -4205,7 +4205,7 @@ ALTER TABLE ONLY public.chat_backup_bases
 --
 
 ALTER TABLE ONLY public.chat_backup_device_heads
-    ADD CONSTRAINT chat_backup_device_heads_pkey PRIMARY KEY (user_id, source_device_id);
+    ADD CONSTRAINT chat_backup_device_heads_pkey PRIMARY KEY (account_id, source_device_id);
 
 
 --
@@ -4213,7 +4213,7 @@ ALTER TABLE ONLY public.chat_backup_device_heads
 --
 
 ALTER TABLE ONLY public.chat_backup_media_objects
-    ADD CONSTRAINT chat_backup_media_objects_pkey PRIMARY KEY (user_id, media_id);
+    ADD CONSTRAINT chat_backup_media_objects_pkey PRIMARY KEY (account_id, media_id);
 
 
 --
@@ -4229,7 +4229,7 @@ ALTER TABLE ONLY public.chat_backup_media_objects
 --
 
 ALTER TABLE ONLY public.chat_backup_media_operations
-    ADD CONSTRAINT chat_backup_media_operations_pkey PRIMARY KEY (user_id, operation_id);
+    ADD CONSTRAINT chat_backup_media_operations_pkey PRIMARY KEY (account_id, operation_id);
 
 
 --
@@ -4237,7 +4237,7 @@ ALTER TABLE ONLY public.chat_backup_media_operations
 --
 
 ALTER TABLE ONLY public.chat_backup_media_reconciliation_entries
-    ADD CONSTRAINT chat_backup_media_reconciliation_entries_pkey PRIMARY KEY (user_id, operation_id, reference_id);
+    ADD CONSTRAINT chat_backup_media_reconciliation_entries_pkey PRIMARY KEY (account_id, operation_id, reference_id);
 
 
 --
@@ -4245,7 +4245,7 @@ ALTER TABLE ONLY public.chat_backup_media_reconciliation_entries
 --
 
 ALTER TABLE ONLY public.chat_backup_media_reconciliation_pages
-    ADD CONSTRAINT chat_backup_media_reconciliation_pages_pkey PRIMARY KEY (user_id, operation_id, page_index);
+    ADD CONSTRAINT chat_backup_media_reconciliation_pages_pkey PRIMARY KEY (account_id, operation_id, page_index);
 
 
 --
@@ -4253,15 +4253,15 @@ ALTER TABLE ONLY public.chat_backup_media_reconciliation_pages
 --
 
 ALTER TABLE ONLY public.chat_backup_media_reconciliations
-    ADD CONSTRAINT chat_backup_media_reconciliations_pkey PRIMARY KEY (user_id, operation_id);
+    ADD CONSTRAINT chat_backup_media_reconciliations_pkey PRIMARY KEY (account_id, operation_id);
 
 
 --
--- Name: chat_backup_media_reconciliations chat_backup_media_reconciliations_user_id_target_generation_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_media_reconciliations chat_backup_media_reconciliations_account_id_target_generation_; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_media_reconciliations
-    ADD CONSTRAINT chat_backup_media_reconciliations_user_id_target_generation_key UNIQUE (user_id, target_generation);
+    ADD CONSTRAINT chat_backup_media_reconciliations_account_id_target_generation_ UNIQUE (account_id, target_generation);
 
 
 --
@@ -4269,7 +4269,7 @@ ALTER TABLE ONLY public.chat_backup_media_reconciliations
 --
 
 ALTER TABLE ONLY public.chat_backup_media_references
-    ADD CONSTRAINT chat_backup_media_references_pkey PRIMARY KEY (user_id, reference_id);
+    ADD CONSTRAINT chat_backup_media_references_pkey PRIMARY KEY (account_id, reference_id);
 
 
 --
@@ -4277,7 +4277,7 @@ ALTER TABLE ONLY public.chat_backup_media_references
 --
 
 ALTER TABLE ONLY public.chat_backup_provision_operations
-    ADD CONSTRAINT chat_backup_provision_operations_pkey PRIMARY KEY (user_id, operation_id);
+    ADD CONSTRAINT chat_backup_provision_operations_pkey PRIMARY KEY (account_id, operation_id);
 
 
 --
@@ -4285,23 +4285,23 @@ ALTER TABLE ONLY public.chat_backup_provision_operations
 --
 
 ALTER TABLE ONLY public.chat_backup_segments
-    ADD CONSTRAINT chat_backup_segments_pkey PRIMARY KEY (user_id, cursor);
+    ADD CONSTRAINT chat_backup_segments_pkey PRIMARY KEY (account_id, cursor);
 
 
 --
--- Name: chat_backup_segments chat_backup_segments_user_id_operation_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.chat_backup_segments
-    ADD CONSTRAINT chat_backup_segments_user_id_operation_id_key UNIQUE (user_id, operation_id);
-
-
---
--- Name: chat_backup_segments chat_backup_segments_user_id_source_device_id_device_sequen_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_segments chat_backup_segments_account_id_operation_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_segments
-    ADD CONSTRAINT chat_backup_segments_user_id_source_device_id_device_sequen_key UNIQUE (user_id, source_device_id, device_sequence);
+    ADD CONSTRAINT chat_backup_segments_account_id_operation_id_key UNIQUE (account_id, operation_id);
+
+
+--
+-- Name: chat_backup_segments chat_backup_segments_account_id_source_device_id_device_sequen_; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chat_backup_segments
+    ADD CONSTRAINT chat_backup_segments_account_id_source_device_id_device_sequen_ UNIQUE (account_id, source_device_id, device_sequence);
 
 
 --
@@ -4317,7 +4317,7 @@ ALTER TABLE ONLY public.chat_backups
 --
 
 ALTER TABLE ONLY public.chat_backups
-    ADD CONSTRAINT chat_backups_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT chat_backups_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -4337,11 +4337,11 @@ ALTER TABLE ONLY public.chat_call_link_seats
 
 
 --
--- Name: chat_call_links chat_call_links_owner_user_id_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_call_links chat_call_links_owner_account_id_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_call_links
-    ADD CONSTRAINT chat_call_links_owner_user_id_nonce_key UNIQUE (owner_user_id, nonce);
+    ADD CONSTRAINT chat_call_links_owner_account_id_nonce_key UNIQUE (owner_account_id, nonce);
 
 
 --
@@ -4357,7 +4357,7 @@ ALTER TABLE ONLY public.chat_call_links
 --
 
 ALTER TABLE ONLY public.chat_delivery_capabilities
-    ADD CONSTRAINT chat_delivery_capabilities_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT chat_delivery_capabilities_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -4365,7 +4365,7 @@ ALTER TABLE ONLY public.chat_delivery_capabilities
 --
 
 ALTER TABLE ONLY public.chat_device_manifest_history
-    ADD CONSTRAINT chat_device_manifest_history_pkey PRIMARY KEY (user_id, incarnation_id, version);
+    ADD CONSTRAINT chat_device_manifest_history_pkey PRIMARY KEY (account_id, incarnation_id, version);
 
 
 --
@@ -4373,7 +4373,7 @@ ALTER TABLE ONLY public.chat_device_manifest_history
 --
 
 ALTER TABLE ONLY public.chat_device_manifests
-    ADD CONSTRAINT chat_device_manifests_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT chat_device_manifests_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -4501,7 +4501,7 @@ ALTER TABLE public.chat_media_objects
 --
 
 ALTER TABLE ONLY public.chat_media_origin_delivery_operations
-    ADD CONSTRAINT chat_media_origin_delivery_operations_pkey PRIMARY KEY (origin_user_id, operation_id);
+    ADD CONSTRAINT chat_media_origin_delivery_operations_pkey PRIMARY KEY (origin_account_id, operation_id);
 
 
 --
@@ -4521,11 +4521,11 @@ ALTER TABLE ONLY public.chat_media_references
 
 
 --
--- Name: chat_media_references chat_media_references_user_id_attachment_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_media_references chat_media_references_account_id_attachment_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_references
-    ADD CONSTRAINT chat_media_references_user_id_attachment_id_key UNIQUE (user_id, attachment_id);
+    ADD CONSTRAINT chat_media_references_account_id_attachment_id_key UNIQUE (account_id, attachment_id);
 
 
 --
@@ -4565,7 +4565,7 @@ ALTER TABLE public.chat_media_uploads
 --
 
 ALTER TABLE ONLY public.chat_multi_send_ids
-    ADD CONSTRAINT chat_multi_send_ids_pkey PRIMARY KEY (user_id, device_id, send_id);
+    ADD CONSTRAINT chat_multi_send_ids_pkey PRIMARY KEY (account_id, device_id, send_id);
 
 
 --
@@ -4573,7 +4573,7 @@ ALTER TABLE ONLY public.chat_multi_send_ids
 --
 
 ALTER TABLE ONLY public.chat_one_time_kyber_pre_keys
-    ADD CONSTRAINT chat_one_time_kyber_pre_keys_pkey PRIMARY KEY (user_id, device_id, key_id);
+    ADD CONSTRAINT chat_one_time_kyber_pre_keys_pkey PRIMARY KEY (account_id, device_id, key_id);
 
 
 --
@@ -4581,7 +4581,7 @@ ALTER TABLE ONLY public.chat_one_time_kyber_pre_keys
 --
 
 ALTER TABLE ONLY public.chat_one_time_pre_keys
-    ADD CONSTRAINT chat_one_time_pre_keys_pkey PRIMARY KEY (user_id, device_id, key_id);
+    ADD CONSTRAINT chat_one_time_pre_keys_pkey PRIMARY KEY (account_id, device_id, key_id);
 
 
 --
@@ -4589,7 +4589,7 @@ ALTER TABLE ONLY public.chat_one_time_pre_keys
 --
 
 ALTER TABLE ONLY public.chat_profiles
-    ADD CONSTRAINT chat_profiles_pkey PRIMARY KEY (user_id, version);
+    ADD CONSTRAINT chat_profiles_pkey PRIMARY KEY (account_id, version);
 
 
 --
@@ -4597,7 +4597,7 @@ ALTER TABLE ONLY public.chat_profiles
 --
 
 ALTER TABLE ONLY public.chat_push_subscriptions
-    ADD CONSTRAINT chat_push_subscriptions_pkey PRIMARY KEY (user_id, device_id);
+    ADD CONSTRAINT chat_push_subscriptions_pkey PRIMARY KEY (account_id, device_id);
 
 
 --
@@ -4605,7 +4605,7 @@ ALTER TABLE ONLY public.chat_push_subscriptions
 --
 
 ALTER TABLE ONLY public.chat_sends
-    ADD CONSTRAINT chat_sends_pkey PRIMARY KEY (sender_user_id, sender_device_id, send_id, delivery_scope);
+    ADD CONSTRAINT chat_sends_pkey PRIMARY KEY (sender_account_id, sender_device_id, send_id, delivery_scope);
 
 
 --
@@ -4633,43 +4633,43 @@ ALTER TABLE ONLY public.chat_zk_server_keys
 
 
 --
--- Name: collection_key_epoch_history collection_key_epoch_history_collection_id_epoch_statement__key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_collection_key_epoch_history drive_collection_key_epoch_history_collection_id_epoch_statemen; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.collection_key_epoch_history
-    ADD CONSTRAINT collection_key_epoch_history_collection_id_epoch_statement__key UNIQUE (collection_id, epoch_statement_hash);
-
-
---
--- Name: collection_key_epoch_history collection_key_epoch_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.collection_key_epoch_history
-    ADD CONSTRAINT collection_key_epoch_history_pkey PRIMARY KEY (collection_id, epoch);
+ALTER TABLE ONLY public.drive_collection_key_epoch_history
+    ADD CONSTRAINT drive_collection_key_epoch_history_collection_id_epoch_statemen UNIQUE (collection_id, epoch_statement_hash);
 
 
 --
--- Name: collection_shares collection_shares_collection_id_recipient_user_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_collection_key_epoch_history drive_collection_key_epoch_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.collection_shares
-    ADD CONSTRAINT collection_shares_collection_id_recipient_user_id_key UNIQUE (collection_id, recipient_user_id);
-
-
---
--- Name: collection_shares collection_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.collection_shares
-    ADD CONSTRAINT collection_shares_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.drive_collection_key_epoch_history
+    ADD CONSTRAINT drive_collection_key_epoch_history_pkey PRIMARY KEY (collection_id, epoch);
 
 
 --
--- Name: collections collections_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_collection_shares drive_collection_shares_collection_id_recipient_account_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.collections
-    ADD CONSTRAINT collections_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.drive_collection_shares
+    ADD CONSTRAINT drive_collection_shares_collection_id_recipient_account_id_key UNIQUE (collection_id, recipient_account_id);
+
+
+--
+-- Name: drive_collection_shares drive_collection_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_collection_shares
+    ADD CONSTRAINT drive_collection_shares_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: drive_collections drive_collections_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_collections
+    ADD CONSTRAINT drive_collections_pkey PRIMARY KEY (id);
 
 
 --
@@ -4689,11 +4689,11 @@ ALTER TABLE ONLY public.consents
 
 
 --
--- Name: contact_emails contact_emails_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: contacts_emails contacts_emails_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.contact_emails
-    ADD CONSTRAINT contact_emails_pkey PRIMARY KEY (contact_id, address);
+ALTER TABLE ONLY public.contacts_emails
+    ADD CONSTRAINT contacts_emails_pkey PRIMARY KEY (contact_id, address);
 
 
 --
@@ -4705,27 +4705,27 @@ ALTER TABLE ONLY public.contacts
 
 
 --
--- Name: contacts contacts_user_id_uid_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: contacts contacts_account_id_uid_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.contacts
-    ADD CONSTRAINT contacts_user_id_uid_key UNIQUE (user_id, uid);
+    ADD CONSTRAINT contacts_account_id_uid_key UNIQUE (account_id, uid);
 
 
 --
--- Name: device_tickets device_tickets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: account_device_tickets account_device_tickets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.device_tickets
-    ADD CONSTRAINT device_tickets_pkey PRIMARY KEY (token_hash);
+ALTER TABLE ONLY public.account_device_tickets
+    ADD CONSTRAINT account_device_tickets_pkey PRIMARY KEY (token_hash);
 
 
 --
--- Name: devices devices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: account_devices account_devices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.devices
-    ADD CONSTRAINT devices_pkey PRIMARY KEY (user_id, device_id);
+ALTER TABLE ONLY public.account_devices
+    ADD CONSTRAINT account_devices_pkey PRIMARY KEY (account_id, device_id);
 
 
 --
@@ -4733,7 +4733,7 @@ ALTER TABLE ONLY public.devices
 --
 
 ALTER TABLE ONLY public.document_acknowledgements
-    ADD CONSTRAINT document_acknowledgements_pkey PRIMARY KEY (user_id, document_id);
+    ADD CONSTRAINT document_acknowledgements_pkey PRIMARY KEY (account_id, document_id);
 
 
 --
@@ -4749,71 +4749,71 @@ ALTER TABLE ONLY public.drive_federation_mutations
 --
 
 ALTER TABLE ONLY public.drive_profile_keys
-    ADD CONSTRAINT drive_profile_keys_pkey PRIMARY KEY (user_id, direction, peer_server, peer_account_id);
+    ADD CONSTRAINT drive_profile_keys_pkey PRIMARY KEY (account_id, direction, peer_server, peer_account_id);
 
 
 --
--- Name: federated_incoming_file_shares federated_incoming_file_share_user_id_remote_domain_capabil_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_federated_incoming_file_shares federated_incoming_file_share_account_id_owner_server_capabil_k; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.federated_incoming_file_shares
-    ADD CONSTRAINT federated_incoming_file_share_user_id_remote_domain_capabil_key UNIQUE (user_id, remote_domain, capability_hash);
-
-
---
--- Name: federated_incoming_file_shares federated_incoming_file_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.federated_incoming_file_shares
-    ADD CONSTRAINT federated_incoming_file_shares_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.drive_federated_incoming_file_shares
+    ADD CONSTRAINT federated_incoming_file_share_account_id_owner_server_capabil_k UNIQUE (account_id, owner_server, capability_hash);
 
 
 --
--- Name: federated_incoming_shares federated_incoming_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_federated_incoming_file_shares drive_federated_incoming_file_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.federated_incoming_shares
-    ADD CONSTRAINT federated_incoming_shares_pkey PRIMARY KEY (id);
-
-
---
--- Name: federated_incoming_shares federated_incoming_shares_user_id_remote_domain_capability__key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.federated_incoming_shares
-    ADD CONSTRAINT federated_incoming_shares_user_id_remote_domain_capability__key UNIQUE (user_id, remote_domain, capability_hash);
+ALTER TABLE ONLY public.drive_federated_incoming_file_shares
+    ADD CONSTRAINT drive_federated_incoming_file_shares_pkey PRIMARY KEY (id);
 
 
 --
--- Name: federated_outgoing_file_shares federated_outgoing_file_shares_capability_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_federated_incoming_shares drive_federated_incoming_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.federated_outgoing_file_shares
-    ADD CONSTRAINT federated_outgoing_file_shares_capability_hash_key UNIQUE (capability_hash);
-
-
---
--- Name: federated_outgoing_file_shares federated_outgoing_file_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.federated_outgoing_file_shares
-    ADD CONSTRAINT federated_outgoing_file_shares_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.drive_federated_incoming_shares
+    ADD CONSTRAINT drive_federated_incoming_shares_pkey PRIMARY KEY (id);
 
 
 --
--- Name: federated_outgoing_shares federated_outgoing_shares_capability_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_federated_incoming_shares drive_federated_incoming_shares_account_id_owner_server_capabil; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.federated_outgoing_shares
-    ADD CONSTRAINT federated_outgoing_shares_capability_hash_key UNIQUE (capability_hash);
+ALTER TABLE ONLY public.drive_federated_incoming_shares
+    ADD CONSTRAINT drive_federated_incoming_shares_account_id_owner_server_capabil UNIQUE (account_id, owner_server, capability_hash);
 
 
 --
--- Name: federated_outgoing_shares federated_outgoing_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_federated_outgoing_file_shares drive_federated_outgoing_file_shares_capability_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.federated_outgoing_shares
-    ADD CONSTRAINT federated_outgoing_shares_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
+    ADD CONSTRAINT drive_federated_outgoing_file_shares_capability_hash_key UNIQUE (capability_hash);
+
+
+--
+-- Name: drive_federated_outgoing_file_shares drive_federated_outgoing_file_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
+    ADD CONSTRAINT drive_federated_outgoing_file_shares_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: drive_federated_outgoing_shares drive_federated_outgoing_shares_capability_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_outgoing_shares
+    ADD CONSTRAINT drive_federated_outgoing_shares_capability_hash_key UNIQUE (capability_hash);
+
+
+--
+-- Name: drive_federated_outgoing_shares drive_federated_outgoing_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_outgoing_shares
+    ADD CONSTRAINT drive_federated_outgoing_shares_pkey PRIMARY KEY (id);
 
 
 --
@@ -4961,107 +4961,107 @@ ALTER TABLE ONLY public.feedback
 
 
 --
--- Name: file_assets file_assets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_assets drive_file_assets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_assets
-    ADD CONSTRAINT file_assets_pkey PRIMARY KEY (file_id, asset_id);
-
-
---
--- Name: file_key_history file_key_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.file_key_history
-    ADD CONSTRAINT file_key_history_pkey PRIMARY KEY (file_id, generation);
+ALTER TABLE ONLY public.drive_file_assets
+    ADD CONSTRAINT drive_file_assets_pkey PRIMARY KEY (file_id, asset_id);
 
 
 --
--- Name: file_sender_floors file_sender_floors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_key_history drive_file_key_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_sender_floors
-    ADD CONSTRAINT file_sender_floors_pkey PRIMARY KEY (file_id, sender_domain, sender_account, sender_device, seq_prefix);
-
-
---
--- Name: file_shares file_shares_file_id_recipient_user_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.file_shares
-    ADD CONSTRAINT file_shares_file_id_recipient_user_id_key UNIQUE (file_id, recipient_user_id);
+ALTER TABLE ONLY public.drive_file_key_history
+    ADD CONSTRAINT drive_file_key_history_pkey PRIMARY KEY (file_id, generation);
 
 
 --
--- Name: file_shares file_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: collab_sender_floors collab_sender_floors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_shares
-    ADD CONSTRAINT file_shares_pkey PRIMARY KEY (id);
-
-
---
--- Name: file_thumbnails file_thumbnails_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.file_thumbnails
-    ADD CONSTRAINT file_thumbnails_pkey PRIMARY KEY (file_id, variant);
+ALTER TABLE ONLY public.collab_sender_floors
+    ADD CONSTRAINT collab_sender_floors_pkey PRIMARY KEY (file_id, sender_server, sender_account_id, sender_device_id, seq_prefix);
 
 
 --
--- Name: file_update_log file_update_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_shares drive_file_shares_file_id_recipient_account_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_update_log
-    ADD CONSTRAINT file_update_log_pkey PRIMARY KEY (file_id, seq);
-
-
---
--- Name: file_versions file_versions_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.file_versions
-    ADD CONSTRAINT file_versions_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
+ALTER TABLE ONLY public.drive_file_shares
+    ADD CONSTRAINT drive_file_shares_file_id_recipient_account_id_key UNIQUE (file_id, recipient_account_id);
 
 
 --
--- Name: file_versions file_versions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_shares drive_file_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_versions
-    ADD CONSTRAINT file_versions_pkey PRIMARY KEY (id);
-
-
---
--- Name: file_versions file_versions_revision_content_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.file_versions
-    ADD CONSTRAINT file_versions_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
+ALTER TABLE ONLY public.drive_file_shares
+    ADD CONSTRAINT drive_file_shares_pkey PRIMARY KEY (id);
 
 
 --
--- Name: files files_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_thumbnails drive_file_thumbnails_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE public.files
-    ADD CONSTRAINT files_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
-
-
---
--- Name: files files_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.files
-    ADD CONSTRAINT files_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.drive_file_thumbnails
+    ADD CONSTRAINT drive_file_thumbnails_pkey PRIMARY KEY (file_id, variant);
 
 
 --
--- Name: files files_revision_content_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+-- Name: collab_update_log collab_update_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE public.files
-    ADD CONSTRAINT files_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
+ALTER TABLE ONLY public.collab_update_log
+    ADD CONSTRAINT collab_update_log_pkey PRIMARY KEY (file_id, seq);
+
+
+--
+-- Name: drive_file_versions drive_file_versions_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.drive_file_versions
+    ADD CONSTRAINT drive_file_versions_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
+
+
+--
+-- Name: drive_file_versions drive_file_versions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_file_versions
+    ADD CONSTRAINT drive_file_versions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: drive_file_versions drive_file_versions_revision_content_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.drive_file_versions
+    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
+
+
+--
+-- Name: drive_files drive_files_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.drive_files
+    ADD CONSTRAINT drive_files_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
+
+
+--
+-- Name: drive_files drive_files_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_files
+    ADD CONSTRAINT drive_files_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: drive_files drive_files_revision_content_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.drive_files
+    ADD CONSTRAINT drive_files_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
 
 
 --
@@ -5089,11 +5089,11 @@ ALTER TABLE ONLY public.legal_documents
 
 
 --
--- Name: live_location_streams live_location_streams_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_live_location_streams chat_live_location_streams_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.live_location_streams
-    ADD CONSTRAINT live_location_streams_pkey PRIMARY KEY (stream_id);
+ALTER TABLE ONLY public.chat_live_location_streams
+    ADD CONSTRAINT chat_live_location_streams_pkey PRIMARY KEY (stream_id);
 
 
 --
@@ -5133,7 +5133,7 @@ ALTER TABLE ONLY public.mail_addresses
 --
 
 ALTER TABLE ONLY public.mail_auto_replies
-    ADD CONSTRAINT mail_auto_replies_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT mail_auto_replies_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -5141,7 +5141,7 @@ ALTER TABLE ONLY public.mail_auto_replies
 --
 
 ALTER TABLE ONLY public.mail_auto_reply_sent
-    ADD CONSTRAINT mail_auto_reply_sent_pkey PRIMARY KEY (user_id, sender_hash);
+    ADD CONSTRAINT mail_auto_reply_sent_pkey PRIMARY KEY (account_id, sender_hash);
 
 
 --
@@ -5149,7 +5149,7 @@ ALTER TABLE ONLY public.mail_auto_reply_sent
 --
 
 ALTER TABLE ONLY public.mail_change_floors
-    ADD CONSTRAINT mail_change_floors_pkey PRIMARY KEY (owner);
+    ADD CONSTRAINT mail_change_floors_pkey PRIMARY KEY (mailbox_owner);
 
 
 --
@@ -5233,11 +5233,11 @@ ALTER TABLE ONLY public.mail_folders
 
 
 --
--- Name: mail_folders mail_folders_user_id_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_folders mail_folders_account_id_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_folders
-    ADD CONSTRAINT mail_folders_user_id_id_key UNIQUE (user_id, id);
+    ADD CONSTRAINT mail_folders_account_id_id_key UNIQUE (account_id, id);
 
 
 --
@@ -5261,7 +5261,7 @@ ALTER TABLE ONLY public.mail_forwarding_keys
 --
 
 ALTER TABLE ONLY public.mail_forwarding_quota
-    ADD CONSTRAINT mail_forwarding_quota_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT mail_forwarding_quota_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -5293,7 +5293,7 @@ ALTER TABLE ONLY public.mail_group_key_lists
 --
 
 ALTER TABLE ONLY public.mail_group_key_shares
-    ADD CONSTRAINT mail_group_key_shares_pkey PRIMARY KEY (group_key_id, user_id);
+    ADD CONSTRAINT mail_group_key_shares_pkey PRIMARY KEY (group_key_id, account_id);
 
 
 --
@@ -5317,7 +5317,7 @@ ALTER TABLE ONLY public.mail_group_keys
 --
 
 ALTER TABLE ONLY public.mail_group_members
-    ADD CONSTRAINT mail_group_members_pkey PRIMARY KEY (group_id, user_id);
+    ADD CONSTRAINT mail_group_members_pkey PRIMARY KEY (group_id, account_id);
 
 
 --
@@ -5341,7 +5341,7 @@ ALTER TABLE ONLY public.mail_group_signers
 --
 
 ALTER TABLE ONLY public.mail_group_signing_shares
-    ADD CONSTRAINT mail_group_signing_shares_pkey PRIMARY KEY (group_id, signer_public_key, user_id);
+    ADD CONSTRAINT mail_group_signing_shares_pkey PRIMARY KEY (group_id, signer_public_key, account_id);
 
 
 --
@@ -5381,7 +5381,7 @@ ALTER TABLE ONLY public.mail_identities
 --
 
 ALTER TABLE ONLY public.mail_image_senders
-    ADD CONSTRAINT mail_image_senders_pkey PRIMARY KEY (user_id, address);
+    ADD CONSTRAINT mail_image_senders_pkey PRIMARY KEY (account_id, address);
 
 
 --
@@ -5401,11 +5401,11 @@ ALTER TABLE ONLY public.mail_labels
 
 
 --
--- Name: mail_labels mail_labels_user_id_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_labels mail_labels_account_id_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_labels
-    ADD CONSTRAINT mail_labels_user_id_id_key UNIQUE (user_id, id);
+    ADD CONSTRAINT mail_labels_account_id_id_key UNIQUE (account_id, id);
 
 
 --
@@ -5421,7 +5421,7 @@ ALTER TABLE ONLY public.mail_message_labels
 --
 
 ALTER TABLE ONLY public.mail_message_tombstones
-    ADD CONSTRAINT mail_message_tombstones_pkey PRIMARY KEY (owner, change_xid, id);
+    ADD CONSTRAINT mail_message_tombstones_pkey PRIMARY KEY (mailbox_owner, change_xid, id);
 
 
 --
@@ -5449,11 +5449,11 @@ ALTER TABLE ONLY public.mail_sender_rules
 
 
 --
--- Name: mail_sender_rules mail_sender_rules_user_id_pattern_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_sender_rules mail_sender_rules_account_id_pattern_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_sender_rules
-    ADD CONSTRAINT mail_sender_rules_user_id_pattern_key UNIQUE (user_id, pattern);
+    ADD CONSTRAINT mail_sender_rules_account_id_pattern_key UNIQUE (account_id, pattern);
 
 
 --
@@ -5469,7 +5469,7 @@ ALTER TABLE ONLY public.mail_sending_events
 --
 
 ALTER TABLE ONLY public.mail_sending_policies
-    ADD CONSTRAINT mail_sending_policies_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT mail_sending_policies_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -5477,7 +5477,7 @@ ALTER TABLE ONLY public.mail_sending_policies
 --
 
 ALTER TABLE ONLY public.mail_settings
-    ADD CONSTRAINT mail_settings_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT mail_settings_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -5573,7 +5573,7 @@ ALTER TABLE ONLY public.pass_pin_failures
 --
 
 ALTER TABLE ONLY public.pass_pins
-    ADD CONSTRAINT pass_pins_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT pass_pins_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -5581,7 +5581,7 @@ ALTER TABLE ONLY public.pass_pins
 --
 
 ALTER TABLE ONLY public.pass_settings
-    ADD CONSTRAINT pass_settings_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT pass_settings_pkey PRIMARY KEY (account_id);
 
 
 --
@@ -5589,7 +5589,7 @@ ALTER TABLE ONLY public.pass_settings
 --
 
 ALTER TABLE ONLY public.photos_library_folders
-    ADD CONSTRAINT photos_library_folders_pkey PRIMARY KEY (user_id, collection_id);
+    ADD CONSTRAINT photos_library_folders_pkey PRIMARY KEY (account_id, collection_id);
 
 
 --
@@ -5597,31 +5597,31 @@ ALTER TABLE ONLY public.photos_library_folders
 --
 
 ALTER TABLE ONLY public.photos_preferences
-    ADD CONSTRAINT photos_preferences_pkey PRIMARY KEY (user_id);
+    ADD CONSTRAINT photos_preferences_pkey PRIMARY KEY (account_id);
 
 
 --
--- Name: public_link_reports public_link_reports_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_public_link_reports drive_public_link_reports_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.public_link_reports
-    ADD CONSTRAINT public_link_reports_pkey PRIMARY KEY (id);
-
-
---
--- Name: public_shares public_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.public_shares
-    ADD CONSTRAINT public_shares_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.drive_public_link_reports
+    ADD CONSTRAINT drive_public_link_reports_pkey PRIMARY KEY (id);
 
 
 --
--- Name: public_shares public_shares_token_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_public_shares drive_public_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.public_shares
-    ADD CONSTRAINT public_shares_token_key UNIQUE (token);
+ALTER TABLE ONLY public.drive_public_shares
+    ADD CONSTRAINT drive_public_shares_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: drive_public_shares drive_public_shares_token_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_public_shares
+    ADD CONSTRAINT drive_public_shares_token_key UNIQUE (token);
 
 
 --
@@ -5629,15 +5629,15 @@ ALTER TABLE ONLY public.public_shares
 --
 
 ALTER TABLE ONLY public.registration_code_uses
-    ADD CONSTRAINT registration_code_uses_pkey PRIMARY KEY (code_id, user_id);
+    ADD CONSTRAINT registration_code_uses_pkey PRIMARY KEY (code_id, account_id);
 
 
 --
--- Name: registration_code_uses registration_code_uses_user_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: registration_code_uses registration_code_uses_account_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.registration_code_uses
-    ADD CONSTRAINT registration_code_uses_user_id_key UNIQUE (user_id);
+    ADD CONSTRAINT registration_code_uses_account_id_key UNIQUE (account_id);
 
 
 --
@@ -5689,19 +5689,19 @@ ALTER TABLE ONLY public.retired_account_ids
 
 
 --
--- Name: sealed_sender_generated_certificates sealed_sender_generated_certificates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_sealed_sender_certificates chat_sealed_sender_certificates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.sealed_sender_generated_certificates
-    ADD CONSTRAINT sealed_sender_generated_certificates_pkey PRIMARY KEY (certificate_id);
+ALTER TABLE ONLY public.chat_sealed_sender_certificates
+    ADD CONSTRAINT chat_sealed_sender_certificates_pkey PRIMARY KEY (certificate_id);
 
 
 --
--- Name: sealed_sender_generated_certificates sealed_sender_generated_certificates_root_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_sealed_sender_certificates chat_sealed_sender_certificates_root_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.sealed_sender_generated_certificates
-    ADD CONSTRAINT sealed_sender_generated_certificates_root_id_key UNIQUE (root_id);
+ALTER TABLE ONLY public.chat_sealed_sender_certificates
+    ADD CONSTRAINT chat_sealed_sender_certificates_root_id_key UNIQUE (root_id);
 
 
 --
@@ -5741,103 +5741,103 @@ ALTER TABLE ONLY public.storage_pending_deletions
 --
 
 ALTER TABLE ONLY public.two_factor_recovery_codes
-    ADD CONSTRAINT two_factor_recovery_codes_pkey PRIMARY KEY (user_id, code_mac);
+    ADD CONSTRAINT two_factor_recovery_codes_pkey PRIMARY KEY (account_id, code_mac);
 
 
 --
--- Name: uploads uploads_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_uploads drive_uploads_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE public.uploads
-    ADD CONSTRAINT uploads_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
-
-
---
--- Name: uploads uploads_file_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.uploads
-    ADD CONSTRAINT uploads_file_id_key UNIQUE (file_id);
+ALTER TABLE public.drive_uploads
+    ADD CONSTRAINT drive_uploads_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
 
 
 --
--- Name: uploads uploads_metadata_at_commit; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_uploads drive_uploads_file_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE public.uploads
-    ADD CONSTRAINT uploads_metadata_at_commit CHECK (((metadata_envelope IS NULL) AND (metadata_revision IS NULL))) NOT VALID;
-
-
---
--- Name: uploads uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.uploads
-    ADD CONSTRAINT uploads_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.drive_uploads
+    ADD CONSTRAINT drive_uploads_file_id_key UNIQUE (file_id);
 
 
 --
--- Name: user_map_preferences user_map_preferences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_uploads drive_uploads_metadata_at_commit; Type: CHECK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.user_map_preferences
-    ADD CONSTRAINT user_map_preferences_pkey PRIMARY KEY (user_id);
-
-
---
--- Name: user_security_keys user_security_keys_credential_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.user_security_keys
-    ADD CONSTRAINT user_security_keys_credential_id_key UNIQUE (credential_id);
+ALTER TABLE public.drive_uploads
+    ADD CONSTRAINT drive_uploads_metadata_at_commit CHECK (((metadata_envelope IS NULL) AND (metadata_revision IS NULL))) NOT VALID;
 
 
 --
--- Name: user_security_keys user_security_keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_uploads drive_uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.user_security_keys
-    ADD CONSTRAINT user_security_keys_pkey PRIMARY KEY (id);
-
-
---
--- Name: user_setting_overrides user_setting_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.user_setting_overrides
-    ADD CONSTRAINT user_setting_overrides_pkey PRIMARY KEY (user_id, key);
+ALTER TABLE ONLY public.drive_uploads
+    ADD CONSTRAINT drive_uploads_pkey PRIMARY KEY (id);
 
 
 --
--- Name: user_ui_preferences user_ui_preferences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: account_map_preferences account_map_preferences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.user_ui_preferences
-    ADD CONSTRAINT user_ui_preferences_pkey PRIMARY KEY (user_id);
-
-
---
--- Name: users users_key_binding_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_key_binding_key UNIQUE (key_binding);
+ALTER TABLE ONLY public.account_map_preferences
+    ADD CONSTRAINT account_map_preferences_pkey PRIMARY KEY (account_id);
 
 
 --
--- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: account_security_keys account_security_keys_credential_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.account_security_keys
+    ADD CONSTRAINT account_security_keys_credential_id_key UNIQUE (credential_id);
 
 
 --
--- Name: users users_username_unique; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: account_security_keys account_security_keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_username_unique UNIQUE (username);
+ALTER TABLE ONLY public.account_security_keys
+    ADD CONSTRAINT account_security_keys_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: account_setting_overrides account_setting_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_setting_overrides
+    ADD CONSTRAINT account_setting_overrides_pkey PRIMARY KEY (account_id, key);
+
+
+--
+-- Name: account_ui_preferences account_ui_preferences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_ui_preferences
+    ADD CONSTRAINT account_ui_preferences_pkey PRIMARY KEY (account_id);
+
+
+--
+-- Name: accounts accounts_key_binding_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.accounts
+    ADD CONSTRAINT accounts_key_binding_key UNIQUE (key_binding);
+
+
+--
+-- Name: accounts accounts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.accounts
+    ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: accounts accounts_username_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.accounts
+    ADD CONSTRAINT accounts_username_unique UNIQUE (username);
 
 
 --
@@ -5887,14 +5887,14 @@ CREATE INDEX account_names_free ON public.account_names USING btree (free_at) WH
 -- Name: account_names_one_current; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX account_names_one_current ON public.account_names USING btree (user_id) WHERE (state = 'current'::text);
+CREATE UNIQUE INDEX account_names_one_current ON public.account_names USING btree (account_id) WHERE (state = 'current'::text);
 
 
 --
 -- Name: account_names_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_names_user ON public.account_names USING btree (user_id);
+CREATE INDEX account_names_user ON public.account_names USING btree (account_id);
 
 
 --
@@ -5908,14 +5908,14 @@ CREATE INDEX account_record_tombstones_age ON public.account_record_tombstones U
 -- Name: account_record_tombstones_feed; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_record_tombstones_feed ON public.account_record_tombstones USING btree (user_id, scope, change_seq);
+CREATE INDEX account_record_tombstones_feed ON public.account_record_tombstones USING btree (account_id, scope, change_seq);
 
 
 --
 -- Name: account_records_feed; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_records_feed ON public.account_records USING btree (user_id, scope, change_seq);
+CREATE INDEX account_records_feed ON public.account_records USING btree (account_id, scope, change_seq);
 
 
 --
@@ -5936,14 +5936,14 @@ CREATE INDEX account_renames_previous ON public.account_renames USING btree (pre
 -- Name: account_renames_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_renames_user ON public.account_renames USING btree (user_id, accepted_at DESC);
+CREATE INDEX account_renames_user ON public.account_renames USING btree (account_id, accepted_at DESC);
 
 
 --
 -- Name: account_security_events_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_security_events_user ON public.account_security_events USING btree (user_id, at DESC, id DESC);
+CREATE INDEX account_security_events_user ON public.account_security_events USING btree (account_id, at DESC, id DESC);
 
 
 --
@@ -5957,7 +5957,7 @@ CREATE INDEX auth_grants_expiry ON public.auth_grants USING btree (expires_at);
 -- Name: auth_grants_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX auth_grants_user ON public.auth_grants USING btree (user_id);
+CREATE INDEX auth_grants_user ON public.auth_grants USING btree (account_id);
 
 
 --
@@ -5982,10 +5982,10 @@ CREATE INDEX auth_sessions_previous_hash_idx ON public.auth_sessions USING btree
 
 
 --
--- Name: auth_sessions_user_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: auth_sessions_account_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX auth_sessions_user_idx ON public.auth_sessions USING btree (user_id) WHERE (revoked_at IS NULL);
+CREATE INDEX auth_sessions_account_idx ON public.auth_sessions USING btree (account_id) WHERE (revoked_at IS NULL);
 
 
 --
@@ -6006,7 +6006,7 @@ CREATE INDEX calendar_alarms_event ON public.calendar_alarms USING btree (event_
 -- Name: calendar_event_reminders_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_event_reminders_user ON public.calendar_event_reminders USING btree (user_id);
+CREATE INDEX calendar_event_reminders_user ON public.calendar_event_reminders USING btree (account_id);
 
 
 --
@@ -6020,7 +6020,7 @@ CREATE INDEX calendar_events_author_address ON public.calendar_events USING btre
 -- Name: calendar_events_author_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_events_author_user ON public.calendar_events USING btree (author_user_id);
+CREATE INDEX calendar_events_author_user ON public.calendar_events USING btree (author_account_id);
 
 
 --
@@ -6041,14 +6041,14 @@ CREATE INDEX calendar_events_window ON public.calendar_events USING btree (calen
 -- Name: calendar_members_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_members_user ON public.calendar_members USING btree (user_id);
+CREATE INDEX calendar_members_user ON public.calendar_members USING btree (account_id);
 
 
 --
 -- Name: calendars_owner; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendars_owner ON public.calendars USING btree (owner_id);
+CREATE INDEX calendars_owner ON public.calendars USING btree (owner_account_id);
 
 
 --
@@ -6069,21 +6069,21 @@ CREATE INDEX chat_backup_bases_staging_idx ON public.chat_backup_bases USING btr
 -- Name: chat_backup_media_reconciliation_entries_order_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX chat_backup_media_reconciliation_entries_order_idx ON public.chat_backup_media_reconciliation_entries USING btree (user_id, operation_id, reference_id);
+CREATE INDEX chat_backup_media_reconciliation_entries_order_idx ON public.chat_backup_media_reconciliation_entries USING btree (account_id, operation_id, reference_id);
 
 
 --
 -- Name: chat_backup_media_references_media_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX chat_backup_media_references_media_idx ON public.chat_backup_media_references USING btree (user_id, media_id);
+CREATE INDEX chat_backup_media_references_media_idx ON public.chat_backup_media_references USING btree (account_id, media_id);
 
 
 --
 -- Name: chat_backup_segments_restore_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX chat_backup_segments_restore_idx ON public.chat_backup_segments USING btree (user_id, cursor);
+CREATE INDEX chat_backup_segments_restore_idx ON public.chat_backup_segments USING btree (account_id, cursor);
 
 
 --
@@ -6132,14 +6132,14 @@ CREATE INDEX chat_group_nonces_expires_at ON public.chat_group_nonces USING btre
 -- Name: chat_link_tokens_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX chat_link_tokens_user ON public.chat_link_tokens USING btree (user_id, expires_at);
+CREATE INDEX chat_link_tokens_user ON public.chat_link_tokens USING btree (account_id, expires_at);
 
 
 --
 -- Name: chat_mailbox_recipient_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX chat_mailbox_recipient_idx ON public.chat_mailbox USING btree (recipient_user_id, recipient_device_id, cursor);
+CREATE INDEX chat_mailbox_recipient_idx ON public.chat_mailbox USING btree (recipient_account_id, recipient_device_id, cursor);
 
 
 --
@@ -6160,7 +6160,7 @@ CREATE INDEX chat_multi_send_ids_created_at ON public.chat_multi_send_ids USING 
 -- Name: chat_profiles_one_current; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX chat_profiles_one_current ON public.chat_profiles USING btree (user_id) WHERE is_current;
+CREATE UNIQUE INDEX chat_profiles_one_current ON public.chat_profiles USING btree (account_id) WHERE is_current;
 
 
 --
@@ -6171,38 +6171,38 @@ CREATE UNIQUE INDEX chat_zk_server_keys_issuing ON public.chat_zk_server_keys US
 
 
 --
--- Name: collections_unique_name; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_collections_unique_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX collections_unique_name ON public.collections USING btree (parent_collection_id, name_hash) WHERE ((deleted_at IS NULL) AND (name_hash IS NOT NULL) AND (parent_collection_id IS NOT NULL));
+CREATE UNIQUE INDEX drive_collections_unique_name ON public.drive_collections USING btree (parent_collection_id, name_hash) WHERE ((deleted_at IS NULL) AND (name_hash IS NOT NULL) AND (parent_collection_id IS NOT NULL));
 
 
 --
--- Name: collections_unique_top_level_name; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_collections_unique_top_level_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX collections_unique_top_level_name ON public.collections USING btree (owner_user_id, name_hash) WHERE ((deleted_at IS NULL) AND (name_hash IS NOT NULL) AND (parent_collection_id IS NULL) AND (kind = 'folder'::text));
+CREATE UNIQUE INDEX drive_collections_unique_top_level_name ON public.drive_collections USING btree (owner_account_id, name_hash) WHERE ((deleted_at IS NULL) AND (name_hash IS NOT NULL) AND (parent_collection_id IS NULL) AND (kind = 'folder'::text));
 
 
 --
 -- Name: consents_latest; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX consents_latest ON public.consents USING btree (user_id, purpose, seq DESC);
+CREATE INDEX consents_latest ON public.consents USING btree (account_id, purpose, seq DESC);
 
 
 --
--- Name: device_tickets_expiry_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: account_device_tickets_expiry_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX device_tickets_expiry_idx ON public.device_tickets USING btree (expires_at);
+CREATE INDEX account_device_tickets_expiry_idx ON public.account_device_tickets USING btree (expires_at);
 
 
 --
--- Name: devices_session; Type: INDEX; Schema: public; Owner: -
+-- Name: account_devices_session; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX devices_session ON public.devices USING btree (session_id);
+CREATE INDEX account_devices_session ON public.account_devices USING btree (session_id);
 
 
 --
@@ -6213,38 +6213,38 @@ CREATE INDEX drive_federation_mutations_share_created_idx ON public.drive_federa
 
 
 --
--- Name: federated_incoming_shares_remote_domain_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_federated_incoming_shares_owner_server_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX federated_incoming_shares_remote_domain_idx ON public.federated_incoming_shares USING btree (remote_domain, created_at DESC);
-
-
---
--- Name: federated_outgoing_file_shares_file_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX federated_outgoing_file_shares_file_idx ON public.federated_outgoing_file_shares USING btree (file_id);
+CREATE INDEX drive_federated_incoming_shares_owner_server_idx ON public.drive_federated_incoming_shares USING btree (owner_server, created_at DESC);
 
 
 --
--- Name: federated_outgoing_file_shares_recipient; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_federated_outgoing_file_shares_file_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX federated_outgoing_file_shares_recipient ON public.federated_outgoing_file_shares USING btree (recipient_domain, recipient_account_id);
-
-
---
--- Name: federated_outgoing_shares_recipient; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX federated_outgoing_shares_recipient ON public.federated_outgoing_shares USING btree (recipient_domain, recipient_account_id);
+CREATE INDEX drive_federated_outgoing_file_shares_file_idx ON public.drive_federated_outgoing_file_shares USING btree (file_id);
 
 
 --
--- Name: federated_outgoing_shares_recipient_domain_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_federated_outgoing_file_shares_recipient; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX federated_outgoing_shares_recipient_domain_idx ON public.federated_outgoing_shares USING btree (recipient_domain, created_at DESC);
+CREATE INDEX drive_federated_outgoing_file_shares_recipient ON public.drive_federated_outgoing_file_shares USING btree (recipient_server, recipient_account_id);
+
+
+--
+-- Name: drive_federated_outgoing_shares_recipient; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX drive_federated_outgoing_shares_recipient ON public.drive_federated_outgoing_shares USING btree (recipient_server, recipient_account_id);
+
+
+--
+-- Name: drive_federated_outgoing_shares_recipient_server_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX drive_federated_outgoing_shares_recipient_server_idx ON public.drive_federated_outgoing_shares USING btree (recipient_server, created_at DESC);
 
 
 --
@@ -6286,7 +6286,7 @@ CREATE INDEX federation_outbox_due ON public.federation_outbox USING btree (kind
 -- Name: federation_outbox_media_pending; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX federation_outbox_media_pending ON public.federation_outbox USING btree (sender_user_id) WHERE ((kind = 'media'::text) AND (state = 'pending'::text));
+CREATE INDEX federation_outbox_media_pending ON public.federation_outbox USING btree (sender_account_id) WHERE ((kind = 'media'::text) AND (state = 'pending'::text));
 
 
 --
@@ -6353,66 +6353,66 @@ CREATE INDEX feedback_resolved ON public.feedback USING btree (resolved_at DESC)
 
 
 --
--- Name: file_assets_uploader_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_file_assets_uploader_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX file_assets_uploader_idx ON public.file_assets USING btree (uploader_user_id);
-
-
---
--- Name: file_shares_recipient_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX file_shares_recipient_idx ON public.file_shares USING btree (recipient_user_id);
+CREATE INDEX drive_file_assets_uploader_idx ON public.drive_file_assets USING btree (uploader_account_id);
 
 
 --
--- Name: file_thumbnails_uploader_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_file_shares_recipient_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX file_thumbnails_uploader_idx ON public.file_thumbnails USING btree (uploader_user_id);
-
-
---
--- Name: file_update_log_sender_seq_unique; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX file_update_log_sender_seq_unique ON public.file_update_log USING btree (file_id, sender_domain, sender_account, sender_device, sender_seq);
+CREATE INDEX drive_file_shares_recipient_idx ON public.drive_file_shares USING btree (recipient_account_id);
 
 
 --
--- Name: file_versions_timeline; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_file_thumbnails_uploader_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX file_versions_timeline ON public.file_versions USING btree (file_id, created_at DESC);
-
-
---
--- Name: files_ciphertext_digest_backfill_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX files_ciphertext_digest_backfill_idx ON public.files USING btree (created_at, id) WHERE ((ciphertext_sha256 IS NULL) AND (deleted_at IS NULL) AND (NOT original_pruned));
+CREATE INDEX drive_file_thumbnails_uploader_idx ON public.drive_file_thumbnails USING btree (uploader_account_id);
 
 
 --
--- Name: files_content_revision_id_key; Type: INDEX; Schema: public; Owner: -
+-- Name: collab_update_log_sender_seq_unique; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX files_content_revision_id_key ON public.files USING btree (content_revision_id);
-
-
---
--- Name: files_fed_share_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX files_fed_share_idx ON public.files USING btree (fed_share_id) WHERE (fed_share_id IS NOT NULL);
+CREATE UNIQUE INDEX collab_update_log_sender_seq_unique ON public.collab_update_log USING btree (file_id, sender_server, sender_account_id, sender_device_id, sender_seq);
 
 
 --
--- Name: files_unique_name; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_file_versions_timeline; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX files_unique_name ON public.files USING btree (collection_id, name_hash) WHERE ((deleted_at IS NULL) AND (name_hash IS NOT NULL));
+CREATE INDEX drive_file_versions_timeline ON public.drive_file_versions USING btree (file_id, created_at DESC);
+
+
+--
+-- Name: drive_files_ciphertext_digest_backfill_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX drive_files_ciphertext_digest_backfill_idx ON public.drive_files USING btree (created_at, id) WHERE ((ciphertext_sha256 IS NULL) AND (deleted_at IS NULL) AND (NOT original_pruned));
+
+
+--
+-- Name: drive_files_content_revision_id_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX drive_files_content_revision_id_key ON public.drive_files USING btree (content_revision_id);
+
+
+--
+-- Name: drive_files_fed_share_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX drive_files_fed_share_idx ON public.drive_files USING btree (fed_share_id) WHERE (fed_share_id IS NOT NULL);
+
+
+--
+-- Name: drive_files_unique_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX drive_files_unique_name ON public.drive_files USING btree (collection_id, name_hash) WHERE ((deleted_at IS NULL) AND (name_hash IS NOT NULL));
 
 
 --
@@ -6423,10 +6423,10 @@ CREATE INDEX idx_admin_audit_log_id_desc ON public.admin_audit_log USING btree (
 
 
 --
--- Name: idx_album_items_file; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_photos_album_items_file; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_album_items_file ON public.album_items USING btree (file_id);
+CREATE INDEX idx_photos_album_items_file ON public.photos_album_items USING btree (file_id);
 
 
 --
@@ -6440,14 +6440,14 @@ CREATE INDEX idx_chat_call_link_knocks_room ON public.chat_call_link_knocks USIN
 -- Name: idx_chat_call_links_owner; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_chat_call_links_owner ON public.chat_call_links USING btree (owner_user_id, created_at DESC);
+CREATE INDEX idx_chat_call_links_owner ON public.chat_call_links USING btree (owner_account_id, created_at DESC);
 
 
 --
 -- Name: idx_chat_media_inbound_pending_recipient; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_chat_media_inbound_pending_recipient ON public.chat_media_federation_inbound_pending USING btree (recipient_user_id);
+CREATE INDEX idx_chat_media_inbound_pending_recipient ON public.chat_media_federation_inbound_pending USING btree (recipient_account_id);
 
 
 --
@@ -6461,7 +6461,7 @@ CREATE INDEX idx_chat_media_rate_expiry ON public.chat_media_rate_counters USING
 -- Name: idx_chat_media_references_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_chat_media_references_user ON public.chat_media_references USING btree (user_id);
+CREATE INDEX idx_chat_media_references_user ON public.chat_media_references USING btree (account_id);
 
 
 --
@@ -6475,77 +6475,77 @@ CREATE INDEX idx_chat_media_uploads_updated ON public.chat_media_uploads USING b
 -- Name: idx_chat_media_uploads_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_chat_media_uploads_user ON public.chat_media_uploads USING btree (user_id);
+CREATE INDEX idx_chat_media_uploads_user ON public.chat_media_uploads USING btree (account_id);
 
 
 --
--- Name: idx_collections_deleted_at; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_drive_collections_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_collections_deleted_at ON public.collections USING btree (deleted_at) WHERE (deleted_at IS NOT NULL);
-
-
---
--- Name: idx_collections_owner; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_collections_owner ON public.collections USING btree (owner_user_id);
+CREATE INDEX idx_drive_collections_deleted_at ON public.drive_collections USING btree (deleted_at) WHERE (deleted_at IS NOT NULL);
 
 
 --
--- Name: idx_collections_parent; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_drive_collections_owner; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_collections_parent ON public.collections USING btree (parent_collection_id);
-
-
---
--- Name: idx_collections_trash_root; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_collections_trash_root ON public.collections USING btree (trash_root_id) WHERE (trash_root_id IS NOT NULL);
+CREATE INDEX idx_drive_collections_owner ON public.drive_collections USING btree (owner_account_id);
 
 
 --
--- Name: idx_contact_emails_user_address; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_drive_collections_parent; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_contact_emails_user_address ON public.contact_emails USING btree (user_id, address text_pattern_ops);
-
-
---
--- Name: idx_contacts_user_name; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_contacts_user_name ON public.contacts USING btree (user_id, lower(name), id);
+CREATE INDEX idx_drive_collections_parent ON public.drive_collections USING btree (parent_collection_id);
 
 
 --
--- Name: idx_files_collection; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_drive_collections_trash_root; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_files_collection ON public.files USING btree (collection_id);
-
-
---
--- Name: idx_files_deleted_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_files_deleted_at ON public.files USING btree (deleted_at) WHERE (deleted_at IS NOT NULL);
+CREATE INDEX idx_drive_collections_trash_root ON public.drive_collections USING btree (trash_root_id) WHERE (trash_root_id IS NOT NULL);
 
 
 --
--- Name: idx_files_trash_root; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_contacts_emails_account_address; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_files_trash_root ON public.files USING btree (trash_root_id) WHERE (trash_root_id IS NOT NULL);
+CREATE INDEX idx_contacts_emails_account_address ON public.contacts_emails USING btree (account_id, address text_pattern_ops);
 
 
 --
--- Name: idx_files_uploader; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_contacts_account_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_files_uploader ON public.files USING btree (uploader_user_id);
+CREATE INDEX idx_contacts_account_name ON public.contacts USING btree (account_id, lower(name), id);
+
+
+--
+-- Name: idx_drive_files_collection; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_drive_files_collection ON public.drive_files USING btree (collection_id);
+
+
+--
+-- Name: idx_drive_files_deleted_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_drive_files_deleted_at ON public.drive_files USING btree (deleted_at) WHERE (deleted_at IS NOT NULL);
+
+
+--
+-- Name: idx_drive_files_trash_root; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_drive_files_trash_root ON public.drive_files USING btree (trash_root_id) WHERE (trash_root_id IS NOT NULL);
+
+
+--
+-- Name: idx_drive_files_uploader; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_drive_files_uploader ON public.drive_files USING btree (uploader_account_id);
 
 
 --
@@ -6566,7 +6566,7 @@ CREATE UNIQUE INDEX idx_mail_address_keys_one_primary ON public.mail_address_key
 -- Name: idx_mail_addresses_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_addresses_user ON public.mail_addresses USING btree (user_id);
+CREATE INDEX idx_mail_addresses_user ON public.mail_addresses USING btree (account_id);
 
 
 --
@@ -6587,28 +6587,28 @@ CREATE INDEX idx_mail_draft_attachments_message ON public.mail_draft_attachments
 -- Name: idx_mail_filter_runs_one; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX idx_mail_filter_runs_one ON public.mail_filter_runs USING btree (user_id) WHERE (finished_at IS NULL);
+CREATE UNIQUE INDEX idx_mail_filter_runs_one ON public.mail_filter_runs USING btree (account_id) WHERE (finished_at IS NULL);
 
 
 --
 -- Name: idx_mail_filters_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_filters_user ON public.mail_filters USING btree (user_id, "position") WHERE enabled;
+CREATE INDEX idx_mail_filters_user ON public.mail_filters USING btree (account_id, "position") WHERE enabled;
 
 
 --
 -- Name: idx_mail_folders_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_folders_user ON public.mail_folders USING btree (user_id, parent_id, "position");
+CREATE INDEX idx_mail_folders_user ON public.mail_folders USING btree (account_id, parent_id, "position");
 
 
 --
 -- Name: idx_mail_group_key_shares_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_group_key_shares_user ON public.mail_group_key_shares USING btree (user_id);
+CREATE INDEX idx_mail_group_key_shares_user ON public.mail_group_key_shares USING btree (account_id);
 
 
 --
@@ -6622,7 +6622,7 @@ CREATE UNIQUE INDEX idx_mail_group_keys_primary ON public.mail_group_keys USING 
 -- Name: idx_mail_group_members_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_group_members_user ON public.mail_group_members USING btree (user_id);
+CREATE INDEX idx_mail_group_members_user ON public.mail_group_members USING btree (account_id);
 
 
 --
@@ -6636,7 +6636,7 @@ CREATE INDEX idx_mail_group_objects_group ON public.mail_group_objects USING btr
 -- Name: idx_mail_labels_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_labels_user ON public.mail_labels USING btree (user_id, "position");
+CREATE INDEX idx_mail_labels_user ON public.mail_labels USING btree (account_id, "position");
 
 
 --
@@ -6657,21 +6657,21 @@ CREATE INDEX idx_mail_message_tombstones_age ON public.mail_message_tombstones U
 -- Name: idx_mail_messages_changes; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_changes ON public.mail_messages USING btree (owner, change_xid, id);
+CREATE INDEX idx_mail_messages_changes ON public.mail_messages USING btree (mailbox_owner, change_xid, id);
 
 
 --
 -- Name: idx_mail_messages_custom_folder; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_custom_folder ON public.mail_messages USING btree (user_id, custom_folder, received_at DESC, id) WHERE (custom_folder IS NOT NULL);
+CREATE INDEX idx_mail_messages_custom_folder ON public.mail_messages USING btree (account_id, custom_folder, received_at DESC, id) WHERE (custom_folder IS NOT NULL);
 
 
 --
 -- Name: idx_mail_messages_folder; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_folder ON public.mail_messages USING btree (user_id, folder, received_at DESC, id);
+CREATE INDEX idx_mail_messages_folder ON public.mail_messages USING btree (account_id, folder, received_at DESC, id);
 
 
 --
@@ -6685,14 +6685,14 @@ CREATE UNIQUE INDEX idx_mail_messages_inbound_once ON public.mail_messages USING
 -- Name: idx_mail_messages_message_id_hash; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_message_id_hash ON public.mail_messages USING btree (owner, message_id_hash) WHERE (message_id_hash IS NOT NULL);
+CREATE INDEX idx_mail_messages_message_id_hash ON public.mail_messages USING btree (mailbox_owner, message_id_hash) WHERE (message_id_hash IS NOT NULL);
 
 
 --
 -- Name: idx_mail_messages_notify; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_notify ON public.mail_messages USING btree (owner, notify_at) WHERE (notify_at IS NOT NULL);
+CREATE INDEX idx_mail_messages_notify ON public.mail_messages USING btree (mailbox_owner, notify_at) WHERE (notify_at IS NOT NULL);
 
 
 --
@@ -6706,21 +6706,21 @@ CREATE UNIQUE INDEX idx_mail_messages_object_once ON public.mail_messages USING 
 -- Name: idx_mail_messages_owner_folder; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_owner_folder ON public.mail_messages USING btree (owner, folder, received_at DESC, id);
+CREATE INDEX idx_mail_messages_owner_folder ON public.mail_messages USING btree (mailbox_owner, folder, received_at DESC, id);
 
 
 --
 -- Name: idx_mail_messages_owner_received; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_owner_received ON public.mail_messages USING btree (owner, received_at DESC, id DESC);
+CREATE INDEX idx_mail_messages_owner_received ON public.mail_messages USING btree (mailbox_owner, received_at DESC, id DESC);
 
 
 --
 -- Name: idx_mail_messages_owner_thread; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_owner_thread ON public.mail_messages USING btree (owner, thread_id, received_at);
+CREATE INDEX idx_mail_messages_owner_thread ON public.mail_messages USING btree (mailbox_owner, thread_id, received_at);
 
 
 --
@@ -6734,21 +6734,21 @@ CREATE INDEX idx_mail_messages_search_tokens ON public.mail_messages USING gin (
 -- Name: idx_mail_messages_sender_recently; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_sender_recently ON public.mail_messages USING btree (sender_account, received_at) WHERE (external_recipients > 0);
+CREATE INDEX idx_mail_messages_sender_recently ON public.mail_messages USING btree (sender_account_id, received_at) WHERE (external_recipients > 0);
 
 
 --
 -- Name: idx_mail_messages_sent_message_id_hash; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_sent_message_id_hash ON public.mail_messages USING btree (sender_account, message_id_hash) WHERE ((direction = 'outbound'::text) AND (message_id_hash IS NOT NULL));
+CREATE INDEX idx_mail_messages_sent_message_id_hash ON public.mail_messages USING btree (sender_account_id, message_id_hash) WHERE ((direction = 'outbound'::text) AND (message_id_hash IS NOT NULL));
 
 
 --
 -- Name: idx_mail_messages_sent_recently; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_sent_recently ON public.mail_messages USING btree (user_id, received_at) WHERE (external_recipients > 0);
+CREATE INDEX idx_mail_messages_sent_recently ON public.mail_messages USING btree (account_id, received_at) WHERE (external_recipients > 0);
 
 
 --
@@ -6769,14 +6769,14 @@ CREATE INDEX idx_mail_messages_thread ON public.mail_messages USING btree (threa
 -- Name: idx_mail_messages_unwanted; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_messages_unwanted ON public.mail_messages USING btree (owner, folder_changed_at) WHERE (folder = ANY (ARRAY['trash'::text, 'spam'::text]));
+CREATE INDEX idx_mail_messages_unwanted ON public.mail_messages USING btree (mailbox_owner, folder_changed_at) WHERE (folder = ANY (ARRAY['trash'::text, 'spam'::text]));
 
 
 --
 -- Name: idx_mail_sending_events_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_sending_events_user ON public.mail_sending_events USING btree (user_id, kind, created_at);
+CREATE INDEX idx_mail_sending_events_user ON public.mail_sending_events USING btree (account_id, kind, created_at);
 
 
 --
@@ -6787,45 +6787,45 @@ CREATE INDEX idx_mail_sending_policies_attention ON public.mail_sending_policies
 
 
 --
--- Name: idx_public_shares_token; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_drive_public_shares_token; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_public_shares_token ON public.public_shares USING btree (token);
+CREATE INDEX idx_drive_public_shares_token ON public.drive_public_shares USING btree (token);
 
 
 --
 -- Name: idx_shares_collection; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_shares_collection ON public.collection_shares USING btree (collection_id);
+CREATE INDEX idx_shares_collection ON public.drive_collection_shares USING btree (collection_id);
 
 
 --
 -- Name: idx_shares_recipient; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_shares_recipient ON public.collection_shares USING btree (recipient_user_id);
+CREATE INDEX idx_shares_recipient ON public.drive_collection_shares USING btree (recipient_account_id);
 
 
 --
--- Name: idx_uploads_updated_at; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_drive_uploads_updated_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_uploads_updated_at ON public.uploads USING btree (updated_at);
-
-
---
--- Name: idx_uploads_user_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_uploads_user_id ON public.uploads USING btree (user_id);
+CREATE INDEX idx_drive_uploads_updated_at ON public.drive_uploads USING btree (updated_at);
 
 
 --
--- Name: idx_users_username; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_drive_uploads_account_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_users_username ON public.users USING btree (username);
+CREATE INDEX idx_drive_uploads_account_id ON public.drive_uploads USING btree (account_id);
+
+
+--
+-- Name: idx_accounts_username; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_accounts_username ON public.accounts USING btree (username);
 
 
 --
@@ -6836,10 +6836,10 @@ CREATE INDEX legal_documents_current ON public.legal_documents USING btree (kind
 
 
 --
--- Name: live_location_streams_expires_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: chat_live_location_streams_expires_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX live_location_streams_expires_idx ON public.live_location_streams USING btree (expires_at);
+CREATE INDEX chat_live_location_streams_expires_idx ON public.chat_live_location_streams USING btree (expires_at);
 
 
 --
@@ -6895,14 +6895,14 @@ CREATE INDEX mail_forwardings_forwardee ON public.mail_forwardings USING btree (
 -- Name: mail_forwardings_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX mail_forwardings_user ON public.mail_forwardings USING btree (user_id);
+CREATE INDEX mail_forwardings_user ON public.mail_forwardings USING btree (account_id);
 
 
 --
 -- Name: mail_group_signing_shares_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX mail_group_signing_shares_user ON public.mail_group_signing_shares USING btree (user_id);
+CREATE INDEX mail_group_signing_shares_user ON public.mail_group_signing_shares USING btree (account_id);
 
 
 --
@@ -6979,28 +6979,28 @@ CREATE UNIQUE INDEX organization_members_one_per_account ON public.organization_
 -- Name: pass_pin_failures_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX pass_pin_failures_user ON public.pass_pin_failures USING btree (user_id);
+CREATE INDEX pass_pin_failures_user ON public.pass_pin_failures USING btree (account_id);
 
 
 --
--- Name: public_link_reports_open; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_public_link_reports_open; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX public_link_reports_open ON public.public_link_reports USING btree (created_at) WHERE (resolved_at IS NULL);
-
-
---
--- Name: public_link_reports_share; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX public_link_reports_share ON public.public_link_reports USING btree (share_id);
+CREATE INDEX drive_public_link_reports_open ON public.drive_public_link_reports USING btree (created_at) WHERE (resolved_at IS NULL);
 
 
 --
--- Name: public_shares_file_target_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_public_link_reports_share; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX public_shares_file_target_idx ON public.public_shares USING btree (target_id) WHERE (share_type = 'file'::text);
+CREATE INDEX drive_public_link_reports_share ON public.drive_public_link_reports USING btree (share_id);
+
+
+--
+-- Name: drive_public_shares_file_target_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX drive_public_shares_file_target_idx ON public.drive_public_shares USING btree (target_id) WHERE (share_type = 'file'::text);
 
 
 --
@@ -7032,31 +7032,31 @@ CREATE INDEX storage_pending_deletions_key ON public.storage_pending_deletions U
 
 
 --
--- Name: uploads_revision_id_key; Type: INDEX; Schema: public; Owner: -
+-- Name: drive_uploads_revision_id_key; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX uploads_revision_id_key ON public.uploads USING btree (revision_id);
-
-
---
--- Name: user_security_keys_user; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX user_security_keys_user ON public.user_security_keys USING btree (user_id);
+CREATE UNIQUE INDEX drive_uploads_revision_id_key ON public.drive_uploads USING btree (revision_id);
 
 
 --
--- Name: users_closing_due; Type: INDEX; Schema: public; Owner: -
+-- Name: account_security_keys_user; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX users_closing_due ON public.users USING btree (closes_at) WHERE (state = 'closing'::text);
+CREATE INDEX account_security_keys_user ON public.account_security_keys USING btree (account_id);
 
 
 --
--- Name: users_one_break_glass; Type: INDEX; Schema: public; Owner: -
+-- Name: accounts_closing_due; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX users_one_break_glass ON public.users USING btree ((true)) WHERE is_break_glass;
+CREATE INDEX accounts_closing_due ON public.accounts USING btree (closes_at) WHERE (state = 'closing'::text);
+
+
+--
+-- Name: accounts_one_break_glass; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX accounts_one_break_glass ON public.accounts USING btree ((true)) WHERE is_break_glass;
 
 
 --
@@ -7074,17 +7074,17 @@ CREATE TRIGGER account_security_events_count_step BEFORE UPDATE OF count ON publ
 
 
 --
--- Name: collections collections_not_in_albums; Type: TRIGGER; Schema: public; Owner: -
+-- Name: drive_collections drive_collections_not_in_albums; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER collections_not_in_albums BEFORE INSERT OR UPDATE OF parent_collection_id ON public.collections FOR EACH ROW EXECUTE FUNCTION public.kutup_no_folders_in_albums();
+CREATE TRIGGER drive_collections_not_in_albums BEFORE INSERT OR UPDATE OF parent_collection_id ON public.drive_collections FOR EACH ROW EXECUTE FUNCTION public.kutup_no_folders_in_albums();
 
 
 --
--- Name: files files_not_in_albums; Type: TRIGGER; Schema: public; Owner: -
+-- Name: drive_files drive_files_not_in_albums; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER files_not_in_albums BEFORE INSERT OR UPDATE OF collection_id ON public.files FOR EACH ROW EXECUTE FUNCTION public.kutup_no_files_in_albums();
+CREATE TRIGGER drive_files_not_in_albums BEFORE INSERT OR UPDATE OF collection_id ON public.drive_files FOR EACH ROW EXECUTE FUNCTION public.kutup_no_files_in_albums();
 
 
 --
@@ -7130,11 +7130,11 @@ CREATE TRIGGER organization_after_member_gone AFTER DELETE ON public.organizatio
 
 
 --
--- Name: account_data_keys account_data_keys_user_id_fkey; Type: FK CONSTRAINT; Schema: account_keys; Owner: -
+-- Name: account_data_keys account_data_keys_account_id_fkey; Type: FK CONSTRAINT; Schema: account_keys; Owner: -
 --
 
 ALTER TABLE ONLY account_keys.account_data_keys
-    ADD CONSTRAINT account_data_keys_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_data_keys_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7146,99 +7146,99 @@ ALTER TABLE ONLY account_keys.mail_group_data_keys
 
 
 --
--- Name: account_heads account_heads_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_heads account_heads_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_heads
-    ADD CONSTRAINT account_heads_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_heads_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: account_names account_names_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_names account_names_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_names
-    ADD CONSTRAINT account_names_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT account_names_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: account_record_feeds account_record_feeds_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_record_feeds account_record_feeds_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_record_feeds
-    ADD CONSTRAINT account_record_feeds_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_record_feeds_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: account_record_tombstones account_record_tombstones_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_record_tombstones account_record_tombstones_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_record_tombstones
-    ADD CONSTRAINT account_record_tombstones_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_record_tombstones_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: account_records account_records_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_records account_records_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_records
-    ADD CONSTRAINT account_records_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_records_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: account_renames account_renames_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_renames account_renames_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_renames
-    ADD CONSTRAINT account_renames_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT account_renames_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: account_roots account_roots_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_roots account_roots_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_roots
-    ADD CONSTRAINT account_roots_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_roots_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: account_security_events account_security_events_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.account_security_events
-    ADD CONSTRAINT account_security_events_admin_user_id_fkey FOREIGN KEY (admin_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
-
-
---
--- Name: account_security_events account_security_events_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_security_events account_security_events_admin_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_security_events
-    ADD CONSTRAINT account_security_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_security_events_admin_account_id_fkey FOREIGN KEY (admin_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: album_items album_items_added_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_security_events account_security_events_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.album_items
-    ADD CONSTRAINT album_items_added_by_fkey FOREIGN KEY (added_by) REFERENCES public.users(id) ON DELETE SET NULL;
-
-
---
--- Name: album_items album_items_album_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.album_items
-    ADD CONSTRAINT album_items_album_id_fkey FOREIGN KEY (album_id) REFERENCES public.collections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.account_security_events
+    ADD CONSTRAINT account_security_events_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: album_items album_items_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: photos_album_items photos_album_items_added_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.album_items
-    ADD CONSTRAINT album_items_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.photos_album_items
+    ADD CONSTRAINT photos_album_items_added_by_account_id_fkey FOREIGN KEY (added_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
+
+
+--
+-- Name: photos_album_items photos_album_items_album_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.photos_album_items
+    ADD CONSTRAINT photos_album_items_album_id_fkey FOREIGN KEY (album_id) REFERENCES public.drive_collections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: photos_album_items photos_album_items_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.photos_album_items
+    ADD CONSTRAINT photos_album_items_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
 
 
 --
@@ -7250,19 +7250,19 @@ ALTER TABLE ONLY public.auth_grants
 
 
 --
--- Name: auth_grants auth_grants_target_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: auth_grants auth_grants_target_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.auth_grants
-    ADD CONSTRAINT auth_grants_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT auth_grants_target_account_id_fkey FOREIGN KEY (target_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: auth_grants auth_grants_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: auth_grants auth_grants_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.auth_grants
-    ADD CONSTRAINT auth_grants_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT auth_grants_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7282,11 +7282,11 @@ ALTER TABLE ONLY public.auth_sessions
 
 
 --
--- Name: auth_sessions auth_sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: auth_sessions auth_sessions_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.auth_sessions
-    ADD CONSTRAINT auth_sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT auth_sessions_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7298,11 +7298,11 @@ ALTER TABLE ONLY public.calendar_alarm_recomputes
 
 
 --
--- Name: calendar_alarm_recomputes calendar_alarm_recomputes_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: calendar_alarm_recomputes calendar_alarm_recomputes_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendar_alarm_recomputes
-    ADD CONSTRAINT calendar_alarm_recomputes_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT calendar_alarm_recomputes_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7314,11 +7314,11 @@ ALTER TABLE ONLY public.calendar_alarms
 
 
 --
--- Name: calendar_alarms calendar_alarms_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: calendar_alarms calendar_alarms_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendar_alarms
-    ADD CONSTRAINT calendar_alarms_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT calendar_alarms_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7330,11 +7330,11 @@ ALTER TABLE ONLY public.calendar_event_reminders
 
 
 --
--- Name: calendar_event_reminders calendar_event_reminders_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: calendar_event_reminders calendar_event_reminders_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendar_event_reminders
-    ADD CONSTRAINT calendar_event_reminders_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT calendar_event_reminders_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7346,11 +7346,11 @@ ALTER TABLE ONLY public.calendar_events
 
 
 --
--- Name: calendar_events calendar_events_author_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: calendar_events calendar_events_author_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendar_events
-    ADD CONSTRAINT calendar_events_author_user_id_fkey FOREIGN KEY (author_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT calendar_events_author_account_id_fkey FOREIGN KEY (author_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
@@ -7370,11 +7370,11 @@ ALTER TABLE ONLY public.calendar_members
 
 
 --
--- Name: calendar_members calendar_members_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: calendar_members calendar_members_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendar_members
-    ADD CONSTRAINT calendar_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT calendar_members_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7386,155 +7386,155 @@ ALTER TABLE ONLY public.calendar_push_subscriptions
 
 
 --
--- Name: calendar_push_subscriptions calendar_push_subscriptions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: calendar_push_subscriptions calendar_push_subscriptions_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendar_push_subscriptions
-    ADD CONSTRAINT calendar_push_subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT calendar_push_subscriptions_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: calendar_user_settings calendar_user_settings_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: calendar_account_settings calendar_account_settings_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.calendar_user_settings
-    ADD CONSTRAINT calendar_user_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.calendar_account_settings
+    ADD CONSTRAINT calendar_account_settings_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: calendars calendars_owner_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: calendars calendars_owner_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendars
-    ADD CONSTRAINT calendars_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT calendars_owner_account_id_fkey FOREIGN KEY (owner_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_account_identities chat_account_identities_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_account_identities chat_account_identities_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_account_identities
-    ADD CONSTRAINT chat_account_identities_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_account_identities_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_anonymous_send_ids chat_anonymous_send_ids_recipient_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_anonymous_send_ids chat_anonymous_send_ids_recipient_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_anonymous_send_ids
-    ADD CONSTRAINT chat_anonymous_send_ids_recipient_user_id_fkey FOREIGN KEY (recipient_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_anonymous_send_ids_recipient_account_id_fkey FOREIGN KEY (recipient_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_bases chat_backup_bases_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_bases chat_backup_bases_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_bases
-    ADD CONSTRAINT chat_backup_bases_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.chat_backups(user_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_bases_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.chat_backups(account_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_device_heads chat_backup_device_heads_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_device_heads chat_backup_device_heads_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_device_heads
-    ADD CONSTRAINT chat_backup_device_heads_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.chat_backups(user_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_device_heads_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.chat_backups(account_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_media_objects chat_backup_media_objects_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_media_objects chat_backup_media_objects_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_media_objects
-    ADD CONSTRAINT chat_backup_media_objects_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.chat_backups(user_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_media_objects_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.chat_backups(account_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_media_operations chat_backup_media_operations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.chat_backup_media_operations
-    ADD CONSTRAINT chat_backup_media_operations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.chat_backups(user_id) ON DELETE CASCADE;
-
-
---
--- Name: chat_backup_media_operations chat_backup_media_operations_user_id_media_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_media_operations chat_backup_media_operations_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_media_operations
-    ADD CONSTRAINT chat_backup_media_operations_user_id_media_id_fkey FOREIGN KEY (user_id, media_id) REFERENCES public.chat_backup_media_objects(user_id, media_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_media_operations_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.chat_backups(account_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_media_reconciliation_entries chat_backup_media_reconciliation_entr_user_id_operation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_media_operations chat_backup_media_operations_account_id_media_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chat_backup_media_operations
+    ADD CONSTRAINT chat_backup_media_operations_account_id_media_id_fkey FOREIGN KEY (account_id, media_id) REFERENCES public.chat_backup_media_objects(account_id, media_id) ON DELETE CASCADE;
+
+
+--
+-- Name: chat_backup_media_reconciliation_entries chat_backup_media_reconciliation_entr_account_id_operation_id_f; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_media_reconciliation_entries
-    ADD CONSTRAINT chat_backup_media_reconciliation_entr_user_id_operation_id_fkey FOREIGN KEY (user_id, operation_id) REFERENCES public.chat_backup_media_reconciliations(user_id, operation_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_media_reconciliation_entr_account_id_operation_id_f FOREIGN KEY (account_id, operation_id) REFERENCES public.chat_backup_media_reconciliations(account_id, operation_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_media_reconciliation_entries chat_backup_media_reconciliation_entries_user_id_media_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_media_reconciliation_entries chat_backup_media_reconciliation_entries_account_id_media_id_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_media_reconciliation_entries
-    ADD CONSTRAINT chat_backup_media_reconciliation_entries_user_id_media_id_fkey FOREIGN KEY (user_id, media_id) REFERENCES public.chat_backup_media_objects(user_id, media_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_media_reconciliation_entries_account_id_media_id_fk FOREIGN KEY (account_id, media_id) REFERENCES public.chat_backup_media_objects(account_id, media_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_media_reconciliation_pages chat_backup_media_reconciliation_page_user_id_operation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_media_reconciliation_pages chat_backup_media_reconciliation_page_account_id_operation_id_f; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_media_reconciliation_pages
-    ADD CONSTRAINT chat_backup_media_reconciliation_page_user_id_operation_id_fkey FOREIGN KEY (user_id, operation_id) REFERENCES public.chat_backup_media_reconciliations(user_id, operation_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_media_reconciliation_page_account_id_operation_id_f FOREIGN KEY (account_id, operation_id) REFERENCES public.chat_backup_media_reconciliations(account_id, operation_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_media_reconciliations chat_backup_media_reconciliations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_media_reconciliations chat_backup_media_reconciliations_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_media_reconciliations
-    ADD CONSTRAINT chat_backup_media_reconciliations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.chat_backups(user_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_media_reconciliations_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.chat_backups(account_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_media_references chat_backup_media_references_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.chat_backup_media_references
-    ADD CONSTRAINT chat_backup_media_references_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.chat_backups(user_id) ON DELETE CASCADE;
-
-
---
--- Name: chat_backup_media_references chat_backup_media_references_user_id_media_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_media_references chat_backup_media_references_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_media_references
-    ADD CONSTRAINT chat_backup_media_references_user_id_media_id_fkey FOREIGN KEY (user_id, media_id) REFERENCES public.chat_backup_media_objects(user_id, media_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_media_references_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.chat_backups(account_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_provision_operations chat_backup_provision_operations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_media_references chat_backup_media_references_account_id_media_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chat_backup_media_references
+    ADD CONSTRAINT chat_backup_media_references_account_id_media_id_fkey FOREIGN KEY (account_id, media_id) REFERENCES public.chat_backup_media_objects(account_id, media_id) ON DELETE CASCADE;
+
+
+--
+-- Name: chat_backup_provision_operations chat_backup_provision_operations_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_provision_operations
-    ADD CONSTRAINT chat_backup_provision_operations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_provision_operations_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backup_segments chat_backup_segments_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backup_segments chat_backup_segments_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backup_segments
-    ADD CONSTRAINT chat_backup_segments_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.chat_backups(user_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backup_segments_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.chat_backups(account_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_backups chat_backups_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_backups chat_backups_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_backups
-    ADD CONSTRAINT chat_backups_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_backups_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7542,7 +7542,7 @@ ALTER TABLE ONLY public.chat_backups
 --
 
 ALTER TABLE ONLY public.chat_call_link_knocks
-    ADD CONSTRAINT chat_call_link_knocks_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT chat_call_link_knocks_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
@@ -7558,7 +7558,7 @@ ALTER TABLE ONLY public.chat_call_link_knocks
 --
 
 ALTER TABLE ONLY public.chat_call_link_seats
-    ADD CONSTRAINT chat_call_link_seats_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT chat_call_link_seats_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
@@ -7570,35 +7570,35 @@ ALTER TABLE ONLY public.chat_call_link_seats
 
 
 --
--- Name: chat_call_links chat_call_links_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_call_links chat_call_links_owner_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_call_links
-    ADD CONSTRAINT chat_call_links_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_call_links_owner_account_id_fkey FOREIGN KEY (owner_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_delivery_capabilities chat_delivery_capabilities_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_delivery_capabilities chat_delivery_capabilities_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_delivery_capabilities
-    ADD CONSTRAINT chat_delivery_capabilities_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_delivery_capabilities_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_device_manifest_history chat_device_manifest_history_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_device_manifest_history chat_device_manifest_history_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_device_manifest_history
-    ADD CONSTRAINT chat_device_manifest_history_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_device_manifest_history_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_device_manifests chat_device_manifests_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_device_manifests chat_device_manifests_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_device_manifests
-    ADD CONSTRAINT chat_device_manifests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_device_manifests_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7634,19 +7634,19 @@ ALTER TABLE ONLY public.chat_group_seen_pseudonyms
 
 
 --
--- Name: chat_link_tokens chat_link_tokens_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_link_tokens chat_link_tokens_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_link_tokens
-    ADD CONSTRAINT chat_link_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_link_tokens_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_mailbox chat_mailbox_recipient_user_id_recipient_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_mailbox chat_mailbox_recipient_account_id_recipient_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_mailbox
-    ADD CONSTRAINT chat_mailbox_recipient_user_id_recipient_device_id_fkey FOREIGN KEY (recipient_user_id, recipient_device_id) REFERENCES public.devices(user_id, device_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_mailbox_recipient_account_id_recipient_device_id_fkey FOREIGN KEY (recipient_account_id, recipient_device_id) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
 
 
 --
@@ -7658,11 +7658,11 @@ ALTER TABLE ONLY public.chat_mailbox
 
 
 --
--- Name: chat_media_federation_inbound_pending chat_media_federation_inbound_pending_recipient_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_media_federation_inbound_pending chat_media_federation_inbound_pending_recipient_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_federation_inbound_pending
-    ADD CONSTRAINT chat_media_federation_inbound_pending_recipient_user_id_fkey FOREIGN KEY (recipient_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_media_federation_inbound_pending_recipient_account_id_fkey FOREIGN KEY (recipient_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7674,19 +7674,19 @@ ALTER TABLE ONLY public.chat_media_federation_pull_grants
 
 
 --
--- Name: chat_media_federation_pull_grants chat_media_federation_pull_grants_origin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_media_federation_pull_grants chat_media_federation_pull_grants_origin_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_federation_pull_grants
-    ADD CONSTRAINT chat_media_federation_pull_grants_origin_user_id_fkey FOREIGN KEY (origin_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_media_federation_pull_grants_origin_account_id_fkey FOREIGN KEY (origin_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_media_objects chat_media_objects_origin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_media_objects chat_media_objects_origin_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_objects
-    ADD CONSTRAINT chat_media_objects_origin_user_id_fkey FOREIGN KEY (origin_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_media_objects_origin_account_id_fkey FOREIGN KEY (origin_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7698,19 +7698,19 @@ ALTER TABLE ONLY public.chat_media_origin_delivery_operations
 
 
 --
--- Name: chat_media_origin_delivery_operations chat_media_origin_delivery_operations_origin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_media_origin_delivery_operations chat_media_origin_delivery_operations_origin_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_origin_delivery_operations
-    ADD CONSTRAINT chat_media_origin_delivery_operations_origin_user_id_fkey FOREIGN KEY (origin_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_media_origin_delivery_operations_origin_account_id_fkey FOREIGN KEY (origin_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_media_origin_delivery_operations chat_media_origin_delivery_operations_recipient_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_media_origin_delivery_operations chat_media_origin_delivery_operations_recipient_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_origin_delivery_operations
-    ADD CONSTRAINT chat_media_origin_delivery_operations_recipient_user_id_fkey FOREIGN KEY (recipient_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_media_origin_delivery_operations_recipient_account_id_fkey FOREIGN KEY (recipient_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7722,115 +7722,115 @@ ALTER TABLE ONLY public.chat_media_references
 
 
 --
--- Name: chat_media_references chat_media_references_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_media_references chat_media_references_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_references
-    ADD CONSTRAINT chat_media_references_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_media_references_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_media_uploads chat_media_uploads_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_media_uploads chat_media_uploads_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_uploads
-    ADD CONSTRAINT chat_media_uploads_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_media_uploads_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_multi_send_ids chat_multi_send_ids_user_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_multi_send_ids chat_multi_send_ids_account_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_multi_send_ids
-    ADD CONSTRAINT chat_multi_send_ids_user_id_device_id_fkey FOREIGN KEY (user_id, device_id) REFERENCES public.devices(user_id, device_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_multi_send_ids_account_id_device_id_fkey FOREIGN KEY (account_id, device_id) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_one_time_kyber_pre_keys chat_one_time_kyber_pre_keys_user_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_one_time_kyber_pre_keys chat_one_time_kyber_pre_keys_account_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_one_time_kyber_pre_keys
-    ADD CONSTRAINT chat_one_time_kyber_pre_keys_user_id_device_id_fkey FOREIGN KEY (user_id, device_id) REFERENCES public.devices(user_id, device_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_one_time_kyber_pre_keys_account_id_device_id_fkey FOREIGN KEY (account_id, device_id) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_one_time_pre_keys chat_one_time_pre_keys_user_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_one_time_pre_keys chat_one_time_pre_keys_account_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_one_time_pre_keys
-    ADD CONSTRAINT chat_one_time_pre_keys_user_id_device_id_fkey FOREIGN KEY (user_id, device_id) REFERENCES public.devices(user_id, device_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_one_time_pre_keys_account_id_device_id_fkey FOREIGN KEY (account_id, device_id) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_profiles chat_profiles_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_profiles chat_profiles_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_profiles
-    ADD CONSTRAINT chat_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_profiles_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_push_subscriptions chat_push_subscriptions_user_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_push_subscriptions chat_push_subscriptions_account_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_push_subscriptions
-    ADD CONSTRAINT chat_push_subscriptions_user_id_device_id_fkey FOREIGN KEY (user_id, device_id) REFERENCES public.devices(user_id, device_id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_push_subscriptions_account_id_device_id_fkey FOREIGN KEY (account_id, device_id) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
 
 
 --
--- Name: chat_sends chat_sends_sender_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_sends chat_sends_sender_account_id_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_sends
-    ADD CONSTRAINT chat_sends_sender_user_id_fkey FOREIGN KEY (sender_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT chat_sends_sender_account_id_id_fkey FOREIGN KEY (sender_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: collection_key_epoch_history collection_key_epoch_history_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_collection_key_epoch_history drive_collection_key_epoch_history_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.collection_key_epoch_history
-    ADD CONSTRAINT collection_key_epoch_history_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.collections(id) ON DELETE CASCADE;
-
-
---
--- Name: collection_shares collection_shares_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.collection_shares
-    ADD CONSTRAINT collection_shares_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.collections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_collection_key_epoch_history
+    ADD CONSTRAINT drive_collection_key_epoch_history_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.drive_collections(id) ON DELETE CASCADE;
 
 
 --
--- Name: collection_shares collection_shares_recipient_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_collection_shares drive_collection_shares_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.collection_shares
-    ADD CONSTRAINT collection_shares_recipient_user_id_fkey FOREIGN KEY (recipient_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- Name: collection_shares collection_shares_sharer_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.collection_shares
-    ADD CONSTRAINT collection_shares_sharer_user_id_fkey FOREIGN KEY (sharer_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_collection_shares
+    ADD CONSTRAINT drive_collection_shares_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.drive_collections(id) ON DELETE CASCADE;
 
 
 --
--- Name: collections collections_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_collection_shares drive_collection_shares_recipient_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.collections
-    ADD CONSTRAINT collections_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_collection_shares
+    ADD CONSTRAINT drive_collection_shares_recipient_account_id_fkey FOREIGN KEY (recipient_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: collections collections_parent_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_collection_shares drive_collection_shares_sharer_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.collections
-    ADD CONSTRAINT collections_parent_collection_id_fkey FOREIGN KEY (parent_collection_id) REFERENCES public.collections(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.drive_collection_shares
+    ADD CONSTRAINT drive_collection_shares_sharer_account_id_fkey FOREIGN KEY (sharer_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_collections drive_collections_owner_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_collections
+    ADD CONSTRAINT drive_collections_owner_account_id_fkey FOREIGN KEY (owner_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_collections drive_collections_parent_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_collections
+    ADD CONSTRAINT drive_collections_parent_collection_id_fkey FOREIGN KEY (parent_collection_id) REFERENCES public.drive_collections(id) ON DELETE SET NULL;
 
 
 --
@@ -7842,51 +7842,51 @@ ALTER TABLE ONLY public.consents
 
 
 --
--- Name: consents consents_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: consents consents_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.consents
-    ADD CONSTRAINT consents_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT consents_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: contact_emails contact_emails_contact_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: contacts_emails contacts_emails_contact_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.contact_emails
-    ADD CONSTRAINT contact_emails_contact_id_fkey FOREIGN KEY (contact_id) REFERENCES public.contacts(id) ON DELETE CASCADE;
-
-
---
--- Name: contact_emails contact_emails_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.contact_emails
-    ADD CONSTRAINT contact_emails_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.contacts_emails
+    ADD CONSTRAINT contacts_emails_contact_id_fkey FOREIGN KEY (contact_id) REFERENCES public.contacts(id) ON DELETE CASCADE;
 
 
 --
--- Name: contacts contacts_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: contacts_emails contacts_emails_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contacts_emails
+    ADD CONSTRAINT contacts_emails_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: contacts contacts_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.contacts
-    ADD CONSTRAINT contacts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT contacts_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: device_tickets device_tickets_user_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_device_tickets account_device_tickets_account_id_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.device_tickets
-    ADD CONSTRAINT device_tickets_user_id_device_id_fkey FOREIGN KEY (user_id, device_id) REFERENCES public.devices(user_id, device_id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.account_device_tickets
+    ADD CONSTRAINT account_device_tickets_account_id_device_id_fkey FOREIGN KEY (account_id, device_id) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
 
 
 --
--- Name: devices devices_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_devices account_devices_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.devices
-    ADD CONSTRAINT devices_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.account_devices
+    ADD CONSTRAINT account_devices_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7898,11 +7898,11 @@ ALTER TABLE ONLY public.document_acknowledgements
 
 
 --
--- Name: document_acknowledgements document_acknowledgements_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: document_acknowledgements document_acknowledgements_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.document_acknowledgements
-    ADD CONSTRAINT document_acknowledgements_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT document_acknowledgements_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7910,63 +7910,63 @@ ALTER TABLE ONLY public.document_acknowledgements
 --
 
 ALTER TABLE ONLY public.drive_federation_mutations
-    ADD CONSTRAINT drive_federation_mutations_share_id_fkey FOREIGN KEY (share_id) REFERENCES public.federated_outgoing_shares(id) ON DELETE CASCADE;
+    ADD CONSTRAINT drive_federation_mutations_share_id_fkey FOREIGN KEY (share_id) REFERENCES public.drive_federated_outgoing_shares(id) ON DELETE CASCADE;
 
 
 --
--- Name: drive_profile_keys drive_profile_keys_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_profile_keys drive_profile_keys_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.drive_profile_keys
-    ADD CONSTRAINT drive_profile_keys_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT drive_profile_keys_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: federated_incoming_file_shares federated_incoming_file_shares_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_federated_incoming_file_shares drive_federated_incoming_file_shares_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.federated_incoming_file_shares
-    ADD CONSTRAINT federated_incoming_file_shares_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- Name: federated_incoming_shares federated_incoming_shares_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.federated_incoming_shares
-    ADD CONSTRAINT federated_incoming_shares_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_federated_incoming_file_shares
+    ADD CONSTRAINT drive_federated_incoming_file_shares_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: federated_outgoing_file_shares federated_outgoing_file_shares_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_federated_incoming_shares drive_federated_incoming_shares_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.federated_outgoing_file_shares
-    ADD CONSTRAINT federated_outgoing_file_shares_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
-
-
---
--- Name: federated_outgoing_file_shares federated_outgoing_file_shares_sharer_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.federated_outgoing_file_shares
-    ADD CONSTRAINT federated_outgoing_file_shares_sharer_user_id_fkey FOREIGN KEY (sharer_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_federated_incoming_shares
+    ADD CONSTRAINT drive_federated_incoming_shares_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: federated_outgoing_shares federated_outgoing_shares_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_federated_outgoing_file_shares drive_federated_outgoing_file_shares_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.federated_outgoing_shares
-    ADD CONSTRAINT federated_outgoing_shares_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.collections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
+    ADD CONSTRAINT drive_federated_outgoing_file_shares_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
 
 
 --
--- Name: federated_outgoing_shares federated_outgoing_shares_sharer_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_federated_outgoing_file_shares drive_federated_outgoing_file_shares_sharer_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.federated_outgoing_shares
-    ADD CONSTRAINT federated_outgoing_shares_sharer_user_id_fkey FOREIGN KEY (sharer_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
+    ADD CONSTRAINT drive_federated_outgoing_file_shares_sharer_account_id_fkey FOREIGN KEY (sharer_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_federated_outgoing_shares drive_federated_outgoing_shares_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_outgoing_shares
+    ADD CONSTRAINT drive_federated_outgoing_shares_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.drive_collections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_federated_outgoing_shares drive_federated_outgoing_shares_sharer_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_outgoing_shares
+    ADD CONSTRAINT drive_federated_outgoing_shares_sharer_account_id_fkey FOREIGN KEY (sharer_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7978,11 +7978,11 @@ ALTER TABLE ONLY public.federation_domain_rules
 
 
 --
--- Name: federation_outbox federation_outbox_sender_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: federation_outbox federation_outbox_sender_account_id_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.federation_outbox
-    ADD CONSTRAINT federation_outbox_sender_user_id_fkey FOREIGN KEY (sender_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT federation_outbox_sender_account_id_id_fkey FOREIGN KEY (sender_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
@@ -7994,163 +7994,163 @@ ALTER TABLE ONLY public.federation_peer_identity_documents
 
 
 --
--- Name: feedback feedback_resolved_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: feedback feedback_resolved_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.feedback
-    ADD CONSTRAINT feedback_resolved_by_fkey FOREIGN KEY (resolved_by) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT feedback_resolved_by_account_id_fkey FOREIGN KEY (resolved_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: feedback feedback_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: feedback feedback_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.feedback
-    ADD CONSTRAINT feedback_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT feedback_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: file_assets file_assets_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_assets drive_file_assets_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_assets
-    ADD CONSTRAINT file_assets_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
-
-
---
--- Name: file_assets file_assets_uploader_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.file_assets
-    ADD CONSTRAINT file_assets_uploader_user_id_fkey FOREIGN KEY (uploader_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_file_assets
+    ADD CONSTRAINT drive_file_assets_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
 
 
 --
--- Name: file_key_history file_key_history_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_assets drive_file_assets_uploader_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_key_history
-    ADD CONSTRAINT file_key_history_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
-
-
---
--- Name: file_sender_floors file_sender_floors_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.file_sender_floors
-    ADD CONSTRAINT file_sender_floors_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_file_assets
+    ADD CONSTRAINT drive_file_assets_uploader_account_id_fkey FOREIGN KEY (uploader_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: file_shares file_shares_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_key_history drive_file_key_history_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_shares
-    ADD CONSTRAINT file_shares_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
-
-
---
--- Name: file_shares file_shares_recipient_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.file_shares
-    ADD CONSTRAINT file_shares_recipient_user_id_fkey FOREIGN KEY (recipient_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_file_key_history
+    ADD CONSTRAINT drive_file_key_history_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
 
 
 --
--- Name: file_shares file_shares_sharer_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: collab_sender_floors collab_sender_floors_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_shares
-    ADD CONSTRAINT file_shares_sharer_user_id_fkey FOREIGN KEY (sharer_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- Name: file_thumbnails file_thumbnails_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.file_thumbnails
-    ADD CONSTRAINT file_thumbnails_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.collab_sender_floors
+    ADD CONSTRAINT collab_sender_floors_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
 
 
 --
--- Name: file_thumbnails file_thumbnails_source_version_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_shares drive_file_shares_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_thumbnails
-    ADD CONSTRAINT file_thumbnails_source_version_fkey FOREIGN KEY (source_version) REFERENCES public.file_versions(id) ON DELETE SET NULL;
-
-
---
--- Name: file_thumbnails file_thumbnails_uploader_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.file_thumbnails
-    ADD CONSTRAINT file_thumbnails_uploader_user_id_fkey FOREIGN KEY (uploader_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_file_shares
+    ADD CONSTRAINT drive_file_shares_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
 
 
 --
--- Name: file_update_log file_update_log_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_shares drive_file_shares_recipient_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_update_log
-    ADD CONSTRAINT file_update_log_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
-
-
---
--- Name: file_versions file_versions_author_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.file_versions
-    ADD CONSTRAINT file_versions_author_user_id_fkey FOREIGN KEY (author_user_id) REFERENCES public.users(id);
+ALTER TABLE ONLY public.drive_file_shares
+    ADD CONSTRAINT drive_file_shares_recipient_account_id_fkey FOREIGN KEY (recipient_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: file_versions file_versions_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_shares drive_file_shares_sharer_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.file_versions
-    ADD CONSTRAINT file_versions_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
-
-
---
--- Name: files files_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.files
-    ADD CONSTRAINT files_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.collections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_file_shares
+    ADD CONSTRAINT drive_file_shares_sharer_account_id_fkey FOREIGN KEY (sharer_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: files files_fed_share_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_thumbnails drive_file_thumbnails_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.files
-    ADD CONSTRAINT files_fed_share_id_fkey FOREIGN KEY (fed_share_id) REFERENCES public.federated_outgoing_shares(id) ON DELETE SET NULL;
-
-
---
--- Name: files files_uploader_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.files
-    ADD CONSTRAINT files_uploader_user_id_fkey FOREIGN KEY (uploader_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_file_thumbnails
+    ADD CONSTRAINT drive_file_thumbnails_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
 
 
 --
--- Name: legal_documents legal_documents_published_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_file_thumbnails drive_file_thumbnails_source_version_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_file_thumbnails
+    ADD CONSTRAINT drive_file_thumbnails_source_version_fkey FOREIGN KEY (source_version) REFERENCES public.drive_file_versions(id) ON DELETE SET NULL;
+
+
+--
+-- Name: drive_file_thumbnails drive_file_thumbnails_uploader_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_file_thumbnails
+    ADD CONSTRAINT drive_file_thumbnails_uploader_account_id_fkey FOREIGN KEY (uploader_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: collab_update_log collab_update_log_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collab_update_log
+    ADD CONSTRAINT collab_update_log_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_file_versions drive_file_versions_author_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_file_versions
+    ADD CONSTRAINT drive_file_versions_author_account_id_fkey FOREIGN KEY (author_account_id) REFERENCES public.accounts(id);
+
+
+--
+-- Name: drive_file_versions drive_file_versions_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_file_versions
+    ADD CONSTRAINT drive_file_versions_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_files drive_files_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_files
+    ADD CONSTRAINT drive_files_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.drive_collections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_files drive_files_fed_share_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_files
+    ADD CONSTRAINT drive_files_fed_share_id_fkey FOREIGN KEY (fed_share_id) REFERENCES public.drive_federated_outgoing_shares(id) ON DELETE SET NULL;
+
+
+--
+-- Name: drive_files drive_files_uploader_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_files
+    ADD CONSTRAINT drive_files_uploader_account_id_fkey FOREIGN KEY (uploader_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: legal_documents legal_documents_published_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.legal_documents
-    ADD CONSTRAINT legal_documents_published_by_fkey FOREIGN KEY (published_by) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT legal_documents_published_by_account_id_fkey FOREIGN KEY (published_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: live_location_streams live_location_streams_creator_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: chat_live_location_streams chat_live_location_streams_created_by_account_id_account_id_fke; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.live_location_streams
-    ADD CONSTRAINT live_location_streams_creator_user_id_fkey FOREIGN KEY (creator_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.chat_live_location_streams
+    ADD CONSTRAINT chat_live_location_streams_created_by_account_id_account_id_fke FOREIGN KEY (created_by_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8186,35 +8186,35 @@ ALTER TABLE ONLY public.mail_addresses
 
 
 --
--- Name: mail_addresses mail_addresses_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_addresses mail_addresses_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_addresses
-    ADD CONSTRAINT mail_addresses_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_addresses_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_auto_replies mail_auto_replies_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_auto_replies mail_auto_replies_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_auto_replies
-    ADD CONSTRAINT mail_auto_replies_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_auto_replies_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_auto_reply_sent mail_auto_reply_sent_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_auto_reply_sent mail_auto_reply_sent_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_auto_reply_sent
-    ADD CONSTRAINT mail_auto_reply_sent_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_auto_reply_sent_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_domain_blocks mail_domain_blocks_blocked_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_domain_blocks mail_domain_blocks_blocked_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_domain_blocks
-    ADD CONSTRAINT mail_domain_blocks_blocked_by_fkey FOREIGN KEY (blocked_by) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT mail_domain_blocks_blocked_by_account_id_fkey FOREIGN KEY (blocked_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
@@ -8250,43 +8250,43 @@ ALTER TABLE ONLY public.mail_draft_attachments
 
 
 --
--- Name: mail_draft_attachments mail_draft_attachments_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_draft_attachments mail_draft_attachments_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_draft_attachments
-    ADD CONSTRAINT mail_draft_attachments_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_draft_attachments_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_filter_runs mail_filter_runs_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_filter_runs mail_filter_runs_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_filter_runs
-    ADD CONSTRAINT mail_filter_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_filter_runs_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_filters mail_filters_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_filters mail_filters_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_filters
-    ADD CONSTRAINT mail_filters_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_filters_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_folders mail_folders_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.mail_folders
-    ADD CONSTRAINT mail_folders_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- Name: mail_folders mail_folders_user_id_parent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_folders mail_folders_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_folders
-    ADD CONSTRAINT mail_folders_user_id_parent_id_fkey FOREIGN KEY (user_id, parent_id) REFERENCES public.mail_folders(user_id, id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_folders_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: mail_folders mail_folders_account_id_parent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mail_folders
+    ADD CONSTRAINT mail_folders_account_id_parent_id_fkey FOREIGN KEY (account_id, parent_id) REFERENCES public.mail_folders(account_id, id) ON DELETE CASCADE;
 
 
 --
@@ -8298,11 +8298,11 @@ ALTER TABLE ONLY public.mail_forwarding_keys
 
 
 --
--- Name: mail_forwarding_quota mail_forwarding_quota_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_forwarding_quota mail_forwarding_quota_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_forwarding_quota
-    ADD CONSTRAINT mail_forwarding_quota_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_forwarding_quota_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8322,11 +8322,11 @@ ALTER TABLE ONLY public.mail_forwardings
 
 
 --
--- Name: mail_forwardings mail_forwardings_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_forwardings mail_forwardings_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_forwardings
-    ADD CONSTRAINT mail_forwardings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_forwardings_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8346,11 +8346,11 @@ ALTER TABLE ONLY public.mail_group_key_shares
 
 
 --
--- Name: mail_group_key_shares mail_group_key_shares_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_group_key_shares mail_group_key_shares_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_group_key_shares
-    ADD CONSTRAINT mail_group_key_shares_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_group_key_shares_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8362,11 +8362,11 @@ ALTER TABLE ONLY public.mail_group_keys
 
 
 --
--- Name: mail_group_members mail_group_members_added_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_group_members mail_group_members_added_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_group_members
-    ADD CONSTRAINT mail_group_members_added_by_fkey FOREIGN KEY (added_by) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT mail_group_members_added_by_account_id_fkey FOREIGN KEY (added_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
@@ -8378,11 +8378,11 @@ ALTER TABLE ONLY public.mail_group_members
 
 
 --
--- Name: mail_group_members mail_group_members_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_group_members mail_group_members_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_group_members
-    ADD CONSTRAINT mail_group_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_group_members_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8410,19 +8410,19 @@ ALTER TABLE ONLY public.mail_group_signing_shares
 
 
 --
--- Name: mail_group_signing_shares mail_group_signing_shares_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_group_signing_shares mail_group_signing_shares_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_group_signing_shares
-    ADD CONSTRAINT mail_group_signing_shares_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_group_signing_shares_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_groups mail_groups_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_groups mail_groups_created_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_groups
-    ADD CONSTRAINT mail_groups_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT mail_groups_created_by_account_id_fkey FOREIGN KEY (created_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
@@ -8434,11 +8434,11 @@ ALTER TABLE ONLY public.mail_identities
 
 
 --
--- Name: mail_image_senders mail_image_senders_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_image_senders mail_image_senders_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_image_senders
-    ADD CONSTRAINT mail_image_senders_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_image_senders_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8450,11 +8450,11 @@ ALTER TABLE ONLY public.mail_key_lists
 
 
 --
--- Name: mail_labels mail_labels_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_labels mail_labels_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_labels
-    ADD CONSTRAINT mail_labels_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_labels_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8486,7 +8486,7 @@ ALTER TABLE ONLY public.mail_messages
 --
 
 ALTER TABLE ONLY public.mail_messages
-    ADD CONSTRAINT mail_messages_custom_folder_fk FOREIGN KEY (user_id, custom_folder) REFERENCES public.mail_folders(user_id, id);
+    ADD CONSTRAINT mail_messages_custom_folder_fk FOREIGN KEY (account_id, custom_folder) REFERENCES public.mail_folders(account_id, id);
 
 
 --
@@ -8498,59 +8498,59 @@ ALTER TABLE ONLY public.mail_messages
 
 
 --
--- Name: mail_messages mail_messages_sent_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_messages mail_messages_sent_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_messages
-    ADD CONSTRAINT mail_messages_sent_by_fkey FOREIGN KEY (sent_by) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT mail_messages_sent_by_account_id_fkey FOREIGN KEY (sent_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: mail_messages mail_messages_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_messages mail_messages_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_messages
-    ADD CONSTRAINT mail_messages_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_messages_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_outbox mail_outbox_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_outbox mail_outbox_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_outbox
-    ADD CONSTRAINT mail_outbox_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_outbox_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_sender_rules mail_sender_rules_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_sender_rules mail_sender_rules_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_sender_rules
-    ADD CONSTRAINT mail_sender_rules_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_sender_rules_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_sending_events mail_sending_events_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_sending_events mail_sending_events_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_sending_events
-    ADD CONSTRAINT mail_sending_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_sending_events_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_sending_policies mail_sending_policies_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_sending_policies mail_sending_policies_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_sending_policies
-    ADD CONSTRAINT mail_sending_policies_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_sending_policies_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: mail_settings mail_settings_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mail_settings mail_settings_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.mail_settings
-    ADD CONSTRAINT mail_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT mail_settings_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8562,11 +8562,11 @@ ALTER TABLE ONLY public.opaque_login_states
 
 
 --
--- Name: opaque_login_states opaque_login_states_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: opaque_login_states opaque_login_states_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.opaque_login_states
-    ADD CONSTRAINT opaque_login_states_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT opaque_login_states_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8578,11 +8578,11 @@ ALTER TABLE ONLY public.organization_access_requests
 
 
 --
--- Name: organization_key_shares organization_key_shares_granted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: organization_key_shares organization_key_shares_granted_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.organization_key_shares
-    ADD CONSTRAINT organization_key_shares_granted_by_fkey FOREIGN KEY (granted_by) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT organization_key_shares_granted_by_account_id_fkey FOREIGN KEY (granted_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
@@ -8630,15 +8630,15 @@ ALTER TABLE ONLY public.organization_member_escrows
 --
 
 ALTER TABLE ONLY public.organization_members
-    ADD CONSTRAINT organization_members_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT organization_members_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: organization_members organization_members_invited_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: organization_members organization_members_invited_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.organization_members
-    ADD CONSTRAINT organization_members_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT organization_members_invited_by_account_id_fkey FOREIGN KEY (invited_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
@@ -8666,27 +8666,27 @@ ALTER TABLE ONLY public.pass_pin_failures
 
 
 --
--- Name: pass_pin_failures pass_pin_failures_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: pass_pin_failures pass_pin_failures_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.pass_pin_failures
-    ADD CONSTRAINT pass_pin_failures_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT pass_pin_failures_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: pass_pins pass_pins_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: pass_pins pass_pins_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.pass_pins
-    ADD CONSTRAINT pass_pins_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT pass_pins_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: pass_settings pass_settings_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: pass_settings pass_settings_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.pass_settings
-    ADD CONSTRAINT pass_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT pass_settings_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8694,15 +8694,15 @@ ALTER TABLE ONLY public.pass_settings
 --
 
 ALTER TABLE ONLY public.photos_library_folders
-    ADD CONSTRAINT photos_library_folders_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.collections(id) ON DELETE CASCADE;
+    ADD CONSTRAINT photos_library_folders_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.drive_collections(id) ON DELETE CASCADE;
 
 
 --
--- Name: photos_library_folders photos_library_folders_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: photos_library_folders photos_library_folders_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.photos_library_folders
-    ADD CONSTRAINT photos_library_folders_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT photos_library_folders_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8710,47 +8710,47 @@ ALTER TABLE ONLY public.photos_library_folders
 --
 
 ALTER TABLE ONLY public.photos_preferences
-    ADD CONSTRAINT photos_preferences_upload_folder_id_fkey FOREIGN KEY (upload_folder_id) REFERENCES public.collections(id) ON DELETE SET NULL;
+    ADD CONSTRAINT photos_preferences_upload_folder_id_fkey FOREIGN KEY (upload_folder_id) REFERENCES public.drive_collections(id) ON DELETE SET NULL;
 
 
 --
--- Name: photos_preferences photos_preferences_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: photos_preferences photos_preferences_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.photos_preferences
-    ADD CONSTRAINT photos_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT photos_preferences_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: public_link_reports public_link_reports_resolved_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_public_link_reports drive_public_link_reports_resolved_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.public_link_reports
-    ADD CONSTRAINT public_link_reports_resolved_by_fkey FOREIGN KEY (resolved_by) REFERENCES public.users(id) ON DELETE SET NULL;
-
-
---
--- Name: public_link_reports public_link_reports_share_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.public_link_reports
-    ADD CONSTRAINT public_link_reports_share_id_fkey FOREIGN KEY (share_id) REFERENCES public.public_shares(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_public_link_reports
+    ADD CONSTRAINT drive_public_link_reports_resolved_by_account_id_fkey FOREIGN KEY (resolved_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: public_shares public_shares_blocked_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_public_link_reports drive_public_link_reports_share_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.public_shares
-    ADD CONSTRAINT public_shares_blocked_by_fkey FOREIGN KEY (blocked_by) REFERENCES public.users(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.drive_public_link_reports
+    ADD CONSTRAINT drive_public_link_reports_share_id_fkey FOREIGN KEY (share_id) REFERENCES public.drive_public_shares(id) ON DELETE CASCADE;
 
 
 --
--- Name: public_shares public_shares_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_public_shares drive_public_shares_blocked_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.public_shares
-    ADD CONSTRAINT public_shares_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_public_shares
+    ADD CONSTRAINT drive_public_shares_blocked_by_account_id_fkey FOREIGN KEY (blocked_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
+
+
+--
+-- Name: drive_public_shares drive_public_shares_owner_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_public_shares
+    ADD CONSTRAINT drive_public_shares_owner_account_id_fkey FOREIGN KEY (owner_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8762,107 +8762,107 @@ ALTER TABLE ONLY public.registration_code_uses
 
 
 --
--- Name: registration_code_uses registration_code_uses_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: registration_code_uses registration_code_uses_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.registration_code_uses
-    ADD CONSTRAINT registration_code_uses_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT registration_code_uses_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: registration_codes registration_codes_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.registration_codes
-    ADD CONSTRAINT registration_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id) ON DELETE SET NULL;
-
-
---
--- Name: registration_codes registration_codes_revoked_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: registration_codes registration_codes_created_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.registration_codes
-    ADD CONSTRAINT registration_codes_revoked_by_fkey FOREIGN KEY (revoked_by) REFERENCES public.users(id) ON DELETE SET NULL;
+    ADD CONSTRAINT registration_codes_created_by_account_id_fkey FOREIGN KEY (created_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: two_factor_recovery_codes two_factor_recovery_codes_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: registration_codes registration_codes_revoked_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.registration_codes
+    ADD CONSTRAINT registration_codes_revoked_by_account_id_fkey FOREIGN KEY (revoked_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
+
+
+--
+-- Name: two_factor_recovery_codes two_factor_recovery_codes_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.two_factor_recovery_codes
-    ADD CONSTRAINT two_factor_recovery_codes_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT two_factor_recovery_codes_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: uploads uploads_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_uploads drive_uploads_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.uploads
-    ADD CONSTRAINT uploads_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.collections(id) ON DELETE CASCADE;
-
-
---
--- Name: uploads uploads_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.uploads
-    ADD CONSTRAINT uploads_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_uploads
+    ADD CONSTRAINT drive_uploads_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.drive_collections(id) ON DELETE CASCADE;
 
 
 --
--- Name: user_map_preferences user_map_preferences_save_folder_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: drive_uploads drive_uploads_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.user_map_preferences
-    ADD CONSTRAINT user_map_preferences_save_folder_id_fkey FOREIGN KEY (save_folder_id) REFERENCES public.collections(id) ON DELETE SET NULL;
-
-
---
--- Name: user_map_preferences user_map_preferences_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.user_map_preferences
-    ADD CONSTRAINT user_map_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.drive_uploads
+    ADD CONSTRAINT drive_uploads_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: user_security_keys user_security_keys_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_map_preferences account_map_preferences_save_folder_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.user_security_keys
-    ADD CONSTRAINT user_security_keys_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- Name: user_setting_overrides user_setting_overrides_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.user_setting_overrides
-    ADD CONSTRAINT user_setting_overrides_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.account_map_preferences
+    ADD CONSTRAINT account_map_preferences_save_folder_id_fkey FOREIGN KEY (save_folder_id) REFERENCES public.drive_collections(id) ON DELETE SET NULL;
 
 
 --
--- Name: user_ui_preferences user_ui_preferences_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_map_preferences account_map_preferences_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.user_ui_preferences
-    ADD CONSTRAINT user_ui_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- Name: users users_legal_hold_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_legal_hold_by_fkey FOREIGN KEY (legal_hold_by) REFERENCES public.users(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.account_map_preferences
+    ADD CONSTRAINT account_map_preferences_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
--- Name: webauthn_ceremonies webauthn_ceremonies_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_security_keys account_security_keys_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_security_keys
+    ADD CONSTRAINT account_security_keys_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: account_setting_overrides account_setting_overrides_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_setting_overrides
+    ADD CONSTRAINT account_setting_overrides_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: account_ui_preferences account_ui_preferences_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_ui_preferences
+    ADD CONSTRAINT account_ui_preferences_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: accounts accounts_legal_hold_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.accounts
+    ADD CONSTRAINT accounts_legal_hold_by_account_id_fkey FOREIGN KEY (legal_hold_by_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
+
+
+--
+-- Name: webauthn_ceremonies webauthn_ceremonies_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.webauthn_ceremonies
-    ADD CONSTRAINT webauthn_ceremonies_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+    ADD CONSTRAINT webauthn_ceremonies_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -8880,7 +8880,7 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 
 --
--- Data for Name: users; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: accounts; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -8970,25 +8970,25 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 
 --
--- Data for Name: collections; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_collections; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: federated_outgoing_shares; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_federated_outgoing_shares; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: files; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_files; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: album_items; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: photos_album_items; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9066,7 +9066,7 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 
 --
--- Data for Name: calendar_user_settings; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: calendar_account_settings; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9240,7 +9240,7 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 
 --
--- Data for Name: devices; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: account_devices; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9342,13 +9342,13 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 
 --
--- Data for Name: collection_key_epoch_history; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_collection_key_epoch_history; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: collection_shares; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_collection_shares; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9372,13 +9372,13 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 
 --
--- Data for Name: contact_emails; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: contacts_emails; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: device_tickets; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: account_device_tickets; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9402,19 +9402,19 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 
 --
--- Data for Name: federated_incoming_file_shares; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_federated_incoming_file_shares; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: federated_incoming_shares; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_federated_incoming_shares; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: federated_outgoing_file_shares; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_federated_outgoing_file_shares; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9507,43 +9507,43 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: file_assets; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_file_assets; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: file_key_history; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_file_key_history; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: file_sender_floors; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: collab_sender_floors; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: file_shares; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_file_shares; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: file_versions; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_file_versions; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: file_thumbnails; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_file_thumbnails; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: file_update_log; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: collab_update_log; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9555,7 +9555,7 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: live_location_streams; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: chat_live_location_streams; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9855,13 +9855,13 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: public_shares; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_public_shares; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: public_link_reports; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_public_link_reports; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9903,7 +9903,7 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: sealed_sender_generated_certificates; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: chat_sealed_sender_certificates; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -9933,31 +9933,31 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: uploads; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: drive_uploads; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: user_map_preferences; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: account_map_preferences; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: user_security_keys; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: account_security_keys; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: user_setting_overrides; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: account_setting_overrides; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
 
 --
--- Data for Name: user_ui_preferences; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: account_ui_preferences; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -10011,10 +10011,10 @@ SELECT pg_catalog.setval('public.storage_pending_deletions_id_seq', 1, false);
 
 
 --
--- Name: user_devices_revocation_seq; Type: SEQUENCE SET; Schema: public; Owner: -
+-- Name: account_devices_revocation_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.user_devices_revocation_seq', 1, false);
+SELECT pg_catalog.setval('public.account_devices_revocation_seq', 1, false);
 
 
 --

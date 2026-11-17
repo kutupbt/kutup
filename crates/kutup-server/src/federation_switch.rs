@@ -91,7 +91,7 @@ pub async fn start_account(
     default_on: bool,
 ) -> sqlx::Result<()> {
     if !default_on {
-        sqlx::query("UPDATE users SET federation = 'off' WHERE id = $1")
+        sqlx::query("UPDATE accounts SET federation = 'off' WHERE id = $1")
             .bind(user_id)
             .execute(&mut **tx)
             .await?;
@@ -103,7 +103,7 @@ pub async fn start_account(
 /// What it queued that carries no transport sequence (its rename announces)
 /// is given up at once; a send that is sent checks the switch again.
 pub async fn turn_off(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("UPDATE users SET federation = 'off' WHERE id = $1")
+    sqlx::query("UPDATE accounts SET federation = 'off' WHERE id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
@@ -112,7 +112,7 @@ pub async fn turn_off(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> sqlx
             SET state = 'rejected', error_class = 'federation_off', updated_at = now()
           WHERE kind = 'rename' AND state = 'pending'
             AND payload->>'incarnation' IN
-                (SELECT account_incarnation_id FROM users WHERE id = $1)",
+                (SELECT account_incarnation_id FROM accounts WHERE id = $1)",
     )
     .bind(user_id)
     .execute(&mut **tx)
@@ -154,7 +154,7 @@ pub async fn turn_on(
             }
         }
     }
-    sqlx::query("UPDATE users SET federation = 'on' WHERE id = $1")
+    sqlx::query("UPDATE accounts SET federation = 'on' WHERE id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
@@ -211,7 +211,7 @@ mod tests {
     async fn account(pool: &PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
              VALUES ($1, $2, '', '', '', '', '', '', '')",
@@ -292,7 +292,7 @@ mod tests {
         assert!(federates(&pool, user).await.unwrap());
         assert!(crate::legal::given(&pool, user, PURPOSE).await.unwrap());
 
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user)
             .execute(&pool)
             .await
@@ -315,7 +315,7 @@ mod tests {
             .unwrap();
         let user = account(&pool).await;
         let incarnation = format!("{:064x}", user.as_u128());
-        sqlx::query("UPDATE users SET account_incarnation_id = $2 WHERE id = $1")
+        sqlx::query("UPDATE accounts SET account_incarnation_id = $2 WHERE id = $1")
             .bind(user)
             .bind(&incarnation)
             .execute(&pool)
@@ -370,8 +370,8 @@ mod tests {
         let verifier =
             kutup_crypto::primitives::hash(kutup_crypto::primitives::Suite::V1, read).to_vec();
         sqlx::query(
-            "INSERT INTO live_location_streams
-                 (stream_id, write_verifier, read_verifier, expires_at, creator_user_id)
+            "INSERT INTO chat_live_location_streams
+                 (stream_id, write_verifier, read_verifier, expires_at, created_by_account_id)
              VALUES ($1, $2, $2, now() + interval '1 hour', $3)",
         )
         .bind(&stream)
@@ -401,7 +401,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user)
             .execute(&pool)
             .await

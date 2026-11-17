@@ -115,7 +115,7 @@ pub(crate) async fn check_listed_rows(
     #[allow(clippy::type_complexity)]
     let rows: Vec<(i32, String, Uuid, Option<Vec<u8>>, Option<i16>, Option<i64>)> = sqlx::query_as(
         "SELECT device_id, kind, session_id, frame_key, suite, registration_id
-               FROM devices WHERE user_id = $1 AND ($2 OR expired_at IS NULL)
+               FROM account_devices WHERE account_id = $1 AND ($2 OR expired_at IS NULL)
               ORDER BY device_id FOR SHARE",
     )
     .bind(user_id)
@@ -235,14 +235,14 @@ pub async fn register_device(
         .map_err(AppError::bad_request)?;
     let mut tx = state.pool.begin().await?;
     let root = root_session_id(&mut *tx, auth.session.session_id).await?;
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     let stale = prune_stale_unlisted(&mut tx, user_id).await?;
     let rows: Vec<(i32, Vec<u8>, Vec<u8>, bool)> = sqlx::query_as(
         "SELECT device_id, credential_salt, credential_hash, expired_at IS NOT NULL
-           FROM devices WHERE user_id = $1 ORDER BY device_id",
+           FROM account_devices WHERE account_id = $1 ORDER BY device_id",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -276,7 +276,7 @@ pub async fn register_device(
         .ok_or_else(device_limit)?;
     let (salt, credential_hash) = chat_identity::new_credential(&credential);
     sqlx::query(
-        "INSERT INTO devices (user_id, device_id, kind, session_id, frame_key, name,
+        "INSERT INTO account_devices (account_id, device_id, kind, session_id, frame_key, name,
              credential_salt, credential_hash)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
@@ -331,7 +331,7 @@ pub async fn list_devices(
     )> = sqlx::query_as(
         "SELECT device_id, kind, name, session_id, expired_at IS NOT NULL, created_at,
                     last_seen_at
-               FROM devices WHERE user_id = $1 ORDER BY device_id",
+               FROM account_devices WHERE account_id = $1 ORDER BY device_id",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -398,7 +398,7 @@ pub async fn create_device_ticket(
             .await?;
     let ticket = crate::handlers::random_token(32);
     let expires_at: OffsetDateTime = sqlx::query_scalar(
-        "INSERT INTO device_tickets (token_hash, user_id, device_id, expires_at)
+        "INSERT INTO account_device_tickets (token_hash, account_id, device_id, expires_at)
          VALUES ($1, $2, $3, now() + ($4 * interval '1 second'))
          RETURNING expires_at",
     )
@@ -420,9 +420,9 @@ pub(crate) async fn consume_ticket(state: &AppState, ticket: &str) -> AppResult<
         return Err(AppError::unauthorized("invalid WebSocket ticket"));
     }
     sqlx::query_as(
-        "DELETE FROM device_tickets
+        "DELETE FROM account_device_tickets
          WHERE token_hash = $1 AND expires_at > now()
-         RETURNING user_id, device_id",
+         RETURNING account_id, device_id",
     )
     .bind(ticket_hash(ticket))
     .fetch_optional(&state.pool)
@@ -457,10 +457,10 @@ pub(crate) async fn frame_device(
 ) -> AppResult<FrameDevice> {
     let row: Option<(Vec<u8>, Uuid, i64)> = sqlx::query_as(
         "SELECT d.frame_key, d.session_id, m.version
-           FROM devices d
-           JOIN chat_device_manifests m ON m.user_id = d.user_id
+           FROM account_devices d
+           JOIN chat_device_manifests m ON m.account_id = d.account_id
            JOIN LATERAL jsonb_array_elements(m.manifest -> 'devices') listed ON true
-          WHERE d.user_id = $1 AND d.device_id = $2 AND d.expired_at IS NULL
+          WHERE d.account_id = $1 AND d.device_id = $2 AND d.expired_at IS NULL
             AND d.frame_key IS NOT NULL
             AND (listed ->> 'deviceId')::int = d.device_id
             AND listed ->> 'frameKey' = encode(d.frame_key, 'base64')
@@ -502,13 +502,13 @@ pub(crate) async fn prune_stale_unlisted(
         .load(&mut **tx)
         .await?;
     Ok(sqlx::query_scalar(
-        "DELETE FROM devices d
-          WHERE d.user_id = $1
+        "DELETE FROM account_devices d
+          WHERE d.account_id = $1
             AND d.created_at < now() - ($2 * interval '1 second')
             AND NOT EXISTS (
                 SELECT 1 FROM chat_device_manifests m,
                        jsonb_array_elements(m.manifest -> 'devices') listed
-                 WHERE m.user_id = d.user_id
+                 WHERE m.account_id = d.account_id
                    AND (listed ->> 'deviceId')::int = d.device_id)
          RETURNING d.device_id",
     )

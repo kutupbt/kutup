@@ -54,8 +54,8 @@ pub(crate) async fn share_reaches(
     file: Uuid,
 ) -> AppResult<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM files WHERE id = $1 AND deleted_at IS NULL AND (collection_id = $2
-             OR id IN (SELECT file_id FROM album_items WHERE album_id = $2)))",
+        "SELECT EXISTS(SELECT 1 FROM drive_files WHERE id = $1 AND deleted_at IS NULL AND (collection_id = $2
+             OR id IN (SELECT file_id FROM photos_album_items WHERE album_id = $2)))",
     )
     .bind(file)
     .bind(collection)
@@ -85,7 +85,7 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
     let result: AppResult<Response> = async {
         let share = outgoing_share(&state, &authenticated, &headers, false).await?;
         let is_album: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM collections WHERE id = $1 AND kind = 'album')",
+            "SELECT EXISTS(SELECT 1 FROM drive_collections WHERE id = $1 AND kind = 'album')",
         )
         .bind(share.collection_id)
         .fetch_one(&state.pool)
@@ -94,12 +94,12 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
             return Err(AppError::not_found("not an album"));
         }
         let files: Vec<FederatedDriveFile> = sqlx::query_as(&format!(
-            "SELECT f.id, f.collection_id, f.uploader_user_id, f.metadata_envelope,
+            "SELECT f.id, f.collection_id, f.uploader_account_id, f.metadata_envelope,
                 f.file_key_envelope, f.key_epoch, f.key_generation, f.metadata_revision,
                 f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_generation,
                 {} AS key_history, {} AS content_key_generation
-             FROM files f
-             WHERE f.id IN (SELECT file_id FROM album_items WHERE album_id = $1)
+             FROM drive_files f
+             WHERE f.id IN (SELECT file_id FROM photos_album_items WHERE album_id = $1)
                AND f.deleted_at IS NULL
              ORDER BY f.created_at DESC",
             crate::models::FILE_KEY_HISTORY_SQL,
@@ -123,9 +123,9 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
             "SELECT i.file_id, i.file_key_envelope, i.key_generation, i.album_epoch,
                     sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                     sm.key_generation AS thumb_sm_generation, lg.key_generation AS thumb_lg_generation
-             FROM album_items i
-             LEFT JOIN file_thumbnails sm ON sm.file_id = i.file_id AND sm.variant = 'sm'
-             LEFT JOIN file_thumbnails lg ON lg.file_id = i.file_id AND lg.variant = 'lg'
+             FROM photos_album_items i
+             LEFT JOIN drive_file_thumbnails sm ON sm.file_id = i.file_id AND sm.variant = 'sm'
+             LEFT JOIN drive_file_thumbnails lg ON lg.file_id = i.file_id AND lg.variant = 'lg'
              WHERE i.album_id = $1",
         )
         .bind(share.collection_id)
@@ -196,7 +196,7 @@ pub async fn thumbnail(
             return Err(AppError::not_found("file not found"));
         }
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM file_thumbnails WHERE file_id = $1 AND variant = $2)",
+            "SELECT EXISTS (SELECT 1 FROM drive_file_thumbnails WHERE file_id = $1 AND variant = $2)",
         )
         .bind(file_id)
         .bind(variant.as_str())

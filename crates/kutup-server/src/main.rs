@@ -738,7 +738,7 @@ async fn bootstrap_admin(
         }
     };
     let res: Result<uuid::Uuid, sqlx::Error> = sqlx::query_scalar(
-        r#"INSERT INTO users (
+        r#"INSERT INTO accounts (
             username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
             master_key_envelope, recovery_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,

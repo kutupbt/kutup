@@ -116,10 +116,10 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
 }
 
 pub(crate) const VERSION_SELECT: &str = r#"SELECT id, storage_path, seq_at_snapshot,
-       doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
+       doc_key_id, author_account_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
        remote_author_server, remote_author_account_id, parent_version_id,
        revision_content_envelope
-FROM file_versions"#;
+FROM drive_file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
@@ -188,7 +188,7 @@ pub async fn download(
 
     let row: Option<(String, i64, i64, i64, Option<String>)> = sqlx::query_as(
         "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot, revision_content_envelope
-         FROM file_versions WHERE id = $1 AND file_id = $2",
+         FROM drive_file_versions WHERE id = $1 AND file_id = $2",
     )
     .bind(vid)
     .bind(fid)
@@ -255,7 +255,7 @@ pub async fn patch(
 
     if let Some(label) = label {
         sqlx::query(
-            "UPDATE file_versions SET label = NULLIF($1, '') WHERE id = $2 AND file_id = $3",
+            "UPDATE drive_file_versions SET label = NULLIF($1, '') WHERE id = $2 AND file_id = $3",
         )
         .bind(label)
         .bind(vid)
@@ -264,12 +264,14 @@ pub async fn patch(
         .await?;
     }
     if let Some(keep) = req.keep_forever {
-        sqlx::query("UPDATE file_versions SET keep_forever = $1 WHERE id = $2 AND file_id = $3")
-            .bind(keep)
-            .bind(vid)
-            .bind(fid)
-            .execute(&state.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE drive_file_versions SET keep_forever = $1 WHERE id = $2 AND file_id = $3",
+        )
+        .bind(keep)
+        .bind(vid)
+        .bind(fid)
+        .execute(&state.pool)
+        .await?;
     }
 
     let row: Option<VersionTuple> =
@@ -288,7 +290,7 @@ pub async fn patch(
 /// file's current content, for notes the saved state their metadata names
 /// (version_retention keeps it for the same reason).
 pub(crate) const NEWEST_VERSION: &str =
-    "SELECT n.id FROM file_versions n WHERE n.file_id = v.file_id AND n.kind = v.kind ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
+    "SELECT n.id FROM drive_file_versions n WHERE n.file_id = v.file_id AND n.kind = v.kind ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
 
 /// `DELETE /api/files/{fileId}/versions/{vid}` — deletes one earlier version
 /// for good and frees its storage. The file's owner or the version's author
@@ -324,11 +326,11 @@ pub async fn delete(
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     type Row = (String, Uuid, Uuid, bool);
     let row: Option<Row> = sqlx::query_as(&format!(
-        "SELECT v.storage_path, v.author_user_id, c.owner_user_id,
+        "SELECT v.storage_path, v.author_account_id, c.owner_account_id,
                 v.id = ({NEWEST_VERSION})
-           FROM file_versions v
-           JOIN files f ON f.id = v.file_id
-           JOIN collections c ON c.id = f.collection_id
+           FROM drive_file_versions v
+           JOIN drive_files f ON f.id = v.file_id
+           JOIN drive_collections c ON c.id = f.collection_id
           WHERE v.id = $1 AND v.file_id = $2"
     ))
     .bind(vid)
@@ -365,11 +367,11 @@ async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResul
     let mut tx = state.pool.begin().await?;
     type Row = (String, i64, Uuid, Uuid, bool, bool);
     let row: Option<Row> = sqlx::query_as(
-        "SELECT f.storage_path, f.encrypted_size_bytes, f.uploader_user_id, c.owner_user_id,
+        "SELECT f.storage_path, f.encrypted_size_bytes, f.uploader_account_id, c.owner_account_id,
                 f.original_pruned,
-                EXISTS (SELECT 1 FROM file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
-           FROM files f
-           JOIN collections c ON c.id = f.collection_id
+                EXISTS (SELECT 1 FROM drive_file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
+           FROM drive_files f
+           JOIN drive_collections c ON c.id = f.collection_id
           WHERE f.id = $1 AND f.deleted_at IS NULL
             FOR UPDATE OF f",
     )
@@ -548,7 +550,7 @@ pub(crate) async fn store_version(
     // The same typed, file-bound blob as an upload; the server checks only its
     // public header.
     let (collection_id, key_generation): (Uuid, i32) = sqlx::query_as(
-        "SELECT collection_id, key_generation FROM files WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT collection_id, key_generation FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
@@ -604,7 +606,7 @@ pub(crate) async fn store_version(
     // lock: upgrading a shared lock would deadlock two saves.
     // Every save commits metadata, so it locks the row: the metadata's
     // revision is checked and advanced below.
-    sqlx::query("SELECT 1 FROM files WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM drive_files WHERE id = $1 FOR UPDATE")
         .bind(fid)
         .execute(&mut *tx)
         .await?;
@@ -620,11 +622,12 @@ pub(crate) async fn store_version(
     crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
     // Its metadata is the file's next revision (the row is locked above).
     {
-        let (current, current_envelope): (i64, Option<String>) =
-            sqlx::query_as("SELECT metadata_revision, metadata_envelope FROM files WHERE id = $1")
-                .bind(fid)
-                .fetch_one(&mut *tx)
-                .await?;
+        let (current, current_envelope): (i64, Option<String>) = sqlx::query_as(
+            "SELECT metadata_revision, metadata_envelope FROM drive_files WHERE id = $1",
+        )
+        .bind(fid)
+        .fetch_one(&mut *tx)
+        .await?;
         if current.checked_add(1) != Some(metadata_revision) {
             // The metadata as it is now comes back, so the saver seals on
             // top of it without reading the file's folder again (an editor
@@ -661,15 +664,15 @@ pub(crate) async fn store_version(
     // Stamped when stored, not when the transaction began: a save that waited
     // for the lock above is newer than the one it waited for.
     let created: VersionTuple = sqlx::query_as(
-        r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot,
-                                      doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
+        r#"INSERT INTO drive_file_versions (id, file_id, storage_path, seq_at_snapshot,
+                                      doc_key_id, author_account_id, size_bytes, label, keep_forever, kind,
                                       key_generation, remote_author_server,
                                       remote_author_account_id, parent_version_id, created_at,
                                       blob_suite, revision_content_envelope)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp(),
                    $15, $16)
            RETURNING id, storage_path, seq_at_snapshot, doc_key_id,
-                     author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
+                     author_account_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
                      remote_author_server, remote_author_account_id, parent_version_id,
                      revision_content_envelope"#,
     )
@@ -696,7 +699,7 @@ pub(crate) async fn store_version(
     // New content: the hash it was recognised by no longer holds; the client
     // records the new one (docs/plans/drive-unique-names.md).
     sqlx::query(
-        "UPDATE files SET updated_at = NOW(), content_hash = NULL,
+        "UPDATE drive_files SET updated_at = NOW(), content_hash = NULL,
                           metadata_envelope = $2, metadata_revision = $3
          WHERE id = $1",
     )
@@ -756,7 +759,7 @@ pub(crate) async fn current_whole_version(
     fid: Uuid,
 ) -> sqlx::Result<Option<Uuid>> {
     sqlx::query_scalar(
-        "SELECT id FROM file_versions WHERE file_id = $1 AND kind = 'file'
+        "SELECT id FROM drive_file_versions WHERE file_id = $1 AND kind = 'file'
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(fid)

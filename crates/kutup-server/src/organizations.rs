@@ -135,7 +135,7 @@ pub async fn of_account(tx: &mut Transaction<'_, Postgres>, account: Uuid) -> Ap
 async fn of_one(tx: &mut Transaction<'_, Postgres>, account: Uuid) -> AppResult<Uuid> {
     let organization: Uuid = sqlx::query_scalar(
         "INSERT INTO organizations (name)
-         SELECT coalesce(nullif(username, ''), 'organization') FROM users WHERE id = $1
+         SELECT coalesce(nullif(username, ''), 'organization') FROM accounts WHERE id = $1
          RETURNING id",
     )
     .bind(account)
@@ -176,7 +176,7 @@ mod tests {
 
     async fn account(pool: &sqlx::PgPool, tag: &str, name: &str) -> Uuid {
         sqlx::query_scalar(
-            "INSERT INTO users (username, master_key_envelope, recovery_key_envelope, public_key,
+            "INSERT INTO accounts (username, master_key_envelope, recovery_key_envelope, public_key,
                                 account_authority_public_key, account_authority_key_id,
                                 account_incarnation_id, drive_signing_public_key)
              VALUES ($1, '', '', '', '', '', '', '') RETURNING id",
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(lost_by, organization);
         for owner in [alice, bob] {
             let told: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM account_security_events WHERE user_id = $1 AND kind = 'domainLost'",
+                "SELECT count(*) FROM account_security_events WHERE account_id = $1 AND kind = 'domainLost'",
             )
             .bind(owner)
             .fetch_one(&pool)
@@ -320,7 +320,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(dave)
             .execute(&pool)
             .await
@@ -346,7 +346,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(alice)
             .execute(&pool)
             .await

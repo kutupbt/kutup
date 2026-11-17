@@ -44,6 +44,7 @@ pub struct Group {
 /// Someone a group's mail goes to: an active account with a primary key.
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct Receiver {
+    #[sqlx(rename = "account_id")]
     pub user_id: Uuid,
     pub address_id: Uuid,
     pub address: String,
@@ -85,10 +86,10 @@ pub async fn find<'e, E: PgExecutor<'e>>(
 pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receiver>> {
     let members: Vec<Receiver> = sqlx::query_as(
         "SELECT * FROM (
-           SELECT DISTINCT ON (u.id) u.id AS user_id, a.id AS address_id, a.address, k.public_key
+           SELECT DISTINCT ON (u.id) u.id AS account_id, a.id AS address_id, a.address, k.public_key
              FROM mail_group_members m
-             JOIN users u ON u.id = m.user_id AND u.is_active
-             JOIN mail_addresses a ON a.user_id = u.id AND a.state = 'active'
+             JOIN accounts u ON u.id = m.account_id AND u.is_active
+             JOIN mail_addresses a ON a.account_id = u.id AND a.state = 'active'
                                   AND a.disabled_at IS NULL
              JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
             WHERE m.group_id = $1
@@ -103,9 +104,9 @@ pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receive
     }
     sqlx::query_as(
         "SELECT * FROM (
-           SELECT DISTINCT ON (u.id) u.id AS user_id, a.id AS address_id, a.address, k.public_key
-             FROM users u
-             JOIN mail_addresses a ON a.user_id = u.id AND a.state = 'active'
+           SELECT DISTINCT ON (u.id) u.id AS account_id, a.id AS address_id, a.address, k.public_key
+             FROM accounts u
+             JOIN mail_addresses a ON a.account_id = u.id AND a.state = 'active'
                                   AND a.disabled_at IS NULL
              JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
             WHERE u.is_admin AND u.is_active
@@ -128,7 +129,7 @@ pub async fn may_post(pool: &PgPool, group: &Group, sender: Sender) -> sqlx::Res
         "anyone" | "local" => true,
         policy => {
             let role: Option<String> = sqlx::query_scalar(
-                "SELECT role FROM mail_group_members WHERE group_id = $1 AND user_id = $2",
+                "SELECT role FROM mail_group_members WHERE group_id = $1 AND account_id = $2",
             )
             .bind(group.id)
             .bind(user)

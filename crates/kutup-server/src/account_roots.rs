@@ -74,7 +74,7 @@ pub async fn store(
 ) -> AppResult<()> {
     for root in roots {
         sqlx::query(
-            "INSERT INTO account_roots (user_id, purpose, object, envelope) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO account_roots (account_id, purpose, object, envelope) VALUES ($1, $2, $3, $4)",
         )
         .bind(user_id)
         .bind(root.purpose.as_u16() as i16)
@@ -92,7 +92,7 @@ pub async fn delete(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM account_roots WHERE user_id = $1")
+    sqlx::query("DELETE FROM account_roots WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
@@ -108,7 +108,7 @@ where
 {
     // The object is the generation, u32 big-endian: bytes order as numbers.
     let object: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT object FROM account_roots WHERE user_id = $1 AND purpose = $2
+        "SELECT object FROM account_roots WHERE account_id = $1 AND purpose = $2
          ORDER BY object DESC LIMIT 1",
     )
     .bind(user_id)
@@ -128,7 +128,7 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let rows: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT envelope FROM account_roots WHERE user_id = $1 AND purpose BETWEEN 22 AND 26
+        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose BETWEEN 22 AND 26
           ORDER BY purpose, object DESC",
     )
     .bind(user_id)
@@ -148,7 +148,7 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let rows: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT envelope FROM account_roots WHERE user_id = $1 AND purpose = 27
+        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose = 27
           ORDER BY object DESC",
     )
     .bind(user_id)
@@ -177,7 +177,7 @@ pub async fn account_keys(pool: &sqlx::PgPool, user_id: Uuid) -> AppResult<Accou
         .execute(&mut *tx)
         .await?;
     let (authority, generation): (String, i32) = sqlx::query_as(
-        "SELECT account_authority_public_key, master_key_generation FROM users WHERE id = $1",
+        "SELECT account_authority_public_key, master_key_generation FROM accounts WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -306,7 +306,7 @@ mod tests {
             .unwrap();
         let user = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
              VALUES ($1, $2, '', '', '', '', '', '', '')",
@@ -321,7 +321,7 @@ mod tests {
         store(&mut tx, user, &roots).await.unwrap();
         tx.commit().await.unwrap();
         assert_eq!(load(&pool, user).await.unwrap().len(), 5);
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user)
             .execute(&pool)
             .await

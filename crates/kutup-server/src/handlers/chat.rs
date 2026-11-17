@@ -433,7 +433,7 @@ pub async fn register_device(
     // Lock the account row, including when it has no chat devices yet. `FOR
     // UPDATE` over devices alone does not lock an empty key range in
     // PostgreSQL, so two first-install requests could otherwise both choose 1.
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -448,7 +448,7 @@ pub async fn register_device(
     let rows: Vec<(i32, Vec<u8>, Vec<u8>, bool, bool)> = sqlx::query_as(
         "SELECT device_id, credential_salt, credential_hash, suite IS NOT NULL,
                 expired_at IS NOT NULL
-           FROM devices WHERE user_id = $1 ORDER BY device_id",
+           FROM account_devices WHERE account_id = $1 ORDER BY device_id",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -511,13 +511,13 @@ pub async fn register_device(
             .await?;
             let shared: Vec<Uuid> = sqlx::query_scalar(
                 "SELECT DISTINCT shared_payload_id FROM chat_mailbox
-              WHERE recipient_user_id = $1 AND shared_payload_id IS NOT NULL",
+              WHERE recipient_account_id = $1 AND shared_payload_id IS NOT NULL",
             )
             .bind(user_id)
             .fetch_all(&mut *tx)
             .await?;
             // Link tokens die with the device set they were asked under.
-            sqlx::query("DELETE FROM chat_link_tokens WHERE user_id = $1")
+            sqlx::query("DELETE FROM chat_link_tokens WHERE account_id = $1")
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await?;
@@ -530,7 +530,7 @@ pub async fn register_device(
                 .map(|device| device.device_id as i32)
                 .collect();
             let dropped: Vec<i32> = sqlx::query_scalar(
-                "DELETE FROM devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
+                "DELETE FROM account_devices WHERE account_id = $1 AND NOT (device_id = ANY($2))
                  RETURNING device_id",
             )
             .bind(user_id)
@@ -558,10 +558,10 @@ pub async fn register_device(
                 kutup_chat_proto::decode_link_token(link_token).map_err(AppError::bad_request)?;
             let used: Option<i32> = sqlx::query_scalar(
                 "UPDATE chat_link_tokens t SET used_at = now()
-              WHERE t.token_hash = $1 AND t.user_id = $2 AND t.used_at IS NULL
+              WHERE t.token_hash = $1 AND t.account_id = $2 AND t.used_at IS NULL
                 AND t.expires_at > now()
-                AND EXISTS (SELECT 1 FROM devices d
-                             WHERE d.user_id = t.user_id AND d.device_id = t.issued_by_device
+                AND EXISTS (SELECT 1 FROM account_devices d
+                             WHERE d.account_id = t.account_id AND d.device_id = t.issued_by_device
                                AND d.expired_at IS NULL AND d.suite IS NOT NULL)
               RETURNING 1",
             )
@@ -601,8 +601,8 @@ pub async fn register_device(
 
     let (salt, hash) = identity::new_credential(&credential);
     sqlx::query(
-        r#"INSERT INTO devices (
-               user_id, device_id, suite, registration_id, identity_key,
+        r#"INSERT INTO account_devices (
+               account_id, device_id, suite, registration_id, identity_key,
                signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                last_resort_kyber_pre_key_signature, name, credential_salt, credential_hash,
@@ -709,7 +709,7 @@ pub(crate) async fn store_manifest(
     let account: (String, String, String, String, String) = sqlx::query_as(
         "SELECT public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key
-         FROM users WHERE id = $1 FOR UPDATE",
+         FROM accounts WHERE id = $1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_one(&mut **tx)
@@ -741,7 +741,7 @@ pub(crate) async fn store_manifest(
 
     let current: Option<(i64, String, serde_json::Value)> = sqlx::query_as(
         "SELECT version, manifest_hash, manifest
-         FROM chat_device_manifests WHERE user_id = $1 FOR UPDATE",
+         FROM chat_device_manifests WHERE account_id = $1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut **tx)
@@ -812,9 +812,9 @@ pub(crate) async fn store_manifest(
                 ));
             }
             sqlx::query(
-                "INSERT INTO chat_account_identities (user_id, identity_key, manifest_version)
+                "INSERT INTO chat_account_identities (account_id, identity_key, manifest_version)
                  VALUES ($1, $2, $3)
-                 ON CONFLICT (user_id) DO UPDATE SET identity_key = EXCLUDED.identity_key,
+                 ON CONFLICT (account_id) DO UPDATE SET identity_key = EXCLUDED.identity_key,
                      manifest_version = EXCLUDED.manifest_version, changed_at = now()",
             )
             .bind(user_id)
@@ -829,9 +829,9 @@ pub(crate) async fn store_manifest(
         .map_err(|error| AppError::internal(format!("serialize chat manifest: {error}")))?;
     sqlx::query(
         "INSERT INTO chat_device_manifests
-             (user_id, version, manifest_hash, authority_key_id, manifest)
+             (account_id, version, manifest_hash, authority_key_id, manifest)
          VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (user_id) DO UPDATE SET
+         ON CONFLICT (account_id) DO UPDATE SET
              version = EXCLUDED.version,
              manifest_hash = EXCLUDED.manifest_hash,
              authority_key_id = EXCLUDED.authority_key_id,
@@ -847,9 +847,9 @@ pub(crate) async fn store_manifest(
     .await?;
     sqlx::query(
         "INSERT INTO chat_device_manifest_history
-             (user_id, incarnation_id, version, manifest_hash, authority_key_id, manifest)
+             (account_id, incarnation_id, version, manifest_hash, authority_key_id, manifest)
          VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (user_id, incarnation_id, version) DO NOTHING",
+         ON CONFLICT (account_id, incarnation_id, version) DO NOTHING",
     )
     .bind(user_id)
     .bind(&manifest.incarnation_id)
@@ -908,7 +908,7 @@ pub async fn publish_manifest(
     let mut tx = state.pool.begin().await?;
     // The account's lock, then the head this publication follows: the devices
     // it leaves out are removed at once, not after the listing grace.
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -979,7 +979,7 @@ pub async fn publish_manifest(
         })
         .unwrap_or_default();
     let pruned: Vec<i32> = sqlx::query_scalar(
-        "DELETE FROM devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
+        "DELETE FROM account_devices WHERE account_id = $1 AND NOT (device_id = ANY($2))
            AND (device_id = ANY($3) OR expired_at IS NOT NULL
                 OR created_at < now() - ($4 * interval '1 second'))
          RETURNING device_id",
@@ -1057,7 +1057,7 @@ pub(crate) async fn stored_manifest<'e>(
     user_id: Uuid,
 ) -> AppResult<Option<AccountManifestV3>> {
     let value: Option<serde_json::Value> =
-        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE account_id = $1")
             .bind(user_id)
             .fetch_optional(executor)
             .await?;
@@ -1072,7 +1072,7 @@ pub(crate) async fn load_account_manifest(
     user_id: Uuid,
 ) -> AppResult<AccountManifestV3> {
     let value: Option<serde_json::Value> =
-        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE account_id = $1")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -1122,7 +1122,7 @@ pub async fn get_manifest_history(
         NamedAccount::Local(user_id) => user_id,
     };
     let incarnation_id: Option<String> = sqlx::query_scalar(
-        "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
+        "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE account_id = $1",
     )
     .bind(target_id)
     .fetch_optional(&state.pool)
@@ -1132,7 +1132,7 @@ pub async fn get_manifest_history(
     let page_from = query.page_from_sequence.unwrap_or(query.from_sequence);
     let values: Vec<serde_json::Value> = sqlx::query_scalar(
         "SELECT manifest FROM chat_device_manifest_history
-         WHERE user_id = $1 AND incarnation_id = $2 AND version BETWEEN $3 AND $4
+         WHERE account_id = $1 AND incarnation_id = $2 AND version BETWEEN $3 AND $4
          ORDER BY version LIMIT 65",
     )
     .bind(target_id)
@@ -1212,7 +1212,7 @@ pub async fn put_profile(
     }
     let mut tx = state.pool.begin().await?;
     // The account's row is the lock every profile write takes.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -1226,8 +1226,8 @@ pub async fn put_profile(
             Some(1)
         } else {
             sqlx::query_scalar(
-                "SELECT 1 FROM devices
-                  WHERE user_id = $1 AND device_id = $2 AND suite IS NOT NULL",
+                "SELECT 1 FROM account_devices
+                  WHERE account_id = $1 AND device_id = $2 AND suite IS NOT NULL",
             )
             .bind(user_id)
             .bind(profile.source_device_id as i32)
@@ -1263,7 +1263,7 @@ pub async fn put_profile(
     // capability while atomically advancing the single owner-visible head.
     sqlx::query(
         "UPDATE chat_profiles SET is_current = false
-         WHERE user_id = $1 AND is_current = true",
+         WHERE account_id = $1 AND is_current = true",
     )
     .bind(user_id)
     .execute(&mut *tx)
@@ -1271,11 +1271,11 @@ pub async fn put_profile(
 
     sqlx::query(
         "INSERT INTO chat_profiles
-             (user_id, suite, version, revision, source_device_id, name_ciphertext,
+             (account_id, suite, version, revision, source_device_id, name_ciphertext,
               avatar_ciphertext, wrapped_key, access_key_verifier, is_current,
               about_ciphertext)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10)
-         ON CONFLICT (user_id, version) DO UPDATE SET
+         ON CONFLICT (account_id, version) DO UPDATE SET
              suite = EXCLUDED.suite,
              revision = EXCLUDED.revision,
              source_device_id = EXCLUDED.source_device_id,
@@ -1301,9 +1301,9 @@ pub async fn put_profile(
     .await?;
     sqlx::query(
         "INSERT INTO chat_delivery_capabilities
-             (user_id, profile_version, profile_revision, capability_hash, rotated_at)
+             (account_id, profile_version, profile_revision, capability_hash, rotated_at)
          VALUES ($1,$2,$3,$4,now())
-         ON CONFLICT (user_id) DO UPDATE SET
+         ON CONFLICT (account_id) DO UPDATE SET
              profile_version = EXCLUDED.profile_version,
              profile_revision = EXCLUDED.profile_revision,
              capability_hash = EXCLUDED.capability_hash,
@@ -1420,7 +1420,7 @@ pub(crate) async fn load_public_profile(
         "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
                 p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
          FROM chat_profiles p
-         JOIN users u ON u.id = p.user_id
+         JOIN accounts u ON u.id = p.account_id
          WHERE u.id = $1 AND u.is_active = true AND p.version = $2",
     )
     .bind(user_id)
@@ -1479,9 +1479,9 @@ async fn load_own_profile_in(
                 p.avatar_ciphertext, p.about_ciphertext, p.wrapped_key, p.access_key_verifier,
                 c.capability_hash
          FROM chat_profiles p
-         JOIN chat_delivery_capabilities c ON c.user_id = p.user_id
+         JOIN chat_delivery_capabilities c ON c.account_id = p.account_id
               AND c.profile_version = p.version AND c.profile_revision = p.revision
-         WHERE p.user_id = $1 AND p.is_current = true{suffix}"
+         WHERE p.account_id = $1 AND p.is_current = true{suffix}"
     );
     let row: Option<OwnProfileRow> = sqlx::query_as(&sql)
         .bind(user_id)
@@ -1548,7 +1548,7 @@ async fn insert_ec_pool(
 ) -> AppResult<()> {
     for k in keys {
         sqlx::query(
-            "INSERT INTO chat_one_time_pre_keys (user_id, device_id, key_id, public_key)
+            "INSERT INTO chat_one_time_pre_keys (account_id, device_id, key_id, public_key)
              VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
@@ -1570,7 +1570,7 @@ async fn insert_kem_pool(
     for k in keys {
         sqlx::query(
             "INSERT INTO chat_one_time_kyber_pre_keys
-                 (user_id, device_id, key_id, public_key, signature)
+                 (account_id, device_id, key_id, public_key, signature)
              VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
@@ -1599,7 +1599,7 @@ pub async fn list_devices(State(state): State<AppState>, auth: AuthUser) -> AppR
     let user_id = trusted_uuid(&auth.user_id)?;
     let rows: Vec<(i32, i16, String, OffsetDateTime, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT device_id, suite, name, created_at, last_seen_at
-         FROM devices WHERE user_id = $1 AND suite IS NOT NULL ORDER BY device_id",
+         FROM account_devices WHERE account_id = $1 AND suite IS NOT NULL ORDER BY device_id",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -1654,8 +1654,8 @@ pub async fn rename_device(
     crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
     let name = normalized_device_name(&req.name)?;
     let updated = sqlx::query(
-        "UPDATE devices SET name = $3
-         WHERE user_id = $1 AND device_id = $2",
+        "UPDATE account_devices SET name = $3
+         WHERE account_id = $1 AND device_id = $2",
     )
     .bind(user_id)
     .bind(device_id)
@@ -1696,7 +1696,7 @@ pub async fn revoke_device(
     let mut tx = state.pool.begin().await?;
     // Serialize revocation with registration, manifest publication, bundle
     // snapshots, and sends that validate this account's exact device set.
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -1704,7 +1704,7 @@ pub async fn revoke_device(
     // it (cascade), and the payloads no other row names after them.
     let shared: Vec<Uuid> = sqlx::query_scalar(
         "SELECT DISTINCT shared_payload_id FROM chat_mailbox
-          WHERE recipient_user_id = $1 AND recipient_device_id = $2
+          WHERE recipient_account_id = $1 AND recipient_device_id = $2
             AND shared_payload_id IS NOT NULL",
     )
     .bind(user_id)
@@ -1712,12 +1712,12 @@ pub async fn revoke_device(
     .fetch_all(&mut *tx)
     .await?;
     // Link tokens die with the device set they were asked under.
-    sqlx::query("DELETE FROM chat_link_tokens WHERE user_id = $1")
+    sqlx::query("DELETE FROM chat_link_tokens WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     let deleted = sqlx::query(
-        "DELETE FROM devices WHERE user_id = $1 AND device_id = $2 AND suite IS NOT NULL",
+        "DELETE FROM account_devices WHERE account_id = $1 AND device_id = $2 AND suite IS NOT NULL",
     )
     .bind(user_id)
     .bind(device_id)
@@ -1830,9 +1830,9 @@ pub async fn replenish_keys(
 
     if let Some(spk) = &req.signed_pre_key {
         sqlx::query(
-            "UPDATE devices SET signed_pre_key_id = $3, signed_pre_key = $4,
+            "UPDATE account_devices SET signed_pre_key_id = $3, signed_pre_key = $4,
                  signed_pre_key_signature = $5
-             WHERE user_id = $1 AND device_id = $2",
+             WHERE account_id = $1 AND device_id = $2",
         )
         .bind(user_id)
         .bind(q.device_id)
@@ -1844,9 +1844,9 @@ pub async fn replenish_keys(
     }
     if let Some(lrk) = &req.last_resort_kyber_pre_key {
         sqlx::query(
-            "UPDATE devices SET last_resort_kyber_pre_key_id = $3,
+            "UPDATE account_devices SET last_resort_kyber_pre_key_id = $3,
                  last_resort_kyber_pre_key = $4, last_resort_kyber_pre_key_signature = $5
-             WHERE user_id = $1 AND device_id = $2",
+             WHERE account_id = $1 AND device_id = $2",
         )
         .bind(user_id)
         .bind(q.device_id)
@@ -1883,14 +1883,14 @@ pub async fn prekey_count(
     let user_id = trusted_uuid(&auth.user_id)?;
     require_device(&state, &headers, user_id, q.device_id).await?;
     let ec: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM chat_one_time_pre_keys WHERE user_id = $1 AND device_id = $2",
+        "SELECT COUNT(*) FROM chat_one_time_pre_keys WHERE account_id = $1 AND device_id = $2",
     )
     .bind(user_id)
     .bind(q.device_id)
     .fetch_one(&state.pool)
     .await?;
     let kem: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM chat_one_time_kyber_pre_keys WHERE user_id = $1 AND device_id = $2",
+        "SELECT COUNT(*) FROM chat_one_time_kyber_pre_keys WHERE account_id = $1 AND device_id = $2",
     )
     .bind(user_id)
     .bind(q.device_id)
@@ -2071,8 +2071,8 @@ pub(crate) async fn load_user_bundles(
     let mut tx = state.pool.begin().await?;
     let target: Option<Option<Vec<u8>>> = sqlx::query_scalar(
         "SELECT c.capability_hash
-         FROM users u
-         LEFT JOIN chat_delivery_capabilities c ON c.user_id = u.id
+         FROM accounts u
+         LEFT JOIN chat_delivery_capabilities c ON c.account_id = u.id
          WHERE u.id = $1 AND u.is_active = true",
     )
     .bind(target_id)
@@ -2105,14 +2105,14 @@ pub(crate) async fn load_user_bundles(
     let account = crate::account_ids::local(&state.config.chat_server_name, target_id)?;
     // Hold a stable account/device/manifest snapshot until the one-time keys
     // have been allocated. Writers take `FOR UPDATE` on this same row.
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR SHARE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR SHARE")
         .bind(target_id)
         .execute(&mut *tx)
         .await?;
     if let Some(device_id) = sync_device_id {
         let exists: Option<i32> = sqlx::query_scalar(
-            "UPDATE devices SET last_seen_at = now()
-             WHERE user_id = $1 AND device_id = $2 RETURNING 1",
+            "UPDATE account_devices SET last_seen_at = now()
+             WHERE account_id = $1 AND device_id = $2 RETURNING 1",
         )
         .bind(target_id)
         .bind(device_id)
@@ -2126,7 +2126,7 @@ pub(crate) async fn load_user_bundles(
     // The identity once and the manifest the bundles are checked against;
     // only the devices it lists, and not expired, have bundles.
     let manifest: Option<serde_json::Value> =
-        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE account_id = $1")
             .bind(target_id)
             .fetch_optional(&mut *tx)
             .await?;
@@ -2149,8 +2149,8 @@ pub(crate) async fn load_user_bundles(
                     signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                     last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                     last_resort_kyber_pre_key_signature
-             FROM devices
-             WHERE user_id = $1 AND expired_at IS NULL AND suite IS NOT NULL
+             FROM account_devices
+             WHERE account_id = $1 AND expired_at IS NULL AND suite IS NOT NULL
                AND device_id = ANY($2)
              ORDER BY device_id",
         )
@@ -2185,7 +2185,7 @@ pub(crate) async fn load_user_bundles(
                 "DELETE FROM chat_one_time_pre_keys t
                  WHERE t.ctid IN (
                      SELECT ctid FROM chat_one_time_pre_keys
-                     WHERE user_id = $1 AND device_id = $2
+                     WHERE account_id = $1 AND device_id = $2
                      ORDER BY key_id LIMIT 1 FOR UPDATE SKIP LOCKED)
                  RETURNING key_id, public_key",
             )
@@ -2203,7 +2203,7 @@ pub(crate) async fn load_user_bundles(
                 "DELETE FROM chat_one_time_kyber_pre_keys t
                  WHERE t.ctid IN (
                      SELECT ctid FROM chat_one_time_kyber_pre_keys
-                     WHERE user_id = $1 AND device_id = $2
+                     WHERE account_id = $1 AND device_id = $2
                      ORDER BY key_id LIMIT 1 FOR UPDATE SKIP LOCKED)
                  RETURNING key_id, public_key, signature",
             )
@@ -2650,8 +2650,8 @@ pub(crate) async fn store_sealed_messages(
     let presented_hash = capability_hash(&capability);
     let target: Option<(Uuid, Vec<u8>)> = sqlx::query_as(
         "SELECT u.id, c.capability_hash
-         FROM users u
-         JOIN chat_delivery_capabilities c ON c.user_id = u.id
+         FROM accounts u
+         JOIN chat_delivery_capabilities c ON c.account_id = u.id
          WHERE u.id = $1 AND u.is_active = true
            -- From another server, an account that doesn't talk to other
            -- servers is not found, as an unknown one (crate::federation_switch).
@@ -2737,7 +2737,7 @@ pub(crate) async fn store_sealed_messages(
         .map_err(|_| AppError::bad_request("sealed sendId is invalid"))?;
     let claimed: Option<i32> = sqlx::query_scalar(
         "INSERT INTO chat_anonymous_send_ids
-             (recipient_user_id, capability_hash, send_id, stored_count)
+             (recipient_account_id, capability_hash, send_id, stored_count)
          VALUES ($1,$2,$3,$4)
          ON CONFLICT DO NOTHING RETURNING stored_count",
     )
@@ -2750,7 +2750,7 @@ pub(crate) async fn store_sealed_messages(
     if claimed.is_none() {
         let stored: i32 = sqlx::query_scalar(
             "SELECT stored_count FROM chat_anonymous_send_ids
-             WHERE recipient_user_id = $1 AND capability_hash = $2 AND send_id = $3",
+             WHERE recipient_account_id = $1 AND capability_hash = $2 AND send_id = $3",
         )
         .bind(recipient_id)
         .bind(presented_hash.as_slice())
@@ -2788,7 +2788,7 @@ pub(crate) async fn store_sealed_messages(
     for envelope in &request.envelopes {
         let (id, cursor, server_ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox
-                (recipient_user_id, recipient_device_id, sealed_sender,
+                (recipient_account_id, recipient_device_id, sealed_sender,
                  sender_device_id, envelope_type, suite, content, send_id)
              VALUES ($1,$2,true,0,$3,$4,$5,$6)
              RETURNING id, cursor, server_ts",
@@ -2929,7 +2929,7 @@ async fn deliver_messages(
     // device set stable through mailbox insertion. Device registration,
     // revocation, and manifest publication take `FOR UPDATE` on these rows.
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM users WHERE id = $1 OR id = $2 ORDER BY id FOR SHARE")
+    sqlx::query("SELECT id FROM accounts WHERE id = $1 OR id = $2 ORDER BY id FOR SHARE")
         .bind(sender_id)
         .bind(recipient_id)
         .fetch_all(&mut *tx)
@@ -2937,8 +2937,8 @@ async fn deliver_messages(
 
     // The sender must address from one of their own registered chat devices.
     let device: Option<i32> = sqlx::query_scalar(
-        "UPDATE devices SET last_seen_at = now()
-         WHERE user_id = $1 AND device_id = $2 RETURNING 1",
+        "UPDATE account_devices SET last_seen_at = now()
+         WHERE account_id = $1 AND device_id = $2 RETURNING 1",
     )
     .bind(sender_id)
     .bind(req.sender_device_id as i32)
@@ -2959,7 +2959,7 @@ async fn deliver_messages(
         "direct"
     };
     let claimed: Option<(String,)> = sqlx::query_as(
-        "INSERT INTO chat_sends (sender_user_id, sender_device_id, send_id, delivery_scope)
+        "INSERT INTO chat_sends (sender_account_id, sender_device_id, send_id, delivery_scope)
          VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING send_id",
     )
     .bind(sender_id)
@@ -3007,7 +3007,7 @@ async fn deliver_messages(
 
     for e in &req.envelopes {
         let (id, cursor, ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
-            "INSERT INTO chat_mailbox (recipient_user_id, recipient_device_id, sender_server,
+            "INSERT INTO chat_mailbox (recipient_account_id, recipient_device_id, sender_server,
                  sender_account_id, sender_device_id, envelope_type, suite, content, send_id)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
              RETURNING id, cursor, server_ts",
@@ -3188,7 +3188,7 @@ pub async fn drain_mailbox(
                 m.shared_payload_id, octet_length(p.payload)
              FROM chat_mailbox m
              LEFT JOIN chat_shared_payloads p ON p.id = m.shared_payload_id
-             WHERE m.recipient_user_id = $1 AND m.recipient_device_id = $2
+             WHERE m.recipient_account_id = $1 AND m.recipient_device_id = $2
                AND ($4::BIGINT IS NULL OR m.cursor > $4)
              ORDER BY m.cursor
              LIMIT $3",
@@ -3327,7 +3327,7 @@ pub async fn ack_messages(
         .collect::<AppResult<_>>()?;
     let deleted: Vec<Option<Uuid>> = sqlx::query_scalar(
         "DELETE FROM chat_mailbox
-         WHERE recipient_user_id = $1 AND recipient_device_id = $2 AND id = ANY($3)
+         WHERE recipient_account_id = $1 AND recipient_device_id = $2 AND id = ANY($3)
          RETURNING shared_payload_id",
     )
     .bind(user_id)
@@ -3403,7 +3403,7 @@ pub async fn ws(
                     crate::account_devices::consume_ticket(&state, ticket).await?;
                 // A ticket of any device: this socket is a Chat device's.
                 let takes_chat: Option<i32> = sqlx::query_scalar(
-                    "SELECT 1 FROM devices WHERE user_id = $1 AND device_id = $2
+                    "SELECT 1 FROM account_devices WHERE account_id = $1 AND device_id = $2
                         AND suite IS NOT NULL AND expired_at IS NULL",
                 )
                 .bind(user_uuid)
@@ -3430,7 +3430,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, user_id: Uuid, de
     let (conn, mut rx) = state.chat_hub.join(user_id, device_id);
 
     let _ = sqlx::query(
-        "UPDATE devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2",
+        "UPDATE account_devices SET last_seen_at = now() WHERE account_id = $1 AND device_id = $2",
     )
     .bind(user_id)
     .bind(device_id)

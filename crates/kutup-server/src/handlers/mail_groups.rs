@@ -68,6 +68,7 @@ pub struct MailGroup {
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MailGroupMember {
+    #[sqlx(rename = "account_id")]
     pub user_id: Uuid,
     pub username: String,
     /// The member's Kutup address.
@@ -98,9 +99,9 @@ const GROUP_COLUMNS: &str = "g.id, g.address, g.display_name, g.description, g.k
     g.system_role, g.storage_quota_bytes, g.storage_used_bytes,
     (SELECT COUNT(*) FROM mail_group_members c WHERE c.group_id = g.id) AS member_count,
     g.created_at,
-    (SELECT role FROM mail_group_members r WHERE r.group_id = g.id AND r.user_id = $1) AS my_role,
+    (SELECT role FROM mail_group_members r WHERE r.group_id = g.id AND r.account_id = $1) AS my_role,
     COALESCE((SELECT r.can_send_as OR r.role IN ('owner', 'manager') FROM mail_group_members r
-               WHERE r.group_id = g.id AND r.user_id = $1), false) AS my_can_send_as,
+               WHERE r.group_id = g.id AND r.account_id = $1), false) AS my_can_send_as,
     g.needs_new_signer, g.signature_sealed";
 
 /// Where a shared mailbox's signature is sealed: under the group's data key
@@ -161,7 +162,7 @@ async fn members_in(
     id: Uuid,
 ) -> AppResult<Vec<MailGroupMember>> {
     Ok(sqlx::query_as(
-        "SELECT u.id AS user_id, COALESCE(u.username, '') AS username,
+        "SELECT u.id AS account_id, COALESCE(u.username, '') AS username,
                 COALESCE(u.username, '') || '@' || $2 AS address,
                 m.role, m.can_send_as, u.is_active AS active,
                 u.is_active
@@ -169,17 +170,17 @@ async fn members_in(
                 AND (NOT EXISTS (
                     SELECT 1 FROM mail_group_keys k
                       JOIN mail_group_key_shares s ON s.group_key_id = k.id
-                     WHERE k.group_id = m.group_id AND k.is_primary AND s.user_id = u.id
+                     WHERE k.group_id = m.group_id AND k.is_primary AND s.account_id = u.id
                        AND s.member_incarnation_id = u.account_incarnation_id)
                   OR (m.role IN ('owner', 'manager') AND NOT EXISTS (
                     SELECT 1 FROM mail_group_signing_shares g
-                     WHERE g.group_id = m.group_id AND g.user_id = u.id
+                     WHERE g.group_id = m.group_id AND g.account_id = u.id
                        AND g.member_incarnation_id = u.account_incarnation_id
                        AND g.signer_public_key = (
                            SELECT public_key FROM mail_group_signers
                             WHERE group_id = m.group_id ORDER BY from_sequence DESC LIMIT 1))))
                 AS needs_keys
-           FROM mail_group_members m JOIN users u ON u.id = m.user_id
+           FROM mail_group_members m JOIN accounts u ON u.id = m.account_id
           WHERE m.group_id = $1
           ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END, u.username",
     )
@@ -203,7 +204,7 @@ async fn detail(state: &AppState, caller: Uuid, id: Uuid) -> AppResult<MailGroup
 
 async fn is_admin(state: &AppState, user: Uuid) -> AppResult<bool> {
     Ok(
-        sqlx::query_scalar("SELECT is_admin FROM users WHERE id = $1 AND is_active")
+        sqlx::query_scalar("SELECT is_admin FROM accounts WHERE id = $1 AND is_active")
             .bind(user)
             .fetch_optional(&state.pool)
             .await?
@@ -319,7 +320,7 @@ pub async fn my_groups(
     let user_id = trusted_uuid(&user.user_id)?;
     let groups = sqlx::query_as(&format!(
         "SELECT {GROUP_COLUMNS} FROM mail_groups g
-          WHERE EXISTS (SELECT 1 FROM mail_group_members m WHERE m.group_id = g.id AND m.user_id = $1)
+          WHERE EXISTS (SELECT 1 FROM mail_group_members m WHERE m.group_id = g.id AND m.account_id = $1)
           ORDER BY g.address"
     ))
     .bind(user_id)
@@ -533,13 +534,13 @@ async fn stale_members(
     members: &[Uuid],
 ) -> AppResult<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
-        "SELECT u.id FROM users u
+        "SELECT u.id FROM accounts u
           WHERE u.id = ANY($3)
             AND NOT EXISTS (
                 SELECT 1 FROM mail_group_key_shares s
                   JOIN mail_group_keys k ON k.id = s.group_key_id
                  WHERE k.group_id = $2 AND k.fingerprint = $1
-                   AND s.user_id = u.id AND s.member_incarnation_id = u.account_incarnation_id)",
+                   AND s.account_id = u.id AND s.member_incarnation_id = u.account_incarnation_id)",
     )
     .bind(key_fingerprint)
     .bind(group_id)
@@ -571,11 +572,11 @@ async fn without_signing_share(
     members: &[Uuid],
 ) -> AppResult<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
-        "SELECT u.id FROM users u
+        "SELECT u.id FROM accounts u
           WHERE u.id = ANY($3)
             AND NOT EXISTS (
                 SELECT 1 FROM mail_group_signing_shares s
-                 WHERE s.group_id = $1 AND s.signer_public_key = $2 AND s.user_id = u.id
+                 WHERE s.group_id = $1 AND s.signer_public_key = $2 AND s.account_id = u.id
                    AND s.member_incarnation_id = u.account_incarnation_id)",
     )
     .bind(group_id)
@@ -590,7 +591,7 @@ async fn without_signing_share(
 /// again if it comes back.
 async fn active_of(conn: &mut sqlx::PgConnection, ids: &[Uuid]) -> AppResult<Vec<Uuid>> {
     let mut active: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id = ANY($1) AND is_active")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = ANY($1) AND is_active")
             .bind(ids)
             .fetch_all(&mut *conn)
             .await?;
@@ -862,7 +863,7 @@ pub async fn set_members(
     }
     let ids: Vec<Uuid> = wanted.iter().map(|(id, _, _)| *id).collect();
     let known: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE id = ANY($1) AND username IS NOT NULL",
+        "SELECT COUNT(*) FROM accounts WHERE id = ANY($1) AND username IS NOT NULL",
     )
     .bind(&ids)
     .fetch_one(&state.pool)
@@ -934,16 +935,18 @@ pub async fn set_members(
         None
     };
 
-    sqlx::query("DELETE FROM mail_group_members WHERE group_id = $1 AND NOT (user_id = ANY($2))")
-        .bind(id)
-        .bind(&ids)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "DELETE FROM mail_group_members WHERE group_id = $1 AND NOT (account_id = ANY($2))",
+    )
+    .bind(id)
+    .bind(&ids)
+    .execute(&mut *tx)
+    .await?;
     for (member, role, can_send_as) in &wanted {
         sqlx::query(
-            "INSERT INTO mail_group_members (group_id, user_id, role, can_send_as, added_by)
+            "INSERT INTO mail_group_members (group_id, account_id, role, can_send_as, added_by_account_id)
              VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (group_id, user_id) DO UPDATE SET role = EXCLUDED.role, can_send_as = EXCLUDED.can_send_as",
+             ON CONFLICT (group_id, account_id) DO UPDATE SET role = EXCLUDED.role, can_send_as = EXCLUDED.can_send_as",
         )
         .bind(id)
         .bind(member)
@@ -957,7 +960,7 @@ pub async fn set_members(
         // Who left keeps nothing of the group keys; who joined gets them all.
         sqlx::query(
             "DELETE FROM mail_group_key_shares
-              WHERE user_id = ANY($1)
+              WHERE account_id = ANY($1)
                 AND group_key_id IN (SELECT id FROM mail_group_keys WHERE group_id = $2)",
         )
         .bind(&changes.removed)
@@ -1148,7 +1151,7 @@ pub async fn admin_create(
         return Err(AppError::bad_request("a group needs at least one owner"));
     }
     let known: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT id) FROM users WHERE id = ANY($1) AND username IS NOT NULL",
+        "SELECT COUNT(DISTINCT id) FROM accounts WHERE id = ANY($1) AND username IS NOT NULL",
     )
     .bind(&owners)
     .fetch_one(&state.pool)
@@ -1204,7 +1207,7 @@ pub async fn admin_create(
 
     let mut tx = state.pool.begin().await?;
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO mail_groups (id, address, display_name, description, kind, post_policy, storage_quota_bytes, created_by)
+        "INSERT INTO mail_groups (id, address, display_name, description, kind, post_policy, storage_quota_bytes, created_by_account_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
     .bind(requested_id)
@@ -1241,7 +1244,7 @@ pub async fn admin_create(
         })?;
     for owner in &owners {
         sqlx::query(
-            "INSERT INTO mail_group_members (group_id, user_id, role, can_send_as, added_by)
+            "INSERT INTO mail_group_members (group_id, account_id, role, can_send_as, added_by_account_id)
              VALUES ($1, $2, 'owner', true, $3)",
         )
         .bind(id)
@@ -1354,7 +1357,7 @@ pub async fn admin_delete(
     // alive, and the orphan sweep removes each once its last row is gone. A
     // shared mailbox's own messages go with it.
     let mut tx = state.pool.begin().await?;
-    sqlx::query("DELETE FROM mail_messages WHERE group_id = $1 AND user_id IS NULL")
+    sqlx::query("DELETE FROM mail_messages WHERE group_id = $1 AND account_id IS NULL")
         .bind(id)
         .execute(&mut *tx)
         .await?;
@@ -1472,9 +1475,9 @@ pub async fn group_keys(
         "SELECT k.fingerprint, k.sha256_fingerprint, k.public_key, k.is_primary, k.flags,
                     s.share
                FROM mail_group_keys k
-               LEFT JOIN mail_group_key_shares s ON s.group_key_id = k.id AND s.user_id = $2
+               LEFT JOIN mail_group_key_shares s ON s.group_key_id = k.id AND s.account_id = $2
                     AND s.member_incarnation_id =
-                        (SELECT account_incarnation_id FROM users WHERE id = $2)
+                        (SELECT account_incarnation_id FROM accounts WHERE id = $2)
               WHERE k.group_id = $1
               ORDER BY k.is_primary DESC, k.created_at DESC",
     )
@@ -1485,20 +1488,19 @@ pub async fn group_keys(
     let b64 = base64::engine::general_purpose::STANDARD;
     let mut conn = state.pool.acquire().await?;
     let signer = group_keys::current_signer(&mut conn, id).await?;
-    let signing_share: Option<Vec<u8>> =
-        match &signer {
-            Some(signer) => sqlx::query_scalar(
-                "SELECT s.share FROM mail_group_signing_shares s JOIN users u ON u.id = s.user_id
-                  WHERE s.group_id = $1 AND s.signer_public_key = $2 AND s.user_id = $3
+    let signing_share: Option<Vec<u8>> = match &signer {
+        Some(signer) => sqlx::query_scalar(
+            "SELECT s.share FROM mail_group_signing_shares s JOIN accounts u ON u.id = s.account_id
+                  WHERE s.group_id = $1 AND s.signer_public_key = $2 AND s.account_id = $3
                     AND s.member_incarnation_id = u.account_incarnation_id",
-            )
-            .bind(id)
-            .bind(signer.as_slice())
-            .bind(user_id)
-            .fetch_optional(&mut *conn)
-            .await?,
-            None => None,
-        };
+        )
+        .bind(id)
+        .bind(signer.as_slice())
+        .bind(user_id)
+        .fetch_optional(&mut *conn)
+        .await?,
+        None => None,
+    };
     Ok(Json(MailGroupKeys {
         keys: rows
             .into_iter()
@@ -1638,6 +1640,7 @@ pub struct ResolveQuery {
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAccountRef {
+    #[sqlx(rename = "account_id")]
     pub user_id: Uuid,
     pub username: String,
     pub address: String,
@@ -1665,9 +1668,9 @@ pub async fn resolve_account(
     let address = crate::mail::typed_address(&query.address)
         .ok_or_else(|| AppError::not_found("not found"))?;
     let row: Option<(Uuid, String, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT u.id AS user_id, COALESCE(u.username, '') AS username, a.address, a.domain_id
+        "SELECT u.id AS account_id, COALESCE(u.username, '') AS username, a.address, a.domain_id
            FROM mail_addresses a
-           JOIN users u ON u.id = a.user_id AND u.is_active
+           JOIN accounts u ON u.id = a.account_id AND u.is_active
           WHERE a.folded = kutup_address_folded($1)
             AND a.state = 'active'
             AND EXISTS (SELECT 1 FROM mail_address_keys k WHERE k.address_id = a.id AND k.is_primary)",
@@ -1741,7 +1744,7 @@ pub async fn directory(
               WHERE (g.address LIKE $1 OR lower(g.display_name) LIKE $1)
                 AND (g.post_policy IN ('anyone', 'local')
                      OR EXISTS (SELECT 1 FROM mail_group_members m
-                                 WHERE m.group_id = g.id AND m.user_id = $2
+                                 WHERE m.group_id = g.id AND m.account_id = $2
                                    AND (g.post_policy = 'members' OR m.role IN ('owner', 'manager'))))
               ORDER BY g.address
               LIMIT 10",

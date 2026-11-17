@@ -240,7 +240,7 @@ pub async fn load(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Option<Saved>> {
     let row: Option<Row> = sqlx::query_as(
         "SELECT enabled, repeat, zone, start_local, end_local, days, start_day, end_day,
                 start_minute, end_minute, message_html, message_text, now() AT TIME ZONE zone
-           FROM mail_auto_replies WHERE user_id = $1",
+           FROM mail_auto_replies WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -316,10 +316,10 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
                 COALESCE(NULLIF(i.display_name, ''), u.username), u.is_admin, cur.address
            FROM mail_messages m
            JOIN mail_addresses a ON a.id = m.address_id
-           JOIN users u ON u.id = a.user_id
-           JOIN mail_addresses cur ON cur.user_id = u.id AND cur.state = 'active'
+           JOIN accounts u ON u.id = a.account_id
+           JOIN mail_addresses cur ON cur.account_id = u.id AND cur.state = 'active'
            LEFT JOIN mail_identities i ON i.address_id = cur.id
-          WHERE m.id = $1 AND m.user_id = $2 AND m.direction = 'inbound'",
+          WHERE m.id = $1 AND m.account_id = $2 AND m.direction = 'inbound'",
     )
     .bind(delivered.message)
     .bind(delivered.user_id)
@@ -395,8 +395,8 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
         .to_vec()
     };
     let claimed: Option<Vec<u8>> = sqlx::query_scalar(
-        "INSERT INTO mail_auto_reply_sent (user_id, sender_hash) VALUES ($1, $2)
-         ON CONFLICT (user_id, sender_hash) DO UPDATE SET sent_at = now()
+        "INSERT INTO mail_auto_reply_sent (account_id, sender_hash) VALUES ($1, $2)
+         ON CONFLICT (account_id, sender_hash) DO UPDATE SET sent_at = now()
           WHERE mail_auto_reply_sent.sent_at < now() - make_interval(days => $3)
          RETURNING sender_hash",
     )
@@ -450,7 +450,7 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     };
     if let Err(error) = sent {
         // Not answered: the next message from them may try again.
-        sqlx::query("DELETE FROM mail_auto_reply_sent WHERE user_id = $1 AND sender_hash = $2")
+        sqlx::query("DELETE FROM mail_auto_reply_sent WHERE account_id = $1 AND sender_hash = $2")
             .bind(delivered.user_id)
             .bind(&sender_hash)
             .execute(&state.pool)
