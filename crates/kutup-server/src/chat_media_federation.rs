@@ -473,11 +473,25 @@ async fn attempt_media(
     if head != Some(row.sequence) {
         return Ok(None);
     }
-    let transaction: FederatedChatMediaTransactionV1 =
-        serde_json::from_value(row.transaction.clone())
-            .map_err(|_| AppError::internal("stored Chat-media transaction is malformed"))?;
-    let operation_id = canonical_uuid(&transaction.offer.operation_id)
-        .ok_or_else(|| AppError::internal("stored Chat-media operation is malformed"))?;
+    // A row this server can no longer read never stalls the queue.
+    let decoded =
+        serde_json::from_value::<FederatedChatMediaTransactionV1>(row.transaction.clone())
+            .ok()
+            .and_then(|transaction| {
+                canonical_uuid(&transaction.offer.operation_id).map(|id| (transaction, id))
+            });
+    let Some((transaction, operation_id)) = decoded else {
+        crate::federation_stream_control::settle_undecodable(
+            state,
+            kutup_chat_proto::FederationStreamV1::Media,
+            row.id,
+            &row.destination,
+            row.sequence,
+            row.attempts,
+        )
+        .await?;
+        return Ok(None);
+    };
     // Its sender's federation went off since it was queued: the offer never
     // leaves; its sequence is withdrawn instead (crate::federation_stream_control).
     if let Some(sender) = row.sender_user_id {

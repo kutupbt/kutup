@@ -173,6 +173,9 @@ pub enum FederationStreamV1 {
     Chat,
     /// Chat media offers (`/api/fed/chat/media/offers`).
     Media,
+    /// Sealed-sender Chat sends (`/api/fed/chat/sealed/messages` and
+    /// `…/batch`).
+    Sealed,
 }
 
 /// A control message on a sequenced federation stream: it uses up one

@@ -476,38 +476,21 @@ fn media_closing_sequence_from_v1(
         )
         .unwrap();
     assert_eq!(next, mark + 1, "A and B agree before the case");
-    // The v1 offer: expired by now (B refuses it for good), its pull grant
-    // gone with its v1 settling.
+    // A queued row this server can no longer read (a retired format, a
+    // damaged payload): it must not stall the destination's queue. Its
+    // sequence is withdrawn (stream control) and it is settled.
     let old_operation = "50000000-0000-4000-8000-000000000014";
-    let transaction = json!({
-        "version": 1,
-        "originDomain": "a.test",
-        "originSequence": next,
-        "offer": {
-            "version": 1,
-            "originDomain": "a.test",
-            "destinationDomain": "b.test",
-            "recipient": bob,
-            "operationId": old_operation,
-            "attachmentId": "50000000-0000-4000-8000-000000000015",
-            "suite": 1,
-            "ciphertextBytes": 64,
-            "ciphertextSha256": "11".repeat(32),
-            "retrievalToken": b64(&[0x74; 32]),
-            "deliveryCapability": b64(capability),
-            "expiresAt": OffsetDateTime::now_utc().unix_timestamp() - 60,
-        },
-    });
+    let transaction = json!({ "version": 99, "notATransaction": true });
     runtime
         .block_on(async {
             let mut tx = pool_a.begin().await?;
             sqlx::query(
                 "INSERT INTO federation_outbox
                      (kind, destination, sequence, idempotency_key, sender_account_id,
-                      recipient_account_id, payload, state, error_class)
+                      recipient_account_id, payload, state)
                  VALUES ('media', 'b.test', $1, $2, $3::uuid, $4::uuid,
                          jsonb_build_object('transaction', $5::jsonb, 'operationId', $6::text),
-                         'pending', 'closing_sequence')",
+                         'pending')",
             )
             .bind(next)
             .bind(format!("{alice_id}:{old_operation}"))
@@ -558,7 +541,7 @@ fn media_closing_sequence_from_v1(
                 .json(&offer)
                 .send()
                 .unwrap(),
-            "an offer behind a v1 refusal",
+            "an offer behind an undecodable row",
         );
         if answer["status"] == "stored" {
             break;
@@ -566,7 +549,7 @@ fn media_closing_sequence_from_v1(
         assert_eq!(answer["status"], "queued");
         assert!(
             Instant::now() < deadline,
-            "the offer behind a v1 refusal never went"
+            "the offer behind an undecodable row never went"
         );
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -576,8 +559,8 @@ fn media_closing_sequence_from_v1(
         .send()
         .unwrap();
     assert_eq!(downloaded.status().as_u16(), 200);
-    // A's v1 row settled refused; B recorded its refusal at N and the
-    // offer at N+1.
+    // A's undecodable row settled; B used up N on its withdrawal and stored
+    // the offer at N+1: no gap.
     let closed: (String, Option<String>) = runtime
         .block_on(
             sqlx::query_as(
@@ -590,7 +573,7 @@ fn media_closing_sequence_from_v1(
         .unwrap();
     assert_eq!(
         closed,
-        ("rejected".to_owned(), Some("remote_rejection".to_owned()))
+        ("rejected".to_owned(), Some("undecodable".to_owned()))
     );
     let recorded: Vec<(i64, i16)> = runtime
         .block_on(
@@ -603,19 +586,18 @@ fn media_closing_sequence_from_v1(
             .fetch_all(&pool_b),
         )
         .unwrap();
-    assert_eq!(recorded, [(next, 400), (next + 1, 200)]);
-    // The v1 operation asked again (with a new expiry, as clients ask): its
-    // stored refusal, not `queued`.
-    let mut again = transaction["offer"].clone();
-    again["expiresAt"] = json!(OffsetDateTime::now_utc().unix_timestamp() + 30 * 86_400);
-    let repeat = c
-        .post(format!("{a}/api/chat/media/deliveries"))
-        .bearer_auth(alice_token)
-        .json(&again)
-        .send()
+    assert_eq!(recorded, [(next, 200), (next + 1, 200)]);
+    let last: i64 = runtime
+        .block_on(
+            sqlx::query_scalar(
+                "SELECT last_sequence FROM federation_inbound_state
+                 WHERE kind = 'media' AND origin = 'a.test'",
+            )
+            .fetch_one(&pool_b),
+        )
         .unwrap();
-    assert_eq!(repeat.status().as_u16(), 422);
-    println!("MEDIA V1 REFUSAL CLOSES ITS SEQUENCE");
+    assert_eq!(last, next + 1, "B's media stream from A has no gap");
+    println!("AN UNDECODABLE MEDIA ROW CLOSES ITS SEQUENCE");
 }
 
 /// A Chat attachment in the block format (KUTPCM2), as a client seals it.
