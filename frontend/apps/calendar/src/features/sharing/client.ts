@@ -169,13 +169,19 @@ export class TooManyMembers extends Error {
   }
 }
 
-/** A shared calendar's owner (or a member who stays, in a rotation) can't be confirmed until the user says so. */
-export class PersonNotConfirmed extends Error {
+type DoubtfulStatus = Extract<IdentityStatus, { kind: 'changed' | 'invalid' | 'someoneElse' }>
+
+/**
+ * A shared calendar's owner (or a member who stays, in a rotation) can't be
+ * confirmed until the user says so. Drive's own error, so Drive's warning
+ * shows it; `address` is the person's.
+ */
+export class PersonNotConfirmed extends IdentityNotConfirmed {
   constructor(
     readonly address: string,
-    readonly status: IdentityStatus,
+    status: DoubtfulStatus,
   ) {
-    super(`the identity of ${address} could not be confirmed (${status.kind})`)
+    super(address, status)
     this.name = 'PersonNotConfirmed'
   }
 }
@@ -359,8 +365,7 @@ export async function loadInvitations(): Promise<ReceivedInvitationRow[]> {
 /** A shared calendar's owner, checked against the pins; their verified keys, or `PersonNotConfirmed`. */
 export async function checkOwner(me: DriveIdentity, owner: CalendarOwnerRow, confirmed = false): Promise<CalendarOwner> {
   const status = await checkIdentity(me, owner.address, { driveSigningPublicKey: owner.signingPublicKey, incarnationId: owner.incarnationId })
-  const doubtful = status.kind === 'changed' || status.kind === 'invalid' || status.kind === 'someoneElse'
-  if (doubtful && !confirmed) throw new PersonNotConfirmed(owner.address, status)
+  if ((status.kind === 'changed' || status.kind === 'invalid' || status.kind === 'someoneElse') && !confirmed) throw new PersonNotConfirmed(owner.address, status)
   return { account: refString({ server: me.accountRef.server, accountId: owner.accountId }), incarnationId: owner.incarnationId, signingPublicKey: owner.signingPublicKey }
 }
 

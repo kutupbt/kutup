@@ -13,7 +13,7 @@ const server = vi.hoisted(() => ({
   invitations: [] as { id: string; accountId: string; address: string; permissions: number; state: string; createdAt: string; expiresAt: string }[],
   keys: [] as { keyGeneration: number; publicKey: string; fingerprint: string; lockedSecretKey: string; passphraseShare: string }[],
   links: [] as { id: string; kind: string; secret: { keyGeneration: number; sealed: string } | null; createdAt: string }[],
-  settings: {} as Record<string, unknown>,
+  settings: {},
   calls: [] as { method: string; url: string; body?: unknown }[],
   failAccept: false,
 }))
@@ -350,7 +350,7 @@ describe('links', () => {
 
 describe('leaving', () => {
   it('leaves a calendar someone else owns, then drops its record; an owner can’t leave', async () => {
-    await leaveCalendar(session, { ...calendar, owned: false } as Calendar)
+    await leaveCalendar(session, { ...calendar, owned: false })
     expect(server.calls.at(-1)).toEqual({ method: 'delete', url: '/calendar/calendars/cal-1/members/me' })
     expect(records.forgotten).toEqual(['cal-1'])
     await expect(leaveCalendar(session, calendar)).rejects.toThrow()

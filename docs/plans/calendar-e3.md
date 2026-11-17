@@ -247,6 +247,51 @@ Busy-only links need nothing.
   are exact), run in Rust and in `scripts/test-crypto-wasm.mjs`.
 - No account-record purposes or scopes are needed.
 
+**E3c and E3d's dialog, as built before E3b** (`feat/calendar-e3`). The UI
+talks to the server through one module,
+`frontend/apps/calendar/src/features/sharing/client.ts`, tested against a
+stand-in server. These are the shapes E3b serves (post-W7 names); if E3b
+differs, only that module changes.
+
+- **Calendar rows** (`GET /api/calendar/calendars`) gain:
+  - `owner {accountId, address, incarnationId, signingPublicKey}` on a
+    calendar someone else owns;
+  - `keys [{keyGeneration, publicKey, fingerprint, lockedSecretKey,
+    passphraseShare}]`, every live generation with the caller's share.
+
+  The old single-key fields stay for now. A shared calendar opens only
+  after the app's owner check (Drive's pins) passes. An owner whose
+  identity changed is listed apart, to confirm, and the calendar stays
+  closed.
+- `GET …/calendars/{id}/keys` → `{keys: [...]}`, as above, for the caller.
+- `GET …/calendars/{id}/members` → `{members: [{accountId, address,
+  permissions, addedAt}], invitations: [{id, accountId, address,
+  permissions, state: pending|declined, createdAt, expiresAt}]}`.
+- `POST …/calendars/{id}/invitations {accountId, incarnationId,
+  permissions, shares: [{keyGeneration, share}]}`. There is one share per
+  live generation, sealed to the account the pins confirm.
+- `PATCH …/calendars/{id}/members/{accountId} {permissions}`;
+  `DELETE …/calendars/{id}/invitations/{invitationId}`;
+  `DELETE …/calendars/{id}/members/me`.
+- `POST …/calendars/{id}/keys/rotate {removeAccountId, fromKeyGeneration,
+  keyGeneration, publicKey, lockedSecretKey, ownShare, memberShares:
+  [{accountId, share}], metadata, links: [{id, passphrase, secret}]}`.
+  - Pending invitees get the new generation too.
+  - It is refused (409) when `fromKeyGeneration` is not the newest.
+- `GET /api/calendar/invitations` → `{invitations: [{id, calendarId, owner,
+  permissions, metadata, keys, createdAt, expiresAt}]}`;
+  `POST …/invitations/{id}/accept` and `…/decline`. The member files its
+  `calendarSettings` record before the accept.
+- `GET …/calendars/{id}/links` → `{links: [{id, kind: full|query|busy,
+  secret: {keyGeneration, sealed} | null, createdAt}]}`.
+- `POST …/calendars/{id}/links {id, kind, secret?, passphrases?:
+  [{keyGeneration, sealed}]}` answers the row.
+- `DELETE …/calendars/{id}/links/{linkId}`.
+- **Site settings in `/api/auth/settings`:** `calendar {queryLinksAllowed,
+  membersPerCalendar, linksPerCalendar}`.
+- **The links' optional purpose** (sealed to the calendar key) is not in the
+  dialog yet: it needs a seal-to-calendar call in WASM. It comes with E3d.
+
 Each slice is its own PR from its own worktree (`feat/calendar-e3a…`),
 opened after the wipe.
 

@@ -24,6 +24,7 @@ import { Textarea } from '@kutup/ui/components/textarea'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { ReminderList } from './reminders/ReminderList'
+import { leaveCalendar } from './sharing/client'
 import { hasRepeats } from './reminders/triggers'
 
 /** Kutup-crypto's limits on a calendar's name and description. */
@@ -58,6 +59,11 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
   const remove = useCalendarMutation(async () => {
     if (calendar) await deleteCalendar(session, calendar)
   })
+  // A member leaves what someone else owns (docs/plans/calendar-e3.md §1).
+  const leave = useCalendarMutation(async () => {
+    if (calendar) await leaveCalendar(session, calendar)
+  })
+  const [leaving, setLeaving] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -149,11 +155,18 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
               </>
             ) : null}
             <p className="text-xs text-muted-foreground">{t('calendars.encrypted')}</p>
+            {calendar && !calendar.owned && calendar.owner ? (
+              <p className="text-xs text-muted-foreground">{t('sharing.sharedBy', { address: calendar.owner.address })}</p>
+            ) : null}
             {save.error ? <Alert variant="error">{apiErrorMessage(save.error, t('calendars.saveFailed'))}</Alert> : null}
             <DialogFooter className="sm:justify-between">
               {calendar && (calendar.permissions & PERMISSION.superOwner) !== 0 ? (
                 <Button type="button" variant="ghost" onClick={() => setConfirming(true)} data-testid="calendar-delete">
                   {t('calendars.delete')}
+                </Button>
+              ) : calendar && !calendar.owned ? (
+                <Button type="button" variant="ghost" onClick={() => setLeaving(true)} data-testid="calendar-leave">
+                  {t('sharing.leave')}
                 </Button>
               ) : (
                 <span />
@@ -170,6 +183,27 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
           </form>
         </DialogContent>
       </Dialog>
+      {calendar && !calendar.owned ? (
+        <ConfirmDestructive
+          open={leaving}
+          onOpenChange={setLeaving}
+          title={t('sharing.leaveTitle', { name: calendar.name })}
+          description={t('sharing.leaveDescription')}
+          submit={t('sharing.leave')}
+          pending={leave.isPending}
+          error={leave.error}
+          errorFallback={t('sharing.errors.saveFailed')}
+          onConfirm={() =>
+            leave.mutate(undefined, {
+              onSuccess: () => {
+                setLeaving(false)
+                onOpenChange(false)
+                toast.success(t('sharing.left', { name: calendar.name }))
+              },
+            })
+          }
+        />
+      ) : null}
       {calendar ? (
         <ConfirmDestructive
           open={confirming}
