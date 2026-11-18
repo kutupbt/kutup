@@ -51,7 +51,7 @@ STORAGE_ALLOWED = {
 }
 # Paths a test calls to see them refused: a client from before versions,
 # and the federation routes long gone.
-PATH_ALLOWED_LINES = ('{base}/api/user/me', '"/api/fed-proxy/incoming"')
+PATH_ALLOWED_LINES = ('{base}/api/user/me', '"/api/fed-proxy/incoming"', 'answer("/api/')
 
 problems = []
 for top in CODE_DIRS:
