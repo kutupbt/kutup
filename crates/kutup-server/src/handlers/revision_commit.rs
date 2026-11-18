@@ -72,7 +72,6 @@ struct Uploaded {
     total_bytes: i64,
     file_key_envelope: Option<String>,
     key_epoch: i32,
-    storage_path: String,
     s3_upload_id: String,
     name_hash: Option<String>,
     key_generation: Option<i32>,
@@ -122,7 +121,7 @@ pub async fn commit(
     let row: Option<Uploaded> = sqlx::query_as(
         "SELECT id, account_id, kind, collection_id, total_bytes,
                 kutup_b64(file_key_envelope) AS file_key_envelope, key_epoch,
-                storage_path, s3_upload_id, encode(name_hash, 'hex') AS name_hash, key_generation,
+                s3_upload_id, encode(name_hash, 'hex') AS name_hash, key_generation,
                 encode(content_hash, 'hex') AS content_hash, based_on,
                 uploaded_at IS NOT NULL AS uploaded
          FROM drive_uploads WHERE file_id = $1 AND revision_id = $2
@@ -159,8 +158,8 @@ pub async fn commit(
     // The object is there, whole, before any row names it. The upload row is
     // locked, and a cancel or the sweep removes that row before the bytes,
     // so what this finds stays until the commit ends.
-    crate::drive_blob::ensure_object_stored(&state.storage, &row.storage_path, row.total_bytes)
-        .await?;
+    let storage_path = crate::file_content::revision_path(file_id, revision_id);
+    crate::drive_blob::ensure_object_stored(&state.storage, &storage_path, row.total_bytes).await?;
     // A new file's key is generation 1; a version's, the one it was sealed at.
     let generation = match kind.as_str() {
         "file" => Some(1),
@@ -195,7 +194,7 @@ pub async fn commit(
                 collection_id: row.collection_id,
                 total_bytes: row.total_bytes,
                 metadata: Some(metadata.clone()),
-                storage_path: row.storage_path,
+                storage_path,
                 s3_upload_id: row.s3_upload_id,
                 key_generation: row
                     .key_generation
@@ -299,7 +298,6 @@ async fn commit_file(
             metadata_revision: 1,
             file_key_envelope,
             key_epoch: row.key_epoch,
-            storage_path: &row.storage_path,
             size: row.total_bytes,
             name_hash: Some(name_hash),
             content_hash: None,

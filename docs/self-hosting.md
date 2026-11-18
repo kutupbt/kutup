@@ -700,9 +700,10 @@ backup.
    provider or account other than the data bucket's, and turn on object
    lock or versioning there if it has it.
 4. **Give the blobs a second copy.** The data bucket holds the only copy of
-   every file's ciphertext. Turn on object versioning, or replicate it to a
-   bucket with a lifecycle rule, at the provider. The blobs are ciphertext,
-   so a replica leaks nothing new.
+   every file's ciphertext. Replicate it to a second bucket at the provider
+   (Kutup itself needs no versioning in either; deletes reach the data
+   bucket only after `server.storage.deleted_blob_retention_seconds`). The
+   blobs are ciphertext, so a replica leaks nothing new.
 
 **Deleted files wait before they leave storage.** A database dump taken at
 time T names blobs that must still exist when it is restored. So the server
@@ -1593,13 +1594,10 @@ every byte goes through the backend, so the bucket should stay private (no
 public access, no public custom domain). The bundled SeaweedFS is a default,
 not a requirement.
 
-Two differences between stores are handled by the server, so no client has
-to know which one is behind it: resumable uploads are stored as equal-sized
-parts (Cloudflare R2 refuses parts of different lengths), and objects are
-read and deleted by version only where the store supports that (R2 returns a
-version id for every upload but refuses to read or delete by it, so the
-server reads and deletes those objects by key, which it writes only once).
-`storage-check` reads back by version and says which way the store goes.
+Resumable uploads are stored as equal-sized parts, so a store that refuses
+parts of different lengths (Cloudflare R2) works too, and no client has to
+know which store is behind the server. Every object is written once under a
+key of its own and read and deleted by that key, never by an S3 version id.
 Checked with `storage-check` against SeaweedFS and Cloudflare R2.
 
 To run on a store you already have (Cloudflare R2, Backblaze B2, Hetzner
@@ -1657,13 +1655,16 @@ PostgreSQL backup is still yours to take.
 
 ## SeaweedFS bucket versioning and lifecycle
 
-Kutup does not depend on S3 object versioning: every object of a file lives
-under `files/{id}/` (`original`, `versions/{versionId}`, `assets/…`,
-`thumbnails/…`), every file version is an object of its own, and version retention
-is Kutup's job (`docs/plans/drive-versions-v2.md` — the last day whole, then
-hourly for a week, then daily up to each account's setting, 7 days to 10
-years). Deletes remove every stored version of an object, so they are final
-whether or not the bucket is versioned.
+Kutup does not use S3 object versioning and needs none:
+every key holds one revision of something and is never overwritten. Every
+object of a file lives under `files/{id}/` (`revisions/{revisionId}` for the
+first upload and each version, `assets/{assetId}`,
+`thumbnails/{variant}/{objectId}`), and version retention is Kutup's job
+(`docs/plans/drive-versions-v2.md`: the last day whole, then hourly for a
+week, then daily up to each account's setting, 7 days to 10 years). A delete
+is a plain delete of the key. On an unversioned bucket it is final; on a
+versioned one it leaves a noncurrent version, which the lifecycle rule below
+removes a day later.
 
 The `seaweedfs-init` Compose service creates the bucket (without versioning)
 and applies `lifecycle.json`, only a safety net for a bucket that has

@@ -3,15 +3,15 @@ import { getCryptoWasm } from './rustWasm'
 import type { MasterKeys } from './masterKeys'
 
 export const ACCOUNT_RECORD_PURPOSE = {
+  // kutup-crypto's AccountRecordPurpose, numbered by owner
+  // (docs/plans/w7-schema.md §11): only those the web seals or opens itself.
   passwordMasterKey: 1,
   recoveryMasterKey: 2,
-  // 3 was the Drive X-Wing private key, now derived from the master key and
-  // never stored (docs/plans/w6-key-hierarchy.md §1): reserved.
-  chatBackupRoot: 4,
+  chatBackupRoot: 13,
   /** A mail address's OpenPGP secret key. */
-  mailAddressPrivateKey: 5,
+  mailAddressPrivateKey: 23,
   /** A Kutup Pass vault's password and key file. */
-  passVaultSecret: 6,
+  passVaultSecret: 27,
 } as const
 
 export type AccountRecordPurpose =

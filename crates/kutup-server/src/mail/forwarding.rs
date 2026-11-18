@@ -483,7 +483,6 @@ pub struct Arrived {
     /// The copy's message row (its folder after filters decides spam).
     pub message_id: Uuid,
     pub object_key: String,
-    pub object_version: String,
     pub readable: Readable,
     /// Whether the message may be forwarded at all: false when it came back
     /// through a forwarding loop (our marker header, our SRS sender, or more
@@ -670,10 +669,7 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
             continue;
         };
         if message.is_none() {
-            let (body, _) = state
-                .storage
-                .get_stored(&arrived.object_key, &arrived.object_version)
-                .await?;
+            let (body, _) = state.storage.get_object(&arrived.object_key).await?;
             message = Some(body.collect().await?.into_bytes().to_vec());
         }
         let stored = message.as_deref().expect("read above");
@@ -886,9 +882,9 @@ async fn deliver(
     let id = Uuid::new_v4();
     let key = super::object_key(forwardee_user, id);
     let size = i64::try_from(forwarded.len())?;
-    let version = state
+    state
         .storage
-        .put_object_versioned(&key, ByteStream::from(forwarded), size)
+        .upload(&key, ByteStream::from(forwarded), size)
         .await?;
     let stored: anyhow::Result<bool> = async {
         let mut tx = state.pool.begin().await?;
@@ -908,7 +904,6 @@ async fn deliver(
                 protection: "endToEnd",
                 seen: false,
                 object_key: &key,
-                object_version: &version,
                 size,
                 readable,
                 bcc: &[],
@@ -925,7 +920,7 @@ async fn deliver(
     }
     .await;
     if !matches!(stored, Ok(true)) {
-        if let Err(error) = state.storage.delete_stored(&key, &version).await {
+        if let Err(error) = state.storage.delete(&key).await {
             tracing::warn!(error = %error, "mail: unrecorded forwarded copy left for the sweep");
         }
     }

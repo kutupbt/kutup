@@ -283,8 +283,8 @@ pub async fn prune_versions(
             "olderThanDays must be between 0 and 36500",
         ));
     }
-    let rows: Vec<(uuid::Uuid, String, i64)> = sqlx::query_as(&format!(
-        "SELECT v.id, v.storage_path, v.size_bytes
+    let rows: Vec<(uuid::Uuid, uuid::Uuid, i64)> = sqlx::query_as(&format!(
+        "SELECT v.id, v.file_id, v.size_bytes
            FROM drive_file_versions v
           WHERE v.author_account_id = $1
             AND v.created_at <= now() - make_interval(days => $2)
@@ -302,7 +302,8 @@ pub async fn prune_versions(
     .await?;
     let more = rows.len() as i64 > PRUNE_BATCH;
     let (mut deleted_count, mut freed_bytes) = (0, 0);
-    for (id, path, size) in rows.into_iter().take(PRUNE_BATCH as usize) {
+    for (id, file_id, size) in rows.into_iter().take(PRUNE_BATCH as usize) {
+        let path = crate::file_content::revision_path(file_id, id);
         match crate::jobs::remove_version(&state.pool, &state.storage, id, &path).await {
             Ok(true) => {
                 deleted_count += 1;

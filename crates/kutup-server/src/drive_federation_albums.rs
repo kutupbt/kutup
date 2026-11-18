@@ -27,7 +27,7 @@ use crate::drive_federation::{
     OCTET_STREAM_CONTENT_TYPE,
 };
 use crate::error::{AppError, AppResult};
-use crate::handlers::file_thumbnails::thumbnail_storage_path;
+use crate::handlers::file_thumbnails::current_object;
 use crate::middleware::AuthUser;
 use crate::AppState;
 
@@ -198,19 +198,12 @@ pub async fn thumbnail(
         if !share_reaches(&state.pool, share.collection_id, file_id).await? {
             return Err(AppError::not_found("file not found"));
         }
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM drive_file_thumbnails WHERE file_id = $1 AND variant = $2)",
-        )
-        .bind(file_id)
-        .bind(variant.as_str())
-        .fetch_one(&state.pool)
-        .await?;
-        if !exists {
+        let Some(path) = current_object(&state.pool, file_id, variant).await? else {
             return Err(AppError::not_found("not found"));
-        }
+        };
         let (object, _) = state
             .storage
-            .get_object(&thumbnail_storage_path(file_id, variant))
+            .get_object(&path)
             .await
             .map_err(|_| AppError::not_found("not found"))?;
         let bytes = object

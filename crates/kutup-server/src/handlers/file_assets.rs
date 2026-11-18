@@ -32,7 +32,7 @@ fn valid_asset_id(id: &str) -> bool {
         && !id.contains("..")
 }
 
-fn asset_storage_path(file_id: Uuid, asset_id: &str) -> String {
+pub(crate) fn asset_storage_path(file_id: Uuid, asset_id: &str) -> String {
     format!("files/{file_id}/assets/{asset_id}")
 }
 

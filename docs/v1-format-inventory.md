@@ -12,7 +12,7 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Master-key password wrap | XSalsa20 secretbox plus separate nonce; implicit Argon parameters | **Implemented:** OPAQUE for the password (its Argon2id in the OPAQUE key-stretching function), and the suite-bearing `AccountRecordV1` (suite 2, bound to the account's key binding, XChaCha) for the wrap |
 | Master-key recovery wrap | XSalsa20 secretbox under random recovery entropy | **Implemented:** `AccountRecordV1` (suite 2) with recovery purpose, the account's key binding as context, and XChaCha |
 | Account sharing private key | XSalsa20 secretbox; public X25519 key stored separately | **Implemented:** account-scoped Drive keys in `AccountManifestV1`; private material wrapped by the Drive-private-key purpose of `AccountRecordV1` |
-| Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records (names padded to 256-byte buckets), immutable `CollectionEpochStatementV1` history and exact revision/epoch binding. The owner key (purpose 1) is sealed under the owner's Drive root (account-record purpose 23), not the master key, with the root's generation in the revision slot (docs/plans/identity-rotation.md §3). Vector: `crypto.json` → `driveOwnerKeys` |
+| Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records (names padded to 256-byte buckets), immutable `CollectionEpochStatementV1` history and exact revision/epoch binding. The owner key (purpose 1) is sealed under the owner's Drive root (account-record purpose 10, `DriveRoot`), not the master key, with the root's generation in the revision slot (docs/plans/identity-rotation.md §3). Vector: `crypto.json` → `driveOwnerKeys` |
 | File metadata/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated file UUID; the file key's wrap is bound to file, folder, the folder epoch it is sealed at and the key's generation, and the metadata (padded to 256-byte buckets, with the content SHA-256) to the file alone (generation and revision), across multipart, tus, trash, public-link and signed-federation paths (docs/plans/drive-move.md) |
 | File blob and version snapshot | Raw secretstream header/chunks, or nonce-prefixed snapshot AEAD | **Implemented end to end:** one block-format file blob (Drive object suite 2, `KUTPDB3`) for originals and text/office/whiteboard snapshots: 4 MiB AEAD blocks bound to the file, its key generation and the revision, never the folder, with a signed manifest of block hashes (docs/plans/drive-block-format.md) |
 | Profile key for a share partner | — (new) | **Implemented end to end:** `ProfileKeyEnvelopeV1` (`KUTPPK1`), the same HPKE suite and Drive keys as a named share, bound to both accounts and incarnations, not to a folder |
@@ -90,6 +90,21 @@ site setting) and whether it carries a revision:
 | IdentityPins | none (one list per account) | padded to a multiple of 256 bytes, at most 4 MiB | yes |
 | ChatGroupListEntry | `hashed_object` of the group id (32 bytes) | one length, at most 3972 bytes of plaintext | yes |
 | ChatContactListEntry | `hashed_object` of the contact's account (32 bytes) | one length, at most 1988 bytes of plaintext | yes |
+
+Purposes are numbered by owner, all below 40 (docs/plans/w7-schema.md §11):
+account 1–9 (1 PasswordMasterKey, 2 RecoveryMasterKey, 3 MasterKeyKeyring,
+4 IdentityRoot, 5 ObjectIdKey, 6 AccountHead, 7 AccountLocalAnchor,
+8 RevisionSeen, 9 LocalChainPin); Drive 10–12 (10 DriveRoot, 11
+IdentityPins); Chat 13–22 (13 ChatBackupRoot, 14 ChatProfileKeyWrap, 15
+ChatGroupListEntry, 16 ChatContactListEntry, 17 ChatAttachmentLedger, 18
+JoinedMeeting, 19 GroupPseudonymRoot, 20 CallLinkRoot, 21 ChatStoreKey);
+Mail 23–26 (23 MailAddressPrivateKey, 24 MailName, 25 MailSearchStoreKey);
+Pass 27–28 (27 PassVaultSecret); Calendar 29–30 (29 CalendarSettings);
+Contacts 31–33 (31 ContactCard, 32 ContactGroup); Photos 34–35 (34
+PhotosLibrary); Organizations 36–37 (36 OrganizationPrivateKey); 38–39 spare.
+The numbers not named are spare, refused as *newer than me*; 40 and up are
+left to the third session's apps. The account roots (`account_roots`) hold
+purposes 3, 4, 5, 10, 19 and 20 only (a CHECK).
 
 A hashed object is `HMAC(K_id, purpose ‖ id)` with `K_id` from the master key
 (`kutup/account-record/object-id/v1`), so the server stores an entry under an

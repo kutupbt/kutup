@@ -477,7 +477,7 @@ CREATE TABLE public.account_roots (
     envelope bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT account_roots_object_check CHECK ((octet_length(object) = 4)),
-    CONSTRAINT account_roots_purpose_check CHECK (((purpose >= 22) AND (purpose <= 27)))
+    CONSTRAINT account_roots_purpose_check CHECK (((purpose)::integer = ANY (ARRAY[3, 4, 5, 10, 19, 20])))
 );
 
 
@@ -2347,7 +2347,7 @@ CREATE TABLE public.drive_file_thumbnails (
     file_id uuid NOT NULL,
     variant text NOT NULL,
     size_bytes bigint NOT NULL,
-    s3_version_id text DEFAULT ''::text NOT NULL,
+    object_id uuid NOT NULL,
     source_version uuid,
     uploader_account_id uuid NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2383,7 +2383,6 @@ CREATE TABLE public.collab_update_log (
 CREATE TABLE public.drive_file_versions (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     file_id uuid NOT NULL,
-    storage_path text NOT NULL,
     seq_at_snapshot bigint NOT NULL,
     doc_key_id bigint NOT NULL,
     author_account_id uuid NOT NULL,
@@ -2398,7 +2397,7 @@ CREATE TABLE public.drive_file_versions (
     remote_author_server text,
     remote_author_account_id uuid,
     blob_suite smallint DEFAULT 2 NOT NULL,
-    revision_content_envelope bytea,
+    revision_content_envelope bytea NOT NULL,
     CONSTRAINT drive_file_versions_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'yjs'::text]))),
     CONSTRAINT drive_file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL))),
     CONSTRAINT drive_file_versions_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
@@ -2417,7 +2416,6 @@ CREATE TABLE public.drive_files (
     file_key_envelope bytea NOT NULL,
     key_epoch integer NOT NULL,
     metadata_revision bigint DEFAULT 1 NOT NULL,
-    storage_path text NOT NULL,
     encrypted_size_bytes bigint DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2436,7 +2434,7 @@ CREATE TABLE public.drive_files (
     content_hash bytea,
     content_revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
     blob_suite smallint DEFAULT 2 NOT NULL,
-    revision_content_envelope bytea,
+    revision_content_envelope bytea NOT NULL,
     CONSTRAINT drive_files_collab_log_floor_check CHECK ((collab_log_floor >= 0)),
     CONSTRAINT drive_files_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_files_key_generation CHECK ((key_generation > 0)),
@@ -2926,7 +2924,6 @@ CREATE TABLE public.mail_group_members (
 
 CREATE TABLE public.mail_group_objects (
     object_key text NOT NULL,
-    object_version text DEFAULT ''::text NOT NULL,
     group_id uuid NOT NULL,
     size_bytes bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -3095,7 +3092,6 @@ CREATE TABLE public.mail_messages (
     starred boolean DEFAULT false NOT NULL,
     protection text NOT NULL,
     object_key text NOT NULL,
-    object_version text DEFAULT ''::text NOT NULL,
     size_bytes bigint NOT NULL,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
     sent_at timestamp with time zone,
@@ -3148,7 +3144,6 @@ CREATE TABLE public.mail_outbox (
     is_admin boolean NOT NULL,
     deliver_at timestamp with time zone NOT NULL,
     parts_key text NOT NULL,
-    parts_version text NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
@@ -3673,12 +3668,11 @@ CREATE TABLE public.storage_pending_deletions (
     id bigint NOT NULL,
     kind text NOT NULL,
     key text NOT NULL,
-    version_id text DEFAULT ''::text NOT NULL,
     queued_at timestamp with time zone DEFAULT now() NOT NULL,
     attempts integer DEFAULT 0 NOT NULL,
     last_error text,
     CONSTRAINT storage_pending_deletions_key_check CHECK ((key <> ''::text)),
-    CONSTRAINT storage_pending_deletions_kind_check CHECK ((kind = ANY (ARRAY['object'::text, 'stored'::text, 'version'::text, 'prefix'::text])))
+    CONSTRAINT storage_pending_deletions_kind_check CHECK ((kind = ANY (ARRAY['object'::text, 'prefix'::text])))
 );
 
 
@@ -3724,11 +3718,8 @@ CREATE TABLE public.drive_uploads (
     file_id uuid NOT NULL,
     total_bytes bigint NOT NULL,
     received_bytes bigint DEFAULT 0 NOT NULL,
-    metadata_envelope bytea,
     file_key_envelope bytea,
     key_epoch integer NOT NULL,
-    metadata_revision bigint,
-    storage_path text NOT NULL,
     s3_upload_id text NOT NULL,
     s3_part_etags jsonb DEFAULT '[]'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -3745,7 +3736,6 @@ CREATE TABLE public.drive_uploads (
     CONSTRAINT drive_uploads_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_uploads_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'version'::text]))),
     CONSTRAINT drive_uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (octet_length(content_hash) = 32))))),
-    CONSTRAINT drive_uploads_metadata_revision_check CHECK ((metadata_revision > 0)),
     CONSTRAINT drive_uploads_uploaded_check CHECK (((uploaded_at IS NULL) OR ((blob_suite = 2) AND (received_bytes = total_bytes)))),
     CONSTRAINT drive_uploads_content_hash_bytes CHECK ((octet_length(content_hash) = 32)),
     CONSTRAINT drive_uploads_name_hash_bytes CHECK ((octet_length(name_hash) = 32))
@@ -5084,7 +5074,7 @@ ALTER TABLE ONLY public.drive_file_versions
 --
 
 ALTER TABLE public.drive_file_versions
-    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (octet_length(revision_content_envelope) = 356))) NOT VALID;
+    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK ((octet_length(revision_content_envelope) = 356));
 
 
 --
@@ -5108,7 +5098,7 @@ ALTER TABLE ONLY public.drive_files
 --
 
 ALTER TABLE public.drive_files
-    ADD CONSTRAINT drive_files_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (octet_length(revision_content_envelope) = 356))) NOT VALID;
+    ADD CONSTRAINT drive_files_revision_content_check CHECK ((octet_length(revision_content_envelope) = 356));
 
 
 --
@@ -5760,11 +5750,11 @@ ALTER TABLE ONLY public.site_settings
 
 
 --
--- Name: storage_pending_deletions storage_pending_deletions_kind_key_version_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: storage_pending_deletions storage_pending_deletions_kind_key_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.storage_pending_deletions
-    ADD CONSTRAINT storage_pending_deletions_kind_key_version_id_key UNIQUE (kind, key, version_id);
+    ADD CONSTRAINT storage_pending_deletions_kind_key_key UNIQUE (kind, key);
 
 
 --
@@ -5797,14 +5787,6 @@ ALTER TABLE public.drive_uploads
 
 ALTER TABLE ONLY public.drive_uploads
     ADD CONSTRAINT drive_uploads_file_id_key UNIQUE (file_id);
-
-
---
--- Name: drive_uploads drive_uploads_metadata_at_commit; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.drive_uploads
-    ADD CONSTRAINT drive_uploads_metadata_at_commit CHECK (((metadata_envelope IS NULL) AND (metadata_revision IS NULL))) NOT VALID;
 
 
 --

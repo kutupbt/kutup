@@ -1517,7 +1517,7 @@ export class ChatService {
     await this.attachmentLedger.create({
       version: 1,
       conversationKind: conversation.kind === 'group'
-        ? 'mlsGroup'
+        ? 'group'
         : address === self ? 'noteToSelf' : 'direct',
       conversationReference: address,
       messageId,

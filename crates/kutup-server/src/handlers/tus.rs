@@ -374,15 +374,13 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         }
     };
 
-    // The metadata comes with the commit: NULL, never the columns' old
-    // default (`uploads_metadata_at_commit`).
+    // The metadata comes with the commit, never with the upload.
     let ins = sqlx::query(
         "INSERT INTO drive_uploads \
             (id, account_id, collection_id, file_id, total_bytes, \
              file_key_envelope, key_epoch, \
-             storage_path, s3_upload_id, name_hash, revision_id, blob_suite, \
-             metadata_envelope, metadata_revision) \
-         VALUES ($1,$2,$3,$4,$5,kutup_unb64($6),$7,$8,$9,decode($10, 'hex'),$11,$12,NULL,NULL)",
+             s3_upload_id, name_hash, revision_id, blob_suite) \
+         VALUES ($1,$2,$3,$4,$5,kutup_unb64($6),$7,$8,decode($9, 'hex'),$10,$11)",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -391,7 +389,6 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     .bind(total_bytes)
     .bind(file_key_envelope)
     .bind(key_epoch)
-    .bind(&storage_path)
     .bind(&s3_upload_id)
     .bind(&name_hash)
     .bind(revision)
@@ -578,7 +575,6 @@ pub async fn patch(
         /// None for a version.
         file_key_envelope: Option<String>,
         key_epoch: i32,
-        storage_path: String,
         s3_upload_id: String,
         s3_part_etags: serde_json::Value,
         pending_bytes: Vec<u8>,
@@ -595,7 +591,7 @@ pub async fn patch(
     let row: Option<UploadRow> = match sqlx::query_as(
         "SELECT collection_id, file_id, total_bytes, received_bytes, \
                 kutup_b64(file_key_envelope) AS file_key_envelope, key_epoch, \
-                storage_path, s3_upload_id, s3_part_etags, pending_bytes, \
+                s3_upload_id, s3_part_etags, pending_bytes, \
                 encode(name_hash, 'hex') AS name_hash, \
                 kind, key_generation, encode(content_hash, 'hex') AS content_hash, based_on, revision_id, \
                 uploaded_at IS NOT NULL AS uploaded \
@@ -619,7 +615,6 @@ pub async fn patch(
         received_bytes,
         file_key_envelope,
         key_epoch,
-        storage_path,
         s3_upload_id,
         s3_part_etags: part_etags_json,
         pending_bytes: pending,
@@ -634,6 +629,7 @@ pub async fn patch(
     else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
+    let storage_path = crate::file_content::revision_path(file_id, revision_id);
     // Every byte is here and checked: what is left is the commit
     // (`POST /api/files/{id}/revisions/{revisionId}/commit`).
     if uploaded {
@@ -981,7 +977,6 @@ pub(super) struct NewFile<'a> {
     pub metadata_revision: i64,
     pub file_key_envelope: &'a str,
     pub key_epoch: i32,
-    pub storage_path: &'a str,
     pub size: i64,
     pub name_hash: Option<&'a str>,
     pub content_hash: Option<&'a str>,
@@ -999,11 +994,11 @@ pub(super) async fn insert_file(
         "INSERT INTO drive_files \
             (id, collection_id, uploader_account_id, \
              metadata_envelope, file_key_envelope, key_epoch, key_generation, \
-             metadata_revision, storage_path, encrypted_size_bytes, original_key_generation, \
+             metadata_revision, encrypted_size_bytes, original_key_generation, \
              name_hash, content_hash, content_revision_id, \
              blob_suite, revision_content_envelope) \
-         VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,$7,$8,$9,1,decode($10, 'hex'), \
-                 decode($11, 'hex'),$12,$13,kutup_unb64($14))",
+         VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,$7,$8,1,decode($9, 'hex'), \
+                 decode($10, 'hex'),$11,$12,kutup_unb64($13))",
     )
     .bind(file.file_id)
     .bind(file.collection_id)
@@ -1012,7 +1007,6 @@ pub(super) async fn insert_file(
     .bind(file.file_key_envelope)
     .bind(file.key_epoch)
     .bind(file.metadata_revision)
-    .bind(file.storage_path)
     .bind(file.size)
     .bind(file.name_hash)
     .bind(file.content_hash)
@@ -1142,8 +1136,9 @@ pub async fn delete(
         Ok(tx) => tx,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db begin"),
     };
-    let row: Option<(String, String, bool)> = match sqlx::query_as(
-        "SELECT u.storage_path, u.s3_upload_id, u.uploaded_at IS NOT NULL FROM drive_uploads u
+    let row: Option<(Uuid, Uuid, String, bool)> = match sqlx::query_as(
+        "SELECT u.file_id, u.revision_id, u.s3_upload_id, u.uploaded_at IS NOT NULL
+         FROM drive_uploads u
          WHERE u.id = $1 AND (u.account_id = $2 OR (u.kind = 'version' AND EXISTS (
              SELECT 1 FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
              WHERE f.id = u.file_id AND c.owner_account_id = $2)))
@@ -1160,9 +1155,10 @@ pub async fn delete(
             return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read");
         }
     };
-    let Some((storage_path, s3_upload_id, uploaded)) = row else {
+    let Some((file_id, revision_id, s3_upload_id, uploaded)) = row else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
+    let storage_path = crate::file_content::revision_path(file_id, revision_id);
 
     let deleted = sqlx::query("DELETE FROM drive_uploads WHERE id=$1")
         .bind(upload_id)

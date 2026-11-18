@@ -139,14 +139,15 @@ assert.throws(() => guardKeys.openSeen(pinEntry, pinSealed))
 assert.throws(() => chainPins.sealPin(pinEntry, '01', 'ab'.repeat(32)))
 assert.throws(() => chainPins.sealPin(pinEntry, '1', 'AB'.repeat(32)))
 
-// The account roots' record vectors (purposes 22-26) open through
+// The account roots' record vectors (purposes 4, 10, 19, 20 and 5) open through
 // openAccountRoots, the only path that hands them to JavaScript, to the
 // vectors' plaintexts; the authority they must give is the identity root's.
 {
   const records = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-record-v1.json`, 'utf8'))
   const byPurpose = new Map(records.purposes.map((p) => [p.purpose, p]))
-  const rootPurposes = [22, 23, 24, 25, 26]
-  const authority = crypto.deriveAccountIdentityKeys(byPurpose.get(22).plaintext).authorityPublicKey
+  // Identity, Drive, group pseudonym and call-link roots, then the object-id key.
+  const rootPurposes = [4, 10, 19, 20, 5]
+  const authority = crypto.deriveAccountIdentityKeys(byPurpose.get(4).plaintext).authorityPublicKey
   const opened = crypto.openAccountRoots(
     masterKeySet(records.key),
     records.binding,
@@ -168,7 +169,8 @@ assert.throws(() => chainPins.sealPin(pinEntry, '1', 'AB'.repeat(32)))
 // every refused one is refused here as in Rust (malformed ones by inspect;
 // the rest, for the purposes the generic API opens, by open).
 const envelopeVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-record-v1.json`, 'utf8'))
-const genericPurposes = new Set([1, 2, 4])
+// The password and recovery wraps and the Chat backup root.
+const genericPurposes = new Set([1, 2, 13])
 for (const p of envelopeVectors.purposes) {
   assert.deepEqual(crypto.inspectAccountRecord(p.envelope), { purpose: p.purpose, generation: 1 })
   if (genericPurposes.has(p.purpose)) {
@@ -424,7 +426,7 @@ assert.throws(() => crypto.openChatAttachmentLedger(
 // Not an id of the scope's form.
 assert.throws(() => crypto.sealChatAttachmentLedger(ledgerPlaintext, masterKeySet(ledgerMaster), ledgerBinding, '22222222-2222-4222-8222-222222222222', 1))
 // The generic account-record path refuses the purpose.
-assert.throws(() => crypto.openAccountRecord(ledgerEnvelope, ledgerMaster, 14, ledgerBinding))
+assert.throws(() => crypto.openAccountRecord(ledgerEnvelope, ledgerMaster, 17, ledgerBinding))
 
 const backupRoot = Buffer.alloc(32, 0x55).toString('base64')
 const backupId = '44444444-4444-4444-8444-444444444444'
@@ -772,7 +774,7 @@ assert.deepEqual(
 assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, ...libraryOwner, Buffer.alloc(32, 0xa2).toString('base64url')))
 assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, masterKeySet(libraryVector.masterKey), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', libraryVector.recordId))
 // The generic account-record path refuses the purpose.
-assert.throws(() => crypto.openAccountRecord(libraryVector.first.envelope, libraryVector.masterKey, 13, libraryVector.binding))
+assert.throws(() => crypto.openAccountRecord(libraryVector.first.envelope, libraryVector.masterKey, 34, libraryVector.binding))
 const resealed = crypto.sealPhotosLibrary(
   JSON.stringify({ v: 1, favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [], albums: [1] }),
   masterKeySet(libraryVector.masterKey), libraryVector.binding, libraryVector.recordId, 3,
@@ -843,8 +845,8 @@ const fresh = crypto.generateMailAddressKey(masterKeySet(mailVectors.masterKey),
 assert.deepEqual(Object.keys(fresh).sort(), ['envelope', 'fingerprint', 'publicKey', 'sha256Fingerprint'])
 assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.dev').fingerprint, fresh.fingerprint)
 // The generic account-envelope path refuses the mail-key purpose.
-assert.throws(() => crypto.openAccountRecord(fresh.envelope, mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
-assert.throws(() => crypto.sealAccountRecord('AA==', mailVectors.masterKey, 5, 1, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.openAccountRecord(fresh.envelope, mailVectors.masterKey, 23, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.sealAccountRecord('AA==', mailVectors.masterKey, 23, 1, mailVectors.binding), /typed export/)
 
 // Mail between Kutup users (docs/plans/mail.md): a split message opens for
 // each recipient with the shared data packet; fresh ones round-trip.

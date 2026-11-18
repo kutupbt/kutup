@@ -115,7 +115,9 @@ CREATE TABLE file_thumbnails (
 );
 ```
 
-Objects at `files/{fileId}/thumbnails/{variant}`, so the existing
+Objects at `files/{fileId}/thumbnails/{variant}/{objectId}`: a fresh
+`objectId` per upload, recorded in the row (W7 §8, one key per revision).
+The old object is deleted after the new row commits. The existing
 `files/{fileId}/` prefix wipe on purge removes them.
 
 Endpoints:

@@ -489,9 +489,9 @@ async fn keep_in_sent(
     let id = Uuid::new_v4();
     let key = object_key(user_id, id);
     let size = i64::try_from(ciphertext.len())?;
-    let version = state
+    state
         .storage
-        .put_object_versioned(&key, ByteStream::from(ciphertext), size)
+        .upload(&key, ByteStream::from(ciphertext), size)
         .await?;
     let recorded: anyhow::Result<bool> = async {
         let mut tx = state.pool.begin().await?;
@@ -511,7 +511,6 @@ async fn keep_in_sent(
                 protection: "zeroAccess",
                 seen: true,
                 object_key: &key,
-                object_version: &version,
                 size,
                 readable: &readable,
                 bcc: &[],
@@ -528,7 +527,7 @@ async fn keep_in_sent(
     }
     .await;
     if !matches!(recorded, Ok(true)) {
-        if let Err(error) = state.storage.delete_stored(&key, &version).await {
+        if let Err(error) = state.storage.delete(&key).await {
             tracing::warn!(error = %error, "mail: unrecorded auto-reply copy left for the sweep");
         }
     }

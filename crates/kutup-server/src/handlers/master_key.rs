@@ -42,7 +42,7 @@ pub struct RotateRequest {
     /// The five roots sealed again under the new key: each the newest
     /// generation the account keeps of it.
     account_roots: Vec<String>,
-    /// The previous master key under the new one (purpose 27; its object the
+    /// The previous master key under the new one (`MasterKeyKeyring`; its object the
     /// previous generation).
     master_keyring: String,
     /// The next account head, sealed under the new key.
@@ -161,10 +161,11 @@ pub async fn rotate(
         // The object is the generation, 4 bytes big-endian: byte order is
         // number order (no max() for bytea).
         "SELECT DISTINCT ON (purpose) purpose, object FROM account_roots
-          WHERE account_id = $1 AND purpose BETWEEN 22 AND 26
+          WHERE account_id = $1 AND purpose = ANY($2)
           ORDER BY purpose, object DESC",
     )
     .bind(user_id)
+    .bind(crate::account_roots::purpose_codes())
     .fetch_all(&mut *tx)
     .await?;
     if req.account_roots.len() != PURPOSES.len() || newest.len() != PURPOSES.len() {

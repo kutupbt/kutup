@@ -656,8 +656,9 @@ Bucket versioning becomes unnecessary, so a local-directory backend works.
 - Drive revisions, assets, Chat media and backups, and mail objects already
   have one key per revision.
 - **Thumbnails are the exception** (overwritten in place). They become
-  `files/{file}/thumbnails/{variant}/{revision}`, and the old object is
-  deleted after the commit.
+  `files/{file}/thumbnails/{variant}/{objectId}`, a fresh id per upload in
+  `drive_file_thumbnails.object_id` (not the content revision, which can be
+  uploaded again), and the old object is deleted after the commit.
 - **What goes:**
   - the five version-id columns;
   - the `stored` and `version` kinds of `storage_pending_deletions`;
@@ -674,6 +675,30 @@ Bucket versioning becomes unnecessary, so a local-directory backend works.
   - `revision_content_envelope` becomes NOT NULL.
   - **To check while building:** `ciphertext_sha256` and `content_hash`
     may now be NOT NULL.
+- **As built (group 5):**
+  - The five version-id columns were `drive_file_thumbnails.s3_version_id`,
+    `mail_messages.object_version`, `mail_group_objects.object_version`,
+    `mail_outbox.parts_version` and `storage_pending_deletions.version_id`.
+    The queue is unique on (kind, key).
+  - `storage_path` is gone from `drive_files`, `drive_file_versions` and
+    `drive_uploads`; `file_content::revision_path` derives it. The Chat
+    tables keep theirs: `chat_media_objects` (a pulled copy's key isn't its
+    attachment's), `chat_media_uploads` (the same), `chat_backup_bases`
+    and `chat_backup_media_objects` (their keys name a backup id and an
+    attempt the row doesn't hold). The version list's `storagePath` API
+    field stays, derived (API changes are not in W7).
+  - `original_pruned` and `original_key_generation` **stay**. The original
+    upload is `drive_files`' own revision: pruning it frees the bytes while
+    the row (and its NOT NULL content record) stays, and the generation it
+    was sealed under can't be derived from the row after a re-key. Making
+    the original version zero (a `drive_file_versions` row) is a Drive model
+    change for a later ordinary migration.
+  - `ciphertext_sha256` and `content_hash` stay nullable: local uploads
+    and versions don't hash the ciphertext (the federation digest backfill
+    fills it lazily), and `content_hash` is set after the commit
+    (`PUT /files/{id}/content-hash`) and cleared by every new version.
+  - The two `revision_content` checks became ordinary checks
+    (`octet_length = 356`) on the NOT NULL columns.
 
 ## 9. The squash checklist and leftovers
 
