@@ -130,8 +130,9 @@ name), and nothing signed, sealed, hashed or derived binds it. Self-statements
 bind the 16-byte account id alone (`AccountRef::id_bytes`): the account
 manifest's signing bytes (`kutup/account/manifest/v3`) and its identity binding,
 safety numbers, the profile envelope (header and subkey), the sealed-delivery
-capability, the Drive key binding, the group pseudonym binding and the
-collaboration frame signature. Statements between two people bind both ids and
+capability, the Drive key binding, the group pseudonym binding, the
+collaboration frame signature and a rename (`kutup/account/rename/v2`, so a
+server can't hang one account's chain onto another id). Statements between two people bind both ids and
 both incarnations: named and file shares, profile-key shares and a shared
 mailbox's key shares. A Chat group's id binds its home's identity document
 (hash and sequence), not the home's name; the name a pin carries is checked

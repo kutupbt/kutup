@@ -680,10 +680,8 @@ mod tests {
             .unwrap();
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, decode($3, 'hex'), '')",
+            "INSERT INTO accounts (id, username, account_incarnation_id, identity_suite)
+             VALUES ($1, $2, decode($3, 'hex'), 2)",
         )
         .bind(user_id)
         .bind(format!("records{}", &user_id.simple().to_string()[..12]))

@@ -9,7 +9,7 @@ is recorded and shown to administrators.
 
 ## 1. Registration mode
 
-A single site setting, `registration_mode`, replaces `registration_enabled`:
+A single site setting, `account.registration_mode`, replaces `registration_enabled`:
 
 | Mode | Who can register | A code |
 |---|---|---|
@@ -29,7 +29,7 @@ A single site setting, `registration_mode`, replaces `registration_enabled`:
   `REGISTRATION_MODE` (default `off`) at its next start; nothing opens by itself.
   No database keeps the old switch across the wipe, so it is not translated. The
   down restores the switch as open only when the mode was `on`.
-- **Public settings:** `GET /api/auth/settings` returns `registrationMode`
+- **Public settings:** `GET /api/v1/auth/settings` returns `registrationMode`
   (`on|code|off`) in place of `registrationEnabled`.
 - **Admin:** a three-way choice on Server settings, replacing the switch.
 
@@ -82,7 +82,7 @@ Who invited whom is `registration_code_uses.user_id` → `registration_codes.cre
 
 ## 4. Registration
 
-- `POST /api/auth/register` takes an optional `registrationCode`.
+- `POST /api/v1/auth/register` takes an optional `registrationCode`.
 - **Mode check:**
   - `off`: 403 `registrationClosed`.
   - `code` with no code: 403 `registrationCodeRequired`.
@@ -102,7 +102,7 @@ Who invited whom is `registration_code_uses.user_id` → `registration_codes.cre
   - Any later failure rolls the use back.
   - The row lock on the code serialises redemptions, so with `max_uses = 1` and N
     parallel sign-ups exactly one succeeds.
-- **Checking a code early:** `POST /api/auth/registration-code/check {code}` →
+- **Checking a code early:** `POST /api/v1/auth/registration-code/check {code}` →
   204 or the same 403. The sign-up page uses it before the costly key derivation.
   It never consumes a use and shares the rate limit below.
 - **Rate limits** (through the auth-check layer, second session's):
@@ -118,13 +118,13 @@ Who invited whom is `registration_code_uses.user_id` → `registration_codes.cre
 ## 5. Admin
 
 - **API** (admin only, audited):
-  - `POST /api/admin/registration-codes {note, expiresAt|null, maxUses|null}` →
+  - `POST /api/v1/admin/registration-codes {note, expiresAt|null, maxUses|null}` →
     `{id, code, hint, …}`. The only time the code is returned.
-  - `GET /api/admin/registration-codes`: id, hint, note, createdBy, createdAt,
+  - `GET /api/v1/admin/registration-codes`: id, hint, note, createdBy, createdAt,
     expiresAt, maxUses, uses, revokedAt, and state (`active|expired|used_up|revoked`).
-  - `POST /api/admin/registration-codes/{id}/revoke`, effective at once.
+  - `POST /api/v1/admin/registration-codes/{id}/revoke`, effective at once.
     "Expire now" is the same action.
-  - `GET /api/admin/registration-codes/{id}/uses`: username and time.
+  - `GET /api/v1/admin/registration-codes/{id}/uses`: username and time.
   - A user's admin page shows "Invited with code …, created by …".
 - **Audit log:**
   - `registrationCode.create` {id, hint, note, maxUses, expiresAt};

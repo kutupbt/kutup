@@ -409,7 +409,9 @@
         "d90": "90 gün",
         "d180": "6 ay",
         "d365": "1 yıl",
-        "d3650": "10 yıl"
+        "d3650": "10 yıl",
+        "days_one": "{{count}} gün",
+        "days_other": "{{count}} gün"
       }
     },
     "view": {

@@ -85,7 +85,7 @@ each copy.
 - **Deleted blobs wait before they leave the object store.** A blob deleted
   for any reason (a file emptied from the trash, an account's data at its
   deletion) is queued in `storage_pending_deletions` and purged only after
-  the site setting `storage_deleted_blob_retention_seconds` (default 2 days,
+  the site setting `server.storage.deleted_blob_retention_seconds` (default 2 days,
   docs/plans/restore-drill-and-alerting.md), so a database dump restored
   from before the delete never names a purged blob. For those 2 days a
   deleted account's ciphertext is still in the object store, unreadable
@@ -121,7 +121,7 @@ each copy.
   `state_changed_at`.
 - **`closing`:** the account was asked to be deleted, by its owner or an
   admin, and is waiting out a grace period: a site setting
-  `account_closing_days`, default 14. In that time the account can't sign in
+  `account.closing_days`, default 14. In that time the account can't sign in
   except to cancel. Then a background job deletes it.
 - **"Deleted" is not a row** (decision 1). A deleted account's row goes: the
   purge that runs today, then the account data key is destroyed, then a
@@ -165,18 +165,18 @@ keeps them; reports on them are operator tooling.
 **As built (L4, A5 and A7):**
 - `accounts.state` (`active`, `suspended` with `suspended_reason`, `closing` with
   `closing_by` and `closes_at`), `state_changed_at`, `purpose_ended_at` (set
-  when closing, cleared when kept). `is_active` stays, generated as
-  `state = 'active'`, for the queries that route, deliver and sign in;
-  nothing writes it.
-- Closing: `POST /api/user/close` with a reauth grant (`close`), or an
-  admin's `POST /api/admin/users/{id}/close`. Every sign-in and grant ends. A
+  when closing, cleared when kept). The queries that route, deliver and
+  sign in read `state = 'active'` (the generated `is_active` went in W7,
+  docs/plans/w7-schema.md §4).
+- Closing: `POST /api/v1/account/close` with a reauth grant (`close`), or an
+  admin's `POST /api/v1/admin/accounts/{id}/close`. Every sign-in and grant ends. A
   sign-in that passes every step gets no session but a grant (`keep`, no
-  session, minutes); `POST /api/auth/keep` makes the account active again and
+  session, minutes); `POST /api/v1/auth/keep` makes the account active again and
   answers as the sign-in. An admin keeps it with `isActive: true`. Either
   only before `closes_at` (or under a hold): after it the job may be deleting
   the account, and a keep would leave it active and emptied. The
   closing job (`crate::account_closing`, every five minutes, 20 at a time)
-  deletes accounts past `closes_at` (`account_closing_days`, default 14).
+  deletes accounts past `closes_at` (`account.closing_days`, default 14).
 - Deletion (`account_closing::destroy`, for the job and an admin's delete):
   the purges, names held, account id retired, the row deleted (its data key
   cascades), and the destruction event, in one transaction that checks the
@@ -228,6 +228,18 @@ keeps them; reports on them are operator tooling.
 
   Not on the security events: they are per account, user-visible, and pruned
   by count.
+- **As built (W7, docs/plans/w7-schema.md §6):** both tables have one column
+  shape: `id`, `kind`, `actor_kind` (`account` | `admin` | `job` | `peer`),
+  `actor_account_id`, `subject_account_id`, `at`, `payload`, `count`,
+  `chain_version`, `previous_hash`, `row_hash`. The admin log is chained
+  (`chain_version` 1, genesis `previous_hash` 32 zero bytes, both hashes NOT
+  NULL by a CHECK on `chain_version`); its kinds are `AdminAction`
+  (`src/audit_log.rs`), and the server's own rows are actor `job` with no
+  account. Security events are `chain_version` 0 with no hashes; what made
+  them (`actingSessionId`, `actingClient`, `clientSealed`) and their names
+  (`oldName`, `newName`) are payload keys, and which actors and names each
+  kind takes is the kind table in `src/security_events.rs`, not a database
+  CHECK.
 - **What is logged, added to today's kinds:**
   - **Sign-ins:** `signIn`, `signInFailedPassword` (only when the pending
     OPAQUE login names a real account; OPAQUE finds a wrong password on the
@@ -264,7 +276,7 @@ keeps them; reports on them are operator tooling.
 - Foreign-key cascades still delete an account's events: Postgres runs them as
   the table's owner.
 - The retention job runs hourly on the owner's connection.
-- `GET /api/admin/activity/verify` walks the chain and says whether the logs
+- `GET /api/v1/admin/activity/verify` walks the chain and says whether the logs
   are append-only.
 - Admin access means opening one account's limits, mail-domain overrides or
   mail-sending state: account content is end-to-end encrypted, so these are
@@ -278,8 +290,8 @@ keeps them; reports on them are operator tooling.
   can't name an admin-log id or move its sequence, a security event's count
   only grows by one (a trigger), and payloads hold integers only.
 - The security log keeps, per account, the newest of each kind
-  (`security_events_kept_per_kind`, default 100), so repeated failures can't
-  push out a password change; the fold window is `security_event_fold_seconds`
+  (`server.retention.security_events_per_kind`, default 100), so repeated failures can't
+  push out a password change; the fold window is `server.security_event_fold_seconds`
   (600). A wrong password is recorded off the answer's path, so a real account
   doesn't answer later than a name that is none.
 - The test stacks (live backup gate, isolated e2e) run as the app role; the
@@ -297,12 +309,13 @@ keeps them; reports on them are operator tooling.
 
   The raw string is never stored.
 - **Sealing:** the family is sealed under the account data key (A2) in
-  `auth_sessions.client_sealed` and `account_security_events.client_sealed`.
+  `auth_sessions.client_sealed` and the security event's payload
+  (`clientSealed`, base64).
   APIs return the three fields; `describeUserAgent` leaves the browser.
 - **Feedback** sends the same parsed family, not `navigator.userAgent`.
 - **Retention, as site settings:**
   - ended sessions (revoked or expired): deleted after
-    `session_record_grace_days`, default 30;
+    `server.retention.session_record_days`, default 30;
   - security events: deleted per A8.
 
   Both through the retention job, with destruction events.
@@ -315,10 +328,10 @@ keeps them; reports on them are operator tooling.
 - `crate::client_family::parse` names Firefox, Chrome, Edge, Safari, Opera,
   Samsung Internet and the CLI, with the major version, and Windows, macOS,
   Linux, Android, iOS and ChromeOS.
-- The family is sealed as `client_sealed` on `auth_sessions` and
-  `account_security_events`, for each row. An event opens its session's family
+- The family is sealed as `client_sealed` on `auth_sessions` and as
+  `clientSealed` in each `account_security_events` row's payload. An event opens its session's family
   and re-seals it for itself, so it outlives the session.
-- Ended sessions go after `session_record_grace_days` (default 30), unless a
+- Ended sessions go after `server.retention.session_record_days` (default 30), unless a
   session forked from one still lives.
 - Feedback sends the family the browser parses ("Firefox on Linux"), not
   `navigator.userAgent`.
@@ -331,10 +344,11 @@ keeps them; reports on them are operator tooling.
     code is `linkBlocked` with the reason, so the public page says why;
     owner and admin takedowns keep `linkRemoved`.
   - Unblocking is possible; both directions are audited.
-- **Per account:** `accounts.public_sharing` (`on`, `off`), which an admin sets
+- **Per account:** the entitlement `drive.public_sharing` (1 on, 0 off; none
+  follows the site's), shown as `on`/`off`, which an admin sets
   per account. While `off`, the account can't create public links, and its
   existing ones answer `410 sharingOff`.
-- **Site-wide:** a site setting `public_sharing`: `on`, `off`, or
+- **Site-wide:** a site setting `drive.public_sharing`: `on`, `off`, or
   `signedIn` (only someone signed in to this server can open a public link).
   - Applies at creation and when a link is served.
   - The Drive and Photos share dialogs say why sharing is off.
@@ -348,11 +362,11 @@ keeps them; reports on them are operator tooling.
   `410 linkRemoved`, `410 sharingOff` (with `scope`: `site` or
   `account`), `403 signInRequired`. Making a link answers `403
   sharingOff` while either switch is off; `signedIn` still makes links.
-- The site switch is the site setting `public_sharing` (default `on`), set in
+- The site switch is the site setting `drive.public_sharing` (default `on`), set in
   Server settings → Accounts and shown in the public settings. The account
-  switch is `accounts.public_sharing`, on the admin's user page and in
+  switch is the entitlement `drive.public_sharing`, on the admin's user page and in
   `/user/me`.
-- Blocks: `POST`/`DELETE /api/admin/shares/:id/block` (reason `legalOrder`,
+- Blocks: `POST`/`DELETE /api/v1/admin/public-links/:id/block` (reason `legalOrder`,
   `abuse`, `other`; an admin-only reference), from the Reports page; open
   reports close as `blocked`. Audited as `share.block`/`share.unblock`.
 - The public pages (Drive folder, Office file, Photos album) say why a link
@@ -382,7 +396,7 @@ keeps them; reports on them are operator tooling.
 - **Consents** (per purpose, separate and withdrawable):
   `consents(id, user_id, purpose, given, document_id, at, channel)`.
   - Append-only. The current state per purpose is the latest row.
-  - `GET/PUT /api/user/consents`; Settings → Privacy lists each purpose with
+  - `GET/PUT /api/v1/account/consents`; Settings → Privacy lists each purpose with
     its document version and lets the person withdraw it.
   - **Purposes from day one:** `federationAbroad` and `marketing`. There is
     no purpose for storing the account abroad: that rests on the operator's
@@ -401,8 +415,9 @@ keeps them; reports on them are operator tooling.
   too) and `consents` (a row per change, ordered by a sequence) are
   append-only for the app role. A purpose's text is the current document of
   the purpose's kind.
-- The federation switch (`accounts.federation`, default from the site setting
-  `federation_default`): off, the account is no account to other servers by
+- The federation switch (the entitlement `server.federation`, 1 or 0, written
+  as an account is made from the site setting
+  `server.federation_default`): off, the account is no account to other servers by
   the same code path an unknown one takes (`kutup_account_federates` in each
   peer-facing query: Chat lookups, deliveries, the sealed store, multi-sends,
   media offers; Drive account lookups, rename chains, profile keys, and
@@ -425,7 +440,7 @@ keeps them; reports on them are operator tooling.
   account never leave: each holds a transport sequence the peer must see,
   so the origin sends a signed withdrawal in its place
   (a `FederatedStreamControlV1` with the withdrawn code,
-  `POST /api/fed/chat/stream-control`: no sender, recipient or payload); the
+  `POST /api/fed/v2/chat/stream-control`: no sender, recipient or payload); the
   peer uses the sequence up and answers a repeat the same, and the stream
   goes on with no gap. Required of every server (no fallback: all are
   deployed together before v1).
@@ -474,7 +489,7 @@ keeps them; reports on them are operator tooling.
 
 - After review (2026-11-14): a held send's outcome (undo send, scheduled
   mail), which names its recipients, is sealed under the account's data key
-  (`mail_outbox.result_sealed`) and the row goes `mail_outbox_keep_seconds`
+  (`mail_outbox.result_sealed`) and the row goes `server.retention.mail_outbox_seconds`
   (a site setting, a day by default) after it finished; a failure is logged
   by its status and code only. The addresses an auto-reply answered are kept
   as keyed hashes under the account's key (`Lookup::MailAutoReplySender`,

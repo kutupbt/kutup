@@ -156,7 +156,7 @@ pub(crate) async fn turn_off(
 ) -> AppResult<bool> {
     let was_on = factors_locked(tx, user_id).await?.on();
     sqlx::query(
-        "UPDATE accounts SET totp_enabled = false, totp_secret_sealed = NULL,
+        "UPDATE accounts SET totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL,
                           security_keys_require_uv = false
          WHERE id = $1",
     )
@@ -206,7 +206,7 @@ impl Factors {
     }
 }
 
-const FACTORS: &str = "SELECT u.totp_enabled,
+const FACTORS: &str = "SELECT u.totp_secret_sealed IS NOT NULL,
         (SELECT count(*) FROM account_security_keys k WHERE k.account_id = u.id),
         (SELECT count(*) FROM account_security_keys k WHERE k.account_id = u.id AND NOT k.compromised),
         (SELECT count(*) FROM two_factor_recovery_codes c WHERE c.account_id = u.id)

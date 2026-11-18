@@ -176,10 +176,7 @@ mod tests {
 
     async fn account(pool: &sqlx::PgPool, tag: &str, name: &str) -> Uuid {
         sqlx::query_scalar(
-            "INSERT INTO accounts (username, master_key_envelope, recovery_key_envelope, public_key,
-                                account_authority_public_key, account_authority_key_id,
-                                account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, '', '', '', '', ''::bytea, ''::bytea, '') RETURNING id",
+            "INSERT INTO accounts (username, identity_suite) VALUES ($1, 2) RETURNING id",
         )
         .bind(format!("{name}{}", &tag[..12]))
         .fetch_one(pool)
@@ -228,8 +225,8 @@ mod tests {
             AddRefusal::AccountLimit
         );
         sqlx::query(
-            "INSERT INTO organization_setting_overrides (organization_id, key, value)
-             VALUES ($1, 'mail_domains.per_organization', 2)",
+            "INSERT INTO organization_entitlements (organization_id, key, value, source)
+             VALUES ($1, 'mail.domains.per_organization', 2, 'admin')",
         )
         .bind(organization)
         .execute(&pool)
@@ -269,7 +266,7 @@ mod tests {
         assert_eq!(lost_by, organization);
         for owner in [alice, bob] {
             let told: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM account_security_events WHERE account_id = $1 AND kind = 'domainLost'",
+                "SELECT count(*) FROM account_security_events WHERE subject_account_id = $1 AND kind = 'domainLost'",
             )
             .bind(owner)
             .fetch_one(&pool)

@@ -840,7 +840,7 @@ async fn reserve_inbound_offer(
     let recipient_user_id: Option<Uuid> = sqlx::query_scalar(
         // An account that doesn't talk to other servers is, to them, no
         // account (crate::federation_switch).
-        "SELECT id FROM accounts WHERE id = $1 AND is_active AND kutup_account_federates(id)",
+        "SELECT id FROM accounts WHERE id = $1 AND state = 'active' AND kutup_account_federates(id)",
     )
     .bind(recipient)
     .fetch_optional(&mut *tx)

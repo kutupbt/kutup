@@ -236,7 +236,7 @@ Specific codes, where an app does something particular (a test in
 | `domainNotVerified` | 409 | The address's custom domain doesn't take mail now (sending from it, a new address or a catch-all on it) |
 | `notYourAddress` | 404 | `fromAddress` names no active address of the caller's |
 | `mimeMismatch` | 400 | `POST /api/v1/mail/send`: the readable `mime` isn't the same message (another From than the sender's address, another Message-ID, or a Bcc header) |
-| `checkTimedOut` | 503 | `GET /api/v1/mail/domains/{id}?refresh=1`: the domain's whole DNS check ran past its time (`mail_domains.check_timeout_seconds`); nothing changed |
+| `checkTimedOut` | 503 | `GET /api/v1/mail/domains/{id}?refresh=1`: the domain's whole DNS check ran past its time (`mail.domains.check_timeout_seconds`); nothing changed |
 | `domainBlocked` | 409 | `POST /api/v1/mail/domains`: an administrator deactivated this name; nobody may add it until they lift the block |
 | `forwardingUnavailable` | 409 | This server has no `MAIL_FORWARDING_KEYS`: no forwarding can be set up |
 | `forwardingState` | 409 | A forwarding action from the wrong state (pause an active one, accept a pending one, …) |
@@ -267,7 +267,8 @@ Specific codes, where an app does something particular (a test in
 | `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
 | `signInRequired` | 403 | Public links on this server open only for someone signed in to it |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
-| `keysPendingUpgrade` | 409 | The person's Drive key is still X25519 (identity suite 1): share with them once they have signed in again (docs/plans/pq-shares.md) |
+| `keysPendingUpgrade` | 409 | The person can't be shared with yet: an account here with no keys (one an administrator made or reset, before its first sign-in), or one on another server still on an X25519 Drive key (docs/plans/pq-shares.md); share with them once they have signed in again |
+| `versionRetentionNotOffered` | 400 | `PATCH /api/v1/account`: the version retention period is not one the administrators offer; `choices` lists those that are |
 | `peerOutdated` | 502 | The other server runs an older version without post-quantum Drive keys and must upgrade before sharing |
 | `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
 | `registrationCodeRequired` | 403 | Registration needs a referral code and none was given |
@@ -974,12 +975,20 @@ Return the current user's profile (public key + storage stats). The encrypted ke
   "storageUsedBytes": 104857600,
   "isAdmin": false,
   "color": "",
-  "versionRetentionDays": 30
+  "versionRetentionDays": 30,
+  "versionRetentionChoices": [7, 30, 90, 180, 365, 3650]
 }
 ```
 
 `storageQuotaBytes` / `storageUsedBytes` are the account's one storage pool.
 Drive, Photos, Office, Maps and Chat all count against it.
+
+`versionRetentionChoices` are the periods (days, ascending) the
+administrators offer for keeping Drive file versions
+(`driveVersionRetentionChoices` in `PUT /api/v1/admin/settings`).
+`PATCH /api/v1/account` with `{ "versionRetentionDays": 90 }` takes one of them
+(`400 versionRetentionNotOffered` otherwise, with the `choices`). An account
+keeps a period taken off the list since, until it chooses another.
 
 ---
 
@@ -1226,7 +1235,8 @@ receiving nothing.
   list (sequence 1, that key primary), as `POST /api/v1/mail/addresses/{id}/keys`
   takes them, stored in the rename's transaction so mail to the new address is
   never deferred; sent exactly when the check says `needsKey` (otherwise
-  `renameInvalid`). The display
+  `renameInvalid`). The statement must name this account's id (`accountId`,
+  signed), or it is `renameInvalid`. The display
   name and signature move to the new address. Errors: `renameInvalid`, `grantInvalid`, `breakGlassAccount`,
   `setupRequired`, `nameTaken`, `nameReserved`, `renameConflict`,
   `tooManyHeldNames`, `renameTooSoon`. One counted rename per 30 days; going
@@ -1238,10 +1248,15 @@ receiving nothing.
   receiving there ends now; the name stays held until its date (`notHeld`;
   `dropTooSoon`: one drop per 30 days).
 - `GET /api/v1/accounts/by-address/:address/renames[?incarnationId=]` → `{ "version": 1,
-  "chains": [{ "incarnationId", "authorityPublicKey", "current", "state":
-  "current" | "held" | "gone", "chain": [<AccountRenameV1>, …] }] }`, newest
-  first; a reused name appears in several. Clients verify every chain against
-  their pins (`version` other than 1: unverifiable, warn). For another
+  "chains": [{ "incarnationId", "authorityPublicKey", "current",
+  "state": "current" | "held" | "gone", "chain": [<AccountRenameV1>, …] }] }`,
+  newest first; a reused name appears in several. An `AccountRenameV1` is `{
+  "incarnationId", "accountId", "sequence", "previous", "current",
+  "issuedAtMs", "signature" }`: `accountId` is the account's permanent id,
+  signed with the rest (`kutup/account/rename/v2`), the same in every
+  statement of a chain, so whose chain it is is the account's own word, never
+  the server's. Clients verify every chain against
+  their pins and the account id they know (`version` other than 1: unverifiable, warn). For another
   server's address: the chains this server keeps of it (from announces, earlier
   lookups and relayed `409 renamed`), asked of that server when none is fresh
   (a day). The server unreachable and nothing kept: `{ "version": 1, "chains":
@@ -1266,7 +1281,7 @@ receiving nothing.
 ### POST /api/v1/account/close
 
 Ask for this account to be deleted (docs/plans/server-personal-data.md, A5).
-It is `closing` for `account_closing_days` (default 14), then deleted with
+It is `closing` for `account.closing_days` (default 14), then deleted with
 everything in it; every sign-in, this one included, ends now. A sign-in before
 then is offered to keep it (`POST /api/v1/auth/keep`). Recorded as
 `accountClosing`.
@@ -2398,8 +2413,8 @@ under it) or `publicSuffix`; `409` `domainLimit`, `domainDailyLimit`,
 
 The domain; `refresh=1` checks its DNS now, uncached (Proton's "Refresh
 status"), at most 30 times an hour per account (`429`), and at most
-`mail_domains.refreshes_at_once` across the server at a time (`429`). A
-check that runs past `mail_domains.check_timeout_seconds` changes nothing
+`mail.domains.refreshes_at_once` across the server at a time (`429`). A
+check that runs past `mail.domains.check_timeout_seconds` changes nothing
 (`503` `checkTimedOut`). A check that finds the domain changed since it was
 read (another check, an administrator) returns it as it is.
 
@@ -2412,7 +2427,7 @@ mail; nothing is published for them).
 
 `{ "addressId": "<an active address on the domain>" | null }` → `204`. Unknown
 names on the domain then reach it, at most the owner's
-`mail_domains.catch_all_per_day` a day (500 at first; `452 4.2.2` after),
+`mail.domains.catch_all_per_day` a day (500 at first; `452 4.2.2` after),
 counted once per stored message across every backend; caught mail is never
 forwarded. `403` when catch-alls are off, `409`
 while the domain isn't verified.
@@ -2434,8 +2449,8 @@ reset the address starts a new chain instead. Sending from it: `POST
 
 ### GET /api/v1/admin/mail/domains · PUT /api/v1/admin/mail/domains/settings
 
-Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail_domains.mode":
-"everyone"|"approve"|"off", "mail_domains.per_account", …addresses_per_account,
+Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail.domains.mode":
+"everyone"|"approve"|"off", "mail.domains.per_organization", …addresses_per_account,
 …on_server, …adds_per_day, …pending_days, …catch_all, …catch_all_per_day,
 …grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "ranges": {
 "<key>": { "min", "max" } } (each numeric setting's range, what the page offers), "spf", "dkimKeys": [{ "selector",
@@ -2474,8 +2489,8 @@ lifts one by its name (`204`; `404` for a name not blocked), audited
 Administrators only. One account's limits over the site's: `{ "maxDomains":
 0–100 | null, "maxAddresses": 1–1000 | null, "catchAll": bool | null }`, `null`
 keeping the site's. `maxDomains` and `catchAll` are the account's
-organization's (`organization_setting_overrides`), `maxAddresses` its own
-(`account_setting_overrides`); setting an organization's limit for an account
+organization's (`organization_entitlements`), `maxAddresses` its own
+(`account_entitlements`); setting an organization's limit for an account
 without one makes its organization of one, so a limit (0 blocks custom
 domains) can be set before the first domain. `GET` adds `maxDomainsRange` and
 `maxAddressesRange` (`{ min, max }`, the ranges of the site settings they
@@ -3485,7 +3500,7 @@ file or a pruned original.
 
 ### DELETE /api/v1/drive/files/:id
 
-Move a file to the trash (soft delete). The file disappears from every normal endpoint but keeps counting against quota; restore or purge it via the Trash endpoints. Permanent deletion happens from the trash — explicitly, or automatically after `TRASH_RETENTION_DAYS` (default 30).
+Move a file to the trash (soft delete). The file disappears from every normal endpoint but keeps counting against quota; restore or purge it via the Trash endpoints. Permanent deletion happens from the trash — explicitly, or automatically after the site setting `drive.trash_retention_days` (default 30; Administration → Server settings → Drive).
 
 **Auth:** Bearer JWT (collection owner, or the uploader holding a `canDelete` share)
 
@@ -3847,7 +3862,7 @@ under a folder the caller does not own.
 
 ## Trash
 
-Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated Drive deletes (`DELETE /api/fed/v2/drive/folder-shares/files/:fileId`) remain permanent — there is no cross-server trash.
+Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than the site setting `drive.trash_retention_days` (`driveTrashRetentionDays`, default 30; `0` keeps the trash until it is emptied). Federated Drive deletes (`DELETE /api/fed/v2/drive/folder-shares/files/:fileId`) remain permanent — there is no cross-server trash.
 
 ### GET /api/v1/drive/trash
 
@@ -5009,14 +5024,19 @@ rename chain naming `username@<this server>`, in any spelling, as `GET
 ### POST /api/fed/v2/{chat|drive}/accounts/renames
 
 Signed (under `chat.v2` or `drive.v1`). A peer announces one of its accounts'
-renames: `{ "version": 1, "username", "incarnationId", "authorityPublicKey",
-"chain": [<AccountRenameV1>, …] }`, the whole chain, `username` its last
-current. Kept when it verifies (the incarnation is its authority's hash, every
-address is on the sending server) and extends the one kept (`204`); then this
-server's rows about that incarnation (incoming and outgoing federated shares,
-profile keys, collaboration devices) move to the new address, by incarnation
-only. `400` for a chain that does not check out, `409` for one that does not
-extend the one kept, `429` past 50,000 chains of that server or 600 announces
+renames: `{ "version": 1, "username", "accountId", "incarnationId",
+"authorityPublicKey", "chain": [<AccountRenameV1>, …] }`, the whole chain,
+`username` its last current. `accountId` is routing: it must be the id every
+statement signs (`400` otherwise). Kept as that account's address here
+(`remote_account_renames`, one row per (server, account id), the id the chain
+signs) when it verifies (the incarnation is its authority's hash, every
+statement names the one account id, every address is on the sending
+server) and extends the one kept, or replaces another incarnation's (an admin
+reset there) (`204`). Rows naming the account (incoming and outgoing federated
+shares, the Drive people list) carry only its id and show this address, so
+nothing is relabelled. `400` for a chain that does not check out, `409` for one
+that does not extend the one kept, `429` past 50,000 chains of that server
+(accounts only met by a share, without a chain, don't count) or 600 announces
 a minute. Announces are sent after a rename commits to every pinned peer not
 quarantined, retried with backoff for 7 days.
 
@@ -5421,7 +5441,7 @@ before sending, never the page's address (it can name a file or a person).
 
 All admin endpoints require the `isAdmin` flag on the JWT and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
 
-Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/v1/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; the human-readable identities (usernames) are snapshotted into the row's `payload` at action time.
+Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/v1/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; payloads name accounts by id only (no username snapshot). Some rows are the server's own (a job or an operator command, for example a federation identity rotation): their `adminAccountId` is the nil UUID, shown as "system".
 
 ### GET /api/v1/admin/reports
 
@@ -5545,7 +5565,10 @@ asked: an account signs in with its username.
 }
 ```
 
-`storageQuotaBytes` is optional and defaults to 10 GB. Returns `201 Created` `{"message": "user created"}`. `400` for a record that is not one (a password sent as it is included), `409` if the username is already taken, `409 keyBindingTaken`, `409 opaqueKeyStale`.
+`storageQuotaBytes` is optional: given (above 0), it is the account's own
+quota (the entitlement `account.storage_quota_bytes`); 0 or none leaves the
+account on the site's default storage quota, which follows that setting as it
+changes. Returns `201 Created` `{"message": "user created"}`. `400` for a record that is not one (a password sent as it is included), `409` if the username is already taken, `409 keyBindingTaken`, `409 opaqueKeyStale`.
 
 ---
 
@@ -5570,7 +5593,9 @@ its sign-ins end. A closing account is `409 accountClosing`: keep it first.
 `isActive: true` makes a suspended account active again, and keeps a closing
 one (as it was before it closed: a suspended account is suspended again, with
 its reason, and records `accountKept`) until its date (`409 accountDeleting` after: the closing job may be
-deleting it; a held account can still be kept). `isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
+deleting it; a held account can still be kept). `storageQuotaBytes` gives the
+account its own quota (above 0; audited as `account.setEntitlement` with `key`
+`account.storage_quota_bytes`). `isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
 
 **Response:** `200 OK` `{"message": "updated"}`. `403` if the request would demote or disable the break-glass admin; `400` if it would leave zero usable admins.
 
@@ -5592,7 +5617,7 @@ keyed hashes (docs/plans/server-personal-data.md, A7).
 ### POST /api/v1/admin/accounts/:id/close
 
 Close the account: every sign-in ends, and it is deleted after
-`account_closing_days` (a Privacy and retention setting, default 14) unless it
+`account.closing_days` (a Privacy and retention setting, default 14) unless it
 is kept, by its owner at sign-in or here (`PUT` with `isActive: true`).
 Recorded as `account.close`.
 
@@ -5623,7 +5648,7 @@ for an unknown account; `409 accountDeleting` once its deletion has begun.
 
 ### DELETE /api/v1/admin/accounts/:id/2fa
 
-Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears the sealed authenticator secret, `totp_enabled` and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
+Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears the sealed authenticator secret (and one being set up) and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
 
 **Auth:** Bearer JWT (admin)
 
@@ -5747,8 +5772,9 @@ the response is downloaded as `kutup-admin-audit.csv`.
 ### GET /api/v1/admin/activity/verify
 
 The admin log's integrity (docs/plans/server-personal-data.md, A8): each row
-stores the previous row's hash and its own, over its admin, action, target,
-time and payload. This walks the chain from the oldest row kept.
+stores the previous row's hash and its own, over its actor kind and actor,
+kind, subject account, time, payload and count; the first row's previous hash
+is 32 zero bytes. This walks the chain from the oldest row kept.
 
 **Auth:** Bearer JWT (admin)
 
@@ -5798,7 +5824,7 @@ Every rate limit the server keeps (docs/plans/admin-rate-limits.md):
 {
   "limits": [
     {
-      "key": "login",
+      "key": "account.rate.login",
       "section": "accounts",
       "per": "address",
       "unit": "events",
@@ -5820,8 +5846,11 @@ Every rate limit the server keeps (docs/plans/admin-rate-limits.md):
 `firstFrom` is `default`, `environment` or `testStack`. `PUT` takes
 `{ "value": 20 }`, or `{ "value": null }` to go back to the first value, and
 answers the limit as it is now. A value outside `min`–`max` is `400`, an
-unknown key `404`. It applies at once on this backend and within 30 seconds
-on the others; each change writes a `settings.setRateLimit` audit entry.
+unknown key `404`. A limit's key is `<app>.rate.<name>` (`account`, `drive`,
+`chat`, `mail`, `calendar`, `pass` or `server`), the same key it is stored
+under in `site_settings` and, for one account, in `account_entitlements`.
+It applies at once on this backend and within 30 seconds on the others; each
+change writes a `settings.setRateLimit` audit entry.
 
 ### GET /api/v1/admin/accounts/{id}/entitlements · PUT /api/v1/admin/accounts/{id}/entitlements/{key}
 
@@ -5832,17 +5861,17 @@ one (docs/plans/settings-registry.md):
 
 ```json
 {
-  "settings": [{ "key": "drive_upload_max_bytes", "field": "driveUploadMaxBytes",
+  "settings": [{ "key": "drive.upload_max_bytes", "field": "driveUploadMaxBytes",
     "section": "drive", "unit": "bytes", "value": 1073741824, "source": "account",
     "siteValue": 10737418240, "min": 1048576, "max": 4398046511104 }],
-  "rateLimits": [{ "key": "rate_limit.feedback", "limit": "feedback",
+  "rateLimits": [{ "key": "account.rate.feedback", "limit": "account.rate.feedback",
     "section": "administration", "unit": "events", "windowSeconds": 3600,
     "value": 10, "source": "default", "siteValue": 10, "min": 1, "max": 1000 }]
 }
 ```
 
 `source` says where `value` comes from: `account`, `site` or `default`.
-`PUT` takes a setting's key or `rate_limit.<key>`, and gives the account its
+`PUT` takes a setting's or a rate limit's key, and gives the account its
 own value (`{ "value": 3 }`) or takes it back (`null`); it answers the entry
 as it is now. A value outside the range is `400` (never clamped), and so is a
 setting or rate limit that doesn't limit one account; an unknown key is
@@ -5856,7 +5885,8 @@ growth: nothing is removed. Each change writes an `account.setEntitlement` or
 
 Every whole-number setting, as Server settings builds its fields from it:
 `{ "settings": [{ "key", "field", "section", "unit", "default", "min", "max",
-"perAccount", "value", "set" }] }`. `field` is its name in
+"perAccount", "value", "set" }] }`. `key` is the setting's key in
+`site_settings` (`<namespace>.<name>`, docs/settings-model.md), `field` its name in
 `/api/v1/admin/settings`, `section` one of `chatMulti`, `calendar`,
 `chatLinking`, `twoFactor` and `drive`, and `perAccount` whether one account
 may have its own value.
@@ -5885,6 +5915,8 @@ Return current global server settings.
   "chatGroupAvatarStoragePerGroupBytes": 82002,
   "chatGroupAvatarPendingSeconds": 86400,
   "passVaultMaxBytes": 67108864,
+  "driveVersionRetentionChoices": [7, 30, 90, 180, 365, 3650],
+  "driveTrashRetentionDays": 30,
   "calendarsPerAccount": 25,
   "calendarEventsPerCalendar": 25000,
   "calendarSyncBatch": 10,
@@ -5935,6 +5967,12 @@ page.
 
 `passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
 upload: 1 MiB to 1 GiB (`400` otherwise), 64 MiB at first.
+
+`driveVersionRetentionChoices` (site setting `drive.version_retention_choices`)
+are the periods an account may choose to keep its Drive file versions for:
+1 to 20 whole numbers of days, each 1 to 36500, ascending with none twice
+(`400` otherwise); 7, 30, 90, 180, 365 and 3650 at first. A new account
+starts at 30 days.
 
 `chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
 for the groups it hosts: 8233, 16425, 32809 or 41001.

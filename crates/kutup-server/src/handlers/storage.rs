@@ -98,9 +98,9 @@ pub async fn usage(
     user: AuthAccount,
 ) -> AppResult<Json<StorageUsageResponse>> {
     let user_id = trusted_uuid(&user.account_id)?;
-    type Row = (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64);
+    type Row = (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64);
     let row: Row = sqlx::query_as(
-        r#"SELECT u.storage_quota_bytes, u.storage_used_bytes,
+        r#"SELECT u.storage_used_bytes,
              COALESCE(f.live_bytes, 0)::bigint, COALESCE(f.live_count, 0)::bigint,
              COALESCE(f.trash_bytes, 0)::bigint, COALESCE(f.trash_count, 0)::bigint,
              COALESCE((SELECT SUM(size_bytes) FROM drive_file_versions WHERE author_account_id = u.id), 0)::bigint,
@@ -152,9 +152,9 @@ pub async fn usage(
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
-    let (quota, used, files, files_count, trash, trash_count, versions, thumbnails, assets) = (
-        row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8,
-    );
+    let quota = crate::storage_pool::quota(&state.pool, user_id).await?;
+    let (used, files, files_count, trash, trash_count, versions, thumbnails, assets) =
+        (row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7);
     Ok(Json(StorageUsageResponse {
         quota_bytes: quota,
         used_bytes: used,
@@ -169,9 +169,9 @@ pub async fn usage(
             assets_bytes: assets,
         },
         chat: ChatUsage {
-            media_bytes: row.9,
-            history_bytes: row.10,
-            history_media_bytes: row.11,
+            media_bytes: row.8,
+            history_bytes: row.9,
+            history_media_bytes: row.10,
         },
         contacts: ContactsUsage {
             bytes: contacts_bytes,

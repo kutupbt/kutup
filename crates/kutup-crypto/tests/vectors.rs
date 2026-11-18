@@ -1334,11 +1334,14 @@ fn account_rename_vector() {
         base64::engine::general_purpose::STANDARD.encode(authority),
         v["authorityPublicKey"]
     );
+    let account_id: kutup_crypto::account_ref::AccountId =
+        v["accountId"].as_str().unwrap().parse().unwrap();
     let chain: Vec<AccountRenameV1> = serde_json::from_value(v["chain"].clone()).unwrap();
     // Signatures are deterministic (Ed25519): the same chain signs again.
     for statement in &chain {
         let again = account_rename::sign(
             &identity,
+            account_id,
             statement.sequence,
             &statement.previous,
             &statement.current,
@@ -1351,6 +1354,7 @@ fn account_rename_vector() {
         hex::encode(
             account_rename::signing_bytes(
                 &chain[0].incarnation_id,
+                &chain[0].account_id,
                 chain[0].sequence,
                 &chain[0].previous,
                 &chain[0].current,
@@ -1360,16 +1364,16 @@ fn account_rename_vector() {
         ),
         v["firstSigningBytes"].as_str().unwrap()
     );
-    let view = account_rename::verify_chain(&authority, &chain).unwrap();
+    let view = account_rename::verify_chain(&authority, account_id, &chain).unwrap();
     assert_eq!(view.first, v["first"].as_str().unwrap());
     assert_eq!(view.current, v["current"].as_str().unwrap());
-    let shorter = account_rename::verify_chain(&authority, &chain[..1]).unwrap();
+    let shorter = account_rename::verify_chain(&authority, account_id, &chain[..1]).unwrap();
     assert!(view.extends(&shorter) && !shorter.extends(&view));
     for bad in v["invalidChains"].as_array().unwrap() {
         let parsed: Result<Vec<AccountRenameV1>, _> = serde_json::from_value(bad["chain"].clone());
         if let Ok(parsed) = parsed {
             assert!(
-                account_rename::verify_chain(&authority, &parsed).is_err(),
+                account_rename::verify_chain(&authority, account_id, &parsed).is_err(),
                 "{}",
                 bad["why"]
             );
@@ -1378,7 +1382,11 @@ fn account_rename_vector() {
     let other: [u8; 32] = b64(v["otherAuthorityPublicKey"].as_str().unwrap())
         .try_into()
         .unwrap();
-    assert!(account_rename::verify_chain(&other, &chain).is_err());
+    assert!(account_rename::verify_chain(&other, account_id, &chain).is_err());
+    // The genuine chain, looked up for another account id.
+    let other_account: kutup_crypto::account_ref::AccountId =
+        v["otherAccountId"].as_str().unwrap().parse().unwrap();
+    assert!(account_rename::verify_chain(&authority, other_account, &chain).is_err());
 }
 
 #[test]
@@ -1396,31 +1404,89 @@ fn print_account_rename_vector() {
     )
     .unwrap();
     let t = 1_790_000_000_000i64;
-    let first =
-        account_rename::sign(&identity, 1, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
-    let second =
-        account_rename::sign(&identity, 2, "alicia@kutup.dev", "ali@kutup.dev", t + 1000).unwrap();
-    let gap = account_rename::sign(&identity, 2, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
-    let unlinked =
-        account_rename::sign(&identity, 2, "bob@kutup.dev", "ali@kutup.dev", t + 1000).unwrap();
-    let backwards =
-        account_rename::sign(&identity, 2, "alicia@kutup.dev", "ali@kutup.dev", t - 1000).unwrap();
+    let account_id: kutup_crypto::account_ref::AccountId =
+        "00000000-0000-4000-8000-0000000000a1".parse().unwrap();
+    let other_account: kutup_crypto::account_ref::AccountId =
+        "00000000-0000-4000-8000-0000000000b2".parse().unwrap();
+    let sign = |who, account, sequence, previous: &str, current: &str, at| {
+        account_rename::sign(who, account, sequence, previous, current, at).unwrap()
+    };
+    let first = sign(
+        &identity,
+        account_id,
+        1,
+        "alice@kutup.dev",
+        "alicia@kutup.dev",
+        t,
+    );
+    let second = sign(
+        &identity,
+        account_id,
+        2,
+        "alicia@kutup.dev",
+        "ali@kutup.dev",
+        t + 1000,
+    );
+    let gap = sign(
+        &identity,
+        account_id,
+        2,
+        "alice@kutup.dev",
+        "alicia@kutup.dev",
+        t,
+    );
+    let unlinked = sign(
+        &identity,
+        account_id,
+        2,
+        "bob@kutup.dev",
+        "ali@kutup.dev",
+        t + 1000,
+    );
+    let backwards = sign(
+        &identity,
+        account_id,
+        2,
+        "alicia@kutup.dev",
+        "ali@kutup.dev",
+        t - 1000,
+    );
     let mut tampered = second.clone();
     tampered.current = "mallory@kutup.dev".into();
-    let mut foreign =
-        account_rename::sign(&other, 1, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
+    let mut foreign = sign(
+        &other,
+        account_id,
+        1,
+        "alice@kutup.dev",
+        "alicia@kutup.dev",
+        t,
+    );
     foreign.incarnation_id = identity.incarnation_id();
+    // The same authority's statement about another account id, and one
+    // relabelled to it after signing.
+    let mixed = sign(
+        &identity,
+        other_account,
+        2,
+        "alicia@kutup.dev",
+        "ali@kutup.dev",
+        t + 1000,
+    );
+    let mut relabelled = second.clone();
+    relabelled.account_id = other_account.to_string();
     let mut moved = first.clone();
     moved.current = "alicia@other.dev".into();
     println!(
         "{}",
         serde_json::json!({
-            "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, chained 1, 2, …; a client accepts only chains that verify and extend what it saw.",
+            "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, binding the account id, chained 1, 2, …; a client accepts only chains that verify for the account id it looked up and extend what it saw.",
             "masterKey": e(&[0x11; 32]),
+            "accountId": account_id.to_string(),
+            "otherAccountId": other_account.to_string(),
             "authorityPublicKey": e(&identity.authority_public_key()),
             "otherAuthorityPublicKey": e(&other.authority_public_key()),
             "chain": [first, second],
-            "firstSigningBytes": hex::encode(account_rename::signing_bytes(&first.incarnation_id, 1, &first.previous, &first.current, t).unwrap()),
+            "firstSigningBytes": hex::encode(account_rename::signing_bytes(&first.incarnation_id, &first.account_id, 1, &first.previous, &first.current, t).unwrap()),
             "first": "alice@kutup.dev",
             "current": "ali@kutup.dev",
             "invalidChains": [
@@ -1430,6 +1496,8 @@ fn print_account_rename_vector() {
                 { "why": "tampered", "chain": [first, tampered] },
                 { "why": "signed by another authority", "chain": [foreign] },
                 { "why": "another server", "chain": [moved] },
+                { "why": "names another account id", "chain": [first, mixed] },
+                { "why": "account id relabelled", "chain": [first, relabelled] },
                 { "why": "empty", "chain": [] }
             ]
         })

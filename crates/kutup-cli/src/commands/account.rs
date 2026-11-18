@@ -205,9 +205,12 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis() as i64;
-    let statement =
-        kutup_crypto::account_rename::sign(&identity, sequence, &address, &current, now_ms)
-            .context("sign the rename")?;
+    // The statement names this account's permanent id (it is about itself).
+    let account_id = ctx.session.person()?.id();
+    let statement = kutup_crypto::account_rename::sign(
+        &identity, account_id, sequence, &address, &current, now_ms,
+    )
+    .context("sign the rename")?;
     // The new address's key comes with the rename, unless the name is one
     // taken back whose address kept its keys: the check says so, and so do
     // the account's own addresses (a key or key list there means none is
@@ -333,7 +336,7 @@ fn own_address(ctx: &crate::context::Ctx, address: &str) -> Result<OwnAddress> {
     Ok(own_address_of(&rows, address))
 }
 
-/// [`own_address`] over `GET /api/mail/addresses`'s rows.
+/// [`own_address`] over `GET /api/v1/mail/addresses`'s rows.
 fn own_address_of(rows: &Value, address: &str) -> OwnAddress {
     let folded = kutup_crypto::names::fold_address(address);
     let mut own = OwnAddress::New;

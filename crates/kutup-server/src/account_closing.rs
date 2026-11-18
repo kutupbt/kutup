@@ -3,7 +3,7 @@
 //! itself.
 //!
 //! - An account asked to be deleted (by its owner, after a reauth, or by an
-//!   admin) is `closing` until `closes_at` (`account_closing_days` after the
+//!   admin) is `closing` until `closes_at` (`account.closing_days` after the
 //!   ask). Its sign-ins end; a sign-in that passes every step is offered to
 //!   keep it instead of a session.
 //! - Then [`run_due`] deletes it: everything it holds, bytes included, its
@@ -500,17 +500,12 @@ mod tests {
 
     async fn account(pool: &sqlx::PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-        )
-        .bind(user_id)
-        .bind(format!("closing{}", &user_id.simple().to_string()[..12]))
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(user_id)
+            .bind(format!("closing{}", &user_id.simple().to_string()[..12]))
+            .execute(pool)
+            .await
+            .unwrap();
         user_id
     }
 

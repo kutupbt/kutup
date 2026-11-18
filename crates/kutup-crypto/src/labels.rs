@@ -74,8 +74,8 @@ pub const ACCOUNT_INCARNATION_V1: &[u8] = b"kutup/account/incarnation/v1\0";
 pub const ACCOUNT_MANIFEST_V1: &[u8] = b"kutup/account/manifest/v1\0";
 /// `kutup-chat-proto/src/account_identity.rs` (`DOMAIN`)
 pub const ACCOUNT_MANIFEST_V3: &[u8] = b"kutup/account/manifest/v3\0";
-/// `kutup-crypto/src/account_rename.rs` (`DOMAIN`)
-pub const ACCOUNT_RENAME_V1: &[u8] = b"kutup/account/rename/v1\0";
+/// `kutup-crypto/src/account_rename.rs` (`DOMAIN`): v2 binds the account id
+pub const ACCOUNT_RENAME_V2: &[u8] = b"kutup/account/rename/v2\0";
 /// `kutup-chat-proto/src/account_identity.rs` (`AccountSuccessionV1`): the
 /// previous authority's signature over an identity rotation's statement.
 pub const ACCOUNT_SUCCESSION_BY_PREVIOUS_V1: &[u8] = b"kutup/account/succession/by-previous/v1\0";
@@ -473,7 +473,7 @@ pub const SEALED_RECIPIENT_RATE_V1: &[u8] = b"kutup/sealed-recipient-rate/v1\0";
 // --- server ------------------------------------------------------------------
 
 /// `kutup-server/src/audit_log.rs` (`CHAIN_DOMAIN`)
-pub const SERVER_ADMIN_AUDIT_CHAIN_V1: &[u8] = b"kutup/server/admin-audit-chain/v1\0";
+pub const SERVER_ADMIN_AUDIT_CHAIN_V2: &[u8] = b"kutup/server/admin-audit-chain/v2\0";
 /// `kutup-crypto/src/server_data.rs` (`SALT`)
 pub const SERVER_DATA_V1: &[u8] = b"kutup/server/data/v1\0";
 /// `kutup-crypto/src/server_data.rs` (`KEK_INFO`)
@@ -589,7 +589,7 @@ pub const ALL: [&[u8]; 169] = [
     ACCOUNT_MANIFEST_V3,
     ACCOUNT_SUCCESSION_BY_PREVIOUS_V1,
     ACCOUNT_SUCCESSION_BY_NEW_V1,
-    ACCOUNT_RENAME_V1,
+    ACCOUNT_RENAME_V2,
     CHAT_BACKUP_MEDIA_BLOCKS_BLOCK_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_MANIFEST_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_NONCE_KEY_V1,
@@ -695,7 +695,7 @@ pub const ALL: [&[u8]; 169] = [
     SEALED_DELIVERY_CAPABILITY_V1,
     SEALED_ORIGIN_RATE_V1,
     SEALED_RECIPIENT_RATE_V1,
-    SERVER_ADMIN_AUDIT_CHAIN_V1,
+    SERVER_ADMIN_AUDIT_CHAIN_V2,
     SERVER_DATA_V1,
     SERVER_DATA_KEK_V1,
     SERVER_DATA_KEY_WRAP_V1,

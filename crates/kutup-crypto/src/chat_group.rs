@@ -735,7 +735,7 @@ mod tests {
             crate::labels::DEVICE_REGISTRATION_V1,
             crate::labels::DEVICE_REVOCATION_V1,
             crate::labels::DRIVE_KEY_BINDING_V2,
-            crate::labels::ACCOUNT_RENAME_V1,
+            crate::labels::ACCOUNT_RENAME_V2,
             crate::labels::CONTACT_SUMMARY_V2,
             crate::labels::MAIL_KEY_LIST_V1,
             crate::labels::MAIL_GROUP_KEY_SHARE_V2,

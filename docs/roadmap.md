@@ -18,7 +18,7 @@ gate record and explicitly labels completed slices.
 The bar for the first `v*` tag:
 
 1. **No silent stubs in admin-facing UI.** Every clickable action that exists in the UI must work end-to-end. No "wire-up pending" toasts in shipped builds.
-2. **Deletion is recoverable.** ✅ Shipped: owner-scoped trash with restore + permanent delete, and an hourly retention sweeper (`TRASH_RETENTION_DAYS`, default 30). See `docs/api.md` → Trash.
+2. **Deletion is recoverable.** ✅ Shipped: owner-scoped trash with restore + permanent delete, and an hourly retention sweeper (site setting `drive.trash_retention_days`, default 30). See `docs/api.md` → Trash.
 3. **Self-hosters can recover broken users without SSH.** ✅ Shipped: force-disable 2FA (lost authenticator), re-enable account (accidental disable), rotate temp password (first-login accounts), and the destructive wipe for users who lost both password and recovery phrase — all from the responsive web admin UI. `docs/research/10-admin-password-reset.md` records why "reset password" is two actions under E2EE.
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
 5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it in both responsive web layouts. See `docs/api.md` → Admin.

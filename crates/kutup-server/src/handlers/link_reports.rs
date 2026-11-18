@@ -240,7 +240,7 @@ pub async fn list_reports(
     let rows: Vec<ReportRow> = sqlx::query_as(if resolved {
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at, p.blocked_reason,
-                u.id, u.username, u.is_active,
+                u.id, u.username, u.state = 'active',
                 (SELECT COUNT(*) FROM drive_public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
            FROM drive_public_link_reports r
            JOIN drive_public_shares p ON p.id = r.share_id
@@ -250,7 +250,7 @@ pub async fn list_reports(
     } else {
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at, p.blocked_reason,
-                u.id, u.username, u.is_active,
+                u.id, u.username, u.state = 'active',
                 (SELECT COUNT(*) FROM drive_public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
            FROM drive_public_link_reports r
            JOIN drive_public_shares p ON p.id = r.share_id
@@ -478,7 +478,7 @@ pub async fn block_link(
     // In the block's own transaction: the record of who blocked what, why.
     crate::audit_log::append_in(
         &mut tx,
-        admin_uuid,
+        crate::audit_log::Actor::Admin(admin_uuid),
         AdminAction::ShareBlock,
         Some(owner),
         &json!({
@@ -542,7 +542,7 @@ pub async fn unblock_link(
     }
     crate::audit_log::append_in(
         &mut tx,
-        admin_uuid,
+        crate::audit_log::Actor::Admin(admin_uuid),
         AdminAction::ShareUnblock,
         Some(owner),
         &json!({ "shareId": share, "reason": reason }),

@@ -46,9 +46,9 @@ OLD_STORAGE = re.compile(
     r"""|pending-uploads|account-head:|revision:|upload:|chat-engine|chat-updates|chat-focus|chat-notifier|chat-call-desk|chat-in-call)\b"""
     r"""|kutup:chat:|kutup_cursor_color_v1|kutup\.sealed\.v1|kutup\.chat\.liveShares\.v1|kutup\.notes\.sourceMode|notificationBanner\.dismissed"""
 )
-# An error code in snake_case: built (`"code": "name_taken"`, `{ code:
-# 'name_taken' }`) or matched (`code === 'name_taken'`, `code.as_deref() ==
-# Some("name_taken")`, `apiErrorCode(e) === 'not_found'`).
+# An error code in snake_case: built (`"code": "nameTaken"`, `{ code:
+# 'nameTaken' }`) or matched (`code === 'nameTaken'`, `code.as_deref() ==
+# Some("nameTaken")`, `apiErrorCode(e) === 'not_found'`).
 SNAKE = r"""["'`][a-z][a-z0-9]*(?:_[a-z0-9]+)+["'`]"""
 SNAKE_CODE = re.compile(
     r"""["']code["']\s*:\s*""" + SNAKE

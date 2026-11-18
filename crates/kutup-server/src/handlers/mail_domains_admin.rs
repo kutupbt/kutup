@@ -15,6 +15,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::audit_log::AdminAction;
+use crate::entitlements::{self, Holder, Source};
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
 use crate::mail::domains::dkim;
@@ -447,9 +448,9 @@ pub struct DomainOverridesView {
     pub organization: Option<OrganizationRef>,
 }
 
-const DOMAINS_KEY: &str = "mail_domains.per_organization";
-const CATCH_ALL_KEY: &str = "mail_domains.catch_all";
-const ADDRESSES_KEY: &str = "mail_domains.addresses_per_account";
+const DOMAINS_KEY: &str = "mail.domains.per_organization";
+const CATCH_ALL_KEY: &str = "mail.domains.catch_all";
+const ADDRESSES_KEY: &str = "mail.domains.addresses_per_account";
 
 /// The account's organization (enabled or invited member) with its role.
 async fn organization_of(
@@ -483,22 +484,14 @@ pub async fn overrides(
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such user"))?;
     let organization = organization_of(&state.pool, id).await?;
     crate::handlers::admin::viewed(&state, &admin, id, "mailDomains").await?;
-    let max_addresses: Option<i64> = sqlx::query_scalar(
-        "SELECT value FROM account_setting_overrides WHERE account_id = $1 AND key = $2",
-    )
-    .bind(id)
-    .bind(ADDRESSES_KEY)
-    .fetch_optional(&state.pool)
-    .await?;
+    let max_addresses = entitlements::get(&state.pool, Holder::Account(id), ADDRESSES_KEY).await?;
     let (mut max_domains, mut catch_all) = (None, None);
     if let Some((organization, _, _)) = &organization {
-        let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT key, value FROM organization_setting_overrides
-              WHERE organization_id = $1 AND key = ANY($2)",
+        let rows = entitlements::some(
+            &state.pool,
+            Holder::Organization(*organization),
+            &[DOMAINS_KEY, CATCH_ALL_KEY],
         )
-        .bind(organization)
-        .bind(&[DOMAINS_KEY, CATCH_ALL_KEY][..])
-        .fetch_all(&state.pool)
         .await?;
         for (key, value) in rows {
             if key == DOMAINS_KEY {
@@ -569,32 +562,30 @@ pub async fn set_overrides(
     } else {
         organization_of(&state.pool, id).await?.map(|(id, _, _)| id)
     };
-    set_or_clear(
-        &mut tx,
-        "account_setting_overrides",
-        "account_id",
-        id,
+    entitlements::set_or_clear(
+        &mut *tx,
+        Holder::Account(id),
         ADDRESSES_KEY,
         input.max_addresses.map(i64::from),
+        Source::Admin,
     )
     .await?;
     if let Some(organization) = organization {
-        set_or_clear(
-            &mut tx,
-            "organization_setting_overrides",
-            "organization_id",
-            organization,
+        let holder = Holder::Organization(organization);
+        entitlements::set_or_clear(
+            &mut *tx,
+            holder,
             DOMAINS_KEY,
             input.max_domains.map(i64::from),
+            Source::Admin,
         )
         .await?;
-        set_or_clear(
-            &mut tx,
-            "organization_setting_overrides",
-            "organization_id",
-            organization,
+        entitlements::set_or_clear(
+            &mut *tx,
+            holder,
             CATCH_ALL_KEY,
             input.catch_all.map(i64::from),
+            Source::Admin,
         )
         .await?;
     }
@@ -608,39 +599,4 @@ pub async fn set_overrides(
     )
     .await;
     Ok(Json(input))
-}
-
-/// Sets `key` to `value` in `table` for `owner`, or removes it (`None`: the
-/// site's again). `table` and `column` are this module's constants.
-async fn set_or_clear(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    table: &'static str,
-    column: &'static str,
-    owner: Uuid,
-    key: &str,
-    value: Option<i64>,
-) -> AppResult<()> {
-    match value {
-        Some(value) => {
-            sqlx::query(&format!(
-                "INSERT INTO {table} ({column}, key, value) VALUES ($1, $2, $3)
-                 ON CONFLICT ({column}, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
-            ))
-            .bind(owner)
-            .bind(key)
-            .bind(value)
-            .execute(&mut **tx)
-            .await?;
-        }
-        None => {
-            sqlx::query(&format!(
-                "DELETE FROM {table} WHERE {column} = $1 AND key = $2"
-            ))
-            .bind(owner)
-            .bind(key)
-            .execute(&mut **tx)
-            .await?;
-        }
-    }
-    Ok(())
 }

@@ -41,8 +41,14 @@ pub(crate) async fn audit(
     let Ok(admin_uuid) = Uuid::parse_str(admin_user_id) else {
         return;
     };
-    if let Err(e) =
-        crate::audit_log::append(pool, admin_uuid, action, target_user_id, &payload).await
+    if let Err(e) = crate::audit_log::append(
+        pool,
+        crate::audit_log::Actor::Admin(admin_uuid),
+        action,
+        target_user_id,
+        &payload,
+    )
+    .await
     {
         tracing::warn!("audit log write failed ({action}): {}", e.message);
     }
@@ -93,7 +99,7 @@ fn valid_admin_username(s: &str) -> bool {
 /// disabled, wiped or deleted.
 async fn is_break_glass(state: &AppState, id: Uuid) -> AppResult<bool> {
     Ok(
-        sqlx::query_scalar("SELECT is_break_glass FROM accounts WHERE id = $1")
+        sqlx::query_scalar("SELECT role = 'breakGlassAdmin' FROM accounts WHERE id = $1")
             .bind(id)
             .fetch_optional(&state.pool)
             .await?
@@ -168,18 +174,28 @@ struct AccountRow {
     security(("BearerAuth" = [])),
     responses((status = 200, description = "All user accounts", body = Vec<AccountRow>))
 )]
-pub async fn list_users(
-    State(state): State<AppState>,
-    _admin: AdminAccount,
-) -> AppResult<Response> {
+pub async fn list_users(State(state): State<AppState>, _admin: AdminAccount) -> AppResult<Response> {
     let users: Vec<AccountRow> = sqlx::query_as(
-        r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
-                  is_admin, is_active, state, suspended_reason, closes_at,
+        r#"SELECT id, COALESCE(username, '') AS username,
+                  COALESCE((SELECT value FROM account_entitlements
+                             WHERE account_id = accounts.id AND key = $1 AND value > 0),
+                           $2) AS storage_quota_bytes,
+                  storage_used_bytes,
+                  role <> 'member' AS is_admin, state = 'active' AS is_active, state,
+                  suspended_reason, closes_at,
                   legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
-                  public_sharing, federation,
-                  totp_enabled, is_first_login, created_at, is_break_glass AS is_protected
+                  CASE WHEN (SELECT value FROM account_entitlements
+                              WHERE account_id = accounts.id AND key = $3) = 0
+                       THEN 'off' ELSE 'on' END AS public_sharing,
+                  CASE WHEN kutup_account_federates(id) THEN 'on' ELSE 'off' END AS federation,
+                  totp_secret_sealed IS NOT NULL AS totp_enabled,
+                  keys_set_up_at IS NULL AS is_first_login, created_at,
+                  role = 'breakGlassAdmin' AS is_protected
            FROM accounts ORDER BY created_at DESC"#,
     )
+    .bind(crate::entitlements::STORAGE_QUOTA)
+    .bind(crate::storage_pool::default_quota(&state.pool).await?)
+    .bind(crate::entitlements::PUBLIC_SHARING)
     .fetch_all(&state.pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
@@ -239,6 +255,7 @@ pub struct CreateAccountRequest {
     /// The temporary password, registered by the administrator's client.
     #[serde(flatten)]
     setup: TempRegistration,
+    /// The account's own quota; 0 (or none) leaves it on the site's.
     storage_quota_bytes: i64,
 }
 
@@ -257,7 +274,7 @@ pub struct CreateAccountRequest {
 pub async fn create_user(
     State(state): State<AppState>,
     admin: AdminAccount,
-    Json(mut req): Json<CreateAccountRequest>,
+    Json(req): Json<CreateAccountRequest>,
 ) -> AppResult<Response> {
     let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     if req.username.is_empty() {
@@ -268,13 +285,12 @@ pub async fn create_user(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
     }
-    if req.storage_quota_bytes == 0 {
-        // The account's one storage pool, for every app (crate::storage_pool).
-        req.storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
-    }
-    if req.storage_quota_bytes <= 0 {
+    // The account's one storage pool, for every app (crate::storage_pool):
+    // its own quota only when one is given, else the site's applies.
+    if req.storage_quota_bytes < 0 {
         return Err(AppError::bad_request("storage quota must be positive"));
     }
+    let own_quota = (req.storage_quota_bytes > 0).then_some(req.storage_quota_bytes);
 
     let federation_default = crate::federation_switch::site_default(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
@@ -294,11 +310,8 @@ pub async fn create_user(
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
                username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
-               master_key_envelope, recovery_key_envelope,
-               public_key, account_authority_public_key, account_authority_key_id,
-               account_incarnation_id, drive_signing_public_key,
-               is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2::uuid,$3,$4,$5,'','','','',''::bytea,''::bytea,'',false,true,$6)
+               identity_suite
+           ) VALUES ($1,$2::uuid,$3,$4,$5,2)
            RETURNING id"#,
     )
     .bind(&req.username)
@@ -306,7 +319,6 @@ pub async fn create_user(
     .bind(&opaque_record)
     .bind(kutup_crypto::opaque::SUITE as i16)
     .bind(opaque_server_key_id)
-    .bind(req.storage_quota_bytes)
     .fetch_one(&mut *tx)
     .await;
     let new_id = match res {
@@ -314,6 +326,16 @@ pub async fn create_user(
         Err(e) => return Err(map_insert_conflict(e)),
     };
     crate::account_names::claim(&mut tx, &req.username, new_id, None).await?;
+    if let Some(quota) = own_quota {
+        crate::entitlements::set(
+            &mut *tx,
+            crate::entitlements::Holder::Account(new_id),
+            crate::entitlements::STORAGE_QUOTA,
+            quota,
+            crate::entitlements::Source::Admin,
+        )
+        .await?;
+    }
     // Whether it talks to other servers starts as the site says.
     crate::federation_switch::start_account(&mut tx, new_id, federation_default).await?;
     if !crate::handlers::mail_keys::create_own_address(
@@ -333,7 +355,7 @@ pub async fn create_user(
         AdminAction::AccountCreate,
         Some(new_id),
         json!({
-            "storageQuotaBytes": req.storage_quota_bytes,
+            "storageQuotaBytes": own_quota,
         }),
     )
     .await;
@@ -375,7 +397,7 @@ pub async fn update_user(
 
     // Load the target's current state for the break-glass + last-admin guards.
     let (target_is_admin, target_is_active): (bool, bool) =
-        sqlx::query_as("SELECT is_admin, is_active FROM accounts WHERE id = $1")
+        sqlx::query_as("SELECT role <> 'member', state = 'active' FROM accounts WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?
@@ -398,7 +420,7 @@ pub async fn update_user(
     // Last-admin guard: don't let a demote/disable leave zero usable admins.
     if (wants_demote || wants_disable) && target_is_admin && target_is_active {
         let other_usable: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM accounts WHERE is_admin AND is_active AND id != $1",
+            "SELECT COUNT(*) FROM accounts WHERE role <> 'member' AND state = 'active' AND id != $1",
         )
         .bind(target)
         .fetch_one(&state.pool)
@@ -412,12 +434,32 @@ pub async fn update_user(
         if q <= 0 {
             return Err(AppError::bad_request("storage quota must be positive"));
         }
-        sqlx::query("UPDATE accounts SET storage_quota_bytes = $1 WHERE id = $2")
-            .bind(q)
-            .bind(target)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| AppError::internal("internal error"))?;
+        // The account's own quota, an entitlement, with its own record.
+        let holder = crate::entitlements::Holder::Account(target);
+        let mut tx = state.pool.begin().await?;
+        let previous =
+            crate::entitlements::get(&mut *tx, holder, crate::entitlements::STORAGE_QUOTA).await?;
+        crate::entitlements::set(
+            &mut *tx,
+            holder,
+            crate::entitlements::STORAGE_QUOTA,
+            q,
+            crate::entitlements::Source::Admin,
+        )
+        .await?;
+        crate::audit_log::append_in(
+            &mut tx,
+            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.account_id)?),
+            AdminAction::AccountSetEntitlement,
+            Some(target),
+            &json!({
+                "key": crate::entitlements::STORAGE_QUOTA,
+                "value": q,
+                "previous": previous,
+            }),
+        )
+        .await?;
+        tx.commit().await?;
     }
     if let Some(a) = req.is_active {
         let mut tx = state.pool.begin().await?;
@@ -499,13 +541,24 @@ pub async fn update_user(
         let on = federation == "on";
         let mut tx = state.pool.begin().await?;
         if on {
-            crate::federation_switch::turn_on(&mut tx, target, None, "admin").await?;
+            crate::federation_switch::turn_on(
+                &mut tx,
+                target,
+                None,
+                crate::federation_switch::By::Admin,
+            )
+            .await?;
         } else {
-            crate::federation_switch::turn_off(&mut tx, target).await?;
+            crate::federation_switch::turn_off(
+                &mut tx,
+                target,
+                crate::federation_switch::By::Admin,
+            )
+            .await?;
         }
         crate::audit_log::append_in(
             &mut tx,
-            crate::handlers::trusted_uuid(&admin.account_id)?,
+            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.account_id)?),
             AdminAction::AccountSetFederation,
             Some(target),
             &json!({ "federation": federation }),
@@ -523,14 +576,17 @@ pub async fn update_user(
         // With its own record, in one transaction: a switch that turns an
         // account's links off is evidence of who did it.
         let mut tx = state.pool.begin().await?;
-        sqlx::query("UPDATE accounts SET public_sharing = $1 WHERE id = $2")
-            .bind(sharing)
-            .bind(target)
-            .execute(&mut *tx)
-            .await?;
+        crate::entitlements::set(
+            &mut *tx,
+            crate::entitlements::Holder::Account(target),
+            crate::entitlements::PUBLIC_SHARING,
+            i64::from(sharing == "on"),
+            crate::entitlements::Source::Admin,
+        )
+        .await?;
         crate::audit_log::append_in(
             &mut tx,
-            crate::handlers::trusted_uuid(&admin.account_id)?,
+            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.account_id)?),
             AdminAction::AccountSetPublicSharing,
             Some(target),
             &json!({ "publicSharing": sharing }),
@@ -539,8 +595,15 @@ pub async fn update_user(
         tx.commit().await?;
     }
     if let Some(a) = req.is_admin {
-        sqlx::query("UPDATE accounts SET is_admin = $1 WHERE id = $2")
-            .bind(a)
+        // The break-glass administrator keeps its role (guarded above for a
+        // demotion; a promotion leaves it as it is).
+        let role = if a {
+            crate::models::AccountRole::Admin
+        } else {
+            crate::models::AccountRole::Member
+        };
+        sqlx::query("UPDATE accounts SET role = $1 WHERE id = $2 AND role <> 'breakGlassAdmin'")
+            .bind(role.as_str())
             .bind(target)
             .execute(&state.pool)
             .await
@@ -628,7 +691,7 @@ pub async fn delete_user(
 }
 
 /// `POST /api/v1/admin/accounts/{id}/close` — closes the account: deleted after
-/// `account_closing_days`, unless kept (by its owner at sign-in, or here with
+/// `account.closing_days`, unless kept (by its owner at sign-in, or here with
 /// `isActive: true`) (docs/plans/server-personal-data.md, A5).
 #[utoipa::path(
     post,
@@ -645,7 +708,7 @@ pub async fn close_user(
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let (is_admin, is_active): (bool, bool) =
-        sqlx::query_as("SELECT is_admin, is_active FROM accounts WHERE id = $1")
+        sqlx::query_as("SELECT role <> 'member', state = 'active' FROM accounts WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?
@@ -655,7 +718,7 @@ pub async fn close_user(
     }
     if is_admin && is_active {
         let other_usable: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM accounts WHERE is_admin AND is_active AND id != $1",
+            "SELECT COUNT(*) FROM accounts WHERE role <> 'member' AND state = 'active' AND id != $1",
         )
         .bind(target)
         .fetch_one(&state.pool)
@@ -1064,7 +1127,7 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminAccount) -> A
 
     let stats = StatsResponse {
         total_accounts: scalar("SELECT COUNT(*) FROM accounts").await,
-        active_accounts: scalar("SELECT COUNT(*) FROM accounts WHERE is_active = true").await,
+        active_accounts: scalar("SELECT COUNT(*) FROM accounts WHERE state = 'active'").await,
         total_files: scalar("SELECT COUNT(*) FROM drive_files").await,
         // ::bigint — SUM(bigint) yields NUMERIC, which sqlx cannot decode as i64;
         // without the cast this silently fell back to 0 via unwrap_or.
@@ -1134,6 +1197,8 @@ pub async fn get_settings(
         "chatGroupAvatarStoragePerGroupBytes": avatar.storage_bytes,
         "chatGroupAvatarPendingSeconds": avatar.pending_seconds,
         "passVaultMaxBytes": crate::site_settings::pass_vault_max_bytes(&state.pool).await?,
+        "driveVersionRetentionChoices":
+            crate::site_settings::version_retention_choices(&state.pool).await?,
     });
     if let Some(object) = settings.as_object_mut() {
         object.extend(numeric);
@@ -1168,6 +1233,7 @@ pub struct UpdateSettingsRequest {
     #[serde(deserialize_with = "present")]
     chat_group_avatar_pending_seconds: Option<Option<i64>>,
     pass_vault_max_bytes: Option<i64>,
+    drive_version_retention_choices: Option<Vec<i32>>,
 }
 
 /// A field that is present: `Some(None)` for `null`, so a missing field
@@ -1208,6 +1274,7 @@ pub async fn update_settings(
         && req.chat_group_avatar_storage_per_group_bytes.is_none()
         && req.chat_group_avatar_pending_seconds.is_none()
         && req.pass_vault_max_bytes.is_none()
+        && req.drive_version_retention_choices.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -1215,6 +1282,12 @@ pub async fn update_settings(
         crate::site_settings::validate_pass_vault_max_bytes(value)
             .map_err(AppError::bad_request)?;
     }
+    let version_retention_choices = req
+        .drive_version_retention_choices
+        .as_deref()
+        .map(crate::site_settings::validate_version_retention_choices)
+        .transpose()
+        .map_err(AppError::bad_request)?;
     if req
         .default_storage_quota_bytes
         .is_some_and(|quota| quota <= 0)
@@ -1351,6 +1424,16 @@ pub async fn update_settings(
         .await
         .map_err(|_| AppError::internal("internal error"))?;
     }
+    if let Some(days) = &version_retention_choices {
+        sqlx::query(
+            "INSERT INTO site_settings (key, value) VALUES ($1, $2) \
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
+        .bind(crate::site_settings::DRIVE_VERSION_RETENTION_CHOICES)
+        .bind(crate::site_settings::version_retention_choices_value(days))
+        .execute(&mut *transaction)
+        .await?;
+    }
     for (key, value) in [
         (
             crate::site_settings::CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP,
@@ -1424,6 +1507,7 @@ pub async fn update_settings(
             "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
             "chatGroupAvatarPendingSeconds": req.chat_group_avatar_pending_seconds,
             "passVaultMaxBytes": req.pass_vault_max_bytes,
+            "driveVersionRetentionChoices": version_retention_choices,
         }),
     )
     .await;
@@ -2430,7 +2514,7 @@ pub struct RotateTempPasswordRequest {
 }
 
 /// `POST /api/v1/admin/accounts/{id}/rotate-temp-password` — replaces the temp password of an
-/// account still in `is_first_login` state. Such an account has no key material yet, so
+/// account that has not set up its keys (`keys_set_up_at` NULL). Such an account has no key material yet, so
 /// this destroys nothing. For an established account this is a `409`: under E2EE the
 /// server cannot reset a password without destroying the user's data — they self-serve
 /// via `/auth/recover`, or the admin wipes (see `wipe_user`).
@@ -2456,10 +2540,11 @@ pub async fn rotate_temp_password(
     let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let row: Option<bool> = sqlx::query_scalar("SELECT is_first_login FROM accounts WHERE id = $1")
-        .bind(target)
-        .fetch_optional(&state.pool)
-        .await?;
+    let row: Option<bool> =
+        sqlx::query_scalar("SELECT keys_set_up_at IS NULL FROM accounts WHERE id = $1")
+            .bind(target)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some(is_first_login) = row else {
         return Err(AppError::not_found("not found"));
     };
@@ -2475,7 +2560,7 @@ pub async fn rotate_temp_password(
     let rotated = sqlx::query(
         "UPDATE accounts SET key_binding = $2::uuid, opaque_record = $3, opaque_suite = $4,
                 opaque_server_key_id = $5, updated_at = NOW()
-          WHERE id = $1 AND is_first_login",
+          WHERE id = $1 AND keys_set_up_at IS NULL",
     )
     .bind(target)
     .bind(&key_binding)
@@ -2594,7 +2679,7 @@ pub struct ResetKeysRequest {
 /// password and recovery phrase. Their data is cryptographically unreachable anyway;
 /// this makes it official: purges every owned collection (files, versions, assets, S3
 /// blobs, shares), erases the key bundle + TOTP + device signing keys, and resets the
-/// account to `is_first_login` with the supplied temp password. Email/username/quota
+/// account to not set up (`keys_set_up_at` NULL) with the supplied temp password. Email/username/quota
 /// survive. Irreversible. Design: `docs/research/10-admin-password-reset.md`.
 #[utoipa::path(
     post,
@@ -2712,15 +2797,15 @@ pub async fn wipe_user(
     crate::account_roots::delete(&mut tx, target).await?;
     sqlx::query(
         r#"UPDATE accounts SET
-               master_key_envelope = '', recovery_key_envelope = '',
-               public_key = '', account_authority_public_key = '',
-               account_authority_key_id = ''::bytea, account_incarnation_id = ''::bytea,
-               drive_signing_public_key = '',
+               master_key_envelope = NULL, recovery_key_envelope = NULL,
+               drive_xwing_public_key = NULL, account_authority_public_key = NULL,
+               account_authority_key_id = NULL, account_incarnation_id = NULL,
+               drive_signing_public_key = NULL,
                recovery_key_verifier = NULL, drive_key_binding = NULL,
                key_binding = $1::uuid, opaque_record = $3, opaque_suite = $4,
                opaque_server_key_id = $5,
-               totp_secret_sealed = NULL, totp_enabled = false,
-               is_first_login = true, updated_at = NOW()
+               totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL,
+               keys_set_up_at = NULL, updated_at = NOW()
            WHERE id = $2"#,
     )
     .bind(&key_binding)
@@ -2792,13 +2877,15 @@ pub struct ActivityQuery {
 #[serde(rename_all = "camelCase")]
 struct ActivityEntry {
     id: i64,
+    /// The row's kind (an `AdminAction`, `area.verb`).
     action: String,
+    /// The acting admin; the nil id for the server's own steps (actor `job`).
     admin_account_id: Uuid,
     /// The acting admin's live username — `null` once that account is deleted.
     admin_username: Option<String>,
     target_account_id: Option<Uuid>,
-    /// The target's live username — `null` once deleted; the payload keeps
-    /// the at-action-time snapshot.
+    /// The target's live username — `null` once deleted (payloads name
+    /// accounts by id only).
     target_username: Option<String>,
     payload: serde_json::Value,
     #[serde(with = "time::serde::rfc3339")]
@@ -2967,14 +3054,16 @@ async fn load_activity_entries(
         serde_json::Value,
         OffsetDateTime,
     );
+    // The server's own rows (actor `job`) name the nil id as their admin,
+    // which the activity page shows as "system".
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT l.id, l.action, l.admin_account_id, a.username,
-                  l.target_account_id, t.username, l.payload, l.occurred_at
+        r#"SELECT l.id, l.kind, COALESCE(l.actor_account_id, '00000000-0000-0000-0000-000000000000'::uuid),
+                  a.username, l.subject_account_id, t.username, l.payload, l.at
            FROM admin_audit_log l
-           LEFT JOIN accounts a ON a.id = l.admin_account_id
-           LEFT JOIN accounts t ON t.id = l.target_account_id
+           LEFT JOIN accounts a ON a.id = l.actor_account_id
+           LEFT JOIN accounts t ON t.id = l.subject_account_id
            WHERE ($1::bigint IS NULL OR l.id < $1)
-             AND ($2::text IS NULL OR left(l.action, char_length($2)) = $2)
+             AND ($2::text IS NULL OR left(l.kind, char_length($2)) = $2)
              AND ($3::text IS NULL
                   OR l.payload->>'domain' = $3
                   OR EXISTS (
@@ -3153,17 +3242,12 @@ mod tests {
             .unwrap();
         let (reset, kept) = (Uuid::new_v4(), Uuid::new_v4());
         for user_id in [reset, kept] {
-            sqlx::query(
-                "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                    public_key, account_authority_public_key,
-                    account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-                 VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-            )
-            .bind(user_id)
-            .bind(format!("reset{}", &user_id.simple().to_string()[..12]))
-            .execute(&pool)
-            .await
-            .unwrap();
+            sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+                .bind(user_id)
+                .bind(format!("reset{}", &user_id.simple().to_string()[..12]))
+                .execute(&pool)
+                .await
+                .unwrap();
             // One record in each of the two Chat list scopes.
             for scope in [RecordScope::ChatGroups, RecordScope::ChatContacts] {
                 sqlx::query(

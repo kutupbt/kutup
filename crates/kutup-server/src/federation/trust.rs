@@ -716,7 +716,7 @@ async fn insert_audit(
 ) -> Result<(), sqlx::Error> {
     crate::audit_log::append_in(
         transaction,
-        admin_user_id.unwrap_or_else(Uuid::nil),
+        admin_user_id.map_or(crate::audit_log::Actor::Job, crate::audit_log::Actor::Admin),
         action,
         None,
         &payload,

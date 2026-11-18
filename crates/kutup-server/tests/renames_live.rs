@@ -92,6 +92,7 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
     let domain = server_domain(&c, &base);
     let stale = kutup_crypto::account_rename::sign(
         &user.identity,
+        user.id.parse().unwrap(),
         1,
         &format!("{old}@{domain}"),
         &format!("{}@{domain}", name("elsewhere_")),
@@ -110,6 +111,29 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
     let conflict: Value = r.json().unwrap();
     assert_eq!(conflict["code"], "renameConflict", "{conflict}");
     assert_eq!(conflict["sequence"], 1);
+
+    // A statement about another account id, though signed by this
+    // account's authority, is no rename of this account.
+    let elsewhere = kutup_crypto::account_rename::sign(
+        &user.identity,
+        uuid::Uuid::new_v4().to_string().parse().unwrap(),
+        2,
+        &format!("{new}@{domain}"),
+        &format!("{}@{domain}", name("elsewhere_")),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64,
+    )
+    .unwrap();
+    let grant = reauth_grant(&c, &base, &user, "rename");
+    let r = bearer(c.post(format!("{base}/api/v1/account/rename")), &user.token)
+        .json(&json!({ "grant": grant, "rename": elsewhere }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let refused: Value = r.json().unwrap();
+    assert_eq!(refused["code"], "renameInvalid", "{refused}");
 
     // The new name and its variants sign in, the same account; the old one
     // is no account.
@@ -143,9 +167,12 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
     assert_eq!(chains["chains"][0]["state"], "current");
     let chain: Vec<kutup_crypto::account_rename::AccountRenameV1> =
         serde_json::from_value(chains["chains"][0]["chain"].clone()).unwrap();
-    let view =
-        kutup_crypto::account_rename::verify_chain(&user.identity.authority_public_key(), &chain)
-            .unwrap();
+    let view = kutup_crypto::account_rename::verify_chain(
+        &user.identity.authority_public_key(),
+        user.id.parse().unwrap(),
+        &chain,
+    )
+    .unwrap();
     assert_eq!(view.current, format!("{new}@{domain}"));
     let listed: Value = get(
         &c,

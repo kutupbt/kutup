@@ -359,6 +359,7 @@ pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, no_key: boo
         .unwrap();
     let statement = kutup_crypto::account_rename::sign(
         &user.identity,
+        user.id.parse().unwrap(),
         sequence,
         &address,
         &current,

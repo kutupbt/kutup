@@ -819,17 +819,17 @@ pub async fn share_collection(
 
     type IdentityRow = (Option<String>, String, String, String);
     let sender: IdentityRow = sqlx::query_as(
-        "SELECT username, encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key),
-                kutup_b64(public_key)
+        "SELECT username, COALESCE(encode(account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(drive_signing_public_key), ''),
+                COALESCE(kutup_b64(drive_xwing_public_key), '')
          FROM accounts WHERE id = $1",
     )
     .bind(sharer_id)
     .fetch_one(&state.pool)
     .await?;
     let recipient: IdentityRow = sqlx::query_as(
-        "SELECT username, encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key),
-                kutup_b64(public_key)
-         FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT username, COALESCE(encode(account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(drive_signing_public_key), ''),
+                COALESCE(kutup_b64(drive_xwing_public_key), '')
+         FROM accounts WHERE id = $1 AND state = 'active'",
     )
     .bind(recipient_id)
     .fetch_optional(&state.pool)

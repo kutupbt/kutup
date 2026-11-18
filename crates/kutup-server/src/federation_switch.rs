@@ -8,7 +8,11 @@
 //!   same code path (the inbound queries ask `kutup_account_federates`).
 //!   Its groups and shares stay; federated ones go quiet, as with a member who
 //!   can't be reached. Nothing is deleted.
-//! - A new account takes the site setting `federation_default` (`on`).
+//! - The switch is the account's entitlement `server.federation` (1 on,
+//!   0 off). A new account gets one from the site setting
+//!   `server.federation_default` (`on`) as it is made, so a later change of the
+//!   default leaves existing accounts as they are; an account without one
+//!   follows the default.
 //! - Turning it on asks the `federationAbroad` consent when a document for it
 //!   is published (`409 consentRequired` without it); withdrawing that
 //!   consent turns it off.
@@ -28,7 +32,7 @@ use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// The site setting a new account's switch starts from (`on`, `off`).
-pub const DEFAULT_SETTING: &str = "federation_default";
+pub const DEFAULT_SETTING: &str = "server.federation_default";
 
 /// The consent purpose turning it on asks for.
 pub const PURPOSE: &str = "federationAbroad";
@@ -83,6 +87,23 @@ pub async fn set_site_default(tx: &mut Transaction<'_, Postgres>, on: bool) -> s
     Ok(())
 }
 
+/// Writes the account's switch.
+async fn store(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    on: bool,
+    source: crate::entitlements::Source,
+) -> sqlx::Result<()> {
+    crate::entitlements::set(
+        &mut **tx,
+        crate::entitlements::Holder::Account(user_id),
+        crate::entitlements::FEDERATION,
+        i64::from(on),
+        source,
+    )
+    .await
+}
+
 /// Sets a new account's switch from the site's default, in its creating
 /// transaction (`default_on`: [`site_default`], read before it).
 pub async fn start_account(
@@ -90,23 +111,43 @@ pub async fn start_account(
     user_id: Uuid,
     default_on: bool,
 ) -> sqlx::Result<()> {
-    if !default_on {
-        sqlx::query("UPDATE accounts SET federation = 'off' WHERE id = $1")
-            .bind(user_id)
-            .execute(&mut **tx)
-            .await?;
+    store(tx, user_id, default_on, crate::entitlements::Source::Admin).await
+}
+
+/// Who turns the switch: the account itself (Settings → Privacy, its
+/// consent withdrawn) or an administrator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum By {
+    Account,
+    Admin,
+}
+
+impl By {
+    fn source(self) -> crate::entitlements::Source {
+        match self {
+            Self::Account => crate::entitlements::Source::Account,
+            Self::Admin => crate::entitlements::Source::Admin,
+        }
     }
-    Ok(())
+
+    /// The consent's channel when turning it on gives one.
+    fn channel(self) -> &'static str {
+        match self {
+            Self::Account => "settings",
+            Self::Admin => "admin",
+        }
+    }
 }
 
 /// Turns the account's federation off (its consent withdrawn, or its choice).
 /// What it queued that carries no transport sequence (its rename announces)
 /// is given up at once; a send that is sent checks the switch again.
-pub async fn turn_off(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("UPDATE accounts SET federation = 'off' WHERE id = $1")
-        .bind(user_id)
-        .execute(&mut **tx)
-        .await?;
+pub async fn turn_off(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    by: By,
+) -> sqlx::Result<()> {
+    store(tx, user_id, false, by.source()).await?;
     sqlx::query(
         "UPDATE federation_outbox
             SET state = 'rejected', error_class = 'federationOff', updated_at = now()
@@ -134,7 +175,7 @@ pub async fn turn_on(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     document_id: Option<Uuid>,
-    channel: &str,
+    by: By,
 ) -> AppResult<()> {
     let text_published = crate::legal::current(&mut **tx)
         .await?
@@ -143,7 +184,8 @@ pub async fn turn_on(
     if text_published {
         match document_id {
             Some(id) => {
-                crate::legal::set_consent(tx, user_id, PURPOSE, true, Some(id), channel).await?
+                crate::legal::set_consent(tx, user_id, PURPOSE, true, Some(id), by.channel())
+                    .await?
             }
             None if crate::legal::given(&mut **tx, user_id, PURPOSE).await? => {}
             None => {
@@ -154,10 +196,7 @@ pub async fn turn_on(
             }
         }
     }
-    sqlx::query("UPDATE accounts SET federation = 'on' WHERE id = $1")
-        .bind(user_id)
-        .execute(&mut **tx)
-        .await?;
+    store(tx, user_id, true, by.source()).await?;
     Ok(())
 }
 
@@ -192,9 +231,9 @@ pub async fn put_federation(
     let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     if req.on {
-        turn_on(&mut tx, user_id, req.document_id, "settings").await?;
+        turn_on(&mut tx, user_id, req.document_id, By::Account).await?;
     } else {
-        turn_off(&mut tx, user_id).await?;
+        turn_off(&mut tx, user_id, By::Account).await?;
     }
     tx.commit().await?;
     if !req.on {
@@ -210,17 +249,12 @@ mod tests {
 
     async fn account(pool: &PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-        )
-        .bind(user_id)
-        .bind(format!("fed{}", &user_id.simple().to_string()[..12]))
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(user_id)
+            .bind(format!("fed{}", &user_id.simple().to_string()[..12]))
+            .execute(pool)
+            .await
+            .unwrap();
         user_id
     }
 
@@ -251,7 +285,7 @@ mod tests {
             Some(user)
         );
         let mut tx = pool.begin().await.unwrap();
-        turn_off(&mut tx, user).await.unwrap();
+        turn_off(&mut tx, user, By::Account).await.unwrap();
         tx.commit().await.unwrap();
         assert!(!federates(&pool, user).await.unwrap());
         assert_eq!(
@@ -281,11 +315,11 @@ mod tests {
         .await
         .unwrap();
         let mut tx = pool.begin().await.unwrap();
-        let refused = turn_on(&mut tx, user, None, "settings").await.unwrap_err();
+        let refused = turn_on(&mut tx, user, None, By::Account).await.unwrap_err();
         assert_eq!(refused.status, StatusCode::CONFLICT);
         tx.rollback().await.unwrap();
         let mut tx = pool.begin().await.unwrap();
-        turn_on(&mut tx, user, Some(text), "settings")
+        turn_on(&mut tx, user, Some(text), By::Account)
             .await
             .unwrap();
         tx.commit().await.unwrap();
@@ -357,7 +391,7 @@ mod tests {
         assert_eq!(queued(1).await, vec![("pending".into(), None)]);
         // Off: the one queued is given up, and no other is queued.
         let mut tx = pool.begin().await.unwrap();
-        turn_off(&mut tx, user).await.unwrap();
+        turn_off(&mut tx, user, By::Account).await.unwrap();
         tx.commit().await.unwrap();
         assert_eq!(
             queued(2).await,

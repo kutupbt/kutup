@@ -237,7 +237,7 @@ pub(crate) fn result_field(id: &str) -> (&'static str, &'static str, &str) {
     ("mail_outbox", "result", id)
 }
 
-/// Deletes held sends finished longer ago than `mail_outbox_keep_seconds`.
+/// Deletes held sends finished longer ago than `server.retention.mail_outbox_seconds`.
 async fn sweep_finished(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let keep = crate::site_settings::MAIL_OUTBOX_KEEP_SECONDS
         .load(pool)

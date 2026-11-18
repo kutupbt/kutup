@@ -2,7 +2,7 @@
 //!
 //! - `POST /api/v1/account/close`: the owner, after a reauth (grant `close`), asks
 //!   for the account to be deleted. It is `closing` for
-//!   `account_closing_days`; every sign-in ends.
+//!   `account.closing_days`; every sign-in ends.
 //! - A sign-in that passes every step of a closing account gets no session
 //!   but a grant (`keep`, no session); `POST /api/v1/auth/keep` with it keeps
 //!   the account and answers as the sign-in would have.
@@ -63,9 +63,10 @@ pub async fn close(
 ) -> AppResult<Response> {
     let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let (protected, last_admin): (bool, bool) = sqlx::query_as(
-        "SELECT is_break_glass,
-                is_admin AND NOT EXISTS (SELECT 1 FROM accounts o
-                                          WHERE o.is_admin AND o.is_active AND o.id <> u.id)
+        "SELECT role = 'breakGlassAdmin',
+                role <> 'member' AND NOT EXISTS (SELECT 1 FROM accounts o
+                                          WHERE o.role <> 'member' AND o.state = 'active'
+                                            AND o.id <> u.id)
            FROM accounts u WHERE id = $1",
     )
     .bind(user_id)

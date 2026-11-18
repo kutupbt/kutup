@@ -10,7 +10,7 @@ vi.mock('@kutup/session/client', () => ({ default: { get, put } }))
 const { RateLimitsPage } = await import('./RateLimitsPage')
 
 const login = {
-  key: 'login',
+  key: 'account.rate.login',
   section: 'accounts',
   per: 'address',
   unit: 'events',
@@ -26,7 +26,7 @@ const login = {
 }
 const imageBytes = {
   ...login,
-  key: 'mail_image_bytes',
+  key: 'mail.rate.image_bytes',
   section: 'mail',
   per: 'account',
   unit: 'bytes',
@@ -49,22 +49,22 @@ describe('Administration → Rate limits', () => {
     get.mockResolvedValue({ data: { limits: [login, imageBytes] } })
     put.mockResolvedValue({ data: { ...login, value: 20, set: true } })
     page()
-    const row = await screen.findByTestId('admin-rate-limit-login')
+    const row = await screen.findByTestId('admin-rate-limit-account.rate.login')
     expect(within(row).getByText('Sign-in attempts (and their second factor).')).toBeTruthy()
     expect(within(row).getByText('Per address each minute')).toBeTruthy()
     // A byte limit shows its size.
-    expect(within(screen.getByTestId('admin-rate-limit-mail_image_bytes')).getByText(/MB|MiB/)).toBeTruthy()
+    expect(within(screen.getByTestId('admin-rate-limit-mail.rate.image_bytes')).getByText(/MB|MiB/)).toBeTruthy()
 
-    const input = within(row).getByTestId('admin-rate-limit-login-value')
+    const input = within(row).getByTestId('admin-rate-limit-account.rate.login-value')
     fireEvent.change(input, { target: { value: '1001' } })
     expect(within(row).getByRole('alert').textContent).toContain('1000')
     expect(within(row).getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true)
 
     fireEvent.change(input, { target: { value: '20' } })
     fireEvent.click(within(row).getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(put).toHaveBeenCalledWith('/admin/rate-limits/login', { value: 20 }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/admin/rate-limits/account.rate.login', { value: 20 }))
     // Set here: it can be reset to its first value.
-    fireEvent.click(await within(row).findByTestId('admin-rate-limit-login-reset'))
-    await waitFor(() => expect(put).toHaveBeenLastCalledWith('/admin/rate-limits/login', { value: null }))
+    fireEvent.click(await within(row).findByTestId('admin-rate-limit-account.rate.login-reset'))
+    await waitFor(() => expect(put).toHaveBeenLastCalledWith('/admin/rate-limits/account.rate.login', { value: null }))
   })
 })

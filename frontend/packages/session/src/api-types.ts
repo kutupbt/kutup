@@ -245,9 +245,9 @@ export interface AccountSettingLimit {
 
 /** A rate limit counted per account, as it stands for one account. */
 export interface AccountRateLimitLimit {
-  /** `rate_limit.<key>`. */
+  /** The rate limit's key, `<app>.rate.<name>` (what `PUT …/limits/{key}` takes). */
   key: string
-  /** The rate limit's own key. */
+  /** The rate limit's key, as Rate limits lists it (the same as `key`). */
   limit: string
   section: string
   unit: 'events' | 'attempts' | 'minutes' | 'bytes' | 'atOnce' | 'bytesAtOnce'
@@ -303,6 +303,8 @@ export interface AdminSettings {
   chatGroupAvatarPendingSeconds: number
   /** The largest `.kdbx` file Kutup Pass takes in an upload, in bytes (1 MiB to 1 GiB). */
   passVaultMaxBytes: number
+  /** The Drive version retention periods an account may choose, in days, ascending. */
+  driveVersionRetentionChoices: number[]
   /** Calendars (site_settings::CALENDAR_SETTINGS). */
   calendarsPerAccount: number
   calendarEventsPerCalendar: number
@@ -339,7 +341,8 @@ export interface AdminSettings {
   chatProvisioningTicketSeconds: number
   chatProvisioningSocketsPerAccount: number
   chatDistributionMessageBytes: number
-  /** Drive uploads and streaming (site_settings::DRIVE_SETTINGS), sizes in bytes. */
+  /** Drive's trash, uploads and streaming (site_settings::DRIVE_SETTINGS), sizes in bytes. */
+  driveTrashRetentionDays: number
   driveUploadMaxBytes: number
   driveVersionMaxBytes: number
   driveStreamMaxBytes: number

@@ -242,8 +242,8 @@ pub async fn access(
         OffsetDateTime,
     );
     let members: Vec<MemberRow> = sqlx::query_as(
-        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), kutup_b64(u.public_key),
-                u.identity_suite, kutup_b64(u.drive_signing_public_key), cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
+        "SELECT u.id, u.username, COALESCE(encode(u.account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(u.drive_xwing_public_key), ''),
+                u.identity_suite, COALESCE(kutup_b64(u.drive_signing_public_key), ''), cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
          FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1 ORDER BY cs.created_at",
     )
@@ -280,10 +280,14 @@ pub async fn access(
         OffsetDateTime,
     );
     let federated: Vec<FederatedRow> = sqlx::query_as(
-        "SELECT id, recipient_username, recipient_server, recipient_account_id,
-                kutup_b64(named_share_envelope), can_upload, can_delete, upload_quota_bytes,
-                created_at
-         FROM drive_federated_outgoing_shares WHERE collection_id = $1 ORDER BY created_at",
+        "SELECT s.id, split_part(r.current_address, '@', 1), s.recipient_server,
+                s.recipient_account_id, kutup_b64(s.named_share_envelope), s.can_upload,
+                s.can_delete, s.upload_quota_bytes, s.created_at
+         FROM drive_federated_outgoing_shares s
+         -- Their address now (remote_renames): the share names them by id.
+         JOIN remote_account_renames r
+           ON r.server = s.recipient_server AND r.account_id = s.recipient_account_id
+         WHERE s.collection_id = $1 ORDER BY s.created_at",
     )
     .bind(collection_id)
     .fetch_all(&state.pool)
@@ -614,7 +618,7 @@ pub async fn rotate(
 
     // Exactly the current access, split into kept and removed.
     let members: Vec<(Uuid, Option<String>, String)> = sqlx::query_as(
-        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex')
+        "SELECT u.id, u.username, COALESCE(encode(u.account_incarnation_id, 'hex'), '')
          FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1",
     )

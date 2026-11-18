@@ -6535,10 +6535,10 @@ fn forwarding_codes() {
 
     // To Carol, with codes that last a minute (the limit applies when a
     // code is made).
-    set_limit("forwarding_code_minutes", 1);
+    set_limit("mail.rate.forwarding_code_minutes", 1);
     let (to_carol, request, _) = forwarding_request(&a, &alice_address_id, &cc, "all", json!([]));
     create(&request);
-    set_limit("forwarding_code_minutes", 15);
+    set_limit("mail.rate.forwarding_code_minutes", 15);
     // To Bob: unverified, a code live, Bob shown nothing.
     let (id, request, _) = forwarding_request(&a, &alice_address_id, &b, "all", json!([]));
     let made = create(&request);
@@ -6651,7 +6651,7 @@ fn forwarding_codes() {
 
     // Forwardings waiting for their code: at most so many per account
     // (Carol's is still waiting; one more fits under 2, then no more).
-    set_limit("forwarding_unverified_pending", 2);
+    set_limit("mail.rate.forwarding_unverified_pending", 2);
     let (dave, erin) = (register(&c, &base), register(&c, &base));
     let (d, e) = (
         set_up_address(&c, &base, &dave),
@@ -6669,10 +6669,10 @@ fn forwarding_codes() {
     .unwrap();
     assert_eq!(r.status().as_u16(), 409);
     assert_eq!(r.json::<Value>().unwrap()["code"], "forwardingLimit");
-    set_limit("forwarding_unverified_pending", 5);
+    set_limit("mail.rate.forwarding_unverified_pending", 5);
 
     // Codes to one destination a day, from every account: Dave had his.
-    set_limit("forwarding_codes_per_destination", 1);
+    set_limit("mail.rate.forwarding_codes_per_destination", 1);
     let bob_address_id = address_id(&c, &base, &bob);
     let (_, bob_to_dave, _) = forwarding_request(&b, &bob_address_id, &d, "all", json!([]));
     let r = bearer(
@@ -6683,7 +6683,7 @@ fn forwarding_codes() {
     .send()
     .unwrap();
     assert_eq!(r.status().as_u16(), 429, "{}", r.text().unwrap_or_default());
-    set_limit("forwarding_codes_per_destination", 10);
+    set_limit("mail.rate.forwarding_codes_per_destination", 10);
 }
 
 /// What the phases of [`outside_forwarding`] hand on.
@@ -7619,7 +7619,7 @@ fn custom_domains() {
         .unwrap();
         assert!(r.status().is_success(), "settings: {}", r.status());
     };
-    put_settings(json!({ "mail_domains.catch_all_per_day": "3" }));
+    put_settings(json!({ "mail.domains.catch_all_per_day": "3" }));
     let third = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
     assert_eq!(
         smtp_send(
@@ -7636,7 +7636,7 @@ fn custom_domains() {
         &message("fourth@customer.test", "fourth@sender.test"),
     );
     assert_eq!(rcpt, 452, "the catch-all's day is full");
-    put_settings(json!({ "mail_domains.catch_all_per_day": "500" }));
+    put_settings(json!({ "mail.domains.catch_all_per_day": "500" }));
 
     // Mail from the address to the outside: the gate checks the sink for
     // the domain's own DKIM signature.
@@ -8241,7 +8241,7 @@ fn custom_domains() {
     // Bob's ownership TXT goes, his MX stays: warn after two failing
     // checks (12 scaled hours apart), inactive after the warn grace (set to
     // a day: 24 seconds here), and then RCPT refuses.
-    put_settings(json!({ "mail_domains.grace_warn_days": "1" }));
+    put_settings(json!({ "mail.domains.grace_warn_days": "1" }));
     write_zone(&zones, customer, &zone_for(&bob_code)[1..]);
     eventually(
         "Bob's domain never warned",
@@ -8268,7 +8268,7 @@ fn custom_domains() {
         },
         |rcpt| *rcpt >= 500,
     );
-    put_settings(json!({ "mail_domains.grace_warn_days": "14" }));
+    put_settings(json!({ "mail.domains.grace_warn_days": "14" }));
     // Bob is told in his inbox that the domain lapsed.
     eventually(
         "Bob was never told the domain lapsed",
@@ -8341,7 +8341,7 @@ fn custom_domains() {
 
     // Custom domains turned off: no keys served, mail refused at RCPT (the
     // reconcile drops the domain from Stalwart); turned on, all comes back.
-    put_settings(json!({ "mail_domains.mode": "off" }));
+    put_settings(json!({ "mail.domains.mode": "off" }));
     assert_eq!(lookup(&alice.token), 404, "no keys while off");
     eventually(
         "RCPT still took mail with custom domains off",
@@ -8349,7 +8349,7 @@ fn custom_domains() {
         rcpt_to_info,
         |rcpt| *rcpt >= 500,
     );
-    put_settings(json!({ "mail_domains.mode": "everyone" }));
+    put_settings(json!({ "mail.domains.mode": "everyone" }));
     assert_eq!(lookup(&alice.token), 200);
     eventually(
         "RCPT never took mail again once custom domains were on",

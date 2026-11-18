@@ -79,20 +79,20 @@ impl Default for Settings {
 
 /// The site-setting keys, each with its range.
 pub const KEYS: [(&str, i64, i64); 11] = [
-    ("mail_domains.per_organization", 0, 100),
-    ("mail_domains.addresses_per_account", 1, 1000),
-    ("mail_domains.on_server", 0, 1_000_000),
-    ("mail_domains.adds_per_day", 1, 1000),
-    ("mail_domains.pending_days", 1, 365),
-    ("mail_domains.catch_all_per_day", 0, 100_000),
-    ("mail_domains.grace_warn_days", 1, 365),
-    ("mail_domains.grace_stopped_hours", 1, 24 * 30),
+    ("mail.domains.per_organization", 0, 100),
+    ("mail.domains.addresses_per_account", 1, 1000),
+    ("mail.domains.on_server", 0, 1_000_000),
+    ("mail.domains.adds_per_day", 1, 1000),
+    ("mail.domains.pending_days", 1, 365),
+    ("mail.domains.catch_all_per_day", 0, 100_000),
+    ("mail.domains.grace_warn_days", 1, 365),
+    ("mail.domains.grace_stopped_hours", 1, 24 * 30),
     // 1 on, 0 off.
-    ("mail_domains.catch_all", 0, 1),
-    ("mail_domains.refreshes_at_once", 1, 1000),
-    ("mail_domains.check_timeout_seconds", 10, 600),
+    ("mail.domains.catch_all", 0, 1),
+    ("mail.domains.refreshes_at_once", 1, 1000),
+    ("mail.domains.check_timeout_seconds", 10, 600),
 ];
-pub const MODE_KEY: &str = "mail_domains.mode";
+pub const MODE_KEY: &str = "mail.domains.mode";
 
 /// A value an administrator gives for `key`, checked against its range.
 pub fn validate(key: &str, value: &str) -> Result<String, String> {
@@ -142,10 +142,11 @@ impl Settings {
     }
 
     pub async fn load(pool: &PgPool) -> Result<Self, sqlx::Error> {
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT key, value FROM site_settings WHERE key LIKE 'mail_domains.%'")
-                .fetch_all(pool)
-                .await?;
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT key, value FROM site_settings WHERE starts_with(key, 'mail.domains.')",
+        )
+        .fetch_all(pool)
+        .await?;
         Ok(Settings::from_stored(&rows.into_iter().collect()))
     }
 
@@ -155,14 +156,14 @@ impl Settings {
     pub const ACCOUNT_KEY: &'static str = KEYS[1].0;
 
     /// `organization`'s limits: the site's, with the organization's own
-    /// values (`organization_setting_overrides`) where set and in range.
+    /// values (`organization_entitlements`) where set and in range.
     pub async fn for_org<'e, E: sqlx::PgExecutor<'e>>(
         &self,
         executor: E,
         organization: uuid::Uuid,
     ) -> Result<Self, sqlx::Error> {
         let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT key, value FROM organization_setting_overrides
+            "SELECT key, value FROM organization_entitlements
               WHERE organization_id = $1 AND key = ANY($2)",
         )
         .bind(organization)
@@ -189,14 +190,14 @@ impl Settings {
     }
 
     /// `account`'s address limit: the site's, with the account's own value
-    /// (`account_setting_overrides`) where set and in range.
+    /// (`account_entitlements`) where set and in range.
     pub async fn for_account(
         &self,
         pool: &PgPool,
         account: uuid::Uuid,
     ) -> Result<Self, sqlx::Error> {
         let own: Option<i64> = sqlx::query_scalar(
-            "SELECT value FROM account_setting_overrides WHERE account_id = $1 AND key = $2",
+            "SELECT value FROM account_entitlements WHERE account_id = $1 AND key = $2",
         )
         .bind(account)
         .bind(Self::ACCOUNT_KEY)
@@ -242,11 +243,11 @@ mod tests {
     #[test]
     fn stored_values_override_and_bad_ones_are_ignored() {
         let stored: HashMap<String, String> = [
-            ("mail_domains.mode", "approve"),
-            ("mail_domains.per_organization", "5"),
-            ("mail_domains.addresses_per_account", "0"),
-            ("mail_domains.catch_all", "0"),
-            ("mail_domains.grace_warn_days", "x"),
+            ("mail.domains.mode", "approve"),
+            ("mail.domains.per_organization", "5"),
+            ("mail.domains.addresses_per_account", "0"),
+            ("mail.domains.catch_all", "0"),
+            ("mail.domains.grace_warn_days", "x"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -264,11 +265,11 @@ mod tests {
 
     #[test]
     fn values_are_checked_when_set() {
-        assert_eq!(validate("mail_domains.mode", "off").unwrap(), "off");
-        assert!(validate("mail_domains.mode", "maybe").is_err());
-        assert_eq!(validate("mail_domains.per_organization", "0").unwrap(), "0");
-        assert!(validate("mail_domains.per_organization", "101").is_err());
-        assert!(validate("mail_domains.per_organization", "-1").is_err());
+        assert_eq!(validate("mail.domains.mode", "off").unwrap(), "off");
+        assert!(validate("mail.domains.mode", "maybe").is_err());
+        assert_eq!(validate("mail.domains.per_organization", "0").unwrap(), "0");
+        assert!(validate("mail.domains.per_organization", "101").is_err());
+        assert!(validate("mail.domains.per_organization", "-1").is_err());
         assert!(validate("mail_domains.nothing", "1").is_err());
     }
 
@@ -276,10 +277,10 @@ mod tests {
     fn an_organization_has_its_own_domains_and_catch_all_only() {
         let site = Settings::default();
         let own = site.with_org_values(&[
-            ("mail_domains.per_organization".into(), 7),
-            ("mail_domains.catch_all".into(), 0),
+            ("mail.domains.per_organization".into(), 7),
+            ("mail.domains.catch_all".into(), 0),
             // Out of range: the site's stays.
-            ("mail_domains.per_organization".into(), 500),
+            ("mail.domains.per_organization".into(), 500),
         ]);
         assert_eq!(own.domains_per_organization, 7);
         assert!(!own.catch_all);

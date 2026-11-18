@@ -31,7 +31,7 @@ Every limiter, the module constants and the sealed-send constants included,
 is built from its entry; a limit outside the registry is a review error.
 
 **2. Values.** A limit's value is, in order: the administrators' (site setting
-`rate_limit.<key>`), else its environment variable (now only its first value,
+`<app>.rate.<name>`, the app the limit belongs to: docs/plans/w7-schema.md §7), else its environment variable (now only its first value,
 kept so deployments can seed it), else its default (raised on test stacks as
 today). The bounds keep a typo from turning a protection off: at least 1,
 never "off", and at most a generous ceiling per limit (100 times its default,
@@ -50,7 +50,7 @@ stays a lock and a vector as today.
 **4. Per-account overrides, only where a limit counts per account.** Feedback,
 chat key fetches per account, the groups relay per account, custom-domain
 checks, account-head reads, device challenges and rename checks. They are
-stored per account (now `user_setting_overrides`, keyed `rate_limit.<key>`,
+stored per account (now `account_entitlements`, keyed by the limit's key,
 with the settings' own: docs/plans/settings-registry.md), read
 through the same snapshot, and set on the account's admin page. Limits per
 address, pseudonym, group or peer get none: there is no account to hang them

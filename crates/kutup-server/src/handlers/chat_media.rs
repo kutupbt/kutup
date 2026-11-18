@@ -818,7 +818,7 @@ pub async fn deliver_local(
         }));
     }
     let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND is_active=true")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND state = 'active'")
             .bind(recipient)
             .fetch_optional(&mut *transaction)
             .await?;
@@ -1198,10 +1198,7 @@ pub async fn storage_summary(
 ) -> AppResult<Json<ChatMediaStorageSummary>> {
     let user_id = trusted_uuid(&user.account_id)?;
     let (quota, used): (i64, i64) =
-        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM accounts WHERE id=$1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+        crate::storage_pool::quota_and_used(&state.pool, user_id).await?;
     let drive: i64 = sqlx::query_scalar(
         "SELECT
           (SELECT COALESCE(SUM((CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)),0)::bigint FROM drive_files WHERE uploader_account_id=$1) +

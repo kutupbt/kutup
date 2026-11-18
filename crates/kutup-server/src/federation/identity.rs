@@ -5,7 +5,6 @@ use kutup_federation_proto::{
 use serde_json::json;
 use sqlx::{PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
-use uuid::Uuid;
 
 use super::FederationRuntimeConfig;
 use crate::audit_log::AdminAction;
@@ -180,7 +179,14 @@ pub(crate) async fn insert_system_audit(
     action: AdminAction,
     payload: serde_json::Value,
 ) -> Result<(), sqlx::Error> {
-    crate::audit_log::append_in(transaction, Uuid::nil(), action, None, &payload).await
+    crate::audit_log::append_in(
+        transaction,
+        crate::audit_log::Actor::Job,
+        action,
+        None,
+        &payload,
+    )
+    .await
 }
 
 async fn lock_local_identity(

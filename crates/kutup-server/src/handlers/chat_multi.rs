@@ -362,7 +362,7 @@ async fn deliver(
         // (crate::federation_switch).
         let active: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM accounts
-              WHERE id = $1 AND is_active AND (NOT $2 OR kutup_account_federates(id))
+              WHERE id = $1 AND state = 'active' AND (NOT $2 OR kutup_account_federates(id))
               FOR SHARE",
         )
         .bind(recipient.account_uuid)

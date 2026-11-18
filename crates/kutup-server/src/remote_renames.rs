@@ -5,11 +5,17 @@
 //! A chain proves itself: every statement is signed by the account authority,
 //! and the incarnation it names is the hash of that authority. A server keeps
 //! one only for the domain that signed it (every address in it on that
-//! domain), never lets a shorter or different one replace it, and moves its
-//! own rows (shares, profile keys, collaboration devices) to the chain's
-//! current address by incarnation alone. A peer can sign a chain for a fresh
-//! authority claiming any of its names; that is another incarnation, and moves
-//! nothing that belongs to an existing one.
+//! domain), never lets a shorter or different one replace it.
+//!
+//! `remote_account_renames` holds one row per remote account, keyed by
+//! (server, account id) (docs/plans/w7-schema.md §1.3): the one place this
+//! server keeps another server's account's address. Rows that name a remote
+//! account (the federated shares) carry its id only and join this table to
+//! show it, so a rename that reaches this server shows everywhere at once and
+//! nothing is relabelled. The row is made when the account is first met
+//! ([`note_account`], before the share naming it), from what its server
+//! says; a chain that reaches this server later replaces that label with the
+//! signed one.
 
 use std::collections::HashMap;
 use std::str::FromStr as _;
@@ -22,6 +28,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::account_ref::AccountId;
 use kutup_crypto::account_rename::{verify_chain, AccountRenameV1, RenameChainView};
 use kutup_crypto::names::fold_address;
 use kutup_federation_proto::FederationFeature;
@@ -69,6 +76,8 @@ pub(crate) fn chains_query(username: &str) -> String {
 
 /// One account incarnation's chain, as lookups and `409 renamed` carry it:
 /// the signed statements unaltered, with what the answering server says of it.
+/// The account it is of is in every statement (`accountId`, signed by the
+/// account authority), never beside them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChainEntry {
@@ -94,12 +103,17 @@ pub struct AnnounceV1 {
     pub version: u64,
     /// The chain's last `current`, without its domain (the sender's).
     pub username: String,
+    /// The account's permanent id: routing only. The statements sign it,
+    /// and an announce whose id is not theirs is refused.
+    pub account_id: Uuid,
     pub incarnation_id: String,
     pub authority_public_key: String,
     pub chain: Vec<AccountRenameV1>,
 }
 
 struct Verified {
+    /// The account the chain is of, as its statements sign it.
+    account_id: Uuid,
     entry: ChainEntry,
     view: RenameChainView,
 }
@@ -116,6 +130,22 @@ enum Stored {
     /// Neither extends the other (the authority signed two histories): the
     /// kept one stays.
     Forked,
+    /// The account is kept under another incarnation, and what brought this
+    /// one (a lookup's answer, which lists old incarnations too) does not say
+    /// which is the account's now: the kept one stays.
+    OtherIncarnation,
+}
+
+/// Where a chain came from, which says whether its incarnation is the
+/// account's current one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Source {
+    /// An announce: its server sends one only for an account's current
+    /// incarnation, so it replaces a kept one of an older (an admin reset).
+    Announce,
+    /// A lookup's answer: every chain naming an address, old incarnations
+    /// too.
+    Lookup,
 }
 
 fn key32(value: &str) -> Option<[u8; 32]> {
@@ -126,12 +156,31 @@ fn key32(value: &str) -> Option<[u8; 32]> {
         .and_then(|raw| raw.try_into().ok())
 }
 
+/// The crypto's form of an account id.
+fn signed_id(account_id: Uuid) -> AccountId {
+    AccountId::from_bytes(account_id.into_bytes())
+}
+
 /// Checks a chain `domain` gave: it verifies under its authority (which the
-/// incarnation is the hash of), every address in it is on `domain`, and its
-/// `current` is the chain's.
-fn verify(domain: &str, mut entry: ChainEntry) -> Result<Verified, &'static str> {
+/// incarnation is the hash of) for the one account id its statements name
+/// (`expected`, when the caller knows whose chain it must be), every address
+/// in it is on `domain`, and its `current` is the chain's.
+fn verify(
+    domain: &str,
+    mut entry: ChainEntry,
+    expected: Option<Uuid>,
+) -> Result<Verified, &'static str> {
     let authority = key32(&entry.authority_public_key).ok_or("authority key")?;
-    let view = verify_chain(&authority, &entry.chain).map_err(|_| "the chain")?;
+    let named: AccountId = entry
+        .chain
+        .first()
+        .and_then(|statement| statement.account_id.parse().ok())
+        .ok_or("the chain")?;
+    let account_id = Uuid::from_bytes(*named.as_bytes());
+    if expected.is_some_and(|expected| expected != account_id) {
+        return Err("another account");
+    }
+    let view = verify_chain(&authority, named, &entry.chain).map_err(|_| "the chain")?;
     if view.incarnation_id != entry.incarnation_id {
         return Err("another incarnation");
     }
@@ -148,17 +197,28 @@ fn verify(domain: &str, mut entry: ChainEntry) -> Result<Verified, &'static str>
     if !matches!(entry.state.as_str(), "current" | "held" | "gone") {
         entry.state = "gone".into();
     }
-    Ok(Verified { entry, view })
+    Ok(Verified {
+        account_id,
+        entry,
+        view,
+    })
 }
 
-/// Keeps a verified chain of `domain`: new, or replacing a shorter one of the
-/// same incarnation (rows then move to its current address); never a shorter
-/// or a different one.
+/// Keeps a verified chain of `domain`'s account (the one it signs): new, or
+/// replacing a shorter one of the same incarnation, or the label the account
+/// was first met by; never a shorter or a different one. Another incarnation
+/// replaces the kept one only from an announce (an admin reset on that
+/// server).
 /// A chain that advanced (an announce, or one a lookup brought) also drops
 /// what was fetched of that account by id (`handlers::accounts`), so its new
 /// name shows at once rather than when that answer goes stale.
-async fn store(pool: &sqlx::PgPool, domain: &str, verified: &Verified) -> AppResult<Stored> {
-    let stored = store_capped(pool, domain, verified, MAX_PER_DOMAIN).await?;
+async fn store(
+    pool: &sqlx::PgPool,
+    domain: &str,
+    verified: &Verified,
+    source: Source,
+) -> AppResult<Stored> {
+    let stored = store_capped(pool, domain, verified, source, MAX_PER_DOMAIN).await?;
     if stored == Stored::Advanced {
         crate::handlers::accounts::forget_remote(domain, &verified.entry.incarnation_id);
     }
@@ -170,16 +230,20 @@ async fn store_capped(
     pool: &sqlx::PgPool,
     domain: &str,
     verified: &Verified,
+    source: Source,
     cap: i64,
 ) -> AppResult<Stored> {
     let entry = &verified.entry;
+    let account_id = verified.account_id;
     let mut tx = pool.begin().await?;
-    let kept: Option<(Value, String)> = sqlx::query_as(
-        "SELECT chain, kutup_b64(authority_public_key) FROM remote_account_renames
-          WHERE domain = $1 AND incarnation_id = decode($2, 'hex') FOR UPDATE",
+    type Kept = (String, i32, Value, Option<String>);
+    let kept: Option<Kept> = sqlx::query_as(
+        "SELECT encode(incarnation_id, 'hex'), sequence, chain, kutup_b64(authority_public_key)
+           FROM remote_account_renames
+          WHERE server = $1 AND account_id = $2 FOR UPDATE",
     )
     .bind(domain)
-    .bind(&entry.incarnation_id)
+    .bind(account_id)
     .fetch_optional(&mut *tx)
     .await?;
     let addresses: Vec<String> = verified
@@ -202,11 +266,14 @@ async fn store_capped(
                 .bind(domain)
                 .execute(&mut *tx)
                 .await?;
-            let count: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM remote_account_renames WHERE domain = $1")
-                    .bind(domain)
-                    .fetch_one(&mut *tx)
-                    .await?;
+            // Rows made when an account was first met (no chain) are this
+            // server's users' doing, not the peer's: they don't count.
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM remote_account_renames WHERE server = $1 AND sequence >= 1",
+            )
+            .bind(domain)
+            .fetch_one(&mut *tx)
+            .await?;
             if count >= cap {
                 return Err(AppError::too_many_requests(
                     "this server keeps no more renames of that server",
@@ -215,12 +282,13 @@ async fn store_capped(
             }
             let inserted = sqlx::query(
                 "INSERT INTO remote_account_renames
-                     (domain, incarnation_id, authority_public_key, sequence, head_digest,
-                      current_address, state, chain, addresses)
-                 VALUES ($1, decode($2, 'hex'), kutup_unb64($3), $4, $5, $6, $7, $8, $9)
+                     (server, account_id, incarnation_id, authority_public_key, sequence,
+                      head_digest, current_address, state, chain, addresses)
+                 VALUES ($1, $2, decode($3, 'hex'), kutup_unb64($4), $5, $6, $7, $8, $9, $10)
                  ON CONFLICT DO NOTHING",
             )
             .bind(domain)
+            .bind(account_id)
             .bind(&entry.incarnation_id)
             .bind(&entry.authority_public_key)
             .bind(verified.view.sequence as i32)
@@ -233,43 +301,46 @@ async fn store_capped(
             .await?
             .rows_affected();
             if inserted == 0 {
-                // Another request kept it meanwhile; that one moved the rows.
+                // Another request kept it meanwhile.
                 Stored::Same
             } else {
-                apply_rows(&mut tx, domain, &entry.incarnation_id, &entry.current).await?;
                 Stored::Advanced
             }
         }
-        Some((chain_kept, authority)) => {
+        Some((incarnation, _, _, _)) if incarnation != entry.incarnation_id => {
+            if source == Source::Announce {
+                write_chain(
+                    &mut tx, domain, account_id, verified, &digest, &chain, &addresses,
+                )
+                .await?;
+                Stored::Advanced
+            } else {
+                Stored::OtherIncarnation
+            }
+        }
+        // Only the label it was first met by: the chain replaces it.
+        Some((_, 0, _, _)) => {
+            write_chain(
+                &mut tx, domain, account_id, verified, &digest, &chain, &addresses,
+            )
+            .await?;
+            Stored::Advanced
+        }
+        Some((_, _, chain_kept, authority)) => {
             let old: Vec<AccountRenameV1> = serde_json::from_value(chain_kept)
                 .map_err(|_| AppError::internal("a kept rename chain"))?;
-            let authority =
-                key32(&authority).ok_or_else(|| AppError::internal("a kept authority"))?;
-            let old = verify_chain(&authority, &old)
+            let authority = authority
+                .as_deref()
+                .and_then(key32)
+                .ok_or_else(|| AppError::internal("a kept authority"))?;
+            let old = verify_chain(&authority, signed_id(account_id), &old)
                 .map_err(|_| AppError::internal("a kept rename chain"))?;
             if verified.view.extends(&old) {
-                let longer = verified.view.sequence > old.sequence;
-                // An equal chain keeps a more specific state it was told
-                // (held, gone) over an announce's plain `current`.
-                sqlx::query(
-                    "UPDATE remote_account_renames
-                        SET sequence = $3, head_digest = $4, current_address = $5,
-                            state = CASE WHEN sequence = $3 AND $6 = 'current' THEN state ELSE $6 END,
-                            chain = $7, addresses = $8, updated_at = now()
-                      WHERE domain = $1 AND incarnation_id = decode($2, 'hex')",
+                write_chain(
+                    &mut tx, domain, account_id, verified, &digest, &chain, &addresses,
                 )
-                .bind(domain)
-                .bind(&entry.incarnation_id)
-                .bind(verified.view.sequence as i32)
-                .bind(&digest)
-                .bind(&entry.current)
-                .bind(&entry.state)
-                .bind(&chain)
-                .bind(&addresses)
-                .execute(&mut *tx)
                 .await?;
-                if longer {
-                    apply_rows(&mut tx, domain, &entry.incarnation_id, &entry.current).await?;
+                if verified.view.sequence > old.sequence {
                     Stored::Advanced
                 } else {
                     Stored::Same
@@ -285,50 +356,100 @@ async fn store_capped(
     Ok(outcome)
 }
 
-/// Moves the address this server shows for the account (`incarnation` on
-/// `domain`) to its current one, by incarnation only: a reused name's earlier
-/// owner is another incarnation, and keeps its rows. Records are keyed by the
-/// account id (docs/plans/account-ids.md); these are labels.
-async fn apply_rows(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+/// Writes a verified chain over the kept row of `domain`'s `account_id`: an
+/// equal chain keeps a more specific state it was told (held, gone) over an
+/// announce's plain `current`.
+async fn write_chain(
+    conn: &mut sqlx::PgConnection,
     domain: &str,
-    incarnation: &str,
-    current: &str,
+    account_id: Uuid,
+    verified: &Verified,
+    digest: &[u8],
+    chain: &Value,
+    addresses: &[String],
 ) -> AppResult<()> {
-    let username = current.rsplit_once('@').map_or("", |(local, _)| local);
-    for statement in [
-        "UPDATE drive_federated_incoming_shares SET owner_account = $3
-          WHERE owner_server = $1 AND owner_incarnation_id = decode($2, 'hex') AND owner_account <> $3",
-        "UPDATE drive_federated_incoming_file_shares SET owner_account = $3
-          WHERE owner_server = $1 AND owner_incarnation_id = decode($2, 'hex') AND owner_account <> $3",
-    ] {
-        sqlx::query(statement)
-            .bind(domain)
-            .bind(incarnation)
-            .bind(current)
-            .execute(&mut **tx)
-            .await?;
-    }
-    for statement in [
-        "UPDATE drive_federated_outgoing_shares SET recipient_username = $3
-          WHERE recipient_server = $1 AND recipient_incarnation_id = decode($2, 'hex')
-            AND recipient_username <> $3",
-        "UPDATE drive_federated_outgoing_file_shares SET recipient_username = $3
-          WHERE recipient_server = $1 AND recipient_incarnation_id = decode($2, 'hex')
-            AND recipient_username <> $3",
-    ] {
-        sqlx::query(statement)
-            .bind(domain)
-            .bind(incarnation)
-            .bind(username)
-            .execute(&mut **tx)
-            .await?;
-    }
+    let entry = &verified.entry;
+    sqlx::query(
+        "UPDATE remote_account_renames
+            SET incarnation_id = decode($3, 'hex'), authority_public_key = kutup_unb64($4),
+                state = CASE WHEN incarnation_id = decode($3, 'hex') AND sequence = $5
+                                  AND $7 = 'current'
+                             THEN state ELSE $7 END,
+                sequence = $5, head_digest = $6, current_address = $8,
+                chain = $9, addresses = $10, updated_at = now()
+          WHERE server = $1 AND account_id = $2",
+    )
+    .bind(domain)
+    .bind(account_id)
+    .bind(&entry.incarnation_id)
+    .bind(&entry.authority_public_key)
+    .bind(verified.view.sequence as i32)
+    .bind(digest)
+    .bind(&entry.state)
+    .bind(&entry.current)
+    .bind(chain)
+    .bind(addresses)
+    .execute(conn)
+    .await?;
     Ok(())
 }
 
+/// Notes the address `server` gives for its account `account_id`
+/// (incarnation `incarnation`, hex) where this server first meets it: a
+/// share made to it, or one it made. Done before the row naming the account,
+/// whose foreign key needs it, so the account always has an address to show.
+/// A kept row of the same incarnation with a signed chain stays (a chain is
+/// the better word for its name, and the next one moves it); a row without a
+/// chain takes the address given; another incarnation (the account was reset
+/// on its server, which is the one to say so) replaces the kept row. Answers
+/// the address shown now.
+pub(crate) async fn note_account<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    server: &str,
+    account_id: Uuid,
+    incarnation: &str,
+    address: &str,
+) -> AppResult<String> {
+    let folded = fold_address(address)
+        .filter(|_| address.rsplit_once('@').is_some_and(|(_, at)| at == server))
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "the other server gave an address that is not its own",
+            )
+        })?;
+    let shown: String = sqlx::query_scalar(
+        "WITH noted AS (
+             INSERT INTO remote_account_renames
+                 (server, account_id, incarnation_id, sequence, current_address, state, chain,
+                  addresses)
+             VALUES ($1, $2, decode($3, 'hex'), 0, $4, 'current', '[]'::jsonb, ARRAY[$5])
+             ON CONFLICT (server, account_id) DO UPDATE SET
+                 incarnation_id = EXCLUDED.incarnation_id, authority_public_key = NULL,
+                 sequence = 0, head_digest = NULL, current_address = EXCLUDED.current_address,
+                 state = 'current', chain = '[]'::jsonb, addresses = EXCLUDED.addresses,
+                 updated_at = now()
+              WHERE remote_account_renames.incarnation_id <> EXCLUDED.incarnation_id
+                 OR (remote_account_renames.sequence = 0
+                     AND remote_account_renames.current_address <> EXCLUDED.current_address)
+             RETURNING current_address)
+         SELECT COALESCE((SELECT current_address FROM noted),
+                         (SELECT current_address FROM remote_account_renames
+                           WHERE server = $1 AND account_id = $2))",
+    )
+    .bind(server)
+    .bind(account_id)
+    .bind(incarnation)
+    .bind(address)
+    .bind(&folded)
+    .fetch_one(executor)
+    .await?;
+    Ok(shown)
+}
+
 /// The kept chains naming `folded` (a folded address of `domain`), newest
-/// first, each with its age in seconds.
+/// first, each with its age in seconds. Rows without a chain (an account
+/// only met, never seen renamed) are no answer to a lookup.
 async fn kept(
     pool: &sqlx::PgPool,
     domain: &str,
@@ -336,12 +457,12 @@ async fn kept(
 ) -> AppResult<Vec<(ChainEntry, f64)>> {
     type Row = (String, String, String, String, Value, f64);
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT encode(incarnation_id, 'hex'), kutup_b64(authority_public_key), current_address,
-                state, chain,
+        "SELECT encode(incarnation_id, 'hex'), kutup_b64(authority_public_key),
+                current_address, state, chain,
                 EXTRACT(EPOCH FROM now() - updated_at)::float8
            FROM remote_account_renames
-          WHERE domain = $1 AND addresses @> ARRAY[$2]
-          ORDER BY updated_at DESC, incarnation_id
+          WHERE server = $1 AND sequence >= 1 AND addresses @> ARRAY[$2]
+          ORDER BY updated_at DESC, account_id
           LIMIT $3",
     )
     .bind(domain)
@@ -392,8 +513,9 @@ async fn take(
     if chains.chains.len() > MAX_CHAINS_PER_ANSWER {
         return Err(bad_gateway("too many chains"));
     }
+    let mut given = Vec::with_capacity(chains.chains.len());
     for entry in chains.chains {
-        let verified = verify(domain, entry).map_err(bad_gateway)?;
+        let verified = verify(domain, entry, None).map_err(bad_gateway)?;
         if !verified
             .view
             .addresses
@@ -402,16 +524,30 @@ async fn take(
         {
             return Err(bad_gateway("a chain that does not name the address"));
         }
-        if store(pool, domain, &verified).await? == Stored::Forked {
+        // Kept by the account its statements sign.
+        if store(pool, domain, &verified, Source::Lookup).await? == Stored::Forked {
             tracing::warn!(%domain, incarnation = %verified.entry.incarnation_id,
                 "a peer's rename chain forks the one kept; the kept one stays");
         }
+        given.push(verified.entry);
     }
-    Ok(kept(pool, domain, folded)
+    // What is kept first (a longer chain than the peer gave stays), then
+    // what was given and not kept (an old incarnation of an account kept under a newer one).
+    let mut answer: Vec<ChainEntry> = kept(pool, domain, folded)
         .await?
         .into_iter()
         .map(|(entry, _)| entry)
-        .collect())
+        .collect();
+    for entry in given {
+        if !answer
+            .iter()
+            .any(|kept| kept.incarnation_id == entry.incarnation_id)
+        {
+            answer.push(entry);
+        }
+    }
+    answer.truncate(MAX_CHAINS_PER_ANSWER);
+    Ok(answer)
 }
 
 /// The answer to a lookup of `asked` (an address of `domain`) whose server
@@ -665,8 +801,8 @@ pub async fn fed_lookup(
 }
 
 /// `POST /api/fed/v2/{chat|drive}/accounts/renames` — a peer's account renamed: its chain,
-/// verified and kept (`204`), and this server's rows about that incarnation
-/// moved to its new address. `400` for a chain that does not verify or is not
+/// verified and kept (`204`) as that account's address here, which every row
+/// naming the account shows. `400` for a chain that does not verify or is not
 /// the peer's, `409` for one that does not extend the one kept, `429` past
 /// the per-domain cap.
 #[utoipa::path(
@@ -702,6 +838,7 @@ pub async fn announce(
         if announced.version != VERSION {
             return Err(AppError::bad_request("an unknown announce version"));
         }
+        // The routing id must be the one the statements sign.
         let verified = verify(
             &origin,
             ChainEntry {
@@ -711,11 +848,12 @@ pub async fn announce(
                 state: "current".into(),
                 chain: announced.chain,
             },
+            Some(announced.account_id),
         )
         .map_err(|why| AppError::bad_request(format!("the chain does not check out: {why}")))?;
-        match store(&state.pool, &origin, &verified).await? {
+        match store(&state.pool, &origin, &verified, Source::Announce).await? {
             Stored::Advanced | Stored::Same => Ok(()),
-            Stored::Behind | Stored::Forked => {
+            Stored::Behind | Stored::Forked | Stored::OtherIncarnation => {
                 Err(AppError::conflict("the chain does not extend the one kept"))
             }
         }
@@ -849,17 +987,17 @@ async fn deliver_one(
     };
     // An account whose federation went off since this was queued: never
     // sent (docs/plans/server-personal-data.md, the federation switch).
-    let federates: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM accounts u
-                         WHERE u.account_incarnation_id = decode($1, 'hex')
-                           AND kutup_account_federates(u.id))",
+    let account_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT u.id FROM accounts u
+          WHERE u.account_incarnation_id = decode($1, 'hex')
+            AND kutup_account_federates(u.id)",
     )
     .bind(&incarnation)
-    .fetch_one(&state.pool)
+    .fetch_optional(&state.pool)
     .await?;
-    if !federates {
+    let Some(account_id) = account_id else {
         return settle(false, Some("federationOff"), json!({})).await;
-    }
+    };
     let rows: Vec<(Value, String, String)> = sqlx::query_as(
         "SELECT statement, kutup_b64(authority_public_key), current FROM account_renames
           WHERE incarnation_id = decode($1, 'hex') ORDER BY sequence",
@@ -881,6 +1019,7 @@ async fn deliver_one(
             .rsplit_once('@')
             .map_or("", |(local, _)| local)
             .to_owned(),
+        account_id,
         incarnation_id: incarnation.clone(),
         authority_public_key: authority,
         chain,
@@ -973,6 +1112,21 @@ mod tests {
         .unwrap()
     }
 
+    /// The account id the tests give `who`'s account (any fixed one will do).
+    fn account_of(who: &AccountIdentityKeysV1) -> Uuid {
+        Uuid::parse_str(&who.incarnation_id()[..32]).unwrap()
+    }
+
+    /// Keeps `verified` for the account it names, as a lookup brings it.
+    async fn keep(pool: &sqlx::PgPool, domain: &str, verified: &Verified) -> AppResult<Stored> {
+        store(pool, domain, verified, Source::Lookup).await
+    }
+
+    /// Verifies a chain whatever account it signs, as a lookup's answer.
+    fn verify_any(domain: &str, entry: ChainEntry) -> Result<Verified, &'static str> {
+        verify(domain, entry, None)
+    }
+
     /// `who`'s chain through `addresses` (local parts on PEER).
     fn entry(who: &AccountIdentityKeysV1, addresses: &[&str]) -> ChainEntry {
         entry_at(who, PEER, addresses)
@@ -980,12 +1134,23 @@ mod tests {
 
     /// `who`'s chain through `addresses` (local parts on `domain`).
     fn entry_at(who: &AccountIdentityKeysV1, domain: &str, addresses: &[&str]) -> ChainEntry {
+        entry_for(who, account_of(who), domain, addresses)
+    }
+
+    /// A chain signed by `who` for the account `account_id`.
+    fn entry_for(
+        who: &AccountIdentityKeysV1,
+        account_id: Uuid,
+        domain: &str,
+        addresses: &[&str],
+    ) -> ChainEntry {
         let chain: Vec<AccountRenameV1> = addresses
             .windows(2)
             .enumerate()
             .map(|(i, pair)| {
                 kutup_crypto::account_rename::sign(
                     who,
+                    signed_id(account_id),
                     i as u64 + 1,
                     &format!("{}@{domain}", pair[0]),
                     &format!("{}@{domain}", pair[1]),
@@ -1038,21 +1203,46 @@ mod tests {
     #[test]
     fn a_chain_is_kept_only_for_the_server_that_signed_it() {
         let who = identity(1);
-        assert!(verify(PEER, entry(&who, &["a", "b"])).is_ok());
+        let verified = verify_any(PEER, entry(&who, &["a", "b"])).unwrap();
+        assert_eq!(verified.account_id, account_of(&who));
         // Its addresses are on PEER, not on the server asked about.
-        assert!(verify("other.test", entry(&who, &["a", "b"])).is_err());
+        assert!(verify_any("other.test", entry(&who, &["a", "b"])).is_err());
         // Its `current` is the chain's.
         let mut wrong = entry(&who, &["a", "b"]);
         wrong.current = format!("a@{PEER}");
-        assert!(verify(PEER, wrong).is_err());
+        assert!(verify_any(PEER, wrong).is_err());
         // Another authority's key does not verify it.
         let mut other = entry(&who, &["a", "b"]);
         other.authority_public_key = STANDARD.encode(identity(2).authority_public_key());
-        assert!(verify(PEER, other).is_err());
+        assert!(verify_any(PEER, other).is_err());
         // An unknown state is shown as unknown.
         let mut odd = entry(&who, &["a", "b"]);
         odd.state = "whatever".into();
-        assert_eq!(verify(PEER, odd).unwrap().entry.state, "gone");
+        assert_eq!(verify_any(PEER, odd).unwrap().entry.state, "gone");
+    }
+
+    #[test]
+    fn a_chain_is_of_the_account_it_signs() {
+        let who = identity(1);
+        // An announce's routing id must be the signed one.
+        let id = account_of(&who);
+        assert!(verify(PEER, entry(&who, &["a", "b"]), Some(id)).is_ok());
+        let elsewhere = account_of(&identity(2));
+        assert!(verify(PEER, entry(&who, &["a", "b"]), Some(elsewhere)).is_err());
+        // A peer can't hang the chain onto another id by relabelling it.
+        let mut relabelled = entry(&who, &["a", "b", "c"]);
+        for statement in &mut relabelled.chain {
+            statement.account_id = elsewhere.to_string();
+        }
+        assert!(verify_any(PEER, relabelled).is_err());
+        // Nor mix statements about two ids.
+        let mut mixed = entry(&who, &["a", "b", "c"]);
+        mixed.chain[1] = entry_for(&who, elsewhere, PEER, &["a", "b", "c"]).chain[1].clone();
+        assert!(verify_any(PEER, mixed).is_err());
+        // An empty chain names nobody.
+        let mut empty = entry(&who, &["a", "b"]);
+        empty.chain.clear();
+        assert!(verify_any(PEER, empty).is_err());
     }
 
     async fn pool() -> Option<sqlx::PgPool> {
@@ -1066,13 +1256,12 @@ mod tests {
         )
     }
 
-    async fn clean(pool: &sqlx::PgPool, incarnations: &[String]) {
+    async fn clean(pool: &sqlx::PgPool, accounts: &[Uuid]) {
         sqlx::query(
-            "DELETE FROM remote_account_renames WHERE domain = $1
-               AND incarnation_id = ANY(SELECT decode(x, 'hex') FROM unnest($2::text[]) AS x)",
+            "DELETE FROM remote_account_renames WHERE server = $1 AND account_id = ANY($2)",
         )
         .bind(PEER)
-        .bind(incarnations)
+        .bind(accounts)
         .execute(pool)
         .await
         .unwrap();
@@ -1086,24 +1275,26 @@ mod tests {
             return;
         };
         let who = identity(11);
-        clean(&pool, &[who.incarnation_id()]).await;
-        let one = verify(PEER, entry(&who, &["k1", "k2"])).unwrap();
-        let two = verify(PEER, entry(&who, &["k1", "k2", "k3"])).unwrap();
-        let fork = verify(PEER, entry(&who, &["k1", "k2", "k9"])).unwrap();
-        assert_eq!(store(&pool, PEER, &one).await.unwrap(), Stored::Advanced);
-        assert_eq!(store(&pool, PEER, &one).await.unwrap(), Stored::Same);
-        assert_eq!(store(&pool, PEER, &two).await.unwrap(), Stored::Advanced);
-        assert_eq!(store(&pool, PEER, &one).await.unwrap(), Stored::Behind);
-        assert_eq!(store(&pool, PEER, &fork).await.unwrap(), Stored::Forked);
+        clean(&pool, &[account_of(&who)]).await;
+        let one = verify_any(PEER, entry(&who, &["k1", "k2"])).unwrap();
+        let two = verify_any(PEER, entry(&who, &["k1", "k2", "k3"])).unwrap();
+        let fork = verify_any(PEER, entry(&who, &["k1", "k2", "k9"])).unwrap();
+        assert_eq!(keep(&pool, PEER, &one).await.unwrap(), Stored::Advanced);
+        assert_eq!(keep(&pool, PEER, &one).await.unwrap(), Stored::Same);
+        assert_eq!(keep(&pool, PEER, &two).await.unwrap(), Stored::Advanced);
+        assert_eq!(keep(&pool, PEER, &one).await.unwrap(), Stored::Behind);
+        assert_eq!(keep(&pool, PEER, &fork).await.unwrap(), Stored::Forked);
         // Found by any address it names, in any spelling, as the longest.
         let found = kept(&pool, PEER, "k1@peer.test").await.unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].0.current, format!("k3@{PEER}"));
+        assert_eq!(found[0].0.chain[0].account_id, account_of(&who).to_string());
         assert_eq!(kept(&pool, PEER, "k2@peer.test").await.unwrap().len(), 1);
-        clean(&pool, &[who.incarnation_id()]).await;
+        clean(&pool, &[account_of(&who)]).await;
     }
 
-    /// At most so many chains of one domain: one more is `429`.
+    /// At most so many chains of one domain: one more is `429`. Accounts
+    /// only met (no chain) don't count.
     #[tokio::test]
     async fn live_a_domain_keeps_at_most_its_cap() {
         let Some(pool) = pool().await else {
@@ -1112,28 +1303,43 @@ mod tests {
         };
         // A domain of its own: other tests keep chains of PEER meanwhile.
         const CAPPED: &str = "capped.test";
-        let (one, two) = (identity(31), identity(32));
-        sqlx::query("DELETE FROM remote_account_renames WHERE domain = $1")
+        let (one, two, met) = (identity(31), identity(32), identity(33));
+        sqlx::query("DELETE FROM remote_account_renames WHERE server = $1")
             .bind(CAPPED)
             .execute(&pool)
             .await
             .unwrap();
         let cap = 1;
-        let first = verify(CAPPED, entry_at(&one, CAPPED, &["c1", "c2"])).unwrap();
-        let second = verify(CAPPED, entry_at(&two, CAPPED, &["d1", "d2"])).unwrap();
+        note_account(
+            &pool,
+            CAPPED,
+            account_of(&met),
+            &met.incarnation_id(),
+            &format!("m1@{CAPPED}"),
+        )
+        .await
+        .unwrap();
+        let first = verify_any(CAPPED, entry_at(&one, CAPPED, &["c1", "c2"])).unwrap();
+        let second = verify_any(CAPPED, entry_at(&two, CAPPED, &["d1", "d2"])).unwrap();
         assert_eq!(
-            store_capped(&pool, CAPPED, &first, cap).await.unwrap(),
+            store_capped(&pool, CAPPED, &first, Source::Lookup, cap)
+                .await
+                .unwrap(),
             Stored::Advanced
         );
-        let refused = store_capped(&pool, CAPPED, &second, cap).await.unwrap_err();
+        let refused = store_capped(&pool, CAPPED, &second, Source::Lookup, cap)
+            .await
+            .unwrap_err();
         assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
         // The one kept still grows.
-        let longer = verify(CAPPED, entry_at(&one, CAPPED, &["c1", "c2", "c3"])).unwrap();
+        let longer = verify_any(CAPPED, entry_at(&one, CAPPED, &["c1", "c2", "c3"])).unwrap();
         assert_eq!(
-            store_capped(&pool, CAPPED, &longer, cap).await.unwrap(),
+            store_capped(&pool, CAPPED, &longer, Source::Lookup, cap)
+                .await
+                .unwrap(),
             Stored::Advanced
         );
-        sqlx::query("DELETE FROM remote_account_renames WHERE domain = $1")
+        sqlx::query("DELETE FROM remote_account_renames WHERE server = $1")
             .bind(CAPPED)
             .execute(&pool)
             .await
@@ -1149,16 +1355,16 @@ mod tests {
             return;
         };
         let who = identity(41);
-        clean(&pool, &[who.incarnation_id()]).await;
+        clean(&pool, &[account_of(&who)]).await;
         let state = || {
             let pool = pool.clone();
-            let incarnation = who.incarnation_id();
+            let account_id = account_of(&who);
             async move {
                 sqlx::query_scalar::<_, String>(
-                    "SELECT state FROM remote_account_renames WHERE domain = $1 AND incarnation_id = decode($2, 'hex')",
+                    "SELECT state FROM remote_account_renames WHERE server = $1 AND account_id = $2",
                 )
                 .bind(PEER)
-                .bind(incarnation)
+                .bind(account_id)
                 .fetch_one(&pool)
                 .await
                 .unwrap()
@@ -1166,63 +1372,133 @@ mod tests {
         };
         let mut held = entry(&who, &["s1", "s2"]);
         held.state = "held".into();
-        store(&pool, PEER, &verify(PEER, held).unwrap())
+        keep(&pool, PEER, &verify_any(PEER, held).unwrap())
             .await
             .unwrap();
         assert_eq!(state().await, "held");
-        store(
+        keep(
             &pool,
             PEER,
-            &verify(PEER, entry(&who, &["s1", "s2"])).unwrap(),
+            &verify_any(PEER, entry(&who, &["s1", "s2"])).unwrap(),
         )
         .await
         .unwrap();
         assert_eq!(state().await, "held");
-        store(
+        keep(
             &pool,
             PEER,
-            &verify(PEER, entry(&who, &["s1", "s2", "s3"])).unwrap(),
+            &verify_any(PEER, entry(&who, &["s1", "s2", "s3"])).unwrap(),
         )
         .await
         .unwrap();
         assert_eq!(state().await, "current");
-        clean(&pool, &[who.incarnation_id()]).await;
+        clean(&pool, &[account_of(&who)]).await;
     }
 
     /// A chain a peer mints under a fresh authority, claiming an existing
-    /// name, is kept as its own incarnation; the name's owner's own chain
-    /// still advances.
+    /// name, is kept for the account it says it is of; the name's owner's
+    /// own chain still advances.
     #[tokio::test]
-    async fn live_a_forged_chain_is_its_own_incarnation() {
+    async fn live_a_forged_chain_is_its_own_account() {
         let Some(pool) = pool().await else {
             eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
             return;
         };
         let (alice, forger) = (identity(21), identity(23));
-        let incarnations = [alice.incarnation_id(), forger.incarnation_id()];
-        clean(&pool, &incarnations).await;
+        let accounts = [account_of(&alice), account_of(&forger)];
+        clean(&pool, &accounts).await;
         let tag = &Uuid::new_v4().simple().to_string()[..10];
         let name = format!("al{tag}");
-        let forged = verify(PEER, entry(&forger, &[&name, &format!("mallory{tag}")])).unwrap();
-        assert_eq!(store(&pool, PEER, &forged).await.unwrap(), Stored::Advanced);
-        let hers = verify(PEER, entry(&alice, &[&name, &format!("alicia{tag}")])).unwrap();
-        assert_eq!(store(&pool, PEER, &hers).await.unwrap(), Stored::Advanced);
-        let kept_incarnations: Vec<String> = sqlx::query_scalar(
-            "SELECT encode(incarnation_id, 'hex') FROM remote_account_renames
-              WHERE domain = $1
-                AND incarnation_id = ANY(SELECT decode(x, 'hex') FROM unnest($2::text[]) AS x)
-              ORDER BY incarnation_id",
+        let forged = verify_any(PEER, entry(&forger, &[&name, &format!("mallory{tag}")])).unwrap();
+        assert_eq!(keep(&pool, PEER, &forged).await.unwrap(), Stored::Advanced);
+        let hers = verify_any(PEER, entry(&alice, &[&name, &format!("alicia{tag}")])).unwrap();
+        assert_eq!(keep(&pool, PEER, &hers).await.unwrap(), Stored::Advanced);
+        let shown: Vec<String> = sqlx::query_scalar(
+            "SELECT current_address FROM remote_account_renames
+              WHERE server = $1 AND account_id = ANY($2) ORDER BY current_address",
         )
         .bind(PEER)
-        .bind(&incarnations[..])
+        .bind(&accounts[..])
         .fetch_all(&pool)
         .await
         .unwrap();
         assert_eq!(
-            kept_incarnations.len(),
-            2,
-            "each chain under its own incarnation"
+            shown,
+            [
+                format!("alicia{tag}@{PEER}"),
+                format!("mallory{tag}@{PEER}")
+            ],
+            "each chain under its own account"
         );
-        clean(&pool, &incarnations).await;
+        clean(&pool, &accounts).await;
+    }
+
+    /// An account first met by its address: the label shows until a chain
+    /// replaces it; then the label no longer moves it. Another incarnation
+    /// (a reset on its server) replaces it from an announce or a new meeting,
+    /// never from a lookup.
+    #[tokio::test]
+    async fn live_an_account_met_shows_its_address_until_a_chain() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let (who, reset) = (identity(51), identity(52));
+        let id = account_of(&who);
+        clean(&pool, &[id]).await;
+        let tag = &Uuid::new_v4().simple().to_string()[..10];
+        let at = |name: &str| format!("{name}{tag}@{PEER}");
+        let noted = |address: String, incarnation: String| {
+            let pool = pool.clone();
+            async move {
+                note_account(&pool, PEER, id, &incarnation, &address)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(noted(at("n1"), who.incarnation_id()).await, at("n1"));
+        // A row without a chain is no answer to a lookup.
+        assert!(kept(&pool, PEER, &at("n1")).await.unwrap().is_empty());
+        // Its server says another address: shown.
+        assert_eq!(noted(at("n2"), who.incarnation_id()).await, at("n2"));
+        // An address on another server is refused.
+        assert!(
+            note_account(&pool, PEER, id, &who.incarnation_id(), "n3@else.test")
+                .await
+                .is_err()
+        );
+        // A chain replaces the label...
+        let chain = verify_any(
+            PEER,
+            entry(&who, &[&format!("n2{tag}"), &format!("n4{tag}")]),
+        )
+        .unwrap();
+        assert_eq!(keep(&pool, PEER, &chain).await.unwrap(), Stored::Advanced);
+        // ...and a label of the same incarnation no longer moves it.
+        assert_eq!(noted(at("n2"), who.incarnation_id()).await, at("n4"));
+        // Another incarnation from a lookup: the kept one stays.
+        let other = verify_any(
+            PEER,
+            entry_for(
+                &reset,
+                id,
+                PEER,
+                &[&format!("n4{tag}"), &format!("n5{tag}")],
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            keep(&pool, PEER, &other).await.unwrap(),
+            Stored::OtherIncarnation
+        );
+        // From an announce, it replaces it.
+        assert_eq!(
+            store(&pool, PEER, &other, Source::Announce).await.unwrap(),
+            Stored::Advanced
+        );
+        assert_eq!(noted(at("n5"), reset.incarnation_id()).await, at("n5"));
+        // A meeting under yet another incarnation replaces the chain.
+        assert_eq!(noted(at("n6"), who.incarnation_id()).await, at("n6"));
+        clean(&pool, &[id]).await;
     }
 }

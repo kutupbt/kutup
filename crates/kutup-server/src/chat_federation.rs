@@ -1865,7 +1865,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
 /// one's queued sends still go, as they always did).
 pub(crate) async fn sender_is_off(pool: &sqlx::PgPool, sender: Uuid) -> AppResult<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND federation = 'off')",
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1) AND NOT kutup_account_federates($1)",
     )
     .bind(sender)
     .fetch_one(pool)
@@ -1878,7 +1878,7 @@ async fn withdraw_off_head(state: &AppState, destination: &str) -> AppResult<()>
     let head: Option<Uuid> = sqlx::query_scalar(
         "SELECT o.id FROM federation_outbox o JOIN accounts u ON u.id = (o.payload->>'sender')::uuid
           WHERE o.kind = 'chat' AND o.destination = $1 AND o.state = 'pending'
-            AND u.federation = 'off'
+            AND NOT kutup_account_federates(u.id)
             AND o.sequence = (SELECT MIN(sequence) FROM federation_outbox
                                WHERE kind = 'chat' AND destination = $1 AND state = 'pending')",
     )
@@ -2962,7 +2962,7 @@ pub async fn deliver_messages(
 
     let recipient_id: Option<Uuid> = match Uuid::parse_str(&transaction.recipient.account_id) {
         Ok(id) => sqlx::query_scalar(
-            "SELECT id FROM accounts WHERE id = $1 AND is_active AND kutup_account_federates(id)
+            "SELECT id FROM accounts WHERE id = $1 AND state = 'active' AND kutup_account_federates(id)
                   FOR SHARE",
         )
         .bind(id)
@@ -3545,18 +3545,12 @@ mod sealed_live_tests {
     async fn recipient(pool: &sqlx::PgPool, capability: [u8; 16]) -> Uuid {
         let id = Uuid::new_v4();
         let name = format!("sb{}", &id.simple().to_string()[..12]);
-        sqlx::query(
-            "INSERT INTO accounts (id, master_key_envelope, recovery_key_envelope,
-                 public_key, account_authority_public_key,
-                 account_authority_key_id, account_incarnation_id, drive_signing_public_key,
-                 username)
-             VALUES ($1, '', '', '', '', ''::bytea, ''::bytea, '', $2)",
-        )
-        .bind(id)
-        .bind(&name)
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(id)
+            .bind(&name)
+            .execute(pool)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO account_devices (account_id, device_id, suite, registration_id, identity_key,
                  signed_pre_key_id, signed_pre_key, signed_pre_key_signature,

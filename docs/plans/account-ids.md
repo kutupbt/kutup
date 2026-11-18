@@ -32,7 +32,7 @@ The one stated exception: OpenPGP keys per mail address, as Proton does.
   - The server refuses a publish whose `accountId` is not the account's `users.id`.
   - An admin reset is a new authority signing the same id, so clients show "safety number changed" in the same conversation, as Signal does.
 - **Names are handles:**
-  - address → (server, accountId) only through `GET /api/users/by-address/:address` and its federated twin;
+  - address → (server, accountId) only through `GET /api/v1/accounts/by-address/:address` and its federated twin;
   - a held name answers `409 renamed`;
   - the answer is server-asserted, as Signal's username lookup returns an ACI;
   - the client checks it against its pins and the signed rename chain.
@@ -69,7 +69,7 @@ pre-wipe, nothing stored needs reading under the old layout.
 | Federation delivery messages (`FederatedChatTransaction.sender/recipient`, sealed, media offer, anonymous MLS, key-package requests and bundles) | addresses | (`server`, `accountId`) | Signal routes by ServiceId (`MessageController`) |
 
 Unchanged:
-- `AccountRenameV1`: the signed history of names.
+- `AccountRenameV1`: the signed history of names (since W7 it also signs the account id, `kutup/account/rename/v2`: a self-statement binds the id, so a chain can't be hung onto another account).
 - Per-address OpenPGP keys, the address in their sealed payload and their user ID: the exception.
 - `device_registration`, `account_envelope`, `opaque`, `kdf`, `account_head`, `mail_names`, `contact_card`, `pass_vault`, `collection_*`, `drive_envelope`, collab frames, `photos_library`: they already bind permanent ids.
 
@@ -104,15 +104,15 @@ Untouched (FINE in the audit):
 
 ## Server: routes
 
-- **Address → account in one place only:** `GET /api/users/by-address/:address` and `GET /api/fed/{chat|drive}/users/:username`.
+- **Address → account in one place only:** `GET /api/v1/accounts/by-address/:address` and `GET /api/fed/v2/{chat|drive}/users/:username`.
   - They answer `{ server, accountId, incarnationId, … }`, or `409 renamed`.
   - Every other route takes an account id. This ends today's two lookup rules: some Chat, MLS and media paths accept a held name, while `kutup_current_user` answers `409`.
 - **Chat:**
-  - `/api/chat/users/:username/{keys,messages,manifest,manifest-history,profile/:version}` and the anonymous variants become `/api/chat/accounts/:accountId/…`, with `?server=` for a remote account.
-  - The federated twins become `/api/fed/chat/accounts/:accountId/…`.
+  - `/api/v1/chat/users/:username/{keys,messages,manifest,manifest-history,profile/:version}` and the anonymous variants become `/api/v1/chat/accounts/:accountId/…`, with `?server=` for a remote account.
+  - The federated twins become `/api/fed/v2/chat/accounts/:accountId/…`.
   - Delivery, MLS, media and key-package handlers resolve recipients by account id.
 - **Drive federation:**
-  - `/api/fed/drive/accounts/:accountId` (the identity, by id);
+  - `/api/fed/v2/drive/accounts/:accountId` (the identity, by id);
   - `DriveInviteResponse` and `FileInviteResponse` carry the recipient's `accountId` and incarnation;
   - accept and refresh compare those, not usernames.
 - **`?server=` for a remote account** (Chat routes and by-id):
@@ -120,9 +120,9 @@ Untouched (FINE in the audit):
   - this server's own name means local;
   - a remote server is reached only through the federation stack's discovery and pinned identity, the same path as #209's lookups. Never a URL built from the parameter, so the parameter cannot point the server at an arbitrary host;
   - the account id must be a canonical UUID (`AccountRef::new`) before any request is made, and the request path is checked against the transport's namespace rule.
-- **New lookup by id:** `GET /api/users/by-id/:accountId[?server=]`, with federated twins `/api/fed/{chat|drive}/accounts/:accountId`. It answers the current address and identity, so a client refreshes a contact's handle by id. It is rate-limited like by-address (the user-lookup limit per account; remote fetches per account and per peer, coalesced per id, as #209's renames lookup).
-- **`/user/me`** gains `accountId`; `POST /api/users/drive-identities` answers it too.
-- **Renames:** `/api/users/renames/:address` stays (the chain is the proof of names). Remote rows are found by account id too.
+- **New lookup by id:** `GET /api/v1/accounts/:accountId[?server=]`, with federated twins `/api/fed/v2/{chat|drive}/accounts/:accountId`. It answers the current address and identity, so a client refreshes a contact's handle by id. It is rate-limited like by-address (the user-lookup limit per account; remote fetches per account and per peer, coalesced per id, as #209's renames lookup).
+- **`/user/me`** gains `accountId`; `POST /api/v1/drive/identities` answers it too.
+- **Renames:** `/api/v1/accounts/by-address/:address/renames` stays (the chain is the proof of names). Remote rows are found by account id too.
 
 ## The bugs the audit found
 
@@ -170,12 +170,12 @@ Total: about 5–7 working days of my time, partly in parallel with the third se
 What landed, and where it differs from the note above:
 - **Minting.** `register/start` mints a sign-up's id (random UUID) with an HMAC proof bound to the key binding, stateless as the registration answer is. `register` takes the id back only with its proof (`accountIdInvalid`) and only if no account has or had it (`accountIdTaken`). Deleting an account retires its id (`retired_account_ids`), so nobody comes back as that person. An admin-made account has its id from creation. The first sign-in's setup answer carries it (`userId`), and `complete-setup` refuses a minted one.
 - **Formats.** The Drive key binding, the folder and file share envelopes and the profile key envelope bind `AccountRef` bytes (u16 server length, server, 16 id bytes). A rename sends no binding. Vectors: `crates/kutup-crypto/tests/vectors/account-refs-v1.json`, checked in Rust and in the browser build. The WASM functions take `{ server, accountId }` objects, as the client branch's do.
-- **Lookups.** By-address, the federated user lookup, `drive-identities` and `/user/me` answer `server` and `accountId`. `GET /api/users/by-id/:accountId[?server=]` and `/api/fed/drive/accounts/:accountId` are as above (`RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN`, coalesced per account).
+- **Lookups.** By-address, the federated user lookup, `drive-identities` and `/user/me` answer `server` and `accountId`. `GET /api/v1/accounts/:accountId[?server=]` and `/api/fed/v2/drive/accounts/:accountId` are as above (`RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN`, coalesced per account).
 - **Drive answers name accounts.**
   - Shared folders carry `ownerServer`, so the owner is `(ownerServer, ownerUserId)`.
-  - `GET /api/shared-files` carries `server` and `sharerUserId`.
+  - `GET /api/v1/drive/shared-with-me` carries `server` and `sharerUserId`.
   - Folder and file access lists carry the federated recipient's `recipientAccountId`; the owner re-seals to it through the by-id lookup.
-- **Break-glass admin** is protected by `users.is_break_glass`, set when `bootstrap_admin` makes it (one at most). The configured name stays reserved as a name.
+- **Break-glass admin** is protected by `accounts.role = 'breakGlassAdmin'`, set when `bootstrap_admin` makes it (one at most). The configured name stays reserved as a name.
 - **Kept as is:**
   - `drive_profile_keys` keeps no address column. People's labels come from the shares and accounts when listed.
   - `federated_incoming_*_shares.owner_user_id` keeps its name: it already is the owner's account id, as `collections.owner_user_id` and the JSON `ownerUserId` are.
@@ -184,8 +184,8 @@ What landed, and where it differs from the note above:
 ## Slice 2 as built (Mail)
 
 - **Key lists name no account.** `MailKeyListV1` signs the incarnation, the authority key id and the address only (Proton's SignedKeyList names keys). A rename never touches a list. Vectors re-signed (`mail-address-key-v1.json`, `KUTUP_WRITE_MAIL_VECTORS=lists`).
-- **Key-list writes by the address row.** `PUT /api/mail/addresses/:id/key-list` and new keys are authorized by the row's `user_id` (current or receiving address), and the address comes from the row. A renamed account still manages its old address's keys (marking one compromised).
-- **`/api/mail/keys` names the account** by `server` and `accountId` (absent for a shared mailbox), not by a username.
+- **Key-list writes by the address row.** `PUT /api/v1/mail/addresses/:id/key-list` and new keys are authorized by the row's `user_id` (current or receiving address), and the address comes from the row. A renamed account still manages its old address's keys (marking one compromised).
+- **`/api/v1/mail/keys` names the account** by `server` and `accountId` (absent for a shared mailbox), not by a username.
 - **Shared-mailbox key shares on the account key**, as specified above:
   - HPKE to the member's Drive HPKE key; the AAD binds the group id, the group key fingerprint, the member's AccountRef and their incarnation.
   - The share carries the incarnation, so the server checks it against the member's current keys (`keyChanged`) without opening anything. `mail_group_key_shares.member_incarnation_id` replaces the address-key fingerprint.
@@ -212,7 +212,7 @@ What landed, and where it differs from the note above:
 ## Slice 3 as built (Chat server and formats)
 
 - **Formats (chat-proto):** the manifest, sealed delivery capability (salt = the recipient's AccountRef bytes), sealed and identified federation transactions, media offer, profile envelope (its account slot holds AccountRef bytes, read back exactly), key-bundle answers (`account`), mailbox envelopes (`sender` as `{ server, accountId }`) and the MLS bindings name AccountRefs. Signal's sender certificate names the sender as `aci:<accountId>@<server>`. Vectors regenerated (pre-wipe, V1 names kept).
-- **Routes:** `/api/chat/accounts/:accountId/…` and `/api/chat/anonymous/accounts/:accountId/…` with `?server=`, and their federated twins. `GET /api/users/by-address/:address` answers other servers' addresses too, the one place a name becomes an account; `/api/drive/federation/users/:username` is removed. Renames-by-name moved to `/api/fed/{chat|drive}/names/:username/renames` (a name under a path of names).
+- **Routes:** `/api/v1/chat/accounts/:accountId/…` and `/api/v1/chat/anonymous/accounts/:accountId/…` with `?server=`, and their federated twins. `GET /api/v1/accounts/by-address/:address` answers other servers' addresses too, the one place a name becomes an account; `/api/v1/drive/federation/users/:username` is removed. Renames-by-name moved to `/api/fed/v2/{chat|drive}/names/:username/renames` (a name under a path of names).
 - **Tables (migration `20261016000000_chat_account_ids`):** the mailbox's sender is `sender_server` + `sender_account_id`; outboxes and media pull grants key the recipient by `recipient_account_id`. Queued and stored rows made under names are deleted (pre-wipe).
 - **Invitation feedback** keys the member by one column, `member_account`, the canonical `aci:` string, rather than two (`member_server` + `member_account_id`): one value keys the rows as the address did, and every query stays as it was. Still the permanent id, never a name.
 - **Profiles** are sealed for the account's id: a rename leaves them valid, and the "sealed for an earlier address" handling is gone, as is the rename relay on Chat fetches (an id never renames).
@@ -232,10 +232,11 @@ nobody has checked yet.
   every read joins on the member's current incarnation, so an old share is
   never served and the member shows `needsKeys`. A manager re-seals for the
   new identity after confirming it; the upsert replaces the old row.
-- `remote_account_renames` (a peer's chain, by domain and incarnation): a
-  peer's reset starts a new chain under the new incarnation; the old one
-  stays as that incarnation's history (an address can appear in several
-  chains), within the per-domain cap.
+- `remote_account_renames` (since W7 one row per (server, account id),
+  docs/plans/w7-schema.md §1.3): a peer's reset starts a new chain under the
+  new incarnation, which replaces the kept row when it arrives by announce or
+  when the account is met again (a share, its refresh); a lookup's answer,
+  which lists old incarnations too, never replaces it.
 - `remote_collab_devices` (a peer's devices): the old incarnation's devices
   no longer renew and go at the daily sweep, after the lease and its grace,
   or sooner once no share names that incarnation. Shares to the old

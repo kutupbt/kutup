@@ -117,7 +117,14 @@ export async function renameAccount(name: string, needsKey: boolean, password: O
   if (own === 'freed') throw new NameRefusedError('ownFreedName')
   const body: RenameRequest = {
     grant,
-    rename: await signAccountRename(session.roots.identityRoot, me.renames.sequence + 1, me.address, address, Date.now()),
+    rename: await signAccountRename(
+      session.roots.identityRoot,
+      session.accountId,
+      me.renames.sequence + 1,
+      me.address,
+      address,
+      Date.now(),
+    ),
     ...(own === 'none' ? { mailAddress: await firstAddressKey(session, address) } : {}),
   }
   try {

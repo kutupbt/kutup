@@ -304,15 +304,17 @@ pub(crate) fn remote_keys_consistent(remote: &AccountLookupResponse) -> bool {
             == kutup_crypto::identity::incarnation_id_from_authority_public(&authority)
 }
 
-/// The username a share's recipient goes by now, from their server by their
-/// account id (shown only, never a client's word), once they are the account
-/// incarnation the envelope was sealed to.
-pub(crate) async fn recipient_label(
+/// Checks a share's recipient with their server, by their account id, is the
+/// account incarnation the envelope was sealed to, and notes the address they
+/// go by now (shown only, never a client's word) where this server keeps
+/// remote accounts' addresses (`remote_renames::note_account`), before the
+/// share row that names them.
+pub(crate) async fn note_recipient(
     state: &AppState,
     caller: &str,
     recipient: &kutup_crypto::account_ref::AccountRef,
     sealed_to: &[u8; 32],
-) -> AppResult<String> {
+) -> AppResult<()> {
     let remote = crate::handlers::accounts::remote_account(state, caller, recipient)
         .await?
         .ok_or_else(|| AppError::not_found("no such account on that server"))?;
@@ -326,7 +328,16 @@ pub(crate) async fn recipient_label(
                 .with_details(serde_json::json!({ "code": "keyChanged" })),
         );
     }
-    Ok(remote.username)
+    crate::remote_renames::note_account(
+        &state.pool,
+        &recipient.server,
+        Uuid::parse_str(&recipient.account_id)
+            .map_err(|_| AppError::bad_request("invalid account id"))?,
+        &remote.account_incarnation_id,
+        &remote.account,
+    )
+    .await?;
+    Ok(())
 }
 
 /// A Drive HPKE public key of identity `suite`: X-Wing's 1216 bytes in suite
@@ -612,7 +623,7 @@ pub async fn create_federated_share(
             &hex::encode(named_share.recipient_incarnation_id),
         )
         .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
-    let recipient_username = recipient_label(
+    note_recipient(
         &state,
         &user.account_id,
         &recipient,
@@ -624,15 +635,14 @@ pub async fn create_federated_share(
     let hash = capability_hash(&capability);
     sqlx::query(
         "INSERT INTO drive_federated_outgoing_shares
-            (collection_id, sharer_account_id, recipient_username,
+            (collection_id, sharer_account_id,
              recipient_server, named_share_envelope, capability_hash,
              can_upload, can_delete, upload_quota_bytes, recipient_incarnation_id,
              recipient_account_id)
-         VALUES ($1,$2,$3,$4,kutup_unb64($5),decode($6, 'hex'),$7,$8,$9,decode($10, 'hex'),$11)",
+         VALUES ($1,$2,$3,kutup_unb64($4),decode($5, 'hex'),$6,$7,$8,decode($9, 'hex'),$10)",
     )
     .bind(collection_id)
     .bind(owner)
-    .bind(&recipient_username)
     .bind(recipient_domain)
     .bind(&request.named_share_envelope)
     .bind(hash)
@@ -684,10 +694,10 @@ pub(crate) async fn local_account_by_name(
         i32,
     );
     let identity: Option<Row> = sqlx::query_as(
-        "SELECT id, username, kutup_b64(public_key), encode(account_incarnation_id, 'hex'),
-                kutup_b64(drive_signing_public_key), kutup_b64(account_authority_public_key),
-                kutup_b64(drive_key_binding), identity_suite, drive_key_binding_epoch
-         FROM accounts WHERE id = kutup_current_account($1) AND is_active = true
+        "SELECT id, username, COALESCE(kutup_b64(drive_xwing_public_key), ''), COALESCE(encode(account_incarnation_id, 'hex'), ''),
+                COALESCE(kutup_b64(drive_signing_public_key), ''), COALESCE(kutup_b64(account_authority_public_key), ''),
+                COALESCE(kutup_b64(drive_key_binding), ''), identity_suite, drive_key_binding_epoch
+         FROM accounts WHERE id = kutup_current_account($1) AND state = 'active'
           AND kutup_account_federates(id)",
     )
     .bind(username)
@@ -755,7 +765,7 @@ pub async fn accept_incoming_share(
     validate_capability(&request.capability)?;
     let user_id = trusted_uuid(&user.account_id)?;
     let local_incarnation: String = sqlx::query_scalar(
-        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT COALESCE(encode(account_incarnation_id, 'hex'), '') FROM accounts WHERE id = $1 AND state = 'active'",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -770,17 +780,27 @@ pub async fn accept_incoming_share(
     )
     .await?;
     let hash = capability_hash(&request.capability);
+    // The owner's address, as their server gives it, kept by their account
+    // id before the share that names them.
+    let owner_account = crate::remote_renames::note_account(
+        &state.pool,
+        server,
+        invite.owner_account_id,
+        &invite.owner_incarnation_id,
+        &invite.owner_account,
+    )
+    .await?;
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO drive_federated_incoming_shares
             (account_id, owner_server, remote_capability, capability_hash,
              remote_collection_id, named_share_envelope, name_envelope,
              key_epoch, name_revision, epoch_statement, epoch_statement_hash,
-             owner_account_id, owner_account, owner_incarnation_id,
+             owner_account_id, owner_incarnation_id,
              owner_signing_public_key, owner_authority_public_key,
              can_upload, can_delete, upload_quota_bytes, collection_kind)
          VALUES ($1,$2,$3,decode($4, 'hex'),$5,kutup_unb64($6),kutup_unb64($7),$8,$9,
-                 kutup_unb64($10),decode($11, 'hex'),$12,$13,
-                 decode($14, 'hex'),kutup_unb64($15),kutup_unb64($16),$17,$18,$19,$20)
+                 kutup_unb64($10),decode($11, 'hex'),$12,
+                 decode($13, 'hex'),kutup_unb64($14),kutup_unb64($15),$16,$17,$18,$19)
          ON CONFLICT (account_id, owner_server, capability_hash) DO UPDATE SET
              remote_collection_id = EXCLUDED.remote_collection_id,
              named_share_envelope = EXCLUDED.named_share_envelope,
@@ -790,7 +810,6 @@ pub async fn accept_incoming_share(
              epoch_statement = EXCLUDED.epoch_statement,
              epoch_statement_hash = EXCLUDED.epoch_statement_hash,
              owner_account_id = EXCLUDED.owner_account_id,
-             owner_account = EXCLUDED.owner_account,
              owner_incarnation_id = EXCLUDED.owner_incarnation_id,
              owner_signing_public_key = EXCLUDED.owner_signing_public_key,
              owner_authority_public_key = EXCLUDED.owner_authority_public_key,
@@ -812,7 +831,6 @@ pub async fn accept_incoming_share(
     .bind(&invite.epoch_statement)
     .bind(&invite.epoch_statement_hash)
     .bind(invite.owner_account_id)
-    .bind(&invite.owner_account)
     .bind(&invite.owner_incarnation_id)
     .bind(&invite.owner_signing_public_key)
     .bind(&invite.owner_authority_public_key)
@@ -835,7 +853,7 @@ pub async fn accept_incoming_share(
             epoch_statement: invite.epoch_statement,
             epoch_statement_hash: invite.epoch_statement_hash,
             owner_account_id: invite.owner_account_id,
-            owner_account: invite.owner_account,
+            owner_account,
             owner_incarnation_id: invite.owner_incarnation_id,
             owner_signing_public_key: invite.owner_signing_public_key,
             owner_authority_public_key: invite.owner_authority_public_key,
@@ -987,7 +1005,7 @@ pub async fn refresh_incoming_share(
     .ok_or_else(|| AppError::not_found("share not found"))?;
     let (server, capability, collection_id, epoch, statement_hash, owner_id, authority) = stored;
     let local_incarnation: String = sqlx::query_scalar(
-        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT COALESCE(encode(account_incarnation_id, 'hex'), '') FROM accounts WHERE id = $1 AND state = 'active'",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -1072,27 +1090,39 @@ pub async fn refresh_incoming_share(
             ));
         }
     }
+    // What the owner's server says of their address now.
+    crate::remote_renames::note_account(
+        &state.pool,
+        &server,
+        owner_id,
+        &invite.owner_incarnation_id,
+        &invite.owner_account,
+    )
+    .await?;
     let refreshed: IncomingDriveShare = sqlx::query_as(
-        "UPDATE drive_federated_incoming_shares SET
-            named_share_envelope = kutup_unb64($3), name_envelope = kutup_unb64($4),
-            key_epoch = $5, name_revision = $6,
-            epoch_statement = kutup_unb64($7), epoch_statement_hash = decode($8, 'hex'),
-            owner_account = $9,
-            owner_incarnation_id = decode($10, 'hex'),
-            owner_signing_public_key = kutup_unb64($11),
-            can_upload = $12, can_delete = $13, upload_quota_bytes = $14
-         WHERE id = $1 AND account_id = $2
-         RETURNING id, owner_server, remote_collection_id,
-                   kutup_b64(named_share_envelope) AS named_share_envelope,
-                   kutup_b64(name_envelope) AS name_envelope, key_epoch, name_revision,
-                   kutup_b64(epoch_statement) AS epoch_statement,
-                   encode(epoch_statement_hash, 'hex') AS epoch_statement_hash,
-                   owner_account_id, owner_account,
-                   encode(owner_incarnation_id, 'hex') AS owner_incarnation_id,
-                   kutup_b64(owner_signing_public_key) AS owner_signing_public_key,
-                   kutup_b64(owner_authority_public_key) AS owner_authority_public_key,
-                   can_upload, can_delete,
-                   upload_quota_bytes, collection_kind, created_at",
+        "WITH s AS (
+             UPDATE drive_federated_incoming_shares SET
+                 named_share_envelope = kutup_unb64($3), name_envelope = kutup_unb64($4),
+                 key_epoch = $5, name_revision = $6,
+                 epoch_statement = kutup_unb64($7), epoch_statement_hash = decode($8, 'hex'),
+                 owner_incarnation_id = decode($9, 'hex'),
+                 owner_signing_public_key = kutup_unb64($10),
+                 can_upload = $11, can_delete = $12, upload_quota_bytes = $13
+              WHERE id = $1 AND account_id = $2
+              RETURNING *)
+         SELECT s.id, s.owner_server, s.remote_collection_id,
+                kutup_b64(s.named_share_envelope) AS named_share_envelope,
+                kutup_b64(s.name_envelope) AS name_envelope, s.key_epoch, s.name_revision,
+                kutup_b64(s.epoch_statement) AS epoch_statement,
+                encode(s.epoch_statement_hash, 'hex') AS epoch_statement_hash,
+                s.owner_account_id, r.current_address AS owner_account,
+                encode(s.owner_incarnation_id, 'hex') AS owner_incarnation_id,
+                kutup_b64(s.owner_signing_public_key) AS owner_signing_public_key,
+                kutup_b64(s.owner_authority_public_key) AS owner_authority_public_key,
+                s.can_upload, s.can_delete,
+                s.upload_quota_bytes, s.collection_kind, s.created_at
+           FROM s JOIN remote_account_renames r
+                ON r.server = s.owner_server AND r.account_id = s.owner_account_id",
     )
     .bind(share_uuid)
     .bind(user_id)
@@ -1102,7 +1132,6 @@ pub async fn refresh_incoming_share(
     .bind(invite.name_revision)
     .bind(&invite.epoch_statement)
     .bind(&invite.epoch_statement_hash)
-    .bind(&invite.owner_account)
     .bind(&invite.owner_incarnation_id)
     .bind(&invite.owner_signing_public_key)
     .bind(invite.can_upload)
@@ -1178,19 +1207,21 @@ pub async fn list_incoming_shares(
         Some(_) => return Err(AppError::bad_request("unknown kind")),
     };
     let rows: Vec<IncomingDriveShare> = sqlx::query_as(
-        "SELECT id, owner_server, remote_collection_id,
-                  kutup_b64(named_share_envelope) AS named_share_envelope,
-                  kutup_b64(name_envelope) AS name_envelope, key_epoch, name_revision,
-                  kutup_b64(epoch_statement) AS epoch_statement,
-                  encode(epoch_statement_hash, 'hex') AS epoch_statement_hash,
-                  owner_account_id, owner_account,
-                  encode(owner_incarnation_id, 'hex') AS owner_incarnation_id,
-                  kutup_b64(owner_signing_public_key) AS owner_signing_public_key,
-                  kutup_b64(owner_authority_public_key) AS owner_authority_public_key,
-                  can_upload, can_delete,
-                  upload_quota_bytes, collection_kind, created_at
-           FROM drive_federated_incoming_shares
-           WHERE account_id = $1 AND collection_kind = $2 ORDER BY created_at ASC",
+        "SELECT s.id, s.owner_server, s.remote_collection_id,
+                  kutup_b64(s.named_share_envelope) AS named_share_envelope,
+                  kutup_b64(s.name_envelope) AS name_envelope, s.key_epoch, s.name_revision,
+                  kutup_b64(s.epoch_statement) AS epoch_statement,
+                  encode(s.epoch_statement_hash, 'hex') AS epoch_statement_hash,
+                  s.owner_account_id, r.current_address AS owner_account,
+                  encode(s.owner_incarnation_id, 'hex') AS owner_incarnation_id,
+                  kutup_b64(s.owner_signing_public_key) AS owner_signing_public_key,
+                  kutup_b64(s.owner_authority_public_key) AS owner_authority_public_key,
+                  s.can_upload, s.can_delete,
+                  s.upload_quota_bytes, s.collection_kind, s.created_at
+           FROM drive_federated_incoming_shares s
+           JOIN remote_account_renames r
+             ON r.server = s.owner_server AND r.account_id = s.owner_account_id
+           WHERE s.account_id = $1 AND s.collection_kind = $2 ORDER BY s.created_at ASC",
     )
     .bind(user_id)
     .bind(kind)

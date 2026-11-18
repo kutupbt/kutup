@@ -97,13 +97,13 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
             .unwrap_or_else(|| panic!("{key} in the registry"))["perAccount"]
             .clone()
     };
-    assert_eq!(per_account("drive_upload_max_bytes"), true);
-    assert_eq!(per_account("drive_stream_response_max_bytes"), false);
+    assert_eq!(per_account("drive.upload_max_bytes"), true);
+    assert_eq!(per_account("drive.stream_response_max_bytes"), false);
 
     // Only administrators set an account's own value.
     let r = bearer(
         c.put(format!(
-            "{base}/api/v1/admin/accounts/{small_id}/entitlements/drive_upload_max_bytes"
+            "{base}/api/v1/admin/accounts/{small_id}/entitlements/drive.upload_max_bytes"
         )),
         &small.token,
     )
@@ -114,7 +114,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
 
     // One MiB for one account: its two-MiB upload is refused, another's not.
     let site_upload = drive_limits(&c, &base, &other.token)["uploadMaxBytes"].clone();
-    let (status, set) = admin.put(&small_id, "drive_upload_max_bytes", json!(MIB));
+    let (status, set) = admin.put(&small_id, "drive.upload_max_bytes", json!(MIB));
     assert_eq!(status, StatusCode::OK, "{set}");
     assert_eq!(set["value"], MIB);
     assert_eq!(set["source"], "account");
@@ -139,7 +139,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|setting| setting["key"] == "drive_upload_max_bytes")
+        .find(|setting| setting["key"] == "drive.upload_max_bytes")
         .expect("listed")
         .clone();
     assert_eq!(upload["source"], "account");
@@ -147,17 +147,17 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
         .as_array()
         .unwrap()
         .iter()
-        .all(|setting| setting["key"] != "drive_stream_response_max_bytes"));
+        .all(|setting| setting["key"] != "drive.stream_response_max_bytes"));
 
     // Out of range is refused, never clamped; a setting that doesn't limit
     // one account is refused; an unknown one is not found.
     assert_eq!(
-        admin.put(&small_id, "drive_upload_max_bytes", json!(1)).0,
+        admin.put(&small_id, "drive.upload_max_bytes", json!(1)).0,
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
         admin
-            .put(&small_id, "drive_stream_response_max_bytes", json!(5 * MIB))
+            .put(&small_id, "drive.stream_response_max_bytes", json!(5 * MIB))
             .0,
         StatusCode::BAD_REQUEST
     );
@@ -166,14 +166,16 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        admin.put(&small_id, "rate_limit.no_such_limit", json!(1)).0,
+        admin
+            .put(&small_id, "account.rate.no_such_limit", json!(1))
+            .0,
         StatusCode::NOT_FOUND
     );
     // The refused value left the account's own as it was.
     assert_eq!(drive_limits(&c, &base, &small.token)["uploadMaxBytes"], MIB);
 
     // Taken back: the site's again.
-    let (status, reset) = admin.put(&small_id, "drive_upload_max_bytes", Value::Null);
+    let (status, reset) = admin.put(&small_id, "drive.upload_max_bytes", Value::Null);
     assert_eq!(status, StatusCode::OK);
     assert_ne!(reset["source"], "account");
     assert_eq!(reset["value"], site_upload);
@@ -181,7 +183,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
 
     // The public settings show a signed-in account its own device limit (and
     // say not to share that answer); anyone else gets the site's.
-    let (status, _) = admin.put(&small_id, "chat_max_active_devices", json!(1));
+    let (status, _) = admin.put(&small_id, "chat.max_active_devices", json!(1));
     assert_eq!(status, StatusCode::OK);
     let public = |token: Option<&str>| {
         let request = c.get(format!("{base}/api/v1/auth/settings"));
@@ -207,7 +209,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
     assert_eq!(public(Some(&other.token)).0, anyone);
     assert_eq!(
         admin
-            .put(&small_id, "chat_max_active_devices", Value::Null)
+            .put(&small_id, "chat.max_active_devices", Value::Null)
             .0,
         StatusCode::OK
     );
@@ -218,7 +220,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
         activity["entries"].as_array().unwrap().iter().any(|e| {
             e["action"] == "account.setEntitlement"
                 && e["targetAccountId"] == small_id
-                && e["payload"]["key"] == "drive_upload_max_bytes"
+                && e["payload"]["key"] == "drive.upload_max_bytes"
         }),
         "{activity}"
     );
@@ -309,7 +311,7 @@ fn a_lowered_limit_removes_nothing() {
     assert_eq!(held(), 3);
 
     // Lowered to one: all three stay.
-    let (status, _) = admin.put(&id, "calendar_push_subscriptions_per_account", json!(1));
+    let (status, _) = admin.put(&id, "calendar.push_subscriptions_per_account", json!(1));
     assert_eq!(status, StatusCode::OK);
     assert_eq!(held(), 3);
     // A browser renewing its subscription removes none.

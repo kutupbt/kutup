@@ -708,7 +708,7 @@ pub(crate) async fn store_manifest(
     let manifest_hash = manifest.manifest_hash().map_err(AppError::bad_request)?;
     // The common serialization point for every device-set change.
     let account: (String, String, String, String, String) = sqlx::query_as(
-        "SELECT kutup_b64(public_key), kutup_b64(account_authority_public_key),
+        "SELECT kutup_b64(drive_xwing_public_key), kutup_b64(account_authority_public_key),
                 encode(account_authority_key_id, 'hex'), encode(account_incarnation_id, 'hex'),
                 kutup_b64(drive_signing_public_key)
          FROM accounts WHERE id = $1 FOR UPDATE",
@@ -1428,7 +1428,7 @@ pub(crate) async fn load_public_profile(
                 kutup_b64(p.about_ciphertext), p.access_key_verifier
          FROM chat_profiles p
          JOIN accounts u ON u.id = p.account_id
-         WHERE u.id = $1 AND u.is_active = true AND p.profile_version = decode($2, 'hex')",
+         WHERE u.id = $1 AND u.state = 'active' AND p.profile_version = decode($2, 'hex')",
     )
     .bind(user_id)
     .bind(version)
@@ -2092,7 +2092,7 @@ pub(crate) async fn load_user_bundles(
         "SELECT c.capability_hash
          FROM accounts u
          LEFT JOIN chat_delivery_capabilities c ON c.account_id = u.id
-         WHERE u.id = $1 AND u.is_active = true",
+         WHERE u.id = $1 AND u.state = 'active'",
     )
     .bind(target_id)
     .fetch_optional(&mut *tx)
@@ -2672,7 +2672,7 @@ pub(crate) async fn store_sealed_messages(
         "SELECT u.id, c.capability_hash
          FROM accounts u
          JOIN chat_delivery_capabilities c ON c.account_id = u.id
-         WHERE u.id = $1 AND u.is_active = true
+         WHERE u.id = $1 AND u.state = 'active'
            -- From another server, an account that doesn't talk to other
            -- servers is not found, as an unknown one (crate::federation_switch).
            AND ($2::text IS NULL OR kutup_account_federates(u.id))

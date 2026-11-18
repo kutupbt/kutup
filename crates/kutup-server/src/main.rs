@@ -42,6 +42,7 @@ mod drive_federation_ranges;
 mod drive_names;
 mod drive_profile_keys;
 mod drive_writes;
+mod entitlements;
 mod error;
 mod federation;
 mod federation_outbox;
@@ -483,7 +484,6 @@ async fn main() -> anyhow::Result<()> {
         jobs::spawn_all(
             pool.clone(),
             storage.clone(),
-            config.trash_retention_days,
             jobs::ChatMaintenancePolicy {
                 mailbox_retention_days: config.chat_mailbox_retention_days,
                 media_delivery_retention_days: config.chat_media_delivery_retention_days,
@@ -745,13 +745,6 @@ async fn bootstrap_admin(
         }
     };
 
-    let storage_quota_bytes = match crate::storage_pool::default_quota(pool).await {
-        Ok(quota) => quota,
-        Err(error) => {
-            tracing::error!(%error, "bootstrapAdmin: could not read the default quota; not creating the account");
-            return;
-        }
-    };
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -762,11 +755,8 @@ async fn bootstrap_admin(
     let res: Result<uuid::Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
             username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
-            master_key_envelope, recovery_key_envelope,
-            public_key, account_authority_public_key, account_authority_key_id,
-            account_incarnation_id, drive_signing_public_key,
-            is_admin, is_first_login, storage_quota_bytes, is_break_glass
-        ) VALUES ($1,$2::uuid,$3,$4,$5,'','','','',''::bytea,''::bytea,'',true,true,$6,true)
+            identity_suite, role
+        ) VALUES ($1,$2::uuid,$3,$4,$5,2,$6)
         RETURNING id"#,
     )
     .bind(username)
@@ -774,7 +764,7 @@ async fn bootstrap_admin(
     .bind(&opaque_record)
     .bind(kutup_crypto::opaque::SUITE as i16)
     .bind(opaque_server_key_id as i16)
-    .bind(storage_quota_bytes)
+    .bind(crate::models::AccountRole::BreakGlassAdmin.as_str())
     .fetch_one(&mut *tx)
     .await;
     let created = match res {

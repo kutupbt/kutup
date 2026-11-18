@@ -97,6 +97,7 @@ async function resetGrant(id: string, adminPassword: string): Promise<string> {
 export interface CreateUserInput {
   username: string
   tempPassword: string
+  /** The account's own quota; 0 leaves it on the site's default. */
   storageQuotaBytes: number
 }
 

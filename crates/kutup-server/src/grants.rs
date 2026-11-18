@@ -291,17 +291,12 @@ mod tests {
             .await
             .unwrap();
         let user = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-        )
-        .bind(user)
-        .bind(format!("expired{}", &user.simple().to_string()[..12]))
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(user)
+            .bind(format!("expired{}", &user.simple().to_string()[..12]))
+            .execute(&pool)
+            .await
+            .unwrap();
         let session = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO auth_sessions (id, account_id, client_type, refresh_token_hash, expires_at)
@@ -336,12 +331,13 @@ mod tests {
             .unwrap();
         }
         sweep(&pool).await.unwrap();
-        let events: Vec<(String, i32)> =
-            sqlx::query_as("SELECT kind, count FROM account_security_events WHERE account_id = $1")
-                .bind(user)
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let events: Vec<(String, i32)> = sqlx::query_as(
+            "SELECT kind, count FROM account_security_events WHERE subject_account_id = $1",
+        )
+        .bind(user)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
         assert_eq!(events, vec![("signInFailedPassword".to_owned(), 2)]);
         sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user)

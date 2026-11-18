@@ -681,7 +681,7 @@ pub fn apply_rename(
         .position(account)
         .map_err(|_| invalid("no pin for this account"))?;
     let authority = list.pins[i].authority()?;
-    let view = account_rename::verify_chain(&authority, chain)?;
+    let view = account_rename::verify_chain(&authority, account.id(), chain)?;
     if let Some(anchor) = &list.pins[i].renames {
         let held = anchor
             .sequence
@@ -1105,13 +1105,27 @@ mod tests {
         }
     }
 
+    /// Account `seed`'s chain, signed by authority `seed`.
     fn renames(seed: u8, addresses: &[&str]) -> Vec<AccountRenameV1> {
+        renames_of(seed, seed, addresses)
+    }
+
+    /// A chain naming account `n`, signed by authority `seed`.
+    fn renames_of(n: u8, seed: u8, addresses: &[&str]) -> Vec<AccountRenameV1> {
         let id = identity(seed);
         addresses
             .windows(2)
             .enumerate()
             .map(|(i, pair)| {
-                account_rename::sign(&id, i as u64 + 1, pair[0], pair[1], T + i as i64).unwrap()
+                account_rename::sign(
+                    &id,
+                    acct(n).id(),
+                    i as u64 + 1,
+                    pair[0],
+                    pair[1],
+                    T + i as i64,
+                )
+                .unwrap()
             })
             .collect()
     }
@@ -1425,9 +1439,12 @@ mod tests {
         );
         let before = list.clone();
         assert!(apply_rename(&mut list, &acct(1), &chain[..1], LATER).is_err());
-        // Another authority's chain, an account not pinned, a bad time: refused.
-        let forged = renames(5, &["alice@kutup.dev", "ali@kutup.dev"]);
+        // Another authority's chain, the pinned authority's chain about another
+        // account id, an account not pinned, a bad time: refused.
+        let forged = renames_of(1, 5, &["alice@kutup.dev", "ali@kutup.dev"]);
         assert!(apply_rename(&mut list, &acct(1), &forged, LATER).is_err());
+        let elsewhere = renames_of(2, 1, &["alice@kutup.dev", "ali@kutup.dev"]);
+        assert!(apply_rename(&mut list, &acct(1), &elsewhere, LATER).is_err());
         assert!(apply_rename(&mut list, &acct(3), &chain, LATER).is_err());
         assert!(apply_rename(&mut list, &acct(1), &chain, "later").is_err());
         assert_eq!(list, before);

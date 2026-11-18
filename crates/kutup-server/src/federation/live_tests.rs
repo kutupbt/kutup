@@ -464,8 +464,8 @@ async fn live_identity_trust_policy_and_replay_invariants() {
     );
 
     let audit_actions: Vec<String> = sqlx::query_scalar(
-        "SELECT action FROM admin_audit_log
-         WHERE action LIKE 'federation.%' ORDER BY id",
+        "SELECT kind FROM admin_audit_log
+         WHERE kind LIKE 'federation.%' ORDER BY id",
     )
     .fetch_all(&pool)
     .await

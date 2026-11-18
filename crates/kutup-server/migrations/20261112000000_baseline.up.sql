@@ -66,7 +66,13 @@ END $$;
 CREATE FUNCTION public.kutup_account_federates(account uuid) RETURNS boolean
     LANGUAGE sql STABLE
     AS $$
-    SELECT EXISTS (SELECT 1 FROM accounts WHERE id = account AND federation = 'on')
+    -- The account's own switch (an entitlement), else the site's default.
+    SELECT EXISTS (SELECT 1 FROM accounts WHERE id = account)
+       AND COALESCE(
+             (SELECT value = 1 FROM account_entitlements
+               WHERE account_id = account AND key = 'server.federation'),
+             (SELECT value <> 'off' FROM site_settings WHERE key = 'server.federation_default'),
+             true)
 $$;
 
 
@@ -479,23 +485,26 @@ CREATE TABLE public.account_roots (
 -- Name: account_security_events; Type: TABLE; Schema: public; Owner: -
 --
 
+-- One shape with admin_audit_log (w7-schema.md §6), unchained (pruned per
+-- kind): chain_version 0, no hashes. The kinds, who may act for each and
+-- their payload keys are src/security_events.rs's kind table.
 CREATE TABLE public.account_security_events (
     id uuid NOT NULL,
-    account_id uuid NOT NULL,
     kind text NOT NULL,
+    actor_kind text NOT NULL,
+    actor_account_id uuid,
+    subject_account_id uuid NOT NULL,
     at timestamp with time zone DEFAULT now() NOT NULL,
-    acting_session_id uuid,
-    acting_client text,
-    admin_account_id uuid,
-    old_name text,
-    new_name text,
+    payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     count integer DEFAULT 1 NOT NULL,
-    client_sealed bytea,
-    CONSTRAINT account_security_events_check CHECK (((kind = ANY (ARRAY['adminReset'::text, 'accountReset'::text, 'nameClosed'::text, 'nameFreed'::text, 'twoFactorOff'::text, 'accountKept'::text])) OR (admin_account_id IS NULL))),
-    CONSTRAINT account_security_events_client_sealed_check CHECK (((client_sealed IS NULL) OR ((octet_length(client_sealed) >= 47) AND (octet_length(client_sealed) <= 512)))),
+    chain_version smallint DEFAULT 0 NOT NULL,
+    previous_hash bytea,
+    row_hash bytea,
+    CONSTRAINT account_security_events_actor_kind_check CHECK ((actor_kind = ANY (ARRAY['account'::text, 'admin'::text, 'job'::text, 'peer'::text]))),
+    CONSTRAINT account_security_events_chain_check CHECK ((((chain_version = 0) AND (previous_hash IS NULL) AND (row_hash IS NULL)) OR ((chain_version >= 1) AND (octet_length(previous_hash) = 32) AND (octet_length(row_hash) = 32)))),
+    CONSTRAINT account_security_events_chain_version_check CHECK ((chain_version = 0)),
     CONSTRAINT account_security_events_count_check CHECK ((count >= 1)),
-    CONSTRAINT account_security_events_kind_check CHECK ((kind = ANY (ARRAY['passwordChange'::text, 'recovery'::text, 'rotate'::text, 'adminReset'::text, 'accountReset'::text, 'rename'::text, 'nameDropped'::text, 'nameClosed'::text, 'nameFreed'::text, 'domainLost'::text, 'twoFactorOn'::text, 'twoFactorOff'::text, 'recoveryCodeUsed'::text, 'recoveryCodesRenewed'::text, 'securityKeyAdded'::text, 'securityKeyRemoved'::text, 'securityKeyCompromised'::text, 'authenticatorOn'::text, 'authenticatorOff'::text, 'orgJoined'::text, 'orgLeft'::text, 'orgRemoved'::text, 'orgAccessGranted'::text, 'orgAccessRevoked'::text, 'orgReset'::text, 'orgSignIn'::text, 'signIn'::text, 'signInFailedPassword'::text, 'signInFailed2fa'::text, 'signOut'::text, 'sessionRevoked'::text, 'allSessionsRevoked'::text, 'adminAccess'::text, 'accountClosing'::text, 'accountKept'::text, 'masterKeyRotated'::text]))),
-    CONSTRAINT account_security_events_names_check CHECK ((((kind = ANY (ARRAY['rename'::text, 'nameDropped'::text, 'nameClosed'::text, 'nameFreed'::text, 'domainLost'::text, 'securityKeyAdded'::text, 'securityKeyRemoved'::text, 'securityKeyCompromised'::text])) = (old_name IS NOT NULL)) AND ((kind = 'rename'::text) = (new_name IS NOT NULL))))
+    CONSTRAINT account_security_events_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text))
 );
 
 
@@ -516,19 +525,27 @@ CREATE TABLE public.admin_audit_anchor (
 -- Name: admin_audit_log; Type: TABLE; Schema: public; Owner: -
 --
 
+-- One shape with account_security_events (w7-schema.md §6). One hash chain
+-- (src/audit_log.rs): the first row's previous_hash is 32 zero bytes, so
+-- every row has both hashes; kind is AdminAction's string.
 CREATE TABLE public.admin_audit_log (
     id bigint NOT NULL,
-    admin_account_id uuid NOT NULL,
-    action text NOT NULL,
-    target_account_id uuid,
+    kind text NOT NULL,
+    actor_kind text NOT NULL,
+    actor_account_id uuid,
+    subject_account_id uuid,
+    at timestamp with time zone DEFAULT now() NOT NULL,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
-    occurred_at timestamp with time zone DEFAULT now() NOT NULL,
+    count integer DEFAULT 1 NOT NULL,
     chain_version smallint DEFAULT 1 NOT NULL,
     previous_hash bytea,
     row_hash bytea,
+    CONSTRAINT admin_audit_log_actor_check CHECK (((actor_kind = 'admin'::text) = (actor_account_id IS NOT NULL))),
+    CONSTRAINT admin_audit_log_actor_kind_check CHECK ((actor_kind = ANY (ARRAY['admin'::text, 'job'::text]))),
+    CONSTRAINT admin_audit_log_chain_check CHECK ((((chain_version = 0) AND (previous_hash IS NULL) AND (row_hash IS NULL)) OR ((chain_version >= 1) AND (octet_length(previous_hash) = 32) AND (octet_length(row_hash) = 32)))),
     CONSTRAINT admin_audit_log_chain_version_check CHECK ((chain_version >= 1)),
-    CONSTRAINT admin_audit_log_previous_hash_check CHECK (((previous_hash IS NULL) OR (octet_length(previous_hash) = 32))),
-    CONSTRAINT admin_audit_log_row_hash_check CHECK (((row_hash IS NULL) OR (octet_length(row_hash) = 32)))
+    CONSTRAINT admin_audit_log_count_check CHECK ((count = 1)),
+    CONSTRAINT admin_audit_log_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text))
 );
 
 
@@ -1875,7 +1892,6 @@ CREATE TABLE public.drive_federated_incoming_file_shares (
     capability_hash bytea NOT NULL,
     remote_file_id uuid NOT NULL,
     owner_account_id uuid NOT NULL,
-    owner_account text NOT NULL,
     owner_incarnation_id bytea NOT NULL,
     owner_signing_public_key bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1905,7 +1921,6 @@ CREATE TABLE public.drive_federated_incoming_shares (
     epoch_statement bytea NOT NULL,
     epoch_statement_hash bytea NOT NULL,
     owner_account_id uuid NOT NULL,
-    owner_account text NOT NULL,
     owner_incarnation_id bytea NOT NULL,
     owner_signing_public_key bytea NOT NULL,
     owner_authority_public_key bytea NOT NULL,
@@ -1938,7 +1953,6 @@ CREATE TABLE public.drive_federated_outgoing_file_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     file_id uuid NOT NULL,
     sharer_account_id uuid NOT NULL,
-    recipient_username text NOT NULL,
     recipient_server text NOT NULL,
     recipient_incarnation_id bytea NOT NULL,
     share_envelope bytea NOT NULL,
@@ -1950,7 +1964,6 @@ CREATE TABLE public.drive_federated_outgoing_file_shares (
     CONSTRAINT drive_federated_outgoing_file_shares_key_generation_check CHECK ((key_generation > 0)),
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
-    CONSTRAINT drive_federated_outgoing_file_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
     CONSTRAINT drive_federated_outgoing_file_shares_share_envelope_check CHECK ((octet_length(share_envelope) <= 3072)),
     CONSTRAINT drive_federated_outgoing_file_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
     CONSTRAINT drive_fed_outgoing_file_shares_recipient_incarnation_id_bytes CHECK ((octet_length(recipient_incarnation_id) = 32))
@@ -1965,7 +1978,6 @@ CREATE TABLE public.drive_federated_outgoing_shares (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     collection_id uuid NOT NULL,
     sharer_account_id uuid NOT NULL,
-    recipient_username text NOT NULL,
     recipient_server text NOT NULL,
     named_share_envelope bytea NOT NULL,
     capability_hash bytea NOT NULL,
@@ -1979,7 +1991,6 @@ CREATE TABLE public.drive_federated_outgoing_shares (
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check2 CHECK ((recipient_server ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT drive_federated_outgoing_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
     CONSTRAINT drive_federated_outgoing_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0))),
     CONSTRAINT drive_federated_outgoing_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
     CONSTRAINT drive_federated_outgoing_shares_recipient_incarnation_id_bytes CHECK ((octet_length(recipient_incarnation_id) = 32))
@@ -3303,18 +3314,6 @@ CREATE TABLE public.opaque_server_setups (
 
 
 --
--- Name: organization_access_requests; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.organization_access_requests (
-    organization_id uuid NOT NULL,
-    account_id uuid NOT NULL,
-    request bytea NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
 -- Name: organization_key_shares; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3384,15 +3383,17 @@ CREATE TABLE public.organization_members (
 
 
 --
--- Name: organization_setting_overrides; Type: TABLE; Schema: public; Owner: -
+-- Name: organization_entitlements; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.organization_setting_overrides (
+CREATE TABLE public.organization_entitlements (
     organization_id uuid NOT NULL,
     key text NOT NULL,
     value bigint NOT NULL,
+    source text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT organization_setting_overrides_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text))
+    CONSTRAINT organization_entitlements_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text)),
+    CONSTRAINT organization_entitlements_source_check CHECK ((source = ANY (ARRAY['admin'::text, 'plan'::text, 'organization'::text])))
 );
 
 
@@ -3577,19 +3578,22 @@ CREATE TABLE public.remote_account_manifests (
 --
 
 CREATE TABLE public.remote_account_renames (
-    domain text NOT NULL,
+    server text NOT NULL,
+    account_id uuid NOT NULL,
     incarnation_id bytea NOT NULL,
-    authority_public_key bytea NOT NULL,
+    authority_public_key bytea,
     sequence integer NOT NULL,
-    head_digest bytea NOT NULL,
+    head_digest bytea,
     current_address text NOT NULL,
     state text NOT NULL,
     chain jsonb NOT NULL,
     addresses text[] NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT remote_account_renames_domain_check CHECK ((domain = lower(domain))),
+    CONSTRAINT remote_account_renames_server_check CHECK ((server = lower(server))),
     CONSTRAINT remote_account_renames_head_digest_check CHECK ((octet_length(head_digest) = 32)),
-    CONSTRAINT remote_account_renames_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000))),
+    CONSTRAINT remote_account_renames_sequence_check CHECK (((sequence >= 0) AND (sequence <= 1000))),
+    CONSTRAINT remote_account_renames_chain_check CHECK ((((sequence = 0) AND (authority_public_key IS NULL) AND (head_digest IS NULL) AND (chain = '[]'::jsonb)) OR ((sequence >= 1) AND (authority_public_key IS NOT NULL) AND (head_digest IS NOT NULL)))),
+    CONSTRAINT remote_account_renames_current_address_check CHECK ((split_part(current_address, '@'::text, 2) = server)),
     CONSTRAINT remote_account_renames_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text, 'gone'::text]))),
     CONSTRAINT remote_account_renames_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32))
 );
@@ -3814,15 +3818,17 @@ CREATE TABLE public.account_security_keys (
 
 
 --
--- Name: account_setting_overrides; Type: TABLE; Schema: public; Owner: -
+-- Name: account_entitlements; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.account_setting_overrides (
+CREATE TABLE public.account_entitlements (
     account_id uuid NOT NULL,
     key text NOT NULL,
     value bigint NOT NULL,
+    source text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_setting_overrides_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text))
+    CONSTRAINT account_entitlements_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text)),
+    CONSTRAINT account_entitlements_source_check CHECK ((source = ANY (ARRAY['admin'::text, 'plan'::text, 'organization'::text, 'account'::text])))
 );
 
 
@@ -3846,20 +3852,18 @@ CREATE TABLE public.account_ui_preferences (
 
 CREATE TABLE public.accounts (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    master_key_envelope bytea NOT NULL,
-    recovery_key_envelope bytea NOT NULL,
-    public_key bytea NOT NULL,
-    account_authority_public_key bytea NOT NULL,
-    account_authority_key_id bytea NOT NULL,
-    account_incarnation_id bytea NOT NULL,
-    drive_signing_public_key bytea NOT NULL,
-    totp_enabled boolean DEFAULT false NOT NULL,
-    storage_quota_bytes bigint DEFAULT '10737418240'::bigint NOT NULL,
+    master_key_envelope bytea,
+    recovery_key_envelope bytea,
+    drive_xwing_public_key bytea,
+    account_authority_public_key bytea,
+    account_authority_key_id bytea,
+    account_incarnation_id bytea,
+    drive_signing_public_key bytea,
     storage_used_bytes bigint DEFAULT 0 NOT NULL,
-    is_admin boolean DEFAULT false NOT NULL,
+    role text DEFAULT 'member'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    is_first_login boolean DEFAULT false NOT NULL,
+    keys_set_up_at timestamp with time zone,
     username text NOT NULL,
     recovery_key_verifier text,
     color text,
@@ -3869,11 +3873,11 @@ CREATE TABLE public.accounts (
     opaque_record bytea,
     opaque_suite smallint,
     opaque_server_key_id smallint,
-    is_break_glass boolean DEFAULT false NOT NULL,
-    identity_suite smallint DEFAULT 1 NOT NULL,
+    identity_suite smallint NOT NULL,
     drive_key_binding_epoch integer DEFAULT 1 NOT NULL,
     security_keys_require_uv boolean DEFAULT false NOT NULL,
     totp_secret_sealed bytea,
+    totp_pending_secret_sealed bytea,
     data_key_lost_at timestamp with time zone,
     state text DEFAULT 'active'::text NOT NULL,
     suspended_reason text,
@@ -3889,9 +3893,6 @@ CREATE TABLE public.accounts (
     deleting_for text,
     deletion_attempts integer DEFAULT 0 NOT NULL,
     deletion_next_try_at timestamp with time zone,
-    is_active boolean GENERATED ALWAYS AS ((state = 'active'::text)) STORED,
-    public_sharing text DEFAULT 'on'::text NOT NULL,
-    federation text DEFAULT 'on'::text NOT NULL,
     master_key_generation integer DEFAULT 1 NOT NULL,
     CONSTRAINT accounts_closing CHECK ((((state = 'closing'::text) = (closing_by IS NOT NULL)) AND ((state = 'closing'::text) = (closes_at IS NOT NULL)))),
     CONSTRAINT accounts_closing_by_check CHECK ((closing_by = ANY (ARRAY['user'::text, 'admin'::text, 'restore'::text]))),
@@ -3899,8 +3900,7 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_deleting_for_check CHECK ((deleting_for = ANY (ARRAY['delete'::text, 'reset'::text]))),
     CONSTRAINT accounts_deletion_attempts_check CHECK ((deletion_attempts >= 0)),
     CONSTRAINT accounts_drive_key_binding_epoch_check CHECK ((drive_key_binding_epoch > 0)),
-    CONSTRAINT accounts_federation_check CHECK ((federation = ANY (ARRAY['on'::text, 'off'::text]))),
-    CONSTRAINT accounts_identity_suite_check CHECK ((identity_suite = ANY (ARRAY[1, 2]))),
+    CONSTRAINT accounts_identity_suite_check CHECK ((identity_suite = 2)),
     CONSTRAINT accounts_key_binding_check CHECK (((key_binding)::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
     CONSTRAINT accounts_legal_hold CHECK ((((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)) AND ((legal_hold_reference IS NOT NULL) OR (legal_hold_by_account_id IS NULL)))),
     CONSTRAINT accounts_legal_hold_reference_check CHECK (((char_length(legal_hold_reference) >= 1) AND (char_length(legal_hold_reference) <= 200))),
@@ -3909,17 +3909,19 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_opaque_record_check CHECK (((octet_length(opaque_record) >= 1) AND (octet_length(opaque_record) <= 1024))),
     CONSTRAINT accounts_opaque_server_key_id_check CHECK ((opaque_server_key_id > 0)),
     CONSTRAINT accounts_opaque_suite_check CHECK ((opaque_suite = 1)),
-    CONSTRAINT accounts_public_sharing_check CHECK ((public_sharing = ANY (ARRAY['on'::text, 'off'::text]))),
+    CONSTRAINT accounts_keys_set_up CHECK (((keys_set_up_at IS NULL) OR ((octet_length(master_key_envelope) > 0) AND (octet_length(recovery_key_envelope) > 0) AND (octet_length(drive_xwing_public_key) > 0) AND (octet_length(account_authority_public_key) > 0) AND (account_authority_key_id IS NOT NULL) AND (account_incarnation_id IS NOT NULL) AND (octet_length(drive_signing_public_key) > 0) AND (key_binding IS NOT NULL) AND (octet_length(drive_key_binding) > 0)))),
+    CONSTRAINT accounts_role_check CHECK ((role = ANY (ARRAY['member'::text, 'admin'::text, 'breakGlassAdmin'::text]))),
     CONSTRAINT accounts_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'closing'::text]))),
     CONSTRAINT accounts_suspended_before_close CHECK (((suspended_before_close IS NULL) OR (state = 'closing'::text))),
     CONSTRAINT accounts_suspended_before_close_check CHECK ((suspended_before_close = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text]))),
     CONSTRAINT accounts_suspended_reason CHECK (((state = 'suspended'::text) = (suspended_reason IS NOT NULL))),
     CONSTRAINT accounts_suspended_reason_check CHECK ((suspended_reason = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text]))),
     CONSTRAINT accounts_totp_secret_sealed_check CHECK (((totp_secret_sealed IS NULL) OR ((octet_length(totp_secret_sealed) >= 47) AND (octet_length(totp_secret_sealed) <= 200)))),
+    CONSTRAINT accounts_totp_pending_secret_sealed_check CHECK (((totp_pending_secret_sealed IS NULL) OR ((octet_length(totp_pending_secret_sealed) >= 47) AND (octet_length(totp_pending_secret_sealed) <= 200)))),
     CONSTRAINT accounts_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
-    CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days = ANY (ARRAY[7, 30, 90, 180, 365, 3650]))),
-    CONSTRAINT accounts_account_authority_key_id_bytes CHECK ((octet_length(account_authority_key_id) = ANY (ARRAY[0, 32]))),
-    CONSTRAINT accounts_account_incarnation_id_bytes CHECK ((octet_length(account_incarnation_id) = ANY (ARRAY[0, 32])))
+    CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days > 0)),
+    CONSTRAINT accounts_account_authority_key_id_bytes CHECK ((octet_length(account_authority_key_id) = 32)),
+    CONSTRAINT accounts_account_incarnation_id_bytes CHECK ((octet_length(account_incarnation_id) = 32))
 );
 
 
@@ -5555,14 +5557,6 @@ ALTER TABLE ONLY public.opaque_server_setups
 
 
 --
--- Name: organization_access_requests organization_access_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.organization_access_requests
-    ADD CONSTRAINT organization_access_requests_pkey PRIMARY KEY (organization_id, account_id);
-
-
---
 -- Name: organization_key_shares organization_key_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5603,11 +5597,11 @@ ALTER TABLE ONLY public.organization_members
 
 
 --
--- Name: organization_setting_overrides organization_setting_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: organization_entitlements organization_entitlements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.organization_setting_overrides
-    ADD CONSTRAINT organization_setting_overrides_pkey PRIMARY KEY (organization_id, key);
+ALTER TABLE ONLY public.organization_entitlements
+    ADD CONSTRAINT organization_entitlements_pkey PRIMARY KEY (organization_id, key);
 
 
 --
@@ -5727,7 +5721,7 @@ ALTER TABLE ONLY public.remote_account_manifests
 --
 
 ALTER TABLE ONLY public.remote_account_renames
-    ADD CONSTRAINT remote_account_renames_pkey PRIMARY KEY (domain, incarnation_id);
+    ADD CONSTRAINT remote_account_renames_pkey PRIMARY KEY (server, account_id);
 
 
 --
@@ -5867,11 +5861,11 @@ ALTER TABLE ONLY public.account_security_keys
 
 
 --
--- Name: account_setting_overrides account_setting_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: account_entitlements account_entitlements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.account_setting_overrides
-    ADD CONSTRAINT account_setting_overrides_pkey PRIMARY KEY (account_id, key);
+ALTER TABLE ONLY public.account_entitlements
+    ADD CONSTRAINT account_entitlements_pkey PRIMARY KEY (account_id, key);
 
 
 --
@@ -6006,10 +6000,10 @@ CREATE INDEX account_renames_user ON public.account_renames USING btree (account
 
 
 --
--- Name: account_security_events_user; Type: INDEX; Schema: public; Owner: -
+-- Name: account_security_events_subject; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_security_events_user ON public.account_security_events USING btree (account_id, at DESC, id DESC);
+CREATE INDEX account_security_events_subject ON public.account_security_events USING btree (subject_account_id, at DESC, id DESC);
 
 
 --
@@ -7122,7 +7116,7 @@ CREATE INDEX accounts_closing_due ON public.accounts USING btree (closes_at) WHE
 -- Name: accounts_one_break_glass; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX accounts_one_break_glass ON public.accounts USING btree ((true)) WHERE is_break_glass;
+CREATE UNIQUE INDEX accounts_one_break_glass ON public.accounts USING btree ((true)) WHERE (role = 'breakGlassAdmin'::text);
 
 
 --
@@ -7268,19 +7262,19 @@ ALTER TABLE ONLY public.account_roots
 
 
 --
--- Name: account_security_events account_security_events_admin_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_security_events account_security_events_actor_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_security_events
-    ADD CONSTRAINT account_security_events_admin_account_id_fkey FOREIGN KEY (admin_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
+    ADD CONSTRAINT account_security_events_actor_account_id_fkey FOREIGN KEY (actor_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
 
 
 --
--- Name: account_security_events account_security_events_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_security_events account_security_events_subject_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.account_security_events
-    ADD CONSTRAINT account_security_events_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_security_events_subject_account_id_fkey FOREIGN KEY (subject_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -7996,6 +7990,14 @@ ALTER TABLE ONLY public.drive_federated_incoming_file_shares
 
 
 --
+-- Name: drive_federated_incoming_file_shares drive_federated_incoming_file_shares_owner_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_incoming_file_shares
+    ADD CONSTRAINT drive_federated_incoming_file_shares_owner_fkey FOREIGN KEY (owner_server, owner_account_id) REFERENCES public.remote_account_renames(server, account_id);
+
+
+--
 -- Name: drive_federated_incoming_shares drive_federated_incoming_shares_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8004,11 +8006,27 @@ ALTER TABLE ONLY public.drive_federated_incoming_shares
 
 
 --
+-- Name: drive_federated_incoming_shares drive_federated_incoming_shares_owner_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_incoming_shares
+    ADD CONSTRAINT drive_federated_incoming_shares_owner_fkey FOREIGN KEY (owner_server, owner_account_id) REFERENCES public.remote_account_renames(server, account_id);
+
+
+--
 -- Name: drive_federated_outgoing_file_shares drive_federated_outgoing_file_shares_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
     ADD CONSTRAINT drive_federated_outgoing_file_shares_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.drive_files(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_federated_outgoing_file_shares drive_federated_outgoing_file_shares_recipient_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
+    ADD CONSTRAINT drive_federated_outgoing_file_shares_recipient_fkey FOREIGN KEY (recipient_server, recipient_account_id) REFERENCES public.remote_account_renames(server, account_id);
 
 
 --
@@ -8025,6 +8043,14 @@ ALTER TABLE ONLY public.drive_federated_outgoing_file_shares
 
 ALTER TABLE ONLY public.drive_federated_outgoing_shares
     ADD CONSTRAINT drive_federated_outgoing_shares_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES public.drive_collections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drive_federated_outgoing_shares drive_federated_outgoing_shares_recipient_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drive_federated_outgoing_shares
+    ADD CONSTRAINT drive_federated_outgoing_shares_recipient_fkey FOREIGN KEY (recipient_server, recipient_account_id) REFERENCES public.remote_account_renames(server, account_id);
 
 
 --
@@ -8636,14 +8662,6 @@ ALTER TABLE ONLY public.opaque_login_states
 
 
 --
--- Name: organization_access_requests organization_access_requests_organization_id_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.organization_access_requests
-    ADD CONSTRAINT organization_access_requests_organization_id_account_id_fkey FOREIGN KEY (organization_id, account_id) REFERENCES public.organization_members(organization_id, account_id) ON DELETE CASCADE;
-
-
---
 -- Name: organization_key_shares organization_key_shares_granted_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8716,11 +8734,11 @@ ALTER TABLE ONLY public.organization_members
 
 
 --
--- Name: organization_setting_overrides organization_setting_overrides_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: organization_entitlements organization_entitlements_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.organization_setting_overrides
-    ADD CONSTRAINT organization_setting_overrides_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.organization_entitlements
+    ADD CONSTRAINT organization_entitlements_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
 
 
 --
@@ -8900,11 +8918,11 @@ ALTER TABLE ONLY public.account_security_keys
 
 
 --
--- Name: account_setting_overrides account_setting_overrides_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_entitlements account_entitlements_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.account_setting_overrides
-    ADD CONSTRAINT account_setting_overrides_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.account_entitlements
+    ADD CONSTRAINT account_entitlements_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -9861,12 +9879,6 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: organization_access_requests; Type: TABLE DATA; Schema: public; Owner: -
---
-
-
-
---
 -- Data for Name: organization_keys; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -9885,7 +9897,7 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: organization_setting_overrides; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: organization_entitlements; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -10017,7 +10029,7 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: account_setting_overrides; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: account_entitlements; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 

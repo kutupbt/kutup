@@ -111,8 +111,8 @@ async fn grant_role(owner: &PgPool, app: &str) -> Result<()> {
     // the sequence, never names one, and never moves the sequence back.
     statements.push(format!("REVOKE INSERT ON admin_audit_log FROM {role}"));
     statements.push(format!(
-        "GRANT INSERT (admin_account_id, action, target_account_id, payload, occurred_at, \
-         previous_hash, row_hash, chain_version) ON admin_audit_log TO {role}"
+        "GRANT INSERT (kind, actor_kind, actor_account_id, subject_account_id, at, payload, \
+         count, chain_version, previous_hash, row_hash) ON admin_audit_log TO {role}"
     ));
     let sequence: Option<String> =
         sqlx::query_scalar("SELECT pg_get_serial_sequence('admin_audit_log', 'id')")
@@ -175,7 +175,7 @@ mod tests {
             "DELETE FROM account_security_events",
             "UPDATE account_security_events SET kind = 'signIn'",
             "DELETE FROM admin_audit_log",
-            "UPDATE admin_audit_log SET action = 'x'",
+            "UPDATE admin_audit_log SET kind = 'x'",
             "TRUNCATE admin_audit_log",
             "DELETE FROM account_keys.destruction_events",
             "UPDATE account_keys.destruction_events SET reference = 'x'",
@@ -183,8 +183,8 @@ mod tests {
             "UPDATE consents SET given = true",
             "DELETE FROM document_acknowledgements",
             "UPDATE legal_documents SET url = 'x'",
-            "INSERT INTO admin_audit_log (id, admin_account_id, action, payload) \
-             VALUES (9223372036854775000, gen_random_uuid(), 'x', '{}')",
+            "INSERT INTO admin_audit_log (id, kind, actor_kind, payload) \
+             VALUES (9223372036854775000, 'x', 'job', '{}')",
             "SELECT setval(pg_get_serial_sequence('admin_audit_log', 'id'), 1)",
             "INSERT INTO admin_audit_anchor (through_id, through_hash) VALUES (1, sha256('x'))",
             "UPDATE admin_audit_anchor SET through_id = 1",

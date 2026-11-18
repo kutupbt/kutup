@@ -21,10 +21,11 @@ const settings = {
   chatGroupAvatarPendingSeconds: 3600,
   passVaultMaxBytes: 64 * 1024 * 1024,
   driveStreamCacheBlocks: 3,
+  driveVersionRetentionChoices: [7, 30, 90],
 }
 const registry = [
   {
-    key: 'drive_stream_cache_blocks',
+    key: 'drive.stream_cache_blocks',
     field: 'driveStreamCacheBlocks',
     section: 'drive',
     unit: 'count',
@@ -60,5 +61,7 @@ describe('Administration → Server settings', () => {
     expect((field as HTMLInputElement).value).toBe('3')
     // The oldest client versions accepted, one row per client type.
     expect(await screen.findByLabelText(/Command line/)).toHaveProperty('value', '0.0.14')
+    const choices = await screen.findByLabelText(/Version retention choices/)
+    expect((choices as HTMLInputElement).value).toBe('7, 30, 90')
   })
 })

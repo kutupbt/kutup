@@ -27,6 +27,7 @@ interface Pin {
 
 interface Rename {
   incarnationId: string
+  accountId: string
   sequence: number
   previous: string
   current: string
@@ -48,15 +49,17 @@ const holds = (pin: Pin, address: string) => {
 }
 
 // Rust's account_rename::verify_chain, modelled: a statement "verifies" when
-// signed by the authority, and each starts where the one before ended.
-function verifyChain(authority: string, chain: Rename[]) {
+// signed by the authority for the account id asked about, and each starts
+// where the one before ended.
+function verifyChain(authority: string, accountId: string, chain: Rename[]) {
   if (chain.length === 0) throw new Error('empty chain')
   chain.forEach((statement, i) => {
     if (statement.signature !== `signed-by-${authority}` || statement.sequence !== i + 1) throw new Error('chain does not verify')
+    if (statement.accountId !== accountId) throw new Error('signed for another account')
     if (i > 0 && statement.previous !== chain[i - 1].current) throw new Error('chain does not verify')
   })
   const addresses = [chain[0].previous, ...chain.map((statement) => statement.current)]
-  return { incarnationId: `inc-${authority}`, first: addresses[0], current: addresses.at(-1)!, addresses, sequence: chain.length, digests: [] }
+  return { incarnationId: `inc-${authority}`, accountId, first: addresses[0], current: addresses.at(-1)!, addresses, sequence: chain.length, digests: [] }
 }
 
 // Rust's IdentityPinsV2::at: those holding the address first, by when seen.
@@ -86,7 +89,13 @@ function continues(pin: GroupPinModel, chain: { signers: string[]; digests: stri
 
 vi.mock('@kutup/crypto/accountRename', () => ({
   foldAddress: vi.fn((address: string) => Promise.resolve(fold(address))),
-  verifyAccountRenameChain: vi.fn((authority: string, chain: Rename[]) => Promise.resolve(verifyChain(authority, chain))),
+  verifyAccountRenameChain: vi.fn((authority: string, accountId: string, chain: Rename[]) => {
+    try {
+      return Promise.resolve(verifyChain(authority, accountId, chain))
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+    }
+  }),
 }))
 
 vi.mock('@kutup/crypto/accountRef', () => ({ sameAccount: (a: Ref, b: Ref) => sameRef(a, b) }))
@@ -159,7 +168,7 @@ vi.mock('@kutup/crypto/identityPins', () => ({
     const pin = pins[i]
     let view
     try {
-      view = verifyChain(pin.authorityPublicKey, chain)
+      view = verifyChain(pin.authorityPublicKey, account.accountId, chain)
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)))
     }
@@ -756,10 +765,14 @@ describe('verifyPerson', () => {
   })
 })
 
-/** The chain of `authority`'s account through `addresses`, oldest first, signed by it (or `by`). */
-function chainOf(authority: string, addresses: string[], by = authority): Rename[] {
+/**
+ * The chain of `authority`'s account through `addresses`, oldest first,
+ * signed by it (or `by`) for its account id (or `account`).
+ */
+function chainOf(authority: string, addresses: string[], by = authority, account = `acct-${authority}`): Rename[] {
   return addresses.slice(1).map((current, i) => ({
     incarnationId: `inc-${authority}`,
+    accountId: account,
     sequence: i + 1,
     previous: addresses[i],
     current,
@@ -925,10 +938,10 @@ describe('shared mailboxes (Mail’s key checks)', () => {
 
 describe('followAccountRenames (Chat\'s rename line)', () => {
   const ADA = { server: 'kutup.dev', accountId: 'acct-A' }
-  /** Ada's chain from ada.l to `to`, each step signed `by` at `at` (ms). */
-  function chainAt(to: string[], at: number, by = 'A') {
+  /** Ada's chain from ada.l to `to`, each step signed `by` for `account` at `at` (ms). */
+  function chainAt(to: string[], at: number, by = 'A', account = 'acct-A') {
     const addresses = ['ada.l@kutup.dev', ...to]
-    const steps = chainOf('A', addresses, by).map((step) => ({ ...step, issuedAtMs: at }))
+    const steps = chainOf('A', addresses, by, account).map((step) => ({ ...step, issuedAtMs: at }))
     return { version: 1, chains: [{ incarnationId: 'inc-A', authorityPublicKey: 'A', current: addresses.at(-1)!, state: 'current', chain: steps }] }
   }
 
@@ -964,6 +977,9 @@ describe('followAccountRenames (Chat\'s rename line)', () => {
     expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
     server.renames.set('ada.lovelace@kutup.dev', chainAt(['ada.other@kutup.dev'], Date.now() + 60_000))
     expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
+    // Ada's authority's chain, but about another account id: not Ada's.
+    server.renames.set('ada.lovelace@kutup.dev', chainAt(['ada.lovelace@kutup.dev'], Date.now() + 60_000, 'A', 'acct-Z'))
+    expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
     expect(await followAccountRenames(me, { server: 'kutup.dev', accountId: 'acct-Z' }, 'zed@kutup.dev')).toEqual([])
     expect(server.puts).toBe(puts)
     expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev'] }])
@@ -977,8 +993,12 @@ describe('followAccountRenames (Chat\'s rename line)', () => {
       { from: 'ada.l@kutup.dev', to: 'ada.lovelace@kutup.dev', sequence: 1, issuedAtMs: expect.any(Number) as number },
     ])
     expect(server.puts).toBe(puts)
-    // Another authority's chain, or a rename from before the meeting: nothing.
+    // Another authority's chain, one about another account, or a rename
+    // from before the meeting: nothing.
     expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev', { authorityPublicKey: 'M', since: met })).toEqual([])
+    expect(
+      await followAccountRenames(me, { server: 'kutup.dev', accountId: 'acct-Z' }, 'ada.lovelace@kutup.dev', { authorityPublicKey: 'A', since: met }),
+    ).toEqual([])
     expect(
       await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev', { authorityPublicKey: 'A', since: new Date(Date.now() + 60_000).toISOString() }),
     ).toEqual([])

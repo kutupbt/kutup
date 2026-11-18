@@ -18,9 +18,7 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::rate_limits::{entry, RateLimitUnit};
 use crate::middleware::AdminAccount;
 use crate::ratelimit::{self, Section, Spec};
-use crate::site_settings::{
-    self, NumericSetting, SettingSection, SettingUnit, ValueSource, RATE_LIMIT_PREFIX,
-};
+use crate::site_settings::{self, NumericSetting, SettingSection, SettingUnit, ValueSource};
 use crate::AppState;
 
 /// One whole-number setting, as Server settings shows it.
@@ -113,9 +111,9 @@ pub struct AccountSettingEntry {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRateLimitEntry {
-    /// `rate_limit.<key>` (what `PUT …/limits/{key}` takes).
-    pub key: String,
-    /// The limit's own key, as Rate limits lists it.
+    /// The limit's key (what `PUT …/limits/{key}` takes).
+    pub key: &'static str,
+    /// The limit's key, as Rate limits lists it (the same as `key`).
     pub limit: &'static str,
     pub section: Section,
     pub unit: RateLimitUnit,
@@ -136,14 +134,10 @@ pub struct AccountLimitsResponse {
 
 /// The account's own values, by key, as stored.
 async fn own_values(state: &AppState, account: Uuid) -> AppResult<HashMap<String, i64>> {
-    Ok(sqlx::query_as::<_, (String, i64)>(
-        "SELECT key, value FROM account_setting_overrides WHERE account_id = $1",
+    Ok(
+        crate::entitlements::all(&state.pool, crate::entitlements::Holder::Account(account))
+            .await?,
     )
-    .bind(account)
-    .fetch_all(&state.pool)
-    .await?
-    .into_iter()
-    .collect())
 }
 
 async fn site_value(state: &AppState, setting: &NumericSetting) -> AppResult<Option<String>> {
@@ -184,7 +178,7 @@ fn rate_limit_entry(
     let shown = entry(spec, site);
     let own = ratelimit::account_override(spec.limit, &account.to_string());
     AccountRateLimitEntry {
-        key: format!("{RATE_LIMIT_PREFIX}{}", spec.key),
+        key: spec.key,
         limit: spec.key,
         section: spec.section,
         unit: shown.unit,
@@ -260,11 +254,7 @@ enum Target {
 }
 
 fn target(key: &str) -> AppResult<Target> {
-    if let Some(limit) = key.strip_prefix(RATE_LIMIT_PREFIX) {
-        let spec = ratelimit::SPECS
-            .iter()
-            .find(|spec| spec.key == limit)
-            .ok_or_else(|| AppError::not_found("no such limit"))?;
+    if let Some(spec) = ratelimit::SPECS.iter().find(|spec| spec.key == key) {
         if !spec.overridable() {
             return Err(AppError::bad_request(format!(
                 "{} is not counted per account",
@@ -296,7 +286,7 @@ pub enum AccountLimitEntry {
 
 /// `PUT /api/v1/admin/accounts/{id}/entitlements/{key}` — gives the account its own
 /// value of a setting or rate limit that limits one account (`key`: a
-/// setting's key, or `rate_limit.<key>`), or (`null`) takes it back. A value
+/// setting's or a rate limit's key), or (`null`) takes it back. A value
 /// outside the range is refused, never clamped. Lowering it below what the
 /// account already uses only stops new growth. Audited as `account.setEntitlement`
 /// or `account.setRateLimit`.
@@ -307,7 +297,7 @@ pub enum AccountLimitEntry {
     security(("BearerAuth" = [])),
     params(
         ("id" = Uuid, Path, description = "The account"),
-        ("key" = String, Path, description = "A setting's key, or rate_limit.<key>"),
+        ("key" = String, Path, description = "A setting's or a rate limit's key"),
     ),
     request_body = UpdateLimitRequest,
     responses(
@@ -341,33 +331,18 @@ pub async fn update(
                     )));
                 }
             }
-            (
-                format!("{RATE_LIMIT_PREFIX}{}", spec.key),
-                AdminAction::AccountSetRateLimit,
-            )
+            (spec.key.to_owned(), AdminAction::AccountSetRateLimit)
         }
     };
     let previous = own_values(&state, id).await?.get(&stored_key).copied();
-    match request.value {
-        Some(value) => {
-            sqlx::query(
-                "INSERT INTO account_setting_overrides (account_id, key, value) VALUES ($1, $2, $3)
-                 ON CONFLICT (account_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-            )
-            .bind(id)
-            .bind(&stored_key)
-            .bind(value)
-            .execute(&state.pool)
-            .await?;
-        }
-        None => {
-            sqlx::query("DELETE FROM account_setting_overrides WHERE account_id = $1 AND key = $2")
-                .bind(id)
-                .bind(&stored_key)
-                .execute(&state.pool)
-                .await?;
-        }
-    }
+    crate::entitlements::set_or_clear(
+        &state.pool,
+        crate::entitlements::Holder::Account(id),
+        &stored_key,
+        request.value,
+        crate::entitlements::Source::Admin,
+    )
+    .await?;
     let site = ratelimit::reload(&state.pool).await?;
     crate::handlers::admin::audit(
         &state.pool,

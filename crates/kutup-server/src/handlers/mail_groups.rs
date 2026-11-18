@@ -164,8 +164,8 @@ async fn members_in(
     Ok(sqlx::query_as(
         "SELECT u.id AS account_id, COALESCE(u.username, '') AS username,
                 COALESCE(u.username, '') || '@' || $2 AS address,
-                m.role, m.can_send_as, u.is_active AS active,
-                u.is_active
+                m.role, m.can_send_as, u.state = 'active' AS active,
+                u.state = 'active'
                 AND EXISTS (SELECT 1 FROM mail_group_keys k WHERE k.group_id = m.group_id AND k.is_primary)
                 AND (NOT EXISTS (
                     SELECT 1 FROM mail_group_keys k
@@ -203,13 +203,13 @@ async fn detail(state: &AppState, caller: Uuid, id: Uuid) -> AppResult<MailGroup
 }
 
 async fn is_admin(state: &AppState, user: Uuid) -> AppResult<bool> {
-    Ok(
-        sqlx::query_scalar("SELECT is_admin FROM accounts WHERE id = $1 AND is_active")
-            .bind(user)
-            .fetch_optional(&state.pool)
-            .await?
-            .unwrap_or(false),
+    Ok(sqlx::query_scalar(
+        "SELECT role <> 'member' FROM accounts WHERE id = $1 AND state = 'active'",
     )
+    .bind(user)
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(false))
 }
 
 /// The caller's standing on a group: administrator, owner, manager, member
@@ -591,7 +591,7 @@ async fn without_signing_share(
 /// again if it comes back.
 async fn active_of(conn: &mut sqlx::PgConnection, ids: &[Uuid]) -> AppResult<Vec<Uuid>> {
     let mut active: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM accounts WHERE id = ANY($1) AND is_active")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = ANY($1) AND state = 'active'")
             .bind(ids)
             .fetch_all(&mut *conn)
             .await?;
@@ -1669,7 +1669,7 @@ pub async fn resolve_account(
     let row: Option<(Uuid, String, String, Option<Uuid>)> = sqlx::query_as(
         "SELECT u.id AS account_id, COALESCE(u.username, '') AS username, a.address, a.domain_id
            FROM mail_addresses a
-           JOIN accounts u ON u.id = a.account_id AND u.is_active
+           JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
           WHERE a.folded = kutup_address_folded($1)
             AND a.state = 'active'
             AND EXISTS (SELECT 1 FROM mail_address_keys k WHERE k.address_id = a.id AND k.is_primary)",

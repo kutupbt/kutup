@@ -3259,14 +3259,18 @@ fn queue_withdrawn_send(a_db: &str) {
     runtime.block_on(async {
         let user = uuid::Uuid::new_v4();
         let mut tx = pool.begin().await.unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(user)
+            .bind(format!("withdrawn{}", &user.simple().to_string()[..10]))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        // Federation off: the account's own entitlement (docs/plans/w7-schema.md §5).
         sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key, account_authority_key_id,
-                account_incarnation_id, drive_signing_public_key, federation)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '', 'off')",
+            "INSERT INTO account_entitlements (account_id, key, value, source)
+             VALUES ($1, 'server.federation', 0, 'account')",
         )
         .bind(user)
-        .bind(format!("withdrawn{}", &user.simple().to_string()[..10]))
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -3695,6 +3699,7 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
         serde_json::from_value(entry["chain"].clone()).unwrap();
     let view = kutup_crypto::account_rename::verify_chain(
         &alice.identity.authority_public_key(),
+        alice.id.parse().unwrap(),
         &statements,
     )
     .unwrap();

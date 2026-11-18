@@ -378,7 +378,8 @@ pub async fn put_consent(
     // Talking to other servers rests on this consent: withdrawn, it stops.
     let withdrawn = req.purpose == crate::federation_switch::PURPOSE && !req.given;
     if withdrawn {
-        crate::federation_switch::turn_off(&mut tx, user_id).await?;
+        crate::federation_switch::turn_off(&mut tx, user_id, crate::federation_switch::By::Account)
+            .await?;
     }
     tx.commit().await?;
     if withdrawn {
@@ -494,17 +495,12 @@ mod tests {
 
     async fn account(pool: &PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-        )
-        .bind(user_id)
-        .bind(format!("legal{}", &user_id.simple().to_string()[..12]))
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(user_id)
+            .bind(format!("legal{}", &user_id.simple().to_string()[..12]))
+            .execute(pool)
+            .await
+            .unwrap();
         user_id
     }
 

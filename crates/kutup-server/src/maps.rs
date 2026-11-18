@@ -32,7 +32,7 @@ use crate::middleware::{AdminAccount, AuthAccount};
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
-const SETTING_KEY: &str = "maps";
+const SETTING_KEY: &str = "server.maps";
 const PROXY_PREFIX: &str = "/api/v1/maps/proxy";
 const MAX_UPSTREAM_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PATH_CHARS: usize = 512;
@@ -107,7 +107,7 @@ pub struct CustomProvider {
     pub attribution: String,
 }
 
-/// The administrator's map settings (`site_settings.maps`).
+/// The administrator's map settings (`site_settings` key `server.maps`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MapSettings {

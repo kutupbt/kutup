@@ -571,7 +571,7 @@ pub fn seal_account_roots(
 }
 
 /// Opens the account's roots from its root records (`accountRoots` of the
-/// sign-in answer, or `GET /api/account/roots`). The newest identity root
+/// sign-in answer, or `GET /api/v1/account/roots`). The newest identity root
 /// must derive `registered_authority_base64` (the account's authority public
 /// key); otherwise the error is `identityRootMismatch`, and no older root
 /// stands in.
@@ -1607,7 +1607,7 @@ struct EpochLinkJson {
 
 /// Every key of a folder, oldest first, as an array of base64 strings, from
 /// its current key and complete signed history (`chain`: the
-/// `GET /api/collections/{id}/epochs` array). Fails unless every statement
+/// `GET /api/v1/drive/collections/{id}/epochs` array). Fails unless every statement
 /// is the owner's, chained, and every key matches its commitment.
 #[wasm_bindgen(js_name = unlockCollectionKeyring)]
 pub fn unlock_collection_keyring(
@@ -5131,6 +5131,7 @@ pub fn yjs_seed_client_id(file_id: &str, content: &[u8]) -> f64 {
 #[serde(rename_all = "camelCase")]
 struct RenameChainJs {
     incarnation_id: String,
+    account_id: String,
     first: String,
     current: String,
     addresses: Vec<String>,
@@ -5139,11 +5140,14 @@ struct RenameChainJs {
     digests: Vec<String>,
 }
 
-/// One rename, signed with the account authority derived from the master key
-/// (docs/plans/username-renames.md). Returns the statement as JSON.
+/// One rename of the account `account_id` (the signed-in account's permanent
+/// id, a lowercase UUID), signed with the account authority derived from the
+/// identity root (docs/plans/username-renames.md). Returns the statement as
+/// JSON.
 #[wasm_bindgen(js_name = signAccountRename)]
 pub fn sign_account_rename(
     identity_root_base64: &str,
+    account_id: &str,
     sequence: f64,
     previous: &str,
     current: &str,
@@ -5160,8 +5164,12 @@ pub fn sign_account_rename(
     if issued_at_ms.fract() != 0.0 || !issued_at_ms.is_finite() {
         return Err(js_error("invalid rename time"));
     }
+    let account_id: kutup_crypto::account_ref::AccountId = account_id
+        .parse()
+        .map_err(|_| js_error("invalid account id"))?;
     let statement = kutup_crypto::account_rename::sign(
         &identity,
+        account_id,
         sequence as u64,
         previous,
         current,
@@ -5171,20 +5179,25 @@ pub fn sign_account_rename(
     serde_json::to_string(&statement).map_err(|error| js_error(&error.to_string()))
 }
 
-/// Verifies an account's rename chain (JSON array) against its authority key.
+/// Verifies an account's rename chain (JSON array) against its authority key
+/// and the account id it was looked up for (every statement must name it).
 /// With `known_digests_json` (the digests of a chain verified before, a JSON
 /// array of hex), the chain must extend it: a server cannot roll a rename
 /// back. Returns where the account is and every address it has had.
 #[wasm_bindgen(js_name = verifyAccountRenameChain)]
 pub fn verify_account_rename_chain(
     authority_public_base64: &str,
+    account_id: &str,
     chain_json: &str,
     known_digests_json: Option<String>,
 ) -> Result<JsValue, JsValue> {
     let authority = public_key_32(authority_public_base64, "authority key")?;
+    let account_id: kutup_crypto::account_ref::AccountId = account_id
+        .parse()
+        .map_err(|_| js_error("invalid account id"))?;
     let chain: Vec<kutup_crypto::account_rename::AccountRenameV1> =
         serde_json::from_str(chain_json).map_err(|_| js_error("invalid rename chain"))?;
-    let view = kutup_crypto::account_rename::verify_chain(&authority, &chain)
+    let view = kutup_crypto::account_rename::verify_chain(&authority, account_id, &chain)
         .map_err(|error| js_error(&error.to_string()))?;
     let digests: Vec<String> = view.digests.iter().map(hex::encode).collect();
     if let Some(known) = known_digests_json {
@@ -5198,6 +5211,7 @@ pub fn verify_account_rename_chain(
     }
     serde_wasm_bindgen::to_value(&RenameChainJs {
         incarnation_id: view.incarnation_id,
+        account_id: view.account_id,
         first: view.first,
         current: view.current,
         addresses: view.addresses,
@@ -5263,7 +5277,7 @@ struct MailForwardingMaterialView {
 /// the forwarder's address key is opened from its envelope here and never
 /// leaves WASM. Returns `{ forwardeePublicKey, instances: [{
 /// forwarderFingerprint, forwardeeFingerprint, proxyParameter }],
-/// activation }`, the body of `POST /api/mail/forwardings`' `endToEnd`. The
+/// activation }`, the body of `POST /api/v1/mail/forwardings`' `endToEnd`. The
 /// forwardee key itself leaves only sealed in the activation, to
 /// `forwardee_public_key_base64` (the forwardee address's primary key, from
 /// its verified key list), binding `forwarding_id` (a UUID v4 the client
@@ -5332,7 +5346,7 @@ struct AcceptedMailForwardingView {
 /// not from the server), for this forwarding and addresses and unexpired at
 /// `now_secs`, and that the key stands in for the forwarder's current key.
 /// Returns `{ publicKey, privateKeyEnvelope, fingerprint }` for `POST
-/// /api/mail/forwardings/{id}/accept`; the key itself never leaves WASM
+/// /api/v1/mail/forwardings/{id}/accept`; the key itself never leaves WASM
 /// unsealed.
 #[wasm_bindgen(js_name = acceptMailForwarding)]
 #[allow(clippy::too_many_arguments)]

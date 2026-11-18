@@ -21,16 +21,16 @@ function entry(action: string, payload: Record<string, unknown>, targetUsername:
 
 describe("An account's limits in the activity log", () => {
   it('names a rate limit by its name on the page', () => {
-    expect(activitySentence(entry('account.setRateLimit', { key: 'feedback', value: 5 }), t)).toBe(
+    expect(activitySentence(entry('account.setRateLimit', { key: 'account.rate.feedback', value: 5 }), t)).toBe(
       'admin set Feedback sent to 5 for bob',
     )
-    expect(activitySentence(entry('account.setRateLimit', { key: 'feedback', value: null }), t)).toBe(
+    expect(activitySentence(entry('account.setRateLimit', { key: 'account.rate.feedback', value: null }), t)).toBe(
       "admin gave bob the server's Feedback sent again",
     )
   })
 
   it('names a setting by its section and field', () => {
-    const upload = { key: 'drive_upload_max_bytes', field: 'driveUploadMaxBytes', section: 'drive' }
+    const upload = { key: 'drive.upload_max_bytes', field: 'driveUploadMaxBytes', section: 'drive' }
     expect(activitySentence(entry('account.setEntitlement', { ...upload, value: 1048576 }), t)).toBe(
       'admin set Largest upload (bytes) to 1048576 for bob',
     )

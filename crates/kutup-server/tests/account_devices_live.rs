@@ -306,10 +306,10 @@ fn the_device_cap_counts_every_kind() {
     let set_cap = |value: Option<i64>| {
         let query = match value {
             Some(value) => format!(
-                "INSERT INTO site_settings (key, value) VALUES ('devices_per_account', '{value}')
+                "INSERT INTO site_settings (key, value) VALUES ('account.devices_per_account', '{value}')
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
             ),
-            None => "DELETE FROM site_settings WHERE key = 'devices_per_account'".into(),
+            None => "DELETE FROM site_settings WHERE key = 'account.devices_per_account'".into(),
         };
         live.runtime
             .block_on(sqlx::query(&query).execute(&live.pool))
@@ -359,10 +359,10 @@ fn stale_unlisted_rows_hold_no_place_under_the_cap() {
     let set_cap = |value: Option<i64>| {
         let query = match value {
             Some(value) => format!(
-                "INSERT INTO site_settings (key, value) VALUES ('devices_per_account', '{value}')
+                "INSERT INTO site_settings (key, value) VALUES ('account.devices_per_account', '{value}')
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
             ),
-            None => "DELETE FROM site_settings WHERE key = 'devices_per_account'".into(),
+            None => "DELETE FROM site_settings WHERE key = 'account.devices_per_account'".into(),
         };
         live.runtime
             .block_on(sqlx::query(&query).execute(&live.pool))

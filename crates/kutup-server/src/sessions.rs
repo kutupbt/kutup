@@ -211,20 +211,20 @@ pub struct LiveSession {
 /// active. Called for every authenticated request.
 pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<LiveSession> {
     let row: Option<(String, bool, String)> = sqlx::query_as(
-        "SELECT s.client_type, u.is_admin,
+        "SELECT s.client_type, u.role <> 'member',
                 encode(sha256(convert_to(
                     length(COALESCE(encode(u.opaque_record, 'hex'), '')) || ':' ||
                     COALESCE(encode(u.opaque_record, 'hex'), '') ||
-                    u.totp_enabled::text || ',' ||
+                    (u.totp_secret_sealed IS NOT NULL)::text || ',' ||
                     (SELECT count(*) || '/' || count(*) FILTER (WHERE NOT k.compromised)
                      FROM account_security_keys k WHERE k.account_id = u.id) || ',' ||
-                    u.is_admin::text || ',' ||
+                    u.role || ',' ||
                     length(COALESCE(u.username, '')) || ':' || COALESCE(u.username, '') ||
                     length(COALESCE(u.key_binding::text, '')) || ':' || COALESCE(u.key_binding::text, ''),
                     'UTF8')), 'hex')
          FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.id = $1 AND s.account_id = $2 AND s.revoked_at IS NULL
-           AND s.expires_at > now() AND u.is_active
+           AND s.expires_at > now() AND u.state = 'active'
            -- A forked session lives only while its sign-in does.
            AND NOT EXISTS (SELECT 1 FROM auth_sessions p
                            WHERE p.id = s.parent_session_id AND p.revoked_at IS NOT NULL)",
@@ -288,7 +288,7 @@ pub async fn refresh(
         Option<OffsetDateTime>,
     );
     let current: Option<Row> = sqlx::query_as(
-        "SELECT s.id, s.account_id, s.client_type, u.is_admin, u.is_active, s.expires_at, s.revoked_at, s.rotated_at
+        "SELECT s.id, s.account_id, s.client_type, u.role <> 'member', u.state = 'active', s.expires_at, s.revoked_at, s.rotated_at
          FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.refresh_token_hash = $1
          FOR UPDATE OF s",
@@ -337,7 +337,7 @@ pub async fn refresh(
     }
 
     let previous: Option<Row> = sqlx::query_as(
-        "SELECT s.id, s.account_id, s.client_type, u.is_admin, u.is_active, s.expires_at, s.revoked_at, s.rotated_at
+        "SELECT s.id, s.account_id, s.client_type, u.role <> 'member', u.state = 'active', s.expires_at, s.revoked_at, s.rotated_at
          FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.previous_refresh_token_hash = $1
          FOR UPDATE OF s",
@@ -635,8 +635,8 @@ pub async fn consume_fork(
         return Err(AppError::unauthorized("invalid fork"));
     }
     let parent: Option<(Uuid, bool)> = sqlx::query_as(
-        "SELECT s.account_id, u.is_admin FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
-         WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.is_active
+        "SELECT s.account_id, u.role <> 'member' FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
+         WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.state = 'active'
          FOR UPDATE OF s",
     )
     .bind(parent_id)

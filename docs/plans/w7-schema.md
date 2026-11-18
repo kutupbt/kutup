@@ -134,6 +134,16 @@ columns. The columns already named `account_id` / `*_account_id` stay.
   - The share tables drop their labels and join it for display. The
     rename-relabel code (`remote_renames.rs` apply_rows) goes.
 - Every `incarnation_id` becomes bytea(32) (§2).
+- **Built (group 4):** every rename statement signs the account id
+  (`accountId`, label `kutup/account/rename/v2`: a self-statement binds the
+  account id), so a chain is kept under the id it signs, never one its server
+  gives beside it; an announce's routing `accountId` must equal it. A remote account first met (a share to or from it)
+  gets a row without a chain (`sequence` 0, no authority or digest) from what
+  its server says (`remote_renames::note_account`), before the share row,
+  which has a foreign key to it; a chain later replaces that label. Another
+  incarnation of the same account (an admin reset there) replaces the row by
+  announce or a new meeting, never by a lookup's answer. Rows without a chain
+  don't count against the per-domain cap and answer no lookup.
 
 ## 2. Encoding
 
@@ -249,6 +259,33 @@ Actions, old → new:
 - The `deleting_*` claim columns stay: they are the deletion job's
   bookkeeping.
 
+**As built (group 4):**
+- `role` CHECK (`member`, `admin`, `breakGlassAdmin`), `member` by default;
+  Rust `models::AccountRole`. The API keeps its booleans (`isAdmin`,
+  `isProtected`), computed from it; a promotion never touches the
+  break-glass administrator's role. `accounts_one_break_glass` is a unique
+  index on `role = 'breakGlassAdmin'`.
+- The key columns are nullable, NULL until set up (an administrator's
+  account, a reset one). `accounts_keys_set_up` requires, once
+  `keys_set_up_at` is set, both envelopes, the X-Wing, authority and Drive
+  signing keys and `drive_key_binding` non-empty and the authority key id,
+  incarnation id and `key_binding` present. `recovery_key_envelope` is in it:
+  every setup path (sign-up, first sign-in) and the master-key rotation
+  write one, and the recovery phrase is not optional. Authority key id and
+  incarnation id are exactly 32 bytes when present. Sign-up sets
+  `keys_set_up_at` with the keys; the first sign-in's setup sets it in the
+  same UPDATE as the keys.
+- `totp_enabled` went, but the authenticator's secret being set up (before
+  its first code) moved to its own column, `totp_pending_secret_sealed`;
+  `totp_secret_sealed IS NOT NULL` is "the authenticator app is on".
+- Sharing to a local account that has not set up its keys is refused
+  (`keysPendingUpgrade`) by `keys_set_up_at`, as it was by suite 1 before.
+- `drive.version_retention_choices`: an admin setting outside the numeric
+  registry (it is a list), stored as ascending comma-separated days, edited
+  in Administration → Server settings → Drive (`driveVersionRetentionChoices`),
+  checked by `PATCH /api/v1/account`; `/api/v1/account` gives the account its
+  `versionRetentionChoices`. The column keeps only `> 0`.
+
 ## 5. Entitlements
 
 `account_entitlements (account_id, key text, value bigint, source text,
@@ -266,6 +303,37 @@ updated_at)`, PK `(account_id, key)`; `source` is `admin` | `plan` |
 - `organization_setting_overrides` becomes `organization_entitlements`, the
   same shape for org scope.
 - Usage counters (`storage_used_bytes`) are not entitlements.
+
+**As built (group 4):**
+- `crate::entitlements` reads and writes both tables (`Holder::Account` /
+  `Holder::Organization`); every former reader of
+  `account_setting_overrides`, `organization_setting_overrides` and the three
+  account columns goes through it or the SQL below.
+- `source` also takes `account` (account table only): the account holder's
+  own federation switch (Settings → Privacy, the `federationAbroad` consent
+  withdrawn) is neither an administrator's, a plan's nor an organization's.
+- Quota: the key `account.storage_quota_bytes` (named finally now, like the
+  two switches); `storage_pool::quota` resolves account > site
+  `account.default_storage_quota_bytes` (named in §7) > 10 GiB. An account without
+  its own follows the site default as it changes (before, the default was
+  copied in at creation). `POST /api/v1/admin/accounts` writes one only for a
+  quota given above 0 (the New user page sends 0 unless the field was
+  edited); `PUT /api/v1/admin/accounts/{id}` writes one and logs
+  `account.setEntitlement` `{key, value, previous}`.
+- `drive.public_sharing`: 0 off, 1 or none follows the site's switch; the
+  API still says `on`/`off`. `server.federation`: written at sign-up and admin
+  creation from `server.federation_default` (§7), so a later change of the default leaves
+  existing accounts as they are; none (the break-glass account) follows the
+  default. `kutup_account_federates` reads it. The admin switches keep their
+  own actions (`account.setFederation`, `account.setPublicSharing`).
+- Values that are not whole numbers: none. The site's `public_sharing`
+  (`on`/`off`/`signedIn`) stays a site setting; the account's is 0/1.
+- **The quota and federation differ on purpose.** A quota is a limit the
+  operator sets: an account without its own follows the site default live,
+  so raising the default raises everyone it applies to. Federation is the
+  account holder's consent to data going abroad: it is fixed per account at
+  sign-up, so an operator changing the site default never turns anyone's
+  federation on or off; only the holder (or an admin, logged as such) does.
 
 ## 6. Event rows
 
@@ -301,10 +369,286 @@ updated_at)`, PK `(account_id, key)`; `source` is `admin` | `plan` |
 - **The admin API's `field` names stay;** only keys change. Three places
   show keys and follow:
   - the registry listing;
-  - `PUT /api/admin/users/{id}/limits/{key}` (the frontend reads keys from
+  - `PUT /api/v1/admin/accounts/{id}/entitlements/{key}` (the frontend reads keys from
     the registry);
   - the mail-domain settings page, which hard-codes `mail_domains.*`. It
     moves to the new keys, and its stale `mail_domains.per_account` is fixed.
+
+### Built (group 4)
+
+- Every key is `<namespace>.<name>`; `site_settings::NAMESPACES` lists the
+  eight, and a unit test checks every key the server has (registry, rate
+  limits, `mail.domains.*`, the ad-hoc ones, the entitlement keys). Rust
+  constant names and the admin API's `field` names did not change.
+- Rate limits: `Spec.key` is now the whole key (`account.rate.login`); the
+  `rate_limit.` prefix is gone from `site_settings`, `account_entitlements`,
+  `PUT /api/v1/admin/rate-limits/{key}` and `PUT /api/v1/admin/accounts/{id}/entitlements/{key}`
+  (which tells a rate limit from a setting by looking the key up). The
+  per-account entry's `key` and `limit` are both the key. The sections map
+  to apps: Accounts → `account`, Drive → `drive`, Chat, Groups and calls →
+  `chat`, Mail → `mail`, Calendar → `calendar`, Pass → `pass`; Federation,
+  Administration and map tiles → `server`. An app prefix already in the old
+  name is dropped (`mail_images` → `mail.rate.images`). The account app's
+  strings for them (`admin.rateLimits.limit` / `about`) are nested by the
+  key's parts, as i18next reads a dotted key as a path.
+- Unknown keys: settings are read by their own key, rate limits with
+  `key = ANY(<every limit's key>)` (was a prefix match), custom-domain
+  settings by `starts_with(key, 'mail.domains.')` and only their known keys;
+  a row of any other key is kept and ignored (unit test
+  `site_settings::tests::unknown_keys_are_ignored`).
+- The baseline seeds no settings; its only key literals are in
+  `kutup_account_federates` (`server.federation`, `server.federation_default`).
+  The entitlement tables' key CHECK (`^[a-z0-9_.]{1,80}$`) already takes the
+  new keys; `site_settings` has none (a fork's keys must fit).
+- Decisions the note left open: the site defaults keep "default" in their
+  name where they had it (`server.federation_default`, and
+  `account.default_storage_quota_bytes` as §5 names it); the site's
+  public-sharing switch takes the entitlement's key (`drive.public_sharing`,
+  another table and value set); `server.retention.*` holds the Privacy
+  section's periods (key backups, security events and their per-kind cap,
+  the admin log, ended sessions, the destruction log, finished held sends),
+  while Chat's delivery retentions stay `chat.*`; storage and health jobs are
+  `server.storage.*` / `server.health.*`; federation timings stay flat
+  (`server.federation_retry_base_seconds`), so `server.federation` (the
+  entitlement) is never also a prefix; contact groups are `mail.records.*`
+  (Contacts belongs to Mail), joined meetings `chat.records.*`, the photo
+  library `photos.records.library`, the records store's own limits
+  `account.records.*`; the map settings are `server.maps`; the custom-domain
+  watcher's two bookkeeping rows are `mail.untagged_domains_*` (outside
+  `mail.domains.*`, which the settings page lists).
+- The mail-domain settings page's stale `mail_domains.per_account` (no such
+  key, so the field never showed) is `mail.domains.per_organization`,
+  labelled "Domains per organization".
+- `TRASH_RETENTION_DAYS` (env) is gone: `drive.trash_retention_days`
+  (`driveTrashRetentionDays`, Drive section, 0–3650, default 30; 0 keeps the
+  trash) is read on every hourly pass of the trash sweep, which now always
+  runs. The compose files and `.env.example` dropped the variable.
+
+The full map. Registry settings (86, and one new):
+
+| Old | New |
+|---|---|
+| `chat_multi_max_message_bytes` | `chat.multi_max_message_bytes` |
+| `chat_multi_base_bytes` | `chat.multi_base_bytes` |
+| `chat_multi_max_recipients` | `chat.multi_max_recipients` |
+| `chat_multi_ip_bytes_per_min` | `chat.multi_ip_bytes_per_min` |
+| `chat_multi_per_recipient_per_min` | `chat.multi_per_recipient_per_min` |
+| `chat_multi_per_token_per_min` | `chat.multi_per_token_per_min` |
+| `chat_group_send_endorsements_per_day` | `chat.group_send_endorsements_per_day` |
+| `chat_group_endorsement_uploads_per_day` | `chat.group_endorsement_uploads_per_day` |
+| `chat_group_endorsement_page_size` | `chat.group_endorsement_page_size` |
+| `chat_multi_origin_requests_per_min` | `chat.multi_origin_requests_per_min` |
+| `chat_multi_origin_bytes_per_min` | `chat.multi_origin_bytes_per_min` |
+| `chat_group_max_members` | `chat.group_max_members` |
+| `calendars_per_account` | `calendar.calendars_per_account` |
+| `calendar_events_per_calendar` | `calendar.events_per_calendar` |
+| `calendar_sync_batch` | `calendar.sync_batch` |
+| `calendar_max_count` | `calendar.max_count` |
+| `calendar_reminders_per_event` | `calendar.reminders_per_event` |
+| `calendar_default_reminders` | `calendar.default_reminders` |
+| `calendar_reminder_lateness_seconds` | `calendar.reminder_lateness_seconds` |
+| `calendar_alarm_tick_seconds` | `calendar.alarm_tick_seconds` |
+| `calendar_alarm_batch` | `calendar.alarm_batch` |
+| `calendar_alarm_batch_per_account` | `calendar.alarm_batch_per_account` |
+| `calendar_alarm_sends` | `calendar.alarm_sends` |
+| `calendar_alarms_per_account` | `calendar.alarms_per_account` |
+| `calendar_push_subscriptions_per_account` | `calendar.push_subscriptions_per_account` |
+| `calendar_recompute_batch` | `calendar.recompute_batch` |
+| `calendar_alarms_page` | `calendar.alarms_page` |
+| `calendar_window_days` | `calendar.window_days` |
+| `calendar_events_page` | `calendar.events_page` |
+| `chat_link_token_seconds` | `chat.link_token_seconds` |
+| `chat_link_tokens_per_account` | `chat.link_tokens_per_account` |
+| `chat_provision_body_bytes` | `chat.provision_body_bytes` |
+| `chat_max_active_devices` | `chat.max_active_devices` |
+| `chat_provisioning_ticket_seconds` | `chat.provisioning_ticket_seconds` |
+| `chat_provisioning_sockets_per_account` | `chat.provisioning_sockets_per_account` |
+| `chat_distribution_message_bytes` | `chat.distribution_message_bytes` |
+| `devices_per_account` | `account.devices_per_account` |
+| `device_listing_grace_seconds` | `account.device_listing_grace_seconds` |
+| `remote_manifest_max_age_seconds` | `server.remote_manifest_max_age_seconds` |
+| `two_factor_recovery_codes` | `account.two_factor_recovery_codes` |
+| `security_keys_per_account` | `account.security_keys_per_account` |
+| `webauthn_ceremony_seconds` | `account.webauthn_ceremony_seconds` |
+| `key_backup_keep_days` | `server.retention.key_backup_days` |
+| `security_event_retention_days` | `server.retention.security_event_days` |
+| `admin_audit_retention_days` | `server.retention.admin_audit_days` |
+| `session_record_grace_days` | `server.retention.session_record_days` |
+| `account_closing_days` | `account.closing_days` |
+| `destruction_event_retention_days` | `server.retention.destruction_event_days` |
+| `security_events_kept_per_kind` | `server.retention.security_events_per_kind` |
+| `security_event_fold_seconds` | `server.security_event_fold_seconds` |
+| `mail_outbox_keep_seconds` | `server.retention.mail_outbox_seconds` |
+| `drive_upload_max_bytes` | `drive.upload_max_bytes` |
+| `drive_version_max_bytes` | `drive.version_max_bytes` |
+| `drive_stream_max_bytes` | `drive.stream_max_bytes` |
+| `drive_stream_cache_blocks` | `drive.stream_cache_blocks` |
+| `drive_stream_readahead_blocks` | `drive.stream_readahead_blocks` |
+| `drive_stream_max_concurrent` | `drive.stream_max_concurrent` |
+| `drive_stream_response_max_bytes` | `drive.stream_response_max_bytes` |
+| `drive_stream_blob_fallback_max_bytes` | `drive.stream_blob_fallback_max_bytes` |
+| `storage_incomplete_multipart_max_age_seconds` | `server.storage.incomplete_multipart_max_age_seconds` |
+| `federation_retry_base_seconds` | `server.federation_retry_base_seconds` |
+| `federation_retry_max_seconds` | `server.federation_retry_max_seconds` |
+| `federation_peer_upgrade_seconds` | `server.federation_peer_upgrade_seconds` |
+| `federation_worker_seconds` | `server.federation_worker_seconds` |
+| `federation_heads_per_tick` | `server.federation_heads_per_tick` |
+| `federation_record_days` | `server.federation_record_days` |
+| `federation_announce_days` | `server.federation_announce_days` |
+| `federation_announce_peer_days` | `server.federation_announce_peer_days` |
+| `chat_attachment_send_lifetime_seconds` | `chat.attachment_send_lifetime_seconds` |
+| `mail_keys_per_address` | `mail.keys_per_address` |
+| `account_records_pass_secrets` | `pass.records.secrets` |
+| `account_records_chat_groups` | `chat.records.groups` |
+| `account_records_chat_contacts` | `chat.records.contacts` |
+| `account_records_photos_library` | `photos.records.library` |
+| `account_records_chat_attachments` | `chat.records.attachments` |
+| `account_records_contact_groups` | `mail.records.contact_groups` |
+| `account_records_calendar_settings` | `calendar.records.settings` |
+| `account_records_joined_meetings` | `chat.records.joined_meetings` |
+| `account_records_batch_items` | `account.records.batch_items` |
+| `account_records_page` | `account.records.page` |
+| `account_records_tombstone_days` | `account.records.tombstone_days` |
+| `storage_deleted_blob_retention_seconds` | `server.storage.deleted_blob_retention_seconds` |
+| `storage_deleted_blob_sweep_seconds` | `server.storage.deleted_blob_sweep_seconds` |
+| `health_backup_max_age_seconds` | `server.health.backup_max_age_seconds` |
+| `health_job_grace_seconds` | `server.health.job_grace_seconds` |
+| `health_probe_timeout_seconds` | `server.health.probe_timeout_seconds` |
+| `TRASH_RETENTION_DAYS (env)` | `drive.trash_retention_days` |
+
+Ad-hoc keys:
+
+| Old | New |
+|---|---|
+| `mail_outside_sending` | `mail.outside_sending` |
+| `chat_mailbox_retention_days` | `chat.mailbox_retention_days` |
+| `chat_media_delivery_retention_days` | `chat.media_delivery_retention_days` |
+| `name_hold_days` | `account.name_hold_days` |
+| `old_address_receive_days` | `account.old_address_receive_days` |
+| `chat_group_link_joins_per_relay_group_per_min` | `chat.group_link_joins_per_relay_group_per_min` |
+| `chat_group_link_joins_per_relay_per_min` | `chat.group_link_joins_per_relay_per_min` |
+| `pass_vault_max_bytes` | `pass.vault_max_bytes` |
+| `drive.version_retention_choices` | `drive.version_retention_choices` |
+| `chat_group_avatar_max_bytes` | `chat.group_avatar_max_bytes` |
+| `chat_group_avatar_storage_per_group_bytes` | `chat.group_avatar_storage_per_group_bytes` |
+| `chat_group_avatar_pending_seconds` | `chat.group_avatar_pending_seconds` |
+| `registration_mode` | `account.registration_mode` |
+| `public_sharing` | `drive.public_sharing` |
+| `federation_default` | `server.federation_default` |
+| `default_storage_quota_bytes` | `account.default_storage_quota_bytes` |
+| `maps` | `server.maps` |
+| `mail_domains_untagged_fingerprint` | `mail.untagged_domains_fingerprint` |
+| `mail_domains_untagged_changed_at` | `mail.untagged_domains_changed_at` |
+
+Custom domains:
+
+| Old | New |
+|---|---|
+| `mail_domains.mode` | `mail.domains.mode` |
+| `mail_domains.per_organization` | `mail.domains.per_organization` |
+| `mail_domains.addresses_per_account` | `mail.domains.addresses_per_account` |
+| `mail_domains.on_server` | `mail.domains.on_server` |
+| `mail_domains.adds_per_day` | `mail.domains.adds_per_day` |
+| `mail_domains.pending_days` | `mail.domains.pending_days` |
+| `mail_domains.catch_all_per_day` | `mail.domains.catch_all_per_day` |
+| `mail_domains.grace_warn_days` | `mail.domains.grace_warn_days` |
+| `mail_domains.grace_stopped_hours` | `mail.domains.grace_stopped_hours` |
+| `mail_domains.catch_all` | `mail.domains.catch_all` |
+| `mail_domains.refreshes_at_once` | `mail.domains.refreshes_at_once` |
+| `mail_domains.check_timeout_seconds` | `mail.domains.check_timeout_seconds` |
+
+Rate limits (88):
+
+| Old | New |
+|---|---|
+| `rate_limit.login` | `account.rate.login` |
+| `rate_limit.login_lockout_threshold` | `account.rate.login_lockout_threshold` |
+| `rate_limit.login_lockout_minutes` | `account.rate.login_lockout_minutes` |
+| `rate_limit.login_account_ceiling` | `account.rate.login_account_ceiling` |
+| `rate_limit.login_account_daily_ceiling` | `account.rate.login_account_daily_ceiling` |
+| `rate_limit.login_source_daily_ceiling` | `account.rate.login_source_daily_ceiling` |
+| `rate_limit.totp_attempts` | `account.rate.totp_attempts` |
+| `rate_limit.totp_block_minutes` | `account.rate.totp_block_minutes` |
+| `rate_limit.fork` | `account.rate.fork` |
+| `rate_limit.register` | `account.rate.register` |
+| `rate_limit.registration_code_checks` | `account.rate.registration_code_checks` |
+| `rate_limit.registration_code_failures` | `account.rate.registration_code_failures` |
+| `rate_limit.recovery` | `account.rate.recovery` |
+| `rate_limit.user_lookup` | `account.rate.user_lookup` |
+| `rate_limit.device_registrations` | `account.rate.device_registrations` |
+| `rate_limit.account_head_reads` | `account.rate.head_reads` |
+| `rate_limit.rename_checks` | `account.rate.rename_checks` |
+| `rate_limit.rename_lookups` | `account.rate.rename_lookups` |
+| `rate_limit.feedback` | `account.rate.feedback` |
+| `rate_limit.available_hashes` | `drive.rate.available_hashes` |
+| `rate_limit.collab_frame_posts` | `drive.rate.collab_frame_posts` |
+| `rate_limit.collab_frames_per_second` | `drive.rate.collab_frames_per_second` |
+| `rate_limit.collab_frame_burst` | `drive.rate.collab_frame_burst` |
+| `rate_limit.collab_bytes_per_second` | `drive.rate.collab_bytes_per_second` |
+| `rate_limit.collab_byte_burst` | `drive.rate.collab_byte_burst` |
+| `rate_limit.reports` | `drive.rate.reports` |
+| `rate_limit.chat_keys_account` | `chat.rate.keys_account` |
+| `rate_limit.chat_link_tokens` | `chat.rate.link_tokens` |
+| `rate_limit.chat_provisioning_sockets` | `chat.rate.provisioning_sockets` |
+| `rate_limit.chat_provisioning_relays` | `chat.rate.provisioning_relays` |
+| `rate_limit.chat_identity_distributions` | `chat.rate.identity_distributions` |
+| `rate_limit.chat_keys_address` | `chat.rate.keys_address` |
+| `rate_limit.chat_anonymous_address` | `chat.rate.anonymous_address` |
+| `rate_limit.sealed_capability_bundles` | `chat.rate.sealed_capability_bundles` |
+| `rate_limit.sealed_capability_minute` | `chat.rate.sealed_capability_minute` |
+| `rate_limit.sealed_capability_day` | `chat.rate.sealed_capability_day` |
+| `rate_limit.sealed_recipient` | `chat.rate.sealed_recipient` |
+| `rate_limit.sealed_origin` | `chat.rate.sealed_origin` |
+| `rate_limit.media_capability_minute` | `chat.rate.media_capability_minute` |
+| `rate_limit.media_capability_day` | `chat.rate.media_capability_day` |
+| `rate_limit.media_recipient` | `chat.rate.media_recipient` |
+| `rate_limit.media_origin` | `chat.rate.media_origin` |
+| `rate_limit.link_previews` | `chat.rate.link_previews` |
+| `rate_limit.live_location_streams` | `chat.rate.live_location_streams` |
+| `rate_limit.live_location_reads` | `chat.rate.live_location_reads` |
+| `rate_limit.group_relay` | `chat.rate.group_relay` |
+| `rate_limit.group_gateway_relay` | `chat.rate.group_gateway_relay` |
+| `rate_limit.group_pseudonym` | `chat.rate.group_pseudonym` |
+| `rate_limit.group_changes_pseudonym` | `chat.rate.group_changes_pseudonym` |
+| `rate_limit.group_changes_group` | `chat.rate.group_changes_group` |
+| `rate_limit.group_link` | `chat.rate.group_link` |
+| `rate_limit.group_failures_relay` | `chat.rate.group_failures_relay` |
+| `rate_limit.group_creates_relay` | `chat.rate.group_creates_relay` |
+| `rate_limit.group_call_account_tokens` | `chat.rate.group_call_account_tokens` |
+| `rate_limit.group_call_origin_tokens` | `chat.rate.group_call_origin_tokens` |
+| `rate_limit.mail_domain_checks` | `mail.rate.domain_checks` |
+| `rate_limit.mail_images` | `mail.rate.images` |
+| `rate_limit.mail_image_bytes` | `mail.rate.image_bytes` |
+| `rate_limit.mail_images_at_once` | `mail.rate.images_at_once` |
+| `rate_limit.mail_images_server_at_once` | `mail.rate.images_server_at_once` |
+| `rate_limit.forwarding_confirmations` | `mail.rate.forwarding_confirmations` |
+| `rate_limit.forwardings_created` | `mail.rate.forwardings_created` |
+| `rate_limit.forwarding_confirmations_sent` | `mail.rate.forwarding_confirmations_sent` |
+| `rate_limit.forwarding_invites` | `mail.rate.forwarding_invites` |
+| `rate_limit.forwarding_code_minutes` | `mail.rate.forwarding_code_minutes` |
+| `rate_limit.forwarding_code_attempts` | `mail.rate.forwarding_code_attempts` |
+| `rate_limit.forwarding_code_resends` | `mail.rate.forwarding_code_resends` |
+| `rate_limit.forwarding_codes_per_destination` | `mail.rate.forwarding_codes_per_destination` |
+| `rate_limit.forwarding_unverified_pending` | `mail.rate.forwarding_unverified_pending` |
+| `rate_limit.forwarding_unverified_minutes` | `mail.rate.forwarding_unverified_minutes` |
+| `rate_limit.forwarding_bounces` | `mail.rate.forwarding_bounces` |
+| `rate_limit.forwarding_outside` | `mail.rate.forwarding_outside` |
+| `rate_limit.forwarding_outside_account` | `mail.rate.forwarding_outside_account` |
+| `rate_limit.calendar_writes` | `calendar.rate.writes` |
+| `rate_limit.call_links` | `chat.rate.call_links` |
+| `rate_limit.call_link_polls` | `chat.rate.call_link_polls` |
+| `rate_limit.turn_credentials` | `chat.rate.turn_credentials` |
+| `rate_limit.map_tiles` | `server.rate.map_tiles` |
+| `rate_limit.pass_icons` | `pass.rate.icons` |
+| `rate_limit.pass_icon_fetches` | `pass.rate.icon_fetches` |
+| `rate_limit.pass_pin_attempts` | `pass.rate.pin_attempts` |
+| `rate_limit.fed_users` | `server.rate.fed_users` |
+| `rate_limit.fed_multi_failures` | `server.rate.fed_multi_failures` |
+| `rate_limit.rename_peer_fetches` | `server.rate.rename_peer_fetches` |
+| `rate_limit.account_peer_fetches` | `server.rate.account_peer_fetches` |
+| `rate_limit.rename_announces` | `server.rate.rename_announces` |
+| `rate_limit.csp_reports` | `server.rate.csp_reports` |
+| `rate_limit.admin` | `server.rate.admin` |
 
 ## 8. Object storage: one key per revision
 

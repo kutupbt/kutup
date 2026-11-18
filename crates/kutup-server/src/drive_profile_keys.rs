@@ -113,8 +113,8 @@ fn decode_envelope(envelope: &str) -> AppResult<ProfileKeyEnvelopeV1> {
 
 async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option<LocalAccount>> {
     let row: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key)
-         FROM accounts WHERE id = $1 AND is_active = true
+        "SELECT id, COALESCE(encode(account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(drive_signing_public_key), '')
+         FROM accounts WHERE id = $1 AND state = 'active'
           -- To another server, an account that doesn't talk to other servers
           -- is no account (crate::federation_switch).
           AND (NOT $2 OR kutup_account_federates(id))",
@@ -226,10 +226,10 @@ pub async fn list_people(
     let domain = state.config.chat_server_name.as_str();
     type LocalRow = (Uuid, String, String, String, i16, Option<String>);
     let local: Vec<LocalRow> = sqlx::query_as(
-        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), kutup_b64(u.public_key),
-                u.identity_suite, kutup_b64(u.drive_signing_public_key)
+        "SELECT u.id, u.username, COALESCE(encode(u.account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(u.drive_xwing_public_key), ''),
+                u.identity_suite, COALESCE(kutup_b64(u.drive_signing_public_key), '')
          FROM accounts u
-         WHERE u.is_active = true AND u.username IS NOT NULL AND u.id <> $1 AND u.id IN (
+         WHERE u.state = 'active' AND u.username IS NOT NULL AND u.id <> $1 AND u.id IN (
              SELECT cs.recipient_account_id FROM drive_collection_shares cs
              JOIN drive_collections c ON c.id = cs.collection_id AND c.deleted_at IS NULL
              WHERE c.owner_account_id = $1
@@ -252,19 +252,20 @@ pub async fn list_people(
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
-    // Remote people by (server, account id), with the address each share
-    // last named them by (kept current by rename announces), to show.
+    // Remote people by (server, account id), with the address they go by
+    // now (remote_renames: kept current by rename announces), to show.
     let remote: Vec<(String, Uuid, String)> = sqlx::query_as(
-        "SELECT DISTINCT ON (server, account_id) server, account_id, account FROM (
-             SELECT s.recipient_server AS server, s.recipient_account_id AS account_id,
-                    s.recipient_username || '@' || s.recipient_server AS account
+        "SELECT r.server, r.account_id, r.current_address FROM (
+             SELECT s.recipient_server AS server, s.recipient_account_id AS account_id
                FROM drive_federated_outgoing_shares s
                JOIN drive_collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
               WHERE s.sharer_account_id = $1
-             UNION ALL
-             SELECT owner_server, owner_account_id, owner_account
+             UNION
+             SELECT owner_server, owner_account_id
                FROM drive_federated_incoming_shares WHERE account_id = $1) people
-         ORDER BY server, account_id, account",
+         JOIN remote_account_renames r
+           ON r.server = people.server AND r.account_id = people.account_id
+         ORDER BY r.server, r.account_id",
     )
     .bind(user_id)
     .fetch_all(&state.pool)

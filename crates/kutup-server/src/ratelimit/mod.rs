@@ -75,16 +75,21 @@ pub(crate) fn apply_overrides(rows: Vec<(String, String, i64)>) {
     *OVERRIDES.write().unwrap() = overrides;
 }
 
-/// Every account's own values, as stored (`account_setting_overrides`, keyed
-/// `rate_limit.<key>`), by limit key.
+/// Every limit's key, as `account_entitlements` and `site_settings` store it.
+fn keys() -> Vec<&'static str> {
+    SPECS.iter().map(|spec| spec.key).collect()
+}
+
+/// Every account's own values, as stored (`account_entitlements`, by the
+/// limit's key). Rows of keys this server doesn't know (a newer server's,
+/// or a fork's) are left alone.
 pub async fn stored_overrides(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, String, i64)>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT account_id::text, substr(key, length($1) + 1), value FROM account_setting_overrides
-         WHERE starts_with(key, $1)",
+        "SELECT account_id::text, key, value FROM account_entitlements WHERE key = ANY($1)",
     )
-    .bind(SETTING_PREFIX)
+    .bind(keys())
     .fetch_all(pool)
     .await
 }
@@ -107,10 +112,6 @@ pub enum FirstFrom {
     TestStack,
 }
 
-/// The `site_settings` key prefix of the values administrators set:
-/// `rate_limit.<key>`.
-pub const SETTING_PREFIX: &str = "rate_limit.";
-
 /// A limit's first value and where it came from.
 pub fn first(limit: Limit) -> (u64, FirstFrom) {
     FIRST
@@ -119,7 +120,7 @@ pub fn first(limit: Limit) -> (u64, FirstFrom) {
         .unwrap_or((limit.spec().default, FirstFrom::Default))
 }
 
-/// The values administrators set, by limit (stored as `rate_limit.<key>`),
+/// The values administrators set, by limit (stored under the limit's key),
 /// over the first values: what every check reads from now on. A stored
 /// value outside the limit's bounds (a bound since lowered) is ignored, and
 /// logged.
@@ -150,17 +151,15 @@ fn effective(spec: &Spec, stored: Option<&String>, first: u64, ceiling: u64) -> 
     }
 }
 
-/// The values administrators set, by limit key.
+/// The values administrators set, by limit key. Rows of keys this server
+/// doesn't know are left alone.
 pub async fn stored(pool: &sqlx::PgPool) -> Result<HashMap<String, String>, sqlx::Error> {
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT key, value FROM site_settings WHERE starts_with(key, $1)")
-            .bind(SETTING_PREFIX)
+        sqlx::query_as("SELECT key, value FROM site_settings WHERE key = ANY($1)")
+            .bind(keys())
             .fetch_all(pool)
             .await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(key, value)| Some((key.strip_prefix(SETTING_PREFIX)?.to_owned(), value)))
-        .collect())
+    Ok(rows.into_iter().collect())
 }
 
 /// Held across a reload's reads and its apply, so reloads apply in the
@@ -1111,11 +1110,17 @@ mod tests {
         let limiter = RateLimiter::registered(Limit::LiveLocationStreams);
         let account = "0b7c9a52-3a8e-4bb4-9a0e-6c1f2e1d0a11";
         apply_overrides(vec![
-            (account.to_owned(), "live_location_streams".to_owned(), 1),
-            // Not per account, out of bounds, unknown: ignored.
-            (account.to_owned(), "reports".to_owned(), 1),
-            (account.to_owned(), "pass_icons".to_owned(), 0),
-            (account.to_owned(), "no_such_limit".to_owned(), 1),
+            (
+                account.to_owned(),
+                "chat.rate.live_location_streams".to_owned(),
+                1,
+            ),
+            // Not per account, out of bounds, unknown (a newer server's, a
+            // fork's): ignored.
+            (account.to_owned(), "drive.rate.reports".to_owned(), 1),
+            (account.to_owned(), "pass.rate.icons".to_owned(), 0),
+            (account.to_owned(), "chat.rate.no_such_limit".to_owned(), 1),
+            (account.to_owned(), "enterprise.rate.seats".to_owned(), 1),
         ]);
         assert_eq!(
             account_override(Limit::LiveLocationStreams, account),

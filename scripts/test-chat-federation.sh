@@ -150,7 +150,7 @@ until [[ "$(compose exec -T postgres-a psql -U kutup -d kutup -Atc \
   sleep 2
 done
 kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
-  "SELECT COUNT(*) FROM remote_account_renames WHERE domain='a.test' AND current_address LIKE 'ren_alicia@%'")"
+  "SELECT COUNT(*) FROM remote_account_renames WHERE server='a.test' AND current_address LIKE 'ren_alicia@%'")"
 [[ "$kept_renames" == "1" ]] || { echo "B did not keep A's rename chain ($kept_renames)" >&2; exit 1; }
 
 # Shares follow accounts (docs/plans/account-ids.md): renames on both sides
