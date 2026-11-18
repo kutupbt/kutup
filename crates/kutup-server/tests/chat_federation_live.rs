@@ -3668,7 +3668,7 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
     let chains = loop {
         let chains = json_response(
             c.get(format!(
-                "{b}/api/v1/accounts/by-address/{old}/renames@{domain_a}"
+                "{b}/api/v1/accounts/by-address/{old}@{domain_a}/renames"
             ))
             .bearer_auth(&token_b)
             .send()

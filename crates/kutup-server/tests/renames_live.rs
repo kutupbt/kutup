@@ -151,7 +151,7 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
         &c,
         &base,
         &user.token,
-        &format!("/api/v1/accounts/by-address/{old}/renames@{domain}"),
+        &format!("/api/v1/accounts/by-address/{old}@{domain}/renames"),
     )
     .json()
     .unwrap();
@@ -782,7 +782,7 @@ fn remote_lookups_check_the_name_and_say_when_they_cannot_tell() {
         &c,
         &base,
         &user.token,
-        "/api/v1/accounts/by-address/ada/renames@unreachable.invalid",
+        "/api/v1/accounts/by-address/ada@unreachable.invalid/renames",
     )
     .json()
     .unwrap();
