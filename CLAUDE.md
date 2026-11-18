@@ -12,7 +12,7 @@ End-to-end encrypted, self-hosted Drive, real-time collaboration, and federated 
 - `docs/README.md` — documentation map and the distinction between current,
   normative, historical, research, and plan documents.
 - `docs/architecture.md` — system design (the E2EE model, the collab WS layer, federation).
-- `docs/api.md` — REST API. The server emits its full OpenAPI spec (every operation annotated via `#[utoipa::path]`) at `GET /api-docs/openapi.json`; an interactive Swagger UI is deferred (see `docs/roadmap.md`).
+- `docs/api.md` — REST API. The server emits its full OpenAPI spec (every operation annotated via `#[utoipa::path]`) at `GET /api/v1/openapi.json` (every client path is under `/api/v1/`, federation under `/api/fed/v2/`); an interactive Swagger UI is deferred (see `docs/roadmap.md`).
 - `docs/contributing.md` — local dev setup, the full project structure, code conventions, ops scripts.
 - `docs/onlyoffice.md` — how office docs stay client-side (the CryptPad pattern: OnlyOffice in the browser, **no WOPI / no Collabora**).
 - `docs/chat-protocol.md`, `docs/chat-media.md`, `docs/chat-backup.md` — current Chat, attachment, and continuous-history contracts; the matching `*-security-threat-model.md` files define their trust boundaries.
