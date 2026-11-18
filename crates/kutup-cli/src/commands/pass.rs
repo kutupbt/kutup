@@ -10,6 +10,7 @@ use clap::Subcommand;
 use serde::Serialize;
 
 use crate::commands::pass_entries as entries;
+use crate::commands::pass_vault as vault_cmds;
 use crate::context::require_session;
 use crate::cryptohelpers::{decrypt_file_meta, locate_file, FoundFile};
 use crate::output::print_json;
@@ -106,6 +107,97 @@ pub enum PassCmd {
         #[arg(long)]
         force: bool,
     },
+    /// Add a group (Group/Sub/New); its parent must be there.
+    Mkdir {
+        /// A vault's file id or name.
+        vault: String,
+        path: String,
+    },
+    /// Move a group (with what it holds) to the recycle bin (for good with
+    /// --force inside it or with the bin off).
+    Rmdir {
+        /// A vault's file id or name.
+        vault: String,
+        path: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Move an entry (path or UUID) or a group (path) into a group (Group/Sub;
+    /// "" for the top group).
+    Mv {
+        /// A vault's file id or name.
+        vault: String,
+        what: String,
+        to: String,
+    },
+    /// Write an entry's attachment to a file (--out) or, with --stdout, to
+    /// standard output.
+    AttachmentExport {
+        /// A vault's file id or name.
+        vault: String,
+        /// An entry: its path (Group/Sub/Title) or its UUID.
+        entry: String,
+        /// The attachment's name.
+        name: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        stdout: bool,
+    },
+    /// Attach a file to an entry under `name` (--force replaces one of that name).
+    AttachmentImport {
+        /// A vault's file id or name.
+        vault: String,
+        /// An entry: its path (Group/Sub/Title) or its UUID.
+        entry: String,
+        /// The attachment's name.
+        name: String,
+        file: PathBuf,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove an entry's attachment (kept in the entry's history).
+    AttachmentRm {
+        /// A vault's file id or name.
+        vault: String,
+        /// An entry: its path (Group/Sub/Title) or its UUID.
+        entry: String,
+        /// The attachment's name.
+        name: String,
+    },
+    /// The vault's name, encryption and counts.
+    DbInfo {
+        /// A vault's file id or name.
+        vault: String,
+    },
+    /// Export the vault UNENCRYPTED (CSV or KeePass XML), after proving the
+    /// account's password again (KUTUP_PASSWORD, or a prompt). Writes to
+    /// --out FILE (created, never overwritten), or to standard output only
+    /// with --stdout.
+    Export {
+        /// A vault's file id or name.
+        vault: String,
+        #[arg(long, value_enum, default_value = "xml")]
+        format: crate::commands::pass_vault::ExportFormat,
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        stdout: bool,
+    },
+    /// Import another password manager's export (a file, or - for standard
+    /// input) into a new group, as the website: CSV from most managers,
+    /// Bitwarden JSON, 1Password 1PUX, Proton Pass, KeePass XML.
+    Import {
+        /// A vault's file id or name.
+        vault: String,
+        file: String,
+        /// The format's id (auto when absent: the file is recognised).
+        #[arg(long)]
+        format: Option<String>,
+        /// The new group's name ("Imported from <app>" when absent).
+        #[arg(long)]
+        group: Option<String>,
+    },
     /// Generate a password, or a passphrase with --words; no vault needed.
     Generate {
         #[command(flatten)]
@@ -192,6 +284,48 @@ pub fn run(profile: &str, json: bool, cmd: &PassCmd) -> Result<()> {
             force,
         } => entries::rm(profile, json, vault, entry, *force),
         PassCmd::Generate { options } => entries::generate(json, options),
+        PassCmd::Mkdir { vault, path } => vault_cmds::mkdir(profile, json, vault, path),
+        PassCmd::Rmdir { vault, path, force } => {
+            vault_cmds::rmdir(profile, json, vault, path, *force)
+        }
+        PassCmd::Mv { vault, what, to } => vault_cmds::mv(profile, json, vault, what, to),
+        PassCmd::AttachmentExport {
+            vault,
+            entry,
+            name,
+            out,
+            stdout,
+        } => vault_cmds::attachment_export(profile, vault, entry, name, out.as_deref(), *stdout),
+        PassCmd::AttachmentImport {
+            vault,
+            entry,
+            name,
+            file,
+            force,
+        } => vault_cmds::attachment_import(profile, json, vault, entry, name, file, *force),
+        PassCmd::AttachmentRm { vault, entry, name } => {
+            vault_cmds::attachment_rm(profile, json, vault, entry, name)
+        }
+        PassCmd::DbInfo { vault } => vault_cmds::db_info(profile, json, vault),
+        PassCmd::Export {
+            vault,
+            format,
+            out,
+            stdout,
+        } => vault_cmds::export(profile, vault, *format, out.as_deref(), *stdout),
+        PassCmd::Import {
+            vault,
+            file,
+            format,
+            group,
+        } => vault_cmds::import(
+            profile,
+            json,
+            vault,
+            file,
+            format.as_deref(),
+            group.as_deref(),
+        ),
         PassCmd::Forget { file_id, force } => forget(profile, json, file_id, *force),
         PassCmd::ShowKey { file_id } => show_key(profile, json, file_id),
     }

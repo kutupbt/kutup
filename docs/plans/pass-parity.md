@@ -251,9 +251,9 @@ read-only vault has no selection and no dragging.
 | Phones | (none; KeePassDX, Keepass2Android, KeePassium) | 🟡 | the website at phone width (K3); no autofill; native apps deferred ([`../mobile-build.md`](../mobile-build.md)) |
 | Browser extension | KeePassXC-Browser | ❌ | later |
 | CLI: open, `ls`, `show`, `clip`, `search` | `keepassxc-cli` | ✅ (CLI) | `kutup pass ls <vault> [group] [-R]`, `search`, `show` (`-s`, `-a`, `-t`), `clip` (`--clear-after`, default 10 s; the platform's clipboard tool) (`crates/kutup-cli/src/commands/pass_entries.rs`): a vault by file id or name, opened with the kept key, `KUTUP_VAULT_PASSWORD` or a prompt; entries by path or UUID, values resolved |
-| CLI: `add`, `edit`, `rm`, `mv`, `mkdir`, `rmdir`, attachments | `keepassxc-cli` | 🟡 | `add`, `edit` (`--move-to` moves), `rm` (`--force` for good), `generate`: the website's operations, saved as a Drive version based on the one read and merged with a save that landed first; no `mkdir`, `rmdir` or attachments yet |
-| CLI: `db-create`, `db-edit`, `db-info`, `merge`, `import`, `export` | `keepassxc-cli` | 🟡 | `merge` happens inside `kutup sync`; the rest none |
-| CLI: `generate`, `diceware`, `estimate`, `analyze` | `keepassxc-cli` | ❌ | |
+| CLI: `add`, `edit`, `rm`, `mv`, `mkdir`, `rmdir`, attachments | `keepassxc-cli` | ✅ | `add`, `edit` (`--move-to` moves), `rm` (`--force` for good), `mv` (an entry or a group), `mkdir`, `rmdir` (`--force` for good), `attachment-export` (`--out`, or `--stdout`), `attachment-import` (`--force` replaces), `attachment-rm`, `generate`: the website's operations, saved as a Drive version based on the one read and merged with a save that landed first |
+| CLI: `db-create`, `db-edit`, `db-info`, `merge`, `import`, `export` | `keepassxc-cli` | 🟡 | `db-info`; `import` (every format the website reads, into a new group); `export` (CSV or KeePass XML, after the account's password is proved again, as the website; a new 0600 file, or standard output only with `--stdout`); `merge` happens inside `kutup sync`; no `db-create` or `db-edit` (vaults are made and set up in the website) |
+| CLI: `generate`, `diceware`, `estimate`, `analyze` | `keepassxc-cli` | 🟡 | `kutup pass generate` (a password, or a passphrase from the EFF list with `--words`, as `diceware`); no `estimate` or `analyze` (the website's reports have them) |
 | CLI: SSH agent | (in the GUI) | ✅ | beyond KeePassXC: `kutup ssh-agent`, `kutup ssh-add`, headless and over SSH |
 | Languages | ~40 | 🟡 | English and Turkish |
 

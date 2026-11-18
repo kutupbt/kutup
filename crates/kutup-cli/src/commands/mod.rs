@@ -13,6 +13,7 @@ pub mod mkdir;
 pub mod mv;
 pub mod pass;
 pub mod pass_entries;
+pub mod pass_vault;
 pub mod password;
 pub mod pubshare;
 pub mod recover;

@@ -102,23 +102,23 @@ impl GenerateOpts {
 }
 
 /// An open vault and where it came from.
-struct Opened {
-    ctx: Ctx,
-    file_id: String,
-    name: String,
-    collection_id: String,
-    folder_epoch: u32,
-    keys: Keyring,
-    vault_keys: VaultKeys,
-    db: Database,
-    key_index: usize,
+pub(crate) struct Opened {
+    pub(crate) ctx: Ctx,
+    pub(crate) file_id: String,
+    pub(crate) name: String,
+    pub(crate) collection_id: String,
+    pub(crate) folder_epoch: u32,
+    pub(crate) keys: Keyring,
+    pub(crate) vault_keys: VaultKeys,
+    pub(crate) db: Database,
+    pub(crate) key_index: usize,
     /// The version read, as the base records it.
-    version: String,
+    pub(crate) version: String,
 }
 
 impl Opened {
     /// Saves the vault as it is now; merges with a save that landed first.
-    fn save(&mut self) -> Result<()> {
+    pub(crate) fn save(&mut self) -> Result<()> {
         let key = self
             .vault_keys
             .key(&self.name, self.key_index)
@@ -160,7 +160,7 @@ impl Opened {
 
 /// The vault named `name` (a file id, or a `.kdbx` file's name with or
 /// without the extension), opened.
-fn open_vault(profile: &str, name: &str) -> Result<Opened> {
+pub(crate) fn open_vault(profile: &str, name: &str) -> Result<Opened> {
     let ctx = require_session(profile)?;
     let roots = ctx.session.roots()?;
     let mut found = Vec::new();
@@ -235,7 +235,7 @@ fn open_vault(profile: &str, name: &str) -> Result<Opened> {
 }
 
 /// The names of the groups from below the top group down to `group`.
-fn group_path(db: &Database, mut group: Option<GroupId>) -> Vec<String> {
+pub(crate) fn group_path(db: &Database, mut group: Option<GroupId>) -> Vec<String> {
     let mut names = Vec::new();
     while let Some(id) = group {
         if id == db.root {
@@ -249,13 +249,13 @@ fn group_path(db: &Database, mut group: Option<GroupId>) -> Vec<String> {
     names
 }
 
-fn field<'a>(entry: &'a Entry, key: &str) -> &'a str {
+pub(crate) fn field<'a>(entry: &'a Entry, key: &str) -> &'a str {
     entry.fields.get(key).map_or("", |v| v.get().as_str())
 }
 
 /// The entry `name` names: its UUID (with or without dashes) or its path
 /// (`Group/Sub/Title`, below the top group), outside the recycle bin.
-fn find_entry(db: &Database, name: &str) -> Result<EntryId> {
+pub(crate) fn find_entry(db: &Database, name: &str) -> Result<EntryId> {
     let compact = name.replace('-', "").to_lowercase();
     if compact.len() == 32 && compact.chars().all(|c| c.is_ascii_hexdigit()) {
         if let Some(entry) = db
@@ -291,7 +291,7 @@ fn find_entry(db: &Database, name: &str) -> Result<EntryId> {
 }
 
 /// The group a path names (below the top group; empty is the top group).
-fn find_group(db: &Database, path: &str) -> Result<GroupId> {
+pub(crate) fn find_group(db: &Database, path: &str) -> Result<GroupId> {
     let mut group = db.root;
     for part in path.split('/').filter(|p| !p.is_empty()) {
         group = db.groups[&group]
@@ -696,7 +696,7 @@ fn input_of(entry: &Entry, changes: &[(&str, String)]) -> EntryInput {
     }
 }
 
-fn now() -> chrono::NaiveDateTime {
+pub(crate) fn now() -> chrono::NaiveDateTime {
     Utc::now().naive_utc()
 }
 
