@@ -34,8 +34,8 @@ use crate::AppState;
 
 const JSON: &str = "application/json";
 const OCTETS: &str = "application/octet-stream";
-const OFFER_PATH: &str = "/api/fed/chat/media/offers";
-const OBJECT_PATH: &str = "/api/fed/chat/media/objects";
+const OFFER_PATH: &str = "/api/fed/v2/chat/media/offers";
+const OBJECT_PATH: &str = "/api/fed/v2/chat/media/objects";
 
 fn canonical_uuid(value: &str) -> Option<Uuid> {
     Uuid::parse_str(value)

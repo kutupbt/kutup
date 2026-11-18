@@ -287,8 +287,8 @@ Server A (sharer)                          Server B (recipient)
    via signed v2 discovery
 
 2. Signed Drive directory lookup
-   GET /api/fed/drive/users/bob
-                                           ← signed bob@b.example publicKey
+   GET /api/fed/v2/accounts/lookup?name=bob
+                                           ← signed bob@b.example account and keys
 
 3. Browser seals collection key to Bob
    POST /api/v1/drive/collections/:id/federated-shares

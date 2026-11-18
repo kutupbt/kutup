@@ -27,8 +27,8 @@ use crate::federation::{FederationRequestSpec, FederationStack};
 use crate::middleware::AuthAccount;
 use crate::AppState;
 
-const GATEWAY_PATH: &str = "/api/fed/chat/groups/gateway";
-const KEY_CONFIG_PATH: &str = "/api/fed/chat/groups/gateway-key";
+const GATEWAY_PATH: &str = "/api/fed/v2/chat/groups/gateway";
+const KEY_CONFIG_PATH: &str = "/api/fed/v2/chat/groups/gateway-key";
 const OCTET_STREAM: &str = "application/octet-stream";
 const JSON: &str = "application/json";
 /// The most identity documents one key-config answer carries.
@@ -239,10 +239,10 @@ pub async fn relay(
     })
 }
 
-/// `POST /api/fed/chat/groups/gateway`: a peer relays a sealed request here.
+/// `POST /api/fed/v2/chat/groups/gateway`: a peer relays a sealed request here.
 #[utoipa::path(
     post,
-    path = "/api/fed/chat/groups/gateway",
+    path = "/api/fed/v2/chat/groups/gateway",
     tag = "chat.federation",
     request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "A sealed group request, relayed"),
     responses(
@@ -289,11 +289,11 @@ pub async fn fed_gateway(
     }
 }
 
-/// `GET /api/fed/chat/groups/gateway-key`: this home's key config, for a
+/// `GET /api/fed/v2/chat/groups/gateway-key`: this home's key config, for a
 /// peer's user. The config is signed by this server's identity.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/groups/gateway-key",
+    path = "/api/fed/v2/chat/groups/gateway-key",
     tag = "chat.federation",
     responses(
         (status = 200, description = "The gateway key config, signed by this server's identity"),

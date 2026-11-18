@@ -38,7 +38,7 @@ use crate::middleware::AuthAccount;
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
-const FEDERATION_PATH: &str = "/api/fed/chat/group-calls/token";
+const FEDERATION_PATH: &str = "/api/fed/v2/chat/group-calls/token";
 /// How long a token admits its holder to the room.
 const TOKEN_TTL_SECONDS: i64 = 6 * 60 * 60;
 

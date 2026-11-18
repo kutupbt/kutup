@@ -341,11 +341,11 @@ macro_rules! signed_read {
     }};
 }
 
-/// `GET /api/fed/drive/file-invite` — the file behind a capability, its key
+/// `GET /api/fed/v2/drive/file-shares/invite` — the file behind a capability, its key
 /// sealed to the recipient, and its owner's identity. Signed.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/file-invite",
+    path = "/api/fed/v2/drive/file-shares/invite",
     tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized file invite", body = FileInviteResponse))
 )]
@@ -356,7 +356,7 @@ pub async fn get_file_invite(
     signed_read!(
         state,
         headers,
-        "/api/fed/drive/file-invite",
+        "/api/fed/v2/drive/file-shares/invite",
         |federation, authenticated, share| {
             let file = federated_file(&state, share.file_id).await?;
             let owner: (Uuid, Option<String>, String, Option<String>) = sqlx::query_as(
@@ -394,13 +394,13 @@ pub async fn get_file_invite(
     )
 }
 
-/// `GET /api/fed/drive/file-content` — the file as it is now (its latest
+/// `GET /api/fed/v2/drive/file-shares/content` — the file as it is now (its latest
 /// whole-file version, else the upload), as a signed encrypted stream; or
 /// the one range the signed query asks (`range`, `ifRange`):
 /// docs/plans/drive-block-format.md §3.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/file-content",
+    path = "/api/fed/v2/drive/file-shares/content",
     tag = "drive.federation",
     params(
         ("range" = Option<String>, Query, description = "One range: `a-b`, `a-` or `-k`"),
@@ -422,7 +422,7 @@ pub async fn get_file_content(
         .authenticate_inbound(
             &headers,
             "GET",
-            "/api/fed/drive/file-content",
+            "/api/fed/v2/drive/file-shares/content",
             query.as_deref(),
             &[],
             FederationFeature::DriveV1,
@@ -492,11 +492,11 @@ pub async fn get_file_content(
     }
 }
 
-/// `GET /api/fed/drive/file-state` — a note's or place list's latest saved
+/// `GET /api/fed/v2/drive/file-shares/state` — a note's or place list's latest saved
 /// state (their edits are not whole-file versions). `404` when none. Signed.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/file-state",
+    path = "/api/fed/v2/drive/file-shares/state",
     tag = "drive.federation",
     responses((status = 200, description = "Signed saved state", body = FileStateResponse))
 )]
@@ -507,7 +507,7 @@ pub async fn get_file_state(
     signed_read!(
         state,
         headers,
-        "/api/fed/drive/file-state",
+        "/api/fed/v2/drive/file-shares/state",
         |federation, authenticated, share| {
             let body = saved_state(&state, share.file_id).await?;
             signed_json(federation, &authenticated, StatusCode::OK, &body)
@@ -531,7 +531,7 @@ async fn fetch_verified_file_invite(
             server,
             drive_spec(
                 Method::GET,
-                "/api/fed/drive/file-invite".into(),
+                "/api/fed/v2/drive/file-shares/invite".into(),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(capability),
@@ -809,7 +809,7 @@ pub async fn proxy_file_content(
         &state,
         &headers,
         &share.remote_domain,
-        "/api/fed/drive/file-content".into(),
+        "/api/fed/v2/drive/file-shares/content".into(),
         &share.remote_capability,
     )
     .await
@@ -843,7 +843,7 @@ pub async fn proxy_file_state(
             &share.remote_domain,
             drive_spec(
                 Method::GET,
-                "/api/fed/drive/file-state".into(),
+                "/api/fed/v2/drive/file-shares/state".into(),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(&share.remote_capability),
@@ -914,11 +914,11 @@ async fn saved_state(state: &AppState, file_id: Uuid) -> AppResult<FileStateResp
     })
 }
 
-/// `GET /api/fed/drive/files/{fileId}/state` — a note's or place list's saved
+/// `GET /api/fed/v2/drive/folder-shares/files/{fileId}/state` — a note's or place list's saved
 /// state in a folder shared with the calling server's user. Signed.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/files/{fileId}/state",
+    path = "/api/fed/v2/drive/folder-shares/files/{fileId}/state",
     tag = "drive.federation",
     params(("fileId" = String, Path)),
     responses((status = 200, description = "Signed saved state", body = FileStateResponse))
@@ -929,7 +929,7 @@ pub async fn get_folder_file_state(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/files/{file_id}/state");
+    let path = format!("/api/fed/v2/drive/folder-shares/files/{file_id}/state");
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -994,7 +994,7 @@ pub async fn proxy_folder_file_state(
             &share.remote_domain,
             drive_spec(
                 Method::GET,
-                format!("/api/fed/drive/files/{file_id}/state"),
+                format!("/api/fed/v2/drive/folder-shares/files/{file_id}/state"),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(&share.remote_capability),

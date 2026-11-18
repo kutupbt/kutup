@@ -556,7 +556,7 @@ async fn forward(
 }
 
 /// The destination's endpoint for a forwarded multi-recipient send.
-pub(crate) const FEDERATED_PATH: &str = "/api/fed/chat/sealed/multi";
+pub(crate) const FEDERATED_PATH: &str = "/api/fed/v2/chat/sealed/multi";
 
 /// The largest send body either route reads: the largest request the
 /// settings can allow (their highest base size and recipient count), base64,
@@ -569,13 +569,13 @@ pub(crate) const MAX_BODY: usize = {
     payload * 4 / 3 + token * 4 / 3 + 4096
 };
 
-/// `POST /api/fed/chat/sealed/multi` — a multi-recipient send another
+/// `POST /api/fed/v2/chat/sealed/multi` — a multi-recipient send another
 /// server forwarded for this server's accounts, checked and stored as a
 /// local one. The origin is budgeted per request and per byte (all its
 /// users together), never per stored recipient.
 #[utoipa::path(
     post,
-    path = "/api/fed/chat/sealed/multi",
+    path = "/api/fed/v2/chat/sealed/multi",
     tag = "federation",
     request_body = SealedMultiSubmissionV1,
     responses(

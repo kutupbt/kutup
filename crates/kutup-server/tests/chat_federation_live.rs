@@ -2207,7 +2207,7 @@ fn drive_round_trip(
         .unwrap();
     assert_eq!(raw_url_share.status().as_u16(), 400);
     assert_eq!(
-        c.get(format!("{a}/api/fed/drive/invite"))
+        c.get(format!("{a}/api/fed/v2/drive/folder-shares/invite"))
             .send()
             .unwrap()
             .status()
@@ -2215,9 +2215,9 @@ fn drive_round_trip(
         401
     );
     for legacy in [
-        "/api/fed/users?username=bobfed",
-        "/api/fed/invites/legacy-token",
-        "/api/fed/shares/legacy-token/files",
+        "/api/fed/v2/users?username=bobfed",
+        "/api/fed/v2/invites/legacy-token",
+        "/api/fed/v2/shares/legacy-token/files",
         "/api/fed-proxy/incoming",
     ] {
         assert_eq!(
@@ -3151,7 +3151,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
 
     let unsigned = c
         .get(format!(
-            "{b}/api/fed/chat/accounts/{}/keys",
+            "{b}/api/fed/v2/chat/accounts/{}/keys",
             account_of(c, b, &bob_token).account_id
         ))
         .send()

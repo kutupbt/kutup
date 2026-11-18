@@ -374,8 +374,8 @@ Relevant routes:
 | `POST /api/v1/chat/manifest` | publish exact next signed manifest |
 | `GET /api/v1/chat/accounts/{accountId}/manifest?server=` | current local/federated manifest |
 | `GET /api/v1/chat/accounts/{accountId}/manifest-history?server=` | bounded complete history page |
-| `GET /api/fed/chat/accounts/{accountId}/manifest` | signed-federation current manifest |
-| `GET /api/fed/chat/accounts/{accountId}/manifest-history` | signed-federation history page |
+| `GET /api/fed/v2/chat/accounts/{accountId}/manifest` | signed-federation current manifest |
+| `GET /api/fed/v2/chat/accounts/{accountId}/manifest-history` | signed-federation history page |
 
 ## 6. Direct Chat and Note to Self
 
@@ -736,7 +736,7 @@ of messages (docs/plans/maps.md "Live location"):
   the write secret (kept by the sharing device) and of `readCapability`,
   the update and times; no account, conversation or position.
 - Readers poll every 10 s while the message is on screen; a reader on
-  another server reads through its own (`/api/fed/chat/live-locations`).
+  another server reads through its own (`/api/fed/v2/chat/live-locations`).
   After a new generation the old stream is deleted, so someone who left has
   a key to nothing new.
 - The sharing device writes about every 15–30 s while moving and every
@@ -984,7 +984,7 @@ good, as a refused pairwise copy does; `rateLimited` sends that member's copy
 pairwise later, and `429` waits.
 
 For another server's members, this server forwards the send at once to that
-server's `POST /api/fed/chat/sealed/multi` (signed federation), waits for its
+server's `POST /api/fed/v2/chat/sealed/multi` (signed federation), waits for its
 answer (the usual federation timeout) and relays it as it is: `200`, `409`,
 `410`, the destination's `400`/`413`, or its `401 groupSendTokenInvalid` (the
 destination verifies the token with its own keys; the origin never does). A destination that is slow,
@@ -1020,7 +1020,7 @@ at most once every 5 seconds per head whichever backend asks
 is noticed at once, and the rest of the queue follows when the head settles.
 Otherwise it sends the run of
 consecutive pending sends from the head, sized before it is loaded, in signed
-`POST /api/fed/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
+`POST /api/fed/v2/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
 64 transactions and 4 MiB). The destination checks the batch's shape first
 (one origin, consecutive sequences) and refuses a malformed batch before
 applying any of it. Otherwise it applies the transactions one by one as

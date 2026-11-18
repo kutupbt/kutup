@@ -361,7 +361,6 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::link_reports::block_link,
         crate::handlers::link_reports::unblock_link,
         // --- Drive federation (shared signed stack + per-share capability) ---
-        crate::drive_federation::get_user,
         crate::handlers::accounts::by_id,
         crate::handlers::accounts::fed_by_id,
         crate::chat_groups::routes::gateway_key,
@@ -370,7 +369,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::chat_groups::routes::fed_gateway_key,
         crate::handlers::chat::send_sealed_batch,
         crate::chat_federation::deliver_sealed_batch,
-        crate::remote_renames::publish,
+        crate::remote_renames::fed_lookup,
         crate::remote_renames::announce,
         crate::drive_federation::get_invite,
         crate::drive_federation::list_files,
@@ -1007,7 +1006,7 @@ mod tests {
             "/api/v1/drive/files/{fileId}/assets/{assetId}",
             "/api/v1/drive/files/{fileId}/collab/ws",
             "/api/v1/drive/public-links/{token}/files/{fileId}/download",
-            "/api/fed/drive/files",
+            "/api/fed/v2/drive/folder-shares/files",
             "/api/v1/drive/federation/folder-shares/{shareId}/files",
             "/api/v1/admin/activity",
             "/api/v1/admin/activity/export",
@@ -1025,12 +1024,12 @@ mod tests {
             "/api/v1/chat/ws",
             "/.well-known/kutup/federation.json",
             "/.well-known/kutup/federation/identity/{sequence}.json",
-            "/api/fed/chat/accounts/{accountId}/keys",
-            "/api/fed/chat/messages",
+            "/api/fed/v2/chat/accounts/{accountId}/keys",
+            "/api/fed/v2/chat/messages",
             "/api/v1/chat/groups/relay/{server}",
-            "/api/fed/chat/groups/gateway",
+            "/api/fed/v2/chat/groups/gateway",
             "/api/v1/chat/anonymous/messages/batch",
-            "/api/fed/chat/sealed/batch",
+            "/api/fed/v2/chat/sealed/batch",
         ] {
             assert!(paths.contains_key(path), "spec is missing path {path}");
         }

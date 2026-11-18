@@ -129,7 +129,7 @@ Specific codes, where an app does something particular (a test in
 | Code | Status | Meaning |
 |---|---|---|
 | `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
-| `unknownStreamControl` | 400 | `POST /api/fed/chat/stream-control`: a must-understand control code (`0x8000..=0xffff`) this server doesn't know; the sequence is not used up |
+| `unknownStreamControl` | 400 | `POST /api/fed/v2/chat/stream-control`: a must-understand control code (`0x8000..=0xffff`) this server doesn't know; the sequence is not used up |
 | `noManifest` | 404 | `GET /api/v1/chat/accounts/{accountId}/manifest` (and its federation route): the account has no Chat manifest, since no Chat device ever registered. Clients take only this 404 for "re-register as the account's first device"; any other 404 is an error |
 | `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber), or a manifest's `identityBinding`, not signed by the account's identity key |
 | `keysDiffer` | 409 | `POST /api/v1/chat/keys/check`: the server holds other keys for this device; it uploads them again |
@@ -283,6 +283,7 @@ Specific codes, where an app does something particular (a test in
 | `expiringOutside` | 400 | Expiring messages cannot go outside Kutup |
 | `clientTooOld` | 426 | This client is older than the server accepts for its type (`clientType`, `minimum`; the `X-Kutup-Min-Client` header says `<type>/<minimum>`). Every client latches it: the web apps offer a reload, the CLI exits 7 asking for an update, native apps show their store's update prompt |
 | `apiVersionUnsupported` | 404 | A path under an API version this server doesn't serve (`/api/v2/…` on a v1 server): `supported` lists the ones it does. The server is older than the client |
+| `federationVersionUnsupported` | 426 | A federation request under `/api/fed/v{n}/` for a version this server doesn't serve: `supported` lists the ones it does, as its discovery's `fedVersions` |
 
 Not covered: server-to-server federation answers (signed, their own shapes)
 and the framework's own refusals of a request it cannot read (a body that is
@@ -1437,7 +1438,7 @@ An account by its permanent id (docs/plans/account-ids.md): its address now
 (server-asserted, a label) and its Drive identity, as the address lookup
 answers them. `?server=` names the account's server (this one when left
 out); another server's account is asked of that server through federation
-(`GET /api/fed/drive/accounts/:accountId`, the pinned peer, never a URL from
+(`GET /api/fed/v2/drive/accounts/:accountId`, the pinned peer, never a URL from
 the query). One fetch per account at a time; its answer (or its `404`)
 serves every lookup of that account for 30 seconds, unless a rename of the
 account reaches this server first (its announce, or a chain a lookup brings),
@@ -1916,7 +1917,7 @@ Create a domain-bound share for a user on a remote Kutup instance.
 
 The named envelope is sealed to the account the lookup above returned
 (`other.example.com` and its `accountId`). The origin asks the recipient's
-server for that account by id (`GET /api/fed/drive/accounts/:accountId`):
+server for that account by id (`GET /api/fed/v2/drive/accounts/:accountId`):
 the username the share lists is its answer, never the client's, and the
 envelope must be sealed to the incarnation it answers (`409 keyChanged`).
 Accepting compares the account id, so a rename on either side never breaks
@@ -1997,7 +1998,7 @@ not your current profile version, give them your key again.
 The server checks that the envelope is from you (your account, incarnation
 and Drive signing key), is for that account (and, here, its current
 incarnation), and that a share exists between you. Someone on another server
-gets it through `PUT /api/fed/drive/profile-keys`. `204`; `404` when there is
+gets it through `PUT /api/fed/v2/drive/profile-keys`. `204`; `404` when there is
 no share between you; `400` for an envelope that does not match.
 
 ---
@@ -3223,7 +3224,7 @@ deletes the stream at its end.
 - `GET /api/v1/chat/live-locations/:streamId[?server=]` (Bearer JWT,
   `x-kutup-live-read`): `{ update, updatedAtMs, expiresAtMs }`; with
   `server`, read from the sharer's server over signed federation
-  (`GET /api/fed/chat/live-locations/:streamId`). `404` for a wrong
+  (`GET /api/fed/v2/chat/live-locations/:streamId`). `404` for a wrong
   capability or an ended stream; `429` above 600 reads a minute per person.
 - `DELETE /api/v1/chat/live-locations/:streamId` (Bearer JWT, `x-kutup-live-write`):
   `204`.
@@ -3845,7 +3846,7 @@ under a folder the caller does not own.
 
 ## Trash
 
-Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated Drive deletes (`DELETE /api/fed/drive/files/:fileId`) remain permanent — there is no cross-server trash.
+Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated Drive deletes (`DELETE /api/fed/v2/drive/folder-shares/files/:fileId`) remain permanent — there is no cross-server trash.
 
 ### GET /api/v1/drive/trash
 
@@ -4590,7 +4591,7 @@ per minute per account.
 → `{ "url", "token" }`: the SFU's WebSocket URL and a 6-hour LiveKit token
 for that room ([`chat-calls.md`](chat-calls.md) "Group calls"). The host
 mints it; another host is asked over signed federation
-(`POST /api/fed/chat/group-calls/token`). `404` when the host has no SFU,
+(`POST /api/fed/v2/chat/group-calls/token`). `404` when the host has no SFU,
 `429` over 30 per minute per account (300 per origin server), `502` when
 the host cannot be reached.
 
@@ -4602,7 +4603,7 @@ groups are off unless `CHAT_GROUPS=true`, `404` otherwise). Signed-in:
 the home's HPKE key config, signed by its federation identity, and its
 identity documents from sequence `n` (the one the group pins) on, at most 64.
 This server fetches a peer's config over signed federation
-(`GET /api/fed/chat/groups/gateway-key`) and gives the history it has
+(`GET /api/fed/v2/chat/groups/gateway-key`) and gives the history it has
 verified; the client trusts neither until it follows the history from its
 pin and verifies the config. The key changes weekly; the previous one is
 accepted for 24 hours. `502` when the home is unreachable.
@@ -4613,7 +4614,7 @@ Signed-in. The body is a request sealed to the home's gateway key
 (RFC 9458 encapsulation, `message/ohttp-req`, at most 256 KiB + 55 bytes);
 the answer is the sealed response (`application/octet-stream`, `no-store`).
 This server passes it on unread: to its own gateway when it is the home,
-otherwise over signed federation to `POST /api/fed/chat/groups/gateway`, and
+otherwise over signed federation to `POST /api/fed/v2/chat/groups/gateway`, and
 only to federation peers. `400` (empty) when the home could not open it,
 `429` over 240 per minute per account, `502` when the home is unreachable.
 Inside, the home checks the request's home, clock (5 minutes), signature and
@@ -4970,41 +4971,41 @@ Return one immutable identity document from the locally verified, contiguous
 history. Genesis is sequence zero. Every rotation hash-links its predecessor
 and is signed by both old and new keys.
 
-### GET /api/fed/chat/accounts/{accountId}/keys
+### GET /api/fed/v2/chat/accounts/{accountId}/keys
 
 Authenticated server-to-server directory lookup. Returns the remote user's
 account-signed complete manifest and replay-safe last-resort PQ bundles. It
 deliberately does not consume one-time prekeys, so a replayed signed read cannot
 exhaust the remote recipient's pool.
 
-### GET /api/fed/chat/accounts/{accountId}/manifest
+### GET /api/fed/v2/chat/accounts/{accountId}/manifest
 
 Return the current complete account-signed manifest through an authenticated,
 origin- and destination-bound federation response (`404 noManifest` when the
 account has none).
 
-### GET /api/fed/chat/accounts/{accountId}/manifest-history
+### GET /api/fed/v2/chat/accounts/{accountId}/manifest-history
 
 Return the same exact-sequence, maximum-64-entry history pages as the local
 route. The signed request URI binds `fromSequence`, `toSequence`, and optional
 `pageFromSequence`.
 
-### GET /api/fed/chat/accounts/{accountId}/profile/{version}
+### GET /api/fed/v2/chat/accounts/{accountId}/profile/{version}
 
 Authenticated proxy lookup for an opaque encrypted profile. The server-to-
 server signature authenticates and destination-binds the originating
 homeserver; the separate profile access-key header remains the end-to-end
 capability. Wrong capabilities return `404`.
 
-### GET /api/fed/{chat|drive}/names/{username}/renames
+### GET /api/fed/v2/{chat|drive}/names/{username}/renames
 
-Signed, under `chat.v2` at `/api/fed/chat/…` or `drive.v1` at
-`/api/fed/drive/…` (each feature's requests stay in its own namespace;
+Signed, under `chat.v2` at `/api/fed/v2/chat/…` or `drive.v1` at
+`/api/fed/v2/drive/…` (each feature's requests stay in its own namespace;
 servers send under whichever the peer admits). Every
 rename chain naming `username@<this server>`, in any spelling, as `GET
 /api/v1/accounts/by-address/:address/renames` answers them; `?incarnationId=` narrows them.
 
-### POST /api/fed/{chat|drive}/accounts/renames
+### POST /api/fed/v2/{chat|drive}/accounts/renames
 
 Signed (under `chat.v2` or `drive.v1`). A peer announces one of its accounts'
 renames: `{ "version": 1, "username", "incarnationId", "authorityPublicKey",
@@ -5018,7 +5019,7 @@ extend the one kept, `429` past 50,000 chains of that server or 600 announces
 a minute. Announces are sent after a rename commits to every pinned peer not
 quarantined, retried with backoff for 7 days.
 
-### POST /api/fed/chat/messages
+### POST /api/fed/v2/chat/messages
 
 Receive one signed, ordered `FederatedChatTransaction`. The receiver enforces a
 contiguous per-origin sequence, exact recipient device set, canonical
@@ -5028,7 +5029,7 @@ high-water mark commit atomically. Exact replay returns the stored response;
 device mismatch or sequence gap returns typed `409` data so the origin can
 refresh/re-encrypt or replay the missing retained transaction.
 
-### POST /api/fed/chat/stream-control
+### POST /api/fed/v2/chat/stream-control
 
 A control message on one of the origin's sequenced streams (plain Chat sends,
 sealed sends or media offers): it uses up one sequence with nothing delivered. Signed
@@ -5137,7 +5138,7 @@ it is never held in memory.
 Bring a share's stored copy up to the owner's current folder key after a
 rotation. The recipient's server fetches the invite again and accepts it only
 from the same owner, folder and authority, never at an older epoch, and only
-if the owner's signed history (`GET /api/fed/drive/epochs`) descends from the
+if the owner's signed history (`GET /api/fed/v2/drive/folder-shares/epochs`) descends from the
 stored epoch. A revoked share fails from the owner's server. **Response:** the
 refreshed share.
 
@@ -5227,17 +5228,24 @@ permits it. Exact retries are idempotent and return `204`.
 
 ## Drive Federation — Server-to-Server Endpoints
 
-All `/api/fed/drive/*` routes require the unified `drive.v1` RFC 9421/9530
-request signature and return an authenticated response. Except for user lookup,
-they also require `Kutup-Share-Capability`; the capability is checked only
+All `/api/fed/v2/drive/*` routes require the unified `drive.v1` RFC 9421/9530
+request signature and return an authenticated response. Except for the
+account by id, they also require `Kutup-Share-Capability`; the capability is checked only
 after the request's canonical origin domain has authenticated, and the share
 must be bound to that same domain.
 
-### GET /api/fed/drive/users/:username
+### GET /api/fed/v2/accounts/lookup?name=
 
-Return `{ "username", "server", "publicKey" }` for one active local user.
+The one place a name on this server becomes an account, in the account
+namespace (`/api/fed/v2/accounts/`), which Chat's and Drive's signed requests
+may both use, each under its own feature's policy. `?name=<name>` answers the
+active account with that name now, as `GET /api/fed/v2/drive/accounts/:accountId`
+answers it; a held or moved name answers `409 renamed` with its rename chains,
+an unknown one `404`. `?name=<name>&renames=all[&incarnationId=]` answers every
+rename chain naming `name@<this server>` (an empty list when none does).
+`POST /api/fed/v2/accounts/renames` takes a peer's rename announce.
 
-### PUT /api/fed/drive/profile-keys
+### PUT /api/fed/v2/drive/profile-keys
 
 Signed server-to-server delivery of a profile key
 (`{ sender: { server, accountId }, recipient: { server, accountId },
@@ -5246,42 +5254,42 @@ must be on the calling server and the recipient here, the envelope must name
 both (and the recipient's current incarnation), and a share must exist
 between them. The recipient's client checks the sender's signature.
 
-### GET /api/fed/drive/accounts/:accountId
+### GET /api/fed/v2/drive/accounts/:accountId
 
 Signed: one active local account by its permanent id, answered as
 `GET /api/v1/accounts/:accountId` answers it (for a peer whose user holds
 the account). `404` when there is none.
 
-### GET /api/fed/drive/invite
+### GET /api/fed/v2/drive/folder-shares/invite
 
 Return the encrypted collection metadata, wrapped key, intended recipient, and
 grants for the capability-authorized share.
 
-### GET /api/fed/drive/files
+### GET /api/fed/v2/drive/folder-shares/files
 
 List ciphertext file metadata for the capability-authorized collection.
 
-### GET /api/fed/drive/epochs
+### GET /api/fed/v2/drive/folder-shares/epochs
 
 The capability-authorized folder's key history, signed.
 
-### GET /api/fed/drive/album
+### GET /api/fed/v2/drive/folder-shares/album
 
 The capability-authorized album's photos, signed (see the relayed route
 above). `404` when the share is not for an album. For an album share,
-`GET /api/fed/drive/files/:fileId/content` reaches the album's items.
+`GET /api/fed/v2/drive/folder-shares/files/:fileId/content` reaches the album's items.
 
-### GET /api/fed/drive/files/:fileId/thumbnails/:variant
+### GET /api/fed/v2/drive/folder-shares/files/:fileId/thumbnails/:variant
 
 A thumbnail of a file the capability reaches (a file in the folder, or a
 photo in the album), as a signed stream with its digest.
 
-### GET /api/fed/drive/files/:fileId/state
+### GET /api/fed/v2/drive/folder-shares/files/:fileId/state
 
 A note's or place list's latest saved state in the capability-authorized
 folder, signed (`404` when none).
 
-### GET /api/fed/drive/file-invite · file-content · file-state
+### GET /api/fed/v2/drive/file-shares/invite · file-content · file-state
 
 The capability names one file shared by itself:
 - `file-invite`: its record, its key sealed to the recipient, and the owner's
@@ -5291,7 +5299,7 @@ The capability names one file shared by itself:
 
 A file (or its folder) in the trash answers `404`.
 
-### GET /api/fed/drive/files/:fileId/content
+### GET /api/fed/v2/drive/folder-shares/files/:fileId/content
 
 Stream ciphertext with its precomputed signed content digest and exact length;
 the ETag is the content's revision id. A ranged read
@@ -5299,14 +5307,14 @@ the ETag is the content's revision id. A ranged read
 query, `?range=a-b` (or `a-`, `-k`) and optionally `&ifRange=<etag>`;
 nothing else may be in the query. The answer is `206`, signed over the
 content digest of that part (at most `driveStreamResponseMaxBytes`), with
-`Content-Range`, or `416`. `GET /api/fed/drive/file-content` (a file shared
+`Content-Range`, or `416`. `GET /api/fed/v2/drive/file-shares/content` (a file shared
 by itself) takes the same query. The receiving server forwards its client's
 `Range` (cut to its own part limit first) and `If-Range` this way, and
 releases a part only once it is the one asked: its start, its length (which the signed digest covers) and the part
 limit. `Content-Range`'s total is not signed; the reader's own metadata gives
 the object's length, and its manifest fixes every byte.
 
-### POST /api/fed/drive/files
+### POST /api/fed/v2/drive/folder-shares/files
 
 Store one encrypted multipart upload. The exact ciphertext is hashed while it
 is spooled and the digest is persisted with the file row. A stable request ID
@@ -5319,17 +5327,17 @@ and parses nothing until the digest matches. Body cap: the upload limit
 (`driveUploadMaxBytes`) plus 16 MiB. The upload names its `revisionId`,
 `metadataRevision` (`1`) and `revisionContentEnvelope`, checked as a local
 upload's: it commits inline. A version saved by a recipient on another
-server (`POST /api/fed/drive/collab/versions/create`) carries `revisionId`,
+server (`POST /api/fed/v2/drive/collab/versions/create`) carries `revisionId`,
 `revisionContentEnvelope`, `metadataEnvelope` and `metadataRevision` (all
 required), checked as a local save's.
 
-### DELETE /api/fed/drive/files/:fileId
+### DELETE /api/fed/v2/drive/folder-shares/files/:fileId
 
 Move one file **this share uploaded** to the owner's trash (restorable, and
 purged with its versions, assets, thumbnails and charges by the trash's own
 path), under a persistent idempotent mutation result. Other files are `404`.
 
-### Collaboration: `/api/fed/drive/collab/*`
+### Collaboration: `/api/fed/v2/drive/collab/*`
 
 Between the file's server (home) and an editor's server (bridge). All are
 signed and carry the share's capability, except `push`, which home signs
@@ -5364,7 +5372,7 @@ base64 sealed collab frames.
   32 MiB); **`POST versions/patch`** `{ fileId, versionId, label,
   keepForever }`; **`POST claim-seed`** `{ fileId }`.
 
-The removed `/api/fed/users`, `/api/fed/invites/*`, `/api/fed/shares/*`,
+The removed `/api/fed/v2/users`, `/api/fed/v2/invites/*`, `/api/fed/v2/shares/*`,
 `/api/fed-proxy/*`, `/api/v1/drive/collections/:id/share-federated`, and
 `/api/v1/drive/collections/fed-pubkey` routes have no compatibility handlers and return
 `404`.

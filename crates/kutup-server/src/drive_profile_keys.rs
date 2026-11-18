@@ -35,7 +35,7 @@ use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const JSON_CONTENT_TYPE: &str = "application/json";
-const FED_PATH: &str = "/api/fed/drive/profile-keys";
+const FED_PATH: &str = "/api/fed/v2/drive/profile-keys";
 /// An X-Wing envelope as text, as the column's CHECK allows (migration
 /// `20261018140000_identity_suite`).
 const MAX_ENVELOPE_CHARS: usize = 4096;
@@ -467,7 +467,7 @@ pub async fn put_profile_key(
 /// client checks the sender's signature; this server checks the parties.
 #[utoipa::path(
     put,
-    path = "/api/fed/drive/profile-keys",
+    path = "/api/fed/v2/drive/profile-keys",
     tag = "drive.federation",
     request_body = FederatedProfileKey,
     responses(

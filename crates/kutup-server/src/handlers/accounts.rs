@@ -224,7 +224,7 @@ async fn fetch(state: &AppState, person: &AccountRef) -> AppResult<Fetched> {
             &person.server,
             drive_spec(
                 reqwest::Method::GET,
-                format!("/api/fed/drive/accounts/{}", person.account_id),
+                format!("/api/fed/v2/drive/accounts/{}", person.account_id),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 None,
@@ -256,11 +256,11 @@ async fn fetch(state: &AppState, person: &AccountRef) -> AppResult<Fetched> {
     Ok(Fetched::Found(Box::new(remote)))
 }
 
-/// `GET /api/fed/drive/accounts/{accountId}` — signed: this server's account
+/// `GET /api/fed/v2/drive/accounts/{accountId}` — signed: this server's account
 /// by its permanent id, for a peer whose user holds it.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/accounts/{accountId}",
+    path = "/api/fed/v2/drive/accounts/{accountId}",
     tag = "drive.federation",
     params(("accountId" = String, Path)),
     responses(
@@ -274,7 +274,7 @@ pub async fn fed_by_id(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/accounts/{account_id}");
+    let path = format!("/api/fed/v2/drive/accounts/{account_id}");
     let authenticated = federation
         .authenticate_inbound(
             &headers,

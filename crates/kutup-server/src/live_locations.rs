@@ -401,7 +401,7 @@ async fn fetch_remote(
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
-                path: format!("/api/fed/chat/live-locations/{stream_id}"),
+                path: format!("/api/fed/v2/chat/live-locations/{stream_id}"),
                 query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
@@ -465,7 +465,7 @@ fn signed(
 /// federation signature authenticates the calling server.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/live-locations/{streamId}",
+    path = "/api/fed/v2/chat/live-locations/{streamId}",
     tag = "chat.federation",
     params(("streamId" = String, Path)),
     responses(
@@ -480,7 +480,7 @@ pub async fn federated_read(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = stack(&state)?;
-    let uri = format!("/api/fed/chat/live-locations/{stream_id}");
+    let uri = format!("/api/fed/v2/chat/live-locations/{stream_id}");
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &uri, None, &[], FederationFeature::ChatV2)
         .await?;

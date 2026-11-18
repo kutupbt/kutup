@@ -68,7 +68,7 @@ pub async fn fetch_remote_bundles(
 ) -> AppResult<AccountPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
-    let path = format!("/api/fed/chat/accounts/{}/keys", account.account_id);
+    let path = format!("/api/fed/v2/chat/accounts/{}/keys", account.account_id);
     let response = federation
         .send(
             destination,
@@ -120,7 +120,10 @@ pub async fn fetch_remote_sealed_bundles(
 ) -> AppResult<AccountPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
-    let path = format!("/api/fed/chat/sealed/accounts/{}/keys", account.account_id);
+    let path = format!(
+        "/api/fed/v2/chat/sealed/accounts/{}/keys",
+        account.account_id
+    );
     let body = serde_json::to_vec(request)
         .map_err(|error| AppError::internal(format!("encode sealed bundle request: {error}")))?;
     let response = federation
@@ -166,7 +169,7 @@ pub async fn fetch_remote_manifest_history(
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path: format!(
-                    "/api/fed/chat/accounts/{}/manifest-history",
+                    "/api/fed/v2/chat/accounts/{}/manifest-history",
                     account.account_id
                 ),
                 query: Some(query_string),
@@ -212,7 +215,7 @@ pub async fn fetch_remote_manifest(
 ) -> AppResult<AccountManifestV3> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
-    let path = format!("/api/fed/chat/accounts/{}/manifest", account.account_id);
+    let path = format!("/api/fed/v2/chat/accounts/{}/manifest", account.account_id);
     let response = federation
         .send(
             destination,
@@ -302,7 +305,7 @@ pub async fn fetch_remote_profile(
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path: format!(
-                    "/api/fed/chat/accounts/{}/profile/{version}",
+                    "/api/fed/v2/chat/accounts/{}/profile/{version}",
                     account.account_id
                 ),
                 query: None,
@@ -1107,7 +1110,7 @@ async fn send_sealed_run(
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::POST,
-                path: "/api/fed/chat/sealed/batch".into(),
+                path: "/api/fed/v2/chat/sealed/batch".into(),
                 query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body,
@@ -1250,7 +1253,7 @@ async fn attempt_sealed_single(
                 FederationRequestSpec {
                     feature: FederationFeature::ChatV2,
                     method: Method::POST,
-                    path: "/api/fed/chat/sealed/messages".into(),
+                    path: "/api/fed/v2/chat/sealed/messages".into(),
                     query: None,
                     content_type: JSON_CONTENT_TYPE.into(),
                     // A retry of the same bytes keeps its request id; a resend
@@ -1681,7 +1684,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::POST,
-                path: "/api/fed/chat/messages".into(),
+                path: "/api/fed/v2/chat/messages".into(),
                 query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body,
@@ -2067,7 +2070,7 @@ pub(crate) async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
 /// of a read request cannot exhaust the recipient's prekey pool.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/accounts/{accountId}/keys",
+    path = "/api/fed/v2/chat/accounts/{accountId}/keys",
     tag = "chat.federation",
     params(
         ("accountId" = String, Path, description = "Recipient's account id on this server")
@@ -2088,7 +2091,7 @@ pub async fn get_user_bundles(
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
-    let path = format!("/api/fed/chat/accounts/{}/keys", account.account_id);
+    let path = format!("/api/fed/v2/chat/accounts/{}/keys", account.account_id);
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV2)
         .await?;
@@ -2118,7 +2121,10 @@ pub async fn get_sealed_user_bundles(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)
         .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    let path = format!("/api/fed/chat/sealed/accounts/{}/keys", account.account_id);
+    let path = format!(
+        "/api/fed/v2/chat/sealed/accounts/{}/keys",
+        account.account_id
+    );
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -2193,7 +2199,7 @@ pub async fn deliver_sealed_messages(
         .authenticate_inbound(
             &headers,
             "POST",
-            "/api/fed/chat/sealed/messages",
+            "/api/fed/v2/chat/sealed/messages",
             None,
             &body,
             FederationFeature::ChatV2,
@@ -2234,14 +2240,14 @@ pub async fn deliver_sealed_messages(
     }
 }
 
-/// `POST /api/fed/chat/sealed/batch`: several of one origin's sealed
+/// `POST /api/fed/v2/chat/sealed/batch`: several of one origin's sealed
 /// transactions, in sequence order, applied one by one exactly as the single
 /// route applies them. It stops after the first answer that doesn't use up
 /// its sequence (the rest would only meet a gap) and answers each one it
 /// tried.
 #[utoipa::path(
     post,
-    path = "/api/fed/chat/sealed/batch",
+    path = "/api/fed/v2/chat/sealed/batch",
     tag = "chat.federation",
     request_body = kutup_chat_proto::FederatedSealedBatchV1,
     responses(
@@ -2270,7 +2276,7 @@ pub async fn deliver_sealed_batch(
         .authenticate_inbound(
             &headers,
             "POST",
-            "/api/fed/chat/sealed/batch",
+            "/api/fed/v2/chat/sealed/batch",
             None,
             &body,
             FederationFeature::ChatV2,
@@ -2618,7 +2624,7 @@ pub async fn get_manifest_history(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
     let path = format!(
-        "/api/fed/chat/accounts/{}/manifest-history",
+        "/api/fed/v2/chat/accounts/{}/manifest-history",
         account.account_id
     );
     let query_string = manifest_history_query_string(&query);
@@ -2725,7 +2731,7 @@ pub async fn get_manifest(
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
-    let path = format!("/api/fed/chat/accounts/{}/manifest", account.account_id);
+    let path = format!("/api/fed/v2/chat/accounts/{}/manifest", account.account_id);
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV2)
         .await?;
@@ -2755,7 +2761,7 @@ pub async fn get_manifest(
 /// destination-binds the proxying homeserver.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/accounts/{accountId}/profile/{version}",
+    path = "/api/fed/v2/chat/accounts/{accountId}/profile/{version}",
     tag = "chat.federation",
     params(
         ("accountId" = String, Path, description = "Profile owner's account id on this server"),
@@ -2778,7 +2784,7 @@ pub async fn get_user_profile(
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
     let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
     let uri = format!(
-        "/api/fed/chat/accounts/{}/profile/{version}",
+        "/api/fed/v2/chat/accounts/{}/profile/{version}",
         account.account_id
     );
     let authenticated = federation
@@ -2832,7 +2838,7 @@ pub async fn get_user_profile(
 /// transaction and atomically append it to the existing per-device mailbox.
 #[utoipa::path(
     post,
-    path = "/api/fed/chat/messages",
+    path = "/api/fed/v2/chat/messages",
     tag = "chat.federation",
     request_body = FederatedChatTransaction,
     responses(
@@ -2860,7 +2866,7 @@ pub async fn deliver_messages(
         .authenticate_inbound(
             &headers,
             "POST",
-            "/api/fed/chat/messages",
+            "/api/fed/v2/chat/messages",
             None,
             &body,
             FederationFeature::ChatV2,

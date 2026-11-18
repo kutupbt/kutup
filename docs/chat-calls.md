@@ -110,7 +110,7 @@ them. What exists already is the server's SFU token:
 - A member asks its own server for an SFU token
   (`POST /api/v1/chat/group-calls/token` with host, room and participant tag).
 - If the host is another server, the request goes over signed federation
-  (`POST /api/fed/chat/group-calls/token`).
+  (`POST /api/fed/v2/chat/group-calls/token`).
 - The host mints a 6-hour LiveKit token for that one room (join, publish,
   subscribe; never room admin).
 - The room id is the capability: only the group's members know it.

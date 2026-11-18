@@ -374,7 +374,7 @@ async fn fetch_remote_envelope(
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
-                path: format!("/api/fed/policies/{feature}"),
+                path: format!("/api/fed/v2/policies/{feature}"),
                 query: sequence.map(|value| format!("sequence={value}")),
                 content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
@@ -419,7 +419,7 @@ pub(crate) async fn get_federated_feature_policy(
 ) -> AppResult<Response> {
     let federation = configured(&state)?;
     let feature_type = parse_feature(&feature)?;
-    let path = format!("/api/fed/policies/{feature}");
+    let path = format!("/api/fed/v2/policies/{feature}");
     let raw_query = query.sequence.map(|value| format!("sequence={value}"));
     let authenticated: AuthenticatedFederationRequest = federation
         .authenticate_inbound(

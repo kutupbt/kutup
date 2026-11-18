@@ -87,13 +87,13 @@ fn groups_are_off_unless_switched_on() {
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "the group list");
     // The federated side too: groups off answers before any signature check.
     let r = c
-        .post(format!("{base}/api/fed/chat/groups/gateway"))
+        .post(format!("{base}/api/fed/v2/chat/groups/gateway"))
         .body(vec![0u8; 64])
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "the groups gateway");
     let r = c
-        .get(format!("{base}/api/fed/chat/groups/gateway-key"))
+        .get(format!("{base}/api/fed/v2/chat/groups/gateway-key"))
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "the gateway key");

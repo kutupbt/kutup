@@ -2078,24 +2078,24 @@ fn build_router(state: AppState) -> Router {
         // --- Server-to-server endpoints. Every feature uses the shared v2
         // identity, discovery, policy, pinning, replay, and signed transport. ---
         .route(
-            "/api/fed/chat/accounts/:accountId/keys",
+            "/api/fed/v2/chat/accounts/:accountId/keys",
             get(chat_federation::get_user_bundles)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/sealed/accounts/:accountId/keys",
+            "/api/fed/v2/chat/sealed/accounts/:accountId/keys",
             post(chat_federation::get_sealed_user_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/sealed/multi",
+            "/api/fed/v2/chat/sealed/multi",
             post(handlers::chat_multi::deliver_federated)
                 .route_layer(DefaultBodyLimit::max(handlers::chat_multi::MAX_BODY))
                 .route_layer(from_fn(middleware::rate_limit_fed_multi)),
         )
         .route(
-            "/api/fed/chat/sealed/batch",
+            "/api/fed/v2/chat/sealed/batch",
             post(chat_federation::deliver_sealed_batch)
                 .route_layer(DefaultBodyLimit::max(
                     kutup_chat_proto::MAX_SEALED_BATCH_BYTES,
@@ -2103,45 +2103,45 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/sealed/messages",
+            "/api/fed/v2/chat/sealed/messages",
             post(chat_federation::deliver_sealed_messages)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/groups/gateway",
+            "/api/fed/v2/chat/groups/gateway",
             post(chat_groups::routes::fed_gateway)
                 .route_layer(DefaultBodyLimit::max(chat_groups::routes::MAX_SEALED))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/groups/gateway-key",
+            "/api/fed/v2/chat/groups/gateway-key",
             get(chat_groups::routes::fed_gateway_key)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/group-calls/token",
+            "/api/fed/v2/chat/group-calls/token",
             post(chat_calls::federated_group_call_token)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/policies/:feature",
+            "/api/fed/v2/policies/:feature",
             get(crate::federation::get_federated_feature_policy)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/accounts/:accountId/profile/:version",
+            "/api/fed/v2/chat/accounts/:accountId/profile/:version",
             get(chat_federation::get_user_profile)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/accounts/:accountId/manifest-history",
+            "/api/fed/v2/chat/accounts/:accountId/manifest-history",
             get(chat_federation::get_manifest_history)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/accounts/:accountId/manifest",
+            "/api/fed/v2/chat/accounts/:accountId/manifest",
             get(chat_federation::get_manifest)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
@@ -2152,68 +2152,57 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/messages",
+            "/api/fed/v2/chat/messages",
             post(chat_federation::deliver_messages)
                 .route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/media/offers",
+            "/api/fed/v2/chat/media/offers",
             post(chat_media_federation::receive_offer)
                 .route_layer(DefaultBodyLimit::max(64 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/media/objects",
+            "/api/fed/v2/chat/media/objects",
             post(chat_media_federation::serve_object)
                 .route_layer(DefaultBodyLimit::max(64 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
-        // Renames, under Chat's and Drive's namespaces alike (the signed
-        // request's feature says which).
+        // The account namespace, for Chat's and Drive's requests alike (the
+        // signed request's feature says which; docs/plans/api-surface.md
+        // §3): the one lookup by name, and rename announces.
         .route(
-            "/api/fed/chat/names/:username/renames",
-            get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
+            "/api/fed/v2/accounts/lookup",
+            get(remote_renames::fed_lookup).route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/names/:username/renames",
-            get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/accounts/renames",
+            "/api/fed/v2/accounts/renames",
             post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         .route(
-            "/api/fed/drive/accounts/renames",
-            post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
-        )
-        .route(
-            "/api/fed/drive/accounts/:accountId",
+            "/api/fed/v2/drive/accounts/:accountId",
             get(handlers::accounts::fed_by_id)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/users/:username",
-            get(drive_federation::get_user).route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/live-locations/:streamId",
+            "/api/fed/v2/chat/live-locations/:streamId",
             get(live_locations::federated_read)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/profile-keys",
+            "/api/fed/v2/drive/profile-keys",
             put(drive_profile_keys::receive_profile_key)
                 .route_layer(DefaultBodyLimit::max(16 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/invite",
+            "/api/fed/v2/drive/folder-shares/invite",
             get(drive_federation::get_invite)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files",
+            "/api/fed/v2/drive/folder-shares/files",
             get(drive_federation::list_files)
                 .post(drive_federation::upload_file)
                 // Spooled against the upload limit, a site setting.
@@ -2221,110 +2210,110 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/epochs",
+            "/api/fed/v2/drive/folder-shares/epochs",
             get(drive_federation::list_epochs)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files/:fileId/content",
+            "/api/fed/v2/drive/folder-shares/files/:fileId/content",
             get(drive_federation::download_file)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/subscribe",
+            "/api/fed/v2/drive/collab/subscribe",
             post(collab_federation::subscribe)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/unsubscribe",
+            "/api/fed/v2/drive/collab/unsubscribe",
             post(collab_federation::unsubscribe)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/frames",
+            "/api/fed/v2/drive/collab/frames",
             post(collab_federation::frames)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/log",
+            "/api/fed/v2/drive/collab/log",
             post(collab_federation::log).route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/versions/list",
+            "/api/fed/v2/drive/collab/versions/list",
             post(collab_federation::versions_list)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/versions/create",
+            "/api/fed/v2/drive/collab/versions/create",
             post(collab_federation::versions_create)
                 .route_layer(DefaultBodyLimit::max(collab_federation::VERSION_BODY_LIMIT))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/versions/patch",
+            "/api/fed/v2/drive/collab/versions/patch",
             post(collab_federation::versions_patch)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/claim-seed",
+            "/api/fed/v2/drive/collab/claim-seed",
             post(collab_federation::claim_seed)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/push",
+            "/api/fed/v2/drive/collab/push",
             post(collab_federation::receive_push)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/assets/create",
+            "/api/fed/v2/drive/collab/assets/create",
             post(collab_federation::assets_create)
                 .route_layer(DefaultBodyLimit::max(collab_federation::ASSET_BODY_LIMIT))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/files/:fileId/assets/:assetId",
+            "/api/fed/v2/drive/collab/files/:fileId/assets/:assetId",
             get(collab_federation::asset_content)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/collab/files/:fileId/versions/:vid",
+            "/api/fed/v2/drive/collab/files/:fileId/versions/:vid",
             get(collab_federation::version_content)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/file-invite",
+            "/api/fed/v2/drive/file-shares/invite",
             get(drive_federation_files::get_file_invite)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/file-content",
+            "/api/fed/v2/drive/file-shares/content",
             get(drive_federation_files::get_file_content)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files/:fileId/state",
+            "/api/fed/v2/drive/folder-shares/files/:fileId/state",
             get(drive_federation_files::get_folder_file_state)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/album",
+            "/api/fed/v2/drive/folder-shares/album",
             get(drive_federation_albums::album_items)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files/:fileId/thumbnails/:variant",
+            "/api/fed/v2/drive/folder-shares/files/:fileId/thumbnails/:variant",
             get(drive_federation_albums::thumbnail)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/file-state",
+            "/api/fed/v2/drive/file-shares/state",
             get(drive_federation_files::get_file_state)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/files/:fileId",
+            "/api/fed/v2/drive/folder-shares/files/:fileId",
             delete(drive_federation::delete_file)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
@@ -2946,7 +2935,6 @@ mod command_tests {
             &["storage-check", "x"],
             &["federation-identity"],
             &["feature-policy", "rotate", "drive"],
-            &["feature-policy", "rotate", "mls-ordering"],
             &["--help"],
         ] {
             assert!(!known_command(&args(refused)), "{refused:?}");

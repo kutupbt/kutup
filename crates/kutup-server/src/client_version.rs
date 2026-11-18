@@ -299,13 +299,34 @@ pub async fn client_version_gate(
     next.run(req).await
 }
 
-/// What answers a path no route has (docs/plans/api-surface.md §1.3):
+/// What answers a path no route has (docs/plans/api-surface.md §1.3, §1.6):
+/// a federation version this server doesn't serve is `426
+/// federationVersionUnsupported`;
 /// an API version this server doesn't serve is `404 apiVersionUnsupported`
 /// (the server is older than the client), an unversioned `/api/…` path —
 /// what a client from before versions calls — is `426 clientTooOld`, and
 /// anything else is a plain `404 notFound`.
 pub async fn api_fallback(req: Request) -> Response {
     let path = req.uri().path();
+    // A federation version this server doesn't serve (§1.6): the peer reads
+    // our discovery's fedVersions again and picks one both serve.
+    if let Some(rest) = path.strip_prefix("/api/fed/v") {
+        let number: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let served = number
+            .parse::<u16>()
+            .is_ok_and(|n| kutup_federation_proto::SERVED_VERSIONS.contains(&n));
+        if !number.is_empty() && !served {
+            return AppError::new(
+                StatusCode::UPGRADE_REQUIRED,
+                "this server does not serve that federation version",
+            )
+            .with_details(serde_json::json!({
+                "code": "federationVersionUnsupported",
+                "supported": kutup_federation_proto::SERVED_VERSIONS,
+            }))
+            .into_response();
+        }
+    }
     if let Some(rest) = path.strip_prefix("/api/v1/v") {
         let number: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         let tail = &rest[number.len()..];
