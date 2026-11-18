@@ -788,7 +788,7 @@ async function send(opts: SendOptions): Promise<{ uploadUrl: string; content: Co
       if (remembered) await pendingUploads.put((remembered = { ...remembered, tail: storeTail(made), updatedAt: Date.now() }))
     },
   })
-  const uploadsEndpoint = `${await resolveApiBase()}/uploads/`
+  const uploadsEndpoint = `${await resolveApiBase()}/drive/uploads/`
   const plainTotal = opts.file.size
   let lastPlainSent = 0
 

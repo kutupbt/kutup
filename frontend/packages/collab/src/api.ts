@@ -55,7 +55,7 @@ export async function listVersions(fileId: string, base = localBase(fileId)): Pr
 export function getVersionDownloadUrl(fileId: string, vid: string, base = localBase(fileId)): string {
   // Includes /api prefix because this URL is consumed directly (e.g. anchor href),
   // not via the axios instance which adds the baseURL itself.
-  return `/api${base}/versions/${vid}/download`
+  return `/api/v1${base}/versions/${vid}/download`
 }
 
 export async function patchVersion(

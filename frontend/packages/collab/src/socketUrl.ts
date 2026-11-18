@@ -13,5 +13,5 @@ export async function collabSocketUrl(device: { header: string }, base: string):
   const ticket = await deviceTicket(device.header)
   const origin = window.location.origin.replace(/^http/, 'ws')
   // A file on another server: its route through this one (the same suffix).
-  return withClientParam(`${origin}/api${base}/collab/ws?ticket=${encodeURIComponent(ticket)}&tab=${getOrCreateTabId()}`)
+  return withClientParam(`${origin}/api/v1${base}/collab/ws?ticket=${encodeURIComponent(ticket)}&tab=${getOrCreateTabId()}`)
 }
