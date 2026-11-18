@@ -313,7 +313,7 @@ async fn store_capped(
         Some((incarnation, _, _, _)) if incarnation != entry.incarnation_id => {
             if source == Source::Announce {
                 write_chain(
-                    &mut *tx, domain, account_id, verified, &digest, &chain, &addresses,
+                    &mut tx, domain, account_id, verified, &digest, &chain, &addresses,
                 )
                 .await?;
                 Stored::Advanced
@@ -324,7 +324,7 @@ async fn store_capped(
         // Only the label it was first met by: the chain replaces it.
         Some((_, 0, _, _)) => {
             write_chain(
-                &mut *tx, domain, account_id, verified, &digest, &chain, &addresses,
+                &mut tx, domain, account_id, verified, &digest, &chain, &addresses,
             )
             .await?;
             Stored::Advanced
@@ -340,7 +340,7 @@ async fn store_capped(
                 .map_err(|_| AppError::internal("a kept rename chain"))?;
             if verified.view.extends(&old) {
                 write_chain(
-                    &mut *tx, domain, account_id, verified, &digest, &chain, &addresses,
+                    &mut tx, domain, account_id, verified, &digest, &chain, &addresses,
                 )
                 .await?;
                 if verified.view.sequence > old.sequence {
