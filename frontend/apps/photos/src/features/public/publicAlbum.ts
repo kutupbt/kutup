@@ -83,7 +83,7 @@ function linkKey(): Uint8Array | null {
   }
 }
 
-const base = (token: string) => `/share/${encodeURIComponent(token)}`
+const base = (token: string) => `/drive/public-links/${encodeURIComponent(token)}`
 
 export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
   const key = linkKey()
@@ -169,14 +169,14 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
 
 /** A photo's thumbnail through the link. */
 export function publicThumbnail(token: string, photo: PublicPhoto, variant: 'sm' | 'lg'): Promise<string | null> {
-  return thumbnailUrl(photo.file, variant, `${base(token)}/thumbnails/${photo.id}/${variant}`)
+  return thumbnailUrl(photo.file, variant, `${base(token)}/files/${photo.id}/thumbnails/${variant}`)
 }
 
 /** A photo's content through the link, decrypted as it streams. */
 export async function readPublicOriginal(token: string, photo: PublicPhoto, signal?: AbortSignal): Promise<Blob> {
   const file = photo.file
   const current = await currentContentOf(file)
-  const url = `${await resolveApiBase()}${base(token)}/download/${file.id}`
+  const url = `${await resolveApiBase()}${base(token)}/files/${file.id}/download`
   const parts: BlobPart[] = []
   for await (const { plain } of fetchDecryptedChunks(url, current.fileKey, current.expected, getAccessToken() ?? '', signal)) {
     parts.push(new Blob([plain as BlobPart]))
@@ -196,7 +196,7 @@ export async function openPublicVideo(
   onProgress?: (read: number) => void,
   onFallback?: (next: PlaybackFallback) => void,
 ): Promise<Playback> {
-  const url = `${await resolveApiBase()}${base(token)}/download/${photo.file.id}`
+  const url = `${await resolveApiBase()}${base(token)}/files/${photo.file.id}/download`
   return openPublicPlayback(
     {
       url,

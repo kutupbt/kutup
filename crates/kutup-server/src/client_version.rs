@@ -306,7 +306,7 @@ pub async fn client_version_gate(
 /// anything else is a plain `404 notFound`.
 pub async fn api_fallback(req: Request) -> Response {
     let path = req.uri().path();
-    if let Some(rest) = path.strip_prefix("/api/v") {
+    if let Some(rest) = path.strip_prefix("/api/v1/v") {
         let number: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         let tail = &rest[number.len()..];
         if !number.is_empty() && (tail.is_empty() || tail.starts_with('/')) {

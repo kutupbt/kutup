@@ -134,7 +134,7 @@ export function linkFailure(error: unknown): PublicFailure {
   return response.data?.code === 'link_removed' ? 'removed' : 'expired'
 }
 
-const shareBase = (token: string) => `/share/${encodeURIComponent(token)}`
+const shareBase = (token: string) => `/drive/public-links/${encodeURIComponent(token)}`
 
 /**
  * The viewer's own sign-in, when they have one here: a server whose links
@@ -279,7 +279,7 @@ export async function editedContent(token: string, file: PublicFile): Promise<Ui
   const stateRevisionId = file.stateRevisionId
   if (!stateRevisionId) return null
   // A state the metadata names but the server doesn't serve is refused (a 404 too).
-  const response = await api.get<ArrayBuffer>(`${shareBase(token)}/state/${file.row.id}`, {
+  const response = await api.get<ArrayBuffer>(`${shareBase(token)}/files/${file.row.id}/state`, {
     params: { revision: stateRevisionId },
     responseType: 'arraybuffer',
   })
@@ -308,7 +308,7 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
   if (!file.fileKey) throw new Error('file is not open')
   const edited = await editedContent(token, file)
   if (edited) return edited
-  const url = `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`
+  const url = `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`
   const parts: Uint8Array[] = []
   let length = 0
   for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, currentExpected(file), viewerToken(), signal)) {
@@ -341,7 +341,7 @@ export async function openPublicFilePlayback(
   if (!fileKey) throw new Error('file is not open')
   return openPublicPlayback(
     {
-      url: `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`,
+      url: `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`,
       size: file.size,
       mimeType: file.mimeType,
       content: () => Promise.resolve({ fileKey, expected: currentExpected(file) }),
@@ -364,7 +364,7 @@ export async function downloadPublicFile(token: string, file: PublicFile): Promi
     return
   }
   await streamDownload({
-    url: `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`,
+    url: `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`,
     fileKey: file.fileKey,
     context: currentExpected(file),
     filename: file.name,
