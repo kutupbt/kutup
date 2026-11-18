@@ -31,7 +31,7 @@ EXTENSIONS = ('.rs', '.ts', '.tsx', '.js', '.mjs')
 # The same in a regular expression's escaped form (`\/api\/files\/…`).
 ESCAPED = re.compile(r"\\/api\\/(?!v1|fed\\/v2|health|csp|/)")
 DOUBLE = re.compile(r"/api/v1/v[0-9\"'`]")
-OLD_PATH = re.compile(r"""["'`]/api/(?!v1/|v1["'`]|v["'`]|fed/v2/|fed/["'`]|fed/v["'`]|health|csp-report|["'`])""")
+OLD_PATH = re.compile(r"""["'`]/api/(?!v1[/"'`$]|v["'`]|fed/v2/|fed/["'`]|fed/v["'`]|health|csp-report|["'`])""")
 OLD_FED = re.compile(r"""/api/fed/(?!v2/|v\{|v[0-9]|v["'`]|["'`])""")
 WIRE = re.compile(
     r"""["'](userId|ownerUserId|uploaderUserId|recipientUserId|sharerUserId|collectionOwnerUserId|authorUserId|targetUserId|adminUserId|totalUsers|activeUsers)["']"""
