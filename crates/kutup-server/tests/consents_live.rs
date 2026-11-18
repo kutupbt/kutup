@@ -1,6 +1,6 @@
 //! Consents and the federation switch (docs/plans/server-personal-data.md,
 //! A4) against a live server: turning federation on asks the
-//! `federation_abroad` consent once its text is published; withdrawing the
+//! `federationAbroad` consent once its text is published; withdrawing the
 //! consent turns it off; while off, the account's requests to other servers
 //! are refused.
 //!
@@ -33,20 +33,17 @@ fn federation_follows_its_consent() {
     assert_eq!(me(&c, &base, &user.token)["federation"], "on");
 
     // The consent's text, published (not required at sign-up).
-    let published = bearer(
-        c.post(format!("{base}/api/v1/admin/legal/documents")),
-        &admin,
-    )
-    .json(&json!({
-        "kind": "federation_abroad",
-        "version": uuid(),
-        "language": "en",
-        "url": "https://example.org/federation",
-        "sha256": "a".repeat(64),
-        "requiredAtSignup": false,
-    }))
-    .send()
-    .unwrap();
+    let published = bearer(c.post(format!("{base}/api/v1/admin/legal/documents")), &admin)
+        .json(&json!({
+            "kind": "federationAbroad",
+            "version": uuid(),
+            "language": "en",
+            "url": "https://example.org/federation",
+            "sha256": "a".repeat(64),
+            "requiredAtSignup": false,
+        }))
+        .send()
+        .unwrap();
     assert_eq!(published.status(), StatusCode::CREATED);
     let text = published.json::<Value>().unwrap()["id"]
         .as_str()
@@ -95,7 +92,7 @@ fn federation_follows_its_consent() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|c| c["purpose"] == "federation_abroad")
+        .find(|c| c["purpose"] == "federationAbroad")
         .expect("the consent is recorded");
     assert_eq!(
         (given["given"].as_bool(), given["documentId"].as_str()),
@@ -103,13 +100,10 @@ fn federation_follows_its_consent() {
     );
 
     // Withdrawn: federation goes off with it.
-    let withdrawn = bearer(
-        c.put(format!("{base}/api/v1/account/consents")),
-        &user.token,
-    )
-    .json(&json!({ "purpose": "federation_abroad", "given": false }))
-    .send()
-    .unwrap();
+    let withdrawn = bearer(c.put(format!("{base}/api/v1/account/consents")), &user.token)
+        .json(&json!({ "purpose": "federationAbroad", "given": false }))
+        .send()
+        .unwrap();
     assert_eq!(withdrawn.status(), StatusCode::NO_CONTENT);
     assert_eq!(me(&c, &base, &user.token)["federation"], "off");
 

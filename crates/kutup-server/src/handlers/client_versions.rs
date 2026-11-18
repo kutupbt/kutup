@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
 
+use crate::audit_log::AdminAction;
 use crate::client_version::{self, Version};
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
@@ -187,9 +188,9 @@ pub async fn set_client_version(
     audit(
         &state.pool,
         &admin.account_id,
-        "settings.update",
+        AdminAction::ClientVersionSetMinimum,
         None,
-        json!({ "key": key, "value": request.minimum }),
+        json!({ "clientType": client.as_str(), "value": request.minimum }),
     )
     .await;
     Ok(Json(ClientVersionsResponse {

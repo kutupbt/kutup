@@ -149,9 +149,9 @@ async fn send_offer(
         return Ok(Err(if unanswered || retryable_status(response.status) {
             OfferFailure::Retry(
                 if response.status == StatusCode::CONFLICT {
-                    "sequence_conflict"
+                    "sequenceConflict"
                 } else {
-                    "remote_error"
+                    "remoteError"
                 },
                 message,
             )
@@ -178,7 +178,7 @@ async fn send_offer(
             }
     }) else {
         return Ok(Err(OfferFailure::Retry(
-            "remote_error",
+            "remoteError",
             "remote Chat-media receipt does not match the offer".into(),
         )));
     };
@@ -219,12 +219,12 @@ impl MediaAnswer {
             MediaAnswer::Receipt { receipt }
                 if receipt.status == ChatMediaDeliveryStatusV1::StorageFull =>
             {
-                ("storage_full", false, Some("storage_full"))
+                ("storage_full", false, Some("storageFull"))
             }
             MediaAnswer::Receipt { .. } => ("delivered", true, None),
             MediaAnswer::Refused { status: 404, .. } => ("unavailable", false, Some("unavailable")),
-            MediaAnswer::Refused { .. } => ("rejected", false, Some("remote_rejection")),
-            MediaAnswer::Withdrawn => ("withdrawn", false, Some("federation_off")),
+            MediaAnswer::Refused { .. } => ("rejected", false, Some("remoteRejection")),
+            MediaAnswer::Withdrawn => ("withdrawn", false, Some("federationOff")),
         }
     }
 }
@@ -518,7 +518,7 @@ async fn attempt_media(
                         row.id,
                         Some(row.sequence),
                         row.attempts,
-                        "sequence_gap",
+                        "sequenceGap",
                         &format!("remote expects media sequence {expected}"),
                     )
                     .await?;
@@ -869,14 +869,14 @@ async fn reserve_inbound_offer(
     };
     chat_media::consume_media_rate(
         &mut tx,
-        "capability_minute",
+        "capabilityMinute",
         &capability_digest,
         crate::ratelimit::Limit::MediaCapabilityMinute,
     )
     .await?;
     chat_media::consume_media_rate(
         &mut tx,
-        "federation_origin",
+        "federationOrigin",
         &hash(
             Suite::V1,
             [

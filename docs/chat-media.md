@@ -150,13 +150,13 @@ treated as evidence for the full object.
 4. The sender writes the attachment message to its history and asks its own
    server for the destination's copy (an authenticated media-delivery
    request). The message is encrypted and sent only once the answer is
-   `stored` or `already_stored` (Signal's model,
+   `stored` or `alreadyStored` (Signal's model,
    docs/plans/federation-outbox.md): on `queued` it waits, showing as
    sending, in a job the client keeps across restarts, and asks the same
    operation again with backoff (at most five minutes between asks, and when
    the app comes back online or reopens) for at most
    `chatAttachmentSendLifetimeSeconds` (a site setting, one day by default).
-   `storage_full`, a refusal (`404`, `422`) or the end of that lifetime shows
+   `storageFull`, a refusal (`404`, `422`) or the end of that lifetime shows
    the message as not delivered, with a retry; a retry after a refusal asks
    under a new operation. The origin may retain the local sender and
    recipient internally for retry; they never enter a destination
@@ -230,7 +230,7 @@ uploads sweep deletes a stale inbound hand-over and releases its reservation.
 
 When the recipient's storage pool is full, the message descriptor may remain
 in E2EE history while the attachment is visibly unavailable. The destination
-does not partially store it. Sender and recipient receive stable `storage_full` state,
+does not partially store it. Sender and recipient receive stable `storageFull` state,
 and retry requires available quota plus an unexpired origin object.
 
 Normal accepted media remains until the recipient clears it, its disappearing
@@ -275,7 +275,7 @@ length-prefixed encoding, not signed JSON. It binds version, conversation
 kind/reference, logical message UUID, attachment UUID, opaque
 storage-reference UUID, exact logical ciphertext bytes, state, media class,
 bounded display name, update time and an optional promoted Drive file UUID.
-States are `active`, `cleared`, `saved_to_drive` and `expired`. The server
+States are `active`, `cleared`, `savedToDrive` and `expired`. The server
 cannot classify or join an entry to a sender or conversation.
 
 Writes are batches of `POST /api/v1/account/records` with the next account head:

@@ -333,7 +333,7 @@ pub async fn run_due(state: &AppState) -> AppResult<u64> {
             state,
             account,
             ClosingBy::actor(&by),
-            "account-closing",
+            "accountClosing",
             true,
         )
         .await
@@ -391,7 +391,7 @@ async fn resume_stale(state: &AppState) -> AppResult<()> {
             continue;
         }
         tracing::warn!(%account, "an admin's deletion stopped part way: finishing it");
-        if let Err(error) = destroy(state, account, Actor::Admin, "user.delete", false).await {
+        if let Err(error) = destroy(state, account, Actor::Admin, "account.delete", false).await {
             tracing::error!(%account, "finishing an admin's deletion: {}", error.message);
         }
     }
@@ -538,7 +538,7 @@ mod tests {
             .unwrap();
         let suspended = account(&pool).await;
         sqlx::query(
-            "UPDATE accounts SET state = 'suspended', suspended_reason = 'operator_order' WHERE id = $1",
+            "UPDATE accounts SET state = 'suspended', suspended_reason = 'operatorOrder' WHERE id = $1",
         )
         .bind(suspended)
         .execute(&pool)
@@ -565,7 +565,7 @@ mod tests {
         tx.commit().await.unwrap();
         assert_eq!(
             state_of(&pool, suspended).await,
-            ("suspended".into(), Some("operator_order".into()))
+            ("suspended".into(), Some("operatorOrder".into()))
         );
 
         // Claimed for deletion: no keep, no hold, no second claim.

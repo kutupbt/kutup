@@ -184,18 +184,15 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
     assert_eq!(row(&users(&c))["state"], "active");
 
     // Suspended, with why.
-    let r = bearer(
-        c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
-        &admin,
-    )
-    .json(&json!({ "isActive": false, "suspendedReason": "operator_order" }))
-    .send()
-    .unwrap();
+    let r = bearer(c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)), &admin)
+        .json(&json!({ "isActive": false, "suspendedReason": "operatorOrder" }))
+        .send()
+        .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let listed = row(&users(&c));
     assert_eq!(
         (listed["state"].as_str(), listed["suspendedReason"].as_str()),
-        (Some("suspended"), Some("operator_order"))
+        (Some("suspended"), Some("operatorOrder"))
     );
 
     // Cleared: the deletion goes ahead, and the destruction log has it.

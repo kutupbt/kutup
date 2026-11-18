@@ -12,6 +12,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
+
 /// Trust applies to the server identity, not to an individual feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PeerTrustState {
@@ -157,7 +159,7 @@ impl FederationTrustStore {
                 insert_audit(
                     &mut transaction,
                     None,
-                    "federation.identity.pin",
+                    AdminAction::FederationPinPeer,
                     json!({
                         "actorType": "system",
                         "domain": domain,
@@ -288,7 +290,7 @@ impl FederationTrustStore {
         insert_audit(
             &mut transaction,
             Some(admin_user_id),
-            "federation.identity.verify",
+            AdminAction::FederationVerifyPeer,
             json!({
                 "actorType": "admin",
                 "domain": domain,
@@ -378,9 +380,9 @@ impl FederationTrustStore {
         insert_audit(
             &mut transaction,
             Some(admin_user_id),
-            "federation.identity.repin",
+            AdminAction::FederationRepinPeer,
             json!({
-                "actorType": "admin-break-glass",
+                "actorType": "adminBreakGlass",
                 "domain": domain,
                 "oldFingerprint": expected_old_fingerprint,
                 "oldFingerprintDisplay": grouped_fingerprint(expected_old_fingerprint)?,
@@ -487,7 +489,7 @@ async fn observe_existing(
     insert_audit(
         transaction,
         None,
-        "federation.identity.advance-remote",
+        AdminAction::FederationAdvancePeer,
         json!({
             "actorType": "system",
             "domain": domain,
@@ -535,7 +537,7 @@ async fn quarantine_peer(
     insert_audit(
         transaction,
         None,
-        "federation.identity.quarantine",
+        AdminAction::FederationQuarantinePeer,
         json!({
             "actorType": "system",
             "domain": domain,
@@ -709,7 +711,7 @@ async fn lock_domain(
 async fn insert_audit(
     transaction: &mut Transaction<'_, Postgres>,
     admin_user_id: Option<Uuid>,
-    action: &str,
+    action: AdminAction,
     payload: serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     crate::audit_log::append_in(

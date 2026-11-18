@@ -21,7 +21,7 @@ export interface ContactEmailPgp {
   /** Sign mail to it; unset: the account's "Sign outside mail". Encrypting signs anyway. */
   sign?: boolean
   /** PGP/MIME or Inline; unset: the account's default scheme. */
-  scheme?: 'pgp_mime' | 'inline'
+  scheme?: 'pgpMime' | 'inline'
 }
 
 export interface ContactPhone {

@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
 use crate::handlers::trusted_uuid;
@@ -163,7 +164,7 @@ async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResul
          events AS (
              SELECT account_id,
                     COUNT(*) FILTER (WHERE kind = 'bounce') AS bounces,
-                    COUNT(*) FILTER (WHERE kind = 'spam_refused') AS spam
+                    COUNT(*) FILTER (WHERE kind = 'spamRefused') AS spam
                FROM mail_sending_events
               WHERE created_at > now() - interval '7 days'
               GROUP BY account_id)
@@ -297,7 +298,7 @@ pub async fn update(
     audit(
         &state.pool,
         &admin.account_id,
-        "mail.sending.update",
+        AdminAction::MailUpdateSending,
         Some(target),
         json!({
             "perHour": request.per_hour,
@@ -373,7 +374,7 @@ pub async fn set_outside_sending(
         audit(
             &state.pool,
             &admin.account_id,
-            "mail.outside_sending.update",
+            AdminAction::MailUpdateOutsideSending,
             None,
             json!({ "from": before.as_str(), "to": policy.as_str() }),
         )

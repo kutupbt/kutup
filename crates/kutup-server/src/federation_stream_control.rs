@@ -86,7 +86,7 @@ pub async fn settle_undecodable(
                 row_id,
                 Some(sequence),
                 attempts,
-                "sequence_gap",
+                "sequenceGap",
                 &format!("remote expects sequence {expected}"),
             )
             .await?;

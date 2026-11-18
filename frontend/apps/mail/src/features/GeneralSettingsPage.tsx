@@ -129,8 +129,8 @@ export function GeneralSettingsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="spam_and_unsubscribe">{t('general.spamActionOn')}</SelectItem>
-              <SelectItem value="just_spam">{t('general.spamActionOff')}</SelectItem>
+              <SelectItem value="spamAndUnsubscribe">{t('general.spamActionOn')}</SelectItem>
+              <SelectItem value="justSpam">{t('general.spamActionOff')}</SelectItem>
               <SelectItem value="ask">{t('general.spamActionAsk')}</SelectItem>
             </SelectContent>
           </Select>
@@ -299,7 +299,7 @@ export function GeneralSettingsPage() {
               <SelectValue placeholder={t('general.pgpScheme')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="pgp_mime">PGP/MIME</SelectItem>
+              <SelectItem value="pgpMime">PGP/MIME</SelectItem>
               <SelectItem value="inline">{t('general.inline')}</SelectItem>
             </SelectContent>
           </Select>

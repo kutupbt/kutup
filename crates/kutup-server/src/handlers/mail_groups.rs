@@ -16,6 +16,7 @@ use super::admin::audit;
 use super::mail_keys::{lookup_address, MailKeyLookup};
 use super::trusted_uuid;
 use crate::account_data::KeyOwner;
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::mail::group_keys::{self, NewGroupKey, ShareInput};
 use crate::mail::groups::{self, Sender};
@@ -467,7 +468,7 @@ pub async fn update_group(
         ));
     }
     apply_update(&state, &group, &change).await?;
-    audit(&state.pool, &user.account_id, "mail_group.update", None, json!({ "groupId": group.id, "address": group.address, "change": {
+    audit(&state.pool, &user.account_id, AdminAction::MailGroupUpdate, None, json!({ "groupId": group.id, "address": group.address, "change": {
         "displayName": change.display_name, "description": change.description, "postPolicy": change.post_policy,
         "signature": change.signature.is_some(),
     } })).await;
@@ -1005,7 +1006,7 @@ pub async fn set_members(
     audit(
         &state.pool,
         &user.account_id,
-        "mail_group.members",
+        AdminAction::MailGroupUpdateMembers,
         None,
         json!({
             "groupId": group.id, "address": group.address, "added": added, "removed": removed, "count": ids.len(),
@@ -1259,7 +1260,7 @@ pub async fn admin_create(
     audit(
         &state.pool,
         &admin.account_id,
-        "mail_group.create",
+        AdminAction::MailGroupCreate,
         None,
         json!({
             "groupId": id, "address": address, "kind": input.kind, "quota": input.storage_quota_bytes,
@@ -1320,7 +1321,7 @@ pub async fn admin_update(
         },
     )
     .await?;
-    audit(&state.pool, &admin.account_id, "mail_group.update", None, json!({
+    audit(&state.pool, &admin.account_id, AdminAction::MailGroupUpdate, None, json!({
         "groupId": group.id, "address": group.address, "quota": change.storage_quota_bytes, "postPolicy": change.post_policy,
     }))
     .await;
@@ -1377,7 +1378,7 @@ pub async fn admin_delete(
     audit(
         &state.pool,
         &admin.account_id,
-        "mail_group.delete",
+        AdminAction::MailGroupDelete,
         None,
         json!({ "groupId": group.id, "address": group.address }),
     )
@@ -1622,7 +1623,7 @@ pub async fn rotate_group_key(
     audit(
         &state.pool,
         &user.account_id,
-        "mail_group.key",
+        AdminAction::MailGroupSetKey,
         None,
         json!({ "groupId": group.id, "address": group.address, "fingerprint": fingerprint }),
     )

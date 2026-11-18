@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
 use crate::middleware::AdminAccount;
@@ -189,7 +190,7 @@ pub async fn create(
     audit(
         &state.pool,
         &admin.account_id,
-        "registration_code.created",
+        AdminAction::RegistrationCodeCreate,
         None,
         json!({
             "id": id,
@@ -258,7 +259,7 @@ pub async fn revoke(
         audit(
             &state.pool,
             &admin.account_id,
-            "registration_code.revoked",
+            AdminAction::RegistrationCodeRevoke,
             None,
             json!({ "id": id, "hint": row.hint }),
         )

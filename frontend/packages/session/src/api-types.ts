@@ -68,7 +68,7 @@ export interface FileRow {
   contentHash?: string
 }
 
-export type SuspendedReason = 'admin' | 'operator_order' | 'security'
+export type SuspendedReason = 'admin' | 'operatorOrder' | 'security'
 
 export interface UserRow {
   id: string
@@ -266,7 +266,7 @@ export interface AccountLimits {
 }
 
 /** Who may open public links (docs/plans/server-personal-data.md, A11). */
-export type PublicSharing = 'on' | 'off' | 'signed_in'
+export type PublicSharing = 'on' | 'off' | 'signedIn'
 
 export interface AdminSettings {
   registrationMode: RegistrationMode
@@ -494,11 +494,11 @@ export interface AdminFederationPolicy {
 /**
  * One admin audit-log row — `GET /admin/activity`. `adminUsername`/`targetUsername`
  * are the LIVE identities and go `null` once the referenced account is
- * deleted; `payload` keeps the at-action-time snapshot (`payload.username`).
+ * deleted; the payload names accounts by id only.
  */
 export interface AdminActivityEntry {
   id: number
-  /** User, settings, and `federation.*` mutation action identifiers. */
+  /** `area.verb` (e.g. `account.create`, `federation.updatePolicy`); the list is `AdminAction` in audit_log.rs. */
   action: string
   adminAccountId: string
   adminUsername: string | null

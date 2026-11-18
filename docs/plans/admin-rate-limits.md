@@ -16,8 +16,8 @@ setting in the admin UI, never a constant. The registry is
   `chat_link_preview.rs`, `mail_forwardings.rs`, the MLS invite links and
   group calls, one in `middleware.rs`).
 - The sealed single-send budgets are constants in the database counters
-  (`capability_minute` 120, `capability_day` 10000, `recipient` 120,
-  `federation_origin` 600).
+  (`capabilityMinute` 120, `capabilityDay` 10000, `recipient` 120,
+  `federationOrigin` 600).
 - Group, mail-domain, multi-recipient and storage limits are already site
   settings; they stay as they are.
 
@@ -68,7 +68,7 @@ like the anonymous budgets. The database budgets are shared already.
 (sign-in and accounts, Drive and sharing, Chat, groups, Mail, calls and maps,
 federation, administration), each with what it counts and per what, its value,
 its first value and where that came from (environment or default), a field
-and a reset. Every change is audited (`settings.rate_limit`).
+and a reset. Every change is audited (`settings.setRateLimit`).
 
 **7. Tests.** Unit: the precedence (setting, environment, default, relaxed),
 the bounds, every limiter built from the registry (a limiter built otherwise

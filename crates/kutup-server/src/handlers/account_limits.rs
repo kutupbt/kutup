@@ -13,6 +13,7 @@ use serde_json::json;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::rate_limits::{entry, RateLimitUnit};
 use crate::middleware::AdminAccount;
@@ -297,8 +298,8 @@ pub enum AccountLimitEntry {
 /// value of a setting or rate limit that limits one account (`key`: a
 /// setting's key, or `rate_limit.<key>`), or (`null`) takes it back. A value
 /// outside the range is refused, never clamped. Lowering it below what the
-/// account already uses only stops new growth. Audited as `user.setting` or
-/// `user.rate_limit`.
+/// account already uses only stops new growth. Audited as `account.setEntitlement`
+/// or `account.setRateLimit`.
 #[utoipa::path(
     put,
     path = "/api/v1/admin/accounts/{id}/entitlements/{key}",
@@ -321,14 +322,14 @@ pub async fn update(
     Path((id, key)): Path<(Uuid, String)>,
     Json(request): Json<UpdateLimitRequest>,
 ) -> AppResult<Json<AccountLimitEntry>> {
-    let username = account_name(&state, id).await?;
+    account_name(&state, id).await?;
     let target = target(&key)?;
     let (stored_key, action) = match &target {
         Target::Setting(_, setting) => {
             if let Some(value) = request.value {
                 setting.validate(value).map_err(AppError::bad_request)?;
             }
-            (setting.key.to_owned(), "user.setting")
+            (setting.key.to_owned(), AdminAction::AccountSetEntitlement)
         }
         Target::RateLimit(spec) => {
             let ceiling = ratelimit::ceiling(spec);
@@ -342,7 +343,7 @@ pub async fn update(
             }
             (
                 format!("{RATE_LIMIT_PREFIX}{}", spec.key),
-                "user.rate_limit",
+                AdminAction::AccountSetRateLimit,
             )
         }
     };
@@ -374,11 +375,10 @@ pub async fn update(
         action,
         Some(id),
         // Named as the pages name them: a rate limit by its own key (as
-        // `settings.rate_limit` logs it), a setting by its key, field and
+        // `settings.setRateLimit` logs it), a setting by its key, field and
         // section.
         match &target {
             Target::Setting(section, setting) => json!({
-                "username": username,
                 "key": setting.key,
                 "field": setting.field,
                 "section": section,
@@ -386,7 +386,6 @@ pub async fn update(
                 "previous": previous,
             }),
             Target::RateLimit(spec) => json!({
-                "username": username,
                 "key": spec.key,
                 "value": request.value,
                 "previous": previous,

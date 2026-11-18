@@ -61,7 +61,7 @@ export interface MailMessage {
   labels: string[]
   seen: boolean
   starred: boolean
-  protection: 'zero_access' | 'end_to_end'
+  protection: 'zeroAccess' | 'endToEnd'
   /**
    * The forwarder's address, when this is a copy forwarded end to end to the
    * account (docs/plans/mail-forwarding.md): it opens only with a forwarding
@@ -792,7 +792,7 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
   if (account.isOwnAddress(sender)) {
     // Sent from this account, perhaps from an address it had before.
     candidates = account.ownPublicKeys
-  } else if (sender && message.protection === 'end_to_end') {
+  } else if (sender && message.protection === 'endToEnd') {
     candidates = await addressKeys(sender)
       .then((keys) => keys.all)
       .catch(() => [])
@@ -806,7 +806,7 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
   // A Kutup user's mail they sent with Encrypt off (docs/plans/mail-encrypt-sign.md):
   // readable on the way, encrypted on arrival; its signature, if any, is
   // checked against the sender's own key list.
-  const readableFromKutup = message.direction === 'inbound' && !!sender && !outside && message.protection === 'zero_access'
+  const readableFromKutup = message.direction === 'inbound' && !!sender && !outside && message.protection === 'zeroAccess'
   if (!outside && !readableFromKutup) return { parsed: await parseMessage(opened.data), raw: opened.data, signed: opened.signed, verified: opened.verified }
 
   const pin = outside ? pinned(sender) : undefined
@@ -1140,7 +1140,7 @@ export interface MailSettings {
   /** Rows on a page of the list: 50, 100 or 200 (Proton's PageSize). */
   pageSize: number
   /** Moving list mail to Spam: ask, just move, or move and unsubscribe (Proton's SpamAction). */
-  spamAction: 'ask' | 'just_spam' | 'spam_and_unsubscribe'
+  spamAction: 'ask' | 'justSpam' | 'spamAndUnsubscribe'
   /** Remote images: blocked until loaded, or always (Proton's "Auto show remote images"); never automatic in Spam. */
   remoteImages: 'ask' | 'always'
   /** Remote images load through the Kutup server, known trackers never load, and links lose tracking parameters (Proton's "Protect against email tracking"). */
@@ -1161,7 +1161,7 @@ export interface MailSettings {
   /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */
   attachPublicKey: boolean
   /** How mail to outside OpenPGP users is encrypted or signed (Proton's PGPScheme); Inline is plain text. */
-  pgpScheme: 'pgp_mime' | 'inline'
+  pgpScheme: 'pgpMime' | 'inline'
   /** The tab icon shows the open place's unread count (Proton's UnreadFavicon). */
   unreadFavicon: boolean
   /** Sent mail moved elsewhere still shows in Sent (Proton's ShowMoved). */
@@ -1428,7 +1428,7 @@ export interface SendOptions {
    * or Inline, plain text with each attachment encrypted (or signed) on its
    * own. Kutup recipients are not affected.
    */
-  pgpScheme?: 'pgp_mime' | 'inline'
+  pgpScheme?: 'pgpMime' | 'inline'
 }
 
 export async function sendDraft(
@@ -1504,7 +1504,7 @@ export async function sendDraft(
   const keyed = options.encrypt
     ? external.flatMap((address, i) => {
         const key = pgpKey(protections[i])
-        const scheme = pinned(address)?.pgp.scheme ?? options.pgpScheme ?? 'pgp_mime'
+        const scheme = pinned(address)?.pgp.scheme ?? options.pgpScheme ?? 'pgpMime'
         return key ? [{ address, key, inline: scheme === 'inline' }] : []
       })
     : []

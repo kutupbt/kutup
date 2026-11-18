@@ -14,7 +14,7 @@ export function documentName(t: ReturnType<typeof useTranslation>['t'], kind: st
 
 export interface LegalDocument {
   id: string
-  /** The operator's kind: `terms`, `privacy_notice`, or a consent purpose. */
+  /** The operator's kind: `terms`, `privacyNotice`, or a consent purpose. */
   kind: string
   version: string
   language: string

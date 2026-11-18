@@ -48,18 +48,18 @@ describe('moving list mail to Spam (Proton’s SpamAction)', () => {
     expect(await screen.findByText(/This message will be marked as spam/)).toBeTruthy()
     fireEvent.click(screen.getByRole('checkbox', { name: 'Remember my choice' }))
     fireEvent.click(screen.getByRole('button', { name: 'Move to spam and unsubscribe' }))
-    expect(updateSettings).toHaveBeenCalledWith({ spamAction: 'spam_and_unsubscribe' })
+    expect(updateSettings).toHaveBeenCalledWith({ spamAction: 'spamAndUnsubscribe' })
     expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ ids: ['m1'], folder: 'spam' }))
     expect(quiet).toHaveBeenCalledWith([list])
   })
 
   it('moves without asking when the choice is set, and never asks for other mail', () => {
-    spamAction = 'just_spam'
+    spamAction = 'justSpam'
     const { result, rerender } = renderHook(() => useMailActions())
     act(() => result.current.move([list], 'spam'))
     expect(mutateAsync).toHaveBeenCalledTimes(1)
     expect(quiet).not.toHaveBeenCalled()
-    spamAction = 'spam_and_unsubscribe'
+    spamAction = 'spamAndUnsubscribe'
     rerender()
     act(() => result.current.move([list], 'spam'))
     expect(quiet).toHaveBeenCalledWith([list])

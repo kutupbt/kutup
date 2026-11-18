@@ -560,9 +560,9 @@ async fn record(
             // Encrypted by its sender with OpenPGP: end to end; otherwise
             // it came in clear and is encrypted here (zero access).
             protection: if readable.pgp_encrypted {
-                "end_to_end"
+                "endToEnd"
             } else {
-                "zero_access"
+                "zeroAccess"
             },
             seen: false,
             object_key: key,

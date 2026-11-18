@@ -115,7 +115,7 @@ function Quotas({ user }: { user: UserRow }) {
   )
 }
 
-const SUSPENDED_REASONS: SuspendedReason[] = ['admin', 'operator_order', 'security']
+const SUSPENDED_REASONS: SuspendedReason[] = ['admin', 'operatorOrder', 'security']
 
 type Pending =
   | { kind: 'disable' }

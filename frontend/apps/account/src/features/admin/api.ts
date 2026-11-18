@@ -441,7 +441,7 @@ export function useDismissReport() {
 }
 
 /** Why an operator blocks a link (docs/plans/server-personal-data.md, A11). */
-export type BlockReason = 'legal_order' | 'abuse' | 'other'
+export type BlockReason = 'legalOrder' | 'abuse' | 'other'
 
 /** Blocks a public link: 451 for a legal order, 410 otherwise; its open reports close. */
 export function useBlockLink() {

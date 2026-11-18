@@ -8,7 +8,7 @@
 //! - **Acknowledgements:** the notice was shown and confirmed (not a
 //!   consent), at sign-up in the account's creating transaction, or when a
 //!   new required version is shown at a later sign-in. Append-only.
-//! - **Consents**, per purpose (`federation_abroad`, `marketing`), given or
+//! - **Consents**, per purpose (`federationAbroad`, `marketing`), given or
 //!   withdrawn; each change is a row and the latest is the state. A
 //!   purpose's text is the current document of the purpose's kind.
 //!
@@ -26,13 +26,14 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::middleware::{AdminAccount, AuthAccount};
 use crate::AppState;
 
 /// The purposes a consent is given for: the core's, worded neutrally; their
 /// texts are the operator's documents of the same kind.
-pub const PURPOSES: [&str; 2] = ["federation_abroad", "marketing"];
+pub const PURPOSES: [&str; 2] = ["federationAbroad", "marketing"];
 
 /// One published version of a document, in one language.
 #[derive(Debug, Clone, Serialize, ToSchema, sqlx::FromRow)]
@@ -465,7 +466,7 @@ pub async fn publish(
         }
         Err(sqlx::Error::Database(e)) if e.is_check_violation() => {
             return Err(AppError::bad_request(
-                "kind is lowercase letters, digits and _; version 1 to 40 characters; language a code like en or pt-BR",
+                "kind is letters and digits, a lowercase letter first (camelCase); version 1 to 40 characters; language a code like en or pt-BR",
             ))
         }
         Err(e) => return Err(e.into()),
@@ -473,7 +474,7 @@ pub async fn publish(
     crate::handlers::admin::audit(
         &state.pool,
         &admin.account_id,
-        "legal.publish",
+        AdminAction::LegalPublish,
         None,
         json!({
             "documentId": document.id,

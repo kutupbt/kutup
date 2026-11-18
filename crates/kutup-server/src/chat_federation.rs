@@ -670,7 +670,7 @@ fn settled_outcome(
         ("delivered", _) => serde_json::from_value(answer)
             .ok()
             .map(FederatedSealedOutcome::Delivered),
-        ("rejected", Some("device_mismatch")) => match serde_json::from_value(answer) {
+        ("rejected", Some("deviceMismatch")) => match serde_json::from_value(answer) {
             Ok(FederationDeliveryError::DeviceListMismatch { mismatch }) => {
                 Some(FederatedSealedOutcome::Mismatch(mismatch))
             }
@@ -903,7 +903,7 @@ impl SealedFlush {
     }
 
     fn waiting(&self, class: Option<&str>) -> FederatedSealedOutcome {
-        if self.parked || class == Some("peer_unsupported") {
+        if self.parked || class == Some("peerUnsupported") {
             FederatedSealedOutcome::PeerUnsupported
         } else {
             FederatedSealedOutcome::Pending
@@ -1015,7 +1015,7 @@ async fn flush_rounds(
             && trigger == FlushTrigger::Client
             && claim_sealed_probe(&state.pool, *head).await?;
         if !due && !probe {
-            flush.parked = class.as_deref() == Some("peer_unsupported");
+            flush.parked = class.as_deref() == Some("peerUnsupported");
             break;
         }
         // A batch carries consecutive sequences; one an answer already
@@ -1061,7 +1061,7 @@ async fn claim_sealed_probe(pool: &sqlx::PgPool, head: Uuid) -> AppResult<bool> 
     Ok(sqlx::query(
         "UPDATE federation_outbox SET updated_at = now()
          WHERE id = $1 AND kind = 'sealed' AND state = 'pending' AND next_attempt_at > now()
-           AND error_class IS DISTINCT FROM 'peer_unsupported'
+           AND error_class IS DISTINCT FROM 'peerUnsupported'
            AND updated_at <= now() - ($2 * interval '1 second')",
     )
     .bind(head)
@@ -1136,7 +1136,7 @@ async fn send_sealed_run(
     };
     let Ok(answers) = serde_json::from_slice::<FederatedSealedBatchResponseV1>(&response.body)
     else {
-        mark_sealed_retry(&state.pool, &rows[0], "remote_error").await?;
+        mark_sealed_retry(&state.pool, &rows[0], "remoteError").await?;
         return Ok(false);
     };
     let mut answers = answers.results.into_iter();
@@ -1151,7 +1151,7 @@ async fn send_sealed_run(
                         apply_sealed_answer(&state.pool, row, status, &body).await
                     }
                     Err(_) => {
-                        mark_sealed_retry(&state.pool, row, "remote_error").await?;
+                        mark_sealed_retry(&state.pool, row, "remoteError").await?;
                         Ok(FederatedSealedOutcome::Pending)
                     }
                 }
@@ -1328,22 +1328,22 @@ async fn apply_sealed_answer(
                 FederatedSealedOutcome::Delivered(delivered),
             ),
             Err(_) => {
-                mark_sealed_retry(pool, row, "remote_error").await?;
+                mark_sealed_retry(pool, row, "remoteError").await?;
                 return Ok(FederatedSealedOutcome::Pending);
             }
         },
         StatusCode::CONFLICT => match serde_json::from_slice::<FederationDeliveryError>(body) {
             Ok(FederationDeliveryError::DeviceListMismatch { mismatch }) => (
                 "rejected",
-                Some("device_mismatch"),
+                Some("deviceMismatch"),
                 FederatedSealedOutcome::Mismatch(mismatch),
             ),
             Ok(FederationDeliveryError::SequenceGap { .. }) => {
-                mark_sealed_retry(pool, row, "sequence_gap").await?;
+                mark_sealed_retry(pool, row, "sequenceGap").await?;
                 return Ok(FederatedSealedOutcome::Pending);
             }
             Err(_) => {
-                mark_sealed_retry(pool, row, "remote_error").await?;
+                mark_sealed_retry(pool, row, "remoteError").await?;
                 return Ok(FederatedSealedOutcome::Pending);
             }
         },
@@ -1371,7 +1371,7 @@ async fn apply_sealed_answer(
             ("rejected", Some("refused"), FederatedSealedOutcome::Refused)
         }
         _ => {
-            mark_sealed_retry(pool, row, "remote_error").await?;
+            mark_sealed_retry(pool, row, "remoteError").await?;
             return Ok(FederatedSealedOutcome::Pending);
         }
     };
@@ -1511,27 +1511,27 @@ pub async fn enqueue_send(
                 tx.rollback().await?;
                 return delivered_outcome(row.answer, true);
             }
-            ("rejected", Some("device_mismatch")) if same => {
+            ("rejected", Some("deviceMismatch")) if same => {
                 tx.rollback().await?;
                 return Ok(FederatedSendOutcome::Mismatch(stored_mismatch(row.answer)?));
             }
             // Corrected after a mismatch: again, under the next sequence.
             // Answered long ago, its record gone at the destination: not
             // known to be delivered.
-            ("rejected", Some("record_gone")) => {
+            ("rejected", Some("recordGone")) => {
                 tx.rollback().await?;
                 return Ok(FederatedSendOutcome::Rejected(
                     FederationDeliveryRejection::RecipientUnavailable,
                 ));
             }
-            ("rejected", Some("device_mismatch")) => {
+            ("rejected", Some("deviceMismatch")) => {
                 requeue_plain(&mut tx, row.id, destination, &request_value).await?;
             }
             // Corrected while a mismatch from before wire version 2 is still
             // closing its sequence (its stale content is sent once more under
             // it, so the destination records an answer there): that goes
             // first, then the correction under the next sequence.
-            ("pending", Some("closing_sequence")) if !same => {
+            ("pending", Some("closingSequence")) if !same => {
                 tx.commit().await?;
                 return match attempt_outbox(state, row.id).await? {
                     FederatedSendOutcome::Mismatch(_) => {
@@ -1544,7 +1544,7 @@ pub async fn enqueue_send(
                         .fetch_optional(&mut *tx)
                         .await?
                         .flatten();
-                        if still.as_deref() != Some("device_mismatch") {
+                        if still.as_deref() != Some("deviceMismatch") {
                             return Ok(FederatedSendOutcome::Pending);
                         }
                         requeue_plain(&mut tx, row.id, destination, &request_value).await?;
@@ -1623,7 +1623,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
         .ok_or_else(|| AppError::internal("federation outbox row disappeared"))?;
     match (row.state.as_str(), row.error_class.as_deref()) {
         ("delivered", _) => return delivered_outcome(row.answer, true),
-        ("rejected", Some("device_mismatch")) => {
+        ("rejected", Some("deviceMismatch")) => {
             return Ok(FederatedSendOutcome::Mismatch(stored_mismatch(row.answer)?));
         }
         ("pending", _) => {}
@@ -1731,7 +1731,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
             retry_plain(
                 state,
                 &row,
-                "remote_error",
+                "remoteError",
                 "remote acknowledged the wrong sequence",
             )
             .await?;
@@ -1759,7 +1759,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
             row.id,
             Some(row.sequence),
             false,
-            Some("record_gone"),
+            Some("recordGone"),
             &answer,
         )
         .await?;
@@ -1808,7 +1808,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                     row.id,
                     Some(row.sequence),
                     false,
-                    Some("device_mismatch"),
+                    Some("deviceMismatch"),
                     &value,
                 )
                 .await?;
@@ -1842,7 +1842,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                 retry_plain(
                     state,
                     &row,
-                    "sequence_gap",
+                    "sequenceGap",
                     &format!("remote expects federation sequence {expected_sequence}"),
                 )
                 .await?;
@@ -1854,7 +1854,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
     retry_plain(
         state,
         &row,
-        "remote_error",
+        "remoteError",
         &format!("remote federation delivery returned {status}"),
     )
     .await?;
@@ -1894,7 +1894,7 @@ async fn withdraw_off_head(state: &AppState, destination: &str) -> AppResult<()>
 }
 
 /// Withdraws a queued plain send's sequence: used up at the destination,
-/// nothing of it sent, the row settled as `federation_off`.
+/// nothing of it sent, the row settled as `federationOff`.
 async fn withdraw_plain(
     state: &AppState,
     row: &FederationOutboxRow,
@@ -1915,7 +1915,7 @@ async fn withdraw_plain(
                 row.id,
                 Some(row.sequence),
                 false,
-                Some("federation_off"),
+                Some("federationOff"),
                 &serde_json::json!({ "withdrawn": true }),
             )
             .await?;
@@ -1941,7 +1941,7 @@ async fn withdraw_plain(
             retry_plain(
                 state,
                 row,
-                "sequence_gap",
+                "sequenceGap",
                 &format!("remote expects federation sequence {expected}"),
             )
             .await?;
@@ -3116,7 +3116,7 @@ async fn charge_sealed_origin(
     .into();
     crate::handlers::chat::consume_anonymous_rate(
         tx,
-        "federation_origin",
+        "federationOrigin",
         &origin_digest,
         crate::ratelimit::Limit::SealedOrigin,
     )
@@ -3377,7 +3377,7 @@ mod tests {
         // it is due, and the other server still is.
         sqlx::query(
             "UPDATE federation_outbox
-                SET next_attempt_at = now() + interval '1 hour', error_class = 'peer_unsupported'
+                SET next_attempt_at = now() + interval '1 hour', error_class = 'peerUnsupported'
               WHERE id = $1",
         )
         .bind(slow_head)
@@ -3972,7 +3972,7 @@ mod sealed_live_tests {
         age("1 minute").await;
         sqlx::query(
             "UPDATE federation_outbox
-                SET error_class = 'peer_unsupported' WHERE id = $1",
+                SET error_class = 'peerUnsupported' WHERE id = $1",
         )
         .bind(head)
         .execute(&pool)

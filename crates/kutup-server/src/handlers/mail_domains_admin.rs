@@ -14,6 +14,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
 use crate::mail::domains::dkim;
@@ -264,9 +265,10 @@ pub async fn set_settings(
         audit(
             &state.pool,
             &admin.account_id,
-            "mail.domains.settings",
+            AdminAction::MailDomainUpdateSettings,
             None,
-            json!(checked.iter().cloned().collect::<BTreeMap<_, _>>()),
+            // The settings by their keys (dotted, as the registry names them).
+            json!({ "settings": checked.iter().cloned().collect::<BTreeMap<_, _>>() }),
         )
         .await;
     }
@@ -300,7 +302,7 @@ pub async fn approve(
     audit(
         &state.pool,
         &admin.account_id,
-        "mail.domains.approve",
+        AdminAction::MailDomainApprove,
         None,
         json!({ "domain": name }),
     )
@@ -338,7 +340,7 @@ pub async fn deactivate(
     audit(
         &state.pool,
         &admin.account_id,
-        "mail.domains.deactivate",
+        AdminAction::MailDomainDeactivate,
         None,
         json!({ "domain": name }),
     )
@@ -403,7 +405,7 @@ pub async fn unblock(
     audit(
         &state.pool,
         &admin.account_id,
-        "mail.domains.unblock",
+        AdminAction::MailDomainUnblock,
         None,
         json!({ "domain": name }),
     )
@@ -600,7 +602,7 @@ pub async fn set_overrides(
     audit(
         &state.pool,
         &admin.account_id,
-        "mail.domains.overrides",
+        AdminAction::MailDomainSetOverrides,
         Some(id),
         json!({ "limits": input, "organization": organization.map(|o| o.to_string()) }),
     )

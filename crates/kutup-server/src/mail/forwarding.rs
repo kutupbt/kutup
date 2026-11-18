@@ -81,7 +81,7 @@ pub async fn outdate(
     sqlx::query(
         "DELETE FROM mail_forwarding_keys
           WHERE forwarding_id IN (SELECT id FROM mail_forwardings
-                                   WHERE forwarder_address_id = $1 AND kind = 'end_to_end')",
+                                   WHERE forwarder_address_id = $1 AND kind = 'endToEnd')",
     )
     .bind(forwarder_address_id)
     .execute(&mut **tx)
@@ -89,7 +89,7 @@ pub async fn outdate(
     sqlx::query(
         "UPDATE mail_forwardings SET state = 'outdated', activation = NULL, expires_at = NULL,
                 updated_at = now()
-          WHERE forwarder_address_id = $1 AND kind = 'end_to_end' AND state <> 'rejected'",
+          WHERE forwarder_address_id = $1 AND kind = 'endToEnd' AND state <> 'rejected'",
     )
     .bind(forwarder_address_id)
     .execute(&mut **tx)
@@ -445,7 +445,7 @@ pub async fn tidy(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
            JOIN accounts fu ON fu.id = f.account_id
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
            LEFT JOIN accounts bu ON bu.id = b.account_id
-          WHERE f.kind = 'end_to_end' AND f.state <> 'outdated'
+          WHERE f.kind = 'endToEnd' AND f.state <> 'outdated'
             AND (NOT fu.is_active OR NOT COALESCE(bu.is_active, true))",
     )
     .fetch_all(pool)
@@ -905,7 +905,7 @@ async fn deliver(
                 thread_id: None,
                 direction: "inbound",
                 folder: "inbox",
-                protection: "end_to_end",
+                protection: "endToEnd",
                 seen: false,
                 object_key: &key,
                 object_version: &version,

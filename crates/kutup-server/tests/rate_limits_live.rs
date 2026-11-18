@@ -230,7 +230,7 @@ fn administrators_set_rate_limits() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["action"] == "settings.rate_limit" && e["payload"]["key"] == LIMIT),
+            .any(|e| e["action"] == "settings.setRateLimit" && e["payload"]["key"] == LIMIT),
         "{activity}"
     );
     assert!(
@@ -238,7 +238,7 @@ fn administrators_set_rate_limits() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["action"] == "user.rate_limit" && e["targetAccountId"] == own_id),
+            .any(|e| e["action"] == "account.setRateLimit" && e["targetAccountId"] == own_id),
         "{activity}"
     );
 }

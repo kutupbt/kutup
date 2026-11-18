@@ -20,6 +20,147 @@ use uuid::Uuid;
 
 use crate::error::AppResult;
 
+/// Declares [`AdminAction`]: each action, its string (`area.verb`: two
+/// camelCase segments, the verb imperative) and the payload keys it may
+/// carry. Payloads name accounts by id only (the row's target account),
+/// never by a username snapshot (A8).
+macro_rules! admin_actions {
+    ($($variant:ident = $name:literal [$($key:literal),* $(,)?]),* $(,)?) => {
+        /// Every action the admin log records (docs/plans/w7-schema.md §3).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum AdminAction {
+            $($variant),*
+        }
+
+        impl AdminAction {
+            /// Every action, for the table's own test.
+            #[cfg(test)]
+            pub const ALL: &'static [AdminAction] = &[$(AdminAction::$variant),*];
+
+            /// The action as the log stores it.
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(AdminAction::$variant => $name),*
+                }
+            }
+
+            /// The payload keys this action may carry (its top-level keys).
+            pub const fn payload_keys(self) -> &'static [&'static str] {
+                match self {
+                    $(AdminAction::$variant => &[$($key),*]),*
+                }
+            }
+        }
+    };
+}
+
+admin_actions! {
+    // Accounts (the account is the row's target).
+    AccountView = "account.view" ["view"],
+    AccountCreate = "account.create" ["storageQuotaBytes"],
+    AccountSetFederation = "account.setFederation" ["federation"],
+    AccountSetPublicSharing = "account.setPublicSharing" ["publicSharing"],
+    AccountUpdate = "account.update" ["changes"],
+    AccountDelete = "account.delete" [],
+    AccountClose = "account.close" ["closesAt"],
+    AccountSetLegalHold = "account.setLegalHold" ["reference"],
+    AccountClearLegalHold = "account.clearLegalHold" ["reference"],
+    AccountDisableTwoFactor = "account.disableTwoFactor" [],
+    AccountRotateTempPassword = "account.rotateTempPassword" [],
+    AccountResetKeys = "account.resetKeys" [],
+    AccountSetEntitlement = "account.setEntitlement" ["key", "field", "section", "value", "previous"],
+    AccountSetRateLimit = "account.setRateLimit" ["key", "value", "previous"],
+    // Site settings and the other admin areas.
+    SettingsUpdate = "settings.update" [
+        "registrationMode", "publicSharing", "federationDefault", "defaultStorageQuotaBytes",
+        "chatMailboxRetentionDays", "chatMediaDeliveryRetentionDays", "nameHoldDays",
+        "oldAddressReceiveDays", "chatGroupLinkJoinsPerRelayGroupPerMin",
+        "chatGroupLinkJoinsPerRelayPerMin", "numeric", "chatGroupAvatarMaxBytes",
+        "chatGroupAvatarStoragePerGroupBytes", "chatGroupAvatarPendingSeconds", "passVaultMaxBytes",
+    ],
+    SettingsSetRateLimit = "settings.setRateLimit" ["key", "value", "previous"],
+    // The oldest client of a type the server accepts (`null` value: the floor).
+    ClientVersionSetMinimum = "clientVersion.setMinimum" ["clientType", "value"],
+    MapsUpdateSettings = "maps.updateSettings" ["enabled", "providers", "proxy", "cacheMegabytes"],
+    LegalPublish = "legal.publish" ["documentId", "kind", "version", "language", "requiredAtSignup"],
+    MailUpdateSending = "mail.updateSending" ["perHour", "perDay", "paused", "clearFlag"],
+    MailUpdateOutsideSending = "mail.updateOutsideSending" ["from", "to"],
+    MailDomainUpdateSettings = "mailDomain.updateSettings" ["settings"],
+    MailDomainApprove = "mailDomain.approve" ["domain"],
+    MailDomainDeactivate = "mailDomain.deactivate" ["domain"],
+    MailDomainUnblock = "mailDomain.unblock" ["domain"],
+    MailDomainSetOverrides = "mailDomain.setOverrides" ["limits", "organization"],
+    MailGroupCreate = "mailGroup.create" ["groupId", "address", "kind", "quota"],
+    MailGroupUpdate = "mailGroup.update" ["groupId", "address", "change", "quota", "postPolicy"],
+    MailGroupUpdateMembers = "mailGroup.updateMembers" ["groupId", "address", "added", "removed", "count"],
+    MailGroupDelete = "mailGroup.delete" ["groupId", "address"],
+    MailGroupSetKey = "mailGroup.setKey" ["groupId", "address", "fingerprint"],
+    ReportDismiss = "report.dismiss" ["reportId", "shareId"],
+    ShareRemove = "share.remove" ["reportId", "shareId"],
+    ShareBlock = "share.block" ["shareId", "reason", "reference"],
+    ShareUnblock = "share.unblock" ["shareId", "reason"],
+    FeedbackResolve = "feedback.resolve" ["feedbackId", "resolution", "githubUrl"],
+    FeedbackDelete = "feedback.delete" ["feedbackId"],
+    RegistrationCodeCreate = "registrationCode.create" ["id", "hint", "note", "maxUses", "expiresAt"],
+    RegistrationCodeRevoke = "registrationCode.revoke" ["id", "hint"],
+    // The held name itself (what the action is about), not a snapshot.
+    NameClose = "name.close" ["name"],
+    NameFree = "name.free" ["name"],
+    // Federation.
+    FederationUpdatePolicy = "federation.updatePolicy" ["globalEnabled", "feature", "mode", "minimumTrust"],
+    FederationSetRule = "federation.setRule" ["domain", "feature", "inbound", "outbound", "trustRequirement"],
+    FederationDeleteRule = "federation.deleteRule" ["domain", "feature"],
+    FederationRetryPeer = "federation.retryPeer" ["domain", "refreshed", "error"],
+    FederationRetryPeers = "federation.retryPeers" ["results"],
+    FederationCreateIdentity = "federation.createIdentity" ["actorType", "domain", "sequence", "fingerprint"],
+    FederationRotateIdentity = "federation.rotateIdentity" [
+        "actorType", "domain", "sequence", "oldFingerprint", "oldFingerprintDisplay",
+        "newFingerprint", "newFingerprintDisplay",
+    ],
+    FederationPinPeer = "federation.pinPeer" ["actorType", "domain", "trust", "sequence", "fingerprint"],
+    FederationVerifyPeer = "federation.verifyPeer" ["actorType", "domain", "sequence", "fingerprint", "fingerprintDisplay"],
+    FederationRepinPeer = "federation.repinPeer" [
+        "actorType", "domain", "oldFingerprint", "oldFingerprintDisplay", "newFingerprint",
+        "newFingerprintDisplay", "newSequence",
+    ],
+    FederationAdvancePeer = "federation.advancePeer" [
+        "actorType", "domain", "previousSequence", "sequence", "fingerprint", "trust",
+    ],
+    FederationQuarantinePeer = "federation.quarantinePeer" [
+        "actorType", "domain", "reason", "retainedSequence", "retainedFingerprint",
+        "candidateSequence", "candidateFingerprint",
+    ],
+    FederationCreateFeaturePolicy = "federation.createFeaturePolicy" [
+        "actorType", "domain", "featureType", "sequence", "policyHash", "identityGeneration",
+    ],
+    FederationRotateFeaturePolicy = "federation.rotateFeaturePolicy" [
+        "actorType", "domain", "featureType", "sequence", "policyHash", "identityGeneration",
+    ],
+}
+
+impl std::fmt::Display for AdminAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// In debug builds and tests: the payload is an object whose keys are all in
+/// `action`'s list, so a new key (or a username snapshot) can't slip in
+/// without the table naming it.
+fn debug_check_payload(action: AdminAction, payload: &Value) {
+    if cfg!(debug_assertions) {
+        let object = payload
+            .as_object()
+            .unwrap_or_else(|| panic!("the {action} payload is not an object"));
+        for key in object.keys() {
+            assert!(
+                action.payload_keys().contains(&key.as_str()),
+                "the {action} payload carries `{key}`, not in its list"
+            );
+        }
+    }
+}
+
 const CHAIN_DOMAIN: &[u8] = kutup_crypto::labels::SERVER_ADMIN_AUDIT_CHAIN_V1;
 /// The version [`row_hash`] is (`admin_audit_log.chain_version`): a row of
 /// another version is one this server can't check, and reads as broken.
@@ -99,7 +240,7 @@ fn has_fraction(value: &Value) -> bool {
 pub async fn append(
     pool: &PgPool,
     admin: Uuid,
-    action: &str,
+    action: AdminAction,
     target: Option<Uuid>,
     payload: &Value,
 ) -> AppResult<()> {
@@ -114,10 +255,12 @@ pub async fn append(
 pub async fn append_in(
     conn: &mut sqlx::PgConnection,
     admin: Uuid,
-    action: &str,
+    action: AdminAction,
     target: Option<Uuid>,
     payload: &Value,
 ) -> sqlx::Result<()> {
+    debug_check_payload(action, payload);
+    let action = action.as_str();
     if has_fraction(payload) {
         return Err(sqlx::Error::Encode(
             "an admin log payload holds a number that is not an integer".into(),
@@ -300,11 +443,18 @@ mod tests {
         (1..=3)
             .map(|id| {
                 let payload = json!({ "n": id });
-                let hash = row_hash(&previous, admin, "user.update", None, micros(at), &payload);
+                let hash = row_hash(
+                    &previous,
+                    admin,
+                    "account.update",
+                    None,
+                    micros(at),
+                    &payload,
+                );
                 let row = (
                     id,
                     admin,
-                    "user.update".to_owned(),
+                    "account.update".to_owned(),
                     None,
                     payload,
                     at,
@@ -364,9 +514,15 @@ mod tests {
             .await
             .unwrap();
         let admin = Uuid::nil();
-        append(&pool, admin, "test.before", None, &json!({ "n": 1 }))
-            .await
-            .unwrap();
+        append(
+            &pool,
+            admin,
+            AdminAction::AccountUpdate,
+            None,
+            &json!({ "changes": 1 }),
+        )
+        .await
+        .unwrap();
         // Everything older than now goes: the table is empty, the anchor set.
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         prune(&pool, 0).await.unwrap();
@@ -375,12 +531,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, 0);
-        append(&pool, admin, "test.after", None, &json!({ "n": 2 }))
-            .await
-            .unwrap();
+        append(
+            &pool,
+            admin,
+            AdminAction::AccountUpdate,
+            None,
+            &json!({ "changes": 2 }),
+        )
+        .await
+        .unwrap();
         let verified = verify(&pool).await.unwrap();
         assert_eq!(verified.broken_at, None);
         assert_eq!(verified.checked, 1);
+    }
+
+    /// One table names every action: each string unique and `area.verb`
+    /// (two camelCase segments), each payload key camelCase, none a username.
+    #[test]
+    fn every_action_is_area_verb_with_camel_case_keys() {
+        fn camel(segment: &str) -> bool {
+            let mut bytes = segment.bytes();
+            bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+                && bytes.all(|b| b.is_ascii_alphabetic())
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for action in AdminAction::ALL {
+            let name = action.as_str();
+            assert!(seen.insert(name), "{name} is listed twice");
+            let (area, verb) = name.split_once('.').expect("area.verb");
+            assert!(
+                camel(area) && camel(verb),
+                "{name} is not area.verb in camelCase"
+            );
+            let mut keys = std::collections::BTreeSet::new();
+            for key in action.payload_keys() {
+                assert!(camel(key), "{name}: payload key {key} is not camelCase");
+                assert!(
+                    keys.insert(key),
+                    "{name}: payload key {key} is listed twice"
+                );
+                assert_ne!(*key, "username", "{name}: payloads name accounts by id");
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "not in its list")]
+    fn a_payload_key_outside_the_list_is_refused() {
+        debug_check_payload(AdminAction::AccountDelete, &json!({ "username": "x" }));
     }
 
     #[test]
@@ -398,7 +597,7 @@ mod tests {
         let base = row_hash(
             &[],
             admin,
-            "user.delete",
+            "account.delete",
             None,
             10,
             &json!({ "a": 1, "b": [1, 2] }),
@@ -408,7 +607,7 @@ mod tests {
             row_hash(
                 &[],
                 admin,
-                "user.delete",
+                "account.delete",
                 None,
                 10,
                 &json!({ "b": [1, 2], "a": 1 })
@@ -418,7 +617,7 @@ mod tests {
             row_hash(
                 &[7],
                 admin,
-                "user.delete",
+                "account.delete",
                 None,
                 10,
                 &json!({ "a": 1, "b": [1, 2] }),
@@ -426,7 +625,7 @@ mod tests {
             row_hash(
                 &[],
                 Uuid::from_u128(2),
-                "user.delete",
+                "account.delete",
                 None,
                 10,
                 &json!({ "a": 1, "b": [1, 2] }),
@@ -434,7 +633,7 @@ mod tests {
             row_hash(
                 &[],
                 admin,
-                "user.wipe",
+                "account.resetKeys",
                 None,
                 10,
                 &json!({ "a": 1, "b": [1, 2] }),
@@ -442,7 +641,7 @@ mod tests {
             row_hash(
                 &[],
                 admin,
-                "user.delete",
+                "account.delete",
                 Some(admin),
                 10,
                 &json!({ "a": 1, "b": [1, 2] }),
@@ -450,7 +649,7 @@ mod tests {
             row_hash(
                 &[],
                 admin,
-                "user.delete",
+                "account.delete",
                 None,
                 11,
                 &json!({ "a": 1, "b": [1, 2] }),
@@ -458,7 +657,7 @@ mod tests {
             row_hash(
                 &[],
                 admin,
-                "user.delete",
+                "account.delete",
                 None,
                 10,
                 &json!({ "a": 2, "b": [1, 2] }),
@@ -466,7 +665,7 @@ mod tests {
             row_hash(
                 &[],
                 admin,
-                "user.delete",
+                "account.delete",
                 None,
                 10,
                 &json!({ "a": 1, "b": [2, 1] }),

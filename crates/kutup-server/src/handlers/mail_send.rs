@@ -577,7 +577,7 @@ pub async fn create_draft(
                 thread_id: thread,
                 direction: "outbound",
                 folder: "drafts",
-                protection: "end_to_end",
+                protection: "endToEnd",
                 seen: true,
                 object_key: &key,
                 object_version: &version,
@@ -970,7 +970,7 @@ struct LocalCopy {
     key: String,
     version: String,
     size: i64,
-    /// `end_to_end`, or `zero_access` for a copy sent readable.
+    /// `endToEnd`, or `zeroAccess` for a copy sent readable.
     protection: &'static str,
 }
 
@@ -1394,7 +1394,7 @@ pub(crate) async fn deliver(
         };
         let key = crate::mail::object_key(recipient.account_id, Uuid::new_v4());
         let (copy, protection) = match &packet {
-            Some(packet) => ([packet.as_slice(), data].concat(), "end_to_end"),
+            Some(packet) => ([packet.as_slice(), data].concat(), "endToEnd"),
             // Encrypt was off for them: the readable message, encrypted here
             // to their key before it is written, as mail from outside.
             None => {
@@ -1407,7 +1407,7 @@ pub(crate) async fn deliver(
                 .await
                 .map_err(|_| AppError::internal("encryption task"))?
                 .map_err(|_| AppError::internal("recipient key does not encrypt"))?;
-                (sealed, "zero_access")
+                (sealed, "zeroAccess")
             }
         };
         let size = copy.len() as i64;
@@ -1471,9 +1471,9 @@ pub(crate) async fn deliver(
                 folder: "sent",
                 // End to end when nobody got the plaintext.
                 protection: if plain.is_empty() {
-                    "end_to_end"
+                    "endToEnd"
                 } else {
-                    "zero_access"
+                    "zeroAccess"
                 },
                 seen: true,
                 object_key: &own_key,
@@ -1560,7 +1560,7 @@ pub(crate) async fn deliver(
                         may_forward: true,
                         // Sent readable (the address forwards outside Kutup, or
                         // Encrypt was off): the message the server read.
-                        plaintext: (copy.protection == "zero_access")
+                        plaintext: (copy.protection == "zeroAccess")
                             .then(|| mime.map(|mime| std::sync::Arc::new(mime.to_vec())))
                             .flatten(),
                     });
@@ -1584,7 +1584,7 @@ pub(crate) async fn deliver(
                 [packet.as_slice(), data].concat(),
                 &crate::mail::groups::ListRow {
                     direction: "inbound",
-                    protection: "end_to_end",
+                    protection: "endToEnd",
                     readable,
                     folder: "inbox",
                 },
@@ -1643,7 +1643,7 @@ pub(crate) async fn deliver(
                 }],
                 &crate::mail::groups::ListRow {
                     direction: "inbound",
-                    protection: "end_to_end",
+                    protection: "endToEnd",
                     readable,
                     folder: "inbox",
                 },

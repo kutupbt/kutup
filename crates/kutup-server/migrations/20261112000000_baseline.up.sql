@@ -218,7 +218,7 @@ CREATE FUNCTION public.kutup_target_blocked(kind text, target uuid) RETURNS text
        AND (b.target_id = target
             OR (kind = 'file' AND b.share_type = 'collection'
                 AND b.target_id = (SELECT f.collection_id FROM drive_files f WHERE f.id = target)))
-     ORDER BY (b.blocked_reason = 'legal_order') DESC, b.blocked_at
+     ORDER BY (b.blocked_reason = 'legalOrder') DESC, b.blocked_at
      LIMIT 1
 $$;
 
@@ -348,11 +348,11 @@ CREATE TABLE account_keys.destruction_events (
     reference text NOT NULL,
     count integer DEFAULT 1 NOT NULL,
     CONSTRAINT destruction_events_actor_check CHECK ((actor = ANY (ARRAY['user'::text, 'admin'::text, 'job'::text]))),
-    CONSTRAINT destruction_events_category_check CHECK ((category = ANY (ARRAY['account'::text, 'security_events'::text, 'admin_audit'::text, 'sessions'::text, 'destruction_events'::text]))),
+    CONSTRAINT destruction_events_category_check CHECK ((category = ANY (ARRAY['account'::text, 'securityEvents'::text, 'adminAudit'::text, 'sessions'::text, 'destructionEvents'::text]))),
     CONSTRAINT destruction_events_check CHECK (((subjects IS NULL) = (subject_key_ids IS NULL))),
     CONSTRAINT destruction_events_check1 CHECK (((subjects IS NULL) OR ((cardinality(subjects) >= 1) AND (cardinality(subjects) = cardinality(subject_key_ids))))),
     CONSTRAINT destruction_events_count_check CHECK ((count >= 1)),
-    CONSTRAINT destruction_events_method_check CHECK ((method = ANY (ARRAY['crypto_shred'::text, 'delete'::text, 'anonymise'::text]))),
+    CONSTRAINT destruction_events_method_check CHECK ((method = ANY (ARRAY['cryptoShred'::text, 'delete'::text, 'anonymise'::text]))),
     CONSTRAINT destruction_events_reference_check CHECK (((char_length(reference) >= 1) AND (char_length(reference) <= 100)))
 );
 
@@ -840,7 +840,7 @@ CREATE TABLE public.chat_anonymous_rate_counters (
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT chat_anonymous_rate_counters_count_check CHECK ((count >= 0)),
     CONSTRAINT chat_anonymous_rate_counters_scope_digest_check CHECK ((octet_length(scope_digest) = 32)),
-    CONSTRAINT chat_anonymous_rate_counters_scope_type_check CHECK ((scope_type = ANY (ARRAY['capability_bundle'::text, 'capability_minute'::text, 'capability_day'::text, 'recipient'::text, 'federation_origin'::text, 'ip_bytes'::text, 'origin_multi_requests'::text, 'origin_multi_bytes'::text, 'group_send_issue'::text, 'group_endorsement_upload'::text, 'group_send_token'::text, 'multi_recipient'::text])))
+    CONSTRAINT chat_anonymous_rate_counters_scope_type_check CHECK ((scope_type = ANY (ARRAY['capabilityBundle'::text, 'capabilityMinute'::text, 'capabilityDay'::text, 'recipient'::text, 'federationOrigin'::text, 'ipBytes'::text, 'originMultiRequests'::text, 'originMultiBytes'::text, 'groupSendIssue'::text, 'groupEndorsementUpload'::text, 'groupSendToken'::text, 'multiRecipient'::text])))
 );
 
 
@@ -1437,7 +1437,7 @@ CREATE TABLE public.chat_media_rate_counters (
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT chat_media_rate_counters_count_check CHECK ((count >= 0)),
     CONSTRAINT chat_media_rate_counters_scope_digest_check CHECK ((octet_length(scope_digest) = 32)),
-    CONSTRAINT chat_media_rate_counters_scope_type_check CHECK ((scope_type = ANY (ARRAY['capability_minute'::text, 'capability_day'::text, 'recipient'::text, 'federation_origin'::text])))
+    CONSTRAINT chat_media_rate_counters_scope_type_check CHECK ((scope_type = ANY (ARRAY['capabilityMinute'::text, 'capabilityDay'::text, 'recipient'::text, 'federationOrigin'::text])))
 );
 
 
@@ -1697,7 +1697,7 @@ CREATE TABLE public.consents (
     at timestamp with time zone DEFAULT now() NOT NULL,
     channel text NOT NULL,
     CONSTRAINT consents_channel_check CHECK ((channel = ANY (ARRAY['settings'::text, 'signup'::text, 'admin'::text]))),
-    CONSTRAINT consents_purpose_check CHECK ((purpose = ANY (ARRAY['federation_abroad'::text, 'marketing'::text])))
+    CONSTRAINT consents_purpose_check CHECK ((purpose = ANY (ARRAY['federationAbroad'::text, 'marketing'::text])))
 );
 
 
@@ -2056,7 +2056,7 @@ CREATE TABLE public.federation_feature_policy_failures (
     evidence_digest bytea NOT NULL,
     received_value jsonb,
     occurred_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT federation_feature_policy_failures_failure_class_check CHECK ((failure_class = ANY (ARRAY['rollback'::text, 'gap'::text, 'wrong_domain'::text, 'unknown_type'::text, 'malformed'::text, 'signature'::text, 'identity_chain'::text, 'configuration_replacement'::text]))),
+    CONSTRAINT federation_feature_policy_failures_failure_class_check CHECK ((failure_class = ANY (ARRAY['rollback'::text, 'gap'::text, 'wrongDomain'::text, 'unknownType'::text, 'malformed'::text, 'signature'::text, 'identityChain'::text, 'configurationReplacement'::text]))),
     CONSTRAINT federation_feature_policy_failures_evidence_digest_bytes CHECK ((octet_length(evidence_digest) = 32))
 );
 
@@ -2461,7 +2461,7 @@ CREATE TABLE public.legal_documents (
     required_at_signup boolean DEFAULT false NOT NULL,
     published_at timestamp with time zone DEFAULT now() NOT NULL,
     published_by_account_id uuid,
-    CONSTRAINT legal_documents_kind_check CHECK ((kind ~ '^[a-z][a-z0-9_]{0,39}$'::text)),
+    CONSTRAINT legal_documents_kind_check CHECK ((kind ~ '^[a-z][A-Za-z0-9]{0,39}$'::text)),
     CONSTRAINT legal_documents_language_check CHECK ((language ~ '^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$'::text)),
     CONSTRAINT legal_documents_sha256_check CHECK ((octet_length(sha256) = 32)),
     CONSTRAINT legal_documents_url_check CHECK (((char_length(url) >= 1) AND (char_length(url) <= 2048))),
@@ -2828,14 +2828,14 @@ CREATE TABLE public.mail_forwardings (
     code_sent_at timestamp with time zone,
     CONSTRAINT mail_forwardings_activation_check CHECK (((activation IS NULL) OR (length(activation) <= 65536))),
     CONSTRAINT mail_forwardings_bounces_today_check CHECK ((bounces_today >= 0)),
-    CONSTRAINT mail_forwardings_check CHECK (((kind = 'end_to_end'::text) = (forwardee_address_id IS NOT NULL))),
+    CONSTRAINT mail_forwardings_check CHECK (((kind = 'endToEnd'::text) = (forwardee_address_id IS NOT NULL))),
     CONSTRAINT mail_forwardings_code_hash_length CHECK (((code_hash IS NULL) OR (length(code_hash) = 32))),
     CONSTRAINT mail_forwardings_code_whole CHECK ((((code_hash IS NULL) = (code_key_version IS NULL)) AND ((code_hash IS NULL) = (code_expires_at IS NULL)))),
     CONSTRAINT mail_forwardings_conditions_check CHECK ((jsonb_typeof(conditions) = 'array'::text)),
     CONSTRAINT mail_forwardings_confirmation_hash_check CHECK (((confirmation_hash IS NULL) OR (octet_length(confirmation_hash) = 32))),
     CONSTRAINT mail_forwardings_forwardee_email_check CHECK (((length(forwardee_email) >= 3) AND (length(forwardee_email) <= 320))),
     CONSTRAINT mail_forwardings_invites_today_check CHECK ((invites_today >= 0)),
-    CONSTRAINT mail_forwardings_kind_check CHECK ((kind = ANY (ARRAY['end_to_end'::text, 'outside'::text]))),
+    CONSTRAINT mail_forwardings_kind_check CHECK ((kind = ANY (ARRAY['endToEnd'::text, 'outside'::text]))),
     CONSTRAINT mail_forwardings_match_check CHECK ((match = ANY (ARRAY['all'::text, 'any'::text]))),
     CONSTRAINT mail_forwardings_notice_check CHECK (((notice IS NULL) OR (notice = ANY (ARRAY['bounces'::text, 'budget'::text])))),
     CONSTRAINT mail_forwardings_sent_today_check CHECK ((sent_today >= 0)),
@@ -3119,7 +3119,7 @@ CREATE TABLE public.mail_messages (
     CONSTRAINT mail_messages_key_packet_check CHECK (((octet_length(key_packet) >= 1) AND (octet_length(key_packet) <= 4096))),
     CONSTRAINT mail_messages_message_id_hash_check CHECK ((octet_length(message_id_hash) = 32)),
     CONSTRAINT mail_messages_owner CHECK (((account_id IS NOT NULL) OR (group_id IS NOT NULL))),
-    CONSTRAINT mail_messages_protection_check CHECK ((protection = ANY (ARRAY['zero_access'::text, 'end_to_end'::text]))),
+    CONSTRAINT mail_messages_protection_check CHECK ((protection = ANY (ARRAY['zeroAccess'::text, 'endToEnd'::text]))),
     CONSTRAINT mail_messages_references_hashes_check CHECK ((cardinality(references_hashes) <= 50)),
     CONSTRAINT mail_messages_search_tokens_check CHECK ((cardinality(search_tokens) <= 4000)),
     CONSTRAINT mail_messages_size_bytes_check CHECK ((size_bytes > 0))
@@ -3171,7 +3171,7 @@ CREATE TABLE public.mail_sending_events (
     account_id uuid NOT NULL,
     kind text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT mail_sending_events_kind_check CHECK ((kind = ANY (ARRAY['bounce'::text, 'spam_refused'::text])))
+    CONSTRAINT mail_sending_events_kind_check CHECK ((kind = ANY (ARRAY['bounce'::text, 'spamRefused'::text])))
 );
 
 
@@ -3229,7 +3229,7 @@ CREATE TABLE public.mail_settings (
     composer_mode text DEFAULT 'popup'::text NOT NULL,
     view_mode text DEFAULT 'conversation'::text NOT NULL,
     attach_public_key boolean DEFAULT false NOT NULL,
-    pgp_scheme text DEFAULT 'pgp_mime'::text NOT NULL,
+    pgp_scheme text DEFAULT 'pgpMime'::text NOT NULL,
     confirm_link boolean DEFAULT true NOT NULL,
     page_size integer DEFAULT 50 NOT NULL,
     spam_action text DEFAULT 'ask'::text NOT NULL,
@@ -3252,9 +3252,9 @@ CREATE TABLE public.mail_settings (
     CONSTRAINT mail_settings_font_face_check CHECK ((font_face = ANY (ARRAY['sans-serif'::text, 'serif'::text, 'georgia'::text, 'arial'::text, 'helvetica'::text, 'monospace'::text, 'tahoma'::text, 'verdana'::text, 'times'::text, 'trebuchet'::text]))),
     CONSTRAINT mail_settings_font_size_check CHECK ((font_size = ANY (ARRAY[10, 12, 14, 16, 18, 20, 22, 24, 26]))),
     CONSTRAINT mail_settings_page_size_check CHECK ((page_size = ANY (ARRAY[50, 100, 200]))),
-    CONSTRAINT mail_settings_pgp_scheme_check CHECK ((pgp_scheme = ANY (ARRAY['pgp_mime'::text, 'inline'::text]))),
+    CONSTRAINT mail_settings_pgp_scheme_check CHECK ((pgp_scheme = ANY (ARRAY['pgpMime'::text, 'inline'::text]))),
     CONSTRAINT mail_settings_remote_images_check CHECK ((remote_images = ANY (ARRAY['ask'::text, 'always'::text]))),
-    CONSTRAINT mail_settings_spam_action_check CHECK ((spam_action = ANY (ARRAY['ask'::text, 'just_spam'::text, 'spam_and_unsubscribe'::text]))),
+    CONSTRAINT mail_settings_spam_action_check CHECK ((spam_action = ANY (ARRAY['ask'::text, 'justSpam'::text, 'spamAndUnsubscribe'::text]))),
     CONSTRAINT mail_settings_text_direction_check CHECK ((text_direction = ANY (ARRAY['ltr'::text, 'rtl'::text]))),
     CONSTRAINT mail_settings_view_layout_check CHECK ((view_layout = ANY (ARRAY['column'::text, 'row'::text]))),
     CONSTRAINT mail_settings_view_mode_check CHECK ((view_mode = ANY (ARRAY['conversation'::text, 'message'::text])))
@@ -3513,7 +3513,7 @@ CREATE TABLE public.drive_public_shares (
     blocked_by_account_id uuid,
     owner_removed_at timestamp with time zone,
     CONSTRAINT drive_public_shares_blocked CHECK ((((blocked_at IS NULL) = (blocked_reason IS NULL)) AND ((blocked_at IS NOT NULL) OR ((blocked_reference IS NULL) AND (blocked_by_account_id IS NULL))) AND ((owner_removed_at IS NULL) OR (blocked_at IS NOT NULL)))),
-    CONSTRAINT drive_public_shares_blocked_reason_check CHECK ((blocked_reason = ANY (ARRAY['legal_order'::text, 'abuse'::text, 'other'::text]))),
+    CONSTRAINT drive_public_shares_blocked_reason_check CHECK ((blocked_reason = ANY (ARRAY['legalOrder'::text, 'abuse'::text, 'other'::text]))),
     CONSTRAINT drive_public_shares_blocked_reference_check CHECK (((char_length(blocked_reference) >= 1) AND (char_length(blocked_reference) <= 200))),
     CONSTRAINT drive_public_shares_collection_key_epoch_check CHECK ((collection_key_epoch > 0)),
     CONSTRAINT drive_public_shares_share_type_check CHECK ((share_type = ANY (ARRAY['collection'::text, 'file'::text])))
@@ -3647,7 +3647,7 @@ CREATE TABLE public.server_generated_keys (
     private_key bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT server_generated_keys_private_key_check CHECK ((octet_length(private_key) = 32)),
-    CONSTRAINT server_generated_keys_purpose_check CHECK ((purpose = ANY (ARRAY['federation-identity'::text, 'fake-accounts'::text, 'registration-codes'::text, 'two-factor-recovery-codes'::text])))
+    CONSTRAINT server_generated_keys_purpose_check CHECK ((purpose = ANY (ARRAY['federationIdentity'::text, 'fakeAccounts'::text, 'registrationCodes'::text, 'twoFactorRecoveryCodes'::text])))
 );
 
 
@@ -3912,9 +3912,9 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_public_sharing_check CHECK ((public_sharing = ANY (ARRAY['on'::text, 'off'::text]))),
     CONSTRAINT accounts_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'closing'::text]))),
     CONSTRAINT accounts_suspended_before_close CHECK (((suspended_before_close IS NULL) OR (state = 'closing'::text))),
-    CONSTRAINT accounts_suspended_before_close_check CHECK ((suspended_before_close = ANY (ARRAY['admin'::text, 'operator_order'::text, 'security'::text]))),
+    CONSTRAINT accounts_suspended_before_close_check CHECK ((suspended_before_close = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text]))),
     CONSTRAINT accounts_suspended_reason CHECK (((state = 'suspended'::text) = (suspended_reason IS NOT NULL))),
-    CONSTRAINT accounts_suspended_reason_check CHECK ((suspended_reason = ANY (ARRAY['admin'::text, 'operator_order'::text, 'security'::text]))),
+    CONSTRAINT accounts_suspended_reason_check CHECK ((suspended_reason = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text]))),
     CONSTRAINT accounts_totp_secret_sealed_check CHECK (((totp_secret_sealed IS NULL) OR ((octet_length(totp_secret_sealed) >= 47) AND (octet_length(totp_secret_sealed) <= 200)))),
     CONSTRAINT accounts_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
     CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days = ANY (ARRAY[7, 30, 90, 180, 365, 3650]))),

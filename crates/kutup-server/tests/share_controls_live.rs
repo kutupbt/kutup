@@ -1,6 +1,6 @@
 //! Share-link controls (docs/plans/server-personal-data.md, A11) against a
 //! live server: an operator's block (451 for a legal order, 410 otherwise),
-//! the per-account switch, and the site-wide switch (`off`, `signed_in`).
+//! the per-account switch, and the site-wide switch (`off`, `signedIn`).
 //!
 //!   KUTUP_LIVE_SERVER=http://… KUTUP_LIVE_ADMIN=name:password \
 //!   cargo test -p kutup-server --test share_controls_live -- --test-threads 1
@@ -200,12 +200,12 @@ fn links_follow_blocks_and_both_switches() {
         .unwrap()
         .status()
     };
-    assert_eq!(block("legal_order"), StatusCode::NO_CONTENT);
+    assert_eq!(block("legalOrder"), StatusCode::NO_CONTENT);
     let (status, body) = open(&c, &base, &token, None);
     assert_eq!(status, StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
     assert_eq!(
         (body["code"].as_str(), body["reason"].as_str()),
-        (Some("link_blocked"), Some("legal_order"))
+        (Some("link_blocked"), Some("legalOrder"))
     );
     for link in [&token, &second] {
         all_refuse(
@@ -263,14 +263,14 @@ fn links_follow_blocks_and_both_switches() {
     assert_eq!(me(&c, &base, &owner.token)["publicSharing"], "off");
     assert_eq!(set_account("on"), StatusCode::OK);
 
-    // Site-wide: signed_in opens only for a signed-in viewer (a sign-in sent
+    // Site-wide: signedIn opens only for a signed-in viewer (a sign-in sent
     // but no longer good is 401, so the page refreshes it); off for nobody.
     let _restore = SiteOn {
         c: &c,
         base: &base,
         admin: &admin,
     };
-    set_site(&c, &base, &admin, "signed_in");
+    set_site(&c, &base, &admin, "signedIn");
     all_refuse(
         &every_route(&c, &base, &token, None)[..GET_ROUTES],
         StatusCode::FORBIDDEN,

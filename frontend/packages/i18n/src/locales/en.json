@@ -48,7 +48,7 @@
   },
   "publicSharing": {
     "blocked": {
-      "legal_order": "Blocked by the server's operators under a legal order",
+      "legalOrder": "Blocked by the server's operators under a legal order",
       "abuse": "Blocked by the server's operators for abuse",
       "other": "Blocked by the server's operators"
     },

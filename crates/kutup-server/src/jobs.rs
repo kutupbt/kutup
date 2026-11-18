@@ -1607,7 +1607,7 @@ mod tests {
             sqlx::query(
                 "INSERT INTO mail_messages (address_id, thread_id, direction, folder,
                     protection, object_key, size_bytes, account_id, group_id, key_packet)
-                 VALUES ($1, $2, 'inbound', 'inbox', 'end_to_end', $3, $4, $5, $6, $7)",
+                 VALUES ($1, $2, 'inbound', 'inbox', 'endToEnd', $3, $4, $5, $6, $7)",
             )
             .bind(address)
             .bind(uuid::Uuid::new_v4())

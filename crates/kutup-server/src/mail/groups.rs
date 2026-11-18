@@ -362,9 +362,9 @@ async fn store_from_outside_inner(
     let row = ListRow {
         direction: "inbound",
         protection: if readable.pgp_encrypted {
-            "end_to_end"
+            "endToEnd"
         } else {
-            "zero_access"
+            "zeroAccess"
         },
         folder: if readable.spam { "spam" } else { "inbox" },
         readable: &readable,
@@ -420,9 +420,9 @@ async fn store_shared_inner(
     let row = ListRow {
         direction: "inbound",
         protection: if readable.pgp_encrypted {
-            "end_to_end"
+            "endToEnd"
         } else {
-            "zero_access"
+            "zeroAccess"
         },
         folder: if readable.spam { "spam" } else { "inbox" },
         readable: &readable,

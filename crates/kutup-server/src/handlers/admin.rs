@@ -19,6 +19,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::federation::{FederationDirection, FederationPolicyFeature};
 use crate::jobs;
@@ -26,12 +27,14 @@ use crate::middleware::AdminAccount;
 use crate::AppState;
 
 /// Best-effort audit-log write, chained (`crate::audit_log`). The payload
-/// snapshots human-readable identities (usernames) at action time so the trail
-/// stays meaningful after the referenced users are deleted.
+/// names accounts by id only, never by a username snapshot (A8): the account
+/// is the row's target, and the activity page shows its current username, or
+/// "deleted account" once it is gone. Its keys are the ones `action` lists
+/// (checked in debug builds).
 pub(crate) async fn audit(
     pool: &PgPool,
     admin_user_id: &str,
-    action: &str,
+    action: AdminAction,
     target_user_id: Option<Uuid>,
     payload: serde_json::Value,
 ) {
@@ -45,7 +48,7 @@ pub(crate) async fn audit(
     }
 }
 
-/// An administrator opened one account's details (`view`): an `admin.view`
+/// An administrator opened one account's details (`view`): an `account.view`
 /// row in the admin log, and `adminAccess` in the account's own security log
 /// (repeats within minutes folded; docs/plans/server-personal-data.md, A8).
 pub(crate) async fn viewed(
@@ -64,7 +67,7 @@ pub(crate) async fn viewed(
     audit(
         &state.pool,
         &admin.account_id,
-        "admin.view",
+        AdminAction::AccountView,
         Some(target),
         serde_json::json!({ "view": view }),
     )
@@ -111,7 +114,7 @@ struct AccountRow {
     is_active: bool,
     /// `active`, `suspended` or `closing` (docs/plans/server-personal-data.md, A5).
     state: String,
-    /// Why a suspended account is: `admin`, `operator_order` or `security`.
+    /// Why a suspended account is: `admin`, `operatorOrder` or `security`.
     #[serde(skip_serializing_if = "Option::is_none")]
     suspended_reason: Option<String>,
     /// When a closing account is deleted.
@@ -327,10 +330,9 @@ pub async fn create_user(
     audit(
         &state.pool,
         &admin.account_id,
-        "user.create",
+        AdminAction::AccountCreate,
         Some(new_id),
         json!({
-            "username": req.username,
             "storageQuotaBytes": req.storage_quota_bytes,
         }),
     )
@@ -372,21 +374,19 @@ pub async fn update_user(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     // Load the target's current state for the break-glass + last-admin guards.
-    let (target_username, target_is_admin, target_is_active): (String, bool, bool) =
-        sqlx::query_as(
-            "SELECT COALESCE(username, ''), is_admin, is_active FROM accounts WHERE id = $1",
-        )
-        .bind(target)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("not found"))?;
+    let (target_is_admin, target_is_active): (bool, bool) =
+        sqlx::query_as("SELECT is_admin, is_active FROM accounts WHERE id = $1")
+            .bind(target)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or_else(|| AppError::not_found("not found"))?;
 
     let wants_demote = req.is_admin == Some(false);
     let wants_disable = req.is_active == Some(false);
     let suspended_reason = req.suspended_reason.as_deref().unwrap_or("admin");
-    if !["admin", "operator_order", "security"].contains(&suspended_reason) {
+    if !["admin", "operatorOrder", "security"].contains(&suspended_reason) {
         return Err(AppError::bad_request(
-            "suspendedReason must be admin, operator_order or security",
+            "suspendedReason must be admin, operatorOrder or security",
         ));
     }
 
@@ -490,7 +490,7 @@ pub async fn update_user(
     }
     if let Some(federation) = req.federation.as_deref() {
         // An administrator's switch. The consent is the user's to give: with
-        // a `federation_abroad` text published, on needs the user's own
+        // a `federationAbroad` text published, on needs the user's own
         // consent already given (`409 consentRequired`; a transfer abroad
         // rests on it), and records none.
         if !["on", "off"].contains(&federation) {
@@ -506,9 +506,9 @@ pub async fn update_user(
         crate::audit_log::append_in(
             &mut tx,
             crate::handlers::trusted_uuid(&admin.account_id)?,
-            "user.federation",
+            AdminAction::AccountSetFederation,
             Some(target),
-            &json!({ "username": target_username, "federation": federation }),
+            &json!({ "federation": federation }),
         )
         .await?;
         tx.commit().await?;
@@ -531,9 +531,9 @@ pub async fn update_user(
         crate::audit_log::append_in(
             &mut tx,
             crate::handlers::trusted_uuid(&admin.account_id)?,
-            "user.publicSharing",
+            AdminAction::AccountSetPublicSharing,
             Some(target),
-            &json!({ "username": target_username, "publicSharing": sharing }),
+            &json!({ "publicSharing": sharing }),
         )
         .await?;
         tx.commit().await?;
@@ -570,9 +570,9 @@ pub async fn update_user(
     audit(
         &state.pool,
         &admin.account_id,
-        "user.update",
+        AdminAction::AccountUpdate,
         Some(target),
-        json!({"username": target_username, "changes": changes}),
+        json!({ "changes": changes }),
     )
     .await;
     Ok(Json(json!({"message": "updated"})).into_response())
@@ -595,12 +595,13 @@ pub async fn delete_user(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     // Break-glass admin can never be deleted.
-    let target_username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
-            .bind(target)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or_else(|| AppError::not_found("not found"))?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
+        .bind(target)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(AppError::not_found("not found"));
+    }
     if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
@@ -611,18 +612,16 @@ pub async fn delete_user(
         &state,
         target,
         crate::destruction_events::Actor::Admin,
-        "user.delete",
+        "account.delete",
         false,
     )
     .await?;
     audit(
         &state.pool,
         &admin.account_id,
-        "user.delete",
+        AdminAction::AccountDelete,
         Some(target),
-        json!({
-            "username": target_username.unwrap_or_default(),
-        }),
+        json!({}),
     )
     .await;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -645,13 +644,12 @@ pub async fn close_user(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let (username, is_admin, is_active): (String, bool, bool) = sqlx::query_as(
-        "SELECT COALESCE(username, ''), is_admin, is_active FROM accounts WHERE id = $1",
-    )
-    .bind(target)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::not_found("not found"))?;
+    let (is_admin, is_active): (bool, bool) =
+        sqlx::query_as("SELECT is_admin, is_active FROM accounts WHERE id = $1")
+            .bind(target)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or_else(|| AppError::not_found("not found"))?;
     if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
@@ -685,9 +683,9 @@ pub async fn close_user(
     audit(
         &state.pool,
         &admin.account_id,
-        "user.close",
+        AdminAction::AccountClose,
         Some(target),
-        json!({ "username": username, "closesAt": closes_at.unix_timestamp() }),
+        json!({ "closesAt": closes_at.unix_timestamp() }),
     )
     .await;
     Ok(Json(crate::handlers::closing::Closed::new(closes_at)).into_response())
@@ -752,7 +750,7 @@ pub async fn set_legal_hold(
     audit(
         &state.pool,
         &admin.account_id,
-        "user.legalHold.set",
+        AdminAction::AccountSetLegalHold,
         Some(target),
         json!({ "reference": reference }),
     )
@@ -792,7 +790,7 @@ pub async fn clear_legal_hold(
         audit(
             &state.pool,
             &admin.account_id,
-            "user.legalHold.clear",
+            AdminAction::AccountClearLegalHold,
             Some(target),
             json!({ "reference": reference }),
         )
@@ -984,14 +982,13 @@ pub async fn force_disable_2fa(
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
-    let username: Option<String> =
-        sqlx::query_scalar("SELECT COALESCE(username, '') FROM accounts WHERE id = $1")
-            .bind(target)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let Some(username) = username else {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
+        .bind(target)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !exists {
         return Err(AppError::not_found("not found"));
-    };
+    }
     // Every second factor and its recovery codes; the owner sees it.
     crate::two_factor::turn_off(&mut tx, target).await?;
     crate::security_events::record(
@@ -1006,9 +1003,9 @@ pub async fn force_disable_2fa(
     audit(
         &state.pool,
         &admin.account_id,
-        "user.2fa_disable",
+        AdminAction::AccountDisableTwoFactor,
         Some(target),
-        json!({"username": username}),
+        json!({}),
     )
     .await;
     Ok(Json(json!({"message": "2fa disabled"})).into_response())
@@ -1403,7 +1400,7 @@ pub async fn update_settings(
     audit(
         &state.pool,
         &admin.account_id,
-        "settings.update",
+        AdminAction::SettingsUpdate,
         None,
         json!({
             "registrationMode": req.registration_mode,
@@ -1808,7 +1805,7 @@ pub async fn get_federation_control_plane(
                 (SELECT COUNT(*) FROM federation_outbox o
                  WHERE o.kind IN ('chat', 'sealed')
                    AND o.destination = federation_peer_identities.domain
-                   AND o.state = 'rejected' AND o.error_class = 'device_mismatch'
+                   AND o.state = 'rejected' AND o.error_class = 'deviceMismatch'
                    AND o.updated_at > now() - interval '1 day')
                     AS chat_mismatches_last_day,
                 (SELECT COUNT(*) FROM drive_federated_incoming_shares s
@@ -1873,7 +1870,7 @@ pub async fn get_federation_control_plane(
              WHERE kind IN ('chat', 'sealed') AND state = 'pending'),
             (SELECT COUNT(*) FROM federation_outbox
              WHERE kind IN ('chat', 'sealed') AND state = 'rejected'
-               AND error_class = 'device_mismatch' AND updated_at > now() - interval '1 day'),
+               AND error_class = 'deviceMismatch' AND updated_at > now() - interval '1 day'),
             (SELECT MIN(created_at) FROM federation_outbox
              WHERE kind IN ('chat', 'sealed') AND state = 'pending'),
             (SELECT COUNT(*) FROM drive_federated_incoming_shares),
@@ -2007,7 +2004,7 @@ pub async fn update_federation_policy(
     audit(
         &state.pool,
         &admin.account_id,
-        "federation.policy.update",
+        AdminAction::FederationUpdatePolicy,
         None,
         json!({"globalEnabled": req.global_enabled, "feature": feature,
                "mode": req.mode, "minimumTrust": req.minimum_trust}),
@@ -2062,7 +2059,7 @@ pub async fn upsert_federation_domain_rule(
     audit(
         &state.pool,
         &admin.account_id,
-        "federation.rule.upsert",
+        AdminAction::FederationSetRule,
         None,
         json!({"domain": domain, "feature": feature, "inbound": req.inbound,
                  "outbound": req.outbound, "trustRequirement": req.trust_requirement}),
@@ -2099,7 +2096,7 @@ pub async fn delete_federation_domain_rule(
     audit(
         &state.pool,
         &admin.account_id,
-        "federation.rule.delete",
+        AdminAction::FederationDeleteRule,
         None,
         json!({"domain": domain, "feature": feature}),
     )
@@ -2239,7 +2236,7 @@ pub async fn retry_federation_peer(
     audit(
         &state.pool,
         &admin.account_id,
-        "federation.peer.retry",
+        AdminAction::FederationRetryPeer,
         None,
         json!({"domain": domain, "refreshed": result.is_ok(), "error": result.err()}),
     )
@@ -2297,7 +2294,7 @@ pub async fn bulk_retry_federation_peers(
     audit(
         &state.pool,
         &admin.account_id,
-        "federation.peer.retry-bulk",
+        AdminAction::FederationRetryPeers,
         None,
         json!({"results": results.iter().map(|result| json!({
             "domain": result.domain,
@@ -2459,12 +2456,11 @@ pub async fn rotate_temp_password(
     let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let row: Option<(String, bool)> =
-        sqlx::query_as("SELECT COALESCE(username, ''), is_first_login FROM accounts WHERE id = $1")
-            .bind(target)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some((username, is_first_login)) = row else {
+    let row: Option<bool> = sqlx::query_scalar("SELECT is_first_login FROM accounts WHERE id = $1")
+        .bind(target)
+        .fetch_optional(&state.pool)
+        .await?;
+    let Some(is_first_login) = row else {
         return Err(AppError::not_found("not found"));
     };
     if !is_first_login {
@@ -2512,9 +2508,9 @@ pub async fn rotate_temp_password(
     audit(
         &state.pool,
         &admin.account_id,
-        "user.rotate_temp_password",
+        AdminAction::AccountRotateTempPassword,
         Some(target),
-        json!({"username": username}),
+        json!({}),
     )
     .await;
     Ok(Json(json!({"message": "temp password rotated"})).into_response())
@@ -2623,14 +2619,13 @@ pub async fn wipe_user(
     take_reset_grant(&mut tx, &req.grant, &admin, target).await?;
     tx.commit().await?;
 
-    let row: Option<Option<String>> =
-        sqlx::query_scalar("SELECT username FROM accounts WHERE id = $1")
-            .bind(target)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some(username) = row else {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)")
+        .bind(target)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
         return Err(AppError::not_found("not found"));
-    };
+    }
     if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
@@ -2772,9 +2767,9 @@ pub async fn wipe_user(
     audit(
         &state.pool,
         &admin.account_id,
-        "user.wipe",
+        AdminAction::AccountResetKeys,
         Some(target),
-        json!({"username": username.unwrap_or_default()}),
+        json!({}),
     )
     .await;
     Ok(Json(json!({"message": "account wiped"})).into_response())
@@ -3123,7 +3118,7 @@ mod tests {
     #[test]
     fn audit_filters_accept_only_bounded_prefixes_and_canonical_domains() {
         let valid = ActivityQuery {
-            action_prefix: Some("federation.identity.".to_owned()),
+            action_prefix: Some("federation.".to_owned()),
             domain: Some("chat.example.com".to_owned()),
             ..ActivityQuery::default()
         };

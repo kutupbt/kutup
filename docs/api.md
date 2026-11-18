@@ -31,7 +31,8 @@ Every Kutup client sends `X-Kutup-Client: <clientType>/<version>`
 browser can't give headers, sends `?client=` instead. A client older than
 its type's minimum gets `426 clientTooOld`. The minimum is the higher of
 the server build's own floor and the one administrators set
-(`GET`/`PUT /api/v1/admin/client-versions`). A request naming no client is not
+(`GET`/`PUT /api/v1/admin/client-versions`; a change is logged as
+`clientVersion.setMinimum`). A request naming no client is not
 checked; a `-dev` version is not on a developer's server. Every client path
 is under `/api/v1/` (health, CSP reports and federation stay outside it); a
 bare `/api/…` path, what a client from before versions calls, answers
@@ -154,7 +155,7 @@ Specific codes, where an app does something particular (a test in
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
 | `revisionTaken` | 409 | A Drive upload or version naming a `revisionId` the file, another file or an open upload already has (a revision names one content: choose a new one) |
 | `objectMissing` | 409 | A Drive revision commit whose uploaded object is not in storage (or not whole): the upload is lost; upload again |
-| `revision_conflict` | 409 | Drive metadata whose `metadataRevision` is not exactly the file's current + 1 (1 for a new file): read the file again |
+| `revisionConflict` | 409 | Drive metadata whose `metadataRevision` is not exactly the file's current + 1 (1 for a new file): read the file again |
 | `alreadyCommitted` | 409 | `POST /api/v1/drive/files/:id/revisions/:revisionId/commit`: the revision is already the file's (current or in its history); nothing changed |
 | `notUploaded` | 409 | The same commit while the revision's upload is still in progress: send its remaining parts first |
 | `securityKeysOff` | 503 | This server can't offer security keys (its account app isn't on https) |
@@ -187,10 +188,10 @@ Specific codes, where an app does something particular (a test in
 | `sequenceGap` | 409 | Federation: a transaction arrived out of order; `expectedSequence` names the next one |
 | `sealedVersionUnsupported` | 400 | Federation: a sealed transaction of another wire version, refused for good |
 | `recordGone` | 410 | Federation: a repeat of a plain chat transaction whose record was pruned (past `federationRecordDays`); the origin settles it as not delivered to the recipient, never as delivered |
-| `version_conflict` | 409 | A newer version exists (Drive, collab) |
-| `revision_conflict` | 409 | A newer revision exists |
-| `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
-| `head_required` | 409 | The account keeps a head, and this listed write carried none |
+| `versionConflict` | 409 | A newer version exists (Drive, collab) |
+| `revisionConflict` | 409 | A newer revision exists |
+| `headConflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
+| `headRequired` | 409 | The account keeps a head, and this listed write carried none |
 | `malformed` | 400 | `POST /api/v1/chat/anonymous/messages/multi`: the payload doesn't parse, names nobody, lists a device twice, or the token isn't canonical base64 of at most 256 bytes ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
 | `groupSendTokenInvalid` | 401 | `POST /api/v1/chat/anonymous/messages/multi`: the group send token doesn't hold for the payload's accounts (expired, an account added or missing, another server's key), checked before any account is looked up; another server's answer is relayed as it is. Send those copies one by one and fetch the endorsements anew ([plans/group-send-endorsements.md](plans/group-send-endorsements.md) §3.5) |
 | `endorsementExpiration` | — | A group route's `putEndorsement` refusal: the expiration isn't day-aligned, is past, or is more than 3 days ahead |
@@ -248,23 +249,23 @@ Specific codes, where an app does something particular (a test in
 | `codeExpired` | 409 | `POST /api/v1/mail/forwardings/:id/verify`: no live code (past `forwarding_code_minutes`, or none sent); send a new one |
 | `forwardingVerified` | 409 | `POST /api/v1/mail/forwardings/:id/code`: the forwarding is verified already |
 | `tooOld` | 410 | `GET /api/v1/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
-| `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
+| `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
 | `driveRootChanged` | 409 | A top-level name hash sent with a `nameHashGeneration` that is not the owner's newest Drive-root generation: hash it again under the current root |
 | `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
 | `frameRefused` | 409 | A collaboration frame sent over HTTP was not kept (stale key or document key, not this device's, a replay): read the log again |
 | `deviceNotAuthorized` | 403 | A collaboration device the account has not vouched for (an unanswered, used or expired challenge, a statement that does not verify, a revoked device or one of an earlier incarnation): register one again, do not sign out |
 | `tooManyDevices` | 409 | The account has 20 collaboration devices in use (trusted, renewed within 30 days): the user removes one under Account → Devices; nothing is removed for them |
-| `link_removed` | 404/410 | The shared link was removed |
-| `link_blocked` | 451/410 | An operator blocked the public link: `451` for a legal order, `410` otherwise; `reason` is `legal_order`, `abuse` or `other` |
-| `sharing_off` | 403/410 | Public links are off, for the whole server or the link owner's account: `403` when making one (with `scope`: `site` or `account`), `410` when opening one (no scope: a link's holder isn't told whose switch it was) |
+| `linkRemoved` | 404/410 | The shared link was removed |
+| `linkBlocked` | 451/410 | An operator blocked the public link: `451` for a legal order, `410` otherwise; `reason` is `legalOrder`, `abuse` or `other` |
+| `sharingOff` | 403/410 | Public links are off, for the whole server or the link owner's account: `403` when making one (with `scope`: `site` or `account`), `410` when opening one (no scope: a link's holder isn't told whose switch it was) |
 | `targetBlocked` | 409 | Making a public link to what an operator blocked links to (`reason`) |
 | `federationOff` | 403 | This account doesn't talk to other servers (Settings → Privacy): a request that would reach one is refused |
-| `consentRequired` | 409 | Turning on talking to other servers needs the `federation_abroad` consent: a text for it is published (`purpose` names it) |
+| `consentRequired` | 409 | Turning on talking to other servers needs the `federationAbroad` consent: a text for it is published (`purpose` names it) |
 | `acknowledgementsRequired` | 400 | Sign-up without confirming the current version of every required document (`kinds` names those missing); see `GET /api/v1/legal/documents` |
 | `documentNotCurrent` | 400 | A document named that is not the current version (an acknowledgement, or the text a consent is given under) |
 | `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
-| `sign_in_required` | 403 | Public links on this server open only for someone signed in to it |
+| `signInRequired` | 403 | Public links on this server open only for someone signed in to it |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `keysPendingUpgrade` | 409 | The person's Drive key is still X25519 (identity suite 1): share with them once they have signed in again (docs/plans/pq-shares.md) |
 | `peerOutdated` | 502 | The other server runs an older version without post-quantum Drive keys and must upgrade before sharing |
@@ -1310,12 +1311,12 @@ exact text shown). Nothing published means nothing is asked.
 - `GET /api/v1/account/consents`: `{ consents: [{ purpose, given, documentId, at }],
   documents }`, each purpose's latest state and its current text.
   `PUT /api/v1/account/consents` `{ purpose, given, documentId? }` (`purpose`:
-  `federation_abroad` or `marketing`): giving one names the current document of
+  `federationAbroad` or `marketing`): giving one names the current document of
   the purpose's kind when one is published (`400 documentNotCurrent`). Each
   change is a new row; the records are append-only for the server.
 - `PUT /api/v1/account/federation` `{ on, documentId? }`: whether this account's
   Chat and Drive talk to other Kutup servers (`federation` in `/user/me`).
-  Turning it on, when a `federation_abroad` text is published, gives that
+  Turning it on, when a `federationAbroad` text is published, gives that
   consent under `documentId` (or needs it given before: `409
   consentRequired`); withdrawing the consent turns it off. While off, the
   account's requests that would reach another server are `403
@@ -1479,7 +1480,7 @@ store](#the-account-records-store)): read with `GET
 stored with `POST /api/v1/account/records` and the next head. The revision is
 sealed in the envelope's authenticated header (a time in unix milliseconds,
 above every revision the writer has seen; docs/plans/sealed-revisions.md). On
-a `revision_conflict` the client merges with the stored list and tries again.
+a `revisionConflict` the client merges with the stored list and tries again.
 Clients refuse a list older than one they have seen.
 
 ### GET /api/v1/account/ui-preferences · PUT /api/v1/account/ui-preferences
@@ -1520,11 +1521,11 @@ contacts (create, update, delete, `delete` many, import: one head per batch),
 mail folder, label and filter names (create, rename, delete), the identity pin
 list, Pass vault secrets (keep, forget). A delete takes a JSON body
 `{ "head": "…" }`. The head's sequence must be the current one plus one, else
-`409 head_conflict`; the check runs last in the write's own transaction, after
+`409 headConflict`; the check runs last in the write's own transaction, after
 the account row is locked and the session found live under the lock (a write
 that began before a wipe is refused). Before the chain is started a listed
-write needs none (and a head with it is `409 head_conflict`: start the chain
-first); after, one without a head is `409 head_required`.
+write needs none (and a head with it is `409 headConflict`: start the chain
+first); after, one without a head is `409 headRequired`.
 
 **Starting the chain** is its own call, on the `basis` an index answers with
 before the first head (`POST /api/v1/account/head`): a listed write landing
@@ -1537,7 +1538,7 @@ what it matches or does: these are not sealed and not rollback-protected) is
 **A folder delete** removes the folders inside it too, so it names them all:
 `DELETE /api/v1/mail/folders/:id` with `{ "removes": ["<id>", …], "head": "…" }`.
 If they are not exactly the folders it removes (one was added inside since),
-`409 head_conflict`.
+`409 headConflict`.
 
 ### GET /api/v1/account/head
 
@@ -1547,7 +1548,7 @@ before the account's first).
 ### POST /api/v1/account/head
 
 Starts the chain: `{ "head": "<base64, sequence 1>", "basis": "<from an
-index>" }` → `201`. `409 head_conflict` when the account has a head already or
+index>" }` → `201`. `409 headConflict` when the account has a head already or
 the basis moved (read the index again and remake the head). **Auth:** Bearer
 JWT.
 
@@ -1585,7 +1586,7 @@ replaces the password and recovery wraps and verifier and the roots' records,
 keeps the keyring record, stores the head after the newest one, sets the
 account's generation to n+1, ends every other sign-in and records
 `masterKeyRotated` → `204`. `400 rotationInvalid` (`field` names the record),
-`403 grantInvalid`, `409 head_conflict` (read the head again),
+`403 grantInvalid`, `409 headConflict` (read the head again),
 `409 opaqueKeyStale`, `409 organizationKeys` (the account holds an
 organization escrow or key copy, which a rotation can't carry until the
 organization routes do). After it, a listed write whose head is sealed under
@@ -1683,10 +1684,10 @@ all or nothing with the next head (required once the account keeps one).
   each scope's count is a per-account site setting.
 - A Pass secret's vault must be a live file the caller can open (`404`).
 
-`200 { "seq" }`. `409 revision_conflict` with `conflicts: [{ "scope", "id",
+`200 { "seq" }`. `409 revisionConflict` with `conflicts: [{ "scope", "id",
 "revision" }]` (the stored revision, 0 for none) for every item not at its
 base; a batch that already landed and is sent again gets this, and the client
-reads again. `409 head_conflict`, `head_required`, `masterKeyStale` as for any
+reads again. `409 headConflict`, `headRequired`, `masterKeyStale` as for any
 listed write. `400 scopeFull` past a scope's count, with `scope` and `max`
 (the count allowed), so a client can make room (the Chat app removes its
 oldest joined meetings in the same batch).
@@ -1773,7 +1774,7 @@ Create a new collection.
 `nameHash` (required for a folder, see "Names in a folder"; ignored for an
 album) keeps the name unique among the parent's files and subfolders, or
 among the owner's top-level folders; a missing one is `400`, a taken name
-`409 name_taken`.
+`409 nameTaken`.
 
 The name envelope is bound to `(collection ID, owner user ID, epoch 1,
 revision 1)`. The owner-key envelope binds the same identifiers with the
@@ -1832,7 +1833,7 @@ Rename a collection (client re-encrypts the name with the collection key).
 
 `nameHash` (required for a folder; albums have none) is the new name's
 hash in the folder's place; a name another item there holds is
-`409 name_taken`.
+`409 nameTaken`.
 
 The revision must be exactly one greater than the stored revision and the
 envelope must authenticate that exact revision, current epoch, collection and
@@ -2191,7 +2192,7 @@ outside forwarding lasts (as Proton's). k is sealed at once under
 `MAIL_FORWARDING_KEYS` and no answer carries it. **Auth:** Bearer JWT, but
 for the three `external` endpoints.
 
-A forwarding: `{ "id", "kind": "end_to_end"|"outside", "state":
+A forwarding: `{ "id", "kind": "endToEnd"|"outside", "state":
 "pending"|"active"|"outdated"|"paused"|"rejected", "forwarderAddress",
 "forwardeeEmail", "match": "all"|"any", "conditions": [filter conditions on
 sender, subject, attachments], "skipped": <messages that couldn't be
@@ -2497,7 +2498,7 @@ first, at most 200 per page (default 50).
 **Auth:** Bearer JWT
 
 **Response:** `{ "messages": [{ "id", "threadId", "folder", "seen", "starred", "protection", "size", "receivedAt", "sentAt", "subject", "from": { "address", "name" }, "to": [...], "cc": [...], "replyTo": [...], "messageId", "attachmentCount" }], "next": "..." }`.
-`protection` is `zero_access` (encrypted on arrival) or `end_to_end` (between
+`protection` is `zeroAccess` (encrypted on arrival) or `endToEnd` (between
 Kutup users, or arrived OpenPGP-encrypted by its sender). Pass
 `next` as `before` for the next page; it is absent on the last. Instead,
 `page` (from 0) pages by number, `limit` to a page (Proton's paging), and the
@@ -2580,7 +2581,7 @@ messages must be From you with the same Message-ID and no Bcc header; a PGP
 message must hold an encrypted OpenPGP message, and `mime` is refused when
 nobody needs it. The server stores `key packet || data packet` for you
 (Sent) and each Kutup recipient (Inbox), hands `mime` and each PGP message
-to Stalwart, and deletes the draft. Your sent copy is `end_to_end` when no
+to Stalwart, and deletes the draft. Your sent copy is `endToEnd` when no
 recipient got the plaintext.
 
 **Response:** `{ "message": {...your sent copy...}, "recipients": [{ "address", "status" }] }`,
@@ -2804,7 +2805,7 @@ UID is already in the address book.
 **Body:** the same plus `baseRevision` (the revision the edit started from);
 the new card's revision must be above it (`400` if not). The UID cannot
 change. **Response:** the contact at its new revision; `409` with
-`{ "code": "revision_conflict", "revision": <stored> }` when it changed
+`{ "code": "revisionConflict", "revision": <stored> }` when it changed
 elsewhere.
 
 ### DELETE /api/v1/contacts/:id · POST /api/v1/contacts/delete
@@ -2929,7 +2930,7 @@ every event that meets it, and also those ending exactly at its start (a
 series' last occurrence of no length there). `409 uidTaken`
 for a UID already in the calendar, `409 eventLimit` at
 `calendarEventsPerCalendar` (25,000). An update or a delete names
-the event's `revision` it was made from: another one is `409 revision_conflict` (with
+the event's `revision` it was made from: another one is `409 revisionConflict` (with
 the stored `revision`), so a replayed or older change never overwrites a
 newer one; a `SEQUENCE` lower than the stored one is `409 sequenceBehind`.
 An event starts at revision 1 and each update adds one. The caller's
@@ -3347,7 +3348,7 @@ Upload an encrypted file to a collection. Multipart form.
 | `nameHash` | string | The name's hash in the folder ("Names in a folder"); required, checked before anything is stored |
 | `contentHash` | string (optional) | The content's hash in the folder, when known before the upload |
 | `revisionId` | string (canonical UUID) | The blob's revision (see "Revisions and the block format") |
-| `metadataRevision` | string (`1`) | The metadata's revision, which must be `1` (`409 revision_conflict` otherwise). The upload commits inline |
+| `metadataRevision` | string (`1`) | The metadata's revision, which must be `1` (`409 revisionConflict` otherwise). The upload commits inline |
 | `revisionContentEnvelope` | string (canonical base64) | The revision's sealed content record at key generation 1 (see "What each revision is") |
 | `file` | binary | Complete typed Drive file blob (`application/octet-stream`) |
 
@@ -3441,7 +3442,7 @@ return `409` or `400` without changing the row.
 ```
 
 `nameHash` is the new name's hash in the file's folder; a name another item
-there holds is `409 name_taken`. Absent, the stored hash stays (the metadata
+there holds is `409 nameTaken`. Absent, the stored hash stays (the metadata
 changed, not the name). Someone renaming a file shared by itself, without
 the folder's key, sends a random hash (docs/plans/drive-unique-names.md).
 
@@ -3523,11 +3524,11 @@ already there.
 - A taken name is `409` with what holds it:
 
   ```json
-  { "error": "an item with this name is already here", "code": "name_taken",
+  { "error": "an item with this name is already here", "code": "nameTaken",
     "holder": { "kind": "file", "id": "<uuid>", "contentHash": "<hex or null>" } }
   ```
 - A file or folder restored from the trash after its name was taken is
-  `409 name_taken`; restore it under a new name in the same request
+  `409 nameTaken`; restore it under a new name in the same request
   (`POST /api/v1/drive/trash/:id/restore`).
 - A new version (`POST /api/v1/drive/files/:id/versions`) clears the content hash;
   the client records the new one. A version uploaded over tus (below)
@@ -3553,8 +3554,8 @@ Answers `201` with
 Checked when the upload starts, so a conflict fails before the content is
 sent, again when its last part lands, and at its commit: the caller may
 write the file (`403`), the file is live (`404`), it still holds `basedOn`
-(`409 version_conflict`), its key has not changed (`409`), the metadata (at
-the commit) is its next revision (`409 revision_conflict`), and the upload
+(`409 versionConflict`), its key has not changed (`409`), the metadata (at
+the commit) is its next revision (`409 revisionConflict`), and the upload
 fits the uploader's storage and share limits (`413`). One open upload per file:
 another is `409 versionUploading`, with `idleSeconds` since its last part,
 `uploaded` (true: an uploaded revision waiting only for its commit),
@@ -3588,7 +3589,7 @@ of the upload itself).
 `nameHash` (a new file only; `400` with a version): the name to commit
 under when it is not the one the upload started with. The upload's own name
 hash was only checked when it started; a name taken while the bytes went up
-is answered `409 name_taken` here, and the client commits again under
+is answered `409 nameTaken` here, and the client commits again under
 another name (its next free one, as "Keep both" picks it) without sending
 the bytes again.
 
@@ -3601,15 +3602,15 @@ for another file, revision or generation: `400`.
 `content` naming this revision and its manifest's SHA-256), sealed for the
 file, its key generation and `metadataRevision`, which must be exactly the
 file's current revision + 1, and `1` for a new file (`409
-revision_conflict`). The server can't read the commitment; readers check it.
+revisionConflict`). The server can't read the commitment; readers check it.
 
 - **A new file** is checked as its last part was (the folder live at the
   epoch its key envelope is bound to, `409`; the caller may still upload
-  there, `403`; the name still free, `409 name_taken`; the quota, `413`), then
+  there, `403`; the name still free, `409 nameTaken`; the quota, `413`), then
   its row goes in with the metadata, its bytes are charged and it appears in
   its folder.
 - **A version** is checked as its last part was (`403`, `404`, `409
-  version_conflict` when the file no longer holds `basedOn`, `409` on a key
+  versionConflict` when the file no longer holds `basedOn`, `409` on a key
   change, `413`), then stored as a tus version lands: the version row (the
   content it replaces is its `parentVersionId`, kept in the history), the
   metadata, the content hash, the charge; editors reopen on the new content.
@@ -3821,7 +3822,7 @@ owner's.
 Move a file to another folder of the same owner (docs/plans/drive-move.md).
 **Body:** `{ fromCollectionId, toCollectionId, toKeyEpoch, fileKeyEnvelope,
 nameHash, contentHash? }` — the name's (and, if known, the content's) hash
-in the destination ("Names in a folder"; a taken name is `409 name_taken`),
+in the destination ("Names in a folder"; a taken name is `409 nameTaken`),
 and the file's current key sealed under the destination's key at its current
 epoch `toKeyEpoch`, with the file's key generation. Nothing else changes: the
 content, metadata, versions, thumbnails and assets are bound to the file, not
@@ -3837,7 +3838,7 @@ the file are closed.
 
 Put a folder under another of the owner's folders, or at the top level.
 **Body:** `{ parentCollectionId: string | null, nameHash }` — its name's hash
-in the new place (`409 name_taken` when held). A folder's key is sealed to
+in the new place (`409 nameTaken` when held). A folder's key is sealed to
 its owner, not its parent, so nothing encrypted changes. **Response:** `204`.
 **Auth:** owner (`404` otherwise). `400` into itself or a folder inside it, or
 under a folder the caller does not own.
@@ -3908,7 +3909,7 @@ owner's trash on its own, its owner may still read them
 
 Put a trash root back where it was. Restoring a folder restores its whole subtree; if its original parent is gone or still trashed, it comes back at the top level. Restoring a file whose folder is still in the trash returns `409 Conflict` (restore the folder instead).
 
-Its name must be free where it lands ("Names in a folder"): a taken one is `409 name_taken` (with what holds it), and a folder that comes back at the top level, where its hash never applied, is `409` with code `nameNeeded`. Either way, restore it again with a name for that place:
+Its name must be free where it lands ("Names in a folder"): a taken one is `409 nameTaken` (with what holds it), and a folder that comes back at the top level, where its hash never applied, is `409` with code `nameNeeded`. Either way, restore it again with a name for that place:
 
 ```json
 {
@@ -3987,17 +3988,17 @@ The client builds the share URL as
 `<SERVER_URL>/s/<token>#key=<base64-link-key>`; the server returns only the
 token.
 
-`403 sharing_off` while public links are off for the server or the caller's
+`403 sharingOff` while public links are off for the server or the caller's
 account (docs/plans/server-personal-data.md, A11).
 
 **Every public route** (`/api/v1/drive/public-links/:token…`) answers, before anything else:
-while the server's public sharing is `signed_in`, `403 sign_in_required`
+while the server's public sharing is `signedIn`, `403 signInRequired`
 without a signed-in caller (`401` when a sign-in is sent but no longer holds,
 so the page refreshes it; the web pages send their sign-in when they have
-one); `451`/`410 link_blocked` when an operator blocked what the link
+one); `451`/`410 linkBlocked` when an operator blocked what the link
 reaches (any link to the same target, or for a file, to its folder);
-`410 link_removed` for one taken down, or whose owner's account isn't
-active; `410 sharing_off` while public links are off for the server or the
+`410 linkRemoved` for one taken down, or whose owner's account isn't
+active; `410 sharingOff` while public links are off for the server or the
 owner's account. Its answers are never cached (`Cache-Control: no-store`).
 
 A block belongs to what a link reaches: no new link to it is made
@@ -4167,7 +4168,7 @@ erased when the report is resolved. A link with 50 open reports takes no more.
 **Response:** `204 No Content` · `404` unknown link · `410` removed.
 
 Every public-link endpoint answers `410` with `{"error": "…", "code":
-"link_removed"}` for a link an administrator took down or whose owner's
+"linkRemoved"}` for a link an administrator took down or whose owner's
 account is disabled (an expired link answers `410` without that code).
 
 ---
@@ -5439,7 +5440,7 @@ Logged as `report.dismiss`.
 
 ### POST /api/v1/admin/reports/:id/remove-link
 
-Take the reported link down (it answers `410 link_removed` from then on) and
+Take the reported link down (it answers `410 linkRemoved` from then on) and
 close every open report on it. `204`; `404` for no such open report. Logged as
 `share.remove`. Disabling the owner (`PUT /api/v1/admin/accounts/:id` with
 `isActive: false`) takes every link of theirs down and closes their reports.
@@ -5447,9 +5448,9 @@ close every open report on it. `204`; `404` for no such open report. Logged as
 ### POST /api/v1/admin/public-links/:id/block · DELETE /api/v1/admin/public-links/:id/block
 
 An operator's block on one public link (by its id, `shareId` in a report):
-`{ "reason": "legal_order" | "abuse" | "other", "reference"?: "…" }`
+`{ "reason": "legalOrder" | "abuse" | "other", "reference"?: "…" }`
 (the reference, at most 200 characters, is for the administrators). The link
-answers `451 link_blocked` for a legal order and `410 link_blocked` otherwise,
+answers `451 linkBlocked` for a legal order and `410 linkBlocked` otherwise,
 as does every other link to what it reaches, and its open reports close as
 `blocked` (keeping the reported link, which may be evidence). The block and
 its record are one transaction. `DELETE` lifts the block. `204`;
@@ -5457,7 +5458,7 @@ its record are one transaction. `DELETE` lifts the block. `204`;
 `share.unblock`. Reports carry the link's `shareBlockedReason`.
 
 Public sharing for the whole server is `publicSharing` in
-`GET`/`PUT /api/v1/admin/settings` (`on`, `off`, `signed_in`; also in the public
+`GET`/`PUT /api/v1/admin/settings` (`on`, `off`, `signedIn`; also in the public
 `GET /api/v1/auth/settings`), and for one account `publicSharing` (`on`, `off`)
 in `PUT /api/v1/admin/accounts/:id` (also in the user list and the account's
 `GET /api/v1/account`).
@@ -5511,7 +5512,7 @@ List all registered users.
 ```
 
 `state` is `active`, `suspended` (with `suspendedReason`: `admin`,
-`operator_order` or `security`) or `closing` (with `closesAt`, when it is
+`operatorOrder` or `security`) or `closing` (with `closesAt`, when it is
 deleted); `isActive` is `state == "active"` (docs/plans/server-personal-data.md,
 A5). `legalHoldReference` and `legalHoldAt` are present while a legal hold is
 set.
@@ -5559,7 +5560,7 @@ Update a user. All fields are optional; only the ones present in the request are
 {
   "storageQuotaBytes": 21474836480,
   "isActive": false,
-  "suspendedReason": "operator_order",
+  "suspendedReason": "operatorOrder",
   "isAdmin": false
 }
 ```
@@ -5593,7 +5594,7 @@ keyed hashes (docs/plans/server-personal-data.md, A7).
 Close the account: every sign-in ends, and it is deleted after
 `account_closing_days` (a Privacy and retention setting, default 14) unless it
 is kept, by its owner at sign-in or here (`PUT` with `isActive: true`).
-Recorded as `user.close`.
+Recorded as `account.close`.
 
 **Auth:** Bearer JWT (admin)
 
@@ -5608,7 +5609,7 @@ is closing already.
 Set (or change) and lift a legal hold. While it is set nothing deletes the
 account or anything of it: the closing job waits, an admin delete or reset is
 `409 legalHold`, and the retention jobs pass its sessions, security events and
-admin-log rows by. Recorded as `user.legalHold.set` / `user.legalHold.clear`,
+admin-log rows by. Recorded as `account.setLegalHold` / `account.clearLegalHold`,
 with the reference.
 
 **Auth:** Bearer JWT (admin)
@@ -5708,12 +5709,12 @@ cursor remains stable.
   "entries": [
     {
       "id": 7,
-      "action": "user.create",
+      "action": "account.create",
       "adminAccountId": "<uuid>",
       "adminUsername": "admin",
       "targetAccountId": "<uuid>",
       "targetUsername": "newuser",
-      "payload": { "username": "newuser", "storageQuotaBytes": 10737418240 },
+      "payload": { "storageQuotaBytes": 10737418240 },
       "occurredAt": "2026-06-11T11:22:33Z"
     }
   ],
@@ -5721,14 +5722,18 @@ cursor remains stable.
 }
 ```
 
-Actions include user/settings changes plus `federation.policy.*`,
-`federation.rule.*`, `federation.peer.*`, and `federation.identity.*`. Identity
-pin, authenticated rotation, quarantine, verification, and break-glass re-pin
-events retain full fingerprints, sequences, and reasons but never private
-signing keys or Drive capabilities. `adminUsername`/`targetUsername` are the live
-identities and become `null` once the referenced account is deleted — the
-`payload` snapshot keeps the trail readable. `nextBefore` is non-null while
-older pages remain.
+Actions are `area.verb`, two camelCase segments with the verb imperative
+(`account.create`, `settings.setRateLimit`, `mailGroup.updateMembers`,
+`federation.updatePolicy`, `federation.pinPeer`, …); the full list, with the
+payload keys each may carry, is `AdminAction` in
+`crates/kutup-server/src/audit_log.rs`. Identity pin, authenticated rotation,
+quarantine, verification, and break-glass re-pin events retain full
+fingerprints, sequences, and reasons but never private signing keys or Drive
+capabilities. Payloads name accounts by id only, never by username (A8): the
+account is `targetAccountId`. `adminUsername`/`targetUsername` are the live
+identities and become `null` once the referenced account is deleted (the page
+then shows "a deleted account"). `nextBefore` is non-null while older pages
+remain.
 
 ### GET /api/v1/admin/activity/export
 
@@ -5755,7 +5760,7 @@ of the oldest rows breaks it too; `appendOnly` is false
 while the server runs as the database's owner (`DATABASE_OWNER_URL` unset).
 
 Opening one account's limits, mail-domain overrides or mail-sending state
-writes an `admin.view` row here, and `adminAccess` in that account's security
+writes an `account.view` row here, and `adminAccess` in that account's security
 log.
 
 ---
@@ -5778,7 +5783,7 @@ log.
 `{ name, kind: "vector" | "raster", url, attribution }`: a style URL, or a
 tile template with `{z}`, `{x}` and `{y}`; it must also be listed in
 `providers`. Maps on with no provider, a provider listed twice, or a cache
-above 102,400 MB is `400`. Saving writes the `maps.settings.update` audit
+above 102,400 MB is `400`. Saving writes the `maps.updateSettings` audit
 entry.
 
 ---
@@ -5816,7 +5821,7 @@ Every rate limit the server keeps (docs/plans/admin-rate-limits.md):
 `{ "value": 20 }`, or `{ "value": null }` to go back to the first value, and
 answers the limit as it is now. A value outside `min`–`max` is `400`, an
 unknown key `404`. It applies at once on this backend and within 30 seconds
-on the others; each change writes a `settings.rate_limit` audit entry.
+on the others; each change writes a `settings.setRateLimit` audit entry.
 
 ### GET /api/v1/admin/accounts/{id}/entitlements · PUT /api/v1/admin/accounts/{id}/entitlements/{key}
 
@@ -5842,8 +5847,8 @@ own value (`{ "value": 3 }`) or takes it back (`null`); it answers the entry
 as it is now. A value outside the range is `400` (never clamped), and so is a
 setting or rate limit that doesn't limit one account; an unknown key is
 `404`. Lowering a value below what the account already uses only stops new
-growth: nothing is removed. Each change writes a `user.setting` or
-`user.rate_limit` audit entry.
+growth: nothing is removed. Each change writes an `account.setEntitlement` or
+`account.setRateLimit` audit entry.
 
 ### GET /api/v1/admin/settings/registry
 
@@ -5984,7 +5989,7 @@ Codes that admit a sign-up when the registration mode asks for one
 (docs/plans/registration-codes.md). A code is 20 Crockford base32 characters
 (100 random bits) shown once, when it is made; the server keeps only its HMAC
 under a key of its own, so a database dump gives no usable code. Each change is
-in the audit log (`registration_code.created`, `registration_code.revoked`).
+in the audit log (`registrationCode.create`, `registrationCode.revoke`).
 
 - `POST /api/v1/admin/registration-codes` with `{ "note": "beta testers",
   "expiresAt": "2026-11-01T00:00:00Z" | null, "maxUses": 5 | null }` (a note of
@@ -6103,7 +6108,7 @@ Update the emergency stop and one feature policy:
 ```
 
 Returns the full control-plane response, wakes the Chat outbox, and audits
-`federation.policy.update`. The global stop denies every feature. A disabled
+`federation.updatePolicy`. The global stop denies every feature. A disabled
 Chat feature also hides public discovery. `allowlist` requires an explicit
 directional allow, `blocklist` permits inherited directions except explicit
 blocks, and `open` permits every admitted direction. Admission never bypasses
@@ -6123,13 +6128,13 @@ domain. The local domain cannot be added.
 ```
 
 Returns the full response, wakes pending Chat delivery for the domain, and
-audits `federation.rule.upsert`.
+audits `federation.setRule`.
 
 ### DELETE /api/v1/admin/federation/rules/:feature/:domain
 
 Delete the feature-scoped rule. Returns the full response, or `404` when the
 rule does not exist, wakes pending Chat delivery, and audits
-`federation.rule.delete`.
+`federation.deleteRule`.
 
 ### POST /api/v1/admin/federation/peers/:domain/verify
 
@@ -6145,7 +6150,7 @@ fingerprint through an independent channel. Body:
 Evict positive and negative discovery caches, retry authenticated discovery
 through either enabled Chat or Drive capability, and wake pending Chat
 delivery. The returned control-plane state exposes the new discovery result or
-`lastDiscoveryError`. The outcome is audited as `federation.peer.retry`.
+`lastDiscoveryError`. The outcome is audited as `federation.retryPeer`.
 
 ### POST /api/v1/admin/federation/peers/retry
 
@@ -6157,7 +6162,7 @@ not abort the others.
 ```
 
 The response contains `{domain, refreshed, error}` per peer and the complete
-batch result is retained in `federation.peer.retry-bulk` audit evidence.
+batch result is retained in `federation.retryPeers` audit evidence.
 
 ### GET /api/v1/admin/federation/peers/:domain/evidence
 
@@ -6388,7 +6393,7 @@ state); `seqAtSnapshot`, `docKeyId`; optional `label`, `keepForever`, and
 `revisionContentEnvelope` (its sealed content record at the file's current
 key generation, every kind) and `metadataEnvelope` and `metadataRevision`: the file's next
 metadata, stored in the same transaction (the save commits inline; `409
-revision_conflict` unless it is the file's current revision + 1, with
+revisionConflict` unless it is the file's current revision + 1, with
 `metadataRevision` and `metadataEnvelope` giving the current metadata to
 seal on top of). For `kind: file` it commits to this revision as the
 content; a `yjs` state is not the file's content, and the metadata names it
@@ -6409,7 +6414,7 @@ floor to that position so the next frame continues after it. **Auth:** write acc
 overwriting"): a whole-file save made from a known version names it, as a
 version id or `original`. Whole-file saves of one file are serialized; if
 the file's current content is no longer that version, nothing is stored or
-charged and the answer is `409 {"code": "version_conflict", "current":
+charged and the answer is `409 {"code": "versionConflict", "current":
 "<version id | original>"}`: the client fetches the current content, merges
 and saves again with `basedOn` set to it. Without `basedOn` a save is stored
 as before. `basedOn` on a `yjs` state is a `400`. Federated saves pass it on
@@ -6417,7 +6422,7 @@ to the file's server, and its `409` back. Kutup Pass and `kutup sync` save
 KeePass vaults this way.
 
 **Response 201:** the version row, including `kind` and `parentVersionId`.
-`409 version_conflict` as above. `413` over quota.
+`409 versionConflict` as above. `413` over quota.
 
 Versions are kept by the file owner's `versionRetentionDays` (see
 `PATCH /api/v1/account`): the last day whole, the last week one per hour, then

@@ -508,7 +508,7 @@ async fn keep_in_sent(
                 thread_id: None,
                 direction: "outbound",
                 folder: "sent",
-                protection: "zero_access",
+                protection: "zeroAccess",
                 seen: true,
                 object_key: &key,
                 object_version: &version,

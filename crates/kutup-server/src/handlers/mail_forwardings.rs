@@ -38,7 +38,7 @@ const MAX_ACTIVATION_CHARS: usize = 65536;
 #[serde(rename_all = "camelCase")]
 pub struct MailForwarding {
     pub id: String,
-    /// `end_to_end` or `outside`.
+    /// `endToEnd` or `outside`.
     pub kind: String,
     /// `pending`, `active`, `outdated`, `paused` or `rejected`.
     pub state: String,
@@ -529,7 +529,7 @@ pub async fn create(
         "INSERT INTO mail_forwardings
            (id, account_id, forwarder_address_id, forwardee_email, forwardee_address_id,
             kind, state, match, conditions)
-         VALUES ($1, $2, $3, $4, $5, 'end_to_end', 'pending', $6, $7)
+         VALUES ($1, $2, $3, $4, $5, 'endToEnd', 'pending', $6, $7)
          ON CONFLICT DO NOTHING",
     )
     .bind(id)
@@ -1493,7 +1493,7 @@ pub async fn renew(
         "SELECT k.public_key FROM mail_forwardings f
            JOIN mail_addresses a ON a.id = f.forwarder_address_id AND a.state = 'active'
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE f.id = $1 AND f.kind = 'end_to_end'",
+          WHERE f.id = $1 AND f.kind = 'endToEnd'",
     )
     .bind(id)
     .fetch_optional(&mut *tx)

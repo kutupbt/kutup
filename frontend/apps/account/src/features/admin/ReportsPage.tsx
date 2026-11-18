@@ -28,7 +28,7 @@ import {
   type LinkReport,
 } from './api'
 
-const BLOCK_REASONS: BlockReason[] = ['legal_order', 'abuse', 'other']
+const BLOCK_REASONS: BlockReason[] = ['legalOrder', 'abuse', 'other']
 
 type Pending = { kind: 'remove' | 'disable' | 'block'; report: LinkReport }
 
@@ -49,7 +49,7 @@ export function ReportsPage() {
   const block = useBlockLink()
   const unblock = useUnblockLink()
   const [pending, setPending] = useState<Pending | null>(null)
-  const [blockReason, setBlockReason] = useState<BlockReason>('legal_order')
+  const [blockReason, setBlockReason] = useState<BlockReason>('legalOrder')
   const [blockReference, setBlockReference] = useState('')
 
   const close = () => {
@@ -57,7 +57,7 @@ export function ReportsPage() {
     remove.reset()
     update.reset()
     block.reset()
-    setBlockReason('legal_order')
+    setBlockReason('legalOrder')
     setBlockReference('')
   }
 
