@@ -58,7 +58,7 @@ pub struct ChatAccount {
     pub head: Option<AccountManifestV3>,
     /// The `session` hash of the token's sign-in, which every device of this
     /// account lists: from the token's `sid` (a test signs in as a root
-    /// sign-in), checked against `GET /api/device-session` at registration.
+    /// sign-in), checked against `GET /api/v1/account/devices/session` at registration.
     pub session: String,
 }
 
@@ -164,7 +164,7 @@ impl ChatAccount {
     /// lists.
     pub fn fetch_session(&self, c: &Client, base: &str) {
         let r = c
-            .get(format!("{base}/api/device-session"))
+            .get(format!("{base}/api/v1/account/devices/session"))
             .bearer_auth(&self.token)
             .send()
             .unwrap();
@@ -242,7 +242,7 @@ impl ChatAccount {
         manifest.signature = b64(&self.authority.sign(&manifest.signing_bytes().unwrap()));
     }
 
-    /// `POST /api/chat/manifest` of `manifest` as `by`, as it is.
+    /// `POST /api/v1/chat/manifest` of `manifest` as `by`, as it is.
     pub fn post_manifest(
         &self,
         c: &Client,
@@ -250,7 +250,7 @@ impl ChatAccount {
         by: &ChatDevice,
         manifest: &AccountManifestV3,
     ) -> Response {
-        by.auth(c.post(format!("{base}/api/chat/manifest")))
+        by.auth(c.post(format!("{base}/api/v1/chat/manifest")))
             .bearer_auth(&self.token)
             .json(manifest)
             .send()
@@ -285,7 +285,7 @@ impl ChatAccount {
         base: &str,
         body: &RegisterChatDeviceRequestV2,
     ) -> Response {
-        c.post(format!("{base}/api/chat/device"))
+        c.post(format!("{base}/api/v1/chat/devices"))
             .bearer_auth(&self.token)
             .json(body)
             .send()
@@ -334,7 +334,7 @@ impl ChatAccount {
     /// A link token asked for by `by`.
     pub fn link_token(&self, c: &Client, base: &str, by: &ChatDevice) -> String {
         let r = by
-            .auth(c.post(format!("{base}/api/chat/link-tokens")))
+            .auth(c.post(format!("{base}/api/v1/chat/link-tokens")))
             .bearer_auth(&self.token)
             .send()
             .unwrap();

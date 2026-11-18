@@ -157,13 +157,13 @@ pub struct LoginStartResponse {
     suite: u16,
 }
 
-/// `POST /api/auth/login/start` — the server's half of KE2. A name that is no
+/// `POST /api/v1/auth/login/start` — the server's half of KE2. A name that is no
 /// account (or one held after a rename, or another server's address) gets a
 /// fake answer of the same shape, the same each time for that name, and
 /// meets the same lockout.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/start",
+    path = "/api/v1/auth/login/start",
     tag = "auth",
     request_body = LoginStartRequest,
     responses(
@@ -400,14 +400,14 @@ pub struct LoginAbortRequest {
     login_id: Uuid,
 }
 
-/// `POST /api/auth/login/abort` — ends a sign-in the client will not finish:
+/// `POST /api/v1/auth/login/abort` — ends a sign-in the client will not finish:
 /// the password did not open the server's answer (a wrong password, or a
 /// name that is no account). A session sign-in of a real account goes into
 /// its security log as a wrong password. Always `204`, whatever the id, so
 /// it tells nothing about the name.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/abort",
+    path = "/api/v1/auth/login/abort",
     tag = "auth",
     request_body = LoginAbortRequest,
     responses((status = 204, description = "Ended, or nothing to end"))
@@ -427,13 +427,13 @@ pub async fn login_abort(
     Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/auth/login/finish` — checks KE3. A sign-in answers as sign-in
+/// `POST /api/v1/auth/login/finish` — checks KE3. A sign-in answers as sign-in
 /// always has (setup, the second factor, or the session with the account's
 /// envelopes); a reauth answers a grant. Every miss is the same `401`: a
 /// wrong password, an unknown name, a used or expired login id.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/finish",
+    path = "/api/v1/auth/login/finish",
     tag = "auth",
     request_body = LoginFinishRequest,
     responses(
@@ -633,14 +633,14 @@ async fn key_binding_unused(state: &AppState, key_binding: &str) -> AppResult<()
     Ok(())
 }
 
-/// `POST /api/auth/opaque/register/start` — the server's answer to a
+/// `POST /api/v1/auth/opaque/register/start` — the server's answer to a
 /// registration request: stateless, derived from the setup and the key
 /// binding. Each answer is one query of that key binding's OPRF key, so it
 /// needs a grant for an existing account's, and is rate-limited as a sign-up
 /// for a new one.
 #[utoipa::path(
     post,
-    path = "/api/auth/opaque/register/start",
+    path = "/api/v1/auth/opaque/register/start",
     tag = "auth",
     request_body = RegisterStartRequest,
     responses(
@@ -757,7 +757,7 @@ pub struct RegisterFinishRequest {
     master_key_envelope: String,
 }
 
-/// `POST /api/auth/opaque/register/finish` — a new password for an account:
+/// `POST /api/v1/auth/opaque/register/finish` — a new password for an account:
 /// after a password change (`passwordChange`, from this session), the
 /// recovery phrase (`recovery`) or a silent re-registration under the current
 /// setup at sign-in (`rotate`). The record and the password envelope change
@@ -765,7 +765,7 @@ pub struct RegisterFinishRequest {
 /// change ends the account's other sign-ins, a recovery all of them.
 #[utoipa::path(
     post,
-    path = "/api/auth/opaque/register/finish",
+    path = "/api/v1/auth/opaque/register/finish",
     tag = "auth",
     request_body = RegisterFinishRequest,
     responses(

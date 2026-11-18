@@ -45,7 +45,7 @@ describe('restoring at the top level', () => {
     post.mockResolvedValue({ data: {} })
     await restoreEntry(folder, me, new QueryClient())
     expect(post).toHaveBeenCalledTimes(1)
-    expect(post.mock.calls[0]).toEqual([`/trash/${folder.id}/restore`, { nameHash: await nameHashIn(top, 'Projects'), nameHashGeneration: 1 }])
+    expect(post.mock.calls[0]).toEqual([`/drive/trash/${folder.id}/restore`, { nameHash: await nameHashIn(top, 'Projects'), nameHashGeneration: 1 }])
   })
 
   it('offers the first free name when its own is taken, and renames it on the way back', async () => {
@@ -60,7 +60,7 @@ describe('restoring at the top level', () => {
     await restoreEntry(folder, me, new QueryClient(), ask)
     expect(ask).toHaveBeenCalledWith({ name: 'Projects', suggested: 'Projects (3)' })
     const last = post.mock.calls.at(-1)!
-    expect(last[0]).toBe(`/trash/${folder.id}/restore`)
+    expect(last[0]).toBe(`/drive/trash/${folder.id}/restore`)
     expect(last[1]).toMatchObject({ nameHash: await nameHashIn(top, 'Projects (3)'), nameHashGeneration: 1, nameRevision: 2 })
     expect(typeof last[1].nameEnvelope).toBe('string')
   })
@@ -82,7 +82,7 @@ describe('restoring at the top level', () => {
       return { data: {} }
     })
     await restoreEntry(inside, me, new QueryClient())
-    expect(post.mock.calls[0]).toEqual([`/trash/${folder.id}/restore`, undefined])
-    expect(post.mock.calls.at(-1)).toEqual([`/trash/${folder.id}/restore`, { nameHash: await nameHashIn(top, 'Projects'), nameHashGeneration: 1 }])
+    expect(post.mock.calls[0]).toEqual([`/drive/trash/${folder.id}/restore`, undefined])
+    expect(post.mock.calls.at(-1)).toEqual([`/drive/trash/${folder.id}/restore`, { nameHash: await nameHashIn(top, 'Projects'), nameHashGeneration: 1 }])
   })
 })

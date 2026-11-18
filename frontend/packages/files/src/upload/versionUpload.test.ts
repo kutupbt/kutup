@@ -46,7 +46,7 @@ describe('a new version over tus', () => {
     const upload: PendingUpload = {
       fileId: created.fileId,
       owner: 'me',
-      uploadUrl: 'https://drive.localhost/api/uploads/22222222-2222-4222-8222-222222222222',
+      uploadUrl: 'https://drive.localhost/api/v1/drive/uploads/22222222-2222-4222-8222-222222222222',
       size: 9,
       lastModified: 1,
       collectionId: '11111111-1111-4111-8111-111111111111',

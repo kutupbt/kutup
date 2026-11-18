@@ -8,7 +8,7 @@
 // lands on the server as an uploaded revision; once its last byte is there,
 // the client commits it with the file's next metadata, which commits to the
 // revision and its manifest's digest (known only after the last block):
-// `POST /api/files/{id}/revisions/{revisionId}/commit` (commit.ts).
+// `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit` (commit.ts).
 //
 // An upload survives a long loss of the connection: it waits, and goes on
 // from where the server stopped once the browser is back online. Started
@@ -19,10 +19,10 @@
 // sending it, and commits it if that had not happened yet.
 //
 // Wire format (crates/kutup-server/src/handlers/tus.rs + the CLI):
-//   POST  /api/uploads          — creates the upload (and a new file's key row)
-//   HEAD  /api/uploads/<id>     — where an upload stands, to go on from there
-//   PATCH /api/uploads/<id>     — appends bytes; the last leaves an uploaded revision
-//   POST  /api/files/<id>/revisions/<revisionId>/commit — makes it current
+//   POST  /api/v1/drive/uploads          — creates the upload (and a new file's key row)
+//   HEAD  /api/v1/drive/uploads/<id>     — where an upload stands, to go on from there
+//   PATCH /api/v1/drive/uploads/<id>     — appends bytes; the last leaves an uploaded revision
+//   POST  /api/v1/drive/files/<id>/revisions/<revisionId>/commit — makes it current
 
 import * as tus from 'tus-js-client'
 import {
@@ -118,7 +118,7 @@ export class UploadNameTaken extends Error {
 
 /**
  * A new version was refused because the file changed since it was chosen
- * (docs/api.md, "POST /api/uploads with versionOf"): another version
+ * (docs/api.md, "POST /api/v1/drive/uploads with versionOf"): another version
  * (`version`), its metadata (`revision`), or its key (`key`). The server
  * discarded the upload; sending it again as it was would only fail again.
  */

@@ -24,7 +24,7 @@ fn client() -> Client {
 fn start(c: &Client, base: &str, name: &str, password: &str, ip: &str) -> (Value, Vec<u8>) {
     let (signing_in, ke1) = kutup_crypto::opaque::client_login_start(password).unwrap();
     let r = c
-        .post(format!("{base}/api/auth/login/start"))
+        .post(format!("{base}/api/v1/auth/login/start"))
         .header("x-kutup-client", "cli")
         .header("x-real-ip", ip)
         .json(&json!({ "name": name, "credentialRequest": b64(&ke1) }))
@@ -38,7 +38,7 @@ fn start(c: &Client, base: &str, name: &str, password: &str, ip: &str) -> (Value
 }
 
 fn finish(c: &Client, base: &str, login_id: &Value, ke3: &[u8]) -> StatusCode {
-    c.post(format!("{base}/api/auth/login/finish"))
+    c.post(format!("{base}/api/v1/auth/login/finish"))
         .header("x-kutup-client", "cli")
         .json(&json!({ "loginId": login_id, "credentialFinalization": b64(ke3) }))
         .send()
@@ -47,7 +47,7 @@ fn finish(c: &Client, base: &str, login_id: &Value, ke3: &[u8]) -> StatusCode {
 }
 
 fn live(c: &Client, base: &str, token: &str) -> StatusCode {
-    bearer(c.get(format!("{base}/api/user/me")), token)
+    bearer(c.get(format!("{base}/api/v1/account")), token)
         .send()
         .unwrap()
         .status()
@@ -113,7 +113,7 @@ fn a_new_password_ends_the_other_sign_ins_and_keeps_the_master_key() {
                 Err((status, _)) => return status,
             };
         let mut request = c
-            .post(format!("{base}/api/auth/opaque/register/finish"))
+            .post(format!("{base}/api/v1/auth/opaque/register/finish"))
             .json(&json!({
                 "grant": grant, "keyBinding": user.binding,
                 "opaqueRecord": record, "opaqueServerKeyId": key_id,
@@ -127,7 +127,7 @@ fn a_new_password_ends_the_other_sign_ins_and_keeps_the_master_key() {
     // A grant for something else, or used by another sign-in: refused.
     let wrong_purpose = reauth_grant(&c, &base, &user, "pass");
     let refused = c
-        .post(format!("{base}/api/auth/opaque/register/start"))
+        .post(format!("{base}/api/v1/auth/opaque/register/start"))
         .json(
             &json!({ "keyBinding": user.binding, "registrationRequest": b64(&[0u8; 32]),
                        "grant": wrong_purpose }),
@@ -196,7 +196,7 @@ fn a_recovery_sets_a_new_password_and_ends_every_sign_in() {
         kutup_crypto::kdf::derive_recovery_auth_proof(&user.recovery_entropy, &user.binding)
             .unwrap();
     let grant_for = |proof: &[u8]| {
-        c.post(format!("{base}/api/auth/recover/grant"))
+        c.post(format!("{base}/api/v1/auth/recover/grant"))
             .json(&json!({ "name": user.username, "recoveryProof": b64(proof) }))
             .send()
             .unwrap()
@@ -221,7 +221,7 @@ fn a_recovery_sets_a_new_password_and_ends_every_sign_in() {
     let (record, key_id, export_key) =
         opaque_register(&c, &base, new_password, &user.binding, Some(&grant), None);
     let r = c
-        .post(format!("{base}/api/auth/opaque/register/finish"))
+        .post(format!("{base}/api/v1/auth/opaque/register/finish"))
         .json(&json!({
             "grant": grant, "keyBinding": user.binding,
             "opaqueRecord": record, "opaqueServerKeyId": key_id,
@@ -265,7 +265,7 @@ fn a_sign_in_that_straddles_a_new_password_gets_nothing() {
         kutup_crypto::kdf::derive_recovery_auth_proof(&user.recovery_entropy, &user.binding)
             .unwrap();
     let granted: Value = c
-        .post(format!("{base}/api/auth/recover/grant"))
+        .post(format!("{base}/api/v1/auth/recover/grant"))
         .json(&json!({ "name": user.username, "recoveryProof": b64(proof.as_slice()) }))
         .send()
         .unwrap()
@@ -338,7 +338,7 @@ fn a_reauth_is_for_the_signed_in_account_only() {
     let (a, b) = (register(&c, &base), register(&c, &base));
     // A reauth names no account: one that does is refused.
     let (_, ke1) = kutup_crypto::opaque::client_login_start(&b.password).unwrap();
-    let named = bearer(c.post(format!("{base}/api/auth/login/start")), &a.token)
+    let named = bearer(c.post(format!("{base}/api/v1/auth/login/start")), &a.token)
         .header("x-kutup-client", "cli")
         .json(&json!({ "name": b.username, "credentialRequest": b64(&ke1),
                        "purpose": "reauth", "for": "passwordChange" }))
@@ -373,7 +373,7 @@ fn every_spelling_of_a_name_shares_its_lockout() {
     // A start alone, never finished: a miss.
     let bare_start = |name: &str| {
         let (_, ke1) = kutup_crypto::opaque::client_login_start("a-wrong-password-1").unwrap();
-        c.post(format!("{base}/api/auth/login/start"))
+        c.post(format!("{base}/api/v1/auth/login/start"))
             .header("x-kutup-client", "cli")
             .header("x-real-ip", "192.0.2.120")
             .json(&json!({ "name": name, "credentialRequest": b64(&ke1) }))
@@ -430,7 +430,7 @@ fn security_events_record_changes_for_their_owner_only() {
         kutup_crypto::kdf::derive_recovery_auth_proof(&user.recovery_entropy, &user.binding)
             .unwrap();
     let granted: Value = c
-        .post(format!("{base}/api/auth/recover/grant"))
+        .post(format!("{base}/api/v1/auth/recover/grant"))
         .json(&json!({ "name": user.username, "recoveryProof": b64(proof.as_slice()) }))
         .send()
         .unwrap()
@@ -493,7 +493,9 @@ fn security_events_record_changes_for_their_owner_only() {
     // A cursor is one of the caller's own events: another's, or none, is 400.
     for cursor in [next, uuid::Uuid::new_v4().to_string()] {
         let r = bearer(
-            c.get(format!("{base}/api/user/security-events?cursor={cursor}")),
+            c.get(format!(
+                "{base}/api/v1/account/security-events?cursor={cursor}"
+            )),
             &other.token,
         )
         .send()
@@ -511,11 +513,14 @@ fn two_step_sign_in_changes_take_the_password() {
     };
     let c = client();
     let user = register(&c, &base);
-    let setup: Value = bearer(c.post(format!("{base}/api/user/2fa/setup")), &user.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let setup: Value = bearer(
+        c.post(format!("{base}/api/v1/account/2fa/setup")),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let code = || {
         totp_rs::TOTP::new(
             totp_rs::Algorithm::SHA1,
@@ -533,11 +538,14 @@ fn two_step_sign_in_changes_take_the_password() {
         .unwrap()
     };
     let verify = |grant: &str| {
-        bearer(c.post(format!("{base}/api/user/2fa/verify")), &user.token)
-            .json(&json!({ "code": code(), "grant": grant }))
-            .send()
-            .unwrap()
-            .status()
+        bearer(
+            c.post(format!("{base}/api/v1/account/2fa/verify")),
+            &user.token,
+        )
+        .json(&json!({ "code": code(), "grant": grant }))
+        .send()
+        .unwrap()
+        .status()
     };
     // A code alone, or a grant for something else, turns nothing on.
     assert_eq!(verify(""), StatusCode::FORBIDDEN);
@@ -550,15 +558,18 @@ fn two_step_sign_in_changes_take_the_password() {
         StatusCode::OK
     );
     // While it is on, its secret stays.
-    let again = bearer(c.post(format!("{base}/api/user/2fa/setup")), &user.token)
-        .send()
-        .unwrap();
+    let again = bearer(
+        c.post(format!("{base}/api/v1/account/2fa/setup")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
     assert_eq!(again.status(), StatusCode::CONFLICT);
     // The second step: a wrong code is tried again, a token that is no
     // longer good goes back to the password.
     let second_step = |token: &str, code: &str| {
         let r = c
-            .post(format!("{base}/api/auth/login/2fa"))
+            .post(format!("{base}/api/v1/auth/login/2fa"))
             .header("x-kutup-client", "cli")
             .json(&json!({ "preAuthToken": token, "code": code }))
             .send()
@@ -601,7 +612,7 @@ fn two_step_sign_in_changes_take_the_password() {
         (StatusCode::UNAUTHORIZED, json!("preAuthInvalid"))
     );
     let disable = |grant: &str| {
-        bearer(c.delete(format!("{base}/api/user/2fa")), &user.token)
+        bearer(c.delete(format!("{base}/api/v1/account/2fa")), &user.token)
             .json(&json!({ "code": code(), "grant": grant }))
             .send()
             .unwrap()
@@ -637,13 +648,16 @@ fn a_verify_reauth_checks_the_password_and_keeps_nothing() {
     // 401, and counts: four more starts from that address lock the name.
     let reauth_start = |password: &str| {
         let (signing_in, ke1) = kutup_crypto::opaque::client_login_start(password).unwrap();
-        let r = bearer(c.post(format!("{base}/api/auth/login/start")), &user.token)
-            .header("x-kutup-client", "cli")
-            .header("x-real-ip", "192.0.2.140")
-            .json(&json!({ "credentialRequest": b64(&ke1),
+        let r = bearer(
+            c.post(format!("{base}/api/v1/auth/login/start")),
+            &user.token,
+        )
+        .header("x-kutup-client", "cli")
+        .header("x-real-ip", "192.0.2.140")
+        .json(&json!({ "credentialRequest": b64(&ke1),
                            "purpose": "reauth", "for": "verify" }))
-            .send()
-            .unwrap();
+        .send()
+        .unwrap();
         let status = r.status();
         (status, r.json::<Value>().unwrap_or(Value::Null), signing_in)
     };
@@ -651,11 +665,14 @@ fn a_verify_reauth_checks_the_password_and_keeps_nothing() {
     let ke2 = b64_decode(right["credentialResponse"].as_str().unwrap());
     let other_ke3 = signing_in.finish(&ke2).unwrap().finalization;
     let (_, wrong, _) = reauth_start("not-the-password-1");
-    let r = bearer(c.post(format!("{base}/api/auth/login/finish")), &user.token)
-        .header("x-kutup-client", "cli")
-        .json(&json!({ "loginId": wrong["loginId"], "credentialFinalization": b64(&other_ke3) }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/auth/login/finish")),
+        &user.token,
+    )
+    .header("x-kutup-client", "cli")
+    .json(&json!({ "loginId": wrong["loginId"], "credentialFinalization": b64(&other_ke3) }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(r.json::<Value>().unwrap()["code"], "invalidCredentials");
     for _ in 0..3 {
@@ -667,7 +684,7 @@ fn a_verify_reauth_checks_the_password_and_keeps_nothing() {
     );
     // Nor is a setup token anything but one.
     let r = c
-        .post(format!("{base}/api/auth/complete-setup"))
+        .post(format!("{base}/api/v1/auth/complete-setup"))
         .header("x-kutup-client", "cli")
         .bearer_auth("not-a-token")
         .json(&json!({}))
@@ -681,16 +698,22 @@ fn a_verify_reauth_checks_the_password_and_keeps_nothing() {
 /// Two-step sign-in turned on for `user`: its authenticator's secret and
 /// the recovery codes shown with it.
 fn turn_on_two_step(c: &Client, base: &str, user: &User) -> (String, Vec<String>) {
-    let setup: Value = bearer(c.post(format!("{base}/api/user/2fa/setup")), &user.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let setup: Value = bearer(
+        c.post(format!("{base}/api/v1/account/2fa/setup")),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let secret = setup["secret"].as_str().unwrap().to_owned();
-    let r = bearer(c.post(format!("{base}/api/user/2fa/verify")), &user.token)
-        .json(&json!({ "code": totp_now(&secret), "grant": reauth_grant(c, base, user, "totp") }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/account/2fa/verify")),
+        &user.token,
+    )
+    .json(&json!({ "code": totp_now(&secret), "grant": reauth_grant(c, base, user, "totp") }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let body: Value = r.json().unwrap();
     let codes = body["recoveryCodes"]
@@ -704,7 +727,7 @@ fn turn_on_two_step(c: &Client, base: &str, user: &User) -> (String, Vec<String>
 
 fn codes_left(c: &Client, base: &str, user: &User) -> i64 {
     let left: Value = bearer(
-        c.get(format!("{base}/api/user/2fa/recovery-codes")),
+        c.get(format!("{base}/api/v1/account/2fa/recovery-codes")),
         &user.token,
     )
     .send()
@@ -719,7 +742,7 @@ fn second_step(c: &Client, base: &str, user: &User, code: &str) -> (StatusCode, 
     let first = sign_in(c, base, &user.username, &user.password);
     let pre_auth = first["preAuthToken"].as_str().expect("the second step");
     let r = c
-        .post(format!("{base}/api/auth/login/2fa"))
+        .post(format!("{base}/api/v1/auth/login/2fa"))
         .header("x-kutup-client", "cli")
         .json(&json!({ "preAuthToken": pre_auth, "code": code }))
         .send()
@@ -768,7 +791,7 @@ fn recovery_codes_take_the_second_factors_place_once() {
     // password alone mint none); the old ones then fail.
     let renew = |grant: &str, code: &str| {
         bearer(
-            c.post(format!("{base}/api/user/2fa/recovery-codes")),
+            c.post(format!("{base}/api/v1/account/2fa/recovery-codes")),
             &user.token,
         )
         .json(&json!({ "grant": grant, "code": code }))
@@ -805,7 +828,7 @@ fn recovery_codes_take_the_second_factors_place_once() {
     );
 
     // Turned off with a recovery code in the authenticator's place.
-    let r = bearer(c.delete(format!("{base}/api/user/2fa")), &user.token)
+    let r = bearer(c.delete(format!("{base}/api/v1/account/2fa")), &user.token)
         .json(&json!({ "code": new_codes[0], "grant": reauth_grant(&c, &base, &user, "totp") }))
         .send()
         .unwrap();
@@ -855,7 +878,7 @@ fn the_recovery_phrase_turns_two_step_sign_in_off() {
         kutup_crypto::kdf::derive_recovery_auth_proof(&user.recovery_entropy, &user.binding)
             .unwrap();
     let granted: Value = c
-        .post(format!("{base}/api/auth/recover/grant"))
+        .post(format!("{base}/api/v1/auth/recover/grant"))
         .json(&json!({ "name": user.username, "recoveryProof": b64(proof.as_slice()) }))
         .send()
         .unwrap()
@@ -907,7 +930,7 @@ fn wrong_second_factor_codes_spend_the_grant_and_block_the_account() {
     let (secret, _) = turn_on_two_step(&c, &base, &user);
     let renew = |grant: &str, code: &str| {
         bearer(
-            c.post(format!("{base}/api/user/2fa/recovery-codes")),
+            c.post(format!("{base}/api/v1/account/2fa/recovery-codes")),
             &user.token,
         )
         .json(&json!({ "grant": grant, "code": code }))
@@ -940,7 +963,7 @@ fn wrong_second_factor_codes_spend_the_grant_and_block_the_account() {
         renew(&reauth_grant(&c, &base, &user, "totp"), &totp_now(&secret)),
         StatusCode::TOO_MANY_REQUESTS
     );
-    let off = bearer(c.delete(format!("{base}/api/user/2fa")), &user.token)
+    let off = bearer(c.delete(format!("{base}/api/v1/account/2fa")), &user.token)
         .json(
             &json!({ "code": totp_now(&secret), "grant": reauth_grant(&c, &base, &user, "totp") }),
         )

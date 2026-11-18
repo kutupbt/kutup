@@ -23,7 +23,10 @@ use common::*;
 
 fn rows(c: &Client, base: &str, token: &str, folder: &Folder) -> Vec<Value> {
     bearer(
-        c.get(format!("{base}/api/collections/{}/files", folder.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{}/files",
+            folder.id
+        )),
         token,
     )
     .send()
@@ -53,18 +56,21 @@ fn move_file(
     epoch: i32,
     envelope: &str,
 ) -> reqwest::blocking::Response {
-    bearer(c.post(format!("{base}/api/files/{file_id}/move")), token)
-        .json(&json!({
-            "fromCollectionId": from.id,
-            "toCollectionId": to.id,
-            "toKeyEpoch": epoch,
-            "fileKeyEnvelope": envelope,
-            // Recomputed under the destination's key; a stand-in unique to
-            // the file and its destination.
-            "nameHash": test_name_hash(&format!("{file_id}{}", to.id))[..64].to_owned(),
-        }))
-        .send()
-        .unwrap()
+    bearer(
+        c.post(format!("{base}/api/v1/drive/files/{file_id}/move")),
+        token,
+    )
+    .json(&json!({
+        "fromCollectionId": from.id,
+        "toCollectionId": to.id,
+        "toKeyEpoch": epoch,
+        "fileKeyEnvelope": envelope,
+        // Recomputed under the destination's key; a stand-in unique to
+        // the file and its destination.
+        "nameHash": test_name_hash(&format!("{file_id}{}", to.id))[..64].to_owned(),
+    }))
+    .send()
+    .unwrap()
 }
 
 fn move_folder(
@@ -75,7 +81,7 @@ fn move_folder(
     parent: Option<&Folder>,
 ) -> StatusCode {
     bearer(
-        c.post(format!("{base}/api/collections/{}/move", folder.id)),
+        c.post(format!("{base}/api/v1/drive/collections/{}/move", folder.id)),
         token,
     )
     .json(&json!({
@@ -247,7 +253,7 @@ fn drive_move_contract() {
     );
     // Rotate A, removing the viewer.
     let access: Value = bearer(
-        c.get(format!("{base}/api/collections/{}/access", a.id)),
+        c.get(format!("{base}/api/v1/drive/collections/{}/access", a.id)),
         &owner.token,
     )
     .send()
@@ -283,7 +289,7 @@ fn drive_move_contract() {
         DriveEnvelopeContextV1::new(purpose, 2, revision, &a.id, &owner.id).unwrap()
     };
     let r = bearer(
-        c.post(format!("{base}/api/collections/{}/rotate", a.id)),
+        c.post(format!("{base}/api/v1/drive/collections/{}/rotate", a.id)),
         &owner.token,
     )
     .json(&json!({
@@ -318,7 +324,7 @@ fn drive_move_contract() {
     let mut second_key2 = [0u8; 32];
     kutup_crypto::primitives::random(&mut second_key2);
     let r = bearer(
-        c.post(format!("{base}/api/files/{}/rekey", second.id)),
+        c.post(format!("{base}/api/v1/drive/files/{}/rekey", second.id)),
         &owner.token,
     )
     .json(&json!({
@@ -424,11 +430,14 @@ fn drive_move_contract() {
         StatusCode::NO_CONTENT,
         "no longer below it"
     );
-    let folders: Vec<Value> = bearer(c.get(format!("{base}/api/collections")), &owner.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let folders: Vec<Value> = bearer(
+        c.get(format!("{base}/api/v1/drive/collections")),
+        &owner.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let parent_of =
         |id: &str| folders.iter().find(|f| f["id"] == id).unwrap()["parentCollectionId"].clone();
     assert_eq!(parent_of(&grandchild.id), Value::Null);

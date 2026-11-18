@@ -320,7 +320,7 @@ pub struct File {
     pub encrypted_size_bytes: i64,
     #[serde(default)]
     pub created_at: String,
-    /// The key generation of what `/files/{id}/download` serves (its latest
+    /// The key generation of what `/drive/files/{id}/download` serves (its latest
     /// whole-file version, else the upload).
     pub content_key_generation: u32,
     /// The key generation the original upload was sealed at.
@@ -471,7 +471,7 @@ pub struct PublicShareResponse {
     pub token: String,
 }
 
-/// An account and its keys, as `/users/by-address` and `/users/by-id` both
+/// An account and its keys, as `/accounts/by-address` and `/accounts/by-id` both
 /// answer it, here or on its server.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

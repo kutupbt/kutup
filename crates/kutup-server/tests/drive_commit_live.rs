@@ -1,7 +1,7 @@
 //! Live e2e for the commit of an uploaded revision
 //! (docs/plans/drive-block-format.md §10 slice 3, "The commit, as
 //! Proton's"): a block-format upload lands stored, checked and reserved, but
-//! not current; `POST /api/files/{id}/revisions/{revisionId}/commit` brings
+//! not current; `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit` brings
 //! the metadata committing to it and makes it current in one transaction. A
 //! new file is listed nowhere before its first commit.
 //!
@@ -79,7 +79,7 @@ fn tus_meta(pairs: &[(&str, &str)]) -> String {
 
 /// Opens a tus upload and sends `bytes` in one part; the upload's location.
 fn tus_upload(c: &Client, base: &str, token: &str, meta: String, bytes: &[u8]) -> String {
-    let created = bearer(c.post(format!("{base}/api/uploads")), token)
+    let created = bearer(c.post(format!("{base}/api/v1/drive/uploads")), token)
         .header("Tus-Resumable", "1.0.0")
         .header("Upload-Length", bytes.len().to_string())
         .header("Upload-Metadata", meta)
@@ -126,14 +126,17 @@ fn upload_new(
 
 fn listed(c: &Client, base: &str, token: &str, folder: &Folder, file_id: &str) -> bool {
     let in_folder: Value = bearer(
-        c.get(format!("{base}/api/collections/{}/files", folder.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{}/files",
+            folder.id
+        )),
         token,
     )
     .send()
     .unwrap()
     .json()
     .unwrap();
-    let everywhere: Value = bearer(c.get(format!("{base}/api/drive/files")), token)
+    let everywhere: Value = bearer(c.get(format!("{base}/api/v1/drive/files")), token)
         .send()
         .unwrap()
         .json()
@@ -409,7 +412,7 @@ fn a_version_commit_keeps_the_old_content_in_history() {
         )
     };
     let send = |form: multipart::Form| {
-        bearer(c.post(format!("{base}/api/files/upload")), &owner.token)
+        bearer(c.post(format!("{base}/api/v1/drive/files")), &owner.token)
             .multipart(form)
             .send()
             .unwrap()
@@ -472,7 +475,7 @@ fn a_version_commit_keeps_the_old_content_in_history() {
     );
     let without = bearer(
         c.post(format!(
-            "{base}/api/files/{}/revisions/{version}/commit",
+            "{base}/api/v1/drive/files/{}/revisions/{version}/commit",
             file.id
         )),
         &owner.token,
@@ -500,7 +503,7 @@ fn a_version_commit_keeps_the_old_content_in_history() {
     // The content it replaced is in the history: the original, the new
     // version's parent.
     let versions: Value = bearer(
-        c.get(format!("{base}/api/files/{}/versions", file.id)),
+        c.get(format!("{base}/api/v1/drive/files/{}/versions", file.id)),
         &owner.token,
     )
     .send()
@@ -532,7 +535,7 @@ fn a_version_commit_keeps_the_old_content_in_history() {
         )
     );
     let original_now = bearer(
-        c.get(format!("{base}/api/files/{}/original", file.id)),
+        c.get(format!("{base}/api/v1/drive/files/{}/original", file.id)),
         &owner.token,
     )
     .send()

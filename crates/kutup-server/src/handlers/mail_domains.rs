@@ -1,5 +1,5 @@
 //! Custom mail domains' API (docs/plans/mail-custom-domains.md), Proton's
-//! shape under `/api/mail/domains`: add a domain, read it with its records
+//! shape under `/api/v1/mail/domains`: add a domain, read it with its records
 //! to publish and their states (`?refresh=1` checks DNS now, Proton's
 //! "Refresh status"), set its catch-all, remove it. Answers 404 where the
 //! server has no Mail.
@@ -205,10 +205,10 @@ async fn view(state: &AppState, row: &Row, settings: &Settings) -> AppResult<Mai
     })
 }
 
-/// `GET /api/mail/domains` — the account's domains and its limit.
+/// `GET /api/v1/mail/domains` — the account's domains and its limit.
 #[utoipa::path(
     get,
-    path = "/api/mail/domains",
+    path = "/api/v1/mail/domains",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, body = MailDomains), (status = 404, description = "No Mail here"))
@@ -242,11 +242,11 @@ pub async fn list(
     }))
 }
 
-/// `POST /api/mail/domains` — adds a domain (or gives back one the account
+/// `POST /api/v1/mail/domains` — adds a domain (or gives back one the account
 /// removed, with its code). Nothing flows until it is verified.
 #[utoipa::path(
     post,
-    path = "/api/mail/domains",
+    path = "/api/v1/mail/domains",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = AddDomain,
@@ -317,11 +317,11 @@ impl Drop for Running {
     }
 }
 
-/// `GET /api/mail/domains/{id}` — one domain; `?refresh=1` checks its DNS
+/// `GET /api/v1/mail/domains/{id}` — one domain; `?refresh=1` checks its DNS
 /// now (uncached; 30 an hour per account).
 #[utoipa::path(
     get,
-    path = "/api/mail/domains/{id}",
+    path = "/api/v1/mail/domains/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path), ("refresh" = Option<u8>, Query)),
@@ -372,11 +372,11 @@ pub async fn get(
     Ok(Json(view(&state, &row, &settings).await?))
 }
 
-/// `DELETE /api/mail/domains/{id}` — removes the domain; its addresses are
+/// `DELETE /api/v1/mail/domains/{id}` — removes the domain; its addresses are
 /// freed (Proton: "all the addresses associated with it will be disabled").
 #[utoipa::path(
     delete,
-    path = "/api/mail/domains/{id}",
+    path = "/api/v1/mail/domains/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -395,11 +395,11 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `PUT /api/mail/domains/{id}/catch-all` — one active address on the
+/// `PUT /api/v1/mail/domains/{id}/catch-all` — one active address on the
 /// domain that takes mail for unknown names on it, or none.
 #[utoipa::path(
     put,
-    path = "/api/mail/domains/{id}/catch-all",
+    path = "/api/v1/mail/domains/{id}/catch-all",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -446,19 +446,19 @@ pub struct CreatedAddress {
     pub address: String,
     /// An address the account held before, back with its keys and key
     /// list, disabled: the client enables it with the chain's next list
-    /// (`PUT /api/mail/addresses/{id}/enable`), never a first key.
+    /// (`PUT /api/v1/mail/addresses/{id}/enable`), never a first key.
     pub continues: bool,
 }
 
-/// `POST /api/mail/domains/addresses` — a new address on one of the
+/// `POST /api/v1/mail/domains/addresses` — a new address on one of the
 /// caller's verified domains, within its address limit (every address
 /// counts, the username's included). A new one has no key yet: the client
-/// makes one and adds it (`POST /api/mail/addresses/{id}/keys`), as for any
+/// makes one and adds it (`POST /api/v1/mail/addresses/{id}/keys`), as for any
 /// address; one the account held before comes back with its chain
 /// (`continues`).
 #[utoipa::path(
     post,
-    path = "/api/mail/domains/addresses",
+    path = "/api/v1/mail/domains/addresses",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = NewAddress,

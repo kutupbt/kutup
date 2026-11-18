@@ -63,7 +63,7 @@ import { acceptGroupKeys, AddressDisabled, addressKeys, forgetKeys, groupMembers
 import { randomBytes } from '@kutup/crypto/random'
 import { asIdentityRoot } from '@kutup/crypto/accountRoots.testing'
 
-/** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
+/** What `GET /api/v1/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
 async function lookupOf(master: string, binding: string, address: string, listed = address, flags: number = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete) {
   const key = await generateMailAddressKey(firstMasterKeys(fromBase64(master)), binding, address)
   const list = await signMailKeyList(asIdentityRoot(master), {

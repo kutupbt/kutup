@@ -186,7 +186,7 @@ function WhiteboardEditorBase(
   // upstream Excalidraw's status-driven flow:
   //   1. Image element appears with status "pending" + binary in
   //      appState.files. We encrypt the binary client-side and PUT it to
-  //      /api/files/:fileId/assets/:assetId, then flip the element's
+  //      /api/v1/drive/files/:fileId/assets/:assetId, then flip the element's
   //      status to "saved" via updateScene.
   //   2. The status flip bumps versionNonce → broadcasts via the normal
   //      EXCALIDRAW_OP channel.

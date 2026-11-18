@@ -93,7 +93,7 @@
           ;[
             'dist/x2t/x2t.js',
             'dist/x2t/x2t.wasm',
-            'dist/v9/web-apps/apps/api/documents/api.js',
+            'dist/v9/web-apps/apps/api/v1/documents/api.js',
             'dist/v9/sdkjs/' + sdk + '/sdk-all-min.js',
             'dist/v9/sdkjs/' + sdk + '/sdk-all.js',
           ].forEach(function (path) {
@@ -917,7 +917,7 @@
           // x2t and PDF paths it loads while the file converts (only the
           // template path keeps the order, as templates are read through a
           // global define() shim). docs/research/18-web-performance.md.
-          var API_JS = '/onlyoffice/dist/v9/web-apps/apps/api/documents/api.js'
+          var API_JS = '/onlyoffice/dist/v9/web-apps/apps/api/v1/documents/api.js'
           var apiReady = null
           if (t.native || useExisting) {
             apiReady = loadScript(API_JS)

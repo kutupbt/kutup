@@ -114,10 +114,10 @@ async fn identity(
     })
 }
 
-/// `GET /api/mail/identity` — the account address's display name and signature.
+/// `GET /api/v1/mail/identity` — the account address's display name and signature.
 #[utoipa::path(
     get,
-    path = "/api/mail/identity",
+    path = "/api/v1/mail/identity",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(IdentityQuery),
@@ -141,10 +141,10 @@ pub struct UpdateMailIdentity {
     pub signature: Option<String>,
 }
 
-/// `PATCH /api/mail/identity`.
+/// `PATCH /api/v1/mail/identity`.
 #[utoipa::path(
     patch,
-    path = "/api/mail/identity",
+    path = "/api/v1/mail/identity",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(IdentityQuery),

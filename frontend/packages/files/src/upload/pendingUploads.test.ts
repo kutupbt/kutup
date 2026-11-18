@@ -5,7 +5,7 @@ import { PENDING_UPLOAD_LIFETIME_MS, pendingUploads, type PendingUpload } from '
 
 function upload(fileId: string, owner: string, startedAt: number, updatedAt = startedAt): PendingUpload {
   return {
-    fileId, owner, uploadUrl: `https://drive.test/api/uploads/${fileId}`, size: 10, lastModified: 1,
+    fileId, owner, uploadUrl: `https://drive.test/api/v1/drive/uploads/${fileId}`, size: 10, lastModified: 1,
     collectionId: 'c', keyEpoch: 1, fileKeyEnvelope: 'k', revisionId: 'r', draftEnvelope: 'd', startedAt, updatedAt,
   }
 }

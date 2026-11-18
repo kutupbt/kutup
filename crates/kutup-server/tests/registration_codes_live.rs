@@ -20,7 +20,7 @@ struct Admin<'a> {
 impl Admin<'_> {
     fn set_mode(&self, mode: &str) {
         let r = bearer(
-            self.c.put(format!("{}/api/admin/settings", self.base)),
+            self.c.put(format!("{}/api/v1/admin/settings", self.base)),
             &self.token,
         )
         .json(&json!({ "registrationMode": mode }))
@@ -29,7 +29,7 @@ impl Admin<'_> {
         assert_eq!(r.status(), StatusCode::OK, "set mode {mode}");
         let settings: Value = self
             .c
-            .get(format!("{}/api/auth/settings", self.base))
+            .get(format!("{}/api/v1/auth/settings", self.base))
             .send()
             .unwrap()
             .json()
@@ -40,7 +40,7 @@ impl Admin<'_> {
     fn make(&self, body: Value) -> Value {
         let r = bearer(
             self.c
-                .post(format!("{}/api/admin/registration-codes", self.base)),
+                .post(format!("{}/api/v1/admin/registration-codes", self.base)),
             &self.token,
         )
         .json(&body)
@@ -53,7 +53,7 @@ impl Admin<'_> {
     fn list(&self) -> Vec<Value> {
         bearer(
             self.c
-                .get(format!("{}/api/admin/registration-codes", self.base)),
+                .get(format!("{}/api/v1/admin/registration-codes", self.base)),
             &self.token,
         )
         .send()
@@ -76,7 +76,9 @@ struct ModeOn<'a>(&'a Admin<'a>);
 impl Drop for ModeOn<'_> {
     fn drop(&mut self) {
         let _ = bearer(
-            self.0.c.put(format!("{}/api/admin/settings", self.0.base)),
+            self.0
+                .c
+                .put(format!("{}/api/v1/admin/settings", self.0.base)),
             &self.0.token,
         )
         .json(&json!({ "registrationMode": "on" }))
@@ -93,7 +95,7 @@ fn refused(result: Result<User, (StatusCode, Value)>) -> (StatusCode, String) {
 
 fn check(c: &Client, base: &str, code: &str) -> (StatusCode, Value) {
     let r = c
-        .post(format!("{base}/api/auth/registration-code/check"))
+        .post(format!("{base}/api/v1/auth/registration-code/check"))
         .json(&json!({ "code": code }))
         .send()
         .unwrap();
@@ -178,7 +180,7 @@ fn registration_modes_and_codes() {
     );
     // Who signed up with it, both ways.
     let uses: Vec<Value> = bearer(
-        c.get(format!("{base}/api/admin/registration-codes/{id}/uses")),
+        c.get(format!("{base}/api/v1/admin/registration-codes/{id}/uses")),
         &admin.token,
     )
     .send()
@@ -189,7 +191,7 @@ fn registration_modes_and_codes() {
     assert_eq!(uses[0]["username"], first.username.as_str());
     let signed_up: Value = bearer(
         c.get(format!(
-            "{base}/api/admin/users/{}/registration-code",
+            "{base}/api/v1/admin/accounts/{}/registration-code",
             first.id
         )),
         &admin.token,
@@ -223,7 +225,7 @@ fn registration_modes_and_codes() {
     let revoke = || {
         bearer(
             c.post(format!(
-                "{base}/api/admin/registration-codes/{many_id}/revoke"
+                "{base}/api/v1/admin/registration-codes/{many_id}/revoke"
             )),
             &admin.token,
         )
@@ -242,7 +244,7 @@ fn registration_modes_and_codes() {
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap();
     let r = bearer(
-        c.post(format!("{base}/api/admin/registration-codes")),
+        c.post(format!("{base}/api/v1/admin/registration-codes")),
         &admin.token,
     )
     .json(&json!({ "expiresAt": past }))
@@ -274,7 +276,7 @@ fn registration_modes_and_codes() {
         json!({ "note": "x".repeat(201) }),
     ] {
         let r = bearer(
-            c.post(format!("{base}/api/admin/registration-codes")),
+            c.post(format!("{base}/api/v1/admin/registration-codes")),
             &admin.token,
         )
         .json(&body)
@@ -292,7 +294,7 @@ fn registration_modes_and_codes() {
     assert_eq!(admin.row(open["id"].as_str().unwrap())["uses"], 1);
     let signed_up: Value = bearer(
         c.get(format!(
-            "{base}/api/admin/users/{}/registration-code",
+            "{base}/api/v1/admin/accounts/{}/registration-code",
             recorded.id
         )),
         &admin.token,
@@ -309,7 +311,7 @@ fn registration_modes_and_codes() {
 
     // The audit log names the codes by hint, never the code.
     let activity: Value = bearer(
-        c.get(format!("{base}/api/admin/activity?limit=200")),
+        c.get(format!("{base}/api/v1/admin/activity?limit=200")),
         &admin.token,
     )
     .send()

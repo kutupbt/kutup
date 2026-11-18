@@ -1,4 +1,4 @@
-//! `GET /api/user/storage`: what the caller's one storage pool holds, by app
+//! `GET /api/v1/account/storage`: what the caller's one storage pool holds, by app
 //! and by kind of stored bytes (docs/api.md). Sizes are the bytes the server
 //! stores and charges, all ciphertext; what the files are (images, documents,
 //! …) only the browser can tell, from the names it decrypts.
@@ -88,7 +88,7 @@ pub struct ChatUsage {
 
 #[utoipa::path(
     get,
-    path = "/api/user/storage",
+    path = "/api/v1/account/storage",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's storage, by app", body = StorageUsageResponse))
@@ -199,11 +199,11 @@ pub struct VersionAge {
     pub count: i64,
 }
 
-/// `GET /api/user/storage/versions` — what "Delete versions older than…"
+/// `GET /api/v1/account/storage/versions` — what "Delete versions older than…"
 /// would free, so the browser can show it for any age before asking.
 #[utoipa::path(
     get,
-    path = "/api/user/storage/versions",
+    path = "/api/v1/account/storage/versions",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Deletable versions by age", body = [VersionAge]))
@@ -260,13 +260,13 @@ pub struct PruneVersionsResponse {
 /// At most this many versions go per request, so one call stays short.
 const PRUNE_BATCH: i64 = 500;
 
-/// `POST /api/user/storage/versions/prune` — deletes for good the earlier
+/// `POST /api/v1/account/storage/versions/prune` — deletes for good the earlier
 /// versions the caller saved more than `olderThanDays` ago, never a file's
 /// newest, and kept-forever ones only when asked. In batches: repeat while
 /// `more`.
 #[utoipa::path(
     post,
-    path = "/api/user/storage/versions/prune",
+    path = "/api/v1/account/storage/versions/prune",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = PruneVersionsRequest,

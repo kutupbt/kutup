@@ -214,10 +214,10 @@ export type SettingUnit = 'bytes' | 'count' | 'seconds' | 'days'
 /** Where a value in effect comes from. */
 export type ValueSource = 'account' | 'site' | 'default'
 
-/** One whole-number setting, as `GET /api/admin/settings/registry` lists it. */
+/** One whole-number setting, as `GET /api/v1/admin/settings/registry` lists it. */
 export interface RegistrySetting {
   key: string
-  /** Its field in `/api/admin/settings`. */
+  /** Its field in `/api/v1/admin/settings`. */
   field: keyof AdminSettings
   section: SettingSection
   unit: SettingUnit
@@ -259,7 +259,7 @@ export interface AccountRateLimitLimit {
   max: number
 }
 
-/** `GET /api/admin/users/{id}/limits`. */
+/** `GET /api/v1/admin/accounts/{id}/entitlements`. */
 export interface AccountLimits {
   settings: AccountSettingLimit[]
   rateLimits: AccountRateLimitLimit[]

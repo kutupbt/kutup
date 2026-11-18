@@ -1,5 +1,5 @@
 // Drive's streaming limits (docs/plans/drive-block-format.md §7): site
-// settings an administrator sets, read from `GET /api/drive/limits` once
+// settings an administrator sets, read from `GET /api/v1/drive/limits` once
 // per page. A public link's page has no session, so it uses the defaults.
 
 import api from '@kutup/session/client'

@@ -91,7 +91,7 @@ test('tracker protection: trackers blocked, links cleaned, images through the pr
   // stays out, with nothing offering to load it directly.
   const proxiedUrls: string[] = []
   // The address goes in the body, never in the URL.
-  const asked = (r: Request) => (new URL(r.url()).pathname === '/api/mail/images' && r.method() === 'POST' ? ((r.postDataJSON() as { url?: string }).url ?? '') : null)
+  const asked = (r: Request) => (new URL(r.url()).pathname === '/api/v1/mail/images' && r.method() === 'POST' ? ((r.postDataJSON() as { url?: string }).url ?? '') : null)
   mail.on('request', (r) => {
     const url = asked(r)
     if (url !== null) proxiedUrls.push(url)

@@ -44,7 +44,7 @@ impl Keyring {
     ) -> Result<Keyring> {
         Self::load_from(
             client,
-            &format!("/collections/{}/epochs", col.id),
+            &format!("/drive/collections/{}/epochs", col.id),
             &col.id,
             &col.owner_account_id,
             col.key_epoch,

@@ -130,7 +130,7 @@ export interface DriveBlockSource {
 /** A Chat attachment (docs/chat-media.md): opened against its E2EE descriptor. */
 export interface ChatMediaBlockSource {
   family: 'chatMedia'
-  /** `/api/chat/media/objects/{attachmentId}` on the account's own server, answered with Range. */
+  /** `/api/v1/chat/media/objects/{attachmentId}` on the account's own server, answered with Range. */
   url: string
   attachmentKey: Uint8Array
   attachmentId: string

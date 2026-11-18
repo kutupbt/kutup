@@ -9,7 +9,7 @@
 //   1. A multi-PATCH upload completes — exercises the PATCH loop, not just
 //      the single-shot path.
 //   2. The file appears in the Drive list under its original name.
-//   3. The bounded-memory multipart fallback (/api/files/upload) is not
+//   3. The bounded-memory multipart fallback (/api/v1/drive/files) is not
 //      used for an ordinary upload.
 
 import { expect, test } from '../fixtures/test'
@@ -34,7 +34,7 @@ test('uploads a 20 MiB file via the tus endpoint and lands it in Drive', async (
   page.on('request', (request) => {
     const { pathname } = new URL(request.url())
     if (request.method() === 'POST' && /^\/api\/uploads\/?$/.test(pathname)) tusPosts.push(pathname)
-    if (request.method() === 'POST' && pathname === '/api/files/upload') multipart.push(pathname)
+    if (request.method() === 'POST' && pathname === '/api/v1/drive/files') multipart.push(pathname)
   })
   page.on('response', (response) => {
     const { pathname } = new URL(response.url())

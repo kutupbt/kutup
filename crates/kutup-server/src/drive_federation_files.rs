@@ -134,13 +134,13 @@ pub struct IncomingFileShareNow {
 
 // ------------------------------------------------------------- owner's side
 
-/// `POST /api/files/{id}/federated-shares` — share one of your files with
+/// `POST /api/v1/drive/files/{id}/federated-shares` — share one of your files with
 /// someone on another server. Returns an invite link (the capability only in
 /// its fragment); only its hash is kept.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/federated-shares",
-    tag = "drive federation",
+    path = "/api/v1/drive/files/{id}/federated-shares",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = CreateFederatedFileShareRequest,
@@ -346,7 +346,7 @@ macro_rules! signed_read {
 #[utoipa::path(
     get,
     path = "/api/fed/drive/file-invite",
-    tag = "drive federation",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized file invite", body = FileInviteResponse))
 )]
 pub async fn get_file_invite(
@@ -401,7 +401,7 @@ pub async fn get_file_invite(
 #[utoipa::path(
     get,
     path = "/api/fed/drive/file-content",
-    tag = "drive federation",
+    tag = "drive.federation",
     params(
         ("range" = Option<String>, Query, description = "One range: `a-b`, `a-` or `-k`"),
         ("ifRange" = Option<String>, Query, description = "The ETag the range is of")
@@ -496,7 +496,7 @@ pub async fn get_file_content(
 #[utoipa::path(
     get,
     path = "/api/fed/drive/file-state",
-    tag = "drive federation",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed saved state", body = FileStateResponse))
 )]
 pub async fn get_file_state(
@@ -595,12 +595,12 @@ async fn local_incarnation(state: &AppState, user_id: Uuid) -> AppResult<String>
     .ok_or_else(|| AppError::unauthorized("unauthorized"))
 }
 
-/// `POST /api/drive/federation/file-shares` — accept a file invite from
+/// `POST /api/v1/drive/federation/file-shares` — accept a file invite from
 /// another server (its capability is kept here, never given to the browser).
 #[utoipa::path(
     post,
-    path = "/api/drive/federation/file-shares",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/file-shares",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     request_body = AcceptFederatedFileShareRequest,
     responses((status = 201, description = "Accepted", body = IncomingFileShare))
@@ -653,11 +653,11 @@ pub async fn accept_file_share(
     Ok((StatusCode::CREATED, Json(row)).into_response())
 }
 
-/// `GET /api/drive/federation/file-shares` — files accepted from other servers.
+/// `GET /api/v1/drive/federation/file-shares` — files accepted from other servers.
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/file-shares",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/file-shares",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Accepted files", body = Vec<IncomingFileShare>))
 )]
@@ -723,13 +723,13 @@ async fn incoming(state: &AppState, user: &AuthAccount, id: &str) -> AppResult<I
     })
 }
 
-/// `GET /api/drive/federation/file-shares/{id}` — the file as it is now on
+/// `GET /api/v1/drive/federation/file-shares/{id}` — the file as it is now on
 /// its owner's server, its key sealed to this account, checked. The owner
 /// must be the one first accepted.
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/file-shares/{id}",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/file-shares/{id}",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
     responses((status = 200, description = "The file now", body = IncomingFileShareNow), (status = 404, description = "No longer shared"))
@@ -776,12 +776,12 @@ pub async fn get_file_share(
     .into_response())
 }
 
-/// `GET /api/drive/federation/file-shares/{id}/content` — the file's content,
+/// `GET /api/v1/drive/federation/file-shares/{id}/content` — the file's content,
 /// relayed from its owner's server (still encrypted).
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/file-shares/{id}/content",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/file-shares/{id}/content",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
     responses(
@@ -814,12 +814,12 @@ pub async fn proxy_file_content(
     .await
 }
 
-/// `GET /api/drive/federation/file-shares/{id}/state` — a note's or place
+/// `GET /api/v1/drive/federation/file-shares/{id}/state` — a note's or place
 /// list's saved state, relayed. `404` when none.
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/file-shares/{id}/state",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/file-shares/{id}/state",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
     responses((status = 200, description = "The saved state", body = FileStateResponse))
@@ -859,12 +859,12 @@ pub async fn proxy_file_state(
         .into_response())
 }
 
-/// `DELETE /api/drive/federation/file-shares/{id}` — stop seeing a file
+/// `DELETE /api/v1/drive/federation/file-shares/{id}` — stop seeing a file
 /// shared from another server.
 #[utoipa::path(
     delete,
-    path = "/api/drive/federation/file-shares/{id}",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/file-shares/{id}",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
     responses((status = 204, description = "Removed"))
@@ -918,7 +918,7 @@ async fn saved_state(state: &AppState, file_id: Uuid) -> AppResult<FileStateResp
 #[utoipa::path(
     get,
     path = "/api/fed/drive/files/{fileId}/state",
-    tag = "drive federation",
+    tag = "drive.federation",
     params(("fileId" = String, Path)),
     responses((status = 200, description = "Signed saved state", body = FileStateResponse))
 )]
@@ -964,12 +964,12 @@ pub async fn get_folder_file_state(
     }
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/files/{fileId}/state` — a
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/state` — a
 /// note's or place list's saved state in a folder on another server, relayed.
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/files/{fileId}/state",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/state",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path), ("fileId" = String, Path)),
     responses((status = 200, description = "The saved state", body = FileStateResponse))

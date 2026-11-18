@@ -77,7 +77,7 @@ export function MailSendingCard({ accountId }: { accountId: string }) {
   const [editing, setEditing] = useState(false)
   const sender = useQuery({
     queryKey: [...sendersKey, 'one', accountId],
-    queryFn: async () => (await api.get<MailSender>(`/admin/users/${accountId}/mail-sending`)).data,
+    queryFn: async () => (await api.get<MailSender>(`/admin/accounts/${accountId}/mail-sending`)).data,
   })
   const update = useUpdateMailSending(() => setEditing(false))
   if (sender.isPending) return <Skeleton className="h-24 w-full" />

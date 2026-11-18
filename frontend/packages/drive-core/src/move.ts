@@ -47,7 +47,7 @@ export async function moveFile(from: Folder, listed: DriveFile, to: Folder): Pro
     // Proton's move recomputes ContentHash — but only while the one it has
     // stands (an editor's save clears it, and leaves the SHA-256 behind)
     // (docs/plans/drive-unique-names.md).
-    await api.post(`/files/${file.id}/move`, {
+    await api.post(`/drive/files/${file.id}/move`, {
       fromCollectionId: from.id,
       toCollectionId: to.id,
       toKeyEpoch: to.keyEpoch,

@@ -49,7 +49,7 @@ export interface CustomProvider {
   attribution: string
 }
 
-/** The administrator's settings (`PUT /api/admin/maps`). */
+/** The administrator's settings (`PUT /api/v1/admin/maps`). */
 export interface MapSettings {
   enabled: boolean
   providers: ProviderId[]
@@ -58,7 +58,7 @@ export interface MapSettings {
   cacheMegabytes: number
 }
 
-/** The settings as `GET /api/admin/maps` answers: with what the server was started with. */
+/** The settings as `GET /api/v1/admin/maps` answers: with what the server was started with. */
 export interface AdminMapSettings extends MapSettings {
   /** KUTUP_MAP_DIRECT_ORIGINS: the providers' origins browsers may load from directly. */
   directOrigins: string[]

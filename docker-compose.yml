@@ -305,7 +305,7 @@ services:
       - backend
       - frontend
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-check-certificate --quiet --output-document=/dev/null https://127.0.0.1/api/auth/settings"]
+      test: ["CMD-SHELL", "wget --no-check-certificate --quiet --output-document=/dev/null https://127.0.0.1/api/v1/auth/settings"]
       interval: 2s
       timeout: 5s
       retries: 30

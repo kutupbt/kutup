@@ -163,9 +163,9 @@ export function fileLocation(folder: Pick<Folder, 'source' | 'remoteShareId' | '
 export function contentPath(location: FileLocation, fileId: string): string {
   switch (location.kind) {
     case 'local':
-      return `/files/${fileId}/download`
+      return `/drive/files/${fileId}/download`
     case 'remoteFolder':
-      return `/drive/federation/shares/${location.shareId}/files/${fileId}/content`
+      return `/drive/federation/folder-shares/${location.shareId}/files/${fileId}/content`
     case 'remoteFile':
       return `/drive/federation/file-shares/${location.shareId}/content`
   }
@@ -178,9 +178,9 @@ export function contentPath(location: FileLocation, fileId: string): string {
 export function thumbnailPath(location: FileLocation, fileId: string, variant: 'sm' | 'lg'): string | null {
   switch (location.kind) {
     case 'local':
-      return `/files/${fileId}/thumbnails/${variant}`
+      return `/drive/files/${fileId}/thumbnails/${variant}`
     case 'remoteFolder':
-      return `/drive/federation/shares/${location.shareId}/files/${fileId}/thumbnails/${variant}`
+      return `/drive/federation/folder-shares/${location.shareId}/files/${fileId}/thumbnails/${variant}`
     case 'remoteFile':
       return null
   }
@@ -196,7 +196,7 @@ export function remoteStatePath(location: FileLocation, fileId: string): string 
     case 'local':
       return null
     case 'remoteFolder':
-      return `/drive/federation/shares/${location.shareId}/files/${fileId}/state`
+      return `/drive/federation/folder-shares/${location.shareId}/files/${fileId}/state`
     case 'remoteFile':
       return `/drive/federation/file-shares/${location.shareId}/state`
   }
@@ -204,15 +204,15 @@ export function remoteStatePath(location: FileLocation, fileId: string): string 
 
 /**
  * Where a file's live-editing calls go, under the API (versions, the seed,
- * the socket): `/files/:id` here; a file on another server through this
+ * the socket): `/drive/files/:id` here; a file on another server through this
  * server's routes for it (docs/plans/collab-federation.md).
  */
 export function collabBase(location: FileLocation, fileId: string): string {
   switch (location.kind) {
     case 'local':
-      return `/files/${fileId}`
+      return `/drive/files/${fileId}`
     case 'remoteFolder':
-      return `/drive/federation/shares/${location.shareId}/files/${fileId}`
+      return `/drive/federation/folder-shares/${location.shareId}/files/${fileId}`
     case 'remoteFile':
       return `/drive/federation/file-shares/${location.shareId}`
   }

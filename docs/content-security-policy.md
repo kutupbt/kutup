@@ -138,7 +138,7 @@ attributes in markup.
 
 ### Mail's remote images
 
-Remote images load through the Kutup image proxy (`POST /api/mail/images`,
+Remote images load through the Kutup image proxy (`POST /api/v1/mail/images`,
 shown as `blob:` URLs) or not at all; Mail's policy has no `https:` in
 `img-src`. Tracker protection, when on, also counts and never asks for
 known tracking pixels and cleans links; turning it off no longer makes the
@@ -147,7 +147,7 @@ browser load images from the sender.
 ### Maps
 
 By default every map comes through the server's relay
-(`/api/maps/proxy/…`, on the app's own origin). `KUTUP_MAP_DIRECT_ORIGINS`
+(`/api/v1/maps/proxy/…`, on the app's own origin). `KUTUP_MAP_DIRECT_ORIGINS`
 (comma-separated origins, e.g.
 `https://tile.openstreetmap.org,https://tiles.openfreemap.org`), given to
 both the backend and the frontend container, lists the providers browsers

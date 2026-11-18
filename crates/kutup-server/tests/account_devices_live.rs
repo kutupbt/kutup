@@ -127,7 +127,7 @@ fn publish(
 ) -> (StatusCode, Value) {
     let answer = code(
         live.c
-            .post(format!("{}/api/chat/manifest", live.base))
+            .post(format!("{}/api/v1/chat/manifest", live.base))
             .bearer_auth(&account.token)
             .header(DEVICE_HEADER, by)
             .json(manifest)
@@ -154,9 +154,9 @@ fn an_editor_credential_opens_no_chat_route() {
     let (editor, credential) = live.editor(&ada, 2);
     let as_editor = header(2, &credential);
     for (method, path) in [
-        ("POST", "/api/chat/keys/check"),
-        ("POST", "/api/chat/link-tokens"),
-        ("GET", "/api/chat/messages?deviceId=2"),
+        ("POST", "/api/v1/chat/keys/check"),
+        ("POST", "/api/v1/chat/link-tokens"),
+        ("GET", "/api/v1/chat/messages?deviceId=2"),
     ] {
         let request = match method {
             "POST" => live.c.post(format!("{}{path}", live.base)),
@@ -374,7 +374,7 @@ fn stale_unlisted_rows_hold_no_place_under_the_cap() {
             .to_array::<32>();
         code(
             live.c
-                .post(format!("{}/api/devices", live.base))
+                .post(format!("{}/api/v1/account/devices", live.base))
                 .bearer_auth(&ada.token)
                 .json(&json!({
                     "kind": "editor",
@@ -433,7 +433,7 @@ fn a_sign_in_alone_only_removes_devices() {
     let without = |ada: &mut ChatAccount, manifest: &AccountManifestV3| {
         let answer = code(
             live.c
-                .post(format!("{}/api/chat/manifest", live.base))
+                .post(format!("{}/api/v1/chat/manifest", live.base))
                 .bearer_auth(&ada.token)
                 .json(manifest)
                 .send()

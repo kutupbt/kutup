@@ -371,12 +371,12 @@ pub(crate) fn canonical_profile_version(value: &str) -> bool {
     hex::decode(value).is_ok_and(|decoded| decoded.len() == 32 && hex::encode(decoded) == value)
 }
 
-/// `POST /api/chat/device` — register this client as a chat device. The server assigns
+/// `POST /api/v1/chat/devices` — register this client as a chat device. The server assigns
 /// the lowest free device id while enforcing the configured 1..=10 active
 /// device limit.
 #[utoipa::path(
     post,
-    path = "/api/chat/device",
+    path = "/api/v1/chat/devices",
     tag = "chat",
     operation_id = "registerChatDevice",
     request_body = RegisterChatDeviceRequestV2,
@@ -862,7 +862,7 @@ pub(crate) async fn store_manifest(
     Ok(true)
 }
 
-/// `POST /api/chat/manifest` — publish the account's next signed device set
+/// `POST /api/v1/chat/manifest` — publish the account's next signed device set
 /// (device-authenticated). The identity is the account's; every listed
 /// device is a live registered row with its listed registration id and
 /// suite; rows the authority didn't list are deleted in the same
@@ -870,7 +870,7 @@ pub(crate) async fn store_manifest(
 /// server-injected row never becomes a listed device.
 #[utoipa::path(
     post,
-    path = "/api/chat/manifest",
+    path = "/api/v1/chat/manifest",
     tag = "chat",
     operation_id = "publishChatAccountManifestV3",
     request_body = AccountManifestV3,
@@ -1000,12 +1000,12 @@ pub async fn publish_manifest(
     Ok(Json(AccountManifestPublicationV3 { manifest }).into_response())
 }
 
-/// `GET /api/chat/accounts/{accountId}/manifest?server=` — fetch an
+/// `GET /api/v1/chat/accounts/{accountId}/manifest?server=` — fetch an
 /// account's latest signed device manifest without consuming any one-time
 /// prekeys.
 #[utoipa::path(
     get,
-    path = "/api/chat/accounts/{accountId}/manifest",
+    path = "/api/v1/chat/accounts/{accountId}/manifest",
     tag = "chat",
     operation_id = "getChatAccountManifestV3",
     params(
@@ -1175,12 +1175,12 @@ pub async fn get_manifest_history(
     Ok(Json(page).into_response())
 }
 
-/// `PUT /api/chat/profile` — replace the caller's current opaque encrypted
+/// `PUT /api/v1/chat/profile` — replace the caller's current opaque encrypted
 /// profile. Revision/source-device ordering makes concurrent linked-device
 /// writes deterministic; an exact replay is idempotent.
 #[utoipa::path(
     put,
-    path = "/api/chat/profile",
+    path = "/api/v1/chat/profile",
     tag = "chat",
     operation_id = "putChatProfile",
     request_body = PutChatProfileRequest,
@@ -1319,11 +1319,11 @@ pub async fn put_profile(
     Ok(Json(profile).into_response())
 }
 
-/// `GET /api/chat/profile` — owner-only linked-device recovery of the current
+/// `GET /api/v1/chat/profile` — owner-only linked-device recovery of the current
 /// encrypted profile and master-key-wrapped random profile key.
 #[utoipa::path(
     get,
-    path = "/api/chat/profile",
+    path = "/api/v1/chat/profile",
     tag = "chat",
     operation_id = "getOwnChatProfile",
     responses(
@@ -1345,12 +1345,12 @@ pub async fn get_own_profile(
     Ok(Json(profile).into_response())
 }
 
-/// `GET /api/chat/accounts/{accountId}/profile/{version}?server=` — fetch a
+/// `GET /api/v1/chat/accounts/{accountId}/profile/{version}?server=` — fetch a
 /// capability-gated local or federated encrypted peer profile. The access
 /// key is carried in a header so it does not enter URL logs.
 #[utoipa::path(
     get,
-    path = "/api/chat/accounts/{accountId}/profile/{version}",
+    path = "/api/v1/chat/accounts/{accountId}/profile/{version}",
     tag = "chat",
     operation_id = "getChatProfile",
     params(
@@ -1587,12 +1587,12 @@ async fn insert_kem_pool(
     Ok(())
 }
 
-/// `GET /api/chat/device` — the account's Chat devices: those its manifest
+/// `GET /api/v1/chat/devices` — the account's Chat devices: those its manifest
 /// lists with Chat keys (a registration not listed yet, waiting out the
 /// listing grace, isn't one).
 #[utoipa::path(
     get,
-    path = "/api/chat/device",
+    path = "/api/v1/chat/devices",
     tag = "chat",
     operation_id = "listChatDevices",
     responses((status = 200, description = "Devices", body = serde_json::Value)),
@@ -1635,12 +1635,12 @@ pub async fn list_devices(State(state): State<AppState>, auth: AuthAccount) -> A
     Ok(Json(json!({ "devices": devices })).into_response())
 }
 
-/// `PATCH /api/chat/device/{deviceId}` — rename one of the caller's Chat
+/// `PATCH /api/v1/chat/devices/{deviceId}` — rename one of the caller's Chat
 /// installations. The label is account-private metadata and has no effect on
 /// the installation's cryptographic identity.
 #[utoipa::path(
     patch,
-    path = "/api/chat/device/{deviceId}",
+    path = "/api/v1/chat/devices/{deviceId}",
     tag = "chat",
     operation_id = "renameChatDevice",
     params(("deviceId" = u32, Path, description = "Chat device id")),
@@ -1679,12 +1679,12 @@ pub async fn rename_device(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/chat/device/{deviceId}` — revoke a chat device. Hard-deletes the
+/// `DELETE /api/v1/chat/devices/{deviceId}` — revoke a chat device. Hard-deletes the
 /// directory entry; cascades wipe its prekey pools and mailbox, and any live sockets
 /// are closed.
 #[utoipa::path(
     delete,
-    path = "/api/chat/device/{deviceId}",
+    path = "/api/v1/chat/devices/{deviceId}",
     tag = "chat",
     operation_id = "revokeChatDevice",
     params(("deviceId" = u32, Path, description = "Chat device id")),
@@ -1775,11 +1775,11 @@ async fn require_device(
         .await
 }
 
-/// `PUT /api/chat/keys?deviceId=N` — rotate the signed prekey / last-resort Kyber
+/// `PUT /api/v1/chat/keys?deviceId=N` — rotate the signed prekey / last-resort Kyber
 /// prekey and/or upload more one-time prekeys.
 #[utoipa::path(
     put,
-    path = "/api/chat/keys",
+    path = "/api/v1/chat/keys",
     tag = "chat",
     operation_id = "replenishChatKeys",
     params(("deviceId" = u32, Query, description = "Chat device id")),
@@ -1873,11 +1873,11 @@ pub async fn replenish_keys(
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
-/// `GET /api/chat/keys/count?deviceId=N` — remaining one-time pool sizes (clients
+/// `GET /api/v1/chat/keys/count?deviceId=N` — remaining one-time pool sizes (clients
 /// replenish below a threshold).
 #[utoipa::path(
     get,
-    path = "/api/chat/keys/count",
+    path = "/api/v1/chat/keys/count",
     tag = "chat",
     operation_id = "chatKeysCount",
     params(("deviceId" = u32, Query, description = "Chat device id")),
@@ -1913,13 +1913,13 @@ pub async fn prekey_count(
     .into_response())
 }
 
-/// `GET /api/chat/accounts/{accountId}/keys?server=` — PQXDH prekey bundles for
+/// `GET /api/v1/chat/accounts/{accountId}/keys?server=` — PQXDH prekey bundles for
 /// every chat device of the account. Consumes one one-time EC and one one-time Kyber prekey per device
 /// (falling back to the last-resort Kyber prekey — a bundle is never non-PQ).
 /// Rate-limited (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) because fetches consume pool keys.
 #[utoipa::path(
     get,
-    path = "/api/chat/accounts/{accountId}/keys",
+    path = "/api/v1/chat/accounts/{accountId}/keys",
     tag = "chat",
     operation_id = "chatUserPreKeyBundles",
     params(
@@ -2256,13 +2256,13 @@ pub(crate) async fn load_user_bundles(
     })
 }
 
-/// `POST /api/chat/users/{username}/messages` — deliver one logical message as
+/// `POST /api/v1/chat/users/{username}/messages` — deliver one logical message as
 /// per-device ciphertexts. The device set must exactly match the recipient's current
 /// devices (ids and registration ids) or the send is rejected with a 409
 /// [`DeviceListMismatch`] so clients can't silently skip a device.
 #[utoipa::path(
     post,
-    path = "/api/chat/accounts/{accountId}/messages",
+    path = "/api/v1/chat/accounts/{accountId}/messages",
     tag = "chat",
     operation_id = "chatSendMessages",
     params(
@@ -2395,7 +2395,7 @@ pub async fn send_sealed_messages(
     }
 }
 
-/// `POST /api/chat/anonymous/messages/batch?server=`: several sealed sends
+/// `POST /api/v1/chat/anonymous/messages/batch?server=`: several sealed sends
 /// to accounts of one server in one cookie- and bearer-free request
 /// (docs/plans/pairwise-groups.md §1). Each recipient's capability is checked
 /// and counted on its own, and each gets its own result; for a remote server
@@ -2403,7 +2403,7 @@ pub async fn send_sealed_messages(
 /// batch.
 #[utoipa::path(
     post,
-    path = "/api/chat/anonymous/messages/batch",
+    path = "/api/v1/chat/anonymous/messages/batch",
     tag = "chat",
     params(("server" = Option<String>, Query, description = "The recipients' server; this one when absent")),
     request_body = kutup_chat_proto::SealedBatchSubmissionV1,
@@ -2890,13 +2890,13 @@ pub(crate) async fn push_sealed(state: &AppState, stored: Vec<(Uuid, i32, Delive
     }
 }
 
-/// `POST /api/chat/sync/messages` — deliver an encrypted sent transcript to
+/// `POST /api/v1/chat/sync/messages` — deliver an encrypted sent transcript to
 /// every other active device of the authenticated account. The sending device
 /// is excluded from the exact-set check; an empty set is valid for a
 /// single-device account.
 #[utoipa::path(
     post,
-    path = "/api/chat/sync/messages",
+    path = "/api/v1/chat/sync/messages",
     tag = "chat",
     operation_id = "chatSyncMessages",
     request_body = SendMessagesRequest,
@@ -3146,11 +3146,11 @@ pub struct DrainQuery {
     after: Option<i64>,
 }
 
-/// `GET /api/chat/messages?deviceId=N` — drain the device's mailbox (oldest first).
-/// Envelopes stay stored until acked via `POST /api/chat/messages/ack`.
+/// `GET /api/v1/chat/messages?deviceId=N` — drain the device's mailbox (oldest first).
+/// Envelopes stay stored until acked via `POST /api/v1/chat/messages/ack`.
 #[utoipa::path(
     get,
-    path = "/api/chat/messages",
+    path = "/api/v1/chat/messages",
     tag = "chat",
     operation_id = "chatDrainMailbox",
     params(
@@ -3310,10 +3310,10 @@ pub struct AckQuery {
     device_id: i32,
 }
 
-/// `POST /api/chat/messages/ack?deviceId=N` — delete processed envelopes.
+/// `POST /api/v1/chat/messages/ack?deviceId=N` — delete processed envelopes.
 #[utoipa::path(
     post,
-    path = "/api/chat/messages/ack",
+    path = "/api/v1/chat/messages/ack",
     tag = "chat",
     operation_id = "chatAckMessages",
     params(("deviceId" = u32, Query, description = "Chat device id")),
@@ -3364,13 +3364,13 @@ pub struct ChatWsQuery {
     device_id: Option<String>,
 }
 
-/// `GET /api/chat/ws` — authenticates, then upgrades. Pushes newly arrived envelopes to
+/// `GET /api/v1/chat/ws` — authenticates, then upgrades. Pushes newly arrived envelopes to
 /// this device; the mailbox remains the source of truth (clients ack over REST). Auth
 /// uses `Authorization: Bearer` for native clients or a single-use `?ticket=`
-/// minted by `POST /api/device-ticket` for browsers.
+/// minted by `POST /api/v1/account/devices/tickets` for browsers.
 #[utoipa::path(
     get,
-    path = "/api/chat/ws",
+    path = "/api/v1/chat/ws",
     tag = "chat",
     operation_id = "chatWs",
     params(

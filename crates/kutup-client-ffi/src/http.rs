@@ -108,7 +108,7 @@ impl ChatTransport for NativeTransport {
 
     async fn register_device(&self, request: &RegisterChatDeviceRequestV2) -> CoreResult<u32> {
         let response: RegisterChatDeviceResponse = self
-            .json(ChatHttpMethod::Post, "/chat/device".into(), Some(request))
+            .json(ChatHttpMethod::Post, "/chat/devices".into(), Some(request))
             .await?;
         Ok(response.device_id)
     }
@@ -137,7 +137,7 @@ impl ChatTransport for NativeTransport {
             session: String,
         }
         let response = self
-            .request(ChatHttpMethod::Get, "/device-session".into(), None)
+            .request(ChatHttpMethod::Get, "/account/devices/session".into(), None)
             .await?;
         ensure_success(&response)?;
         decode::<DeviceSession>(&response.body_json).map(|body| body.session)

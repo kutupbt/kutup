@@ -39,7 +39,7 @@ describe('what a note holds now', () => {
   it('is its newest Yjs state, a stray whole-file version passed over', async () => {
     mocks.listVersions.mockResolvedValue([version('stray', 'file'), version('y1', 'yjs')])
     mocks.get.mockImplementation((path: string) => {
-      expect(path).toBe('/files/f1/versions/y1/download')
+      expect(path).toBe('/drive/files/f1/versions/y1/download')
       return Promise.resolve({ data: noteState('hello').buffer })
     })
     const content = await currentContent(folder, file('notes.md'))

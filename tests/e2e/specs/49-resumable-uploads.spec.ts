@@ -85,7 +85,7 @@ test('an upload interrupted by a reload goes on and arrives byte for byte', asyn
 
   // Slow enough to reload in the middle.
   let slow = true
-  await context.route('**/api/uploads/**', async (route) => {
+  await context.route('**/api/v1/drive/uploads/**', async (route) => {
     if (slow && route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 1500))
     await route.continue()
   })
@@ -160,7 +160,7 @@ test('a multi-GB upload rides out a long loss of the connection and a reload', a
 /** PATCHes slowed down so a test can act in the middle of an upload. */
 async function slowUploads(context: BrowserContext) {
   const state = { slow: true }
-  await context.route('**/api/uploads/**', async (route) => {
+  await context.route('**/api/v1/drive/uploads/**', async (route) => {
     if (state.slow && route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 1500))
     await route.continue()
   })

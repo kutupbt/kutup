@@ -27,7 +27,7 @@ test('embedded images wait when turned off; metadata removal starts as set', asy
   const metadata = mail.getByRole('checkbox', { name: /Remove image metadata/ })
   await expect(embedded).toBeChecked({ timeout: 120_000 })
   await expect(metadata).toBeChecked()
-  const saved = () => mail.waitForResponse((r) => r.request().method() === 'PATCH' && new URL(r.url()).pathname === '/api/mail/settings' && r.ok())
+  const saved = () => mail.waitForResponse((r) => r.request().method() === 'PATCH' && new URL(r.url()).pathname === '/api/v1/mail/settings' && r.ok())
   let save = saved()
   await embedded.click()
   await save

@@ -9,7 +9,7 @@ import type { ListEntry } from './lists'
 
 /** The places a list was created with (its upload), for a list never saved. */
 export async function uploadedPlaces(file: DriveFile, folder?: Pick<Folder, 'source' | 'remoteShareId' | 'remoteFileShareId'>): Promise<Place[]> {
-  const path = folder ? contentPath(fileLocation(folder), file.id) : `/files/${file.id}/download`
+  const path = folder ? contentPath(fileLocation(folder), file.id) : `/drive/files/${file.id}/download`
   const { data } = await api.get<ArrayBuffer>(path, { responseType: 'arraybuffer' })
   // The file's own content, against what its metadata commits to.
   const opened = await currentContentOf(file)
@@ -42,7 +42,7 @@ export async function savedPlaces(file: DriveFile, folder?: Pick<Folder, 'source
   }
   const latest = (await listVersions(file.id))[0]
   if (!latest || latest.sizeBytes === 0) return uploadedPlaces(file)
-  const { data } = await api.get<ArrayBuffer>(`/files/${file.id}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
+  const { data } = await api.get<ArrayBuffer>(`/drive/files/${file.id}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
   const opened = await versionContentOf(file, latest)
   const state = await openDriveObject(new Uint8Array(data), opened.fileKey, opened.expected)
   return parseListJson(stateToListJson(state))

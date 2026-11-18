@@ -260,14 +260,14 @@ pub(crate) fn validate_manifest(manifest: &AccountManifestV3) -> AppResult<()> {
     Ok(())
 }
 
-/// `POST /api/chat/keys/check` (device-authenticated; Signal's
+/// `POST /api/v1/chat/keys/check` (device-authenticated; Signal's
 /// `/v2/keys/check`): whether the server holds what the device believes it
 /// holds for it (the account identity, its signed prekey and its last-resort
 /// key). `204` when they agree, `409 keysDiffer` when they don't (the device
 /// then uploads its keys again).
 #[utoipa::path(
     post,
-    path = "/api/chat/keys/check",
+    path = "/api/v1/chat/keys/check",
     tag = "chat",
     operation_id = "checkChatKeys",
     request_body = ChatKeysCheckRequest,
@@ -319,7 +319,7 @@ pub async fn check_keys(
     }
 }
 
-/// `PUT /api/chat/account-identity` (device-authenticated; Signal's
+/// `PUT /api/v1/chat/account-identity` (device-authenticated; Signal's
 /// `PhoneNumberIdentityKeyDistributionRequest`): a new account identity for
 /// every device the manifest keeps, in one transaction. The request names
 /// exactly the manifest's devices (`409` with the mismatch otherwise, and for
@@ -331,7 +331,7 @@ pub async fn check_keys(
 /// the account goes, and the devices upload new ones.
 #[utoipa::path(
     put,
-    path = "/api/chat/account-identity",
+    path = "/api/v1/chat/account-identity",
     tag = "chat",
     operation_id = "distributeChatAccountIdentity",
     request_body = AccountIdentityDistributionRequest,

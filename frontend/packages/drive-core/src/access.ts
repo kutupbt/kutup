@@ -72,7 +72,7 @@ function memberRef(me: DriveIdentity, member: AccessMember): AccountRef {
 }
 
 async function loadAccess(folderId: string): Promise<FolderAccess> {
-  return (await api.get<FolderAccess>(`/collections/${folderId}/access`)).data
+  return (await api.get<FolderAccess>(`/drive/collections/${folderId}/access`)).data
 }
 
 export function useFolderAccess(folder: Folder | undefined) {
@@ -125,7 +125,7 @@ interface RemoteRecipient {
  * belong to the account incarnation the folder was shared with.
  */
 async function remoteRecipient(f: AccessFederated): Promise<RemoteRecipient> {
-  const { data: remote } = await api.get<RemoteRecipient>(`/users/by-id/${encodeURIComponent(f.recipientAccountId)}`, {
+  const { data: remote } = await api.get<RemoteRecipient>(`/accounts/${encodeURIComponent(f.recipientAccountId)}`, {
     params: { server: f.recipientServer },
   })
   if (remote.server !== f.recipientServer || remote.accountId !== f.recipientAccountId) {
@@ -235,7 +235,7 @@ export async function rotateFolder(
 
   const more = sealMore ? await sealMore(key, next) : {}
   try {
-    await api.post(`/collections/${folder.id}/rotate`, {
+    await api.post(`/drive/collections/${folder.id}/rotate`, {
       ...more,
       fromEpoch: folder.keyEpoch,
       epochStatement,
@@ -282,7 +282,7 @@ export function useSetFolderPermissions() {
           recipient: memberRef(me, member),
           recipientIncarnationId: member.accountIncarnationId,
         })
-        await api.post(`/collections/${folder.id}/share`, {
+        await api.post(`/drive/collections/${folder.id}/share`, {
           recipientAccountId: member.accountId,
           namedShareEnvelope,
           canUpload,

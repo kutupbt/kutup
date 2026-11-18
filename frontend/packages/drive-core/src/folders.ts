@@ -187,8 +187,8 @@ function index(folders: Folder[]): FolderIndex {
 async function loadFolders(me: DriveIdentity): Promise<FolderIndex> {
   const fetchAll = async () => {
     const [{ data: rows }, { data: shares }] = await Promise.all([
-      api.get<CollectionRowWithTimes[]>('/collections'),
-      api.get<IncomingShare[]>('/drive/federation/shares'),
+      api.get<CollectionRowWithTimes[]>('/drive/collections'),
+      api.get<IncomingShare[]>('/drive/federation/folder-shares'),
     ])
     const local = await Promise.all(rows.map((row) => openRow(row, me)))
     const remote = (await Promise.all(shares.map((s) => openRemote(s, me)))).filter((f): f is Folder => f !== null)
@@ -199,7 +199,7 @@ async function loadFolders(me: DriveIdentity): Promise<FolderIndex> {
     // First visit: every account keeps its top-level files in one root folder.
     const created = await createOwnedCollectionV1(me, me.accountId, ROOT_NAME, null)
     try {
-      await api.post('/collections', { ...created.payload, ...(await nameFieldsIn(atTopLevel(me.roots), ROOT_NAME)) })
+      await api.post('/drive/collections', { ...created.payload, ...(await nameFieldsIn(atTopLevel(me.roots), ROOT_NAME)) })
     } catch (error) {
       // Another tab made it first: its name is taken at the top level.
       if (!(isAxiosError(error) && error.response?.status === 409)) throw error

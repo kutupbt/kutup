@@ -236,7 +236,7 @@ pub struct Config {
     /// Canonical base64 raw libsignal private key for the active online server
     /// certificate. This purpose-specific key issues only sender certificates.
     pub chat_sealed_sender_online_private_key: String,
-    /// Where each web app lives. Published by `/api/auth/settings` and enforced
+    /// Where each web app lives. Published by `/api/v1/auth/settings` and enforced
     /// for session forks (a fork for `web-drive` is only consumable from `drive`).
     pub apps: AppOrigins,
     /// The relying party id security keys are bound to

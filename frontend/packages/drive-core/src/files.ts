@@ -86,8 +86,8 @@ export async function loadFolderFiles(folder: Folder): Promise<DriveFile[]> {
   const location = folderLocation(folder)
   const { data } = await api.get<FileRowLike[]>(
     location.kind === 'local'
-      ? `/collections/${location.collectionId}/files`
-      : `/drive/federation/shares/${location.shareId}/files`,
+      ? `/drive/collections/${location.collectionId}/files`
+      : `/drive/federation/folder-shares/${location.shareId}/files`,
   )
   return Promise.all(data.map((row) => openRow(row, folder)))
 }
@@ -135,7 +135,7 @@ export function useFolderFiles(folder: Folder | undefined) {
       // the stored share up to date (docs/plans/drive-share-revocation.md).
       if (folder!.remoteShareId && files.some((f) => f.keyEpoch > folder!.keyEpoch)) {
         await api
-          .post(`/drive/federation/shares/${folder!.remoteShareId}/refresh`)
+          .post(`/drive/federation/folder-shares/${folder!.remoteShareId}/refresh`)
           .then(() => queryClient.invalidateQueries({ queryKey: foldersKey }))
           .catch(() => {})
       }

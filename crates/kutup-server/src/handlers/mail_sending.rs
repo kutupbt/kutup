@@ -37,11 +37,11 @@ pub struct MailSendingStatus {
     pub outside_allowed: bool,
 }
 
-/// `GET /api/mail/sending` — your limits on mail to outside addresses, and
+/// `GET /api/v1/mail/sending` — your limits on mail to outside addresses, and
 /// whether sending is paused.
 #[utoipa::path(
     get,
-    path = "/api/mail/sending",
+    path = "/api/v1/mail/sending",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your sending limits", body = MailSendingStatus))
@@ -112,12 +112,12 @@ struct SenderRow {
     flag_reason: Option<String>,
 }
 
-/// `GET /api/admin/mail/senders?attention=` — accounts that sent outside in
+/// `GET /api/v1/admin/mail/senders?attention=` — accounts that sent outside in
 /// the last week, or have limits, a pause or a flag: paused and flagged
 /// first, then by volume.
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/senders",
+    path = "/api/v1/admin/mail/senders",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(MailSendersQuery),
@@ -188,11 +188,11 @@ async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResul
     .await?)
 }
 
-/// `GET /api/admin/users/{id}/mail-sending` — one account's sending, even
+/// `GET /api/v1/admin/accounts/{id}/mail-sending` — one account's sending, even
 /// before it has sent anything.
 #[utoipa::path(
     get,
-    path = "/api/admin/users/{id}/mail-sending",
+    path = "/api/v1/admin/accounts/{id}/mail-sending",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -239,11 +239,11 @@ pub struct UpdateMailSending {
     pub clear_flag: Option<bool>,
 }
 
-/// `PUT /api/admin/users/{id}/mail-sending` — an account's limits, pause and
+/// `PUT /api/v1/admin/accounts/{id}/mail-sending` — an account's limits, pause and
 /// flag. Resuming clears the pause whatever set it.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}/mail-sending",
+    path = "/api/v1/admin/accounts/{id}/mail-sending",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -318,10 +318,10 @@ pub struct OutsideSendingPolicy {
     pub outside_sending: String,
 }
 
-/// `GET /api/admin/mail/outside-sending` — who may send outside Kutup.
+/// `GET /api/v1/admin/mail/outside-sending` — who may send outside Kutup.
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/outside-sending",
+    path = "/api/v1/admin/mail/outside-sending",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The policy", body = OutsideSendingPolicy))
@@ -338,11 +338,11 @@ pub async fn outside_sending(
     }))
 }
 
-/// `PUT /api/admin/mail/outside-sending` — sets it, at once and without a
+/// `PUT /api/v1/admin/mail/outside-sending` — sets it, at once and without a
 /// restart; recorded in the audit log.
 #[utoipa::path(
     put,
-    path = "/api/admin/mail/outside-sending",
+    path = "/api/v1/admin/mail/outside-sending",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = OutsideSendingPolicy,

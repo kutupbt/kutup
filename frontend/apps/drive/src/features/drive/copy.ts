@@ -123,7 +123,7 @@ export async function copyFolder(
 ): Promise<void> {
   signal.throwIfAborted()
   const created = await createOwnedCollectionV1(me, me.accountId, name, destParent.id)
-  await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(destParent), name) })
+  await api.post('/drive/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(destParent), name) })
   const copy = createdFolder(me, destParent, created, name)
   const files = (await loadFolderFiles(source)).filter((f) => f.fileKey && f.name)
   const taken: string[] = []

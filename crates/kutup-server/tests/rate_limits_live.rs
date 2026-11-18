@@ -23,7 +23,7 @@ impl Admin<'_> {
     fn put(&self, key: &str, value: Value) -> (StatusCode, Value) {
         let r = bearer(
             self.c
-                .put(format!("{}/api/admin/rate-limits/{key}", self.base)),
+                .put(format!("{}/api/v1/admin/rate-limits/{key}", self.base)),
             &self.token,
         )
         .json(&json!({ "value": value }))
@@ -35,7 +35,8 @@ impl Admin<'_> {
 
     fn listed(&self, key: &str) -> Value {
         let list: Value = bearer(
-            self.c.get(format!("{}/api/admin/rate-limits", self.base)),
+            self.c
+                .get(format!("{}/api/v1/admin/rate-limits", self.base)),
             &self.token,
         )
         .send()
@@ -64,7 +65,7 @@ impl Drop for Reset<'_> {
 fn check(c: &Client, base: &str, token: &str) -> StatusCode {
     bearer(
         c.get(format!(
-            "{base}/api/user/rename/check?name=free-{}",
+            "{base}/api/v1/account/rename/check?name=free-{}",
             &uuid()[..8]
         )),
         token,
@@ -135,16 +136,19 @@ fn administrators_set_rate_limits() {
 
     // Only administrators.
     let r = bearer(
-        c.put(format!("{base}/api/admin/rate-limits/{LIMIT}")),
+        c.put(format!("{base}/api/v1/admin/rate-limits/{LIMIT}")),
         &user.token,
     )
     .json(&json!({ "value": 1000 }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
-    let r = bearer(c.get(format!("{base}/api/admin/rate-limits")), &user.token)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.get(format!("{base}/api/v1/admin/rate-limits")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
 
     // A reset returns to the first value.
@@ -161,7 +165,7 @@ fn administrators_set_rate_limits() {
     let account_put = |key: &str, value: Value| {
         let r = bearer(
             c.put(format!(
-                "{base}/api/admin/users/{own_id}/limits/rate_limit.{key}"
+                "{base}/api/v1/admin/accounts/{own_id}/entitlements/rate_limit.{key}"
             )),
             &admin.token,
         )
@@ -174,7 +178,7 @@ fn administrators_set_rate_limits() {
     // An account can't set its own, even more generous, value.
     let r = bearer(
         c.put(format!(
-            "{base}/api/admin/users/{own_id}/limits/rate_limit.{LIMIT}"
+            "{base}/api/v1/admin/accounts/{own_id}/entitlements/rate_limit.{LIMIT}"
         )),
         &own.token,
     )
@@ -191,7 +195,9 @@ fn administrators_set_rate_limits() {
     assert_eq!(check(&c, &base, &own.token), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(check(&c, &base, &user.token), StatusCode::OK);
     let listed: Value = bearer(
-        c.get(format!("{base}/api/admin/users/{own_id}/limits")),
+        c.get(format!(
+            "{base}/api/v1/admin/accounts/{own_id}/entitlements"
+        )),
         &admin.token,
     )
     .send()
@@ -212,7 +218,7 @@ fn administrators_set_rate_limits() {
 
     // Audited.
     let activity: Value = bearer(
-        c.get(format!("{base}/api/admin/activity?limit=10")),
+        c.get(format!("{base}/api/v1/admin/activity?limit=10")),
         &admin.token,
     )
     .send()

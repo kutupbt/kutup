@@ -92,7 +92,7 @@ everything on one machine:
 - groups: `CHAT_GROUPS=true`, with federation and sealed sender on.
 
 JSON values need single quotes when the file is sourced by a shell.
-`GET /api/auth/settings` → `chat` shows what is advertised.
+`GET /api/v1/auth/settings` → `chat` shows what is advertised.
 
 ### Database migrations
 
@@ -149,7 +149,7 @@ are embedded at compile time, **rebuild** the server after adding one.
 ### OpenAPI
 
 The server generates its OpenAPI document with [`utoipa`](https://github.com/juhaku/utoipa)
-and serves the machine-readable JSON at `GET /api-docs/openapi.json`. Every HTTP
+and serves the machine-readable JSON at `GET /api/v1/openapi.json`. Every HTTP
 operation has a path annotation, and a coverage test keeps the generated route set aligned
 with the Axum router. An interactive Swagger UI is deferred (see `docs/roadmap.md`).
 
@@ -309,7 +309,7 @@ reverse proxy on port 80 routes by host name to each server's `PORT`:
   KUTUP_API_TARGET=http://localhost:3101 pnpm -C apps/photos dev` serves
   `http://photos.fa.localhost:5378`.
 - **Admission:** an admin of each server opens the feature to other servers
-  (Account → Admin → Federation, or `PUT /api/admin/federation` with
+  (Account → Admin → Federation, or `PUT /api/v1/admin/federation` with
   `{"globalEnabled": true, "feature": "drive", "mode": "open", "minimumTrust": "tofu"}`).
 
 ### Building for production
@@ -468,7 +468,7 @@ The sweep does **not** persist progress — a crash mid-run means rerunning from
 - All cryptographic operations go in `src/crypto/`. Components and pages must not call libsodium directly.
 - KDF (Argon2id) runs in `src/workers/kdf.worker.ts` to avoid blocking the main thread.
 - State management uses Redux Toolkit slices. Keep slices thin — business logic goes in thunks or service functions.
-- API calls go through `src/api/client.ts`, which handles token injection and refresh.
+- API calls go through `src/api/v1/client.ts`, which handles token injection and refresh.
 - Use semantic theme roles and the responsive ownership boundaries documented
   in [`frontend.md`](frontend.md). A viewport change must not remount services
   or trigger a mutation.

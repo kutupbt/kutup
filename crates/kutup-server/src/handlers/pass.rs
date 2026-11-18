@@ -47,11 +47,11 @@ pub struct VaultState {
     state: VaultSecretState,
 }
 
-/// `GET /api/pass/vault-states` — what has become of the vault of every key
+/// `GET /api/v1/pass/vault-states` — what has become of the vault of every key
 /// the account keeps (its `passSecrets` records), by file id.
 #[utoipa::path(
     get,
-    path = "/api/pass/vault-states",
+    path = "/api/v1/pass/vault-states",
     tag = "pass",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Each kept key's vault and its state", body = Vec<VaultState>))
@@ -182,10 +182,10 @@ fn refusal(status: StatusCode, error: &'static str, attempts_left: Option<i16>) 
         .into_response()
 }
 
-/// `GET /api/pass/pin` — whether the account has a PIN.
+/// `GET /api/v1/pass/pin` — whether the account has a PIN.
 #[utoipa::path(
     get,
-    path = "/api/pass/pin",
+    path = "/api/v1/pass/pin",
     tag = "pass",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Whether a PIN is set", body = PinStatus))
@@ -200,10 +200,10 @@ pub async fn pin_status(State(state): State<AppState>, user: AuthAccount) -> App
     Ok(Json(PinStatus { set }).into_response())
 }
 
-/// `PUT /api/pass/pin` — sets or changes the PIN, with the account password.
+/// `PUT /api/v1/pass/pin` — sets or changes the PIN, with the account password.
 #[utoipa::path(
     put,
-    path = "/api/pass/pin",
+    path = "/api/v1/pass/pin",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = SetPinRequest,
@@ -245,10 +245,10 @@ pub async fn set_pin(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/pass/pin` — removes the PIN, with the account password.
+/// `DELETE /api/v1/pass/pin` — removes the PIN, with the account password.
 #[utoipa::path(
     delete,
-    path = "/api/pass/pin",
+    path = "/api/v1/pass/pin",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = RemovePinRequest,
@@ -275,10 +275,10 @@ pub async fn remove_pin(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/pass/pin/verify` — checks the PIN.
+/// `POST /api/v1/pass/pin/verify` — checks the PIN.
 #[utoipa::path(
     post,
-    path = "/api/pass/pin/verify",
+    path = "/api/v1/pass/pin/verify",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = VerifyPinRequest,

@@ -248,13 +248,13 @@ fn device_answers(
     (missing, extra, stale)
 }
 
-/// `POST /api/chat/anonymous/messages/multi?server=` — one group message to
+/// `POST /api/v1/chat/anonymous/messages/multi?server=` — one group message to
 /// member accounts of one server, sent once (docs/plans/pairwise-groups.md,
 /// slice 2). Anonymous, as the other sealed routes. Another server's
 /// members: forwarded to it at once, its answer relayed as it is.
 #[utoipa::path(
     post,
-    path = "/api/chat/anonymous/messages/multi",
+    path = "/api/v1/chat/anonymous/messages/multi",
     tag = "chat",
     params(("server" = Option<String>, Query, description = "The recipients' server; this one when absent")),
     request_body = SealedMultiSubmissionV1,

@@ -57,7 +57,7 @@ const MAX_MULTIPART_FIELD_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 /// An account and its keys, as every identity lookup answers it, here or on
-/// its server (`/api/users/by-address`, `/api/users/by-id`, and the signed
+/// its server (`/api/v1/accounts/by-address`, `/api/v1/accounts/by-id`, and the signed
 /// federated lookups): one shape, so clients never tell local from remote.
 pub struct AccountLookupResponse {
     /// The name the account goes by now on `server`, server-asserted: a
@@ -453,7 +453,7 @@ fn stable_mutation_request_id(operation: &str, scope: &[&[u8]]) -> String {
 
 /// Local authenticated lookup of a remote Drive account through the pinned,
 /// signed federation transport.
-/// Another server's account by its name there (`GET /api/users/by-address`,
+/// Another server's account by its name there (`GET /api/v1/accounts/by-address`,
 /// the one place a name becomes an account: docs/plans/account-ids.md),
 /// asked of that server through federation. Each fetch counts against the
 /// caller's limit for that server.
@@ -526,8 +526,8 @@ pub(crate) async fn remote_user_by_name(
 /// inside a URL fragment. The plaintext capability is never stored locally.
 #[utoipa::path(
     post,
-    path = "/api/collections/{collectionId}/federated-shares",
-    tag = "drive federation",
+    path = "/api/v1/drive/collections/{collectionId}/federated-shares",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("collectionId" = String, Path, description = "Owned collection id")),
     request_body = CreateFederatedShareRequest,
@@ -661,7 +661,7 @@ pub async fn create_federated_share(
 #[utoipa::path(
     get,
     path = "/api/fed/drive/users/{username}",
-    tag = "drive federation",
+    tag = "drive.federation",
     params(("username" = String, Path)),
     responses((status = 200, description = "Signed local Drive account", body = AccountLookupResponse))
 )]
@@ -760,8 +760,8 @@ pub async fn get_user(
 /// the pinned remote identity and confirming the intended local username.
 #[utoipa::path(
     post,
-    path = "/api/drive/federation/shares",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     request_body = AcceptFederatedShareRequest,
     responses((status = 201, description = "Incoming federated share accepted", body = IncomingDriveShare))
@@ -969,7 +969,7 @@ async fn fetch_verified_invite(
     Ok(invite)
 }
 
-/// `POST /api/drive/federation/shares/{shareId}/refresh` — bring a share's
+/// `POST /api/v1/drive/federation/folder-shares/{shareId}/refresh` — bring a share's
 /// stored copy up to the owner's current folder key after a rotation
 /// (docs/plans/drive-share-revocation.md). The new epoch is accepted only
 /// from the same owner and folder, never older, and only if its signed
@@ -977,8 +977,8 @@ async fn fetch_verified_invite(
 /// answers `403`/`404` from the owner's server.
 #[utoipa::path(
     post,
-    path = "/api/drive/federation/shares/{shareId}/refresh",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/refresh",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 200, description = "The share, current", body = IncomingDriveShare))
@@ -1130,12 +1130,12 @@ pub async fn refresh_incoming_share(
     Ok(Json(refreshed).into_response())
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/epochs` — the remote folder's
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/epochs` — the remote folder's
 /// key history, relayed from its owner's server.
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/epochs",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/epochs",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 200, description = "Key history, oldest first", body = Vec<crate::handlers::folder_access::EpochLink>))
@@ -1177,8 +1177,8 @@ pub async fn proxy_list_epochs(
 
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(IncomingShareListQuery),
     responses((status = 200, description = "Incoming federated shares", body = Vec<IncomingDriveShare>))
@@ -1213,8 +1213,8 @@ pub async fn list_incoming_shares(
 
 #[utoipa::path(
     delete,
-    path = "/api/drive/federation/shares/{shareId}",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 204, description = "Incoming share removed"))
@@ -1259,8 +1259,8 @@ pub(crate) async fn incoming_share(
 
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/files",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 200, description = "Verified remote file list", body = Vec<FederatedDriveFile>))
@@ -1302,8 +1302,8 @@ pub async fn proxy_list_files(
 
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/files/{fileId}/content",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/content",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path), ("fileId" = String, Path)),
     responses(
@@ -1339,8 +1339,8 @@ pub async fn proxy_download(
 
 #[utoipa::path(
     post,
-    path = "/api/drive/federation/shares/{shareId}/files",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     request_body(content = Vec<u8>, content_type = "multipart/form-data"),
@@ -1443,8 +1443,8 @@ fn is_http_token_byte(byte: u8) -> bool {
 
 #[utoipa::path(
     delete,
-    path = "/api/drive/federation/shares/{shareId}/files/{fileId}",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path), ("fileId" = String, Path)),
     responses((status = 204, description = "Remote encrypted file deleted"))
@@ -1494,7 +1494,7 @@ pub async fn proxy_delete(
 #[utoipa::path(
     get,
     path = "/api/fed/drive/invite",
-    tag = "drive federation",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized invite", body = DriveInviteResponse))
 )]
 pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -1601,7 +1601,7 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
 #[utoipa::path(
     get,
     path = "/api/fed/drive/files",
-    tag = "drive federation",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized file list", body = Vec<FederatedDriveFile>))
 )]
 pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -1648,7 +1648,7 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Ap
 #[utoipa::path(
     get,
     path = "/api/fed/drive/epochs",
-    tag = "drive federation",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized key history", body = Vec<crate::handlers::folder_access::EpochLink>))
 )]
 pub async fn list_epochs(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -1682,7 +1682,7 @@ pub async fn list_epochs(State(state): State<AppState>, headers: HeaderMap) -> A
 #[utoipa::path(
     get,
     path = "/api/fed/drive/files/{fileId}/content",
-    tag = "drive federation",
+    tag = "drive.federation",
     params(
         ("fileId" = String, Path),
         ("range" = Option<String>, Query, description = "One range: `a-b`, `a-` or `-k`"),
@@ -1821,7 +1821,7 @@ pub async fn download_file(
 #[utoipa::path(
     post,
     path = "/api/fed/drive/files",
-    tag = "drive federation",
+    tag = "drive.federation",
     request_body(content = Vec<u8>, content_type = "multipart/form-data"),
     responses((status = 201, description = "Idempotent encrypted upload", body = FederatedDriveUploadResponse))
 )]
@@ -2066,7 +2066,7 @@ pub async fn upload_file(
 #[utoipa::path(
     delete,
     path = "/api/fed/drive/files/{fileId}",
-    tag = "drive federation",
+    tag = "drive.federation",
     params(("fileId" = String, Path)),
     responses((status = 204, description = "Idempotent encrypted file deletion"))
 )]

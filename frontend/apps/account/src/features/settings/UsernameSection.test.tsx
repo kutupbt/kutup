@@ -49,9 +49,9 @@ beforeEach(() => {
   names = [{ name: 'ada.l', state: 'current', receiveUntil: null, freeAt: null }]
   check = { available: true, needsKey: true }
   get.mockImplementation((path: string) => {
-    if (path === '/user/me') return Promise.resolve({ data: me })
-    if (path === '/user/names') return Promise.resolve({ data: names })
-    if (path === '/user/rename/check') return Promise.resolve({ data: check })
+    if (path === '/account') return Promise.resolve({ data: me })
+    if (path === '/account/names') return Promise.resolve({ data: names })
+    if (path === '/account/rename/check') return Promise.resolve({ data: check })
     return Promise.reject(new Error(`unexpected ${path}`))
   })
   accountGrant.mockResolvedValue('grant-1')
@@ -95,7 +95,7 @@ describe('the rename dialog', () => {
     show()
     const dialog = await openAndType('ada_l')
     await within(dialog).findByText('That is your username now.')
-    expect(get.mock.calls.some(([path]) => path === '/user/rename/check')).toBe(false)
+    expect(get.mock.calls.some(([path]) => path === '/account/rename/check')).toBe(false)
   })
 
   it('warns with the server windows, then sends the signed rename with the new address key', async () => {
@@ -112,7 +112,7 @@ describe('the rename dialog', () => {
     expect(accountGrant).toHaveBeenCalledWith('pw', 'rename')
     expect(firstAddressKey).toHaveBeenCalledWith(session, 'ada-lovelace@kutup.test')
     const [path, body] = post.mock.calls[0] as [string, Record<string, unknown>]
-    expect(path).toBe('/user/rename')
+    expect(path).toBe('/account/rename')
     expect(body).toMatchObject({
       grant: 'grant-1',
       rename: { sequence: 1, previous: 'ada.l@kutup.test', current: 'ada-lovelace@kutup.test' },
@@ -247,7 +247,7 @@ describe('the held names', () => {
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.change(within(dialog).getByLabelText(/Current password/), { target: { value: 'pw' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Stop receiving' }))
-    await waitFor(() => expect(del).toHaveBeenCalledWith('/user/names/ada.l', { data: { grant: 'grant-1' } }))
+    await waitFor(() => expect(del).toHaveBeenCalledWith('/account/names/ada.l', { data: { grant: 'grant-1' } }))
     expect(accountGrant).toHaveBeenCalledWith('pw', 'rename')
   })
 })

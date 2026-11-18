@@ -123,10 +123,10 @@ fn millis(at: OffsetDateTime) -> i64 {
     (at.unix_timestamp_nanos() / 1_000_000) as i64
 }
 
-/// `POST /api/live-locations` — open a stream.
+/// `POST /api/v1/chat/live-locations` — open a stream.
 #[utoipa::path(
     post,
-    path = "/api/live-locations",
+    path = "/api/v1/chat/live-locations",
     tag = "chat",
     security(("BearerAuth" = [])),
     request_body = CreateLiveLocationRequest,
@@ -179,11 +179,11 @@ pub async fn create(
     Ok(StatusCode::CREATED.into_response())
 }
 
-/// `PUT /api/live-locations/{streamId}` — replace the latest update. Needs
+/// `PUT /api/v1/chat/live-locations/{streamId}` — replace the latest update. Needs
 /// the write secret (`x-kutup-live-write`) and a counter above the stored one.
 #[utoipa::path(
     put,
-    path = "/api/live-locations/{streamId}",
+    path = "/api/v1/chat/live-locations/{streamId}",
     tag = "chat",
     security(("BearerAuth" = [])),
     params(("streamId" = String, Path)),
@@ -251,10 +251,10 @@ pub async fn write(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/live-locations/{streamId}` — end a stream now (write secret).
+/// `DELETE /api/v1/chat/live-locations/{streamId}` — end a stream now (write secret).
 #[utoipa::path(
     delete,
-    path = "/api/live-locations/{streamId}",
+    path = "/api/v1/chat/live-locations/{streamId}",
     tag = "chat",
     security(("BearerAuth" = [])),
     params(("streamId" = String, Path)),
@@ -324,12 +324,12 @@ async fn read_local(
     })
 }
 
-/// `GET /api/live-locations/{streamId}[?server=]` — the latest update, with
+/// `GET /api/v1/chat/live-locations/{streamId}[?server=]` — the latest update, with
 /// the read capability (`x-kutup-live-read`). A stream on another server is
 /// read through this one over signed federation.
 #[utoipa::path(
     get,
-    path = "/api/live-locations/{streamId}",
+    path = "/api/v1/chat/live-locations/{streamId}",
     tag = "chat",
     security(("BearerAuth" = [])),
     params(
@@ -466,7 +466,7 @@ fn signed(
 #[utoipa::path(
     get,
     path = "/api/fed/chat/live-locations/{streamId}",
-    tag = "chat federation",
+    tag = "chat.federation",
     params(("streamId" = String, Path)),
     responses(
         (status = 200, description = "The latest update", body = LiveLocationResponse),

@@ -337,7 +337,7 @@ function useContactMutation<T, R>(fn: (input: T, session: Session) => Promise<R>
         // and the sidebar meter reads the session's figure.
         queryClient.invalidateQueries({ queryKey: ['storage'] }),
         api
-          .get<{ storageUsedBytes: number }>('/user/me')
+          .get<{ storageUsedBytes: number }>('/account')
           .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes }))
           .catch(() => undefined),
       ]),

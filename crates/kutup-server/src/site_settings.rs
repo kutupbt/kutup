@@ -277,7 +277,7 @@ pub enum SettingSection {
 }
 
 /// A whole-number setting administrators set: its key, its field in
-/// `/api/admin/settings`, its first value, its range, what it counts, and
+/// `/api/v1/admin/settings`, its first value, its range, what it counts, and
 /// whether one account may have its own value (docs/plans/settings-
 /// registry.md: only a setting that limits one account).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -540,7 +540,7 @@ pub async fn seed_chat_group_max_members(pool: &PgPool, initial: usize) -> Resul
     Ok(())
 }
 
-/// Every multi-recipient setting, as `/api/admin/settings` lists them.
+/// Every multi-recipient setting, as `/api/v1/admin/settings` lists them.
 pub const CHAT_MULTI_SETTINGS: [NumericSetting; 12] = [
     CHAT_GROUP_MAX_MEMBERS,
     CHAT_MULTI_MAX_MESSAGE_BYTES,
@@ -702,7 +702,7 @@ pub const CALENDAR_RECOMPUTE_BATCH: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: false,
 };
-/// Alarms one page of `/api/calendar/alarms` answers.
+/// Alarms one page of `/api/v1/calendar/alarms` answers.
 pub const CALENDAR_ALARMS_PAGE: NumericSetting = NumericSetting {
     key: "calendar_alarms_page",
     field: "calendarAlarmsPage",
@@ -1472,13 +1472,13 @@ pub const BACKUP_SETTINGS: [NumericSetting; 5] = [
     HEALTH_PROBE_TIMEOUT_SECONDS,
 ];
 
-/// Every whole-number setting `/api/admin/settings` lists by field.
+/// Every whole-number setting `/api/v1/admin/settings` lists by field.
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
     registry().map(|(_, setting)| setting)
 }
 
 /// Every whole-number setting with its Server settings section: the
-/// registry `GET /api/admin/settings/registry` lists.
+/// registry `GET /api/v1/admin/settings/registry` lists.
 pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetting)> {
     let section = |section: SettingSection, settings: &'static [NumericSetting]| {
         settings.iter().map(move |setting| (section, setting))

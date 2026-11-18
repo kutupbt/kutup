@@ -58,7 +58,7 @@ impl Client {
     /// Lists accepted federated shares. Mirrors `ListIncomingShares`.
     pub fn list_incoming_shares(&self) -> Result<Vec<IncomingShare>> {
         let resp = self
-            .request(Method::GET, "/drive/federation/shares")
+            .request(Method::GET, "/drive/federation/folder-shares")
             .send()?;
         super::decode_json(resp)
     }
@@ -66,7 +66,7 @@ impl Client {
     /// Accepts a parsed canonical-domain/capability invite.
     pub fn add_incoming_share(&self, server: &str, capability: &str) -> Result<IncomingShare> {
         let resp = self
-            .request(Method::POST, "/drive/federation/shares")
+            .request(Method::POST, "/drive/federation/folder-shares")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(&serde_json::json!({ "server": server, "capability": capability }))
             .send()?;
@@ -78,7 +78,7 @@ impl Client {
         let resp = self
             .request(
                 Method::DELETE,
-                &format!("/drive/federation/shares/{share_id}"),
+                &format!("/drive/federation/folder-shares/{share_id}"),
             )
             .send()?;
         super::check_ok(resp)
@@ -89,7 +89,7 @@ impl Client {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/drive/federation/shares/{share_id}/files"),
+                &format!("/drive/federation/folder-shares/{share_id}/files"),
             )
             .send()?;
         super::decode_json(resp)
@@ -125,7 +125,7 @@ impl Client {
         let resp = self
             .request(
                 Method::POST,
-                &format!("/drive/federation/shares/{share_id}/files"),
+                &format!("/drive/federation/folder-shares/{share_id}/files"),
             )
             .multipart(form)
             .send()?;

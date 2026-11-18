@@ -81,7 +81,7 @@ async function uploadRemote(
   form.append('fileKeyEnvelope', record.fileKeyEnvelope)
   form.append('nameHash', nameHash)
   form.append('file', sealed.blob, 'encrypted')
-  await api.post(`/drive/federation/shares/${shareId}/files`, form, {
+  await api.post(`/drive/federation/folder-shares/${shareId}/files`, form, {
     signal,
     onUploadProgress: (e) => progress(Math.round((e.progress ?? 0) * file.size), file.size),
   })

@@ -44,11 +44,11 @@ export function PrivacyPage() {
   const queryClient = useQueryClient()
   const view = useQuery({
     queryKey: consentsKey,
-    queryFn: async () => (await api.get<ConsentsView>('/user/consents')).data,
+    queryFn: async () => (await api.get<ConsentsView>('/account/consents')).data,
   })
   const change = useMutation({
     mutationFn: async ({ purpose, given, documentId }: { purpose: Purpose; given: boolean; documentId: string | null }) => {
-      await api.put('/user/consents', { purpose, given, documentId })
+      await api.put('/account/consents', { purpose, given, documentId })
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: consentsKey })
@@ -60,7 +60,7 @@ export function PrivacyPage() {
   const me = useMe()
   const federation = useMutation({
     mutationFn: async ({ on, documentId }: { on: boolean; documentId: string | null }) => {
-      await api.put('/user/federation', { on, documentId })
+      await api.put('/account/federation', { on, documentId })
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: meKey })

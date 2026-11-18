@@ -22,11 +22,11 @@ import {
   setDisappearing,
 } from '../fixtures/chat'
 
-/** An identified (not sealed) Direct send: POST /api/chat/accounts/<id>/messages. */
+/** An identified (not sealed) Direct send: POST /api/v1/chat/accounts/<id>/messages. */
 const IDENTIFIED_SEND = /^\/api\/chat\/accounts\/[0-9a-f-]{36}\/messages$/
-/** A sealed send: POST /api/chat/anonymous/accounts/<id>/messages. */
+/** A sealed send: POST /api/v1/chat/anonymous/accounts/<id>/messages. */
 const ANONYMOUS_SEND = /^\/api\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/messages$/
-/** A sealed bundle fetch or send: POST /api/chat/anonymous/accounts/<id>/{keys,messages}. */
+/** A sealed bundle fetch or send: POST /api/v1/chat/anonymous/accounts/<id>/{keys,messages}. */
 const ANONYMOUS_KEYS_OR_SEND = /^\/api\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/(keys|messages)$/
 
 const PASSWORD = 'Deneme123*FederatedSecurityPassword'
@@ -109,7 +109,7 @@ async function sendCapturedMedia(page: Page, filename: string, plaintext: string
   const input = page.getByTestId('chat-capture-input')
   await expect(input).toHaveAttribute('accept', 'image/*,video/*')
   await expect(input).toHaveAttribute('capture', 'environment')
-  const delivery = posted(page, '/api/chat/media/deliveries')
+  const delivery = posted(page, '/api/v1/chat/media/deliveries')
   await input.setInputFiles({ name: filename, mimeType: 'image/png', buffer: Buffer.from(plaintext, 'utf8') })
   expect((await delivery).ok()).toBe(true)
 }
@@ -262,7 +262,7 @@ test.describe('two-server secure chat', () => {
     // reach: Chat says so and keeps retrying, and offers no repair.
     const abandonedPageA = await abandonedContextA.newPage()
     let interruptedManifestAttempts = 0
-    await abandonedPageA.route('**/api/chat/manifest', async (route) => {
+    await abandonedPageA.route('**/api/v1/chat/manifest', async (route) => {
       if (route.request().method() === 'POST') {
         interruptedManifestAttempts += 1
         await route.abort('connectionfailed')
@@ -410,7 +410,7 @@ test.describe('two-server secure chat', () => {
     const destinationEnvelopes: Array<Record<string, unknown>> = []
     pageB.on('response', (response) => {
       const url = new URL(response.url())
-      if (response.request().method() !== 'GET' || url.pathname !== '/api/chat/messages' || !response.ok()) return
+      if (response.request().method() !== 'GET' || url.pathname !== '/api/v1/chat/messages' || !response.ok()) return
       void response
         .json()
         .then((body: { envelopes?: Array<Record<string, unknown>> }) => {
@@ -474,7 +474,7 @@ test.describe('two-server secure chat', () => {
 
     await pageA.getByTestId('chat-voice-button').click()
     await expect(pageA.getByTestId('chat-voice-recording')).toBeVisible()
-    const voiceDelivery = posted(pageA, '/api/chat/media/deliveries')
+    const voiceDelivery = posted(pageA, '/api/v1/chat/media/deliveries')
     await pageA.getByTestId('chat-voice-stop').click()
     expect((await voiceDelivery).ok()).toBe(true)
     // Voice notes show as a player; its controls are named after the file.

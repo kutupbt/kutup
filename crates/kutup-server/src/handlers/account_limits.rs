@@ -27,7 +27,7 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct RegistryEntry {
     pub key: &'static str,
-    /// Its field in `/api/admin/settings`.
+    /// Its field in `/api/v1/admin/settings`.
     pub field: &'static str,
     pub section: SettingSection,
     pub unit: SettingUnit,
@@ -48,12 +48,12 @@ pub struct RegistryResponse {
     pub settings: Vec<RegistryEntry>,
 }
 
-/// `GET /api/admin/settings/registry` — every whole-number setting with its
+/// `GET /api/v1/admin/settings/registry` — every whole-number setting with its
 /// section, unit, first value, range and value now: what Server settings
 /// builds its fields from.
 #[utoipa::path(
     get,
-    path = "/api/admin/settings/registry",
+    path = "/api/v1/admin/settings/registry",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Every whole-number setting", body = RegistryResponse))
@@ -209,11 +209,11 @@ async fn account_name(state: &AppState, id: Uuid) -> AppResult<Option<String>> {
         .ok_or_else(|| AppError::not_found("user not found"))
 }
 
-/// `GET /api/admin/users/{id}/limits` — the settings and rate limits that
+/// `GET /api/v1/admin/accounts/{id}/entitlements` — the settings and rate limits that
 /// limit one account, as they stand for this one.
 #[utoipa::path(
     get,
-    path = "/api/admin/users/{id}/limits",
+    path = "/api/v1/admin/accounts/{id}/entitlements",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path, description = "The account")),
@@ -293,7 +293,7 @@ pub enum AccountLimitEntry {
     RateLimit(AccountRateLimitEntry),
 }
 
-/// `PUT /api/admin/users/{id}/limits/{key}` — gives the account its own
+/// `PUT /api/v1/admin/accounts/{id}/entitlements/{key}` — gives the account its own
 /// value of a setting or rate limit that limits one account (`key`: a
 /// setting's key, or `rate_limit.<key>`), or (`null`) takes it back. A value
 /// outside the range is refused, never clamped. Lowering it below what the
@@ -301,7 +301,7 @@ pub enum AccountLimitEntry {
 /// `user.rate_limit`.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}/limits/{key}",
+    path = "/api/v1/admin/accounts/{id}/entitlements/{key}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(

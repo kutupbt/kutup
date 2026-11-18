@@ -65,12 +65,12 @@ pub struct GatewayKeyAnswer {
     pub identity_history: Vec<serde_json::Value>,
 }
 
-/// `GET /api/chat/groups/gateway-key?server=&fromSequence=`: a home's key
+/// `GET /api/v1/chat/groups/gateway-key?server=&fromSequence=`: a home's key
 /// config and identity history, as this server got them.
 #[utoipa::path(
     get,
-    path = "/api/chat/groups/gateway-key",
-    tag = "chat groups",
+    path = "/api/v1/chat/groups/gateway-key",
+    tag = "chat.groups",
     security(("BearerAuth" = [])),
     params(
         ("server" = String, Query, description = "The group's home server"),
@@ -169,12 +169,12 @@ fn opaque(status: StatusCode, body: Vec<u8>) -> Response {
         .into_response()
 }
 
-/// `POST /api/chat/groups/relay/{server}`: passes a sealed request to the home
+/// `POST /api/v1/chat/groups/relay/{server}`: passes a sealed request to the home
 /// `server` and its sealed answer back. The body is opaque to this server.
 #[utoipa::path(
     post,
-    path = "/api/chat/groups/relay/{server}",
-    tag = "chat groups",
+    path = "/api/v1/chat/groups/relay/{server}",
+    tag = "chat.groups",
     security(("BearerAuth" = [])),
     params(("server" = String, Path, description = "The group's home server")),
     request_body(content = Vec<u8>, content_type = "message/ohttp-req", description = "A request sealed to the home's gateway key (RFC 9458)"),
@@ -243,7 +243,7 @@ pub async fn relay(
 #[utoipa::path(
     post,
     path = "/api/fed/chat/groups/gateway",
-    tag = "chat federation",
+    tag = "chat.federation",
     request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "A sealed group request, relayed"),
     responses(
         (status = 200, description = "The sealed answer (signed federation response)"),
@@ -294,7 +294,7 @@ pub async fn fed_gateway(
 #[utoipa::path(
     get,
     path = "/api/fed/chat/groups/gateway-key",
-    tag = "chat federation",
+    tag = "chat.federation",
     responses(
         (status = 200, description = "The gateway key config, signed by this server's identity"),
         (status = 404, description = "Groups are off"),

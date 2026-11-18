@@ -18,7 +18,7 @@ export function usePublicSharing() {
     queryFn: async (): Promise<SharingOff | null> => {
       const settings = await loadServerSettings<{ publicSharing?: string }>()
       if (settings.publicSharing === 'off') return 'site'
-      const { data } = await api.get<{ publicSharing?: string }>('/user/me')
+      const { data } = await api.get<{ publicSharing?: string }>('/account')
       return data.publicSharing === 'off' ? 'account' : null
     },
     staleTime: 60_000,

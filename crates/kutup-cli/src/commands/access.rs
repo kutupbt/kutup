@@ -64,7 +64,7 @@ struct Access {
 fn load_access(ctx: &Ctx, collection_id: &str) -> Result<Access> {
     let resp = ctx
         .client
-        .get(&format!("/collections/{collection_id}/access"))?;
+        .get(&format!("/drive/collections/{collection_id}/access"))?;
     crate::api::decode_json(resp).context("load folder access (owner only)")
 }
 
@@ -261,7 +261,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         .collect::<Result<Vec<_>>>()?;
 
     let resp = ctx.client.post_json(
-        &format!("/collections/{}/rotate", col.id),
+        &format!("/drive/collections/{}/rotate", col.id),
         &serde_json::json!({
             "fromEpoch": col.key_epoch,
             "epochStatement": statement.encode_b64(),

@@ -249,24 +249,24 @@ pub async fn set_consent(
 
 // --- handlers ----------------------------------------------------------------
 
-/// `GET /api/legal/documents` — the current documents (anyone: the sign-up
+/// `GET /api/v1/legal/documents` — the current documents (anyone: the sign-up
 /// page shows the required ones).
 #[utoipa::path(
     get,
-    path = "/api/legal/documents",
-    tag = "legal",
+    path = "/api/v1/legal/documents",
+    tag = "account",
     responses((status = 200, description = "Current documents", body = Vec<Document>))
 )]
 pub async fn get_documents(State(state): State<AppState>) -> AppResult<Response> {
     Ok(Json(current(&state.pool).await?).into_response())
 }
 
-/// `GET /api/user/legal/pending` — the required documents the caller hasn't
+/// `GET /api/v1/account/legal/pending` — the required documents the caller hasn't
 /// acknowledged in their current version.
 #[utoipa::path(
     get,
-    path = "/api/user/legal/pending",
-    tag = "legal",
+    path = "/api/v1/account/legal/pending",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Documents to acknowledge", body = Vec<Document>))
 )]
@@ -275,19 +275,19 @@ pub async fn get_pending(State(state): State<AppState>, user: AuthAccount) -> Ap
     Ok(Json(pending(&state.pool, user_id).await?).into_response())
 }
 
-/// `POST /api/user/legal/acknowledge` body.
+/// `POST /api/v1/account/legal/acknowledge` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AcknowledgeRequest {
     document_ids: Vec<Uuid>,
 }
 
-/// `POST /api/user/legal/acknowledge` — the caller confirmed new required
+/// `POST /api/v1/account/legal/acknowledge` — the caller confirmed new required
 /// versions.
 #[utoipa::path(
     post,
-    path = "/api/user/legal/acknowledge",
-    tag = "legal",
+    path = "/api/v1/account/legal/acknowledge",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = AcknowledgeRequest,
     responses((status = 204, description = "Recorded"))
@@ -307,7 +307,7 @@ pub async fn post_acknowledge(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `GET /api/user/consents` answer.
+/// `GET /api/v1/account/consents` answer.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsentsView {
@@ -317,11 +317,11 @@ pub struct ConsentsView {
     documents: Vec<Document>,
 }
 
-/// `GET /api/user/consents`
+/// `GET /api/v1/account/consents`
 #[utoipa::path(
     get,
-    path = "/api/user/consents",
-    tag = "legal",
+    path = "/api/v1/account/consents",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's consents", body = ConsentsView))
 )]
@@ -339,7 +339,7 @@ pub async fn get_consents(State(state): State<AppState>, user: AuthAccount) -> A
     .into_response())
 }
 
-/// `PUT /api/user/consents` body.
+/// `PUT /api/v1/account/consents` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ConsentRequest {
@@ -349,11 +349,11 @@ pub struct ConsentRequest {
     document_id: Option<Uuid>,
 }
 
-/// `PUT /api/user/consents` — give or withdraw one purpose.
+/// `PUT /api/v1/account/consents` — give or withdraw one purpose.
 #[utoipa::path(
     put,
-    path = "/api/user/consents",
-    tag = "legal",
+    path = "/api/v1/account/consents",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = ConsentRequest,
     responses((status = 204, description = "Recorded"))
@@ -386,10 +386,10 @@ pub async fn put_consent(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `GET /api/admin/legal/documents` — every published version.
+/// `GET /api/v1/admin/legal/documents` — every published version.
 #[utoipa::path(
     get,
-    path = "/api/admin/legal/documents",
+    path = "/api/v1/admin/legal/documents",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Every version", body = Vec<Document>))
@@ -406,7 +406,7 @@ pub async fn admin_documents(
     Ok(Json(all).into_response())
 }
 
-/// `POST /api/admin/legal/documents` body.
+/// `POST /api/v1/admin/legal/documents` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PublishRequest {
@@ -419,11 +419,11 @@ pub struct PublishRequest {
     required_at_signup: bool,
 }
 
-/// `POST /api/admin/legal/documents` — publish a version (never edited
+/// `POST /api/v1/admin/legal/documents` — publish a version (never edited
 /// after). Audited.
 #[utoipa::path(
     post,
-    path = "/api/admin/legal/documents",
+    path = "/api/v1/admin/legal/documents",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = PublishRequest,

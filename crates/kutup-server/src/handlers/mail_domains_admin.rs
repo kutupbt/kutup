@@ -149,10 +149,10 @@ fn effective(settings: &Settings) -> BTreeMap<String, String> {
     out
 }
 
-/// `GET /api/admin/mail/domains`
+/// `GET /api/v1/admin/mail/domains`
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/domains",
+    path = "/api/v1/admin/mail/domains",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, body = AdminDomains))
@@ -228,11 +228,11 @@ pub async fn list(
     }))
 }
 
-/// `PUT /api/admin/mail/domains/settings` — any of the `mail_domains.*`
+/// `PUT /api/v1/admin/mail/domains/settings` — any of the `mail_domains.*`
 /// settings, each checked against its range; applies at once.
 #[utoipa::path(
     put,
-    path = "/api/admin/mail/domains/settings",
+    path = "/api/v1/admin/mail/domains/settings",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = BTreeMap<String, String>,
@@ -273,11 +273,11 @@ pub async fn set_settings(
     Ok(Json(effective(&Settings::load(&state.pool).await?)))
 }
 
-/// `POST /api/admin/mail/domains/{id}/approve` — lets a verified domain
+/// `POST /api/v1/admin/mail/domains/{id}/approve` — lets a verified domain
 /// take mail (the `approve` mode).
 #[utoipa::path(
     post,
-    path = "/api/admin/mail/domains/{id}/approve",
+    path = "/api/v1/admin/mail/domains/{id}/approve",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -308,12 +308,12 @@ pub async fn approve(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/admin/mail/domains/{id}/deactivate` — an administrator ends a
+/// `POST /api/v1/admin/mail/domains/{id}/deactivate` — an administrator ends a
 /// domain (abuse): inactive at once, its addresses freed, its owner told,
 /// and its name blocked until `unblock`.
 #[utoipa::path(
     post,
-    path = "/api/admin/mail/domains/{id}/deactivate",
+    path = "/api/v1/admin/mail/domains/{id}/deactivate",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -357,11 +357,11 @@ pub struct DomainBlock {
     pub blocked_by: Option<String>,
 }
 
-/// `GET /api/admin/mail/domains/blocks` — the blocked names (each covers
+/// `GET /api/v1/admin/mail/domains/blocks` — the blocked names (each covers
 /// the names under it), whether or not a domain row is left for them.
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/domains/blocks",
+    path = "/api/v1/admin/mail/domains/blocks",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, body = Vec<DomainBlock>))
@@ -383,11 +383,11 @@ pub async fn blocks(
     ))
 }
 
-/// `DELETE /api/admin/mail/domains/blocks/{name}` — lifts a block: the name
+/// `DELETE /api/v1/admin/mail/domains/blocks/{name}` — lifts a block: the name
 /// and those under it may be proven again.
 #[utoipa::path(
     delete,
-    path = "/api/admin/mail/domains/blocks/{name}",
+    path = "/api/v1/admin/mail/domains/blocks/{name}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path)),
@@ -464,10 +464,10 @@ async fn organization_of(
     .await?)
 }
 
-/// `GET /api/admin/users/{id}/mail-domains`
+/// `GET /api/v1/admin/accounts/{id}/mail-domains`
 #[utoipa::path(
     get,
-    path = "/api/admin/users/{id}/mail-domains",
+    path = "/api/v1/admin/accounts/{id}/mail-domains",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -522,13 +522,13 @@ pub async fn overrides(
     }))
 }
 
-/// `PUT /api/admin/users/{id}/mail-domains`: the address count on the
+/// `PUT /api/v1/admin/accounts/{id}/mail-domains`: the address count on the
 /// account, the domain count and the catch-all on its organization; an
 /// account with none yet gets its organization of one, so an administrator
 /// can limit (or block, with 0) custom domains before the first one.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}/mail-domains",
+    path = "/api/v1/admin/accounts/{id}/mail-domains",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),

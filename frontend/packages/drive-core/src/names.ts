@@ -171,7 +171,7 @@ const MAX_BATCHES = 100
 
 /** Which of `hashes` (at most 10) are free in `place`, as the server says. */
 export async function availableHashes(place: NamePlace, hashes: string[]): Promise<Set<string>> {
-  const path = place.kind === 'top' ? '/drive/top-level-available-hashes' : `/collections/${place.folder.id}/available-hashes`
+  const path = place.kind === 'top' ? '/drive/top-level-available-hashes' : `/drive/collections/${place.folder.id}/available-hashes`
   const { data } = await api.post<{ available: string[] }>(path, { hashes })
   return new Set(data.available)
 }
@@ -269,7 +269,7 @@ export async function planUpload(folder: Folder, file: File, listing: FolderList
 export async function recordContentHash(folder: Folder, fileId: string, contentSha256: string | null): Promise<void> {
   if (!contentSha256 || !folder.key || folderLocation(folder).kind !== 'local') return
   try {
-    await api.put(`/files/${fileId}/content-hash`, { contentHash: await contentHashIn(folder, contentSha256) })
+    await api.put(`/drive/files/${fileId}/content-hash`, { contentHash: await contentHashIn(folder, contentSha256) })
   } catch (error) {
     console.warn('names: could not record a content hash', error)
   }

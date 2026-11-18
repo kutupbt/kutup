@@ -2068,7 +2068,7 @@ pub(crate) async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
 #[utoipa::path(
     get,
     path = "/api/fed/chat/accounts/{accountId}/keys",
-    tag = "chat federation",
+    tag = "chat.federation",
     params(
         ("accountId" = String, Path, description = "Recipient's account id on this server")
     ),
@@ -2242,7 +2242,7 @@ pub async fn deliver_sealed_messages(
 #[utoipa::path(
     post,
     path = "/api/fed/chat/sealed/batch",
-    tag = "chat federation",
+    tag = "chat.federation",
     request_body = kutup_chat_proto::FederatedSealedBatchV1,
     responses(
         (status = 200, description = "Each tried transaction's answer, in order", body = kutup_chat_proto::FederatedSealedBatchResponseV1),
@@ -2756,7 +2756,7 @@ pub async fn get_manifest(
 #[utoipa::path(
     get,
     path = "/api/fed/chat/accounts/{accountId}/profile/{version}",
-    tag = "chat federation",
+    tag = "chat.federation",
     params(
         ("accountId" = String, Path, description = "Profile owner's account id on this server"),
         ("version" = String, Path, description = "Profile-key-derived version")
@@ -2833,7 +2833,7 @@ pub async fn get_user_profile(
 #[utoipa::path(
     post,
     path = "/api/fed/chat/messages",
-    tag = "chat federation",
+    tag = "chat.federation",
     request_body = FederatedChatTransaction,
     responses(
         (status = 200, description = "Transaction stored or idempotently replayed", body = FederationDeliveryResponse),

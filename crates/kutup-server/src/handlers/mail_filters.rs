@@ -92,10 +92,10 @@ type FilterRow = (
     String,
 );
 
-/// `GET /api/mail/filters` — the account's filters, in order.
+/// `GET /api/v1/mail/filters` — the account's filters, in order.
 #[utoipa::path(
     get,
-    path = "/api/mail/filters",
+    path = "/api/v1/mail/filters",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Filters", body = [MailFilter]))
@@ -179,10 +179,10 @@ async fn check_enabled_limit(
     Ok(())
 }
 
-/// `POST /api/mail/filters` — a new filter, last in order.
+/// `POST /api/v1/mail/filters` — a new filter, last in order.
 #[utoipa::path(
     post,
-    path = "/api/mail/filters",
+    path = "/api/v1/mail/filters",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = CreateMailFilter,
@@ -255,10 +255,10 @@ pub struct UpdateMailFilter {
     pub head: Option<String>,
 }
 
-/// `PATCH /api/mail/filters/{id}` — rename, switch on or off, change what it matches or does.
+/// `PATCH /api/v1/mail/filters/{id}` — rename, switch on or off, change what it matches or does.
 #[utoipa::path(
     patch,
-    path = "/api/mail/filters/{id}",
+    path = "/api/v1/mail/filters/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Filter id")),
@@ -350,10 +350,10 @@ pub async fn update(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/mail/filters/{id}`.
+/// `DELETE /api/v1/mail/filters/{id}`.
 #[utoipa::path(
     delete,
-    path = "/api/mail/filters/{id}",
+    path = "/api/v1/mail/filters/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Filter id")),
@@ -392,10 +392,10 @@ pub struct OrderMailFilters {
     pub ids: Vec<String>,
 }
 
-/// `PUT /api/mail/filters/order` — the order filters run in (Proton: drag to reorder).
+/// `PUT /api/v1/mail/filters/order` — the order filters run in (Proton: drag to reorder).
 #[utoipa::path(
     put,
-    path = "/api/mail/filters/order",
+    path = "/api/v1/mail/filters/order",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = OrderMailFilters,
@@ -447,11 +447,11 @@ pub struct MailFilterRun {
     pub failed: bool,
 }
 
-/// `POST /api/mail/filters/apply` — runs filters over the mail already there
+/// `POST /api/v1/mail/filters/apply` — runs filters over the mail already there
 /// (outside Drafts, Spam and Trash), in the background; nothing is sent.
 #[utoipa::path(
     post,
-    path = "/api/mail/filters/apply",
+    path = "/api/v1/mail/filters/apply",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = ApplyMailFilters,
@@ -589,10 +589,10 @@ async fn run_filters(
     Ok(())
 }
 
-/// `GET /api/mail/filters/runs/{id}` — how far "apply to existing" got.
+/// `GET /api/v1/mail/filters/runs/{id}` — how far "apply to existing" got.
 #[utoipa::path(
     get,
-    path = "/api/mail/filters/runs/{id}",
+    path = "/api/v1/mail/filters/runs/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Run id")),

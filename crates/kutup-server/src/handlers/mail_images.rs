@@ -4,7 +4,7 @@
 //! sees the server, not the reader's address or browser; it still learns that
 //! and when the message was read. Nothing is stored or cached.
 //!
-//! `POST /api/mail/images` with `{ url }`: one image. The address travels in
+//! `POST /api/v1/mail/images` with `{ url }`: one image. The address travels in
 //! the body, never in a URL that a proxy or access log would keep. A known
 //! tracker answers 204 with `X-Kutup-Tracker` and is never fetched, nor
 //! followed to by a redirect. The reader checks the same list
@@ -118,7 +118,7 @@ pub struct ImageRequest {
 
 #[utoipa::path(
     post,
-    path = "/api/mail/images",
+    path = "/api/v1/mail/images",
     tag = "mail",
     operation_id = "fetchMailImage",
     request_body = ImageRequest,

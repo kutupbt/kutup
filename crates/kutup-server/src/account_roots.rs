@@ -210,11 +210,11 @@ pub struct AccountRootsResponse {
     master_keyring: Vec<String>,
 }
 
-/// `GET /api/account/roots` — the caller's own root records and master-key
+/// `GET /api/v1/account/roots` — the caller's own root records and master-key
 /// keyring, for a client that holds the master key but not the roots.
 #[utoipa::path(
     get,
-    path = "/api/account/roots",
+    path = "/api/v1/account/roots",
     tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, body = AccountRootsResponse))

@@ -508,7 +508,7 @@ pub async fn primary_public_key(pool: &PgPool, group_id: Uuid) -> sqlx::Result<O
         .await
 }
 
-/// A shared mailbox's keys and its key-list chain for `GET /api/mail/keys`:
+/// A shared mailbox's keys and its key-list chain for `GET /api/v1/mail/keys`:
 /// the lists signed by the group's signers, the first signer and the
 /// handovers between them, for senders to verify and pin.
 pub async fn lookup(

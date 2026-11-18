@@ -107,7 +107,7 @@ impl Account<'_> {
 
     fn batch(&self, body: Value) -> (StatusCode, Value) {
         let r = bearer(
-            self.c.post(format!("{}/api/account/records", self.base)),
+            self.c.post(format!("{}/api/v1/account/records", self.base)),
             &self.user.token,
         )
         .json(&body)
@@ -126,7 +126,9 @@ impl Account<'_> {
     }
 
     fn feed(&self, after: i64) -> Value {
-        let (status, page) = self.get(&format!("/api/account/records/chatContacts?after={after}"));
+        let (status, page) = self.get(&format!(
+            "/api/v1/account/records/chatContacts?after={after}"
+        ));
         assert_eq!(status, StatusCode::OK, "{page}");
         page
     }
@@ -171,7 +173,7 @@ fn records_land_in_batches_under_the_head() {
     assert!(empty["head"].is_null());
     let basis = empty["basis"].as_str().unwrap().to_owned();
     let first = chain.next(&[]);
-    let r = bearer(c.post(format!("{base}/api/account/head")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/account/head")), &user.token)
         .json(&json!({ "head": first, "basis": basis }))
         .send()
         .unwrap();
@@ -208,14 +210,14 @@ fn records_land_in_batches_under_the_head() {
     assert_eq!(page["head"].as_str(), Some(head.as_str()));
     assert!(page["basis"].is_null());
     // The head's index reads the store.
-    let (_, index) = account.get("/api/account/index/chatContacts");
+    let (_, index) = account.get("/api/v1/account/index/chatContacts");
     let mut values: Vec<(String, i64)> = serde_json::from_value(index["values"].clone()).unwrap();
     values.sort();
     let mut want = vec![(a.clone(), 1), (b.clone(), 5)];
     want.sort();
     assert_eq!(values, want);
     // One record.
-    let (status, one) = account.get(&format!("/api/account/records/chatContacts/{b}"));
+    let (status, one) = account.get(&format!("/api/v1/account/records/chatContacts/{b}"));
     assert_eq!(status, StatusCode::OK);
     assert_eq!(one["revision"], 5);
     assert_eq!(one["envelope"].as_str(), Some(b5.as_str()));
@@ -248,7 +250,7 @@ fn records_land_in_batches_under_the_head() {
     assert_eq!(conflicts, want);
     assert_eq!(
         account
-            .get(&format!("/api/account/records/chatContacts/{cc}"))
+            .get(&format!("/api/v1/account/records/chatContacts/{cc}"))
             .0,
         StatusCode::NOT_FOUND
     );
@@ -354,9 +356,9 @@ fn contact_groups_calendar_settings_and_joined_meetings_are_records() {
         ),
     };
     let mut chain = Chain::new(&user.binding);
-    let (_, empty) = account.get("/api/account/records/joinedMeetings?after=0");
+    let (_, empty) = account.get("/api/v1/account/records/joinedMeetings?after=0");
     let first = chain.next_in("joinedMeetings", &[]);
-    let r = bearer(c.post(format!("{base}/api/account/head")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/account/head")), &user.token)
         .json(&json!({ "head": first, "basis": empty["basis"] }))
         .send()
         .unwrap();
@@ -384,7 +386,7 @@ fn contact_groups_calendar_settings_and_joined_meetings_are_records() {
     let head = chain.next_in("joinedMeetings", &[(id, 1)]);
     let (status, body) = account.batch(json!({ "head": head, "puts": [meeting(0)] }));
     assert_eq!(status, StatusCode::OK, "{body}");
-    let (_, page) = account.get("/api/account/records/joinedMeetings?after=0");
+    let (_, page) = account.get("/api/v1/account/records/joinedMeetings?after=0");
     assert_eq!(page["records"][0]["revision"], 1);
     assert_eq!(page["head"].as_str(), Some(head.as_str()));
     let landed = chain.last.clone();
@@ -421,7 +423,7 @@ fn contact_groups_calendar_settings_and_joined_meetings_are_records() {
         "puts": [{ "scope": "contactGroups", "id": group, "baseRevision": 0, "envelope": sealed }],
     }));
     assert_eq!(status, StatusCode::OK, "{body}");
-    let (_, index) = account.get("/api/account/index/contactGroups");
+    let (_, index) = account.get("/api/v1/account/index/contactGroups");
     assert_eq!(index["values"], json!([[group, 1]]));
     // A contact group's record is not a calendar's settings.
     let (status, _) = account.batch(json!({
@@ -429,7 +431,7 @@ fn contact_groups_calendar_settings_and_joined_meetings_are_records() {
     }));
     assert_eq!(status, StatusCode::BAD_REQUEST);
     // The old routes are gone.
-    for gone in ["/api/contacts/groups", "/api/chat/joined-meetings"] {
+    for gone in ["/api/v1/contacts/groups", "/api/v1/chat/joined-meetings"] {
         let (status, _) = account.get(gone);
         assert!(
             status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED,
@@ -464,10 +466,13 @@ fn a_scope_keeps_at_most_its_count() {
         json!({ "scope": "chatGroups", "id": encode_entry_id(&id), "baseRevision": 0, "envelope": b64(&sealed) })
     };
     let batch = |puts: Vec<Value>| {
-        let r = bearer(c.post(format!("{base}/api/account/records")), &user.token)
-            .json(&json!({ "puts": puts }))
-            .send()
-            .unwrap();
+        let r = bearer(
+            c.post(format!("{base}/api/v1/account/records")),
+            &user.token,
+        )
+        .json(&json!({ "puts": puts }))
+        .send()
+        .unwrap();
         let status = r.status();
         (status, r.json::<Value>().unwrap_or(Value::Null))
     };

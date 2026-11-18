@@ -32,7 +32,7 @@ use crate::error::{AppError, AppResult};
 /// than this many heads. The server keeps one more (the anchor's own head).
 pub const RETENTION: i64 = kutup_crypto::account_head::RETENTION as i64;
 
-/// The most heads one `GET /api/account/heads` answers; the rest by `next`.
+/// The most heads one `GET /api/v1/account/heads` answers; the rest by `next`.
 pub const PAGE: i64 = 200;
 
 /// A listed write's account, locked for its transaction ([`lock`]).

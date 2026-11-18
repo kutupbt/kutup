@@ -18,7 +18,7 @@ impl Client {
         struct Devices {
             devices: Vec<AccountDeviceV1>,
         }
-        let resp = self.request(Method::GET, "/devices").send()?;
+        let resp = self.request(Method::GET, "/account/devices").send()?;
         Ok(super::decode_json::<Devices>(resp)?.devices)
     }
 
@@ -29,7 +29,7 @@ impl Client {
         request: &RegisterDeviceRequestV1,
     ) -> Result<RegisterDeviceResponseV1> {
         let resp = self
-            .request(Method::POST, "/devices")
+            .request(Method::POST, "/account/devices")
             .json(request)
             .send()?;
         super::decode_json(resp)

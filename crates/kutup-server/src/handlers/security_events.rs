@@ -1,4 +1,4 @@
-//! `GET /api/user/security-events`: what changed the caller's sign-in, for
+//! `GET /api/v1/account/security-events`: what changed the caller's sign-in, for
 //! Account → Security (`crate::security_events`).
 
 use axum::extract::{Query, State};
@@ -68,12 +68,12 @@ pub struct SecurityEventsPage {
     retention_days: i64,
 }
 
-/// `GET /api/user/security-events` — the caller's account security events,
+/// `GET /api/v1/account/security-events` — the caller's account security events,
 /// newest first.
 #[utoipa::path(
     get,
-    path = "/api/user/security-events",
-    tag = "user",
+    path = "/api/v1/account/security-events",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(SecurityEventsQuery),
     responses((status = 200, body = SecurityEventsPage))

@@ -20,7 +20,7 @@ import type { Session } from '@kutup/session/store'
 // Forwarding keys (docs/plans/mail-forwarding.md) are never in a list: they
 // open only mail forwarded to the address and are never encrypted to.
 
-/** One of an address's keys, as `GET /api/mail/addresses` lists it (the server's word). */
+/** One of an address's keys, as `GET /api/v1/mail/addresses` lists it (the server's word). */
 export interface ListedKey {
   fingerprint: string
   sha256Fingerprint: string
@@ -117,7 +117,7 @@ function signList(session: Pick<Session, 'roots'>, current: SignedMailKeyList, k
 /**
  * The next key list with `EMAIL_NO_ENCRYPT` set on every key, the signed
  * list's keys otherwise: what an address's first outside forwarding brings
- * (`keyList` in `POST /api/mail/forwardings`).
+ * (`keyList` in `POST /api/v1/mail/forwardings`).
  */
 export async function encryptionOffList(session: Pick<Session, 'masterKeys' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
   return nextKeyList(session, address, withEncryptionOff(signedEntries(address), true))
@@ -137,7 +137,7 @@ export async function encryptionOnList(session: Pick<Session, 'masterKeys' | 'ro
 /**
  * The next key list for disabling the address: its keys, none of them to be
  * encrypted to (`NOT_OBSOLETE` cleared), so senders and WKD stop offering it
- * (`PUT /api/mail/addresses/{id}/disable`).
+ * (`PUT /api/v1/mail/addresses/{id}/disable`).
  */
 export async function disabledKeyList(session: Pick<Session, 'masterKeys' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
   return nextKeyList(
@@ -149,7 +149,7 @@ export async function disabledKeyList(session: Pick<Session, 'masterKeys' | 'roo
 
 /**
  * The next key list for enabling the address again: its primary key to be
- * encrypted to (`PUT /api/mail/addresses/{id}/enable`); the others stay as
+ * encrypted to (`PUT /api/v1/mail/addresses/{id}/enable`); the others stay as
  * they are (only the primary is encrypted to).
  */
 export async function enabledKeyList(session: Pick<Session, 'masterKeys' | 'roots'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
@@ -160,7 +160,7 @@ export async function enabledKeyList(session: Pick<Session, 'masterKeys' | 'root
   )
 }
 
-/** One of the account's addresses as `GET /api/mail/addresses` lists it, with what key lists need. */
+/** One of the account's addresses as `GET /api/v1/mail/addresses` lists it, with what key lists need. */
 export interface AddressRow {
   id: string
   address: string
@@ -214,7 +214,7 @@ export class OwnKeyListRolledBack extends Error {
   }
 }
 
-/** A row of `GET /api/mail/addresses` as far as checking it needs. */
+/** A row of `GET /api/v1/mail/addresses` as far as checking it needs. */
 interface OwnRow<K> {
   address: string
   keys: K[]

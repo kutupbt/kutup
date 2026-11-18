@@ -1,10 +1,10 @@
 //! Closing an account and keeping it (docs/plans/server-personal-data.md, A5).
 //!
-//! - `POST /api/user/close`: the owner, after a reauth (grant `close`), asks
+//! - `POST /api/v1/account/close`: the owner, after a reauth (grant `close`), asks
 //!   for the account to be deleted. It is `closing` for
 //!   `account_closing_days`; every sign-in ends.
 //! - A sign-in that passes every step of a closing account gets no session
-//!   but a grant (`keep`, no session); `POST /api/auth/keep` with it keeps
+//!   but a grant (`keep`, no session); `POST /api/v1/auth/keep` with it keeps
 //!   the account and answers as the sign-in would have.
 
 use axum::extract::State;
@@ -44,10 +44,10 @@ impl Closed {
     }
 }
 
-/// `POST /api/user/close` — asks for this account to be deleted.
+/// `POST /api/v1/account/close` — asks for this account to be deleted.
 #[utoipa::path(
     post,
-    path = "/api/user/close",
+    path = "/api/v1/account/close",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = GrantRequest,
@@ -100,11 +100,11 @@ pub async fn close(
     Ok(Json(Closed::new(closes_at)).into_response())
 }
 
-/// `POST /api/auth/keep` — keeps a closing account, with the grant its
+/// `POST /api/v1/auth/keep` — keeps a closing account, with the grant its
 /// sign-in got; answers as that sign-in would have (a session).
 #[utoipa::path(
     post,
-    path = "/api/auth/keep",
+    path = "/api/v1/auth/keep",
     tag = "auth",
     request_body = GrantRequest,
     responses(

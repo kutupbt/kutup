@@ -98,11 +98,11 @@ pub(crate) fn entry(spec: &Spec, stored: &HashMap<String, String>) -> RateLimitE
     }
 }
 
-/// `GET /api/admin/rate-limits` — every rate limit, read fresh (this backend
+/// `GET /api/v1/admin/rate-limits` — every rate limit, read fresh (this backend
 /// takes the stored values at once).
 #[utoipa::path(
     get,
-    path = "/api/admin/rate-limits",
+    path = "/api/v1/admin/rate-limits",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Every rate limit", body = RateLimitsResponse))
@@ -120,12 +120,12 @@ pub async fn list(
     }))
 }
 
-/// `PUT /api/admin/rate-limits/{key}` — sets one limit, or resets it to its
+/// `PUT /api/v1/admin/rate-limits/{key}` — sets one limit, or resets it to its
 /// first value. It applies at once on this backend and within 30 seconds on
 /// the others; audited as `settings.rate_limit`.
 #[utoipa::path(
     put,
-    path = "/api/admin/rate-limits/{key}",
+    path = "/api/v1/admin/rate-limits/{key}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("key" = String, Path, description = "The limit's key")),

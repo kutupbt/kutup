@@ -125,7 +125,7 @@ async function keysBound(person: PublishedIdentity): Promise<boolean> {
   ).catch(() => false)
 }
 
-/** An account as a single lookup answers it (`/users/by-address`, `/users/by-id`). */
+/** An account as a single lookup answers it (`/accounts/by-address`, `/accounts/by-id`). */
 export interface AccountAnswer extends PublishedIdentity {
   username: string
   accountIncarnationId: string
@@ -153,7 +153,7 @@ async function fetchIdentity(me: DriveIdentity, account: string): Promise<Publis
     server === me.account.split('@')[1]
       ? await localIdentity(account)
       // Another server's account: the same lookup, through this server.
-      : (await api.get<PublishedIdentity>(`/users/by-address/${encodeURIComponent(account)}`)).data
+      : (await api.get<PublishedIdentity>(`/accounts/by-address/${encodeURIComponent(account)}`)).data
   if (data.account !== account) throw new Error('the lookup answered for another account')
   // An account lives on the server of its address.
   if (data.server !== server) throw new Error('the lookup answered for an account on another server')
@@ -192,7 +192,7 @@ async function flush(): Promise<void> {
   for (let start = 0; start < batch.length; start += BATCH) {
     const part = batch.slice(start, start + BATCH)
     try {
-      const { data } = await api.post<PublishedIdentity[]>('/users/drive-identities', {
+      const { data } = await api.post<PublishedIdentity[]>('/drive/identities', {
         accounts: [...new Set(part.map((entry) => entry.account))],
       })
       const found = new Map(data.map((identity) => [identity.account, identity]))
@@ -355,7 +355,7 @@ async function recordPin(me: DriveIdentity, person: PublishedIdentity, update: P
 
 // ------------------------------------------------------------- renames
 
-/** One account's rename chain, as `GET /api/users/renames/:address` and `409 renamed` give it. */
+/** One account's rename chain, as `GET /api/v1/accounts/by-address/:address/renames` and `409 renamed` give it. */
 export interface RenameChainEntry {
   incarnationId: string
   authorityPublicKey: string
@@ -380,7 +380,7 @@ export function renamesOf(error: unknown): RenameChains | null {
 
 /** The rename chains that name `address`. */
 async function fetchRenames(address: string): Promise<RenameChains> {
-  return (await api.get<RenameChains>(`/users/renames/${encodeURIComponent(address)}`)).data
+  return (await api.get<RenameChains>(`/accounts/by-address/${encodeURIComponent(address)}/renames`)).data
 }
 
 /** Where a person known at an address they left is now. */
@@ -950,12 +950,12 @@ export function checkAnswer(me: DriveIdentity, address: string, answer: AccountA
 
 /**
  * The account `address` leads to, here or on another server: one lookup
- * (`/users/by-address`). Not found is `RecipientNotFound`-worthy (null); a
+ * (`/accounts/by-address`). Not found is `RecipientNotFound`-worthy (null); a
  * name its person left is `RecipientRenamed`.
  */
 export async function lookupAddress(me: DriveIdentity, address: string): Promise<AccountAnswer | null> {
   try {
-    return (await api.get<AccountAnswer>(`/users/by-address/${encodeURIComponent(address)}`)).data
+    return (await api.get<AccountAnswer>(`/accounts/by-address/${encodeURIComponent(address)}`)).data
   } catch (error) {
     if ((error as { response?: { status?: number } }).response?.status === 404) return null
     throw await recipientError(me, address, error)

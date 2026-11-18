@@ -7,7 +7,7 @@
 //! account authority. The server checks what it can (the public key's shape
 //! and address, the envelope's purpose and account, the list's signature,
 //! chain and contents) and publishes the public side: to Kutup users through
-//! `GET /api/mail/keys`, to the world through WKD.
+//! `GET /api/v1/mail/keys`, to the world through WKD.
 
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -220,11 +220,11 @@ async fn own_address(
     })
 }
 
-/// `GET /api/mail/addresses` — the caller's addresses with their keys and
+/// `GET /api/v1/mail/addresses` — the caller's addresses with their keys and
 /// current signed key list. An account without a username has none.
 #[utoipa::path(
     get,
-    path = "/api/mail/addresses",
+    path = "/api/v1/mail/addresses",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's addresses", body = [OwnMailAddress]))
@@ -509,13 +509,13 @@ impl ListChange {
     }
 }
 
-/// `POST /api/mail/addresses/{id}/keys` — adds a key (generated, or
+/// `POST /api/v1/mail/addresses/{id}/keys` — adds a key (generated, or
 /// imported from a key file) to one of the caller's addresses together with
 /// the next signed key list, in one transaction. The list may make it the
 /// primary key (a new key replacing the old for new mail).
 #[utoipa::path(
     post,
-    path = "/api/mail/addresses/{id}/keys",
+    path = "/api/v1/mail/addresses/{id}/keys",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),
@@ -703,12 +703,12 @@ pub struct UpdateKeyListRequest {
     pub key_list: SignedKeyList,
 }
 
-/// `PUT /api/mail/addresses/{id}/key-list` — publishes the next signed key
+/// `PUT /api/v1/mail/addresses/{id}/key-list` — publishes the next signed key
 /// list for the same keys: another key made primary, or keys marked
 /// obsolete (not encrypted to) or compromised (signatures not trusted).
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/{id}/key-list",
+    path = "/api/v1/mail/addresses/{id}/key-list",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),
@@ -841,11 +841,11 @@ async fn public_keys(
     )))
 }
 
-/// `GET /api/mail/keys?email=` — a Kutup address's public keys and signed
+/// `GET /api/v1/mail/keys?email=` — a Kutup address's public keys and signed
 /// key-list chain (Proton's `keys/all`).
 #[utoipa::path(
     get,
-    path = "/api/mail/keys",
+    path = "/api/v1/mail/keys",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("email" = String, Query, description = "The address to look up")),
@@ -879,7 +879,7 @@ pub async fn lookup_keys(
             }
         }
         // A list's mail is encrypted to its members: the browser asks
-        // `GET /api/mail/groups/recipients` for them.
+        // `GET /api/v1/mail/groups/recipients` for them.
         return Err(AppError::not_found("this address is a group")
             .with_details(serde_json::json!({ "code": "group" })));
     }
@@ -1097,12 +1097,12 @@ pub struct OutsideMailKeyEntry {
     pub created_at: u32,
 }
 
-/// `GET /api/mail/keys/outside?email=` — an outside address's OpenPGP key,
+/// `GET /api/v1/mail/keys/outside?email=` — an outside address's OpenPGP key,
 /// from its Web Key Directory, Proton's key server or keys.openpgp.org
-/// (docs/plans/mail.md, C3). Kutup addresses use `GET /api/mail/keys`.
+/// (docs/plans/mail.md, C3). Kutup addresses use `GET /api/v1/mail/keys`.
 #[utoipa::path(
     get,
-    path = "/api/mail/keys/outside",
+    path = "/api/v1/mail/keys/outside",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("email" = String, Query, description = "The outside address")),
@@ -1121,7 +1121,9 @@ pub async fn outside_keys(
         return Err(AppError::bad_request("not an email address"));
     };
     if domain.eq_ignore_ascii_case(&state.config.chat_server_name) {
-        return Err(AppError::bad_request("a Kutup address: use /api/mail/keys"));
+        return Err(AppError::bad_request(
+            "a Kutup address: use /api/v1/mail/keys",
+        ));
     }
     let address = format!("{local}@{domain}");
     let found = crate::mail::outside_keys::lookup(&state, &address)

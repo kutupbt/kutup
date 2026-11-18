@@ -60,15 +60,15 @@ describe("An account's limits", () => {
     fireEvent.change(input, { target: { value: String(GIB) } })
     fireEvent.click(within(row).getByRole('button', { name: 'Save' }))
     await waitFor(() =>
-      expect(put).toHaveBeenCalledWith('/admin/users/u1/limits/drive_upload_max_bytes', { value: GIB }),
+      expect(put).toHaveBeenCalledWith('/admin/accounts/u1/entitlements/drive_upload_max_bytes', { value: GIB }),
     )
     // Now the account's own: it can go back to the server's.
     fireEvent.click(await within(row).findByTestId('admin-rate-limit-drive_upload_max_bytes-reset'))
     await waitFor(() =>
-      expect(put).toHaveBeenLastCalledWith('/admin/users/u1/limits/drive_upload_max_bytes', { value: null }),
+      expect(put).toHaveBeenLastCalledWith('/admin/accounts/u1/entitlements/drive_upload_max_bytes', { value: null }),
     )
     // A rate limit goes by its prefixed key.
     fireEvent.click(within(own).getByTestId('admin-rate-limit-feedback-reset'))
-    await waitFor(() => expect(put).toHaveBeenLastCalledWith('/admin/users/u1/limits/rate_limit.feedback', { value: null }))
+    await waitFor(() => expect(put).toHaveBeenLastCalledWith('/admin/accounts/u1/entitlements/rate_limit.feedback', { value: null }))
   })
 })

@@ -64,7 +64,7 @@ fn file_share_contract() {
 
     let share = |to: &User, envelope: String, can_edit: bool, by: &User| {
         bearer(
-            c.post(format!("{base}/api/files/{}/share", file.id)),
+            c.post(format!("{base}/api/v1/drive/files/{}/share", file.id)),
             &by.token,
         )
         .json(
@@ -123,11 +123,14 @@ fn file_share_contract() {
     );
 
     // Bob lists it and opens its key; the folder stays closed.
-    let listed: Value = bearer(c.get(format!("{base}/api/shared-files")), &bob.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let listed: Value = bearer(
+        c.get(format!("{base}/api/v1/drive/shared-with-me")),
+        &bob.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let entry = listed
         .as_array()
         .unwrap()
@@ -157,7 +160,10 @@ fn file_share_contract() {
         b"just this one"
     );
     let folder_files = bearer(
-        c.get(format!("{base}/api/collections/{}/files", folder.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{}/files",
+            folder.id
+        )),
         &bob.token,
     )
     .send()
@@ -184,7 +190,7 @@ fn file_share_contract() {
 
     // The owner sees who has it.
     let access: Value = bearer(
-        c.get(format!("{base}/api/files/{}/access", file.id)),
+        c.get(format!("{base}/api/v1/drive/files/{}/access", file.id)),
         &alice.token,
     )
     .send()
@@ -194,7 +200,7 @@ fn file_share_contract() {
     assert_eq!(access["members"].as_array().unwrap().len(), 2);
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/files/{}/access", file.id)),
+            c.get(format!("{base}/api/v1/drive/files/{}/access", file.id)),
             &bob.token
         )
         .send()
@@ -207,7 +213,7 @@ fn file_share_contract() {
     let mut next_key = [0u8; 32];
     kutup_crypto::primitives::random(&mut next_key);
     let rotate = |members: Value, removed: Value| {
-        bearer(c.post(format!("{base}/api/files/{}/rotate", file.id)), &alice.token)
+        bearer(c.post(format!("{base}/api/v1/drive/files/{}/rotate", file.id)), &alice.token)
             .json(&json!({
                 "fromGeneration": 1,
                 "fileKeyEnvelope": drive_envelope::seal_b64(&next_key, &folder.key,
@@ -241,21 +247,27 @@ fn file_share_contract() {
         StatusCode::OK,
         "Bob was removed"
     );
-    let bob_listed: Value = bearer(c.get(format!("{base}/api/shared-files")), &bob.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let bob_listed: Value = bearer(
+        c.get(format!("{base}/api/v1/drive/shared-with-me")),
+        &bob.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     assert!(bob_listed
         .as_array()
         .unwrap()
         .iter()
         .all(|e| e["file"]["id"] != file.id.as_str()));
-    let carol_listed: Value = bearer(c.get(format!("{base}/api/shared-files")), &carol.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let carol_listed: Value = bearer(
+        c.get(format!("{base}/api/v1/drive/shared-with-me")),
+        &carol.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let carol_entry = carol_listed
         .as_array()
         .unwrap()
@@ -270,7 +282,7 @@ fn file_share_contract() {
 
     // In the trash, a shared file is out of reach; restored, back.
     assert!(bearer(
-        c.delete(format!("{base}/api/files/{}", file.id)),
+        c.delete(format!("{base}/api/v1/drive/files/{}", file.id)),
         &alice.token
     )
     .send()
@@ -281,11 +293,14 @@ fn file_share_contract() {
         download(&c, &base, &carol.token, &file.id).0,
         StatusCode::OK
     );
-    let trashed: Value = bearer(c.get(format!("{base}/api/shared-files")), &carol.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let trashed: Value = bearer(
+        c.get(format!("{base}/api/v1/drive/shared-with-me")),
+        &carol.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     assert!(trashed
         .as_array()
         .unwrap()
@@ -318,7 +333,7 @@ fn stale_file_shares_wait_for_the_owner() {
         .status()
         .is_success());
     let status = bearer(
-        c.post(format!("{base}/api/files/{}/share", file.id)),
+        c.post(format!("{base}/api/v1/drive/files/{}/share", file.id)),
         &alice.token,
     )
     .json(&json!({ "recipientAccountId": carol.id,
@@ -330,7 +345,11 @@ fn stale_file_shares_wait_for_the_owner() {
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     // Shared by me: the folder (two people) and the file by itself (one).
-    let by_me = get(&c, format!("{base}/api/shared-by-me"), &alice.token);
+    let by_me = get(
+        &c,
+        format!("{base}/api/v1/drive/shared-by-me"),
+        &alice.token,
+    );
     let by_me = by_me.as_array().unwrap();
     assert!(by_me.iter().any(|i| i["collectionId"] == folder.id.as_str()
         && i.get("fileId").is_none()
@@ -339,10 +358,14 @@ fn stale_file_shares_wait_for_the_owner() {
         .iter()
         .any(|i| i["fileId"] == file.id.as_str() && i["people"] == 1));
     assert_eq!(
-        get(&c, format!("{base}/api/shared-by-me"), &carol.token)
-            .as_array()
-            .unwrap()
-            .len(),
+        get(
+            &c,
+            format!("{base}/api/v1/drive/shared-by-me"),
+            &carol.token
+        )
+        .as_array()
+        .unwrap()
+        .len(),
         0
     );
 
@@ -350,13 +373,19 @@ fn stale_file_shares_wait_for_the_owner() {
     let listing = |token: &str| {
         get(
             &c,
-            format!("{base}/api/collections/{}/files", folder.id),
+            format!("{base}/api/v1/drive/collections/{}/files", folder.id),
             token,
         )
     };
     assert_eq!(listing(&alice.token)[0]["shared"], true);
     assert!(listing(&editor.token)[0].get("shared").is_none());
-    let pending = |token: &str| get(&c, format!("{base}/api/file-shares/pending"), token);
+    let pending = |token: &str| {
+        get(
+            &c,
+            format!("{base}/api/v1/drive/shared-with-me/pending"),
+            token,
+        )
+    };
     assert_eq!(pending(&alice.token).as_array().unwrap().len(), 0);
     let version = |token: &str, key: &[u8; 32], generation: u32| {
         save_version(
@@ -372,7 +401,7 @@ fn stale_file_shares_wait_for_the_owner() {
     // The folder moves to a new key (the leaver removed); the file is behind.
     let access = get(
         &c,
-        format!("{base}/api/collections/{}/access", folder.id),
+        format!("{base}/api/v1/drive/collections/{}/access", folder.id),
         &alice.token,
     );
     let mut folder2 = [0u8; 32];
@@ -404,7 +433,7 @@ fn stale_file_shares_wait_for_the_owner() {
         DriveEnvelopeContextV1::new(purpose, 2, revision, &folder.id, &alice.id).unwrap()
     };
     let r = bearer(
-        c.post(format!("{base}/api/collections/{}/rotate", folder.id)),
+        c.post(format!("{base}/api/v1/drive/collections/{}/rotate", folder.id)),
         &alice.token,
     )
     .json(&json!({
@@ -422,7 +451,7 @@ fn stale_file_shares_wait_for_the_owner() {
     assert_eq!(r.status(), StatusCode::OK, "rotate: {:?}", r.text());
 
     let carol_entry = |token: &str| {
-        get(&c, format!("{base}/api/shared-files"), token)
+        get(&c, format!("{base}/api/v1/drive/shared-with-me"), token)
             .as_array()
             .unwrap()
             .iter()
@@ -446,7 +475,7 @@ fn stale_file_shares_wait_for_the_owner() {
     // The folder's editor re-keys the file; they cannot seal for the owner.
     let mut key2 = [0u8; 32];
     kutup_crypto::primitives::random(&mut key2);
-    let r = bearer(c.post(format!("{base}/api/files/{}/rekey", file.id)), &editor.token)
+    let r = bearer(c.post(format!("{base}/api/v1/drive/files/{}/rekey", file.id)), &editor.token)
         .json(&json!({
             "fromGeneration": 1,
             "fileKeyEnvelope": drive_envelope::seal_b64(&key2, &folder2,
@@ -480,7 +509,7 @@ fn stale_file_shares_wait_for_the_owner() {
     );
 
     // The owner re-seals: Carol edits again, nothing is pending.
-    let r = bearer(c.put(format!("{base}/api/files/{}/shares", file.id)), &alice.token)
+    let r = bearer(c.put(format!("{base}/api/v1/drive/files/{}/shares", file.id)), &alice.token)
         .json(&json!({ "members": [{ "accountId": carol.id,
                                      "shareEnvelope": file_share(&alice, &file.id, &key2, 2, &carol) }] }))
         .send()
@@ -512,7 +541,7 @@ fn editors_share_and_rename_when_allowed() {
         .is_success());
     let share = |by: &User, to: &User, can_edit: bool| {
         bearer(
-            c.post(format!("{base}/api/files/{}/share", file.id)),
+            c.post(format!("{base}/api/v1/drive/files/{}/share", file.id)),
             &by.token,
         )
         .json(&json!({ "recipientAccountId": to.id,
@@ -529,7 +558,7 @@ fn editors_share_and_rename_when_allowed() {
     assert_eq!(share(&carol, &dave, false), StatusCode::FORBIDDEN);
     let access = |by: &User| {
         bearer(
-            c.get(format!("{base}/api/files/{}/access", file.id)),
+            c.get(format!("{base}/api/v1/drive/files/{}/access", file.id)),
             &by.token,
         )
         .send()
@@ -538,7 +567,7 @@ fn editors_share_and_rename_when_allowed() {
     assert_eq!(access(&carol).status(), StatusCode::FORBIDDEN);
     let allow = |value: bool, by: &User| {
         bearer(
-            c.put(format!("{base}/api/files/{}/sharing", file.id)),
+            c.put(format!("{base}/api/v1/drive/files/{}/sharing", file.id)),
             &by.token,
         )
         .json(&json!({ "editorsCanShare": value }))
@@ -570,7 +599,11 @@ fn editors_share_and_rename_when_allowed() {
     assert_eq!(seen["members"].as_array().unwrap().len(), 3);
     assert_eq!(seen["editorsCanShare"], true);
 
-    let listed = get(&c, format!("{base}/api/shared-files"), &dave.token);
+    let listed = get(
+        &c,
+        format!("{base}/api/v1/drive/shared-with-me"),
+        &dave.token,
+    );
     let entry = listed
         .as_array()
         .unwrap()
@@ -596,7 +629,7 @@ fn editors_share_and_rename_when_allowed() {
 
     // Editors rename; viewers do not.
     let rename = |by: &User, revision: u64| {
-        bearer(c.put(format!("{base}/api/files/{}", file.id)), &by.token)
+        bearer(c.put(format!("{base}/api/v1/drive/files/{}", file.id)), &by.token)
             .json(&json!({
                 "metadataEnvelope": drive_envelope::seal_b64(br#"{"name":"renamed.txt","mimeType":"text/plain","size":1}"#, &file.key,
                     DriveEnvelopeContextV1::file_metadata(&file.id, 1, revision).unwrap()).unwrap(),
@@ -618,7 +651,7 @@ fn editors_share_and_rename_when_allowed() {
             .iter()
             .map(|m| json!({ "accountId": m.id, "shareEnvelope": file_share(&alice, &file.id, &next, 2, m) }))
             .collect();
-        bearer(c.post(format!("{base}/api/files/{}/rotate", file.id)), &by.token)
+        bearer(c.post(format!("{base}/api/v1/drive/files/{}/rotate", file.id)), &by.token)
             .json(&json!({
                 "fromGeneration": 1,
                 "fileKeyEnvelope": drive_envelope::seal_b64(&next, &folder.key,
@@ -635,7 +668,11 @@ fn editors_share_and_rename_when_allowed() {
     };
     assert_eq!(rotate(&carol), StatusCode::FORBIDDEN);
     assert_eq!(rotate(&alice), StatusCode::OK);
-    let carol_entry = get(&c, format!("{base}/api/shared-files"), &carol.token);
+    let carol_entry = get(
+        &c,
+        format!("{base}/api/v1/drive/shared-with-me"),
+        &carol.token,
+    );
     let carol_entry = carol_entry
         .as_array()
         .unwrap()
@@ -672,16 +709,19 @@ fn a_public_link_to_one_file() {
     };
     let make_link = |link_key: &[u8; 32]| -> Value {
         let id = uuid();
-        let r = bearer(c.post(format!("{base}/api/share")), &alice.token)
-            .json(&json!({
-                "shareType": "file",
-                "targetId": file.id,
-                "collectionKeyEnvelope": wrap(&file.key, link_key, 1),
-                "id": id,
-                "ownerLinkKeyEnvelope": owner_link_key(link_key, &alice, &id),
-            }))
-            .send()
-            .unwrap();
+        let r = bearer(
+            c.post(format!("{base}/api/v1/drive/public-links")),
+            &alice.token,
+        )
+        .json(&json!({
+            "shareType": "file",
+            "targetId": file.id,
+            "collectionKeyEnvelope": wrap(&file.key, link_key, 1),
+            "id": id,
+            "ownerLinkKeyEnvelope": owner_link_key(link_key, &alice, &id),
+        }))
+        .send()
+        .unwrap();
         assert_eq!(r.status(), StatusCode::CREATED, "{:?}", r.text());
         r.json().unwrap()
     };
@@ -691,7 +731,7 @@ fn a_public_link_to_one_file() {
 
     // Anyone with the link: the file's record, its key, its content.
     let public: Value = c
-        .get(format!("{base}/api/share/{token}"))
+        .get(format!("{base}/api/v1/drive/public-links/{token}"))
         .send()
         .unwrap()
         .json()
@@ -712,7 +752,10 @@ fn a_public_link_to_one_file() {
     .unwrap();
     assert_eq!(key, file.key);
     let blob = c
-        .get(format!("{base}/api/share/{token}/download/{}", file.id))
+        .get(format!(
+            "{base}/api/v1/drive/public-links/{token}/files/{}/download",
+            file.id
+        ))
         .send()
         .unwrap();
     assert_eq!(blob.status(), StatusCode::OK);
@@ -729,7 +772,7 @@ fn a_public_link_to_one_file() {
     }
     let asset = c
         .get(format!(
-            "{base}/api/share/{token}/files/{}/assets/img-1",
+            "{base}/api/v1/drive/public-links/{token}/files/{}/assets/img-1",
             file.id
         ))
         .send()
@@ -747,7 +790,7 @@ fn a_public_link_to_one_file() {
     );
     assert_eq!(
         c.get(format!(
-            "{base}/api/share/{token}/files/{}/assets/img-1",
+            "{base}/api/v1/drive/public-links/{token}/files/{}/assets/img-1",
             neighbour.id
         ))
         .send()
@@ -757,7 +800,7 @@ fn a_public_link_to_one_file() {
     );
     assert_eq!(
         c.get(format!(
-            "{base}/api/share/{token}/files/{}/assets/img-2",
+            "{base}/api/v1/drive/public-links/{token}/files/{}/assets/img-2",
             file.id
         ))
         .send()
@@ -767,23 +810,29 @@ fn a_public_link_to_one_file() {
     );
     // No saved editing state yet: the upload is the file.
     assert_eq!(
-        c.get(format!("{base}/api/share/{token}/state/{}", file.id))
-            .send()
-            .unwrap()
-            .status(),
+        c.get(format!(
+            "{base}/api/v1/drive/public-links/{token}/files/{}/state",
+            file.id
+        ))
+        .send()
+        .unwrap()
+        .status(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        c.get(format!("{base}/api/share/{token}/state/{}", neighbour.id))
-            .send()
-            .unwrap()
-            .status(),
+        c.get(format!(
+            "{base}/api/v1/drive/public-links/{token}/files/{}/state",
+            neighbour.id
+        ))
+        .send()
+        .unwrap()
+        .status(),
         StatusCode::FORBIDDEN
     );
     // Nothing else in the folder.
     assert_eq!(
         c.get(format!(
-            "{base}/api/share/{token}/download/{}",
+            "{base}/api/v1/drive/public-links/{token}/files/{}/download",
             neighbour.id
         ))
         .send()
@@ -792,21 +841,21 @@ fn a_public_link_to_one_file() {
         StatusCode::FORBIDDEN
     );
     assert_ne!(
-        c.get(format!("{base}/api/share/{token}/files"))
+        c.get(format!("{base}/api/v1/drive/public-links/{token}/files"))
             .send()
             .unwrap()
             .status(),
         StatusCode::OK
     );
     assert_ne!(
-        c.get(format!("{base}/api/share/{token}/epochs"))
+        c.get(format!("{base}/api/v1/drive/public-links/{token}/epochs"))
             .send()
             .unwrap()
             .status(),
         StatusCode::OK
     );
     // A wrap for the wrong generation is refused; only the owner links.
-    let r = bearer(c.post(format!("{base}/api/share")), &bob.token)
+    let r = bearer(c.post(format!("{base}/api/v1/drive/public-links")), &bob.token)
         .json(&json!({ "shareType": "file", "targetId": file.id, "collectionKeyEnvelope": wrap(&file.key, &link_key, 1),
                        "id": uuid(), "ownerLinkKeyEnvelope": owner_link_key(&link_key, &bob, &uuid()) }))
         .send()
@@ -816,11 +865,15 @@ fn a_public_link_to_one_file() {
     // The owner sees it; so does Shared by me.
     let access = get(
         &c,
-        format!("{base}/api/files/{}/access", file.id),
+        format!("{base}/api/v1/drive/files/{}/access", file.id),
         &alice.token,
     );
     assert_eq!(access["publicLinks"].as_array().unwrap().len(), 1);
-    let by_me = get(&c, format!("{base}/api/shared-by-me"), &alice.token);
+    let by_me = get(
+        &c,
+        format!("{base}/api/v1/drive/shared-by-me"),
+        &alice.token,
+    );
     assert!(by_me
         .as_array()
         .unwrap()
@@ -828,7 +881,7 @@ fn a_public_link_to_one_file() {
         .any(|i| i["fileId"] == file.id.as_str() && i["links"] == 1));
 
     // Removing Bob keeps the link, re-wrapped for the new key.
-    let status = bearer(c.post(format!("{base}/api/files/{}/share", file.id)), &alice.token)
+    let status = bearer(c.post(format!("{base}/api/v1/drive/files/{}/share", file.id)), &alice.token)
         .json(&json!({ "recipientAccountId": bob.id, "shareEnvelope": file_share(&alice, &file.id, &file.key, 1, &bob), "canEdit": false }))
         .send()
         .unwrap()
@@ -843,7 +896,7 @@ fn a_public_link_to_one_file() {
                   removed: Value,
                   links: Value,
                   removed_links: Value| {
-        bearer(c.post(format!("{base}/api/files/{}/rotate", file.id)), &alice.token)
+        bearer(c.post(format!("{base}/api/v1/drive/files/{}/rotate", file.id)), &alice.token)
             .json(&json!({
                 "fromGeneration": from,
                 "fileKeyEnvelope": drive_envelope::seal_b64(to, &folder.key,
@@ -877,7 +930,7 @@ fn a_public_link_to_one_file() {
         StatusCode::OK
     );
     let public: Value = c
-        .get(format!("{base}/api/share/{token}"))
+        .get(format!("{base}/api/v1/drive/public-links/{token}"))
         .send()
         .unwrap()
         .json()
@@ -899,7 +952,7 @@ fn a_public_link_to_one_file() {
         StatusCode::OK
     );
     assert_eq!(
-        c.get(format!("{base}/api/share/{token}"))
+        c.get(format!("{base}/api/v1/drive/public-links/{token}"))
             .send()
             .unwrap()
             .status(),
@@ -909,7 +962,7 @@ fn a_public_link_to_one_file() {
     // A link to a file in the trash goes dark.
     let second_key = [0x31u8; 32];
     let id = uuid();
-    let r = bearer(c.post(format!("{base}/api/share")), &alice.token)
+    let r = bearer(c.post(format!("{base}/api/v1/drive/public-links")), &alice.token)
         .json(&json!({ "shareType": "file", "targetId": file.id,
                        "collectionKeyEnvelope": drive_envelope::seal_b64(&third, &second_key,
                            DriveEnvelopeContextV1::public_link_file_key(&file.id, &alice.id, 3).unwrap()).unwrap(),
@@ -922,7 +975,7 @@ fn a_public_link_to_one_file() {
         .unwrap()
         .to_string();
     assert!(bearer(
-        c.delete(format!("{base}/api/files/{}", file.id)),
+        c.delete(format!("{base}/api/v1/drive/files/{}", file.id)),
         &alice.token
     )
     .send()
@@ -930,7 +983,7 @@ fn a_public_link_to_one_file() {
     .status()
     .is_success());
     assert_eq!(
-        c.get(format!("{base}/api/share/{token2}"))
+        c.get(format!("{base}/api/v1/drive/public-links/{token2}"))
             .send()
             .unwrap()
             .status(),
@@ -942,17 +995,20 @@ fn a_public_link_to_one_file() {
 fn file_link(c: &Client, base: &str, owner: &User, file: &Sealed) -> String {
     let link_key = [0x33u8; 32];
     let id = uuid();
-    let r = bearer(c.post(format!("{base}/api/share")), &owner.token)
-        .json(&json!({
-            "shareType": "file",
-            "targetId": file.id,
-            "collectionKeyEnvelope": drive_envelope::seal_b64(&file.key, &link_key,
-                DriveEnvelopeContextV1::public_link_file_key(&file.id, &owner.id, 1).unwrap()).unwrap(),
-            "id": id,
-            "ownerLinkKeyEnvelope": owner_link_key(&link_key, owner, &id),
-        }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/v1/drive/public-links")),
+        &owner.token,
+    )
+    .json(&json!({
+        "shareType": "file",
+        "targetId": file.id,
+        "collectionKeyEnvelope": drive_envelope::seal_b64(&file.key, &link_key,
+            DriveEnvelopeContextV1::public_link_file_key(&file.id, &owner.id, 1).unwrap()).unwrap(),
+        "id": id,
+        "ownerLinkKeyEnvelope": owner_link_key(&link_key, owner, &id),
+    }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::CREATED, "{:?}", r.text());
     r.json::<Value>().unwrap()["token"]
         .as_str()
@@ -994,7 +1050,7 @@ fn reports_take_public_links_down() {
     }
     let token = file_link(&c, &base, &alice, &first);
     let office: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()
@@ -1005,7 +1061,7 @@ fn reports_take_public_links_down() {
         .trim_end_matches('/')
         .to_string();
     let report = |token: &str, body: Value| {
-        c.post(format!("{base}/api/share/{token}/report"))
+        c.post(format!("{base}/api/v1/drive/public-links/{token}/report"))
             .json(&body)
             .send()
             .unwrap()
@@ -1046,13 +1102,13 @@ fn reports_take_public_links_down() {
 
     // Only an administrator sees reports.
     assert_eq!(
-        bearer(c.get(format!("{base}/api/admin/reports")), &alice.token)
+        bearer(c.get(format!("{base}/api/v1/admin/reports")), &alice.token)
             .send()
             .unwrap()
             .status(),
         StatusCode::FORBIDDEN
     );
-    let open = get(&c, format!("{base}/api/admin/reports"), &admin.token);
+    let open = get(&c, format!("{base}/api/v1/admin/reports"), &admin.token);
     let mine = open
         .as_array()
         .unwrap()
@@ -1068,15 +1124,18 @@ fn reports_take_public_links_down() {
 
     // Taken down: every request to the link says so; the report is closed and the key forgotten.
     let removed = bearer(
-        c.post(format!("{base}/api/admin/reports/{id}/remove-link")),
+        c.post(format!("{base}/api/v1/admin/reports/{id}/remove-link")),
         &admin.token,
     )
     .send()
     .unwrap();
     assert_eq!(removed.status(), StatusCode::NO_CONTENT);
     for path in [
-        format!("/api/share/{token}"),
-        format!("/api/share/{token}/download/{}", first.id),
+        format!("/api/v1/drive/public-links/{token}"),
+        format!(
+            "/api/v1/drive/public-links/{token}/files/{}/download",
+            first.id
+        ),
     ] {
         let r = c.get(format!("{base}{path}")).send().unwrap();
         assert_eq!(r.status(), StatusCode::GONE, "{path}");
@@ -1086,11 +1145,11 @@ fn reports_take_public_links_down() {
         report(&token, json!({ "reason": "other" })),
         StatusCode::GONE
     );
-    let open = get(&c, format!("{base}/api/admin/reports"), &admin.token);
+    let open = get(&c, format!("{base}/api/v1/admin/reports"), &admin.token);
     assert!(!open.as_array().unwrap().iter().any(|r| r["id"] == id));
     let resolved = get(
         &c,
-        format!("{base}/api/admin/reports?status=resolved"),
+        format!("{base}/api/v1/admin/reports?status=resolved"),
         &admin.token,
     );
     let closed = resolved
@@ -1109,26 +1168,29 @@ fn reports_take_public_links_down() {
         StatusCode::NO_CONTENT
     );
     assert_eq!(
-        c.get(format!("{base}/api/share/{other}"))
+        c.get(format!("{base}/api/v1/drive/public-links/{other}"))
             .send()
             .unwrap()
             .status(),
         StatusCode::OK
     );
     let disabled = bearer(
-        c.put(format!("{base}/api/admin/users/{}", alice.id)),
+        c.put(format!("{base}/api/v1/admin/accounts/{}", alice.id)),
         &admin.token,
     )
     .json(&json!({ "isActive": false }))
     .send()
     .unwrap();
     assert!(disabled.status().is_success());
-    let r = c.get(format!("{base}/api/share/{other}")).send().unwrap();
+    let r = c
+        .get(format!("{base}/api/v1/drive/public-links/{other}"))
+        .send()
+        .unwrap();
     assert_eq!(r.status(), StatusCode::GONE);
     assert_eq!(r.json::<Value>().unwrap()["code"], "link_removed");
     let resolved = get(
         &c,
-        format!("{base}/api/admin/reports?status=resolved"),
+        format!("{base}/api/v1/admin/reports?status=resolved"),
         &admin.token,
     );
     assert!(resolved
@@ -1139,7 +1201,7 @@ fn reports_take_public_links_down() {
 
     // Enabled again, the link the administrator did not take down works again.
     let enabled = bearer(
-        c.put(format!("{base}/api/admin/users/{}", alice.id)),
+        c.put(format!("{base}/api/v1/admin/accounts/{}", alice.id)),
         &admin.token,
     )
     .json(&json!({ "isActive": true }))
@@ -1147,14 +1209,14 @@ fn reports_take_public_links_down() {
     .unwrap();
     assert!(enabled.status().is_success());
     assert_eq!(
-        c.get(format!("{base}/api/share/{other}"))
+        c.get(format!("{base}/api/v1/drive/public-links/{other}"))
             .send()
             .unwrap()
             .status(),
         StatusCode::OK
     );
     assert_eq!(
-        c.get(format!("{base}/api/share/{token}"))
+        c.get(format!("{base}/api/v1/drive/public-links/{token}"))
             .send()
             .unwrap()
             .status(),

@@ -99,7 +99,7 @@ fn link_keyring(client: &Client, p: &PubUrl, share: &PublicShare) -> Result<Keyr
     let col_key = unwrap_collection_key(share, &p.link_key)?;
     Keyring::load_from(
         client,
-        &format!("/share/{}/epochs", p.token),
+        &format!("/drive/public-links/{}/epochs", p.token),
         &share.target_id,
         &share.owner_account_id,
         share.collection_key_epoch,

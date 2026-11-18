@@ -28,10 +28,10 @@ pub struct PhotosPreferences {
     pub library_folder_ids: Vec<Uuid>,
 }
 
-/// `GET /api/photos/preferences` — your library's folders.
+/// `GET /api/v1/photos/preferences` — your library's folders.
 #[utoipa::path(
     get,
-    path = "/api/photos/preferences",
+    path = "/api/v1/photos/preferences",
     tag = "photos",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your photo library's folders", body = PhotosPreferences))
@@ -76,11 +76,11 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
     })
 }
 
-/// `PUT /api/photos/preferences` — choose the upload folder (one of your own)
+/// `PUT /api/v1/photos/preferences` — choose the upload folder (one of your own)
 /// and the other folders the library shows.
 #[utoipa::path(
     put,
-    path = "/api/photos/preferences",
+    path = "/api/v1/photos/preferences",
     tag = "photos",
     security(("BearerAuth" = [])),
     request_body = PhotosPreferences,

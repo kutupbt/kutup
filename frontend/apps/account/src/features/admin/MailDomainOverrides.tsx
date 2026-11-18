@@ -43,7 +43,7 @@ export function MailDomainOverridesCard({ accountId }: { accountId: string }) {
   const key = [...adminKey, 'mail', 'domains', 'overrides', accountId] as const
   const current = useQuery({
     queryKey: key,
-    queryFn: async () => (await api.get<OverridesView>(`/admin/users/${accountId}/mail-domains`)).data,
+    queryFn: async () => (await api.get<OverridesView>(`/admin/accounts/${accountId}/mail-domains`)).data,
   })
   const [domains, setDomains] = useState('')
   const [addresses, setAddresses] = useState('')
@@ -55,7 +55,7 @@ export function MailDomainOverridesCard({ accountId }: { accountId: string }) {
     setCatchAll(current.data.catchAll === null ? 'site' : current.data.catchAll ? 'on' : 'off')
   }, [current.data])
   const save = useMutation({
-    mutationFn: async (body: Overrides) => (await api.put<Overrides>(`/admin/users/${accountId}/mail-domains`, body)).data,
+    mutationFn: async (body: Overrides) => (await api.put<Overrides>(`/admin/accounts/${accountId}/mail-domains`, body)).data,
     onSuccess: (saved) => {
       queryClient.setQueryData<OverridesView>(key, (old) => (old ? { ...old, ...saved } : old))
       toast.success(t('admin.mailDomains.overrides.saved'))

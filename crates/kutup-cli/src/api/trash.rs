@@ -105,7 +105,7 @@ pub struct RestoreRequest {
 impl Client {
     /// Lists the caller's trash roots (folders + files), newest first.
     pub fn list_trash(&self) -> Result<TrashResponse> {
-        let resp = self.request(Method::GET, "/trash").send()?;
+        let resp = self.request(Method::GET, "/drive/trash").send()?;
         super::decode_json(resp)
     }
 
@@ -113,7 +113,7 @@ impl Client {
     /// new name it carries (when its own is taken there, or a folder comes
     /// back at the top level: `409` `name_taken` / `nameNeeded`).
     pub fn restore_trash(&self, id: &str, rename: Option<&RestoreRequest>) -> Result<()> {
-        let mut request = self.request(Method::POST, &format!("/trash/{id}/restore"));
+        let mut request = self.request(Method::POST, &format!("/drive/trash/{id}/restore"));
         if let Some(rename) = rename {
             request = request.json(rename);
         }
@@ -123,14 +123,14 @@ impl Client {
     /// Permanently destroys one trashed root (releases quota). Irreversible.
     pub fn purge_trash(&self, id: &str) -> Result<()> {
         let resp = self
-            .request(Method::DELETE, &format!("/trash/{id}"))
+            .request(Method::DELETE, &format!("/drive/trash/{id}"))
             .send()?;
         super::check_ok(resp)
     }
 
     /// Permanently destroys everything in the trash. Irreversible.
     pub fn empty_trash(&self) -> Result<()> {
-        let resp = self.request(Method::DELETE, "/trash").send()?;
+        let resp = self.request(Method::DELETE, "/drive/trash").send()?;
         super::check_ok(resp)
     }
 }

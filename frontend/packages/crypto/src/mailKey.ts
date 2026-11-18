@@ -269,7 +269,7 @@ export async function openForwardedMailMessage(key: SealedMailKey, message: Uint
   }
 }
 
-/** An end-to-end forwarding's material, the body of `POST /api/mail/forwardings`' `endToEnd`. */
+/** An end-to-end forwarding's material, the body of `POST /api/v1/mail/forwardings`' `endToEnd`. */
 export interface MailForwardingMaterial {
   /** The forwardee key's public part (base64). */
   forwardeePublicKey: string
@@ -305,7 +305,7 @@ export async function makeMailForwarding(
   )
 }
 
-/** The forwarding key as `POST /api/mail/forwardings/{id}/accept` takes it. */
+/** The forwarding key as `POST /api/v1/mail/forwardings/{id}/accept` takes it. */
 export interface AcceptedMailForwarding {
   publicKey: string
   privateKeyEnvelope: string

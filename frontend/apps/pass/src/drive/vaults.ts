@@ -89,11 +89,11 @@ export async function readVaultVersion(file: DriveFile, version: string): Promis
   if (version === ORIGINAL) {
     // The upload, which the version list does not name: it opens against
     // the revision and sealed record served with it.
-    return loadVersionBytes(await originalContentOf(file), `/files/${file.id}/original`)
+    return loadVersionBytes(await originalContentOf(file), `/drive/files/${file.id}/original`)
   }
   const row = (await listVersions(file.id)).find((v) => v.id === version)
   if (!row) throw new Error(`version ${version} is gone`)
-  return loadVersionBytes(await versionContentOf(file, row), `/files/${file.id}/versions/${row.id}/download`)
+  return loadVersionBytes(await versionContentOf(file, row), `/drive/files/${file.id}/versions/${row.id}/download`)
 }
 
 /** What the vault holds now, and which version that is. */
@@ -101,7 +101,7 @@ export async function readCurrentVault(file: DriveFile): Promise<{ contents: Uin
   const newest = (await listVersions(file.id)).find((v) => v.kind === 'file')
   if (newest) return { contents: await readVaultVersion(file, newest.id), version: newest.id }
   // Never saved: the upload is the file's content, opened against what its metadata commits to.
-  return { contents: await loadVersionBytes(await currentContentOf(file), `/files/${file.id}/download`), version: ORIGINAL }
+  return { contents: await loadVersionBytes(await currentContentOf(file), `/drive/files/${file.id}/download`), version: ORIGINAL }
 }
 
 /** The file as its folder lists it now (its key may have moved on). */

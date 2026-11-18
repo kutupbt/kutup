@@ -32,7 +32,7 @@ impl Client {
     /// Fetches public-share metadata. Mirrors `GetPublicShare`.
     pub fn get_public_share(&self, token: &str) -> Result<PublicShare> {
         let resp = self
-            .request(Method::GET, &format!("/share/{token}"))
+            .request(Method::GET, &format!("/drive/public-links/{token}"))
             .send()?;
         super::decode_json(resp)
     }
@@ -40,7 +40,7 @@ impl Client {
     /// Lists files in a collection-type public share. Mirrors `ListPublicShareFiles`.
     pub fn list_public_share_files(&self, token: &str) -> Result<Vec<File>> {
         let resp = self
-            .request(Method::GET, &format!("/share/{token}/files"))
+            .request(Method::GET, &format!("/drive/public-links/{token}/files"))
             .send()?;
         super::decode_json(resp)
     }

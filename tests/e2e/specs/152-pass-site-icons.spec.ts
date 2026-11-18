@@ -13,7 +13,7 @@ test('pass: entries show website icons through Kutup, or none, as the account ch
   await registerAccount(context, newAccount('pass152', PASSWORD))
   const page = await context.newPage()
   const asked: string[] = []
-  await page.route('**/api/pass/icon', async (route) => {
+  await page.route('**/api/v1/pass/icon', async (route) => {
     asked.push(route.request().postDataJSON().domain)
     await route.fulfill({ status: 200, contentType: 'image/png', body: PNG })
   })
@@ -42,7 +42,7 @@ test('pass: entries show website icons through Kutup, or none, as the account ch
   const other = await context.newPage()
   const otherAsked: string[] = []
   other.on('request', (request) => {
-    if (request.url().includes('/api/pass/icon') || !request.url().includes('.localhost')) otherAsked.push(request.url())
+    if (request.url().includes('/api/v1/pass/icon') || !request.url().includes('.localhost')) otherAsked.push(request.url())
   })
   await other.goto(vaultUrl)
   await expect(other.getByRole('heading', { name: 'Kişisel', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })

@@ -103,7 +103,7 @@ fn request_digest<T: serde::Serialize>(value: &T) -> AppResult<String> {
     Ok(hex::encode(hash(Suite::V1, encoded)))
 }
 
-#[utoipa::path(post, path = "/api/chat/backup", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = ProvisionChatBackupRequestV1,
     responses((status = 201, body = ChatBackupStatusV1), (status = 200, body = ChatBackupStatusV1)))]
 pub async fn provision(
@@ -249,7 +249,7 @@ pub async fn provision(
     ))
 }
 
-#[utoipa::path(get, path = "/api/chat/backup", tag = "chat-backup",
+#[utoipa::path(get, path = "/api/v1/chat/backup", tag = "chat.backup",
     security(("BearerAuth" = [])), responses((status = 200, body = ChatBackupStatusV1)))]
 pub async fn status(
     State(state): State<AppState>,
@@ -401,7 +401,7 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
     })
 }
 
-#[utoipa::path(post, path = "/api/chat/backup/segments", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/segments", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = AppendChatBackupSegmentRequestV1,
     responses((status = 200, body = ChatBackupSegmentReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn append_segment(
@@ -621,7 +621,7 @@ pub async fn append_segment(
     }))
 }
 
-#[utoipa::path(get, path = "/api/chat/backup/segments", tag = "chat-backup",
+#[utoipa::path(get, path = "/api/v1/chat/backup/segments", tag = "chat.backup",
     security(("BearerAuth" = [])), params(
         ("after" = Option<u64>, Query, description = "Exclusive account backup cursor"),
         ("limit" = Option<u16>, Query, description = "Page size")
@@ -714,7 +714,7 @@ pub async fn list_segments(
 
 /// Streams an encrypted base snapshot to object storage. The multipart form
 /// contains a canonical `metadata` JSON part and one `ciphertext` file part.
-#[utoipa::path(post, path = "/api/chat/backup/bases", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/bases", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body(
         content = Vec<u8>, content_type = "multipart/form-data",
         description = "Typed metadata and encrypted base ciphertext"
@@ -998,7 +998,7 @@ pub async fn stage_base(
     }))
 }
 
-#[utoipa::path(put, path = "/api/chat/backup/manifest", tag = "chat-backup",
+#[utoipa::path(put, path = "/api/v1/chat/backup/manifest", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = CommitChatBackupManifestRequestV1,
     responses((status = 200, body = ChatBackupManifestCommitReceiptV1), (status = 409, description = "Restore point changed")))]
 pub async fn commit_manifest(
@@ -1212,7 +1212,7 @@ pub async fn commit_manifest(
     }))
 }
 
-#[utoipa::path(get, path = "/api/chat/backup/bases/{objectId}", tag = "chat-backup",
+#[utoipa::path(get, path = "/api/v1/chat/backup/bases/{objectId}", tag = "chat.backup",
     security(("BearerAuth" = [])), params(("objectId" = String, Path)),
     responses((status = 200, description = "Encrypted committed base", content_type = "application/octet-stream")))]
 pub async fn download_base(
@@ -1252,7 +1252,7 @@ pub async fn download_base(
 
 /// Server-side copy of an account-owned inner Chat-media ciphertext into its
 /// backup-specific padded outer encryption. The outer key is never persisted.
-#[utoipa::path(post, path = "/api/chat/backup/media/copy", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/media/copy", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = CopyChatBackupMediaRequestV1,
     responses((status = 200, body = kutup_chat_proto::ChatBackupMediaReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn copy_media(
@@ -1548,7 +1548,7 @@ pub async fn copy_media(
 
 /// Direct upload fallback for a verified outer-encrypted media copy retained
 /// by a client after the administrator-retained delivery object has expired.
-#[utoipa::path(post, path = "/api/chat/backup/media", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/media", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body(
         content = Vec<u8>, content_type = "multipart/form-data",
         description = "Typed metadata and outer-encrypted media ciphertext"
@@ -1906,7 +1906,7 @@ async fn ensure_media_reference(
     Ok(())
 }
 
-#[utoipa::path(get, path = "/api/chat/backup/media/{mediaId}", tag = "chat-backup",
+#[utoipa::path(get, path = "/api/v1/chat/backup/media/{mediaId}", tag = "chat.backup",
     security(("BearerAuth" = [])), params(("mediaId" = String, Path)),
     responses(
         (status = 200, description = "Outer-encrypted backup media", content_type = "application/octet-stream"),
@@ -1954,7 +1954,7 @@ pub async fn download_media(
     .await
 }
 
-#[utoipa::path(post, path = "/api/chat/backup/media/reconciliation", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/media/reconciliation", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = ReconcileChatBackupMediaRequestV1,
     responses((status = 200, body = ChatBackupMediaReconciliationReceiptV1)))]
 pub async fn reconcile_media(

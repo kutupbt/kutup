@@ -13,10 +13,10 @@ async function usedBytes(context: BrowserContext): Promise<number> {
   const page = await context.newPage()
   await page.goto(appUrl('account', '/'))
   const used = await page.evaluate(async () => {
-    const refreshed = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
+    const refreshed = await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })
     if (!refreshed.ok) throw new Error(`refresh ${refreshed.status}`)
     const { accessToken } = (await refreshed.json()) as { accessToken: string }
-    const me = await fetch('/api/user/me', { headers: { Authorization: `Bearer ${accessToken}` } })
+    const me = await fetch('/api/v1/account', { headers: { Authorization: `Bearer ${accessToken}` } })
     return ((await me.json()) as { storageUsedBytes: number }).storageUsedBytes
   })
   await page.close()

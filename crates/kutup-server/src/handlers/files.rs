@@ -90,11 +90,11 @@ pub struct ClaimSeedResponse {
     committed: bool,
 }
 
-/// `GET /api/collections/{id}/files` — mirrors `ListFiles`.
+/// `GET /api/v1/drive/collections/{id}/files` — mirrors `ListFiles`.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}/files",
-    tag = "files",
+    path = "/api/v1/drive/collections/{id}/files",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "Files in the collection", body = Vec<FileRow>))
@@ -115,15 +115,15 @@ pub async fn list_files(
     Ok(Json(out).into_response())
 }
 
-/// `GET /api/drive/files` — every file in the folders this account owns or
+/// `GET /api/v1/drive/files` — every file in the folders this account owns or
 /// has been given (not albums, not the trash), newest first: one request
 /// where listing each folder takes one per folder (the Office home lists
 /// documents across all of them; docs/research/18-web-performance.md).
-/// Rows are those of `GET /api/collections/{id}/files`.
+/// Rows are those of `GET /api/v1/drive/collections/{id}/files`.
 #[utoipa::path(
     get,
-    path = "/api/drive/files",
-    tag = "files",
+    path = "/api/v1/drive/files",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Files in every folder the account can read", body = Vec<FileRow>))
 )]
@@ -147,11 +147,11 @@ pub async fn list_all_files(
     Ok(Json(out).into_response())
 }
 
-/// `POST /api/files/upload` — mirrors `Upload`.
+/// `POST /api/v1/drive/files` — mirrors `Upload`.
 #[utoipa::path(
     post,
-    path = "/api/files/upload",
-    tag = "files",
+    path = "/api/v1/drive/files",
+    tag = "drive",
     operation_id = "uploadFile",
     security(("BearerAuth" = [])),
     request_body(
@@ -397,11 +397,11 @@ pub async fn upload(
         .into_response())
 }
 
-/// `GET /api/files/{id}/download` — mirrors `Download`.
+/// `GET /api/v1/drive/files/{id}/download` — mirrors `Download`.
 #[utoipa::path(
     get,
-    path = "/api/files/{id}/download",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/download",
+    tag = "drive",
     operation_id = "downloadFile",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
@@ -459,13 +459,13 @@ pub(crate) const VERSION_HEADER: &str = "x-kutup-version";
 /// Names the original upload where a version id is expected.
 pub(crate) const ORIGINAL: &str = "original";
 
-/// `GET /api/files/{id}/original` — the original upload, while it is kept:
+/// `GET /api/v1/drive/files/{id}/original` — the original upload, while it is kept:
 /// the base of an office editing session that began before the file's first
 /// saved version.
 #[utoipa::path(
     get,
-    path = "/api/files/{id}/original",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/original",
+    tag = "drive",
     operation_id = "downloadFileOriginal",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
@@ -510,12 +510,12 @@ pub struct DriveLimits {
     stream_blob_fallback_max_bytes: i64,
 }
 
-/// `GET /api/drive/limits` — the upload and streaming limits, as they are
+/// `GET /api/v1/drive/limits` — the upload and streaming limits, as they are
 /// for this account (its own where administrators set them).
 #[utoipa::path(
     get,
-    path = "/api/drive/limits",
-    tag = "files",
+    path = "/api/v1/drive/limits",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, body = DriveLimits))
 )]
@@ -544,11 +544,11 @@ pub async fn limits(
     }))
 }
 
-/// `PUT /api/files/{id}` — mirrors `UpdateMetadata` (rename).
+/// `PUT /api/v1/drive/files/{id}` — mirrors `UpdateMetadata` (rename).
 #[utoipa::path(
     put,
-    path = "/api/files/{id}",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = UpdateFileMetadataRequest,
@@ -637,13 +637,13 @@ pub async fn update_metadata(
     .into_response())
 }
 
-/// `DELETE /api/files/{id}` — soft-deletes into the trash (30-day retention). Quota stays
+/// `DELETE /api/v1/drive/files/{id}` — soft-deletes into the trash (30-day retention). Quota stays
 /// reserved while the file is in trash (the blob still occupies storage); the permanent
-/// path (`DELETE /api/trash/{id}` or the retention sweeper) releases it.
+/// path (`DELETE /api/v1/drive/trash/{id}` or the retention sweeper) releases it.
 #[utoipa::path(
     delete,
-    path = "/api/files/{id}",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}",
+    tag = "drive",
     operation_id = "deleteFile",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
@@ -678,11 +678,11 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/files/{fileId}/claim-seed` — mirrors `ClaimSeed`.
+/// `POST /api/v1/drive/files/{fileId}/claim-seed` — mirrors `ClaimSeed`.
 #[utoipa::path(
     post,
-    path = "/api/files/{fileId}/claim-seed",
-    tag = "files",
+    path = "/api/v1/drive/files/{fileId}/claim-seed",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
     responses((status = 200, description = "Whether this caller won the first-seeder race", body = ClaimSeedResponse))

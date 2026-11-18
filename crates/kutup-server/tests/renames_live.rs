@@ -42,7 +42,7 @@ fn rename(c: &Client, base: &str, user: &User, to: &str) -> (StatusCode, Value) 
         c,
         base,
         &user.token,
-        &format!("/api/user/rename/check?name={to}"),
+        &format!("/api/v1/account/rename/check?name={to}"),
     )
     .json()
     .unwrap();
@@ -54,7 +54,7 @@ fn rename(c: &Client, base: &str, user: &User, to: &str) -> (StatusCode, Value) 
 fn start(c: &Client, base: &str, name: &str, password: &str, ip: &str) -> (StatusCode, Value) {
     let (_, ke1) = kutup_crypto::opaque::client_login_start(password).unwrap();
     let r = c
-        .post(format!("{base}/api/auth/login/start"))
+        .post(format!("{base}/api/v1/auth/login/start"))
         .header("x-kutup-client", "cli")
         .header("x-real-ip", ip)
         .json(&json!({ "name": name, "credentialRequest": b64(&ke1) }))
@@ -78,7 +78,9 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["username"], json!(new));
     assert_eq!(body["sequence"], 1);
-    let me: Value = get(&c, &base, &user.token, "/api/user/me").json().unwrap();
+    let me: Value = get(&c, &base, &user.token, "/api/v1/account")
+        .json()
+        .unwrap();
     assert_eq!(me["username"], json!(new));
     assert_eq!(me["renames"]["sequence"], 1);
     assert!(me["renames"]["digest"]
@@ -100,7 +102,7 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
     )
     .unwrap();
     let grant = reauth_grant(&c, &base, &user, "rename");
-    let r = bearer(c.post(format!("{base}/api/user/rename")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/account/rename")), &user.token)
         .json(&json!({ "grant": grant, "rename": stale }))
         .send()
         .unwrap();
@@ -127,7 +129,7 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
         &c,
         &base,
         &user.token,
-        &format!("/api/users/by-address/{old}@{domain}"),
+        &format!("/api/v1/accounts/by-address/{old}@{domain}"),
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
     let renamed: Value = r.json().unwrap();
@@ -149,21 +151,21 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
         &c,
         &base,
         &user.token,
-        &format!("/api/users/renames/{old}@{domain}"),
+        &format!("/api/v1/accounts/by-address/{old}/renames@{domain}"),
     )
     .json()
     .unwrap();
     assert_eq!(&listed, chains);
 
     // The names the account has, and the event.
-    let names: Value = get(&c, &base, &user.token, "/api/user/names")
+    let names: Value = get(&c, &base, &user.token, "/api/v1/account/names")
         .json()
         .unwrap();
     assert_eq!(names[0]["name"], json!(new));
     assert_eq!(names[0]["state"], "current");
     assert_eq!(names[1]["name"], json!(old));
     assert_eq!(names[1]["state"], "held");
-    let events: Value = get(&c, &base, &user.token, "/api/user/security-events")
+    let events: Value = get(&c, &base, &user.token, "/api/v1/account/security-events")
         .json()
         .unwrap();
     // Among the sign-ins the log also holds: one rename, naming both.
@@ -274,7 +276,10 @@ fn one_account_per_folded_name() {
         &c,
         &base,
         &other.token,
-        &format!("/api/user/rename/check?name={}", taken.replace('_', "-")),
+        &format!(
+            "/api/v1/account/rename/check?name={}",
+            taken.replace('_', "-")
+        ),
     )
     .json()
     .unwrap();
@@ -298,7 +303,7 @@ fn a_deleted_accounts_name_is_held_until_freed() {
     let token = admin_token(&c, &base, admin_password, admin_name);
     let gone = register(&c, &base);
     let r = bearer(
-        c.delete(format!("{base}/api/admin/users/{}", gone.id)),
+        c.delete(format!("{base}/api/v1/admin/accounts/{}", gone.id)),
         &token,
     )
     .send()
@@ -311,7 +316,7 @@ fn a_deleted_accounts_name_is_held_until_freed() {
     );
     // ...until an administrator frees it: a new account, a new incarnation.
     let r = bearer(
-        c.post(format!("{base}/api/admin/names/{}/free", gone.username)),
+        c.post(format!("{base}/api/v1/admin/names/{}/free", gone.username)),
         &token,
     )
     .send()
@@ -352,7 +357,7 @@ fn variant_spellings_find_the_current_account_as_stored() {
             &c,
             &base,
             &asker.token,
-            &format!("/api/users/by-address/{at}"),
+            &format!("/api/v1/accounts/by-address/{at}"),
         );
         assert_eq!(r.status(), StatusCode::OK, "{at}");
         let found: Value = r.json().unwrap();
@@ -364,7 +369,7 @@ fn variant_spellings_find_the_current_account_as_stored() {
         );
         // Drive identities.
         let identities: Value = bearer(
-            c.post(format!("{base}/api/users/drive-identities")),
+            c.post(format!("{base}/api/v1/drive/identities")),
             &asker.token,
         )
         .json(&json!({ "accounts": [at] }))
@@ -382,7 +387,7 @@ fn variant_spellings_find_the_current_account_as_stored() {
             &c,
             &base,
             &asker.token,
-            &format!("/api/mail/accounts?address={at}"),
+            &format!("/api/v1/mail/accounts?address={at}"),
         )
         .json()
         .unwrap();
@@ -391,7 +396,7 @@ fn variant_spellings_find_the_current_account_as_stored() {
             &c,
             &base,
             &asker.token,
-            &format!("/api/mail/keys?email={at}"),
+            &format!("/api/v1/mail/keys?email={at}"),
         )
         .json()
         .unwrap();
@@ -425,7 +430,7 @@ fn renaming_back_to_a_freed_name_gives_it_its_new_key() {
     let renamed = rename_account(&c, &base, &user, &away, false);
     assert_eq!(renamed.status, StatusCode::OK, "{}", renamed.body);
     let r = bearer(
-        c.post(format!("{base}/api/admin/names/{first}/free")),
+        c.post(format!("{base}/api/v1/admin/names/{first}/free")),
         &token,
     )
     .send()
@@ -435,7 +440,7 @@ fn renaming_back_to_a_freed_name_gives_it_its_new_key() {
         &c,
         &base,
         &user.token,
-        &format!("/api/user/rename/check?name={first}"),
+        &format!("/api/v1/account/rename/check?name={first}"),
     )
     .json()
     .unwrap();
@@ -447,7 +452,7 @@ fn renaming_back_to_a_freed_name_gives_it_its_new_key() {
         &c,
         &base,
         &user.token,
-        &format!("/api/mail/keys?email={first}@{domain}"),
+        &format!("/api/v1/mail/keys?email={first}@{domain}"),
     )
     .json()
     .unwrap();
@@ -464,7 +469,7 @@ fn renaming_back_to_a_freed_name_gives_it_its_new_key() {
     );
     // The account's addresses: the current one first, then the old ones,
     // whose keys open the mail they received (the freed first row among them).
-    let own: Value = get(&c, &base, &user.token, "/api/mail/addresses")
+    let own: Value = get(&c, &base, &user.token, "/api/v1/mail/addresses")
         .json()
         .unwrap();
     let states: Vec<(&str, &str)> = own
@@ -523,7 +528,7 @@ fn the_sweep_frees_a_held_name_on_its_date() {
         .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
-        let names: Value = get(&c, &base, &user.token, "/api/user/names")
+        let names: Value = get(&c, &base, &user.token, "/api/v1/account/names")
             .json()
             .unwrap();
         if names.as_array().unwrap().len() == 1 {
@@ -559,7 +564,7 @@ fn dropping_names_is_limited_and_a_name_is_taken_back_as_spelled() {
         &c,
         &base,
         &user.token,
-        &format!("/api/user/rename/check?name={respelled}"),
+        &format!("/api/v1/account/rename/check?name={respelled}"),
     )
     .json()
     .unwrap();
@@ -575,7 +580,7 @@ fn dropping_names_is_limited_and_a_name_is_taken_back_as_spelled() {
     let drop = |held: &str| {
         let grant = reauth_grant(&c, &base, &user, "rename");
         bearer(
-            c.delete(format!("{base}/api/user/names/{held}")),
+            c.delete(format!("{base}/api/v1/account/names/{held}")),
             &user.token,
         )
         .json(&json!({ "grant": grant }))
@@ -632,14 +637,14 @@ fn five_old_names_receive_and_a_drop_makes_room() {
     // One dropped: it stays held, and no longer counts.
     let grant = reauth_grant(&c, &base, &user, "rename");
     let r = bearer(
-        c.delete(format!("{base}/api/user/names/{}", held[0])),
+        c.delete(format!("{base}/api/v1/account/names/{}", held[0])),
         &user.token,
     )
     .json(&json!({ "grant": grant }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
-    let names: Value = get(&c, &base, &user.token, "/api/user/names")
+    let names: Value = get(&c, &base, &user.token, "/api/v1/account/names")
         .json()
         .unwrap();
     assert!(names
@@ -703,7 +708,7 @@ fn a_renamed_account_keeps_its_chat_profile() {
     };
     let put = |body: Value| {
         bearer(
-            chat_device.auth(c.put(format!("{base}/api/chat/profile"))),
+            chat_device.auth(c.put(format!("{base}/api/v1/chat/profile"))),
             &user.token,
         )
         .json(&body)
@@ -715,7 +720,7 @@ fn a_renamed_account_keeps_its_chat_profile() {
     let read = |version: &str| {
         bearer(
             c.get(format!(
-                "{base}/api/chat/accounts/{}/profile/{version}",
+                "{base}/api/v1/chat/accounts/{}/profile/{version}",
                 account.account_id
             )),
             &reader.token,
@@ -738,7 +743,7 @@ fn a_renamed_account_keeps_its_chat_profile() {
     assert_eq!(rename(&c, &base, &user, &new).0, StatusCode::OK);
     user.username = new.clone();
     // The owner's copy and everyone else's are the same profile as before.
-    let own: Value = get(&c, &base, &user.token, "/api/chat/profile")
+    let own: Value = get(&c, &base, &user.token, "/api/v1/chat/profile")
         .json()
         .unwrap();
     assert_eq!(own["account"], json!(account), "{own}");
@@ -769,7 +774,7 @@ fn remote_lookups_check_the_name_and_say_when_they_cannot_tell() {
             &c,
             &base,
             &user.token,
-            &format!("/api/users/renames/{address}"),
+            &format!("/api/v1/accounts/by-address/{address}/renames"),
         );
         assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{address}");
     }
@@ -777,7 +782,7 @@ fn remote_lookups_check_the_name_and_say_when_they_cannot_tell() {
         &c,
         &base,
         &user.token,
-        "/api/users/renames/ada@unreachable.invalid",
+        "/api/v1/accounts/by-address/ada/renames@unreachable.invalid",
     )
     .json()
     .unwrap();

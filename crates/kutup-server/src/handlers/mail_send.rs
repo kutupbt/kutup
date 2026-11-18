@@ -524,12 +524,12 @@ async fn row(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<MailMessage
     Ok(row.into_message(&opener))
 }
 
-/// `POST /api/mail/drafts` — a new draft: multipart `meta` (JSON, the
+/// `POST /api/v1/mail/drafts` — a new draft: multipart `meta` (JSON, the
 /// readable fields) and `body` (the message without attachments, encrypted
 /// to your own address key).
 #[utoipa::path(
     post,
-    path = "/api/mail/drafts",
+    path = "/api/v1/mail/drafts",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body(content = Vec<u8>, content_type = "multipart/form-data", description = "meta and body"),
@@ -603,11 +603,11 @@ pub async fn create_draft(
     Ok(Json(row(&state, user_id, id).await?))
 }
 
-/// `PUT /api/mail/drafts/{id}` — replaces a draft's readable fields and
+/// `PUT /api/v1/mail/drafts/{id}` — replaces a draft's readable fields and
 /// body (multipart, as for creating). Attachments stay.
 #[utoipa::path(
     put,
-    path = "/api/mail/drafts/{id}",
+    path = "/api/v1/mail/drafts/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Draft id")),
@@ -734,11 +734,11 @@ async fn own_draft(state: &AppState, user_id: Uuid, id: &str) -> AppResult<Uuid>
         .ok_or_else(|| AppError::not_found("not found"))
 }
 
-/// `POST /api/mail/drafts/{id}/attachments` — one attachment, multipart
+/// `POST /api/v1/mail/drafts/{id}/attachments` — one attachment, multipart
 /// `part`: the MIME part as it will be sent, encrypted to your own key.
 #[utoipa::path(
     post,
-    path = "/api/mail/drafts/{id}/attachments",
+    path = "/api/v1/mail/drafts/{id}/attachments",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Draft id")),
@@ -826,11 +826,11 @@ pub async fn add_draft_attachment(
     }))
 }
 
-/// `GET /api/mail/drafts/{id}/attachments` — a draft's attachments, in the
+/// `GET /api/v1/mail/drafts/{id}/attachments` — a draft's attachments, in the
 /// order they were added.
 #[utoipa::path(
     get,
-    path = "/api/mail/drafts/{id}/attachments",
+    path = "/api/v1/mail/drafts/{id}/attachments",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Draft id")),
@@ -859,10 +859,10 @@ pub async fn list_draft_attachments(
     ))
 }
 
-/// `GET /api/mail/drafts/{id}/attachments/{attachment}` — the encrypted part.
+/// `GET /api/v1/mail/drafts/{id}/attachments/{attachment}` — the encrypted part.
 #[utoipa::path(
     get,
-    path = "/api/mail/drafts/{id}/attachments/{attachment}",
+    path = "/api/v1/mail/drafts/{id}/attachments/{attachment}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(
@@ -895,10 +895,10 @@ pub async fn draft_attachment_content(
     Ok(octet_stream_response(body, size, &[]))
 }
 
-/// `DELETE /api/mail/drafts/{id}/attachments/{attachment}`.
+/// `DELETE /api/v1/mail/drafts/{id}/attachments/{attachment}`.
 #[utoipa::path(
     delete,
-    path = "/api/mail/drafts/{id}/attachments/{attachment}",
+    path = "/api/v1/mail/drafts/{id}/attachments/{attachment}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(
@@ -974,7 +974,7 @@ struct LocalCopy {
     protection: &'static str,
 }
 
-/// `POST /api/mail/send` — sends a message. Multipart: `meta` (JSON:
+/// `POST /api/v1/mail/send` — sends a message. Multipart: `meta` (JSON:
 /// readable fields, `keyPackets`, optional `draftId` and `pgp`), `data` (the
 /// shared data packet), `pgp0`, `pgp1`, … (PGP/MIME messages for outside
 /// recipients with keys, as `pgp` lists them) and, when other outside
@@ -982,7 +982,7 @@ struct LocalCopy {
 /// With undo send on, a saved draft's send is checked, then held (202).
 #[utoipa::path(
     post,
-    path = "/api/mail/send",
+    path = "/api/v1/mail/send",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body(content = Vec<u8>, content_type = "multipart/form-data", description = "meta, data, pgp0… and mime"),
@@ -1076,7 +1076,7 @@ pub async fn send(
     .map_err(|_| AppError::internal("send task"))?
 }
 
-/// Sends what `POST /api/mail/send` received (`parts`), now or from the
+/// Sends what `POST /api/v1/mail/send` received (`parts`), now or from the
 /// outbox; with `check_only`, stops before anything is written or sent,
 /// having refused what the send would refuse.
 pub(crate) async fn deliver(

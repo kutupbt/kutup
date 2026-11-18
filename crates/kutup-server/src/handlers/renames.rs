@@ -65,12 +65,12 @@ pub struct CheckView {
     reason: Option<&'static str>,
 }
 
-/// `GET /api/user/rename/check?name=` — whether the caller could rename to
+/// `GET /api/v1/account/rename/check?name=` — whether the caller could rename to
 /// `name` (any spelling of a name in use or held counts as taken).
 #[utoipa::path(
     get,
-    path = "/api/user/rename/check",
-    tag = "user",
+    path = "/api/v1/account/rename/check",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(CheckQuery),
     responses((status = 200, body = CheckView), (status = 429, description = "rateLimited"))
@@ -148,7 +148,7 @@ pub struct RenameRequest {
     #[schema(value_type = Object)]
     rename: AccountRenameV1,
     /// The new address's first key and key list (as `POST
-    /// /api/mail/addresses/{id}/keys` takes them), so mail to it is never
+    /// /api/v1/mail/addresses/{id}/keys` takes them), so mail to it is never
     /// deferred. None only when taking back a held name whose address still
     /// has its keys.
     #[serde(default)]
@@ -179,11 +179,11 @@ fn rename_invalid(why: &str) -> AppError {
         .with_details(json!({ "code": "renameInvalid" }))
 }
 
-/// `POST /api/user/rename` — a new username (docs/plans/username-renames.md).
+/// `POST /api/v1/account/rename` — a new username (docs/plans/username-renames.md).
 #[utoipa::path(
     post,
-    path = "/api/user/rename",
-    tag = "user",
+    path = "/api/v1/account/rename",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = RenameRequest,
     responses(
@@ -541,12 +541,12 @@ pub struct HeldName {
     free_at: Option<time::OffsetDateTime>,
 }
 
-/// `GET /api/user/names` — the caller's names: the current one and those it
+/// `GET /api/v1/account/names` — the caller's names: the current one and those it
 /// holds, with when each stops receiving and is freed.
 #[utoipa::path(
     get,
-    path = "/api/user/names",
-    tag = "user",
+    path = "/api/v1/account/names",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, body = [HeldName]))
 )]
@@ -569,12 +569,12 @@ pub struct DropName {
     grant: String,
 }
 
-/// `DELETE /api/user/names/{name}` — stop receiving at a held name now. The
+/// `DELETE /api/v1/account/names/{name}` — stop receiving at a held name now. The
 /// name stays held until its date.
 #[utoipa::path(
     delete,
-    path = "/api/user/names/{name}",
-    tag = "user",
+    path = "/api/v1/account/names/{name}",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A name the account holds")),
     request_body = DropName,
@@ -739,10 +739,10 @@ async fn admin_name(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/admin/names/{name}/close` — receiving at a held name ends now.
+/// `POST /api/v1/admin/names/{name}/close` — receiving at a held name ends now.
 #[utoipa::path(
     post,
-    path = "/api/admin/names/{name}/close",
+    path = "/api/v1/admin/names/{name}/close",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
@@ -756,11 +756,11 @@ pub async fn admin_close(
     admin_name(&state, &admin, &name, AdminAction::Close).await
 }
 
-/// `POST /api/admin/names/{name}/free` — a held name is free now: anyone may
+/// `POST /api/v1/admin/names/{name}/free` — a held name is free now: anyone may
 /// take it (a new owner is another incarnation; pins of the old one warn).
 #[utoipa::path(
     post,
-    path = "/api/admin/names/{name}/free",
+    path = "/api/v1/admin/names/{name}/free",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
@@ -781,13 +781,13 @@ pub struct ChainsQuery {
     incarnation_id: Option<String>,
 }
 
-/// `GET /api/users/renames/{address}` — every rename chain that names the
+/// `GET /api/v1/accounts/by-address/{address}/renames` — every rename chain that names the
 /// address (a reused name is in more than one), as `{ version: 1, chains }`,
 /// newest first. Clients verify each chain against their own pins.
 #[utoipa::path(
     get,
-    path = "/api/users/renames/{address}",
-    tag = "user",
+    path = "/api/v1/accounts/by-address/{address}/renames",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(("address" = String, Path, description = "username@server"), ChainsQuery),
     responses((status = 200, description = "The chains (an empty list when none names it)"))

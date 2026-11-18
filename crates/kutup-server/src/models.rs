@@ -53,7 +53,7 @@ pub struct MessageResponse {
     pub message: String,
 }
 
-/// Public server settings (`GET /api/auth/settings`) — how a client learns what
+/// Public server settings (`GET /api/v1/auth/settings`) — how a client learns what
 /// the server supports before showing UI for it.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -124,7 +124,7 @@ pub struct AdminSettingsResponse {
     pub pass_vault_max_bytes: i64,
 }
 
-/// `GET /api/auth/recover/preflight`: what a recovery proof is derived with.
+/// `GET /api/v1/auth/recover/preflight`: what a recovery proof is derived with.
 /// The recovery envelope comes only with the grant, after the proof
 /// (`RecoverGrantResponse`), so nothing in its header (the master key's
 /// generation) tells a real account from an unknown name.
@@ -135,7 +135,7 @@ pub struct PreflightRecoverResponse {
     pub envelope_binding: String,
 }
 
-/// `POST /api/auth/refresh` — mirrors `handlers.RefreshResponse`.
+/// `POST /api/v1/auth/refresh` — mirrors `handlers.RefreshResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshResponse {
@@ -146,7 +146,7 @@ pub struct RefreshResponse {
     pub refresh_token: Option<String>,
 }
 
-/// `GET /api/user/me` — mirrors `handlers.AccountResponse`.
+/// `GET /api/v1/account` — mirrors `handlers.AccountResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountResponse {
@@ -197,7 +197,7 @@ pub struct OkResponse {
     pub ok: bool,
 }
 
-/// `POST /api/user/2fa/setup` — mirrors `handlers.TOTPSetupResponse`.
+/// `POST /api/v1/account/2fa/setup` — mirrors `handlers.TOTPSetupResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TotpSetupResponse {
@@ -273,7 +273,7 @@ pub struct CollectionRow {
     pub updated_at: time::OffsetDateTime,
 }
 
-/// `POST /api/collections` body — mirrors `handlers.CreateCollectionRequest`.
+/// `POST /api/v1/drive/collections` body — mirrors `handlers.CreateCollectionRequest`.
 /// `default` so missing JSON fields decode to zero values (Go `c.BodyParser`).
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
@@ -293,13 +293,13 @@ pub struct CreateCollectionRequest {
     pub name_hash_generation: Option<u32>,
 }
 
-/// `POST /api/collections` result — mirrors `handlers.CreateCollectionResult`.
+/// `POST /api/v1/drive/collections` result — mirrors `handlers.CreateCollectionResult`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CreateCollectionResult {
     pub id: String,
 }
 
-/// `PUT /api/collections/{id}` body — mirrors `handlers.UpdateCollectionRequest`.
+/// `PUT /api/v1/drive/collections/{id}` body — mirrors `handlers.UpdateCollectionRequest`.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateCollectionRequest {
@@ -311,14 +311,14 @@ pub struct UpdateCollectionRequest {
     pub name_hash_generation: Option<u32>,
 }
 
-/// `PATCH /api/collections/{id}/color` body — mirrors `handlers.UpdateColorRequest`.
+/// `PATCH /api/v1/drive/collections/{id}/color` body — mirrors `handlers.UpdateColorRequest`.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(default)]
 pub struct UpdateColorRequest {
     pub color: Option<String>,
 }
 
-/// `POST /api/collections/{id}/share` body — mirrors `handlers.ShareCollectionRequest`.
+/// `POST /api/v1/drive/collections/{id}/share` body — mirrors `handlers.ShareCollectionRequest`.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ShareCollectionRequest {
@@ -417,7 +417,7 @@ pub struct UploadResult {
     pub id: String,
 }
 
-/// A trashed folder (a trash root) — `GET /api/trash`.
+/// A trashed folder (a trash root) — `GET /api/v1/drive/trash`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TrashFolderRow {
@@ -439,7 +439,7 @@ pub struct TrashFolderRow {
     pub deleted_at: OffsetDateTime,
 }
 
-/// A trashed file (a trash root) — `GET /api/trash`. Carries the parent collection's
+/// A trashed file (a trash root) — `GET /api/v1/drive/trash`. Carries the parent collection's
 /// owner-wrapped key so the metadata chain decrypts even when the collection itself
 /// is not in the live listing.
 #[derive(Debug, Serialize, ToSchema)]
@@ -463,14 +463,14 @@ pub struct TrashFileRow {
     pub thumbnails: FileThumbnails,
 }
 
-/// `GET /api/trash` body — the caller's trash roots, newest first.
+/// `GET /api/v1/drive/trash` body — the caller's trash roots, newest first.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct TrashResponse {
     pub folders: Vec<TrashFolderRow>,
     pub files: Vec<TrashFileRow>,
 }
 
-/// `POST /api/share` body — mirrors `handlers.CreateShareRequest`.
+/// `POST /api/v1/drive/public-links` body — mirrors `handlers.CreateShareRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateShareRequest {
@@ -480,14 +480,14 @@ pub struct CreateShareRequest {
     pub expires_in_hours: Option<i32>,
 }
 
-/// `POST /api/share` result — mirrors `handlers.CreateShareResult`.
+/// `POST /api/v1/drive/public-links` result — mirrors `handlers.CreateShareResult`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CreateShareResult {
     pub id: String,
     pub token: String,
 }
 
-/// `GET /api/share/{token}` — mirrors `handlers.PublicShareResponse`.
+/// `GET /api/v1/drive/public-links/{token}` — mirrors `handlers.PublicShareResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicShareResponse {
@@ -501,7 +501,7 @@ pub struct PublicShareResponse {
     pub expires_at: Option<OffsetDateTime>,
 }
 
-/// `POST /api/admin/users` body — mirrors `handlers.CreateAdminAccountRequest`.
+/// `POST /api/v1/admin/accounts` body — mirrors `handlers.CreateAdminAccountRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateAdminAccountRequest {
@@ -512,7 +512,7 @@ pub struct CreateAdminAccountRequest {
     pub storage_quota_bytes: i64,
 }
 
-/// `PUT /api/admin/users/{id}` body — mirrors `handlers.UpdateAdminAccountRequest`.
+/// `PUT /api/v1/admin/accounts/{id}` body — mirrors `handlers.UpdateAdminAccountRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminAccountRequest {
@@ -530,7 +530,7 @@ pub struct UpdateAdminAccountRequest {
     pub is_admin: Option<bool>,
 }
 
-/// `PUT /api/admin/settings` body — mirrors `handlers.UpdateAdminSettingsRequest`.
+/// `PUT /api/v1/admin/settings` body — mirrors `handlers.UpdateAdminSettingsRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminSettingsRequest {
@@ -558,7 +558,7 @@ pub struct UpdateAdminSettingsRequest {
     pub pass_vault_max_bytes: Option<i64>,
 }
 
-/// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.
+/// `GET /api/v1/admin/stats` — mirrors `handlers.StatsResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsResponse {

@@ -77,7 +77,7 @@ fn share_revocation_contract() {
     let mut link_key = [0u8; 32];
     kutup_crypto::primitives::random(&mut link_key);
     let link_id = uuid();
-    let link = bearer(c.post(format!("{base}/api/share")), &owner.token)
+    let link = bearer(c.post(format!("{base}/api/v1/drive/public-links")), &owner.token)
         .json(&json!({
             "id": link_id,
             "shareType": "collection",
@@ -96,7 +96,10 @@ fn share_revocation_contract() {
 
     // Who has access, as the owner sees it.
     let access: Value = bearer(
-        c.get(format!("{base}/api/collections/{}/access", folder.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{}/access",
+            folder.id
+        )),
         &owner.token,
     )
     .send()
@@ -108,7 +111,10 @@ fn share_revocation_contract() {
     assert_eq!(access["publicLinks"].as_array().unwrap().len(), 1);
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/collections/{}/access", folder.id)),
+            c.get(format!(
+                "{base}/api/v1/drive/collections/{}/access",
+                folder.id
+            )),
             &alice.token
         )
         .send()
@@ -150,7 +156,10 @@ fn share_revocation_contract() {
     };
     let rotate = |body: Value, token: &str| {
         bearer(
-            c.post(format!("{base}/api/collections/{}/rotate", folder.id)),
+            c.post(format!(
+                "{base}/api/v1/drive/collections/{}/rotate",
+                folder.id
+            )),
             token,
         )
         .json(&body)
@@ -189,7 +198,10 @@ fn share_revocation_contract() {
     // Bob is out; Alice is in, at epoch 2.
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/collections/{}/files", folder.id)),
+            c.get(format!(
+                "{base}/api/v1/drive/collections/{}/files",
+                folder.id
+            )),
             &bob.token
         )
         .send()
@@ -201,11 +213,14 @@ fn share_revocation_contract() {
         download(&c, &base, &bob.token, &file.id).0,
         StatusCode::FORBIDDEN
     );
-    let alice_rows: Vec<Value> = bearer(c.get(format!("{base}/api/collections")), &alice.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let alice_rows: Vec<Value> = bearer(
+        c.get(format!("{base}/api/v1/drive/collections")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let alice_row = alice_rows
         .iter()
         .find(|r| r["id"] == folder.id.as_str())
@@ -229,7 +244,10 @@ fn share_revocation_contract() {
 
     // The history: the current key unlocks both; an old one unlocks nothing.
     let chain: Vec<Value> = bearer(
-        c.get(format!("{base}/api/collections/{}/epochs", folder.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{}/epochs",
+            folder.id
+        )),
         &alice.token,
     )
     .send()
@@ -254,7 +272,10 @@ fn share_revocation_contract() {
     );
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/collections/{}/epochs", folder.id)),
+            c.get(format!(
+                "{base}/api/v1/drive/collections/{}/epochs",
+                folder.id
+            )),
             &bob.token
         )
         .send()
@@ -279,7 +300,7 @@ fn share_revocation_contract() {
     let mut file_key2 = [0u8; 32];
     kutup_crypto::primitives::random(&mut file_key2);
     let rekey = |from: i32| {
-        bearer(c.post(format!("{base}/api/files/{}/rekey", file.id)), &alice.token)
+        bearer(c.post(format!("{base}/api/v1/drive/files/{}/rekey", file.id)), &alice.token)
             .json(&json!({
                 "fromGeneration": from,
                 "fileKeyEnvelope": drive_envelope::seal_b64(&file_key2, &key2,
@@ -294,7 +315,7 @@ fn share_revocation_contract() {
     };
     assert_eq!(
         bearer(
-            c.post(format!("{base}/api/files/{}/rekey", file.id)),
+            c.post(format!("{base}/api/v1/drive/files/{}/rekey", file.id)),
             &bob.token
         )
         .json(&json!({
@@ -311,7 +332,10 @@ fn share_revocation_contract() {
     assert_eq!(rekey(1), StatusCode::OK);
     assert_eq!(rekey(1), StatusCode::CONFLICT, "already re-keyed");
     let rows: Vec<Value> = bearer(
-        c.get(format!("{base}/api/collections/{}/files", folder.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{}/files",
+            folder.id
+        )),
         &alice.token,
     )
     .send()
@@ -347,7 +371,10 @@ fn share_revocation_contract() {
     assert_eq!(r.status(), StatusCode::CREATED);
     assert_eq!(r.json::<Value>().unwrap()["keyGeneration"], 2);
     let rows: Vec<Value> = bearer(
-        c.get(format!("{base}/api/collections/{}/files", folder.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{}/files",
+            folder.id
+        )),
         &alice.token,
     )
     .send()
@@ -365,7 +392,7 @@ fn share_revocation_contract() {
 
     // The kept public link follows the key, and serves its history.
     let public: Value = c
-        .get(format!("{base}/api/share/{token}"))
+        .get(format!("{base}/api/v1/drive/public-links/{token}"))
         .send()
         .unwrap()
         .json()
@@ -385,7 +412,7 @@ fn share_revocation_contract() {
     .unwrap();
     assert_eq!(via_link.as_slice(), key2.as_slice());
     let public_chain: Vec<Value> = c
-        .get(format!("{base}/api/share/{token}/epochs"))
+        .get(format!("{base}/api/v1/drive/public-links/{token}/epochs"))
         .send()
         .unwrap()
         .json()

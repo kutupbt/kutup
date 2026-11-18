@@ -90,7 +90,7 @@ async fn check(
     Ok((collection_id, generation))
 }
 
-/// `POST /api/uploads` with `versionOf`: opens a version upload. `201` as a
+/// `POST /api/v1/drive/uploads` with `versionOf`: opens a version upload. `201` as a
 /// new file's; `409` with code `versionUploading` while another upload of a
 /// new version of this file is open, with `idleSeconds` since its last part
 /// (one idle a while was left by a crash, one active is still running), and
@@ -246,7 +246,7 @@ async fn open(
         StatusCode::CREATED,
         [
             ("Tus-Resumable", TUS_VERSION.to_string()),
-            ("Location", format!("/api/uploads/{upload_id}")),
+            ("Location", format!("/api/v1/drive/uploads/{upload_id}")),
             ("Upload-Offset", "0".to_string()),
             ("Content-Type", "application/json".to_string()),
         ],

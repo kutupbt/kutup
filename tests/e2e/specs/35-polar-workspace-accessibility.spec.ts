@@ -95,7 +95,7 @@ test.describe('Responsive and accessibility gate', () => {
     // Theme and language follow the account, which would switch a page back
     // while it is checked: this spec sets them per app, so the account says
     // nothing (account sync has its own spec).
-    await context.route('**/api/account/ui-preferences', (route) =>
+    await context.route('**/api/v1/account/ui-preferences', (route) =>
       route.request().method() === 'GET'
         ? route.fulfill({ json: { theme: null, language: null } })
         : route.fulfill({ status: 204 }),

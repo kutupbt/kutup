@@ -278,14 +278,14 @@ bounded display name, update time and an optional promoted Drive file UUID.
 States are `active`, `cleared`, `saved_to_drive` and `expired`. The server
 cannot classify or join an entry to a sender or conversation.
 
-Writes are batches of `POST /api/account/records` with the next account head:
+Writes are batches of `POST /api/v1/account/records` with the next account head:
 each entity's put names the revision it read, so a retried or raced write is
 refused (`revision_conflict`) and the client reads again and redoes it. The
 account head covers the scope (a count and digest of every `(id, revision)`),
 so a server that rolls an entity back, drops one or brings an old one back is
 caught when the client checks the scope's index against the verified head.
 The private hash chain, the history table, the operation ids and the ledger's
-own cursor are gone: the records feed (`GET /api/account/records/chatAttachments`)
+own cursor are gone: the records feed (`GET /api/v1/account/records/chatAttachments`)
 and the head replace them.
 
 Clients decrypt the scope and build a disposable in-memory projection; they

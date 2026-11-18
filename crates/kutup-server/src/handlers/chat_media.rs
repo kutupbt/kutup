@@ -380,7 +380,10 @@ pub async fn create_upload(
         StatusCode::CREATED,
         [
             ("Tus-Resumable", TUS_VERSION.to_string()),
-            ("Location", format!("/api/chat/media/uploads/{upload_id}")),
+            (
+                "Location",
+                format!("/api/v1/chat/media/uploads/{upload_id}"),
+            ),
             ("Upload-Offset", "0".into()),
             ("Content-Type", "application/json".into()),
         ],

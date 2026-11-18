@@ -89,12 +89,12 @@ fn public_key(value: &str) -> AppResult<Vec<u8>> {
     Ok(bytes)
 }
 
-/// `GET /api/collections/{id}/epochs` — the folder's key history, for the
+/// `GET /api/v1/drive/collections/{id}/epochs` — the folder's key history, for the
 /// owner and its members.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}/epochs",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/epochs",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "Key history, oldest first", body = Vec<EpochLink>))
@@ -204,12 +204,12 @@ async fn owned_folder(
         .ok_or_else(|| AppError::not_found("not found"))
 }
 
-/// `GET /api/collections/{id}/access` — everyone who can open the folder:
+/// `GET /api/v1/drive/collections/{id}/access` — everyone who can open the folder:
 /// members here, members elsewhere, public links. Owner only.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}/access",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/access",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "Who has access", body = FolderAccess))
@@ -517,13 +517,13 @@ async fn rotate_album_items(
     Ok(())
 }
 
-/// `POST /api/collections/{id}/rotate` — move the folder to a new key, keep
+/// `POST /api/v1/drive/collections/{id}/rotate` — move the folder to a new key, keep
 /// who is listed, remove who is listed as removed. Owner only; all or
 /// nothing.
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/rotate",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/rotate",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = RotateRequest,
@@ -858,15 +858,15 @@ pub struct RekeyResult {
     pub key_generation: i32,
 }
 
-/// `POST /api/files/{id}/rekey` — give a file a new key, wrapped at its
+/// `POST /api/v1/drive/files/{id}/rekey` — give a file a new key, wrapped at its
 /// folder's current epoch, before writing to it: a file the folder has
 /// rotated past (docs/plans/drive-share-revocation.md). The key it leaves is
 /// sealed under the new one, so what was stored under it stays readable in
 /// any folder (docs/plans/drive-move.md). Editors only.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/rekey",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/rekey",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = RekeyRequest,

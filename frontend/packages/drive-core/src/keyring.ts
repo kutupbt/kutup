@@ -28,8 +28,8 @@ async function history(folder: KeyringFolder): Promise<EpochLinkV1[]> {
   const location = folderLocation(folder)
   const { data } = await api.get<EpochLinkV1[]>(
     location.kind === 'local'
-      ? `/collections/${location.collectionId}/epochs`
-      : `/drive/federation/shares/${location.shareId}/epochs`,
+      ? `/drive/collections/${location.collectionId}/epochs`
+      : `/drive/federation/folder-shares/${location.shareId}/epochs`,
   )
   return data
 }
@@ -167,7 +167,7 @@ export function relayedVersion(saved: RelayedState): { id: string; keyGeneration
 }
 
 /**
- * The file's original upload (`/files/{id}/original`), which no listing
+ * The file's original upload (`/drive/files/{id}/original`), which no listing
  * names: the revision its sealed metadata names (`originalRevisionId`), and
  * nothing else the server might serve, opened against the sealed record
  * served with it.

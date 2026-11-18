@@ -43,7 +43,7 @@ const file = new File(['new content'], 'report.bin', { lastModified: 5 })
 const signal = new AbortController().signal
 const pending = (uploadId: string, version = true) => ({
   fileId: 'f1',
-  uploadUrl: `https://drive.localhost/api/uploads/${uploadId}`,
+  uploadUrl: `https://drive.localhost/api/v1/drive/uploads/${uploadId}`,
   version: version ? { keyGeneration: 3, metadataRevision: 8 } : undefined,
 })
 
@@ -134,7 +134,7 @@ describe('Replace', () => {
     mocks.del.mockResolvedValue({})
     mocks.list.mockResolvedValue([pending('u1')])
     await cancelVersionUpload('f1', 'u1')
-    expect(mocks.del).toHaveBeenCalledWith('/uploads/u1', { headers: { 'Tus-Resumable': '1.0.0' } })
+    expect(mocks.del).toHaveBeenCalledWith('/drive/uploads/u1', { headers: { 'Tus-Resumable': '1.0.0' } })
     expect(mocks.remove).toHaveBeenCalledWith('f1')
   })
 })

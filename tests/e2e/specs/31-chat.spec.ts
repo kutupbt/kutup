@@ -117,7 +117,7 @@ test.describe('Signal-backed chat', () => {
       }),
     )
     pageB.on('response', (response) => {
-      if (response.request().method() === 'POST' && response.url().includes('/api/chat/messages/ack') && response.ok()) acks.push(Date.now())
+      if (response.request().method() === 'POST' && response.url().includes('/api/v1/chat/messages/ack') && response.ok()) acks.push(Date.now())
     })
     await pageB.reload()
     await expect(composer(pageB)).toBeVisible({ timeout: 60_000 })

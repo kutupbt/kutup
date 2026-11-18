@@ -57,12 +57,12 @@ fn instant(text: &str, what: &str) -> AppResult<time::OffsetDateTime> {
         .map_err(|_| AppError::bad_request(format!("{what} is an RFC 3339 time")))
 }
 
-/// `GET /api/calendar/alarms?start=&end=` — the caller's next alarms in a
+/// `GET /api/v1/calendar/alarms?start=&end=` — the caller's next alarms in a
 /// window, by fire time, `calendarAlarmsPage` at most (Proton's `/alarms`):
 /// the open app fires its own device notifications from these.
 #[utoipa::path(
     get,
-    path = "/api/calendar/alarms",
+    path = "/api/v1/calendar/alarms",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(AlarmsQuery),
@@ -134,10 +134,10 @@ pub struct CalendarSettings {
     pub zone: Option<String>,
 }
 
-/// `GET /api/calendar/settings`
+/// `GET /api/v1/calendar/settings`
 #[utoipa::path(
     get,
-    path = "/api/calendar/settings",
+    path = "/api/v1/calendar/settings",
     tag = "calendar",
     security(("BearerAuth" = [])),
     responses((status = 200, body = CalendarSettings))
@@ -155,11 +155,11 @@ pub async fn settings(
     Ok(Json(CalendarSettings { zone }))
 }
 
-/// `PUT /api/calendar/settings` — the account's calendar zone; its all-day
+/// `PUT /api/v1/calendar/settings` — the account's calendar zone; its all-day
 /// reminders move with it (shortly: the reminder job recomputes them).
 #[utoipa::path(
     put,
-    path = "/api/calendar/settings",
+    path = "/api/v1/calendar/settings",
     tag = "calendar",
     security(("BearerAuth" = [])),
     request_body = CalendarSettings,
@@ -219,12 +219,12 @@ pub struct CalendarPushSubscription {
     pub auth: String,
 }
 
-/// `PUT /api/calendar/push-subscription` — this signed-in browser takes
+/// `PUT /api/v1/calendar/push-subscription` — this signed-in browser takes
 /// reminder pushes (one subscription per session; signing out ends it).
 /// The push services are Chat's allowlist.
 #[utoipa::path(
     put,
-    path = "/api/calendar/push-subscription",
+    path = "/api/v1/calendar/push-subscription",
     tag = "calendar",
     security(("BearerAuth" = [])),
     request_body = CalendarPushSubscription,
@@ -322,10 +322,10 @@ pub async fn put_push_subscription(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/calendar/push-subscription` — this browser takes no more.
+/// `DELETE /api/v1/calendar/push-subscription` — this browser takes no more.
 #[utoipa::path(
     delete,
-    path = "/api/calendar/push-subscription",
+    path = "/api/v1/calendar/push-subscription",
     tag = "calendar",
     security(("BearerAuth" = [])),
     responses((status = 204))

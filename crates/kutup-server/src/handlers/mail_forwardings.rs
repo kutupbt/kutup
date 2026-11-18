@@ -1,5 +1,5 @@
 //! Mail forwarding's API (docs/plans/mail-forwarding.md), Proton's shape
-//! under `/api/mail/forwardings`: the forwarder sets a forwarding up with
+//! under `/api/v1/mail/forwardings`: the forwarder sets a forwarding up with
 //! the material its client made, the forwardee accepts or declines it, and
 //! either side ends it. The proxy factors are sealed at once and no answer
 //! ever carries one, the forwarder's included.
@@ -396,10 +396,10 @@ fn incoming_view(row: Row) -> MailForwarding {
     }
 }
 
-/// `GET /api/mail/forwardings` — the caller's forwardings both ways.
+/// `GET /api/v1/mail/forwardings` — the caller's forwardings both ways.
 #[utoipa::path(
     get,
-    path = "/api/mail/forwardings",
+    path = "/api/v1/mail/forwardings",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Both ways", body = MailForwardings))
@@ -451,12 +451,12 @@ async fn local_person(
     .await?)
 }
 
-/// `POST /api/mail/forwardings` — sets a forwarding of one of the caller's
+/// `POST /api/v1/mail/forwardings` — sets a forwarding of one of the caller's
 /// addresses up. To a Kutup address on this server it is end to end, and
 /// the body carries the material the forwarder's client made.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings",
+    path = "/api/v1/mail/forwardings",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = CreateMailForwarding,
@@ -902,12 +902,12 @@ async fn create_outside(
     Ok((StatusCode::CREATED, Json(one(state, id).await?)))
 }
 
-/// `PUT /api/mail/forwardings/{id}/reinvite` — the forwarder asks an
+/// `PUT /api/v1/mail/forwardings/{id}/reinvite` — the forwarder asks an
 /// outside destination again (a pending forwarding, or a declined one): it
 /// is pending and unverified, and a new code goes out.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}/reinvite",
+    path = "/api/v1/mail/forwardings/{id}/reinvite",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1017,11 +1017,11 @@ async fn by_token(
     row.ok_or_else(|| AppError::not_found("not found"))
 }
 
-/// `POST /api/mail/forwardings/external` — the public stop page reads what
+/// `POST /api/v1/mail/forwardings/external` — the public stop page reads what
 /// a link is for (no account needed).
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/external",
+    path = "/api/v1/mail/forwardings/external",
     tag = "mail",
     request_body = ForwardingToken,
     responses((status = 200, description = "The forwarding", body = ExternalForwarding), (status = 404, description = "No such link"), (status = 429, description = "rateLimited"))
@@ -1043,13 +1043,13 @@ pub async fn external(
     }))
 }
 
-/// `POST /api/mail/forwardings/external/decline` — the outside destination
+/// `POST /api/v1/mail/forwardings/external/decline` — the outside destination
 /// refuses the forwarding, pending or active: it is `rejected` for the
 /// forwarder, and the link spent. Nothing on this page starts a forwarding:
 /// only the code the forwarder enters does.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/external/decline",
+    path = "/api/v1/mail/forwardings/external/decline",
     tag = "mail",
     request_body = ForwardingToken,
     responses((status = 204, description = "Declined"), (status = 404, description = "No such link"), (status = 429, description = "rateLimited"))
@@ -1111,12 +1111,12 @@ async fn lock(
     }
 }
 
-/// `DELETE /api/mail/forwardings/{id}` — either side ends it; its proxy
+/// `DELETE /api/v1/mail/forwardings/{id}` — either side ends it; its proxy
 /// factors go with it. The forwardee keeps the forwarding key (mail already
 /// forwarded needs it) until they delete it.
 #[utoipa::path(
     delete,
-    path = "/api/mail/forwardings/{id}",
+    path = "/api/v1/mail/forwardings/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1176,12 +1176,12 @@ async fn forwarder_moves(
     Ok(Json(one(state, id).await?))
 }
 
-/// `POST /api/mail/forwardings/{id}/code` — the forwarder has a new
+/// `POST /api/v1/mail/forwardings/{id}/code` — the forwarder has a new
 /// verification code mailed to the destination (the last one void), at most
 /// `forwarding_code_resends` a minute and `forwarding_invites` a day.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/{id}/code",
+    path = "/api/v1/mail/forwardings/{id}/code",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1253,14 +1253,14 @@ async fn clear_code(
     Ok(())
 }
 
-/// `POST /api/mail/forwardings/{id}/verify` — the forwarder enters the code
+/// `POST /api/v1/mail/forwardings/{id}/verify` — the forwarder enters the code
 /// mailed to the destination. Right: the forwarding is verified (an outside
 /// one active; an end-to-end one now shown to its forwardee to accept).
 /// Wrong: `400 codeWrong` with the tries left, the last one voiding the
 /// code (`409 codeVoid`); none live: `409 codeExpired`.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/{id}/verify",
+    path = "/api/v1/mail/forwardings/{id}/verify",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1384,11 +1384,11 @@ pub async fn verify(
     Ok(Json(one(&state, id).await?))
 }
 
-/// `PUT /api/mail/forwardings/{id}/pause` — the forwarder pauses an active
+/// `PUT /api/v1/mail/forwardings/{id}/pause` — the forwarder pauses an active
 /// forwarding; its proxy factors are kept.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}/pause",
+    path = "/api/v1/mail/forwardings/{id}/pause",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1402,10 +1402,10 @@ pub async fn pause(
     forwarder_moves(&state, &user, &id, "active", "paused").await
 }
 
-/// `PUT /api/mail/forwardings/{id}/resume` — and resumes it.
+/// `PUT /api/v1/mail/forwardings/{id}/resume` — and resumes it.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}/resume",
+    path = "/api/v1/mail/forwardings/{id}/resume",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1419,11 +1419,11 @@ pub async fn resume(
     forwarder_moves(&state, &user, &id, "paused", "active").await
 }
 
-/// `PUT /api/mail/forwardings/{id}/conditions` — the forwarder changes what
+/// `PUT /api/v1/mail/forwardings/{id}/conditions` — the forwarder changes what
 /// is forwarded.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}/conditions",
+    path = "/api/v1/mail/forwardings/{id}/conditions",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1458,13 +1458,13 @@ pub async fn conditions(
     Ok(Json(one(&state, id).await?))
 }
 
-/// `PUT /api/mail/forwardings/{id}` — the forwarder renews an Outdated or
+/// `PUT /api/v1/mail/forwardings/{id}` — the forwarder renews an Outdated or
 /// declined forwarding with new material (Proton's "Re-enable" and
 /// "Request confirmation"); it is pending and unverified again, and a new
 /// code goes out.
 #[utoipa::path(
     put,
-    path = "/api/mail/forwardings/{id}",
+    path = "/api/v1/mail/forwardings/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1512,11 +1512,11 @@ pub async fn renew(
     Ok(Json(one(&state, id).await?))
 }
 
-/// `GET /api/mail/forwardings/{id}/activation` — a pending forwarding's
+/// `GET /api/v1/mail/forwardings/{id}/activation` — a pending forwarding's
 /// activation, for its forwardee.
 #[utoipa::path(
     get,
-    path = "/api/mail/forwardings/{id}/activation",
+    path = "/api/v1/mail/forwardings/{id}/activation",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1553,13 +1553,13 @@ pub async fn activation(
     }))
 }
 
-/// `POST /api/mail/forwardings/{id}/accept` — the forwardee keeps the
+/// `POST /api/v1/mail/forwardings/{id}/accept` — the forwardee keeps the
 /// forwarding key as an address key (never primary, never encrypted to, out
 /// of the signed key list) and the forwarding becomes active. The key's
 /// subkeys must be exactly the forwarding's.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/{id}/accept",
+    path = "/api/v1/mail/forwardings/{id}/accept",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1675,12 +1675,12 @@ pub async fn accept(
     Ok(Json(one(&state, id).await?))
 }
 
-/// `POST /api/mail/forwardings/{id}/decline` — the forwardee declines a
+/// `POST /api/v1/mail/forwardings/{id}/decline` — the forwardee declines a
 /// pending forwarding: its proxy factors and activation go; the forwarder
 /// may ask again with new material.
 #[utoipa::path(
     post,
-    path = "/api/mail/forwardings/{id}/decline",
+    path = "/api/v1/mail/forwardings/{id}/decline",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Forwarding id")),
@@ -1714,12 +1714,12 @@ pub async fn decline(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/mail/addresses/{address}/forwarding-keys/{key}` — the
+/// `DELETE /api/v1/mail/addresses/{address}/forwarding-keys/{key}` — the
 /// forwardee deletes a forwarding key; the forwarding it serves ends with
 /// it (with the key gone, its proxy factors must not outlive it).
 #[utoipa::path(
     delete,
-    path = "/api/mail/addresses/{address}/forwarding-keys/{key}",
+    path = "/api/v1/mail/addresses/{address}/forwarding-keys/{key}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(

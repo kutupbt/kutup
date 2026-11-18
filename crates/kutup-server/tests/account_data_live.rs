@@ -79,19 +79,25 @@ fn the_authenticator_secret_is_sealed_under_the_accounts_data_key() {
 
     // The authenticator app on: a key under the current entry, the secret
     // stored sealed (not as its base32 text).
-    let setup: Value = bearer(c.post(format!("{base}/api/user/2fa/setup")), &user.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let setup: Value = bearer(
+        c.post(format!("{base}/api/v1/account/2fa/setup")),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let secret = setup["secret"].as_str().unwrap().to_owned();
-    let verify = bearer(c.post(format!("{base}/api/user/2fa/verify")), &user.token)
-        .json(&json!({
-            "code": totp_now(&secret),
-            "grant": reauth_grant(&c, &base, &user, "totp"),
-        }))
-        .send()
-        .unwrap();
+    let verify = bearer(
+        c.post(format!("{base}/api/v1/account/2fa/verify")),
+        &user.token,
+    )
+    .json(&json!({
+        "code": totp_now(&secret),
+        "grant": reauth_grant(&c, &base, &user, "totp"),
+    }))
+    .send()
+    .unwrap();
     assert_eq!(verify.status(), StatusCode::OK);
     let enabled: Value = verify.json().unwrap();
     let recovery_code = enabled["recoveryCodes"][0].as_str().unwrap().to_owned();
@@ -117,7 +123,7 @@ fn the_authenticator_secret_is_sealed_under_the_accounts_data_key() {
         .expect("a second step")
         .to_owned();
     let second = c
-        .post(format!("{base}/api/auth/login/2fa"))
+        .post(format!("{base}/api/v1/auth/login/2fa"))
         .header("x-kutup-client", "cli")
         .json(&json!({ "preAuthToken": pre_auth, "code": totp_now(&secret) }))
         .send()
@@ -143,7 +149,7 @@ fn the_authenticator_secret_is_sealed_under_the_accounts_data_key() {
     };
     let token = pre_auth(&c);
     let lost = c
-        .post(format!("{base}/api/auth/login/2fa"))
+        .post(format!("{base}/api/v1/auth/login/2fa"))
         .header("x-kutup-client", "cli")
         .json(&json!({ "preAuthToken": token, "code": totp_now(&secret) }))
         .send()
@@ -152,7 +158,7 @@ fn the_authenticator_secret_is_sealed_under_the_accounts_data_key() {
     let lost: Value = lost.json().unwrap();
     assert_eq!(lost["code"], "authenticatorLost", "{lost}");
     let recovered = c
-        .post(format!("{base}/api/auth/login/2fa"))
+        .post(format!("{base}/api/v1/auth/login/2fa"))
         .header("x-kutup-client", "cli")
         .json(&json!({ "preAuthToken": token, "code": recovery_code }))
         .send()

@@ -50,7 +50,7 @@ test('registration codes: closed to codes, a code made once, a sign-up through i
     const signup = await visitor.newPage()
     let checks = 0
     signup.on('request', (request) => {
-      if (request.url().includes('/api/auth/registration-code/check')) checks += 1
+      if (request.url().includes('/api/v1/auth/registration-code/check')) checks += 1
     })
     await signup.goto(appUrl('account', '/register'))
     const account = newAccount('ref155', PASSWORD)

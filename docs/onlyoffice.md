@@ -114,7 +114,7 @@ model (DocumentServer never hands a newcomer a newer save mid-session):
   loaded as the session's **base** on the collaboration relay
   (`{"type":"base","versionId","seq"}`) and the log is trimmed up to it.
 - A tab joining a live session is told the base; if it loaded a newer save
-  it reopens from the base (`GET /api/files/:id/original` when the session
+  it reopens from the base (`GET /api/v1/drive/files/:id/original` when the session
   began before the first save) and replays the log after it. Edits that
   arrive before its editor has authenticated are handed over as the
   document's initial changes (`getInitialChanges`), as DocumentServer does.

@@ -36,11 +36,11 @@ fn asset_storage_path(file_id: Uuid, asset_id: &str) -> String {
     format!("files/{file_id}/assets/{asset_id}")
 }
 
-/// `PUT /api/files/{fileId}/assets/{assetId}` — mirrors `Upload`.
+/// `PUT /api/v1/drive/files/{fileId}/assets/{assetId}` — mirrors `Upload`.
 #[utoipa::path(
     put,
-    path = "/api/files/{fileId}/assets/{assetId}",
-    tag = "assets",
+    path = "/api/v1/drive/files/{fileId}/assets/{assetId}",
+    tag = "drive",
     operation_id = "uploadFileAsset",
     security(("BearerAuth" = [])),
     params(
@@ -233,11 +233,11 @@ pub(crate) async fn load_asset(
     Ok((bytes, key_generation))
 }
 
-/// `GET /api/files/{fileId}/assets/{assetId}` — mirrors `Download`.
+/// `GET /api/v1/drive/files/{fileId}/assets/{assetId}` — mirrors `Download`.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/assets/{assetId}",
-    tag = "assets",
+    path = "/api/v1/drive/files/{fileId}/assets/{assetId}",
+    tag = "drive",
     operation_id = "downloadFileAsset",
     security(("BearerAuth" = [])),
     params(

@@ -1,5 +1,5 @@
 //! One check for every secret a person proves to the server: sign-in,
-//! re-authentication (`/api/user/reauth`, the Pass PIN's set and remove) and
+//! re-authentication (`/api/v1/account/reauth`, the Pass PIN's set and remove) and
 //! recovery (docs/plans/account-identity.md, "Sign-in checks").
 //!
 //! - **Order.** The caller decodes the secret before it looks the name up,
@@ -314,7 +314,7 @@ fn seal_known_client(key: &[u8; 32], user_id: Uuid, issued_at: i64, epoch: &[u8]
 }
 
 /// The `Set-Cookie` value marking this client as one `user_id` signed in
-/// from: HttpOnly, sent only to `/api/auth` (sign-in reads it; no other route,
+/// from: HttpOnly, sent only to `/api/v1/auth` (sign-in reads it; no other route,
 /// above all the anonymous Chat routes, which refuse any cookie, ever sees
 /// it), `Secure` in production; bound to the account's current password.
 pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppResult<String> {
@@ -330,7 +330,7 @@ pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppR
         &credential_epoch(&opaque_record),
     );
     let mut cookie = format!(
-        "{KNOWN_CLIENT_COOKIE}={value}; Max-Age={}; Path=/api/auth; HttpOnly; SameSite=Strict",
+        "{KNOWN_CLIENT_COOKIE}={value}; Max-Age={}; Path=/api/v1/auth; HttpOnly; SameSite=Strict",
         KNOWN_CLIENT_DAYS * 86_400
     );
     if state.config.app_env == "production" {
@@ -341,7 +341,7 @@ pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppR
 
 /// Clears the mark on this origin (signing out).
 pub(crate) fn clear_known_client_cookie(state: &AppState) -> String {
-    clear_at(state, "/api/auth")
+    clear_at(state, "/api/v1/auth")
 }
 
 fn clear_at(state: &AppState, path: &str) -> String {

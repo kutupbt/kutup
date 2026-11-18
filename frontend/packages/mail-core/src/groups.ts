@@ -205,7 +205,7 @@ export interface MemberTrust {
  * the server alone vouches for.
  */
 async function memberKey(member: { accountId: string }, trust: MemberTrust): Promise<GroupKeyMember> {
-  const { data } = await api.get<MemberIdentity>(`/users/by-id/${encodeURIComponent(member.accountId)}`)
+  const { data } = await api.get<MemberIdentity>(`/accounts/${encodeURIComponent(member.accountId)}`)
   const account = { server: data.server, accountId: data.accountId }
   if (data.accountId === member.accountId && data.identitySuite === 1) {
     throw new KeysPendingUpgrade(`${data.username}@${data.server}`)

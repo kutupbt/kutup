@@ -161,7 +161,7 @@ pub async fn turn_on(
     Ok(())
 }
 
-/// `PUT /api/user/federation` body.
+/// `PUT /api/v1/account/federation` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FederationRequest {
@@ -172,11 +172,11 @@ pub struct FederationRequest {
     document_id: Option<Uuid>,
 }
 
-/// `PUT /api/user/federation` — the account's own switch.
+/// `PUT /api/v1/account/federation` — the account's own switch.
 #[utoipa::path(
     put,
-    path = "/api/user/federation",
-    tag = "legal",
+    path = "/api/v1/account/federation",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = FederationRequest,
     responses(

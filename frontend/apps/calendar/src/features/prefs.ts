@@ -3,7 +3,7 @@ import { localeWeekStart } from '@kutup/calendar-core/time'
 
 // How this browser shows calendars: the time zone, the first day of the
 // week and the clock, kept on this device. The zone is the account's too
-// (`/api/calendar/settings`): all-day reminders fire in it (`useAccountZone`).
+// (`/api/v1/calendar/settings`): all-day reminders fire in it (`useAccountZone`).
 
 export interface CalendarPrefs {
   /** An IANA zone; the browser's by default. */

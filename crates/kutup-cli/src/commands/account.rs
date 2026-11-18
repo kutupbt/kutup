@@ -149,7 +149,7 @@ fn history(profile: &str, json: bool, cmd: &AccountCmd) -> Result<()> {
 
 fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
     let mut ctx = require_session(profile)?;
-    let me: Value = decode_json(ctx.client.request(Method::GET, "/user/me").send()?)?;
+    let me: Value = decode_json(ctx.client.request(Method::GET, "/account").send()?)?;
     let address = me["address"]
         .as_str()
         .filter(|a| !a.is_empty())
@@ -161,7 +161,7 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
         .context("the account's address has no server")?;
     let check: Value = decode_json(
         ctx.client
-            .request(Method::GET, "/user/rename/check")
+            .request(Method::GET, "/account/rename/check")
             .query(&[("name", name)])
             .send()?,
     )?;
@@ -252,7 +252,7 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
     };
     let renamed: Value = decode_json(
         ctx.client
-            .request(Method::POST, "/user/rename")
+            .request(Method::POST, "/account/rename")
             .json(&json!({
                 "grant": grant,
                 "rename": statement,
@@ -280,7 +280,7 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
 
 fn names(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
-    let rows: Value = decode_json(ctx.client.request(Method::GET, "/user/names").send()?)?;
+    let rows: Value = decode_json(ctx.client.request(Method::GET, "/account/names").send()?)?;
     if json {
         return crate::output::print_json(&rows);
     }
@@ -304,7 +304,7 @@ fn drop_name(profile: &str, json: bool, name: &str) -> Result<()> {
     let grant = super::login::reauth_grant(&ctx.client, &password, "rename")?;
     check_ok(
         ctx.client
-            .request(Method::DELETE, &format!("/user/names/{name}"))
+            .request(Method::DELETE, &format!("/account/names/{name}"))
             .json(&json!({ "grant": grant }))
             .send()?,
     )?;

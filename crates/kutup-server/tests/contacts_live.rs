@@ -61,7 +61,7 @@ fn contact_revisions() {
     let c = crate::common::client();
     let user = register(&c, &base);
     let post = |body: Value| {
-        bearer(c.post(format!("{base}/api/contacts")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/contacts")), &user.token)
             .json(&body)
             .send()
             .unwrap()
@@ -80,7 +80,7 @@ fn contact_revisions() {
 
     let put = |mut body: Value, base_revision: u64| {
         body["baseRevision"] = json!(base_revision);
-        bearer(c.put(format!("{base}/api/contacts/{id}")), &user.token)
+        bearer(c.put(format!("{base}/api/v1/contacts/{id}")), &user.token)
             .json(&body)
             .send()
             .unwrap()
@@ -106,7 +106,7 @@ fn contact_revisions() {
     );
 
     // What comes back opens at the revision the list names.
-    let page: Value = bearer(c.get(format!("{base}/api/contacts")), &user.token)
+    let page: Value = bearer(c.get(format!("{base}/api/v1/contacts")), &user.token)
         .send()
         .unwrap()
         .json()

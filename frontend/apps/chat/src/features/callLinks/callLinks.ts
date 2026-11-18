@@ -258,7 +258,7 @@ async function asHolder<T>(
 ): Promise<T> {
   let response: Response
   try {
-    response = await clientFetch(`/api/chat/call-links/${path}`, {
+    response = await clientFetch(`/api/v1/chat/call-links/${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(vouchFor ? { Authorization: `Bearer ${vouchFor}` } : {}) },
       credentials: 'omit',
@@ -339,7 +339,7 @@ export function knockMeeting(link: OpenCallLink, seat: MeetingSeat, label: strin
  */
 export function leaveKnock(link: OpenCallLink, knock: Knock): void {
   try {
-    void clientFetch('/api/chat/call-links/knock/leave', {
+    void clientFetch('/api/v1/chat/call-links/knock/leave', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'omit',

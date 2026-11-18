@@ -30,9 +30,9 @@ export type NameCheck =
     }
   | { available: false; reason: 'taken' | 'held' | 'reserved' | 'invalid' | (string & {}) }
 
-/** Whether the account could rename to `name` (`GET /api/user/rename/check`). */
+/** Whether the account could rename to `name` (`GET /api/v1/account/rename/check`). */
 export async function checkName(name: string, signal?: AbortSignal): Promise<NameCheck> {
-  return (await api.get<NameCheck>('/user/rename/check', { params: { name }, signal })).data
+  return (await api.get<NameCheck>('/account/rename/check', { params: { name }, signal })).data
 }
 
 /** How long an old name receives and is held: the server's settings now. */
@@ -104,7 +104,7 @@ export async function renameAccount(name: string, needsKey: boolean, password: O
   // Where the chain ends and the address it ends at, read now. Another device
   // may have renamed since this page loaded: then this rename is no longer
   // the one the person chose, and they are told so.
-  const { data: me } = await api.get<MeResponse>('/user/me')
+  const { data: me } = await api.get<MeResponse>('/account')
   const [signedFrom, shown] = await Promise.all([foldAddress(me.address), foldAddress(session.address)])
   if (signedFrom === null || signedFrom !== shown) throw await changedElsewhere()
   const domain = me.address.slice(me.address.lastIndexOf('@') + 1)
@@ -121,13 +121,13 @@ export async function renameAccount(name: string, needsKey: boolean, password: O
     ...(own === 'none' ? { mailAddress: await firstAddressKey(session, address) } : {}),
   }
   try {
-    return (await api.post<Renamed>('/user/rename', body)).data
+    return (await api.post<Renamed>('/account/rename', body)).data
   } catch (error) {
     const refused = refusal(error)
     if (refused?.code === 'renameConflict') throw await changedElsewhere()
     if (refused?.code === 'renameInvalid') {
       // Refused as no longer starting where the account is: renamed meanwhile.
-      const { data: now } = await api.get<MeResponse>('/user/me')
+      const { data: now } = await api.get<MeResponse>('/account')
       if (now.address !== me.address || now.renames.sequence !== me.renames.sequence) throw await changedElsewhere()
     }
     throw refused ?? error
@@ -155,7 +155,7 @@ export interface AccountName {
 export function useAccountNames() {
   return useQuery({
     queryKey: namesKey,
-    queryFn: async () => (await api.get<AccountName[]>('/user/names')).data,
+    queryFn: async () => (await api.get<AccountName[]>('/account/names')).data,
   })
 }
 
@@ -182,11 +182,11 @@ export function useRenameAccount() {
   })
 }
 
-/** Ends receiving at a held name now (`DELETE /api/user/names/:name`); it stays held until its date. */
+/** Ends receiving at a held name now (`DELETE /api/v1/account/names/:name`); it stays held until its date. */
 export async function dropName(name: string, password: OneUseSecret): Promise<void> {
   const grant = await accountGrant(password.take(), 'rename')
   try {
-    await api.delete(`/user/names/${encodeURIComponent(name)}`, { data: { grant } })
+    await api.delete(`/account/names/${encodeURIComponent(name)}`, { data: { grant } })
   } catch (error) {
     throw refusal(error) ?? error
   }

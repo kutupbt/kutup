@@ -25,10 +25,10 @@ pub struct MailImageSender {
     pub created_at: OffsetDateTime,
 }
 
-/// `GET /api/mail/image-senders` — senders whose images always load, newest first.
+/// `GET /api/v1/mail/image-senders` — senders whose images always load, newest first.
 #[utoipa::path(
     get,
-    path = "/api/mail/image-senders",
+    path = "/api/v1/mail/image-senders",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Senders", body = [MailImageSender]))
@@ -67,10 +67,10 @@ fn address(state: &AppState, value: &str) -> AppResult<String> {
         .ok_or_else(|| AppError::bad_request("not an address"))
 }
 
-/// `POST /api/mail/image-senders` — this sender's images always load.
+/// `POST /api/v1/mail/image-senders` — this sender's images always load.
 #[utoipa::path(
     post,
-    path = "/api/mail/image-senders",
+    path = "/api/v1/mail/image-senders",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = MailImageSenderAddress,
@@ -104,10 +104,10 @@ pub async fn add(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/mail/image-senders/delete` — images from this sender are asked for again.
+/// `POST /api/v1/mail/image-senders/delete` — images from this sender are asked for again.
 #[utoipa::path(
     post,
-    path = "/api/mail/image-senders/delete",
+    path = "/api/v1/mail/image-senders/delete",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = MailImageSenderAddress,

@@ -25,7 +25,7 @@ use crate::AppState;
 use kutup_crypto::account_ref::AccountRef;
 
 /// Query params on the WS URL. Browsers can't set headers on `new WebSocket(url)`, so a
-/// device ticket (`POST /api/device-ticket`) arrives here; a native client sends its token
+/// device ticket (`POST /api/v1/account/devices/tickets`) arrives here; a native client sends its token
 /// and `X-Kutup-Device` instead.
 #[derive(Debug, Deserialize)]
 pub struct CollabQuery {
@@ -100,13 +100,13 @@ struct PeersMsg {
     kind: &'static str,
 }
 
-/// `GET /api/files/{fileId}/collab/ws` — authenticates, then upgrades. Mirrors
+/// `GET /api/v1/drive/files/{fileId}/collab/ws` — authenticates, then upgrades. Mirrors
 /// `PreUpgrade` + `Upgrade`: all access checks run here so the upgraded connection trusts
 /// the resolved identity.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/collab/ws",
-    tag = "collab",
+    path = "/api/v1/drive/files/{fileId}/collab/ws",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(
         ("fileId" = String, Path, description = "File id"),
@@ -1044,12 +1044,12 @@ pub struct FramesPage {
     pub more: bool,
 }
 
-/// `GET /api/files/{fileId}/collab/frames` — the collaboration log after a
+/// `GET /api/v1/drive/files/{fileId}/collab/frames` — the collaboration log after a
 /// position, for a reader of the file (as the socket's replay).
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/collab/frames",
-    tag = "collab",
+    path = "/api/v1/drive/files/{fileId}/collab/frames",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id"), FramesQuery),
     responses((status = 200, description = "Frames after `after`, oldest first", body = FramesPage))
@@ -1128,15 +1128,15 @@ pub struct FrameKept {
     pub seq: i64,
 }
 
-/// `POST /api/files/{fileId}/collab/frames` — one sealed edit frame
+/// `POST /api/v1/drive/files/{fileId}/collab/frames` — one sealed edit frame
 /// (`application/octet-stream`) from a registered device: kept and sent to
 /// the room, as from a socket. `409 frameRefused` when the gate drops it (not
 /// this device's, a stale key or document key, a replayed sequence): read the
 /// log again and rebuild. `403` without write access; `429` past the limit.
 #[utoipa::path(
     post,
-    path = "/api/files/{fileId}/collab/frames",
-    tag = "collab",
+    path = "/api/v1/drive/files/{fileId}/collab/frames",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
     request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "One sealed collaboration frame"),

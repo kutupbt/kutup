@@ -83,12 +83,12 @@ fn decode_public_key(value: &str) -> AppResult<Vec<u8>> {
     Ok(bytes)
 }
 
-/// `GET /api/collections` — mirrors `ListCollections`. Owned collections, then those
+/// `GET /api/v1/drive/collections` — mirrors `ListCollections`. Owned collections, then those
 /// shared with the user (with the recipient-specific key + permissions + computed usage).
 #[utoipa::path(
     get,
-    path = "/api/collections",
-    tag = "collections",
+    path = "/api/v1/drive/collections",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Owned + shared collections", body = Vec<CollectionRow>))
 )]
@@ -97,7 +97,7 @@ pub async fn list_collections(
     user: AuthAccount,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.account_id)?;
-    // Albums are the Photos app's (GET /api/albums), never Drive folders.
+    // Albums are the Photos app's (GET /api/v1/photos/albums), never Drive folders.
     Ok(Json(collection_rows(&state, user_id, "folder").await?).into_response())
 }
 
@@ -270,11 +270,11 @@ pub(crate) async fn collection_rows(
     Ok(out)
 }
 
-/// `POST /api/collections` — mirrors `CreateCollection`.
+/// `POST /api/v1/drive/collections` — mirrors `CreateCollection`.
 #[utoipa::path(
     post,
-    path = "/api/collections",
-    tag = "collections",
+    path = "/api/v1/drive/collections",
+    tag = "drive",
     security(("BearerAuth" = [])),
     request_body = CreateCollectionRequest,
     responses((status = 201, description = "Collection created", body = CreateCollectionResult))
@@ -417,11 +417,11 @@ pub(crate) async fn create_owned_collection(
         .into_response())
 }
 
-/// `GET /api/collections/{id}` — mirrors `GetCollection`.
+/// `GET /api/v1/drive/collections/{id}` — mirrors `GetCollection`.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "One collection (owned or shared view)", body = CollectionRow))
@@ -581,11 +581,11 @@ pub async fn get_collection(
     .into_response())
 }
 
-/// `PUT /api/collections/{id}` — mirrors `UpdateCollection` (rename).
+/// `PUT /api/v1/drive/collections/{id}` — mirrors `UpdateCollection` (rename).
 #[utoipa::path(
     put,
-    path = "/api/collections/{id}",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = UpdateCollectionRequest,
@@ -671,11 +671,11 @@ pub async fn update_collection(
     }
 }
 
-/// `PATCH /api/collections/{id}/color` — mirrors `UpdateCollectionColor`.
+/// `PATCH /api/v1/drive/collections/{id}/color` — mirrors `UpdateCollectionColor`.
 #[utoipa::path(
     patch,
-    path = "/api/collections/{id}/color",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/color",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = UpdateColorRequest,
@@ -711,14 +711,14 @@ pub async fn update_collection_color(
     }
 }
 
-/// `DELETE /api/collections/{id}` — soft-deletes the folder *and its whole subtree*
+/// `DELETE /api/v1/drive/collections/{id}` — soft-deletes the folder *and its whole subtree*
 /// (sub-folders + files) into the trash. The folder is the single trash entry
 /// (`trash_root_id = its id`); restore/purge operate on the entry and everything
 /// tagged with it. Items already in the trash keep their own entry + deletion time.
 #[utoipa::path(
     delete,
-    path = "/api/collections/{id}",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 204, description = "Folder + subtree moved to trash"))
@@ -736,7 +736,7 @@ pub async fn delete_collection(
     let subtree: Vec<Uuid> = sqlx::query_scalar(
         r#"WITH RECURSIVE subtree AS (
              SELECT id FROM drive_collections
-             -- An album is deleted with DELETE /api/albums/{id}, not trashed.
+             -- An album is deleted with DELETE /api/v1/photos/albums/{id}, not trashed.
              WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL AND kind = 'folder'
              UNION ALL
              SELECT c.id FROM drive_collections c
@@ -772,11 +772,11 @@ pub async fn delete_collection(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/collections/{id}/share` — mirrors `ShareCollection` (local share/upsert).
+/// `POST /api/v1/drive/collections/{id}/share` — mirrors `ShareCollection` (local share/upsert).
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/share",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/share",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = ShareCollectionRequest,

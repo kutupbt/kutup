@@ -30,7 +30,7 @@ export interface MeResponse {
 
 /** The signed-in account's profile, under `accessToken`. */
 export async function fetchProfile(accessToken: string): Promise<MeResponse> {
-  const { data } = await api.get<MeResponse>('/user/me', { headers: { Authorization: `Bearer ${accessToken}` } })
+  const { data } = await api.get<MeResponse>('/account', { headers: { Authorization: `Bearer ${accessToken}` } })
   return data
 }
 
@@ -59,7 +59,7 @@ export async function activateSession(
 ): Promise<SessionKeys> {
   setAccessToken(accessToken)
   resetSessionVersion()
-  const me = prefetched ?? (await api.get<MeResponse>('/user/me')).data
+  const me = prefetched ?? (await api.get<MeResponse>('/account')).data
   const keys = given
   if (me.id !== keys.accountId) {
     throw new Error('the session belongs to a different account than its keys')
@@ -123,7 +123,7 @@ export async function activateSession(
 export async function recheckAccount(): Promise<void> {
   const session = getSession()
   if (!session) return
-  const { data: me } = await api.get<MeResponse>('/user/me')
+  const { data: me } = await api.get<MeResponse>('/account')
   if (me.id !== session.accountId || me.envelopeBinding !== session.envelopeBinding) {
     // As a refused session (KeyBindingMismatchError): ended on the server,
     // the keys dropped here; the app's boot shows "this account's keys

@@ -38,7 +38,7 @@ export interface StoredRecord {
   envelope: string
 }
 
-/** One page, as `GET /api/account/records/{scope}` answers. */
+/** One page, as `GET /api/v1/account/records/{scope}` answers. */
 export interface RecordsPage {
   records: { id: string; revision: number; envelope: string; seq: number }[]
   deleted: { id: string; seq: number }[]
@@ -140,7 +140,7 @@ export class ScopeRecords {
   }
 }
 
-/** The `POST /api/account/records` body. */
+/** The `POST /api/v1/account/records` body. */
 export function batchBody(batch: RecordsBatch, head: string): unknown {
   return {
     head,

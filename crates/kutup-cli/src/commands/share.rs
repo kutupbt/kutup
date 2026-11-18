@@ -449,7 +449,7 @@ fn unwrap_shared_collection_key(s: &IncomingShare, sess: &Session) -> Result<Vec
 fn shared_keyring(ctx: &Ctx, share: &IncomingShare, key: &[u8]) -> Result<Keyring> {
     Keyring::load_from(
         &ctx.client,
-        &format!("/drive/federation/shares/{}/epochs", share.id),
+        &format!("/drive/federation/folder-shares/{}/epochs", share.id),
         &share.remote_collection_id,
         &share.owner_account_id,
         share.key_epoch,

@@ -327,7 +327,7 @@ pub struct DeviceQuery {
 
 #[utoipa::path(
     put,
-    path = "/api/chat/push-subscription",
+    path = "/api/v1/chat/push-subscription",
     tag = "chat",
     operation_id = "putChatPushSubscription",
     request_body = PushSubscriptionRequest,
@@ -377,7 +377,7 @@ pub async fn put_subscription(
 
 #[utoipa::path(
     delete,
-    path = "/api/chat/push-subscription",
+    path = "/api/v1/chat/push-subscription",
     tag = "chat",
     operation_id = "deleteChatPushSubscription",
     params(DeviceQuery),

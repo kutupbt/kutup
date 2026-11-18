@@ -62,10 +62,10 @@ pub struct SecurityKeysResponse {
     available: bool,
 }
 
-/// `GET /api/auth/security-keys` — the account's keys.
+/// `GET /api/v1/auth/security-keys` — the account's keys.
 #[utoipa::path(
     get,
-    path = "/api/auth/security-keys",
+    path = "/api/v1/auth/security-keys",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, body = SecurityKeysResponse))
@@ -94,7 +94,7 @@ pub async fn list(
 
 /// A reauth's grant for this session (`totp` purpose: changing second
 /// factors).
-/// `POST /api/auth/security-keys/register/start` — options for adding a key,
+/// `POST /api/v1/auth/security-keys/register/start` — options for adding a key,
 /// with the password proved again (a `totp` grant from a reauth of this
 /// session) and, while two-step sign-in is on, a factor the account has
 /// (`code` or `securityKey`, as removing one takes; `403
@@ -102,7 +102,7 @@ pub async fn list(
 /// limit.
 #[utoipa::path(
     post,
-    path = "/api/auth/security-keys/register/start",
+    path = "/api/v1/auth/security-keys/register/start",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = crate::handlers::auth::CodeRequest,
@@ -219,12 +219,12 @@ pub struct RegisterFinishResponse {
     recovery_codes: Option<Vec<String>>,
 }
 
-/// `POST /api/auth/security-keys/register/finish` — adds the key the
+/// `POST /api/v1/auth/security-keys/register/finish` — adds the key the
 /// browser made. `409 securityKeyExists` for a key already added. The first
 /// second factor turns two-step sign-in on, with its recovery codes.
 #[utoipa::path(
     post,
-    path = "/api/auth/security-keys/register/finish",
+    path = "/api/v1/auth/security-keys/register/finish",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = RegisterFinishRequest,
@@ -339,10 +339,10 @@ pub struct RenameRequest {
     name: String,
 }
 
-/// `PATCH /api/auth/security-keys/{id}` — renames a key.
+/// `PATCH /api/v1/auth/security-keys/{id}` — renames a key.
 #[utoipa::path(
     patch,
-    path = "/api/auth/security-keys/{id}",
+    path = "/api/v1/auth/security-keys/{id}",
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -371,13 +371,13 @@ pub async fn rename(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/auth/security-keys/proof/start` — options for proving the
+/// `POST /api/v1/auth/security-keys/proof/start` — options for proving the
 /// second factor again with a key, for this session (renewing recovery
 /// codes, removing a factor): the answer goes in that request's
 /// `securityKey`.
 #[utoipa::path(
     post,
-    path = "/api/auth/security-keys/proof/start",
+    path = "/api/v1/auth/security-keys/proof/start",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "PublicKeyCredentialRequestOptions (JSON form)"))
@@ -400,12 +400,12 @@ pub async fn proof_start(State(state): State<AppState>, user: AuthAccount) -> Ap
     Ok(Json(options).into_response())
 }
 
-/// `POST /api/auth/login/security-key/start` — a sign-in's second step with
+/// `POST /api/v1/auth/login/security-key/start` — a sign-in's second step with
 /// a security key: options naming the account's keys. Only someone past the
 /// password step (its pre-auth token) learns the account's credential ids.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/security-key/start",
+    path = "/api/v1/auth/login/security-key/start",
     tag = "auth",
     request_body = PreAuthRequest,
     responses((status = 200, description = "PublicKeyCredentialRequestOptions (JSON form)"))
@@ -460,14 +460,14 @@ pub struct LoginFinishRequest {
     credential: serde_json::Value,
 }
 
-/// `POST /api/auth/login/security-key/finish` — checks the key's answer and
+/// `POST /api/v1/auth/login/security-key/finish` — checks the key's answer and
 /// signs in, as `login/2fa` does for a code. Failures share the code's
 /// attempt budget. A key whose counter went back is refused: marked
 /// compromised (`securityKeyCompromised`), or, when it was used after this
 /// sign-in's start (another tab), only refused (`409 securityKeyRetry`).
 #[utoipa::path(
     post,
-    path = "/api/auth/login/security-key/finish",
+    path = "/api/v1/auth/login/security-key/finish",
     tag = "auth",
     request_body = LoginFinishRequest,
     responses((status = 200, description = "The session", body = crate::handlers::auth::LoginResponse))
@@ -544,14 +544,14 @@ pub struct RemoveResponse {
     two_factor_off: bool,
 }
 
-/// `DELETE /api/auth/security-keys/{id}` — removes a key, with the password
+/// `DELETE /api/v1/auth/security-keys/{id}` — removes a key, with the password
 /// (a `totp` grant) and the second factor proved again (`code`: the
 /// authenticator's or a recovery code; or `securityKey`: an answer to
 /// `proof/start`), as turning the authenticator app off takes. Removing the
 /// account's last factor turns two-step sign-in off.
 #[utoipa::path(
     delete,
-    path = "/api/auth/security-keys/{id}",
+    path = "/api/v1/auth/security-keys/{id}",
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -634,13 +634,13 @@ pub struct RequireUvRequest {
     security_key: Option<serde_json::Value>,
 }
 
-/// `PUT /api/auth/security-keys/require-uv` — Proton's "Require PIN": keys
+/// `PUT /api/v1/auth/security-keys/require-uv` — Proton's "Require PIN": keys
 /// verify their user (a PIN or a fingerprint) when added and at sign-in.
 /// With the password proved again (a `totp` grant); turning it off takes
 /// the second factor too (`403 secondFactorRequired` without).
 #[utoipa::path(
     put,
-    path = "/api/auth/security-keys/require-uv",
+    path = "/api/v1/auth/security-keys/require-uv",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = RequireUvRequest,

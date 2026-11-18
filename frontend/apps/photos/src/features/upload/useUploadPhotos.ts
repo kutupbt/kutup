@@ -74,7 +74,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
   const settled = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['files'] })
     void api
-      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/user/me')
+      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/account')
       .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes, storageQuotaBytes: data.storageQuotaBytes }))
       .catch(() => {})
   }, [queryClient])
@@ -232,7 +232,7 @@ export function useResumePhotos() {
   const settled = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['files'] })
     void api
-      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/user/me')
+      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/account')
       .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes, storageQuotaBytes: data.storageQuotaBytes }))
       .catch(() => {})
   }, [queryClient])

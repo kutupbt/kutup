@@ -10,7 +10,7 @@ vi.mock('@kutup/session/client', () => ({
   default: {
     post: (...a: unknown[]) => post(...a),
     // The account's switch: this account talks to other servers.
-    get: (url: string) => Promise.resolve({ data: url === '/user/me' ? { federation: 'on' } : {} }),
+    get: (url: string) => Promise.resolve({ data: url === '/account' ? { federation: 'on' } : {} }),
   },
 }))
 vi.mock('@kutup/session/apiBase', () => ({ apiBase: () => '/api' }))

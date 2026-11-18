@@ -466,7 +466,7 @@ pub(crate) fn fetch_lock(folded: &str) -> Arc<tokio::sync::Mutex<()>> {
     fetches.entry(folded.to_owned()).or_default().clone()
 }
 
-/// `GET /api/users/renames/:address` for another server's address: the
+/// `GET /api/v1/accounts/by-address/:address/renames` for another server's address: the
 /// chains kept of it, asked of its server when none is fresh. The server
 /// unreachable and nothing kept: `{ "chains": [], "unavailable": true }`,
 /// which says nothing either way.

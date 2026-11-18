@@ -128,11 +128,11 @@ pub struct PatchVersionRequest {
     keep_forever: Option<bool>,
 }
 
-/// `GET /api/files/{fileId}/versions` — mirrors `List`.
+/// `GET /api/v1/drive/files/{fileId}/versions` — mirrors `List`.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/versions",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions",
+    tag = "drive",
     operation_id = "listFileVersions",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
@@ -157,11 +157,11 @@ pub async fn list(
     Ok(Json(out).into_response())
 }
 
-/// `GET /api/files/{fileId}/versions/{vid}/download` — mirrors `Download`.
+/// `GET /api/v1/drive/files/{fileId}/versions/{vid}/download` — mirrors `Download`.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/versions/{vid}/download",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions/{vid}/download",
+    tag = "drive",
     operation_id = "downloadFileVersion",
     security(("BearerAuth" = [])),
     params(
@@ -219,11 +219,11 @@ pub async fn download(
     .await
 }
 
-/// `PATCH /api/files/{fileId}/versions/{vid}` — mirrors `Patch`.
+/// `PATCH /api/v1/drive/files/{fileId}/versions/{vid}` — mirrors `Patch`.
 #[utoipa::path(
     patch,
-    path = "/api/files/{fileId}/versions/{vid}",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions/{vid}",
+    tag = "drive",
     operation_id = "patchFileVersion",
     security(("BearerAuth" = [])),
     params(
@@ -292,7 +292,7 @@ pub async fn patch(
 pub(crate) const NEWEST_VERSION: &str =
     "SELECT n.id FROM drive_file_versions n WHERE n.file_id = v.file_id AND n.kind = v.kind ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
 
-/// `DELETE /api/files/{fileId}/versions/{vid}` — deletes one earlier version
+/// `DELETE /api/v1/drive/files/{fileId}/versions/{vid}` — deletes one earlier version
 /// for good and frees its storage. The file's owner or the version's author
 /// may; the newest version cannot go. `original` as the version deletes the
 /// file's first upload, once a whole-file version has replaced it (the
@@ -300,8 +300,8 @@ pub(crate) const NEWEST_VERSION: &str =
 /// that opens with the old key stays (docs/plans/pass-parity.md).
 #[utoipa::path(
     delete,
-    path = "/api/files/{fileId}/versions/{vid}",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions/{vid}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(
         ("fileId" = String, Path, description = "File id"),
@@ -411,11 +411,11 @@ async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResul
 /// The longest version name, in characters.
 const MAX_LABEL_CHARS: usize = 200;
 
-/// `POST /api/files/{fileId}/versions` — store a version (multipart).
+/// `POST /api/v1/drive/files/{fileId}/versions` — store a version (multipart).
 #[utoipa::path(
     post,
-    path = "/api/files/{fileId}/versions",
-    tag = "versions",
+    path = "/api/v1/drive/files/{fileId}/versions",
+    tag = "drive",
     operation_id = "createFileVersion",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),

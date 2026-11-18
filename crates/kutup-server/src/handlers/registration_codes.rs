@@ -130,11 +130,11 @@ async fn fetch(state: &AppState, id: Uuid) -> AppResult<RegistrationCodeRow> {
         .ok_or_else(|| AppError::not_found("no such referral code"))
 }
 
-/// `POST /api/admin/registration-codes` — makes a code. The response holds
+/// `POST /api/v1/admin/registration-codes` — makes a code. The response holds
 /// its text, which is never shown again.
 #[utoipa::path(
     post,
-    path = "/api/admin/registration-codes",
+    path = "/api/v1/admin/registration-codes",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = CreateRegistrationCode,
@@ -207,11 +207,11 @@ pub async fn create(
         .into_response())
 }
 
-/// `GET /api/admin/registration-codes` — every code, newest first, with its
+/// `GET /api/v1/admin/registration-codes` — every code, newest first, with its
 /// use and state.
 #[utoipa::path(
     get,
-    path = "/api/admin/registration-codes",
+    path = "/api/v1/admin/registration-codes",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The codes", body = Vec<RegistrationCodeRow>))
@@ -223,11 +223,11 @@ pub async fn list(State(state): State<AppState>, _admin: AdminAccount) -> AppRes
     Ok(Json(rows.into_iter().map(to_row).collect::<Vec<_>>()).into_response())
 }
 
-/// `POST /api/admin/registration-codes/{id}/revoke` — stops a code at once
+/// `POST /api/v1/admin/registration-codes/{id}/revoke` — stops a code at once
 /// (also what "expire now" does). Revoking a revoked code changes nothing.
 #[utoipa::path(
     post,
-    path = "/api/admin/registration-codes/{id}/revoke",
+    path = "/api/v1/admin/registration-codes/{id}/revoke",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path, description = "The code's id")),
@@ -267,11 +267,11 @@ pub async fn revoke(
     Ok(Json(row).into_response())
 }
 
-/// `GET /api/admin/registration-codes/{id}/uses` — the accounts that signed
+/// `GET /api/v1/admin/registration-codes/{id}/uses` — the accounts that signed
 /// up with a code, oldest first.
 #[utoipa::path(
     get,
-    path = "/api/admin/registration-codes/{id}/uses",
+    path = "/api/v1/admin/registration-codes/{id}/uses",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path, description = "The code's id")),
@@ -318,11 +318,11 @@ pub struct SignedUpWith {
     pub used_at: OffsetDateTime,
 }
 
-/// `GET /api/admin/users/{id}/registration-code` — which referral code an
+/// `GET /api/v1/admin/accounts/{id}/registration-code` — which referral code an
 /// account signed up with; `null` when it used none.
 #[utoipa::path(
     get,
-    path = "/api/admin/users/{id}/registration-code",
+    path = "/api/v1/admin/accounts/{id}/registration-code",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path, description = "The account's id")),

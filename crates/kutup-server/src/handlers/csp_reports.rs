@@ -41,7 +41,7 @@ struct Violation {
 #[utoipa::path(
     post,
     path = "/api/csp-report",
-    tag = "security",
+    tag = "account",
     request_body(
         content = String,
         description = "A CSP violation report: `application/csp-report` (report-uri) or \

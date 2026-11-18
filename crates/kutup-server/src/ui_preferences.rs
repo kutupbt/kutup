@@ -41,10 +41,10 @@ impl UiPreferences {
     }
 }
 
-/// `GET /api/account/ui-preferences` — this account's theme and language.
+/// `GET /api/v1/account/ui-preferences` — this account's theme and language.
 #[utoipa::path(
     get,
-    path = "/api/account/ui-preferences",
+    path = "/api/v1/account/ui-preferences",
     tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Theme and language, null where never chosen", body = UiPreferences))
@@ -63,11 +63,11 @@ pub async fn get_ui_preferences(
     Ok(Json(UiPreferences { theme, language }))
 }
 
-/// `PUT /api/account/ui-preferences` — set the theme and language; a null
+/// `PUT /api/v1/account/ui-preferences` — set the theme and language; a null
 /// leaves that one unchosen.
 #[utoipa::path(
     put,
-    path = "/api/account/ui-preferences",
+    path = "/api/v1/account/ui-preferences",
     tag = "account",
     security(("BearerAuth" = [])),
     request_body = UiPreferences,

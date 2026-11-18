@@ -5,7 +5,7 @@
 //! The server cannot read what a link shows. A reporter may hand over the
 //! whole link, key included, so an administrator can look; it is kept only
 //! while the report is open. An administrator dismisses a report, takes the
-//! link down, or disables its owner's account (`PUT /api/admin/users/{id}`),
+//! link down, or disables its owner's account (`PUT /api/v1/admin/accounts/{id}`),
 //! which takes every link of theirs down with it. A link that is down answers
 //! `410` with `code: "link_removed"`.
 
@@ -96,12 +96,12 @@ fn is_link_to(state: &AppState, link: &str, token: &str) -> bool {
         && path.next().is_none_or(|file| Uuid::parse_str(file).is_ok() && path.next().is_none())
 }
 
-/// `POST /api/share/{token}/report` — report a public link to the server's
+/// `POST /api/v1/drive/public-links/{token}/report` — report a public link to the server's
 /// administrators. Anonymous; rate-limited per address, which is not kept.
 #[utoipa::path(
     post,
-    path = "/api/share/{token}/report",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/report",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     request_body = ReportLinkRequest,
     responses(
@@ -216,11 +216,11 @@ type ReportRow = (
     i64,
 );
 
-/// `GET /api/admin/reports` — reports on public links, oldest open first
+/// `GET /api/v1/admin/reports` — reports on public links, oldest open first
 /// (or the latest resolved).
 #[utoipa::path(
     get,
-    path = "/api/admin/reports",
+    path = "/api/v1/admin/reports",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("status" = Option<String>, Query, description = "`open` (default) or `resolved`")),
@@ -323,10 +323,10 @@ fn admin_id(admin: &AdminAccount) -> AppResult<Uuid> {
     Uuid::parse_str(&admin.account_id).map_err(|_| AppError::unauthorized("unauthorized"))
 }
 
-/// `POST /api/admin/reports/{id}/dismiss` — nothing wrong: close the report.
+/// `POST /api/v1/admin/reports/{id}/dismiss` — nothing wrong: close the report.
 #[utoipa::path(
     post,
-    path = "/api/admin/reports/{id}/dismiss",
+    path = "/api/v1/admin/reports/{id}/dismiss",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Report id")),
@@ -358,11 +358,11 @@ pub async fn dismiss_report(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/admin/reports/{id}/remove-link` — take the reported link down
+/// `POST /api/v1/admin/reports/{id}/remove-link` — take the reported link down
 /// and close every open report on it.
 #[utoipa::path(
     post,
-    path = "/api/admin/reports/{id}/remove-link",
+    path = "/api/v1/admin/reports/{id}/remove-link",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Report id")),
@@ -405,7 +405,7 @@ pub async fn remove_reported_link(
 /// Why an operator blocks a link (docs/plans/server-personal-data.md, A11).
 const BLOCK_REASONS: [&str; 3] = ["legal_order", "abuse", "other"];
 
-/// `POST /api/admin/shares/{id}/block` body.
+/// `POST /api/v1/admin/public-links/{id}/block` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BlockLinkRequest {
@@ -415,13 +415,13 @@ pub struct BlockLinkRequest {
     reference: Option<String>,
 }
 
-/// `POST /api/admin/shares/{id}/block` — block one public link: it answers
+/// `POST /api/v1/admin/public-links/{id}/block` — block one public link: it answers
 /// `451` (a legal order) or `410` (another reason) with `link_blocked`, and
 /// its open reports are closed as `blocked`. Blocking again changes the
 /// reason. Audited.
 #[utoipa::path(
     post,
-    path = "/api/admin/shares/{id}/block",
+    path = "/api/v1/admin/public-links/{id}/block",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Public link (share) id")),
@@ -494,10 +494,10 @@ pub async fn block_link(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/admin/shares/{id}/block` — lift a link's block. Audited.
+/// `DELETE /api/v1/admin/public-links/{id}/block` — lift a link's block. Audited.
 #[utoipa::path(
     delete,
-    path = "/api/admin/shares/{id}/block",
+    path = "/api/v1/admin/public-links/{id}/block",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Public link (share) id")),

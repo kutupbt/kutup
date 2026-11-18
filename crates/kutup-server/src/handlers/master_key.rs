@@ -1,4 +1,4 @@
-//! `POST /api/account/master-key/rotate` — a new master key
+//! `POST /api/v1/account/master-key/rotate` — a new master key
 //! (docs/plans/mk-rotation-exercise.md), in one transaction: the password
 //! registered again with it, a new recovery phrase, the five roots re-wrapped,
 //! the previous key kept in the keyring, the next account head sealed under
@@ -75,7 +75,7 @@ fn checked(
 
 #[utoipa::path(
     post,
-    path = "/api/account/master-key/rotate",
+    path = "/api/v1/account/master-key/rotate",
     tag = "account",
     security(("BearerAuth" = [])),
     request_body = RotateRequest,

@@ -206,7 +206,7 @@ pub(super) fn require_sfu(state: &AppState) -> AppResult<()> {
 
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links",
+    path = "/api/v1/chat/call-links",
     tag = "chat",
     operation_id = "createChatCallLink",
     request_body = CreateCallLinkRequest,
@@ -314,7 +314,7 @@ pub(crate) async fn create(
 
 #[utoipa::path(
     get,
-    path = "/api/chat/call-links",
+    path = "/api/v1/chat/call-links",
     tag = "chat",
     operation_id = "listChatCallLinks",
     responses((status = 200, description = "This account's call links, newest first", body = CallLinkList)),
@@ -349,7 +349,7 @@ pub(crate) async fn list(
 
 #[utoipa::path(
     delete,
-    path = "/api/chat/call-links/{roomId}",
+    path = "/api/v1/chat/call-links/{roomId}",
     tag = "chat",
     operation_id = "deleteChatCallLink",
     params(("roomId" = String, Path, description = "The link's room id")),
@@ -387,7 +387,7 @@ pub(crate) async fn delete(
 
 #[utoipa::path(
     put,
-    path = "/api/chat/call-links/{roomId}/info",
+    path = "/api/v1/chat/call-links/{roomId}/info",
     tag = "chat",
     operation_id = "updateChatCallLinkInfo",
     params(("roomId" = String, Path, description = "The link's room id")),
@@ -509,7 +509,7 @@ pub(super) async fn admitted(
 /// link. No account (`middleware::rate_limit_call_link`).
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/info",
+    path = "/api/v1/chat/call-links/info",
     tag = "chat",
     operation_id = "getChatCallLinkInfo",
     request_body = CallLinkInfoRequest,
@@ -537,7 +537,7 @@ pub(crate) async fn info(
 /// who wants the others to see who they are sends their access token too.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/token",
+    path = "/api/v1/chat/call-links/token",
     tag = "chat",
     operation_id = "getChatCallLinkToken",
     request_body = CallLinkTokenRequest,

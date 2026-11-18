@@ -2,9 +2,9 @@
 // docs/plans/multi-app-web-rewrite.md).
 //
 //   drive (no session) ──requestFork──▶ account/authorize?app=drive&state=S
-//   account (signed in) ──produceFork──▶ POST /api/auth/forks → selector
+//   account (signed in) ──produceFork──▶ POST /api/v1/auth/forks → selector
 //        └─▶ <drive origin>/login#selector=…&sk=<32-byte key>&state=S
-//   drive ──consumeFork──▶ POST /api/auth/forks/consume (Origin-bound, once)
+//   drive ──consumeFork──▶ POST /api/v1/auth/forks/consume (Origin-bound, once)
 //        → opens the SessionFork envelope with `sk`, persists, returns to S's path
 //
 // The key only ever travels in a URL fragment, which browsers never send to a

@@ -26,7 +26,7 @@ the rule yet (tracked in [`roadmap.md`](roadmap.md), "Settings model").
   font/size/direction) are per account because Proton Mail keeps them in the
   account and Mail follows Proton ([`plans/mail.md`](plans/mail.md)). That is
   the one deliberate exception to "ergonomics are per device".
-- **Theme and language** are per account (`/api/account/ui-preferences`) with
+- **Theme and language** are per account (`/api/v1/account/ui-preferences`) with
   a per-origin copy in localStorage only for the first paint; the account value
   wins on load and when a tab comes back into view.
 

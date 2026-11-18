@@ -81,13 +81,13 @@ pub struct AddressOrderRequest {
     pub ids: Vec<String>,
 }
 
-/// `PUT /api/mail/addresses/order` — the account's addresses in a new order
+/// `PUT /api/v1/mail/addresses/order` — the account's addresses in a new order
 /// (Proton's `PUT addresses/order`; "Set as default" moves one first). The
 /// list names exactly the account's current addresses: a tab that missed one
 /// added or deleted meanwhile gets `409 addressSetChanged`.
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/order",
+    path = "/api/v1/mail/addresses/order",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = AddressOrderRequest,
@@ -188,13 +188,13 @@ fn address_id(id: &str) -> AppResult<Uuid> {
     Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))
 }
 
-/// `PUT /api/mail/addresses/{id}/disable` — Proton's Disable, with the
+/// `PUT /api/v1/mail/addresses/{id}/disable` — Proton's Disable, with the
 /// address's next signed key list: the same keys, none of them to be
 /// encrypted to. The address neither receives nor sends; its catch-all
 /// ends. The default address is moved down first (`409 defaultAddress`).
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/{id}/disable",
+    path = "/api/v1/mail/addresses/{id}/disable",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),
@@ -241,11 +241,11 @@ pub async fn disable(
     Ok(Json(change.finish(&state).await?))
 }
 
-/// `PUT /api/mail/addresses/{id}/enable` — Proton's Enable, with the
+/// `PUT /api/v1/mail/addresses/{id}/enable` — Proton's Enable, with the
 /// address's next signed key list: its primary key to be encrypted to again.
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/{id}/enable",
+    path = "/api/v1/mail/addresses/{id}/enable",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),
@@ -290,14 +290,14 @@ pub async fn enable(
     Ok(Json(change.finish(&state).await?))
 }
 
-/// `PUT /api/mail/addresses/{id}/delete` — Proton's Delete for an address on
+/// `PUT /api/v1/mail/addresses/{id}/delete` — Proton's Delete for an address on
 /// a custom domain, once disabled (Proton disables first; one that never had
 /// a key, which can't be disabled, at once): the name is free
 /// for anyone again, and its keys stay with this account to open the mail it
 /// received (never published, never used for new mail).
 #[utoipa::path(
     put,
-    path = "/api/mail/addresses/{id}/delete",
+    path = "/api/v1/mail/addresses/{id}/delete",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Address id")),

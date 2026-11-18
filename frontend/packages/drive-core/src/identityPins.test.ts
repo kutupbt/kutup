@@ -295,8 +295,8 @@ vi.mock('@kutup/session/client', () => {
           const records = server.pins ? [{ id: 'pins', revision: server.pins.revision, envelope: server.pins.envelope, seq: 1 }] : []
           return Promise.resolve({ data: { records, deleted: [], next: records.length, more: false, resync: false, head: 'h', basis: null } })
         }
-        if (url.startsWith('/users/renames/')) {
-          const found = server.renames.get(decodeURIComponent(url.slice('/users/renames/'.length)))
+        if (/^\/accounts\/by-address\/[^/]+\/renames$/.test(url)) {
+          const found = server.renames.get(decodeURIComponent(url.split('/')[3] ?? ''))
           return Promise.resolve({ data: found ?? { version: 1, chains: [] } })
         }
         const held = server.heldNames.get(decodeURIComponent(url.split('/').pop()!))
@@ -309,7 +309,7 @@ vi.mock('@kutup/session/client', () => {
         return person ? Promise.resolve({ data: person }) : Promise.reject(notFound())
       }),
       post: vi.fn((url: string, body: { accounts: string[] }) => {
-        if (url !== '/users/drive-identities') return Promise.reject(new Error(url))
+        if (url !== '/drive/identities') return Promise.reject(new Error(url))
         server.batches.push(body.accounts)
         return Promise.resolve({ data: body.accounts.flatMap((a) => server.people.get(a) ?? []) })
       }),

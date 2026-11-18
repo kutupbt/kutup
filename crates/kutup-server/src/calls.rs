@@ -89,7 +89,7 @@ fn turn_credential(secret: &str, user_id: &str, expires_at: i64) -> (String, Str
 
 #[utoipa::path(
     get,
-    path = "/api/chat/call-servers",
+    path = "/api/v1/chat/call-servers",
     tag = "chat",
     operation_id = "getChatCallServers",
     responses(

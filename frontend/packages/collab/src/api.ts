@@ -30,11 +30,11 @@ export interface VersionRow {
 }
 
 /**
- * Where a file's collaboration calls go, under the API: `/files/:id` here;
+ * Where a file's collaboration calls go, under the API: `/drive/files/:id` here;
  * for a file on another server, its route through this server
  * (docs/plans/collab-federation.md), which takes the same suffixes.
  */
-export const localBase = (fileId: string) => `/files/${fileId}`
+export const localBase = (fileId: string) => `/drive/files/${fileId}`
 
 /**
  * The newest version holding collaboration state (`kind` `yjs`), from a

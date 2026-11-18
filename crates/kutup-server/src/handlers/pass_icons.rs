@@ -7,8 +7,8 @@
 //! default) and none (`pass_settings`). The browser never asks a website
 //! itself, so the Pass page loads no outside images.
 //!
-//! - `GET/PUT /api/pass/settings`: that choice.
-//! - `POST /api/pass/icon`: one domain's icon, refused unless the account
+//! - `GET/PUT /api/v1/pass/settings`: that choice.
+//! - `POST /api/v1/pass/icon`: one domain's icon, refused unless the account
 //!   chose Kutup. The domain travels in the body, so it stays out of access
 //!   logs; icons are kept in memory only, never written down, and per
 //!   account: a quick answer must not tell one account that another has
@@ -117,10 +117,10 @@ async fn site_icons(state: &AppState, user: &AuthAccount) -> AppResult<SiteIcons
     Ok(stored.map_or(SiteIcons::Kutup, |value| SiteIcons::parse(&value)))
 }
 
-/// `GET /api/pass/settings` — the account's Kutup Pass settings.
+/// `GET /api/v1/pass/settings` — the account's Kutup Pass settings.
 #[utoipa::path(
     get,
-    path = "/api/pass/settings",
+    path = "/api/v1/pass/settings",
     tag = "pass",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The settings", body = PassSettings))
@@ -134,10 +134,10 @@ pub async fn get_settings(
     }))
 }
 
-/// `PUT /api/pass/settings` — changes them.
+/// `PUT /api/v1/pass/settings` — changes them.
 #[utoipa::path(
     put,
-    path = "/api/pass/settings",
+    path = "/api/v1/pass/settings",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = PassSettings,
@@ -171,10 +171,10 @@ pub struct IconRequest {
     pub domain: String,
 }
 
-/// `POST /api/pass/icon` — one website's icon, through Kutup.
+/// `POST /api/v1/pass/icon` — one website's icon, through Kutup.
 #[utoipa::path(
     post,
-    path = "/api/pass/icon",
+    path = "/api/v1/pass/icon",
     tag = "pass",
     security(("BearerAuth" = [])),
     request_body = IconRequest,

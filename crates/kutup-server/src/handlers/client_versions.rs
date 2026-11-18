@@ -78,10 +78,10 @@ async fn list(state: &AppState) -> AppResult<ClientVersionsResponse> {
     })
 }
 
-/// `GET /api/admin/client-versions`
+/// `GET /api/v1/admin/client-versions`
 #[utoipa::path(
     get,
-    path = "/api/admin/client-versions",
+    path = "/api/v1/admin/client-versions",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Minimum client versions", body = ClientVersionsResponse))
@@ -112,11 +112,11 @@ mod tests {
     }
 }
 
-/// `PUT /api/admin/client-versions`: sets or clears one type's minimum, at
+/// `PUT /api/v1/admin/client-versions`: sets or clears one type's minimum, at
 /// once; recorded in the audit log.
 #[utoipa::path(
     put,
-    path = "/api/admin/client-versions",
+    path = "/api/v1/admin/client-versions",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = SetClientVersionRequest,

@@ -36,11 +36,11 @@ pub struct UploadQuery {
     revision: Option<String>,
 }
 
-/// `PUT /api/files/{fileId}/thumbnails/{variant}?source={versionId|original}&revision={revisionId}`
+/// `PUT /api/v1/drive/files/{fileId}/thumbnails/{variant}?source={versionId|original}&revision={revisionId}`
 #[utoipa::path(
     put,
-    path = "/api/files/{fileId}/thumbnails/{variant}",
-    tag = "thumbnails",
+    path = "/api/v1/drive/files/{fileId}/thumbnails/{variant}",
+    tag = "drive",
     operation_id = "uploadFileThumbnail",
     security(("BearerAuth" = [])),
     params(
@@ -241,11 +241,11 @@ async fn owns_trashed_file(
     .await
 }
 
-/// `GET /api/files/{fileId}/thumbnails/{variant}` — the envelope.
+/// `GET /api/v1/drive/files/{fileId}/thumbnails/{variant}` — the envelope.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/thumbnails/{variant}",
-    tag = "thumbnails",
+    path = "/api/v1/drive/files/{fileId}/thumbnails/{variant}",
+    tag = "drive",
     operation_id = "downloadFileThumbnail",
     security(("BearerAuth" = [])),
     params(
@@ -310,12 +310,12 @@ async fn serve(state: &AppState, fid: Uuid, variant: ThumbnailVariant) -> AppRes
     ))
 }
 
-/// `DELETE /api/files/{fileId}/thumbnails` — both variants, e.g. when the
+/// `DELETE /api/v1/drive/files/{fileId}/thumbnails` — both variants, e.g. when the
 /// content becomes something without a preview.
 #[utoipa::path(
     delete,
-    path = "/api/files/{fileId}/thumbnails",
-    tag = "thumbnails",
+    path = "/api/v1/drive/files/{fileId}/thumbnails",
+    tag = "drive",
     operation_id = "deleteFileThumbnails",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),

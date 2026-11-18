@@ -67,7 +67,7 @@ pub(crate) async fn share_reaches(
 #[utoipa::path(
     get,
     path = "/api/fed/drive/album",
-    tag = "drive federation",
+    tag = "drive.federation",
     responses((status = 200, description = "Signed capability-authorized album items", body = Vec<FederatedAlbumItem>))
 )]
 pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
@@ -165,7 +165,7 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
 #[utoipa::path(
     get,
     path = "/api/fed/drive/files/{fileId}/thumbnails/{variant}",
-    tag = "drive federation",
+    tag = "drive.federation",
     params(("fileId" = String, Path), ("variant" = String, Path, description = "sm or lg")),
     responses((status = 200, description = "Signed sealed thumbnail"))
 )]
@@ -235,12 +235,12 @@ pub async fn thumbnail(
     }
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/album` — the photos of an
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/album` — the photos of an
 /// album on another server, relayed.
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/album",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/album",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path)),
     responses((status = 200, description = "Verified remote album items", body = Vec<FederatedAlbumItem>))
@@ -280,12 +280,12 @@ pub async fn proxy_album_items(
         .into_response())
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/files/{fileId}/thumbnails/{variant}`
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/thumbnails/{variant}`
 /// — a thumbnail from another server, relayed (still sealed).
 #[utoipa::path(
     get,
-    path = "/api/drive/federation/shares/{shareId}/files/{fileId}/thumbnails/{variant}",
-    tag = "drive federation",
+    path = "/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/thumbnails/{variant}",
+    tag = "drive.federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path), ("fileId" = String, Path), ("variant" = String, Path)),
     responses((status = 200, description = "Digest-verified sealed thumbnail"))

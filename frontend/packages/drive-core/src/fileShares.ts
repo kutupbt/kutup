@@ -266,7 +266,7 @@ export function useSharedFiles({ enabled = true }: { enabled?: boolean } = {}) {
     enabled: enabled && identity.isSuccess,
     queryFn: async () => {
       const [{ data: local }, { data: remote }] = await Promise.all([
-        api.get<SharedFileRow[]>('/shared-files'),
+        api.get<SharedFileRow[]>('/drive/shared-with-me'),
         api.get<RemoteFileShareRow[]>('/drive/federation/file-shares').catch(() => ({ data: [] as RemoteFileShareRow[] })),
       ])
       return Promise.all([
@@ -330,7 +330,7 @@ export interface FileAccess {
 /** Someone on another server as their server describes them: their account and keys. */
 /** Their Drive key from their server, by their account id, still the same account incarnation. */
 async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientServer' | 'recipientAccountId' | 'recipientIncarnationId'>): Promise<AccountAnswer> {
-  const { data } = await api.get<AccountAnswer>(`/users/by-id/${encodeURIComponent(member.recipientAccountId)}`, {
+  const { data } = await api.get<AccountAnswer>(`/accounts/${encodeURIComponent(member.recipientAccountId)}`, {
     params: { server: member.recipientServer },
   })
   if (data.server !== member.recipientServer || data.accountId !== member.recipientAccountId) {
@@ -383,7 +383,7 @@ export const fileAccessKey = (fileId: string) => ['file-access', fileId] as cons
 export const pendingFileSharesKey = ['file-shares-pending'] as const
 
 async function loadFileAccess(fileId: string): Promise<FileAccess> {
-  return (await api.get<FileAccess>(`/files/${fileId}/access`)).data
+  return (await api.get<FileAccess>(`/drive/files/${fileId}/access`)).data
 }
 
 /** Whether this account may share `file` by itself: it owns the folder. */
@@ -416,7 +416,7 @@ export function useSetEditorsCanShare() {
   const queryClient = useQueryClient()
   return useDriveMutation(async ({ file, value }: { file: DriveFile; value: boolean }) => {
     try {
-      await api.put(`/files/${file.id}/sharing`, { editorsCanShare: value })
+      await api.put(`/drive/files/${file.id}/sharing`, { editorsCanShare: value })
     } finally {
       await queryClient.invalidateQueries({ queryKey: fileAccessKey(file.id) })
     }
@@ -483,7 +483,7 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
       })),
     )
     try {
-      await api.put(`/files/${fresh.id}/shares`, { members, publicLinks, federatedShares })
+      await api.put(`/drive/files/${fresh.id}/shares`, { members, publicLinks, federatedShares })
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 409) throw new AccessChanged()
       throw error
@@ -552,7 +552,7 @@ export function useShareFile() {
           await confirmRecipient(me, address, remote, input.identityConfirmed)
           const file = await bringFileSharesUpToDate(input.folder, input.file, me)
           const shareEnvelope = await sealForRemote(me, file, file.fileKey!, file.keyGeneration, remote)
-          const { data } = await api.post<{ inviteUrl: string }>(`/files/${file.id}/federated-shares`, {
+          const { data } = await api.post<{ inviteUrl: string }>(`/drive/files/${file.id}/federated-shares`, {
             recipientServer: server,
             recipientAccountId: remote.accountId,
             shareEnvelope,
@@ -570,7 +570,7 @@ export function useShareFile() {
           accountIncarnationId: recipient.accountIncarnationId,
           drivePublicKey: recipient.driveHpkePublicKey,
         })
-        await api.post(`/files/${file.id}/share`, { recipientAccountId: recipient.accountId, shareEnvelope, canEdit: input.canEdit })
+        await api.post(`/drive/files/${file.id}/share`, { recipientAccountId: recipient.accountId, shareEnvelope, canEdit: input.canEdit })
         return { kind: 'local', account: recipient.account }
       } finally {
         await queryClient.invalidateQueries({ queryKey: fileAccessKey(input.file.id) })
@@ -593,7 +593,7 @@ export function useSetFileRole() {
       try {
         const file = await bringFileSharesUpToDate(input.folder, input.file, me)
         const shareEnvelope = await sealFor(me, file.id, file.fileKey!, file.keyGeneration, memberTo(me, input.member))
-        await api.post(`/files/${file.id}/share`, { recipientAccountId: input.member.accountId, shareEnvelope, canEdit: input.canEdit })
+        await api.post(`/drive/files/${file.id}/share`, { recipientAccountId: input.member.accountId, shareEnvelope, canEdit: input.canEdit })
       } finally {
         await queryClient.invalidateQueries({ queryKey: fileAccessKey(input.file.id) })
       }
@@ -677,7 +677,7 @@ export function useRemoveFileAccess() {
           .filter(({ share }) => !extra.federatedShares.includes(share.id))
           .map(async ({ share, remote }) => ({ id: share.id, shareEnvelope: await sealForRemote(me, file, next.fileKey, next.keyGeneration, remote) })),
       )
-      await api.post(`/files/${file.id}/rotate`, {
+      await api.post(`/drive/files/${file.id}/rotate`, {
         fromGeneration: file.keyGeneration,
         fileKeyEnvelope: next.fileKeyEnvelope,
         metadataEnvelope: next.metadataEnvelope,
@@ -712,7 +712,7 @@ export function useKeepFileSharesCurrent() {
     queryKey: pendingFileSharesKey,
     enabled: identity.isSuccess,
     refetchInterval: 60_000,
-    queryFn: async () => (await api.get<{ fileId: string; collectionId: string }[]>('/file-shares/pending')).data,
+    queryFn: async () => (await api.get<{ fileId: string; collectionId: string }[]>('/drive/shared-with-me/pending')).data,
   })
   useEffect(() => {
     const me = identity.data
@@ -760,7 +760,7 @@ export function useCreateFileLink() {
     const linkKey = await generateKey()
     const id = crypto.randomUUID()
     try {
-      const { data } = await api.post<{ token: string }>('/share', {
+      const { data } = await api.post<{ token: string }>('/drive/public-links', {
         shareType: 'file',
         targetId: file.id,
         collectionKeyEnvelope: await wrapForLink(file, file.fileKey!, file.keyGeneration, linkKey, me),

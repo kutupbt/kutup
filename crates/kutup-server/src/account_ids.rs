@@ -83,7 +83,7 @@ pub fn from_peer(server: &str, account_id: &str) -> AppResult<AccountRef> {
     })
 }
 
-/// The key of the proofs `POST /api/auth/opaque/register/start` gives with a
+/// The key of the proofs `POST /api/v1/auth/opaque/register/start` gives with a
 /// minted account id, so that `register` takes back only an id this server
 /// minted for that key binding (stateless, like the registration answer).
 async fn proof_key(state: &crate::AppState) -> AppResult<[u8; 32]> {

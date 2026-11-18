@@ -54,13 +54,13 @@ pub struct DeviceSessionResponse {
     pub session: String,
 }
 
-/// `GET /api/device-session` — the `session` hash a device of this sign-in
+/// `GET /api/v1/account/devices/session` — the `session` hash a device of this sign-in
 /// lists in its manifest entry. A device asks before it signs its own entry
 /// (a re-registration, or adding itself after a link).
 #[utoipa::path(
     get,
-    path = "/api/device-session",
-    tag = "devices",
+    path = "/api/v1/account/devices/session",
+    tag = "account",
     operation_id = "getDeviceSession",
     responses(
         (status = 200, description = "This sign-in's session hash", body = DeviceSessionResponse),
@@ -198,17 +198,17 @@ fn devices_conflict() -> AppError {
 // Editor and CLI devices (slice 2)
 // ---------------------------------------------------------------------------
 
-/// `POST /api/devices` — an editor or CLI device of the caller's account:
+/// `POST /api/v1/account/devices` — an editor or CLI device of the caller's account:
 /// a row under the caller's sign-in with the lowest id no row holds, within
 /// [`crate::site_settings::DEVICES_PER_ACCOUNT`]. The device then lists
-/// itself in the account's manifest (`POST /api/chat/manifest`); until it
+/// itself in the account's manifest (`POST /api/v1/chat/manifest`); until it
 /// does, its frames are refused, and a publication by another device after
 /// `deviceListingGraceSeconds` drops the row. A retry with the same
 /// credential answers the row it made.
 #[utoipa::path(
     post,
-    path = "/api/devices",
-    tag = "devices",
+    path = "/api/v1/account/devices",
+    tag = "account",
     operation_id = "registerDevice",
     request_body = RegisterDeviceRequestV1,
     responses(
@@ -303,13 +303,13 @@ pub struct AccountDevicesResponse {
     pub devices: Vec<AccountDeviceV1>,
 }
 
-/// `GET /api/devices` — every device of the caller's account, of every
+/// `GET /api/v1/account/devices` — every device of the caller's account, of every
 /// kind, with whether the account's manifest lists it and whether it is of
 /// the caller's sign-in.
 #[utoipa::path(
     get,
-    path = "/api/devices",
-    tag = "devices",
+    path = "/api/v1/account/devices",
+    tag = "account",
     operation_id = "listDevices",
     responses((status = 200, description = "The account's devices", body = AccountDevicesResponse)),
     security(("bearerAuth" = []))
@@ -373,14 +373,14 @@ fn ticket_hash(ticket: &str) -> String {
     hex::encode(hash(Suite::V1, ticket.as_bytes()))
 }
 
-/// `POST /api/device-ticket` — a single-use, short-lived WebSocket
+/// `POST /api/v1/account/devices/tickets` — a single-use, short-lived WebSocket
 /// credential for the device `X-Kutup-Device` names (browsers can't set
 /// headers on a socket): the Chat socket takes one of a Chat device, the
 /// collab sockets one of a device with a frame key. Only its hash is kept.
 #[utoipa::path(
     post,
-    path = "/api/device-ticket",
-    tag = "devices",
+    path = "/api/v1/account/devices/tickets",
+    tag = "account",
     operation_id = "createDeviceTicket",
     responses(
         (status = 200, description = "One-time ticket", body = DeviceTicketResponse),

@@ -223,7 +223,7 @@ fn mint(
 
 #[utoipa::path(
     post,
-    path = "/api/chat/group-calls/token",
+    path = "/api/v1/chat/group-calls/token",
     tag = "chat",
     operation_id = "getChatGroupCallToken",
     request_body = GroupCallTokenRequest,

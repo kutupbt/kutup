@@ -52,7 +52,7 @@ export async function moveFolder(folder: Folder, parent: Folder | null): Promise
   const place = parent ? inFolder(parent) : roots ? atTopLevel(roots) : null
   if (!place || !folder.name) throw new Error('folder is not open')
   try {
-    await api.post(`/collections/${folder.id}/move`, {
+    await api.post(`/drive/collections/${folder.id}/move`, {
       parentCollectionId: parent?.id ?? null,
       ...(await nameFieldsIn(place, folder.name)),
     })

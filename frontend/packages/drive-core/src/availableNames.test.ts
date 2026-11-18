@@ -53,7 +53,7 @@ describe('an available name', () => {
     expect(free.name).toBe('Report (3).pdf')
     expect(free.hash).toBe(await nameHashIn(inFolder(folder), 'Report (3).pdf'))
     expect(post).toHaveBeenCalledTimes(1)
-    expect(post.mock.calls[0][0]).toBe(`/collections/${folder.id}/available-hashes`)
+    expect(post.mock.calls[0][0]).toBe(`/drive/collections/${folder.id}/available-hashes`)
   })
 
   it('goes on to the next batch when ten are taken', async () => {

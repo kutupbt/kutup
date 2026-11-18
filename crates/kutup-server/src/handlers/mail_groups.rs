@@ -248,16 +248,16 @@ pub struct MailGroupRecipients {
     pub address: String,
     pub group_id: Uuid,
     pub kind: String,
-    /// Each receiver as `GET /api/mail/keys` answers for them; their key
+    /// Each receiver as `GET /api/v1/mail/keys` answers for them; their key
     /// lists are checked like any address's.
     pub members: Vec<MailKeyLookup>,
 }
 
-/// `GET /api/mail/groups/recipients?email=` — who receives a group's mail,
+/// `GET /api/v1/mail/groups/recipients?email=` — who receives a group's mail,
 /// with their keys, when the caller may post to it.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups/recipients",
+    path = "/api/v1/mail/groups/recipients",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("email" = String, Query, description = "The group's address")),
@@ -304,10 +304,10 @@ pub async fn recipients(
 
 // --- Members, owners and managers -----------------------------------------
 
-/// `GET /api/mail/groups` — the groups the caller belongs to.
+/// `GET /api/v1/mail/groups` — the groups the caller belongs to.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups",
+    path = "/api/v1/mail/groups",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your groups", body = Vec<MailGroup>))
@@ -328,11 +328,11 @@ pub async fn my_groups(
     Ok(Json(opened_all(&state, groups).await?))
 }
 
-/// `GET /api/mail/groups/{id}` — a group and its members, for its members
+/// `GET /api/v1/mail/groups/{id}` — a group and its members, for its members
 /// and administrators.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups/{id}",
+    path = "/api/v1/mail/groups/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -434,11 +434,11 @@ async fn apply_update(
     Ok(())
 }
 
-/// `PATCH /api/mail/groups/{id}` — the name, description and who may post,
+/// `PATCH /api/v1/mail/groups/{id}` — the name, description and who may post,
 /// for owners, managers and administrators.
 #[utoipa::path(
     patch,
-    path = "/api/mail/groups/{id}",
+    path = "/api/v1/mail/groups/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -806,13 +806,13 @@ async fn check_key_changes(
     })
 }
 
-/// `PUT /api/mail/groups/{id}/members` — the whole member list. Owners and
+/// `PUT /api/v1/mail/groups/{id}/members` — the whole member list. Owners and
 /// administrators change anyone; managers change members and managers, but
 /// neither add, remove nor change owners. A group other than a role address
 /// keeps at least one owner.
 #[utoipa::path(
     put,
-    path = "/api/mail/groups/{id}/members",
+    path = "/api/v1/mail/groups/{id}/members",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -1017,10 +1017,10 @@ pub async fn set_members(
 
 // --- Administrators ---------------------------------------------------------
 
-/// `GET /api/admin/mail/groups` — every group, role addresses first.
+/// `GET /api/v1/admin/mail/groups` — every group, role addresses first.
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/groups",
+    path = "/api/v1/admin/mail/groups",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Every group", body = Vec<MailGroup>))
@@ -1096,10 +1096,10 @@ pub(crate) async fn group_name_free(state: &AppState, name: &str) -> AppResult<S
     }
 }
 
-/// `POST /api/admin/mail/groups` — creates a group.
+/// `POST /api/v1/admin/mail/groups` — creates a group.
 #[utoipa::path(
     post,
-    path = "/api/admin/mail/groups",
+    path = "/api/v1/admin/mail/groups",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = CreateMailGroup,
@@ -1278,11 +1278,11 @@ pub struct AdminUpdateMailGroup {
     pub post_policy: Option<String>,
 }
 
-/// `PATCH /api/admin/mail/groups/{id}` — quota, name, description and who
+/// `PATCH /api/v1/admin/mail/groups/{id}` — quota, name, description and who
 /// may post.
 #[utoipa::path(
     patch,
-    path = "/api/admin/mail/groups/{id}",
+    path = "/api/v1/admin/mail/groups/{id}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -1327,12 +1327,12 @@ pub async fn admin_update(
     Ok(Json(detail(&state, admin_id, id).await?))
 }
 
-/// `DELETE /api/admin/mail/groups/{id}` — deletes a group (not a role
+/// `DELETE /api/v1/admin/mail/groups/{id}` — deletes a group (not a role
 /// address). Members keep the copies they already received; its address
 /// becomes free.
 #[utoipa::path(
     delete,
-    path = "/api/admin/mail/groups/{id}",
+    path = "/api/v1/admin/mail/groups/{id}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -1445,11 +1445,11 @@ pub struct MailGroupKeys {
     pub signing_share: Option<String>,
 }
 
-/// `GET /api/mail/groups/{id}/keys` — a shared mailbox's keys, primary
+/// `GET /api/v1/mail/groups/{id}/keys` — a shared mailbox's keys, primary
 /// first, with the caller's shares, for its members.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups/{id}/keys",
+    path = "/api/v1/mail/groups/{id}/keys",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -1525,12 +1525,12 @@ pub struct RotateGroupKey {
     pub key: NewGroupKey,
 }
 
-/// `POST /api/mail/groups/{id}/keys` — a new primary key for a shared
+/// `POST /api/v1/mail/groups/{id}/keys` — a new primary key for a shared
 /// mailbox, with a share for every member (owners and managers): older keys
 /// stay to open older mail.
 #[utoipa::path(
     post,
-    path = "/api/mail/groups/{id}/keys",
+    path = "/api/v1/mail/groups/{id}/keys",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Group id")),
@@ -1644,12 +1644,12 @@ pub struct MailAccountRef {
     pub address: String,
 }
 
-/// `GET /api/mail/accounts?address=` — the active account with this Kutup
+/// `GET /api/v1/mail/accounts?address=` — the active account with this Kutup
 /// address and a mail key (the address is public anyway, through key
 /// lookup), so a group can be given members by address.
 #[utoipa::path(
     get,
-    path = "/api/mail/accounts",
+    path = "/api/v1/mail/accounts",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("address" = String, Query, description = "A Kutup address")),
@@ -1709,12 +1709,12 @@ pub struct MailGroupEntry {
     pub kind: String,
 }
 
-/// `GET /api/mail/groups/directory?q=` — up to 10 groups whose address or
+/// `GET /api/v1/mail/groups/directory?q=` — up to 10 groups whose address or
 /// name starts with `q` and that take the caller's mail (anyone, Kutup
 /// users, or the caller's own groups), for the composer's suggestions.
 #[utoipa::path(
     get,
-    path = "/api/mail/groups/directory",
+    path = "/api/v1/mail/groups/directory",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("q" = String, Query, description = "The start of an address or name")),

@@ -157,10 +157,10 @@ struct AccountRow {
     is_protected: bool,
 }
 
-/// `GET /api/admin/users` — mirrors `ListUsers`.
+/// `GET /api/v1/admin/accounts` — mirrors `ListUsers`.
 #[utoipa::path(
     get,
-    path = "/api/admin/users",
+    path = "/api/v1/admin/accounts",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "All user accounts", body = Vec<AccountRow>))
@@ -239,13 +239,13 @@ pub struct CreateAccountRequest {
     storage_quota_bytes: i64,
 }
 
-/// `POST /api/admin/users` — creates a first-login account under a temporary
+/// `POST /api/v1/admin/accounts` — creates a first-login account under a temporary
 /// password the administrator's browser derived (the server never sees it);
 /// the user establishes their E2EE key material on first sign-in. It signs in
 /// with its username; no email is asked (a recovery email is the user's own).
 #[utoipa::path(
     post,
-    path = "/api/admin/users",
+    path = "/api/v1/admin/accounts",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = crate::models::CreateAdminAccountRequest,
@@ -353,10 +353,10 @@ pub struct UpdateAccountRequest {
     is_admin: Option<bool>,
 }
 
-/// `PUT /api/admin/users/{id}` — mirrors `UpdateUser`. Each present field is one UPDATE.
+/// `PUT /api/v1/admin/accounts/{id}` — mirrors `UpdateUser`. Each present field is one UPDATE.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}",
+    path = "/api/v1/admin/accounts/{id}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -578,10 +578,10 @@ pub async fn update_user(
     Ok(Json(json!({"message": "updated"})).into_response())
 }
 
-/// `DELETE /api/admin/users/{id}` — mirrors `DeleteUser` (cascades via FKs).
+/// `DELETE /api/v1/admin/accounts/{id}` — mirrors `DeleteUser` (cascades via FKs).
 #[utoipa::path(
     delete,
-    path = "/api/admin/users/{id}",
+    path = "/api/v1/admin/accounts/{id}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -628,12 +628,12 @@ pub async fn delete_user(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/admin/users/{id}/close` — closes the account: deleted after
+/// `POST /api/v1/admin/accounts/{id}/close` — closes the account: deleted after
 /// `account_closing_days`, unless kept (by its owner at sign-in, or here with
 /// `isActive: true`) (docs/plans/server-personal-data.md, A5).
 #[utoipa::path(
     post,
-    path = "/api/admin/users/{id}/close",
+    path = "/api/v1/admin/accounts/{id}/close",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -693,7 +693,7 @@ pub async fn close_user(
     Ok(Json(crate::handlers::closing::Closed::new(closes_at)).into_response())
 }
 
-/// `PUT /api/admin/users/{id}/legal-hold` body.
+/// `PUT /api/v1/admin/accounts/{id}/legal-hold` body.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LegalHoldRequest {
@@ -701,12 +701,12 @@ pub struct LegalHoldRequest {
     reference: String,
 }
 
-/// `PUT /api/admin/users/{id}/legal-hold` — sets (or changes) a legal hold
+/// `PUT /api/v1/admin/accounts/{id}/legal-hold` — sets (or changes) a legal hold
 /// (docs/plans/server-personal-data.md, A5): while it is set nothing deletes
 /// the account or anything of it.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}/legal-hold",
+    path = "/api/v1/admin/accounts/{id}/legal-hold",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -760,11 +760,11 @@ pub async fn set_legal_hold(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/admin/users/{id}/legal-hold` — ends a legal hold; deletions
+/// `DELETE /api/v1/admin/accounts/{id}/legal-hold` — ends a legal hold; deletions
 /// that waited (a closing account past its date) go ahead.
 #[utoipa::path(
     delete,
-    path = "/api/admin/users/{id}/legal-hold",
+    path = "/api/v1/admin/accounts/{id}/legal-hold",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -966,12 +966,12 @@ pub(crate) async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppR
     Ok(())
 }
 
-/// `DELETE /api/admin/users/{id}/2fa` — mirrors `ForceDisable2FA`. Clears the target's TOTP
+/// `DELETE /api/v1/admin/accounts/{id}/2fa` — mirrors `ForceDisable2FA`. Clears the target's TOTP
 /// (the admin caller is already authenticated + admin-gated, so no TOTP-code challenge).
 /// Allowed on the break-glass admin too — it's a recovery aid and can't lock anyone out.
 #[utoipa::path(
     delete,
-    path = "/api/admin/users/{id}/2fa",
+    path = "/api/v1/admin/accounts/{id}/2fa",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -1032,10 +1032,10 @@ struct StatsResponse {
     storage_backend_used_bytes: i64,
 }
 
-/// `GET /api/admin/stats` — mirrors `GetStats`.
+/// `GET /api/v1/admin/stats` — mirrors `GetStats`.
 #[utoipa::path(
     get,
-    path = "/api/admin/stats",
+    path = "/api/v1/admin/stats",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Aggregate instance stats", body = StatsResponse))
@@ -1082,10 +1082,10 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminAccount) -> A
     Ok(Json(stats).into_response())
 }
 
-/// `GET /api/admin/settings` — mirrors `GetSettings`.
+/// `GET /api/v1/admin/settings` — mirrors `GetSettings`.
 #[utoipa::path(
     get,
-    path = "/api/admin/settings",
+    path = "/api/v1/admin/settings",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Site settings", body = crate::models::AdminSettingsResponse))
@@ -1181,10 +1181,10 @@ fn present<'de, D: serde::Deserializer<'de>>(
     Option::<i64>::deserialize(deserializer).map(Some)
 }
 
-/// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
+/// `PUT /api/v1/admin/settings` — mirrors `UpdateSettings`.
 #[utoipa::path(
     put,
-    path = "/api/admin/settings",
+    path = "/api/v1/admin/settings",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = crate::models::UpdateAdminSettingsRequest,
@@ -1713,7 +1713,7 @@ pub struct RepinFederationPeerRequest {
 
 #[utoipa::path(
     get,
-    path = "/api/admin/federation",
+    path = "/api/v1/admin/federation",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Unified federation policy and peer trust state", body = FederationControlPlaneResponse))
@@ -1971,7 +1971,7 @@ pub async fn get_federation_control_plane(
 
 #[utoipa::path(
     put,
-    path = "/api/admin/federation",
+    path = "/api/v1/admin/federation",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = UpdateFederationPolicyRequest,
@@ -2018,7 +2018,7 @@ pub async fn update_federation_policy(
 
 #[utoipa::path(
     put,
-    path = "/api/admin/federation/rules/{feature}/{domain}",
+    path = "/api/v1/admin/federation/rules/{feature}/{domain}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("feature" = String, Path), ("domain" = String, Path)),
@@ -2073,7 +2073,7 @@ pub async fn upsert_federation_domain_rule(
 
 #[utoipa::path(
     delete,
-    path = "/api/admin/federation/rules/{feature}/{domain}",
+    path = "/api/v1/admin/federation/rules/{feature}/{domain}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("feature" = String, Path), ("domain" = String, Path)),
@@ -2109,7 +2109,7 @@ pub async fn delete_federation_domain_rule(
 
 #[utoipa::path(
     get,
-    path = "/api/admin/federation/peers/{domain}/evidence",
+    path = "/api/v1/admin/federation/peers/{domain}/evidence",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("domain" = String, Path)),
@@ -2186,7 +2186,7 @@ pub async fn get_federation_peer_evidence(
 
 #[utoipa::path(
     post,
-    path = "/api/admin/federation/peers/{domain}/verify",
+    path = "/api/v1/admin/federation/peers/{domain}/verify",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("domain" = String, Path)),
@@ -2222,7 +2222,7 @@ pub async fn verify_federation_peer(
 
 #[utoipa::path(
     post,
-    path = "/api/admin/federation/peers/{domain}/retry",
+    path = "/api/v1/admin/federation/peers/{domain}/retry",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("domain" = String, Path)),
@@ -2249,7 +2249,7 @@ pub async fn retry_federation_peer(
 
 #[utoipa::path(
     post,
-    path = "/api/admin/federation/peers/retry",
+    path = "/api/v1/admin/federation/peers/retry",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = BulkRetryFederationPeersRequest,
@@ -2352,7 +2352,7 @@ async fn retry_peer_resolution(state: &AppState, domain: &str) -> Result<(), Str
 
 #[utoipa::path(
     post,
-    path = "/api/admin/federation/peers/{domain}/repin",
+    path = "/api/v1/admin/federation/peers/{domain}/repin",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("domain" = String, Path)),
@@ -2432,7 +2432,7 @@ pub struct RotateTempPasswordRequest {
     setup: TempRegistration,
 }
 
-/// `POST /api/admin/users/{id}/rotate-temp-password` — replaces the temp password of an
+/// `POST /api/v1/admin/accounts/{id}/rotate-temp-password` — replaces the temp password of an
 /// account still in `is_first_login` state. Such an account has no key material yet, so
 /// this destroys nothing. For an established account this is a `409`: under E2EE the
 /// server cannot reset a password without destroying the user's data — they self-serve
@@ -2440,7 +2440,7 @@ pub struct RotateTempPasswordRequest {
 /// Design: `docs/research/10-admin-password-reset.md`.
 #[utoipa::path(
     post,
-    path = "/api/admin/users/{id}/rotate-temp-password",
+    path = "/api/v1/admin/accounts/{id}/rotate-temp-password",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -2528,13 +2528,13 @@ pub struct ResetGrantRequest {
     grant: String,
 }
 
-/// `POST /api/admin/users/{id}/reset-grant` — the admin's fresh password
+/// `POST /api/v1/admin/accounts/{id}/reset-grant` — the admin's fresh password
 /// proof (a reauth grant for `adminReset`), exchanged for one bound to this
 /// account: what its temporary password's registration and the reset itself
 /// take. Single use, five minutes, this admin session only.
 #[utoipa::path(
     post,
-    path = "/api/admin/users/{id}/reset-grant",
+    path = "/api/v1/admin/accounts/{id}/reset-grant",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -2594,7 +2594,7 @@ pub struct ResetKeysRequest {
     setup: TempRegistration,
 }
 
-/// `POST /api/admin/users/{id}/wipe` — the destructive "reset" for a user who lost both
+/// `POST /api/v1/admin/accounts/{id}/reset-keys` — the destructive "reset" for a user who lost both
 /// password and recovery phrase. Their data is cryptographically unreachable anyway;
 /// this makes it official: purges every owned collection (files, versions, assets, S3
 /// blobs, shares), erases the key bundle + TOTP + device signing keys, and resets the
@@ -2602,7 +2602,7 @@ pub struct ResetKeysRequest {
 /// survive. Irreversible. Design: `docs/research/10-admin-password-reset.md`.
 #[utoipa::path(
     post,
-    path = "/api/admin/users/{id}/wipe",
+    path = "/api/v1/admin/accounts/{id}/reset-keys",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Target user id")),
@@ -2830,10 +2830,10 @@ pub struct ActivityIntegrity {
     pub append_only: bool,
 }
 
-/// `GET /api/admin/activity/verify` — walks the admin log's hash chain.
+/// `GET /api/v1/admin/activity/verify` — walks the admin log's hash chain.
 #[utoipa::path(
     get,
-    path = "/api/admin/activity/verify",
+    path = "/api/v1/admin/activity/verify",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The chain checked, and whether the logs are append-only", body = ActivityIntegrity))
@@ -2848,10 +2848,10 @@ pub async fn activity_verify(
     }))
 }
 
-/// `GET /api/admin/activity?limit=50&before=<id>` — the filterable audit-log feed.
+/// `GET /api/v1/admin/activity?limit=50&before=<id>` — the filterable audit-log feed.
 #[utoipa::path(
     get,
-    path = "/api/admin/activity",
+    path = "/api/v1/admin/activity",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(
@@ -2884,7 +2884,7 @@ pub async fn activity(
 
 #[utoipa::path(
     get,
-    path = "/api/admin/activity/export",
+    path = "/api/v1/admin/activity/export",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(

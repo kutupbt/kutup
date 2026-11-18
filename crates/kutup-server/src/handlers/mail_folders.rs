@@ -87,10 +87,10 @@ fn parse_id(id: &str) -> AppResult<Uuid> {
 /// id, parent, sealed name, colour, position, expanded, notify.
 type FolderRow = (Uuid, Option<Uuid>, Option<String>, String, i32, bool, bool);
 
-/// `GET /api/mail/places` — the account's folders and labels.
+/// `GET /api/v1/mail/places` — the account's folders and labels.
 #[utoipa::path(
     get,
-    path = "/api/mail/places",
+    path = "/api/v1/mail/places",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Folders and labels", body = MailPlaces))
@@ -210,10 +210,10 @@ pub struct CreateMailFolder {
     pub head: Option<String>,
 }
 
-/// `POST /api/mail/folders` — a new folder, at the top or inside another.
+/// `POST /api/v1/mail/folders` — a new folder, at the top or inside another.
 #[utoipa::path(
     post,
-    path = "/api/mail/folders",
+    path = "/api/v1/mail/folders",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = CreateMailFolder,
@@ -309,11 +309,11 @@ pub struct UpdateMailFolder {
     pub head: Option<String>,
 }
 
-/// `PATCH /api/mail/folders/{id}` — rename (a new sealed name), recolour,
+/// `PATCH /api/v1/mail/folders/{id}` — rename (a new sealed name), recolour,
 /// move into another folder or to the top, reorder, fold, notify.
 #[utoipa::path(
     patch,
-    path = "/api/mail/folders/{id}",
+    path = "/api/v1/mail/folders/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Folder id")),
@@ -430,12 +430,12 @@ pub struct DeletedMailFolder {
     pub moved: u64,
 }
 
-/// `DELETE /api/mail/folders/{id}` — removes the folder and the folders in
+/// `DELETE /api/v1/mail/folders/{id}` — removes the folder and the folders in
 /// it. Their mail is never deleted: it moves to Archive (Proton: "emails
 /// stored in the folder will not be deleted and can be found in All Mail").
 #[utoipa::path(
     delete,
-    path = "/api/mail/folders/{id}",
+    path = "/api/v1/mail/folders/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Folder id")),
@@ -542,10 +542,10 @@ pub struct CreateMailLabel {
     pub head: Option<String>,
 }
 
-/// `POST /api/mail/labels` — a new label.
+/// `POST /api/v1/mail/labels` — a new label.
 #[utoipa::path(
     post,
-    path = "/api/mail/labels",
+    path = "/api/v1/mail/labels",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = CreateMailLabel,
@@ -608,10 +608,10 @@ pub struct UpdateMailLabel {
     pub head: Option<String>,
 }
 
-/// `PATCH /api/mail/labels/{id}` — rename, recolour, reorder.
+/// `PATCH /api/v1/mail/labels/{id}` — rename, recolour, reorder.
 #[utoipa::path(
     patch,
-    path = "/api/mail/labels/{id}",
+    path = "/api/v1/mail/labels/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Label id")),
@@ -676,11 +676,11 @@ pub async fn update_label(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/mail/labels/{id}` — removes the label from every message;
+/// `DELETE /api/v1/mail/labels/{id}` — removes the label from every message;
 /// the mail stays where it is.
 #[utoipa::path(
     delete,
-    path = "/api/mail/labels/{id}",
+    path = "/api/v1/mail/labels/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Label id")),

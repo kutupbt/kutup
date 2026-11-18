@@ -16,7 +16,7 @@ test('an unreachable server is retried, with no repair offered', async ({ browse
   const page = await openChat(context)
   const deviceBefore = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('kutup.chat.deviceId')).map((key) => localStorage.getItem(key)))
 
-  await page.route('**/api/chat/**', (route) => route.fulfill({ status: 502, body: '' }))
+  await page.route('**/api/v1/chat/**', (route) => route.fulfill({ status: 502, body: '' }))
   await page.reload()
   await expect(page.getByText("The server can't be reached")).toBeVisible({ timeout: 90_000 })
   await expect(page.getByText('Retrying…').first()).toBeVisible()
@@ -25,7 +25,7 @@ test('an unreachable server is retried, with no repair offered', async ({ browse
 
   // The server is back: Chat opens without anyone doing anything, as the
   // same device.
-  await page.unroute('**/api/chat/**')
+  await page.unroute('**/api/v1/chat/**')
   await openChats(page)
   const deviceAfter = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('kutup.chat.deviceId')).map((key) => localStorage.getItem(key)))
   expect(deviceAfter).toEqual(deviceBefore)
@@ -40,7 +40,7 @@ test('a failure of this browser\'s own state offers the repair', async ({ browse
   await registerAccount(context, newAccount('openstate', PASSWORD))
   const page = await openChat(context)
 
-  await page.route('**/api/chat/messages*', (route) => route.fulfill({ status: 404, body: '' }))
+  await page.route('**/api/v1/chat/messages*', (route) => route.fulfill({ status: 404, body: '' }))
   await page.reload()
   await expect(page.getByText('Chat could not open')).toBeVisible({ timeout: 90_000 })
   await expect(page.getByRole('button', { name: 'Repair this browser' })).toBeVisible()

@@ -95,7 +95,7 @@ function keysOf(person: DrivePerson): Promise<Keys | null> {
   let pending = remoteKeys.get(cacheKey)
   if (!pending) {
     pending = api
-      .get<RemoteUser>(`/users/by-id/${encodeURIComponent(person.accountId)}`, {
+      .get<RemoteUser>(`/accounts/${encodeURIComponent(person.accountId)}`, {
         params: { server: person.server },
       })
       .then(({ data }) => {

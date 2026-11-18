@@ -35,7 +35,7 @@ fn by_id(
     account_id: &str,
     server: Option<&str>,
 ) -> reqwest::blocking::Response {
-    let mut request = bearer(c.get(format!("{base}/api/users/by-id/{account_id}")), token);
+    let mut request = bearer(c.get(format!("{base}/api/v1/accounts/{account_id}")), token);
     if let Some(server) = server {
         request = request.query(&[("server", server)]);
     }
@@ -129,7 +129,7 @@ fn a_deleted_accounts_id_is_never_given_again() {
     let sent = sent.unwrap();
     let token = admin_token(&c, &base, admin_password, admin_name);
     let r = bearer(
-        c.delete(format!("{base}/api/admin/users/{}", user.id)),
+        c.delete(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &token,
     )
     .send()
@@ -195,7 +195,7 @@ fn accounts_are_found_by_id_and_keep_it_through_a_rename() {
     );
     // Signed in only.
     assert_eq!(
-        c.get(format!("{base}/api/users/by-id/{}", alice.id))
+        c.get(format!("{base}/api/v1/accounts/{}", alice.id))
             .send()
             .unwrap()
             .status(),
@@ -233,7 +233,7 @@ fn accounts_are_found_by_id_and_keep_it_through_a_rename() {
     // The new address leads to the same account.
     let lookup: Value = bearer(
         c.get(format!(
-            "{base}/api/users/by-address/{to}@{}",
+            "{base}/api/v1/accounts/by-address/{to}@{}",
             alice.person.server
         )),
         &bob.token,

@@ -1,5 +1,5 @@
 //! Undo send (docs/plans/mail-parity.md, P4), as Proton's DelaySendSeconds:
-//! `POST /api/mail/send` checks a send, then [`hold`]s it; [`spawn`]'s loop
+//! `POST /api/v1/mail/send` checks a send, then [`hold`]s it; [`spawn`]'s loop
 //! sends it when the delay is up through the same `deliver`, unless it was
 //! taken back ([`cancel`]). A send that was going out when the server
 //! stopped is not sent again: it fails, and its draft stays.
@@ -20,7 +20,7 @@ use crate::AppState;
 
 const TICK: Duration = Duration::from_secs(1);
 
-/// A held send, as `POST /api/mail/send` answers 202.
+/// A held send, as `POST /api/v1/mail/send` answers 202.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HeldSend {

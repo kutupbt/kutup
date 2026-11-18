@@ -3,7 +3,7 @@
 //! Registration, login (+ preflight, 2FA), recovery (+ preflight), token refresh,
 //! first-login setup, the `/user/*` profile + TOTP endpoints, and the lookup by address.
 //! Wire formats, status codes, and SQL match the Go handler exactly; the refresh token
-//! is set as the same HttpOnly cookie scoped to `/api/auth/refresh`.
+//! is set as the same HttpOnly cookie scoped to `/api/v1/auth/refresh`.
 
 use axum::extract::rejection::JsonRejection;
 use std::net::SocketAddr;
@@ -74,7 +74,7 @@ pub struct RegisterRequest {
     account_id: Option<String>,
     #[serde(default)]
     account_id_proof: Option<String>,
-    /// The documents shown and confirmed at sign-up (`GET /api/legal/documents`,
+    /// The documents shown and confirmed at sign-up (`GET /api/v1/legal/documents`,
     /// those `requiredAtSignup`): the current version of each required kind
     /// (docs/plans/server-personal-data.md, A3).
     #[serde(default)]
@@ -97,7 +97,7 @@ pub struct LoginResponse {
     account_id: String,
     username: String,
     master_key_envelope: String,
-    /// The account's root records (`GET /api/account/roots`), with the
+    /// The account's root records (`GET /api/v1/account/roots`), with the
     /// session only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     account_roots: Vec<String>,
@@ -145,7 +145,7 @@ pub struct LoginResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     setup_token: Option<String>,
     /// The account is closing: no session, but `grant` (purpose `keep`, no
-    /// session, minutes) keeps it at `POST /api/auth/keep`.
+    /// session, minutes) keeps it at `POST /api/v1/auth/keep`.
     #[serde(skip_serializing_if = "Option::is_none")]
     closing: Option<Closing>,
 }
@@ -203,7 +203,7 @@ pub struct CodeRequest {
     grant: String,
     /// Instead of `code`, where the second factor is proved again: a
     /// security key's answer (`PublicKeyCredential.toJSON()`) to
-    /// `POST /api/auth/security-keys/proof/start`.
+    /// `POST /api/v1/auth/security-keys/proof/start`.
     #[serde(rename = "securityKey")]
     #[schema(value_type = Option<Object>)]
     pub(crate) security_key: Option<serde_json::Value>,
@@ -510,12 +510,12 @@ pub struct RegistrationCodeCheck {
     pub code: String,
 }
 
-/// `POST /api/auth/registration-code/check` — whether a referral code can
+/// `POST /api/v1/auth/registration-code/check` — whether a referral code can
 /// admit a sign-up now, before the sign-up page derives the account's keys.
 /// It uses nothing up; the same answer for every code that cannot.
 #[utoipa::path(
     post,
-    path = "/api/auth/registration-code/check",
+    path = "/api/v1/auth/registration-code/check",
     tag = "auth",
     request_body = RegistrationCodeCheck,
     responses(
@@ -540,10 +540,10 @@ pub async fn check_registration_code(
     Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }
 
-/// `GET /api/auth/settings` — mirrors `GetPublicSettings`.
+/// `GET /api/v1/auth/settings` — mirrors `GetPublicSettings`.
 #[utoipa::path(
     get,
-    path = "/api/auth/settings",
+    path = "/api/v1/auth/settings",
     tag = "auth",
     responses((status = 200, description = "Public registration settings", body = SettingsResponse))
 )]
@@ -690,10 +690,10 @@ pub async fn get_public_settings(
     Ok(response)
 }
 
-/// `POST /api/auth/register` — mirrors `Register`.
+/// `POST /api/v1/auth/register` — mirrors `Register`.
 #[utoipa::path(
     post,
-    path = "/api/auth/register",
+    path = "/api/v1/auth/register",
     tag = "auth",
     request_body = RegisterRequest,
     responses((status = 201, description = "Account created", body = MessageResponse))
@@ -961,10 +961,10 @@ pub(crate) async fn signed_in_answer(
     .await
 }
 
-/// `POST /api/auth/login/2fa` — mirrors `LoginTwoFA`.
+/// `POST /api/v1/auth/login/2fa` — mirrors `LoginTwoFA`.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/2fa",
+    path = "/api/v1/auth/login/2fa",
     tag = "auth",
     request_body = TwoFALoginRequest,
     responses((status = 200, description = "Full session after TOTP", body = LoginResponse))
@@ -1125,10 +1125,10 @@ pub(crate) async fn issue_after_second_step(
     .await
 }
 
-/// `GET /api/auth/recover/preflight` — mirrors `GetRecoveryPreflight`.
+/// `GET /api/v1/auth/recover/preflight` — mirrors `GetRecoveryPreflight`.
 #[utoipa::path(
     get,
-    path = "/api/auth/recover/preflight",
+    path = "/api/v1/auth/recover/preflight",
     tag = "auth",
     params(("name" = String, Query, description = "The username or the Kutup address")),
     responses((status = 200, description = "The binding a recovery proof is derived with", body = PreflightRecoverResponse))
@@ -1161,7 +1161,7 @@ pub async fn get_recovery_preflight(
     Ok(Json(resp).into_response())
 }
 
-/// `POST /api/auth/recover/grant` — the recovery phrase's proof, for a
+/// `POST /api/v1/auth/recover/grant` — the recovery phrase's proof, for a
 /// `recovery` grant (no session) and the recovery envelope (the master key
 /// under the phrase): with them the client opens the master key and
 /// registers a new password (register/start, register/finish), which ends
@@ -1169,7 +1169,7 @@ pub async fn get_recovery_preflight(
 /// verifier and a wrong phrase are the same `401`, checked at full cost.
 #[utoipa::path(
     post,
-    path = "/api/auth/recover/grant",
+    path = "/api/v1/auth/recover/grant",
     tag = "auth",
     request_body = RecoverRequest,
     responses(
@@ -1256,12 +1256,12 @@ pub struct RecoverGrantResponse {
     recovery_key_envelope: String,
 }
 
-/// `POST /api/auth/refresh` — rotates the session's refresh token. Web clients present
+/// `POST /api/v1/auth/refresh` — rotates the session's refresh token. Web clients present
 /// it in the HttpOnly cookie on their own origin and receive the next one the same way;
 /// the CLI presents and receives it in the JSON body.
 #[utoipa::path(
     post,
-    path = "/api/auth/refresh",
+    path = "/api/v1/auth/refresh",
     tag = "auth",
     request_body(content = RefreshRequest, description = "CLI only; web clients use the refresh_token cookie"),
     responses((status = 200, description = "Fresh access token", body = RefreshResponse))
@@ -1322,10 +1322,10 @@ pub async fn refresh(
     }
 }
 
-/// `GET /api/user/me` — mirrors `GetMe`.
+/// `GET /api/v1/account` — mirrors `GetMe`.
 #[utoipa::path(
     get,
-    path = "/api/user/me",
+    path = "/api/v1/account",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The caller's profile", body = AccountResponse))
@@ -1412,10 +1412,10 @@ pub async fn get_me(State(state): State<AppState>, user: AuthAccount) -> AppResu
     .into_response())
 }
 
-/// `PATCH /api/user/me` — mirrors `UpdateMe`.
+/// `PATCH /api/v1/account` — mirrors `UpdateMe`.
 #[utoipa::path(
     patch,
-    path = "/api/user/me",
+    path = "/api/v1/account",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = UpdateMeRequest,
@@ -1478,14 +1478,14 @@ fn local_account_username(address: &str, server_name: &str) -> Option<String> {
     Some(username.to_ascii_lowercase())
 }
 
-/// `GET /api/users/by-address/:address` — an account by the address a
+/// `GET /api/v1/accounts/by-address/:address` — an account by the address a
 /// person would type: its Kutup address, here or on another server. The one
 /// place a name becomes an account (docs/plans/account-ids.md); everything
 /// after takes the account id. Another server's account is asked of that
 /// server through federation (its pinned identity), as `by-id` asks.
 #[utoipa::path(
     get,
-    path = "/api/users/by-address/{address}",
+    path = "/api/v1/accounts/by-address/{address}",
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("address" = String, Path, description = "Target account's Kutup address (username@server)")),
@@ -1545,10 +1545,10 @@ pub async fn get_user_by_address(
     }
 }
 
-/// `POST /api/user/2fa/setup` — mirrors `SetupTOTP`.
+/// `POST /api/v1/account/2fa/setup` — mirrors `SetupTOTP`.
 #[utoipa::path(
     post,
-    path = "/api/user/2fa/setup",
+    path = "/api/v1/account/2fa/setup",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "TOTP secret + provisioning URI", body = TotpSetupResponse))
@@ -1590,10 +1590,10 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthAccount) -> App
     Ok(Json(TotpSetupResponse { secret, qr_uri }).into_response())
 }
 
-/// `POST /api/user/2fa/verify` — mirrors `VerifyTOTP`.
+/// `POST /api/v1/account/2fa/verify` — mirrors `VerifyTOTP`.
 #[utoipa::path(
     post,
-    path = "/api/user/2fa/verify",
+    path = "/api/v1/account/2fa/verify",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = CodeRequest,
@@ -1698,10 +1698,10 @@ pub struct RecoveryCodesResponse {
     recovery_codes: Vec<String>,
 }
 
-/// `GET /api/user/2fa/recovery-codes` — how many recovery codes are left.
+/// `GET /api/v1/account/2fa/recovery-codes` — how many recovery codes are left.
 #[utoipa::path(
     get,
-    path = "/api/user/2fa/recovery-codes",
+    path = "/api/v1/account/2fa/recovery-codes",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, body = RecoveryCodesLeft))
@@ -1715,14 +1715,14 @@ pub async fn recovery_codes_left(
     Ok(Json(RecoveryCodesLeft { remaining }))
 }
 
-/// `POST /api/user/2fa/recovery-codes` — new recovery codes in place of the
+/// `POST /api/v1/account/2fa/recovery-codes` — new recovery codes in place of the
 /// old ones, with the password proved again (a `totp` grant from a reauth of
 /// this session) and the second factor too (an authenticator code, or an
 /// unused recovery code), as Proton asks: a stolen session and password
 /// alone cannot mint codes. `409` while two-factor sign-in is off.
 #[utoipa::path(
     post,
-    path = "/api/user/2fa/recovery-codes",
+    path = "/api/v1/account/2fa/recovery-codes",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = CodeRequest,
@@ -1905,10 +1905,10 @@ pub(crate) async fn settle_second_factor<'c>(
     }
 }
 
-/// `DELETE /api/user/2fa` — mirrors `DisableTOTP`.
+/// `DELETE /api/v1/account/2fa` — mirrors `DisableTOTP`.
 #[utoipa::path(
     delete,
-    path = "/api/user/2fa",
+    path = "/api/v1/account/2fa",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = CodeRequest,
@@ -1969,11 +1969,11 @@ pub async fn disable_totp(
     .into_response())
 }
 
-/// `POST /api/auth/complete-setup` — mirrors `CompleteSetup`. Authenticated by the
+/// `POST /api/v1/auth/complete-setup` — mirrors `CompleteSetup`. Authenticated by the
 /// short-lived setup token (not a regular access token).
 #[utoipa::path(
     post,
-    path = "/api/auth/complete-setup",
+    path = "/api/v1/auth/complete-setup",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = RegisterRequest,
@@ -2354,10 +2354,10 @@ pub(crate) const REFRESH_COOKIE: &str = "kutup.refresh";
 pub(crate) const CLIENT_HEADER: &str = crate::client_version::CLIENT_HEADER;
 
 /// The refresh cookie: HttpOnly, host-only on the app's own origin (no `Domain`), sent
-/// only to `/api/auth/refresh`, 30-day sliding lifetime; `Secure` outside development.
+/// only to `/api/v1/auth/refresh`, 30-day sliding lifetime; `Secure` outside development.
 pub(crate) fn refresh_cookie(state: &AppState, value: &str) -> String {
     let mut c = format!(
-        "{REFRESH_COOKIE}={value}; Max-Age={}; Path=/api/auth/refresh; HttpOnly; SameSite=Lax",
+        "{REFRESH_COOKIE}={value}; Max-Age={}; Path=/api/v1/auth/refresh; HttpOnly; SameSite=Lax",
         sessions::SESSION_TTL.whole_seconds()
     );
     if state.config.app_env == "production" {
@@ -2368,7 +2368,7 @@ pub(crate) fn refresh_cookie(state: &AppState, value: &str) -> String {
 
 pub(crate) fn clear_refresh_cookie(state: &AppState) -> String {
     let mut c =
-        format!("{REFRESH_COOKIE}=; Max-Age=0; Path=/api/auth/refresh; HttpOnly; SameSite=Lax");
+        format!("{REFRESH_COOKIE}=; Max-Age=0; Path=/api/v1/auth/refresh; HttpOnly; SameSite=Lax");
     if state.config.app_env == "production" {
         c.push_str("; Secure");
     }

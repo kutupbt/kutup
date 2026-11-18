@@ -4,7 +4,7 @@
 // The keys are sealed into a WebSession local-state envelope (profile
 // `<client>:<session id>`) under a random 32-byte local key. The envelope is
 // stored in localStorage; the local key is stored only on the server
-// (`/api/auth/sessions/current/local-key`) and released only to this live
+// (`/api/v1/auth/sessions/current/local-key`) and released only to this live
 // session. Neither half is useful alone, and revoking the session — sign-out,
 // "sign out everywhere", a password reset — makes the blob useless.
 

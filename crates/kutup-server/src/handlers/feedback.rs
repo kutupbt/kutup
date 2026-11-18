@@ -81,11 +81,11 @@ fn clean_details(details: Option<Map<String, Value>>) -> AppResult<Option<Value>
     Ok((!kept.is_empty()).then_some(Value::Object(kept)))
 }
 
-/// `POST /api/feedback` — send feedback to this server's administrators.
+/// `POST /api/v1/feedback` — send feedback to this server's administrators.
 #[utoipa::path(
     post,
-    path = "/api/feedback",
-    tag = "feedback",
+    path = "/api/v1/feedback",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = SendFeedbackRequest,
     responses(
@@ -178,10 +178,10 @@ type FeedbackRow = (
     Option<String>,
 );
 
-/// `GET /api/admin/feedback` — feedback, oldest open first (or the latest resolved).
+/// `GET /api/v1/admin/feedback` — feedback, oldest open first (or the latest resolved).
 #[utoipa::path(
     get,
-    path = "/api/admin/feedback",
+    path = "/api/v1/admin/feedback",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("status" = Option<String>, Query, description = "`open` (default) or `resolved`")),
@@ -270,11 +270,11 @@ fn is_issue_of(url: &str, repository: &str) -> bool {
         && number.chars().all(|c| c.is_ascii_digit())
 }
 
-/// `POST /api/admin/feedback/{id}/resolve` — mark open feedback done,
+/// `POST /api/v1/admin/feedback/{id}/resolve` — mark open feedback done,
 /// dismissed, or forwarded to the public tracker.
 #[utoipa::path(
     post,
-    path = "/api/admin/feedback/{id}/resolve",
+    path = "/api/v1/admin/feedback/{id}/resolve",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Feedback id")),
@@ -345,10 +345,10 @@ pub async fn resolve_feedback(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `DELETE /api/admin/feedback/{id}` — delete feedback for good.
+/// `DELETE /api/v1/admin/feedback/{id}` — delete feedback for good.
 #[utoipa::path(
     delete,
-    path = "/api/admin/feedback/{id}",
+    path = "/api/v1/admin/feedback/{id}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Feedback id")),

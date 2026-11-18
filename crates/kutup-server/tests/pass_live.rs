@@ -5,7 +5,7 @@
 //! their master key: the account-records scope `passSecrets`
 //! (docs/plans/account-records.md). The server checks the envelope is that
 //! account's vault secret and that the vault is theirs to open. Every secret
-//! is listed, with what became of its vault (`GET /api/pass/vault-states`):
+//! is listed, with what became of its vault (`GET /api/v1/pass/vault-states`):
 //! one in the trash, out of reach or purged stays until its owner forgets it
 //! (docs/plans/rollback-protection.md §9).
 //!
@@ -56,10 +56,13 @@ fn current_revision(c: &Client, base: &str, user: &User, file_id: &str) -> u64 {
 }
 
 fn batch(c: &Client, base: &str, user: &User, body: Value) -> reqwest::blocking::Response {
-    bearer(c.post(format!("{base}/api/account/records")), &user.token)
-        .json(&body)
-        .send()
-        .unwrap()
+    bearer(
+        c.post(format!("{base}/api/v1/account/records")),
+        &user.token,
+    )
+    .json(&body)
+    .send()
+    .unwrap()
 }
 
 fn put_on(
@@ -99,19 +102,25 @@ fn forget(c: &Client, base: &str, user: &User, file_id: &str) -> StatusCode {
 /// Removes a file for good (trash, then purge): the gates check that a purged
 /// account leaves nothing stored behind, so these tests leave nothing either.
 fn purge_file(c: &Client, base: &str, user: &User, file_id: &str) {
-    bearer(c.delete(format!("{base}/api/files/{file_id}")), &user.token)
-        .send()
-        .unwrap();
-    let purged = bearer(c.delete(format!("{base}/api/trash/{file_id}")), &user.token)
-        .send()
-        .unwrap();
+    bearer(
+        c.delete(format!("{base}/api/v1/drive/files/{file_id}")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    let purged = bearer(
+        c.delete(format!("{base}/api/v1/drive/trash/{file_id}")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
     assert_eq!(purged.status(), StatusCode::NO_CONTENT, "purge {file_id}");
 }
 
 /// `user`'s kept keys: `{ fileId, envelope, revision }` each.
 fn list(c: &Client, base: &str, user: &User) -> Vec<Value> {
     let r = bearer(
-        c.get(format!("{base}/api/account/records/passSecrets?after=0")),
+        c.get(format!("{base}/api/v1/account/records/passSecrets?after=0")),
         &user.token,
     )
     .send()
@@ -129,9 +138,12 @@ fn list(c: &Client, base: &str, user: &User) -> Vec<Value> {
 
 /// Each kept key's vault and what became of it.
 fn states(c: &Client, base: &str, user: &User) -> Vec<(String, String)> {
-    let r = bearer(c.get(format!("{base}/api/pass/vault-states")), &user.token)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.get(format!("{base}/api/v1/pass/vault-states")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let rows: Vec<Value> = r.json().unwrap();
     rows.into_iter()
@@ -332,7 +344,7 @@ fn vault_secrets() {
 
     // In the trash: kept, listed as such (the head lists it); restored: open.
     let trashed = bearer(
-        c.delete(format!("{base}/api/files/{}", vault.id)),
+        c.delete(format!("{base}/api/v1/drive/files/{}", vault.id)),
         &owner.token,
     )
     .send()
@@ -343,7 +355,7 @@ fn vault_secrets() {
         vec![(vault.id.clone(), "trashed".to_owned())]
     );
     let restored = bearer(
-        c.post(format!("{base}/api/trash/{}/restore", vault.id)),
+        c.post(format!("{base}/api/v1/drive/trash/{}/restore", vault.id)),
         &owner.token,
     )
     .send()
@@ -360,20 +372,20 @@ fn vault_secrets() {
 
     // Purged: its secret stays, listed as gone, until its owner forgets it.
     bearer(
-        c.delete(format!("{base}/api/files/{}", vault.id)),
+        c.delete(format!("{base}/api/v1/drive/files/{}", vault.id)),
         &owner.token,
     )
     .send()
     .unwrap();
     let purged = bearer(
-        c.delete(format!("{base}/api/trash/{}", vault.id)),
+        c.delete(format!("{base}/api/v1/drive/trash/{}", vault.id)),
         &owner.token,
     )
     .send()
     .unwrap();
     assert_eq!(purged.status(), StatusCode::NO_CONTENT);
     bearer(
-        c.post(format!("{base}/api/trash/{}/restore", vault.id)),
+        c.post(format!("{base}/api/v1/drive/trash/{}/restore", vault.id)),
         &owner.token,
     )
     .send()
@@ -431,14 +443,17 @@ fn reauth_checks_the_password_like_sign_in_with_its_lockout() {
     // another account's or not, is refused.
     let other = register(&c, &base);
     let (_, ke1) = kutup_crypto::opaque::client_login_start(&other.password).unwrap();
-    let named = bearer(c.post(format!("{base}/api/auth/login/start")), &user.token)
-        .header("x-kutup-client", "cli")
-        .json(
-            &json!({ "name": other.username, "credentialRequest": b64(&ke1),
+    let named = bearer(
+        c.post(format!("{base}/api/v1/auth/login/start")),
+        &user.token,
+    )
+    .header("x-kutup-client", "cli")
+    .json(
+        &json!({ "name": other.username, "credentialRequest": b64(&ke1),
                        "purpose": "reauth", "for": "pass" }),
-        )
-        .send()
-        .unwrap();
+    )
+    .send()
+    .unwrap();
     assert_eq!(named.status(), StatusCode::BAD_REQUEST);
     // The sign-in lockout (LOGIN_LOCKOUT_THRESHOLD, 5 by default): every
     // start counts, finished or not, and then even the right password waits.
@@ -469,14 +484,14 @@ fn pin_is_set_with_a_fresh_grant_and_three_misses_end_the_sign_in() {
         .unwrap();
     let user = register(&c, &base);
     let status = || -> Value {
-        bearer(c.get(format!("{base}/api/pass/pin")), &user.token)
+        bearer(c.get(format!("{base}/api/v1/pass/pin")), &user.token)
             .send()
             .unwrap()
             .json()
             .unwrap()
     };
     let set = |grant: &str, pin: &str| {
-        let response = bearer(c.put(format!("{base}/api/pass/pin")), &user.token)
+        let response = bearer(c.put(format!("{base}/api/v1/pass/pin")), &user.token)
             .json(&json!({ "grant": grant, "pin": pin }))
             .send()
             .unwrap();
@@ -484,10 +499,13 @@ fn pin_is_set_with_a_fresh_grant_and_three_misses_end_the_sign_in() {
         (code, response.json::<Value>().unwrap_or(Value::Null))
     };
     let verify = |pin: &str| {
-        let response = bearer(c.post(format!("{base}/api/pass/pin/verify")), &user.token)
-            .json(&json!({ "pin": pin }))
-            .send()
-            .unwrap();
+        let response = bearer(
+            c.post(format!("{base}/api/v1/pass/pin/verify")),
+            &user.token,
+        )
+        .json(&json!({ "pin": pin }))
+        .send()
+        .unwrap();
         let code = response.status();
         let body: Value = response.json().unwrap_or(Value::Null);
         (code, body)
@@ -531,7 +549,7 @@ fn pin_is_set_with_a_fresh_grant_and_three_misses_end_the_sign_in() {
     );
     // The sign-in has ended: the session is refused.
     assert_eq!(
-        bearer(c.get(format!("{base}/api/pass/pin")), &user.token)
+        bearer(c.get(format!("{base}/api/v1/pass/pin")), &user.token)
             .send()
             .unwrap()
             .status(),
@@ -552,7 +570,7 @@ fn pin_is_removed_only_with_a_grant_of_this_sign_in() {
         .unwrap();
     let user = register(&c, &base);
     let pin = |method: reqwest::Method, token: &str, body: Value| {
-        bearer(c.request(method, format!("{base}/api/pass/pin")), token)
+        bearer(c.request(method, format!("{base}/api/v1/pass/pin")), token)
             .json(&body)
             .send()
             .unwrap()
@@ -583,7 +601,7 @@ fn pin_is_removed_only_with_a_grant_of_this_sign_in() {
         ),
         StatusCode::NO_CONTENT
     );
-    let status: Value = bearer(c.get(format!("{base}/api/pass/pin")), &user.token)
+    let status: Value = bearer(c.get(format!("{base}/api/v1/pass/pin")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -613,7 +631,7 @@ fn pin_tries_are_counted_per_sign_in() {
     let user = register(&c, &base);
     let grant = reauth_grant(&c, &base, &user, "pass");
     assert_eq!(
-        bearer(c.put(format!("{base}/api/pass/pin")), &user.token)
+        bearer(c.put(format!("{base}/api/v1/pass/pin")), &user.token)
             .json(&json!({ "grant": grant, "pin": "975310" }))
             .send()
             .unwrap()
@@ -622,7 +640,7 @@ fn pin_tries_are_counted_per_sign_in() {
     );
     let other = sign_in_token(&c, &base, &user);
     let verify = |token: &str, pin: &str| -> Value {
-        let response = bearer(c.post(format!("{base}/api/pass/pin/verify")), token)
+        let response = bearer(c.post(format!("{base}/api/v1/pass/pin/verify")), token)
             .json(&json!({ "pin": pin }))
             .send()
             .unwrap();
@@ -640,7 +658,7 @@ fn pin_tries_are_counted_per_sign_in() {
     assert_eq!(verify(&other, "000004")["error"], "signedOut");
     // The other sign-in has ended; this one goes on.
     assert_eq!(
-        bearer(c.get(format!("{base}/api/pass/pin")), &other)
+        bearer(c.get(format!("{base}/api/v1/pass/pin")), &other)
             .send()
             .unwrap()
             .status(),
@@ -661,21 +679,21 @@ fn site_icons_follow_the_account_setting() {
         .unwrap();
     let user = register(&c, &base);
     let settings = || -> Value {
-        bearer(c.get(format!("{base}/api/pass/settings")), &user.token)
+        bearer(c.get(format!("{base}/api/v1/pass/settings")), &user.token)
             .send()
             .unwrap()
             .json()
             .unwrap()
     };
     let choose = |body: Value| {
-        bearer(c.put(format!("{base}/api/pass/settings")), &user.token)
+        bearer(c.put(format!("{base}/api/v1/pass/settings")), &user.token)
             .json(&body)
             .send()
             .unwrap()
             .status()
     };
     let icon = |domain: &str| {
-        bearer(c.post(format!("{base}/api/pass/icon")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/pass/icon")), &user.token)
             .json(&json!({ "domain": domain }))
             .send()
             .unwrap()
@@ -718,7 +736,7 @@ fn site_icons_follow_the_account_setting() {
     assert_eq!(settings()["siteIcons"], "kutup");
     // Without a sign-in, nothing.
     assert_eq!(
-        c.get(format!("{base}/api/pass/settings"))
+        c.get(format!("{base}/api/v1/pass/settings"))
             .send()
             .unwrap()
             .status(),
@@ -846,7 +864,7 @@ fn the_largest_vault_upload_is_an_administrators_setting() {
         .build()
         .unwrap();
     let public = |c: &Client| -> i64 {
-        c.get(format!("{base}/api/auth/settings"))
+        c.get(format!("{base}/api/v1/auth/settings"))
             .send()
             .unwrap()
             .json::<Value>()
@@ -877,11 +895,11 @@ fn the_largest_vault_upload_is_an_administrators_setting() {
     }
     let _restore = Restore {
         c: &c,
-        url: format!("{base}/api/admin/settings"),
+        url: format!("{base}/api/v1/admin/settings"),
         token: &token,
     };
     let put = |value: Value| {
-        bearer(c.put(format!("{base}/api/admin/settings")), &token)
+        bearer(c.put(format!("{base}/api/v1/admin/settings")), &token)
             .json(&json!({ "passVaultMaxBytes": value }))
             .send()
             .unwrap()

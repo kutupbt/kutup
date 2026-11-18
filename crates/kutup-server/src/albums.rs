@@ -36,10 +36,10 @@ pub struct AlbumRow {
     pub item_count: i64,
 }
 
-/// `GET /api/albums` — your albums and those shared with you.
+/// `GET /api/v1/photos/albums` — your albums and those shared with you.
 #[utoipa::path(
     get,
-    path = "/api/albums",
+    path = "/api/v1/photos/albums",
     tag = "photos",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your albums and albums shared with you", body = [AlbumRow]))
@@ -75,11 +75,11 @@ pub async fn list(
     ))
 }
 
-/// `POST /api/albums` — a new album: the body is a new collection's, without
+/// `POST /api/v1/photos/albums` — a new album: the body is a new collection's, without
 /// a parent (albums are not inside folders).
 #[utoipa::path(
     post,
-    path = "/api/albums",
+    path = "/api/v1/photos/albums",
     tag = "photos",
     security(("BearerAuth" = [])),
     request_body = CreateCollectionRequest,
@@ -138,10 +138,10 @@ async fn owned_album(state: &AppState, user_id: Uuid, album_id: &str) -> AppResu
     Ok((access.id, access.epoch))
 }
 
-/// `DELETE /api/albums/{id}` — the album goes; its photos stay where they are.
+/// `DELETE /api/v1/photos/albums/{id}` — the album goes; its photos stay where they are.
 #[utoipa::path(
     delete,
-    path = "/api/albums/{id}",
+    path = "/api/v1/photos/albums/{id}",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -177,10 +177,10 @@ pub struct AlbumItem {
     pub added_at: OffsetDateTime,
 }
 
-/// `GET /api/albums/{id}/items` — the album's photos (those in the trash are left out).
+/// `GET /api/v1/photos/albums/{id}/items` — the album's photos (those in the trash are left out).
 #[utoipa::path(
     get,
-    path = "/api/albums/{id}/items",
+    path = "/api/v1/photos/albums/{id}/items",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -239,11 +239,11 @@ pub async fn items(
     ))
 }
 
-/// `DELETE /api/albums/{id}/membership` — leave an album shared with you.
+/// `DELETE /api/v1/photos/albums/{id}/membership` — leave an album shared with you.
 /// The photos you put in leave with you (they are yours).
 #[utoipa::path(
     delete,
-    path = "/api/albums/{id}/membership",
+    path = "/api/v1/photos/albums/{id}/membership",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -287,11 +287,11 @@ pub struct AlbumItemKey {
     pub album_epoch: i32,
 }
 
-/// `GET /api/albums/{id}/keys` — every photo's sealed key, those in the
+/// `GET /api/v1/photos/albums/{id}/keys` — every photo's sealed key, those in the
 /// trash too: what the owner re-seals when the album moves to a new key.
 #[utoipa::path(
     get,
-    path = "/api/albums/{id}/keys",
+    path = "/api/v1/photos/albums/{id}/keys",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -339,14 +339,14 @@ pub struct AddAlbumItems {
     pub items: Vec<AlbumItemInput>,
 }
 
-/// `POST /api/albums/{id}/items` — put photos in the album (or re-seal ones
+/// `POST /api/v1/photos/albums/{id}/items` — put photos in the album (or re-seal ones
 /// already in it): its owner, or a member allowed to add. Each must be one
 /// of the caller's own files (it stays in their storage), not in the trash,
 /// with its key sealed at its current generation and the album's current
 /// epoch.
 #[utoipa::path(
     post,
-    path = "/api/albums/{id}/items",
+    path = "/api/v1/photos/albums/{id}/items",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),
@@ -439,11 +439,11 @@ pub struct RemoveAlbumItems {
     pub file_ids: Vec<String>,
 }
 
-/// `POST /api/albums/{id}/items/remove` — take photos out of the album (the
+/// `POST /api/v1/photos/albums/{id}/items/remove` — take photos out of the album (the
 /// photos stay where they are): the owner any, a member those they added.
 #[utoipa::path(
     post,
-    path = "/api/albums/{id}/items/remove",
+    path = "/api/v1/photos/albums/{id}/items/remove",
     tag = "photos",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Album id")),

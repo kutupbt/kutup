@@ -255,10 +255,10 @@ pub struct ContactPage {
     pub total: i64,
 }
 
-/// `GET /api/contacts?offset=&limit=` — the caller's contacts, by name.
+/// `GET /api/v1/contacts?offset=&limit=` — the caller's contacts, by name.
 #[utoipa::path(
     get,
-    path = "/api/contacts",
+    path = "/api/v1/contacts",
     tag = "contacts",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "A page of contacts", body = ContactPage))
@@ -289,10 +289,10 @@ pub async fn list(
     }))
 }
 
-/// `POST /api/contacts` — adds a contact.
+/// `POST /api/v1/contacts` — adds a contact.
 #[utoipa::path(
     post,
-    path = "/api/contacts",
+    path = "/api/v1/contacts",
     tag = "contacts",
     security(("BearerAuth" = [])),
     request_body = ContactCreate,
@@ -357,12 +357,12 @@ pub struct ContactUpdate {
     pub head: Option<String>,
 }
 
-/// `PUT /api/contacts/{id}` — replaces a contact (same UID) if nobody changed
+/// `PUT /api/v1/contacts/{id}` — replaces a contact (same UID) if nobody changed
 /// it since `baseRevision`; `409` with `code: "revision_conflict"` and the
 /// current revision otherwise.
 #[utoipa::path(
     put,
-    path = "/api/contacts/{id}",
+    path = "/api/v1/contacts/{id}",
     tag = "contacts",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Contact id")),
@@ -468,10 +468,10 @@ async fn delete_ids(
     Ok(freed as u64)
 }
 
-/// `DELETE /api/contacts/{id}`.
+/// `DELETE /api/v1/contacts/{id}`.
 #[utoipa::path(
     delete,
-    path = "/api/contacts/{id}",
+    path = "/api/v1/contacts/{id}",
     tag = "contacts",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Contact id")),
@@ -507,10 +507,10 @@ pub struct DeleteContacts {
     pub head: Option<String>,
 }
 
-/// `POST /api/contacts/delete` — deletes several contacts.
+/// `POST /api/v1/contacts/delete` — deletes several contacts.
 #[utoipa::path(
     post,
-    path = "/api/contacts/delete",
+    path = "/api/v1/contacts/delete",
     tag = "contacts",
     security(("BearerAuth" = [])),
     request_body = DeleteContacts,
@@ -556,10 +556,10 @@ pub struct ImportResult {
     pub imported: usize,
 }
 
-/// `POST /api/contacts/import` — adds up to 500 contacts, all or nothing.
+/// `POST /api/v1/contacts/import` — adds up to 500 contacts, all or nothing.
 #[utoipa::path(
     post,
-    path = "/api/contacts/import",
+    path = "/api/v1/contacts/import",
     tag = "contacts",
     security(("BearerAuth" = [])),
     request_body = ImportContacts,
@@ -615,12 +615,12 @@ pub struct ContactEmailRow {
     pub label: Option<String>,
 }
 
-/// `GET /api/contacts/emails?q=&limit=` — addresses whose address or name
+/// `GET /api/v1/contacts/emails?q=&limit=` — addresses whose address or name
 /// starts with `q` (any word of the name), recently used first; for the
 /// recipient, share and invitee pickers.
 #[utoipa::path(
     get,
-    path = "/api/contacts/emails",
+    path = "/api/v1/contacts/emails",
     tag = "contacts",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Matching addresses", body = [ContactEmailRow]))

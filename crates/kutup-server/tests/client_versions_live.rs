@@ -43,16 +43,16 @@ fn old_clients_are_refused_and_the_instance_is_named() {
     assert_eq!(instance.len(), 22, "{instance}");
 
     // Every API answer names the same instance, errors included.
-    let me = bearer(c.get(format!("{base}/api/user/me")), &user.token)
+    let me = bearer(c.get(format!("{base}/api/v1/account")), &user.token)
         .send()
         .unwrap();
     assert_eq!(me.headers()["x-kutup-instance"], instance.as_str());
-    let missing = c.get(format!("{base}/api/user/me")).send().unwrap();
+    let missing = c.get(format!("{base}/api/v1/account")).send().unwrap();
     assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(missing.headers()["x-kutup-instance"], instance.as_str());
 
     let set = |token: &str, minimum: Value| {
-        bearer(c.put(format!("{base}/api/admin/client-versions")), token)
+        bearer(c.put(format!("{base}/api/v1/admin/client-versions")), token)
             .json(&json!({ "clientType": "cli", "minimum": minimum }))
             .send()
             .unwrap()
@@ -80,7 +80,7 @@ fn old_clients_are_refused_and_the_instance_is_named() {
     assert_eq!(cli["effective"], "99.0.0");
 
     let as_client = |client: Option<&str>| {
-        let mut req = bearer(c.get(format!("{base}/api/user/me")), &user.token);
+        let mut req = bearer(c.get(format!("{base}/api/v1/account")), &user.token);
         if let Some(client) = client {
             req = req.header("x-kutup-client", client);
         }
@@ -113,6 +113,25 @@ fn old_clients_are_refused_and_the_instance_is_named() {
         .json()
         .unwrap();
     assert_eq!(health["minimumClients"]["cli"], "99.0.0");
+
+    // A client from before versions calls bare /api/… paths: too old. A
+    // version this server doesn't serve: the server is too old.
+    let bare = bearer(c.get(format!("{base}/api/user/me")), &user.token)
+        .send()
+        .unwrap();
+    assert_eq!(bare.status(), StatusCode::UPGRADE_REQUIRED);
+    assert_eq!(bare.json::<Value>().unwrap()["code"], "clientTooOld");
+    let newer = c.get(format!("{base}/api/v2/account")).send().unwrap();
+    assert_eq!(newer.status(), StatusCode::NOT_FOUND);
+    let newer: Value = newer.json().unwrap();
+    assert_eq!(newer["code"], "apiVersionUnsupported");
+    assert_eq!(newer["supported"], json!([1]));
+    let missing = c
+        .get(format!("{base}/api/v1/no-such-route"))
+        .send()
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(missing.json::<Value>().unwrap()["code"], "notFound");
 
     // Cleared: the old client is back.
     assert_eq!(set(&admin, Value::Null).status(), StatusCode::OK);

@@ -159,7 +159,7 @@ describe('the service worker', () => {
   it('leaves every request outside /sw/ to the network', async () => {
     const { fetch } = worker()
     expect(await fetch('/')).toBeNull()
-    expect(await fetch('/api/files/x/download', { range: 'bytes=0-1' })).toBeNull()
+    expect(await fetch('/api/v1/drive/files/x/download', { range: 'bytes=0-1' })).toBeNull()
     expect(await fetch('/assets/index.js')).toBeNull()
     expect(await fetch('/kutup-sw.js')).toBeNull()
     expect((await fetch('/sw/other'))?.status).toBe(404)

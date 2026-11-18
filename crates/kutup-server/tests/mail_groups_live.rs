@@ -179,7 +179,7 @@ fn shared_mailbox(
         lists: Vec::new(),
     };
     let first = chain.next(&signer, &key, false);
-    let r = bearer(live.c.post(format!("{}/api/admin/mail/groups", live.base)), &live.admin_token)
+    let r = bearer(live.c.post(format!("{}/api/v1/admin/mail/groups", live.base)), &live.admin_token)
         .json(&json!({
             "id": id, "name": name, "displayName": "Team", "kind": "shared", "postPolicy": "anyone",
             "storageQuotaBytes": 10_000_000, "owners": [owner.id],
@@ -205,7 +205,7 @@ fn shared_mailbox(
 fn members(live: &Live, by: &User, id: &str, body: Value) -> Response {
     bearer(
         live.c
-            .put(format!("{}/api/mail/groups/{id}/members", live.base)),
+            .put(format!("{}/api/v1/mail/groups/{id}/members", live.base)),
         &by.token,
     )
     .json(&body)
@@ -216,7 +216,7 @@ fn members(live: &Live, by: &User, id: &str, body: Value) -> Response {
 fn rotate(live: &Live, by: &str, id: &str, key: Value) -> Response {
     bearer(
         live.c
-            .post(format!("{}/api/mail/groups/{id}/keys", live.base)),
+            .post(format!("{}/api/v1/mail/groups/{id}/keys", live.base)),
         by,
     )
     .json(&json!({ "key": key }))
@@ -228,7 +228,7 @@ fn rotate(live: &Live, by: &str, id: &str, key: Value) -> Response {
 fn served_chain(live: &Live, address: &str, id: &str) -> (Vec<[u8; 32]>, u64) {
     let lookup: Value = bearer(
         live.c
-            .get(format!("{}/api/mail/keys?email={address}", live.base)),
+            .get(format!("{}/api/v1/mail/keys?email={address}", live.base)),
         &live.admin_token,
     )
     .send()
@@ -308,7 +308,7 @@ fn group_key_lists_are_signed_by_the_groups_signers_only() {
     assert_eq!(r.status(), StatusCode::OK, "Bob joins as a manager");
     let keys: Value = bearer(
         live.c
-            .get(format!("{}/api/mail/groups/{id}/keys", live.base)),
+            .get(format!("{}/api/v1/mail/groups/{id}/keys", live.base)),
         &bob.token,
     )
     .send()
@@ -501,10 +501,13 @@ fn a_rotation_waiting_on_a_removal_is_checked_against_who_stays() {
     let (base, token, id2) = (live.base.clone(), alice.token.clone(), id.clone());
     let rotation = std::thread::spawn(move || {
         let c = crate::common::client();
-        let r = bearer(c.post(format!("{base}/api/mail/groups/{id2}/keys")), &token)
-            .json(&json!({ "key": body }))
-            .send()
-            .unwrap();
+        let r = bearer(
+            c.post(format!("{base}/api/v1/mail/groups/{id2}/keys")),
+            &token,
+        )
+        .json(&json!({ "key": body }))
+        .send()
+        .unwrap();
         code(r)
     });
     std::thread::sleep(std::time::Duration::from_secs(2));
@@ -557,7 +560,7 @@ fn a_reset_member_gets_the_keys_sealed_again() {
     wipe_and_set_up(&live.c, &live.base, &live.admin, &mut bob);
     let keys: Value = bearer(
         live.c
-            .get(format!("{}/api/mail/groups/{id}/keys", live.base)),
+            .get(format!("{}/api/v1/mail/groups/{id}/keys", live.base)),
         &bob.token,
     )
     .send()
@@ -566,7 +569,7 @@ fn a_reset_member_gets_the_keys_sealed_again() {
     .unwrap();
     assert!(keys["keys"][0]["share"].is_null(), "{keys}");
     let detail: Value = bearer(
-        live.c.get(format!("{}/api/mail/groups/{id}", live.base)),
+        live.c.get(format!("{}/api/v1/mail/groups/{id}", live.base)),
         &alice.token,
     )
     .send()
@@ -604,7 +607,7 @@ fn a_reset_member_gets_the_keys_sealed_again() {
     );
     let keys: Value = bearer(
         live.c
-            .get(format!("{}/api/mail/groups/{id}/keys", live.base)),
+            .get(format!("{}/api/v1/mail/groups/{id}/keys", live.base)),
         &bob.token,
     )
     .send()
@@ -638,7 +641,7 @@ fn a_reset_member_gets_the_keys_sealed_again() {
 
 fn needs_new_signer(live: &Live, by: &User, id: &str) -> bool {
     let detail: Value = bearer(
-        live.c.get(format!("{}/api/mail/groups/{id}", live.base)),
+        live.c.get(format!("{}/api/v1/mail/groups/{id}", live.base)),
         &by.token,
     )
     .send()
@@ -691,7 +694,7 @@ fn a_deleted_or_deactivated_manager_means_a_new_signer() {
     // Carol is deactivated: she may still hold the signer's seed.
     let r = bearer(
         live.c
-            .put(format!("{}/api/admin/users/{}", live.base, carol.id)),
+            .put(format!("{}/api/v1/admin/accounts/{}", live.base, carol.id)),
         &live.admin_token,
     )
     .json(&json!({ "isActive": false }))
@@ -790,7 +793,8 @@ fn a_shared_mailbox_signature_is_set_by_its_owners_and_managers() {
     );
     let patch = |by: &User, body: Value| {
         bearer(
-            live.c.patch(format!("{}/api/mail/groups/{id}", live.base)),
+            live.c
+                .patch(format!("{}/api/v1/mail/groups/{id}", live.base)),
             &by.token,
         )
         .json(&body)
@@ -802,7 +806,7 @@ fn a_shared_mailbox_signature_is_set_by_its_owners_and_managers() {
     let r = patch(&alice, json!({ "signature": signature }));
     assert_eq!(r.status(), StatusCode::OK);
     let mine: Value = bearer(
-        live.c.get(format!("{}/api/mail/groups", live.base)),
+        live.c.get(format!("{}/api/v1/mail/groups", live.base)),
         &bob.token,
     )
     .send()

@@ -52,7 +52,7 @@ pub struct Session {
     /// this account is to everyone (docs/plans/account-ids.md).
     pub account_id: String,
     pub server_name: String,
-    /// Shown only: the account's username, as `/user/me` last said.
+    /// Shown only: the account's username, as `/account` last said.
     pub username: String,
     pub access_token: String,
     pub refresh_token: String,

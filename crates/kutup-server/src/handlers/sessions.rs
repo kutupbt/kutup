@@ -24,13 +24,13 @@ fn user_uuid(user: &AuthAccount) -> AppResult<Uuid> {
     Uuid::parse_str(&user.account_id).map_err(|_| AppError::unauthorized("unauthorized"))
 }
 
-/// `POST /api/auth/logout` — ends the whole sign-in the caller belongs to: the
+/// `POST /api/v1/auth/logout` — ends the whole sign-in the caller belongs to: the
 /// account. (or CLI) session and every session forked from it. Other apps find out on
 /// their next request (401) and go back through the account app.
 #[utoipa::path(
     post,
-    path = "/api/auth/logout",
-    tag = "sessions",
+    path = "/api/v1/auth/logout",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Signed out", body = OkResponse))
 )]
@@ -78,11 +78,11 @@ pub struct SessionView {
     current: bool,
 }
 
-/// `GET /api/auth/sessions` — the caller's live sessions, most recently used first.
+/// `GET /api/v1/auth/sessions` — the caller's live sessions, most recently used first.
 #[utoipa::path(
     get,
-    path = "/api/auth/sessions",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Live sessions", body = [SessionView]))
 )]
@@ -112,12 +112,12 @@ pub async fn list_sessions(
     Ok(Json(views).into_response())
 }
 
-/// `DELETE /api/auth/sessions/{id}` — revoke one of the caller's sessions and anything
+/// `DELETE /api/v1/auth/sessions/{id}` — revoke one of the caller's sessions and anything
 /// forked from it.
 #[utoipa::path(
     delete,
-    path = "/api/auth/sessions/{id}",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions/{id}",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Session id")),
     responses((status = 200, description = "Revoked", body = OkResponse), (status = 404, description = "No such session"))
@@ -135,12 +135,12 @@ pub async fn revoke_session(
     Ok(Json(OkResponse { ok: true }).into_response())
 }
 
-/// `DELETE /api/auth/sessions` — sign out everywhere else: revoke every session except
+/// `DELETE /api/v1/auth/sessions` — sign out everywhere else: revoke every session except
 /// the caller's own sign-in.
 #[utoipa::path(
     delete,
-    path = "/api/auth/sessions",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Other sessions revoked", body = OkResponse))
 )]
@@ -204,11 +204,11 @@ pub struct CreateForkResponse {
     child_origin: String,
 }
 
-/// `POST /api/auth/forks` — the account app hands a child app (drive, chat) a session.
+/// `POST /api/v1/auth/forks` — the account app hands a child app (drive, chat) a session.
 #[utoipa::path(
     post,
-    path = "/api/auth/forks",
-    tag = "sessions",
+    path = "/api/v1/auth/forks",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = CreateForkRequest,
     responses((status = 200, description = "Fork created", body = CreateForkResponse))
@@ -257,14 +257,14 @@ pub struct ConsumeForkResponse {
     payload: String,
 }
 
-/// `POST /api/auth/forks/consume` — the child app (on its own origin) turns a fork into
+/// `POST /api/v1/auth/forks/consume` — the child app (on its own origin) turns a fork into
 /// its own session. Single use; the `X-Kutup-Client` type must be the one the fork was
 /// minted for, and the request `Origin` must be that app's configured origin, so a fork
 /// cannot be redeemed from anywhere else. The refresh cookie is set on this origin.
 #[utoipa::path(
     post,
-    path = "/api/auth/forks/consume",
-    tag = "sessions",
+    path = "/api/v1/auth/forks/consume",
+    tag = "account",
     request_body = ConsumeForkRequest,
     responses((status = 200, description = "Child session created", body = ConsumeForkResponse), (status = 401, description = "Invalid, used or expired fork"))
 )]
@@ -329,13 +329,13 @@ pub struct LocalKeyBody {
     key: String,
 }
 
-/// `PUT /api/auth/sessions/current/local-key` — store the key that unlocks this web
+/// `PUT /api/v1/auth/sessions/current/local-key` — store the key that unlocks this web
 /// session's persisted key blob. The blob stays in the browser; the key stays here,
 /// released only to this live session, so neither is useful alone.
 #[utoipa::path(
     put,
-    path = "/api/auth/sessions/current/local-key",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions/current/local-key",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = LocalKeyBody,
     responses((status = 200, description = "Stored", body = OkResponse))
@@ -355,11 +355,11 @@ pub async fn put_local_key(
     Ok(Json(OkResponse { ok: true }).into_response())
 }
 
-/// `GET /api/auth/sessions/current/local-key`
+/// `GET /api/v1/auth/sessions/current/local-key`
 #[utoipa::path(
     get,
-    path = "/api/auth/sessions/current/local-key",
-    tag = "sessions",
+    path = "/api/v1/auth/sessions/current/local-key",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The session's local key", body = LocalKeyBody), (status = 404, description = "None stored"))
 )]

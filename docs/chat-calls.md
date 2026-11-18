@@ -108,7 +108,7 @@ them. What exists already is the server's SFU token:
 
 **Joining:**
 - A member asks its own server for an SFU token
-  (`POST /api/chat/group-calls/token` with host, room and participant tag).
+  (`POST /api/v1/chat/group-calls/token` with host, room and participant tag).
 - If the host is another server, the request goes over signed federation
   (`POST /api/fed/chat/group-calls/token`).
 - The host mints a 6-hour LiveKit token for that one room (join, publish,
@@ -185,10 +185,10 @@ with a waiting room, the people waiting (below). It
 offers:
 
 - to the owner: create, list, replace the info and delete
-  (`/api/chat/call-links`);
+  (`/api/v1/chat/call-links`);
 - to anyone presenting the access token, with no account:
-  - `POST /api/chat/call-links/info`: the sealed info;
-  - `POST /api/chat/call-links/token`: a 6-hour LiveKit token for that one
+  - `POST /api/v1/chat/call-links/info`: the sealed info;
+  - `POST /api/v1/chat/call-links/token`: a 6-hour LiveKit token for that one
     room (join, publish, subscribe; never room admin), carrying the joiner's
     sealed name as the participant's metadata.
 
@@ -260,7 +260,7 @@ changing one). With it on, holding the link is not enough to join.
   secret, nobody the link is shared with can compute it. The server stores
   its SHA-256.
 - This server enforces it, because it mints the SFU tokens:
-  `POST /api/chat/call-links/token` answers `403` for a meeting with a
+  `POST /api/v1/chat/call-links/token` answers `403` for a meeting with a
   waiting room unless the host token is presented. Whether a meeting has a
   waiting room is therefore kept in the clear on the server, and told to
   whoever asks for the meeting's details.
@@ -341,7 +341,7 @@ SFU itself, as the room's administrator, through LiveKit's room service
   Their page says a host removed them. They still hold the link, which is
   why the waiting room goes on: to come back they have to ask, and a host
   decides. It stays on until the owner turns it off. (Every link has a
-  host token: `POST /api/chat/call-links` requires its hash.) The database changes
+  host token: `POST /api/v1/chat/call-links` requires its hash.) The database changes
   are made together, before the SFU is asked: if it cannot be reached the
   host sees an error, the person stays out of the seat they had, and asking
   again disconnects them.
@@ -395,7 +395,7 @@ SFU itself, as the room's administrator, through LiveKit's room service
   Meetings page makes one for the same meeting (same title, time and
   waiting room, a new secret and so new keys), deletes the old one and
   disconnects whoever is in it. Only the people the new link is sent to
-  come back. It is one request (`replaces` on `POST /api/chat/call-links`):
+  come back. It is one request (`replaces` on `POST /api/v1/chat/call-links`):
   the server closes the old meeting at the SFU, deletes the old link and
   stores the new one in one transaction, so the two links never both work.
   If the SFU cannot close the old meeting nothing changes and the owner
@@ -443,7 +443,7 @@ screen, People, Chat, leave).
 
 ## ICE servers
 
-`GET /api/chat/call-servers` returns what `RTCPeerConnection` needs:
+`GET /api/v1/chat/call-servers` returns what `RTCPeerConnection` needs:
 
 - **STUN:** the servers in `CHAT_STUN_URLS`.
 - **TURN:** with `CHAT_TURN_URLS` and `CHAT_TURN_SECRET` set, a relay entry

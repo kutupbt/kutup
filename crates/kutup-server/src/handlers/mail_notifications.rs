@@ -1,4 +1,4 @@
-//! `GET /api/mail/notifications` — new mail to tell the reader about
+//! `GET /api/v1/mail/notifications` — new mail to tell the reader about
 //! (docs/plans/mail-parity.md, P6), as Proton's `useNewEmailNotification`:
 //! unread mail that arrived, or snoozed mail that came back, in the Inbox,
 //! Starred, or a folder with notifications on (never Spam or Trash). Mail
@@ -58,7 +58,7 @@ pub struct NewMailPage {
 
 #[utoipa::path(
     get,
-    path = "/api/mail/notifications",
+    path = "/api/v1/mail/notifications",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(NotificationsQuery),

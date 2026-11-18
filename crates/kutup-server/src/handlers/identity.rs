@@ -78,14 +78,14 @@ pub struct DriveIdentity {
     drive_key_binding_epoch: i32,
 }
 
-/// `POST /api/users/drive-identities` — the Drive identities of accounts on
+/// `POST /api/v1/drive/identities` — the Drive identities of accounts on
 /// this server, by exact address, many at once: a page that shows who shared
 /// what checks every person with one request (docs/plans/drive-identity-pins.md).
 /// Unknown or disabled accounts are left out. Rate-limited with the user
 /// lookups, each request counting once.
 #[utoipa::path(
     post,
-    path = "/api/users/drive-identities",
+    path = "/api/v1/drive/identities",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = DriveIdentitiesRequest,

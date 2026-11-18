@@ -565,7 +565,7 @@ export async function deleteEvent(
   await syncOne(calendar, addressId, { delete: { id: existing.id, baseRevision: existing.revision } })
 }
 
-/** One of the caller's alarms (`GET /api/calendar/alarms`). */
+/** One of the caller's alarms (`GET /api/v1/calendar/alarms`). */
 export interface Alarm {
   calendarId: string
   eventId: string

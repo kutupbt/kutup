@@ -133,13 +133,13 @@ pub struct FeedPage {
     pub basis: Option<String>,
 }
 
-/// `GET /api/account/records/{scope}` — a page of the scope's changes after
+/// `GET /api/v1/account/records/{scope}` — a page of the scope's changes after
 /// `after`, with the head of the same snapshot. A client checks the head
 /// against its anchor before it applies a page, and checks the scope's
 /// index against the head once `more` is false.
 #[utoipa::path(
     get,
-    path = "/api/account/records/{scope}",
+    path = "/api/v1/account/records/{scope}",
     tag = "account",
     security(("BearerAuth" = [])),
     params(("scope" = String, Path, description = "The scope's name"), FeedQuery),
@@ -252,10 +252,10 @@ pub(crate) async fn page(
     Ok(page)
 }
 
-/// `GET /api/account/records/{scope}/{id}` — one record.
+/// `GET /api/v1/account/records/{scope}/{id}` — one record.
 #[utoipa::path(
     get,
-    path = "/api/account/records/{scope}/{id}",
+    path = "/api/v1/account/records/{scope}/{id}",
     tag = "account",
     security(("BearerAuth" = [])),
     params(
@@ -355,13 +355,13 @@ struct Put {
     envelope: Vec<u8>,
 }
 
-/// `POST /api/account/records` — stores and deletes records with the next
+/// `POST /api/v1/account/records` — stores and deletes records with the next
 /// head, all or nothing. `409 revision_conflict` lists every record not at
 /// its base revision; `head_conflict` and `head_required` as for any listed
 /// write.
 #[utoipa::path(
     post,
-    path = "/api/account/records",
+    path = "/api/v1/account/records",
     tag = "account",
     security(("BearerAuth" = [])),
     request_body = Batch,

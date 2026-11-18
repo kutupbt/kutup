@@ -310,7 +310,7 @@ impl Client {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/api{}", self.base, path)
+        format!("{}/api/v1{}", self.base, path)
     }
 
     fn auth(&self, rb: RequestBuilder) -> RequestBuilder {
@@ -446,14 +446,14 @@ impl Client {
     // --- User ---
 
     pub fn me(&self) -> Result<AccountMe> {
-        let resp = self.get("/user/me")?;
+        let resp = self.get("/account")?;
         decode_json(resp)
     }
 
     // --- 2FA (TOTP) ---
 
     pub fn setup_totp(&self) -> Result<SetupTotpResponse> {
-        let resp = self.post_json("/user/2fa/setup", &serde_json::json!({}))?;
+        let resp = self.post_json("/account/2fa/setup", &serde_json::json!({}))?;
         decode_json(resp)
     }
 
@@ -462,7 +462,7 @@ impl Client {
     /// codes proving the factor it has (empty otherwise).
     pub fn verify_totp(&self, code: &str, grant: &str, recovery_code: &str) -> Result<()> {
         let resp = self.post_json(
-            "/user/2fa/verify",
+            "/account/2fa/verify",
             &serde_json::json!({ "code": code, "grant": grant, "recoveryCode": recovery_code }),
         )?;
         check_ok(resp)
@@ -472,7 +472,7 @@ impl Client {
     /// grant (the password proved again), so a stolen session cannot.
     pub fn disable_totp(&self, code: &str, grant: &str) -> Result<()> {
         let resp = self
-            .request(Method::DELETE, "/user/2fa")
+            .request(Method::DELETE, "/account/2fa")
             .header(CONTENT_TYPE, "application/json")
             .json(&serde_json::json!({ "code": code, "grant": grant }))
             .send()?;
@@ -487,7 +487,7 @@ impl Client {
     }
 
     pub fn list_collections(&self) -> Result<Vec<Collection>> {
-        let resp = self.get("/collections/")?;
+        let resp = self.get("/drive/collections/")?;
         decode_json(resp)
     }
 
@@ -495,17 +495,17 @@ impl Client {
         &self,
         req: &CreateCollectionRequest,
     ) -> Result<CreateCollectionResponse> {
-        let resp = self.post_json("/collections/", req)?;
+        let resp = self.post_json("/drive/collections/", req)?;
         decode_json(resp)
     }
 
     pub fn rename_collection(&self, id: &str, req: &RenameCollectionRequest) -> Result<()> {
-        let resp = self.put_json(&format!("/collections/{id}"), req)?;
+        let resp = self.put_json(&format!("/drive/collections/{id}"), req)?;
         check_ok(resp)
     }
 
     pub fn delete_collection(&self, id: &str) -> Result<()> {
-        let resp = self.delete(&format!("/collections/{id}"))?;
+        let resp = self.delete(&format!("/drive/collections/{id}"))?;
         check_ok(resp)
     }
 
@@ -515,19 +515,19 @@ impl Client {
         } else {
             serde_json::json!({ "color": color })
         };
-        let resp = self.patch_json(&format!("/collections/{id}/color"), &body)?;
+        let resp = self.patch_json(&format!("/drive/collections/{id}/color"), &body)?;
         check_ok(resp)
     }
 
     // --- Files ---
 
     pub fn list_files(&self, collection_id: &str) -> Result<Vec<File>> {
-        let resp = self.get(&format!("/collections/{collection_id}/files"))?;
+        let resp = self.get(&format!("/drive/collections/{collection_id}/files"))?;
         decode_json(resp)
     }
 
     pub fn delete_file(&self, file_id: &str) -> Result<()> {
-        let resp = self.delete(&format!("/files/{file_id}"))?;
+        let resp = self.delete(&format!("/drive/files/{file_id}"))?;
         check_ok(resp)
     }
 
@@ -536,7 +536,7 @@ impl Client {
         file_id: &str,
         req: &UpdateFileMetadataRequest,
     ) -> Result<()> {
-        let resp = self.put_json(&format!("/files/{file_id}"), req)?;
+        let resp = self.put_json(&format!("/drive/files/{file_id}"), req)?;
         check_ok(resp)
     }
 
@@ -544,7 +544,7 @@ impl Client {
     /// (docs/plans/drive-unique-names.md).
     pub fn set_content_hash(&self, file_id: &str, content_hash: &str) -> Result<()> {
         let resp = self.put_json(
-            &format!("/files/{file_id}/content-hash"),
+            &format!("/drive/files/{file_id}/content-hash"),
             &serde_json::json!({ "contentHash": content_hash }),
         )?;
         check_ok(resp)
@@ -559,7 +559,7 @@ impl Client {
         hashes: &[String],
     ) -> Result<Vec<String>> {
         let path = match collection_id {
-            Some(id) => format!("/collections/{id}/available-hashes"),
+            Some(id) => format!("/drive/collections/{id}/available-hashes"),
             None => "/drive/top-level-available-hashes".to_string(),
         };
         let resp = self.post_json(&path, &serde_json::json!({ "hashes": hashes }))?;

@@ -19,7 +19,7 @@ import { getSession, type Session } from './store'
 /** The device credential beside the sign-in: `<deviceId>.<credential, base64url>`. */
 export const DEVICE_HEADER = 'X-Kutup-Device'
 
-/** One device of the account, as `GET /api/devices` lists it. */
+/** One device of the account, as `GET /api/v1/account/devices` lists it. */
 export interface AccountDevice {
   deviceId: number
   kind: DeviceKind
@@ -90,7 +90,7 @@ export function isDevicesMismatch(error: unknown): boolean {
 }
 
 export async function listAccountDevices(): Promise<AccountDevice[]> {
-  return (await api.get<{ devices: AccountDevice[] }>('/devices')).data.devices
+  return (await api.get<{ devices: AccountDevice[] }>('/account/devices')).data.devices
 }
 
 /**
@@ -106,7 +106,7 @@ export async function registerDevice(request: {
   /** Unpadded base64url of 32 random bytes. */
   credential: string
 }): Promise<{ deviceId: number; session: string }> {
-  return (await api.post<{ deviceId: number; session: string }>('/devices', request)).data
+  return (await api.post<{ deviceId: number; session: string }>('/account/devices', request)).data
 }
 
 /** The account's head manifest; null when it has none yet (`404 noManifest`). */
@@ -221,5 +221,5 @@ export async function publishNextManifest(
  * can't set headers on a WebSocket): the Chat socket and the collab sockets.
  */
 export async function deviceTicket(header: string): Promise<string> {
-  return (await api.post<{ ticket: string }>('/device-ticket', null, asDevice(header))).data.ticket
+  return (await api.post<{ ticket: string }>('/account/devices/tickets', null, asDevice(header))).data.ticket
 }

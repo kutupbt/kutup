@@ -48,7 +48,7 @@ fn login(c: &Client, base: &str, a: &User, client_type: Option<&str>) -> Respons
         req
     };
     let (signing_in, request) = kutup_crypto::opaque::client_login_start(&a.password).unwrap();
-    let r = with_client(c.post(format!("{base}/api/auth/login/start")))
+    let r = with_client(c.post(format!("{base}/api/v1/auth/login/start")))
         .json(&json!({
             "name": a.username, "credentialRequest": b64(&request), "purpose": "session",
         }))
@@ -62,7 +62,7 @@ fn login(c: &Client, base: &str, a: &User, client_type: Option<&str>) -> Respons
         .decode(started["credentialResponse"].as_str().unwrap())
         .unwrap();
     let signed_in = signing_in.finish(&response).expect("the password is right");
-    with_client(c.post(format!("{base}/api/auth/login/finish")))
+    with_client(c.post(format!("{base}/api/v1/auth/login/finish")))
         .json(&json!({
             "loginId": started["loginId"],
             "credentialFinalization": b64(&signed_in.finalization),
@@ -72,14 +72,14 @@ fn login(c: &Client, base: &str, a: &User, client_type: Option<&str>) -> Respons
 }
 
 fn me_status(c: &Client, base: &str, token: &str) -> StatusCode {
-    bearer(c.get(format!("{base}/api/user/me")), token)
+    bearer(c.get(format!("{base}/api/v1/account")), token)
         .send()
         .unwrap()
         .status()
 }
 
 fn refresh_with_cookie(c: &Client, base: &str, cookie: &str) -> Response {
-    c.post(format!("{base}/api/auth/refresh"))
+    c.post(format!("{base}/api/v1/auth/refresh"))
         .header("cookie", format!("kutup.refresh={cookie}"))
         .send()
         .unwrap()
@@ -93,7 +93,7 @@ fn sessions_and_forks_contract() {
     let base = base.trim_end_matches('/').to_string();
     let c = client();
     let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()
@@ -142,7 +142,7 @@ fn sessions_and_forks_contract() {
     let account_cookie = rotated;
     // A CLI-style body refresh of a web token is refused.
     let r = c
-        .post(format!("{base}/api/auth/refresh"))
+        .post(format!("{base}/api/v1/auth/refresh"))
         .json(&json!({ "refreshToken": account_cookie }))
         .send()
         .unwrap();
@@ -163,7 +163,7 @@ fn sessions_and_forks_contract() {
     // --- Fork account → drive.
     let payload = b64(b"opaque local-state envelope");
     let fork = |child: &str| -> Value {
-        let r = bearer(c.post(format!("{base}/api/auth/forks")), &account_token)
+        let r = bearer(c.post(format!("{base}/api/v1/auth/forks")), &account_token)
             .json(&json!({ "childClientType": child, "payload": payload }))
             .send()
             .unwrap();
@@ -174,7 +174,7 @@ fn sessions_and_forks_contract() {
     assert_eq!(created["childOrigin"].as_str().unwrap(), drive_origin);
     let selector = created["selector"].as_str().unwrap().to_string();
     let consume = |selector: &str, client_type: &str, origin: &str| -> Response {
-        c.post(format!("{base}/api/auth/forks/consume"))
+        c.post(format!("{base}/api/v1/auth/forks/consume"))
             .header("x-kutup-client", client_type)
             .header("origin", origin)
             .json(&json!({ "selector": selector }))
@@ -212,7 +212,7 @@ fn sessions_and_forks_contract() {
         StatusCode::UNAUTHORIZED
     );
     // Only the account app forks.
-    let r = bearer(c.post(format!("{base}/api/auth/forks")), &drive_token)
+    let r = bearer(c.post(format!("{base}/api/v1/auth/forks")), &drive_token)
         .json(&json!({ "childClientType": "web-chat", "payload": payload }))
         .send()
         .unwrap();
@@ -221,7 +221,7 @@ fn sessions_and_forks_contract() {
     // --- Local key for the child's persisted blob.
     let key = b64(&[7u8; 32]);
     let r = bearer(
-        c.put(format!("{base}/api/auth/sessions/current/local-key")),
+        c.put(format!("{base}/api/v1/auth/sessions/current/local-key")),
         &drive_token,
     )
     .json(&json!({ "key": key }))
@@ -229,7 +229,7 @@ fn sessions_and_forks_contract() {
     .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let got: Value = bearer(
-        c.get(format!("{base}/api/auth/sessions/current/local-key")),
+        c.get(format!("{base}/api/v1/auth/sessions/current/local-key")),
         &drive_token,
     )
     .send()
@@ -239,11 +239,14 @@ fn sessions_and_forks_contract() {
     assert_eq!(got["key"].as_str().unwrap(), key);
 
     // --- The session list shows the sign-in as one family.
-    let list: Value = bearer(c.get(format!("{base}/api/auth/sessions")), &account_token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let list: Value = bearer(
+        c.get(format!("{base}/api/v1/auth/sessions")),
+        &account_token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let list = list.as_array().unwrap();
     let find = |id: &str| list.iter().find(|s| s["id"] == id).cloned().unwrap();
     assert_eq!(find(&account_session)["clientType"], "web-account");
@@ -259,7 +262,7 @@ fn sessions_and_forks_contract() {
     let cli_token = cli["accessToken"].as_str().unwrap().to_string();
     let cli_refresh = cli["refreshToken"].as_str().unwrap().to_string();
     let r = c
-        .post(format!("{base}/api/auth/refresh"))
+        .post(format!("{base}/api/v1/auth/refresh"))
         .json(&json!({ "refreshToken": cli_refresh }))
         .send()
         .unwrap();
@@ -268,7 +271,7 @@ fn sessions_and_forks_contract() {
     assert_ne!(next["refreshToken"].as_str().unwrap(), cli_refresh);
     // CLI sessions hold no local key.
     let r = bearer(
-        c.put(format!("{base}/api/auth/sessions/current/local-key")),
+        c.put(format!("{base}/api/v1/auth/sessions/current/local-key")),
         &cli_token,
     )
     .json(&json!({ "key": key }))
@@ -277,7 +280,7 @@ fn sessions_and_forks_contract() {
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 
     // --- "Sign out everywhere else" from the CLI ends the web sign-in, keeps the CLI.
-    let r = bearer(c.delete(format!("{base}/api/auth/sessions")), &cli_token)
+    let r = bearer(c.delete(format!("{base}/api/v1/auth/sessions")), &cli_token)
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
@@ -306,7 +309,7 @@ fn sessions_and_forks_contract() {
     let r = login(&c, &base, &account, Some("web-account"));
     let body: Value = r.json().unwrap();
     let account_token = body["accessToken"].as_str().unwrap().to_string();
-    let created = bearer(c.post(format!("{base}/api/auth/forks")), &account_token)
+    let created = bearer(c.post(format!("{base}/api/v1/auth/forks")), &account_token)
         .json(&json!({ "childClientType": "web-chat", "payload": payload }))
         .send()
         .unwrap()
@@ -320,7 +323,7 @@ fn sessions_and_forks_contract() {
     .json()
     .unwrap();
     let chat_token = child["accessToken"].as_str().unwrap().to_string();
-    let r = bearer(c.post(format!("{base}/api/auth/logout")), &chat_token)
+    let r = bearer(c.post(format!("{base}/api/v1/auth/logout")), &chat_token)
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::OK);

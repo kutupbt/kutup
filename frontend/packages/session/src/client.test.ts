@@ -5,7 +5,7 @@ import api, { ClientTooOldError, configureClient, isClientTooOld, resetClientToo
 import { clearSession, getAccessToken, getSession, setSession } from './store'
 import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
-// Tests for the axios wrapper at frontend/src/api/client.ts.
+// Tests for the axios wrapper at frontend/src/api/v1/client.ts.
 // Strategy: install a tiny in-memory adapter on the api instance via
 // `defaults.adapter`. Each test programs the adapter's responses, so we
 // can drive the interceptor (Authorization header, 401-refresh, 503-retry)
@@ -133,7 +133,7 @@ describe('api/client — 401 refresh chain', () => {
     // but axios.defaults.adapter is separate). Stub axios.defaults too.
     const axiosMod = (await import('axios')).default
     axiosMod.defaults.adapter = api.defaults.adapter
-    responses['POST /api/auth/refresh'] = [{ status: 200, data: { accessToken: 'fresh-token' } }]
+    responses['POST /api/v1/auth/refresh'] = [{ status: 200, data: { accessToken: 'fresh-token' } }]
 
     const res = await api.get('/me')
     expect(res.data).toEqual({ ok: true })
@@ -150,7 +150,7 @@ describe('api/client — 401 refresh chain', () => {
     responses[route('GET /me')] = [{ status: 401, data: { error: 'expired' } }]
     const axiosMod = (await import('axios')).default
     axiosMod.defaults.adapter = api.defaults.adapter
-    responses['POST /api/auth/refresh'] = [{ status: 401, data: { error: 'revoked' } }]
+    responses['POST /api/v1/auth/refresh'] = [{ status: 401, data: { error: 'revoked' } }]
     let called = 0
     setUnauthenticatedHandler(() => { called += 1 })
 
@@ -167,18 +167,18 @@ describe('api/client — 401 refresh chain', () => {
     // No /auth/refresh handler — if it gets called the adapter would 0-status
     // and we'd see it in `calls`.
     await expect(api.post('/auth/login/start', {})).rejects.toBeTruthy()
-    const refreshCalls = calls.filter((c) => c.url === '/api/auth/refresh')
+    const refreshCalls = calls.filter((c) => c.url === '/api/v1/auth/refresh')
     expect(refreshCalls, 'refresh must NOT fire for /auth/login 401').toHaveLength(0)
   })
 
   it('does not retry a wrong password at the re-checks (it would count twice)', async () => {
     seedAuth('any-token')
-    responses[route('POST /user/reauth')] = [{ status: 401, data: { error: 'invalid credentials', code: 'invalidCredentials' } }]
+    responses[route('POST /account/reauth')] = [{ status: 401, data: { error: 'invalid credentials', code: 'invalidCredentials' } }]
     responses[route('PUT /pass/pin')] = [{ status: 401, data: { error: 'invalid credentials', code: 'invalidCredentials' } }]
-    await expect(api.post('/user/reauth', {})).rejects.toBeTruthy()
+    await expect(api.post('/account/reauth', {})).rejects.toBeTruthy()
     await expect(api.put('/pass/pin', {})).rejects.toBeTruthy()
-    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
-    expect(calls.filter((c) => c.url?.endsWith('/user/reauth'))).toHaveLength(1)
+    expect(calls.filter((c) => c.url === '/api/v1/auth/refresh')).toHaveLength(0)
+    expect(calls.filter((c) => c.url?.endsWith('/account/reauth'))).toHaveLength(1)
   })
 
   it('never refreshes for an auth call, even with a session: a setup token that ran out', async () => {
@@ -191,7 +191,7 @@ describe('api/client — 401 refresh chain', () => {
     await expect(api.post('/auth/opaque/register/start', {}, { headers: { Authorization: 'Bearer setup' } })).rejects.toMatchObject({
       response: { status: 401 },
     })
-    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
+    expect(calls.filter((c) => c.url === '/api/v1/auth/refresh')).toHaveLength(0)
     expect(calls.filter((c) => c.url?.endsWith('/register/start'))).toHaveLength(1)
     // Nothing of this origin's session was touched.
     expect(ended).toBe(0)
@@ -206,8 +206,8 @@ describe('api/client — 401 refresh chain', () => {
     responses[route('POST /user/thing')] = [{ status: 401, data: { error: 'expired', code: 'setupTokenInvalid' } }]
     await expect(api.post('/auth/login/finish', {})).rejects.toBeTruthy()
     await expect(api.post('/auth/login/2fa', {})).rejects.toBeTruthy()
-    await expect(api.post('/user/thing', {})).rejects.toBeTruthy()
-    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
+    await expect(api.post('/account/thing', {})).rejects.toBeTruthy()
+    expect(calls.filter((c) => c.url === '/api/v1/auth/refresh')).toHaveLength(0)
     expect(getAccessToken()).toBe('expired-token')
   })
 
@@ -223,7 +223,7 @@ describe('api/client — 401 refresh chain', () => {
     ]
     const axiosMod = (await import('axios')).default
     axiosMod.defaults.adapter = api.defaults.adapter
-    responses['POST /api/auth/refresh'] = [
+    responses['POST /api/v1/auth/refresh'] = [
       { status: 200, data: { accessToken: 'fresh-token' } },
       { status: 200, data: { accessToken: 'fresher-token' } },
     ]
@@ -237,20 +237,20 @@ describe('api/client — 401 refresh chain', () => {
     seedAuth('any-token')
     responses[route('POST /auth/forks/consume')] = [{ status: 401, data: { error: 'unknown fork' } }]
     await expect(api.post('/auth/forks/consume', {})).rejects.toBeTruthy()
-    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
+    expect(calls.filter((c) => c.url === '/api/v1/auth/refresh')).toHaveLength(0)
   })
 
   it('refreshes an expired token at the re-checks and retries', async () => {
     seedAuth('expired-token')
-    responses[route('POST /user/reauth')] = [
+    responses[route('POST /account/reauth')] = [
       { status: 401, data: { error: 'unauthorized' } },
       { status: 204, data: '' },
     ]
     const axiosMod = (await import('axios')).default
     axiosMod.defaults.adapter = api.defaults.adapter
-    responses['POST /api/auth/refresh'] = [{ status: 200, data: { accessToken: 'fresh-token' } }]
-    await expect(api.post('/user/reauth', {})).resolves.toBeTruthy()
-    const reauthCalls = calls.filter((c) => c.url?.endsWith('/user/reauth'))
+    responses['POST /api/v1/auth/refresh'] = [{ status: 200, data: { accessToken: 'fresh-token' } }]
+    await expect(api.post('/account/reauth', {})).resolves.toBeTruthy()
+    const reauthCalls = calls.filter((c) => c.url?.endsWith('/account/reauth'))
     expect(reauthCalls).toHaveLength(2)
     expect(reauthCalls[1].headers.Authorization).toBe('Bearer fresh-token')
   })

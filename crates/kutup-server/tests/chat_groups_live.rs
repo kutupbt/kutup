@@ -51,7 +51,7 @@ fn now() -> i64 {
 
 fn server_name(c: &Client, base: &str) -> String {
     let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()
@@ -77,7 +77,7 @@ fn home(c: &Client, base: &str, user: &User) -> Home {
     let name = server_name(c, base);
     let answer: Value = bearer(
         c.get(format!(
-            "{base}/api/chat/groups/gateway-key?server={name}&fromSequence=0"
+            "{base}/api/v1/chat/groups/gateway-key?server={name}&fromSequence=0"
         )),
         &user.token,
     )
@@ -122,7 +122,10 @@ fn exchange(c: &Client, user: &User, home: &Home, request: &GroupRequestV1) -> G
 
 fn relay(c: &Client, user: &User, home: &Home, sealed: Vec<u8>) -> (StatusCode, Vec<u8>) {
     let r = bearer(
-        c.post(format!("{}/api/chat/groups/relay/{}", home.base, home.name)),
+        c.post(format!(
+            "{}/api/v1/chat/groups/relay/{}",
+            home.base, home.name
+        )),
         &user.token,
     )
     .header("content-type", "message/ohttp-req")
@@ -1121,7 +1124,7 @@ impl LinkJoinBudgets {
 
     fn put(&self, body: Value) -> (StatusCode, Value) {
         let r = bearer(
-            self.c.put(format!("{}/api/admin/settings", self.base)),
+            self.c.put(format!("{}/api/v1/admin/settings", self.base)),
             &self.token,
         )
         .json(&body)
@@ -1619,14 +1622,14 @@ fn the_relay_needs_a_signed_in_account() {
     let c = crate::common::client();
     let name = server_name(&c, &base);
     let r = c
-        .post(format!("{base}/api/chat/groups/relay/{name}"))
+        .post(format!("{base}/api/v1/chat/groups/relay/{name}"))
         .body(vec![0u8; 64])
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
     let r = c
         .get(format!(
-            "{base}/api/chat/groups/gateway-key?server={name}&fromSequence=0"
+            "{base}/api/v1/chat/groups/gateway-key?server={name}&fromSequence=0"
         ))
         .send()
         .unwrap();

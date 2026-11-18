@@ -189,10 +189,10 @@ async fn fetch(state: &AppState, user_id: Uuid, id: Uuid) -> AppResult<CalendarV
         .ok_or_else(|| AppError::not_found("not found"))
 }
 
-/// `GET /api/calendar/calendars` — the caller's calendars.
+/// `GET /api/v1/calendar/calendars` — the caller's calendars.
 #[utoipa::path(
     get,
-    path = "/api/calendar/calendars",
+    path = "/api/v1/calendar/calendars",
     tag = "calendar",
     security(("BearerAuth" = [])),
     responses((status = 200, body = CalendarList))
@@ -261,10 +261,10 @@ pub struct CalendarCreate {
     pub metadata: SealedMetadataV1,
 }
 
-/// `POST /api/calendar/calendars` — makes a calendar the caller owns.
+/// `POST /api/v1/calendar/calendars` — makes a calendar the caller owns.
 #[utoipa::path(
     post,
-    path = "/api/calendar/calendars",
+    path = "/api/v1/calendar/calendars",
     tag = "calendar",
     security(("BearerAuth" = [])),
     request_body = CalendarCreate,
@@ -400,10 +400,10 @@ pub struct CalendarUpdate {
     pub default_reminders: Option<DefaultReminders>,
 }
 
-/// `PUT /api/calendar/calendars/{id}`
+/// `PUT /api/v1/calendar/calendars/{id}`
 #[utoipa::path(
     put,
-    path = "/api/calendar/calendars/{id}",
+    path = "/api/v1/calendar/calendars/{id}",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path)),
@@ -505,11 +505,11 @@ pub async fn update(
     Ok(Json(fetch(&state, user_id, id).await?))
 }
 
-/// `DELETE /api/calendar/calendars/{id}` — the owner deletes a calendar and
+/// `DELETE /api/v1/calendar/calendars/{id}` — the owner deletes a calendar and
 /// every event in it.
 #[utoipa::path(
     delete,
-    path = "/api/calendar/calendars/{id}",
+    path = "/api/v1/calendar/calendars/{id}",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path)),
@@ -726,11 +726,11 @@ fn instant(value: &str, what: &str) -> AppResult<time::OffsetDateTime> {
         .map_err(|_| AppError::bad_request(format!("{what} is not an RFC 3339 time")))
 }
 
-/// `GET /api/calendar/calendars/{id}/events?start&end` — the events that
+/// `GET /api/v1/calendar/calendars/{id}/events?start&end` — the events that
 /// meet a window, oldest start first, paged.
 #[utoipa::path(
     get,
-    path = "/api/calendar/calendars/{id}/events",
+    path = "/api/v1/calendar/calendars/{id}/events",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path), EventsQuery),
@@ -799,10 +799,10 @@ pub async fn events(
     }))
 }
 
-/// `GET /api/calendar/calendars/{id}/events/{eventId}`
+/// `GET /api/v1/calendar/calendars/{id}/events/{eventId}`
 #[utoipa::path(
     get,
-    path = "/api/calendar/calendars/{id}/events/{eventId}",
+    path = "/api/v1/calendar/calendars/{id}/events/{eventId}",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path), ("eventId" = Uuid, Path)),
@@ -1109,11 +1109,11 @@ async fn check_event_blocking(
         .map_err(|error| AppError::internal(error.to_string()))?
 }
 
-/// `POST /api/calendar/calendars/{id}/events/sync` — creates, changes and
+/// `POST /api/v1/calendar/calendars/{id}/events/sync` — creates, changes and
 /// deletes events, each alone (Proton's sync): one result per change.
 #[utoipa::path(
     post,
-    path = "/api/calendar/calendars/{id}/events/sync",
+    path = "/api/v1/calendar/calendars/{id}/events/sync",
     tag = "calendar",
     security(("BearerAuth" = [])),
     params(("id" = Uuid, Path)),

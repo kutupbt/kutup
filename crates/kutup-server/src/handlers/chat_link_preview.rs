@@ -1,4 +1,4 @@
-//! `POST /api/chat/link-preview` — fetch one public web page or image for a
+//! `POST /api/v1/chat/link-preview` — fetch one public web page or image for a
 //! Chat link preview made by the sender.
 //!
 //! Browsers cannot read another site's page, so the sender's own homeserver
@@ -60,7 +60,7 @@ pub struct LinkPreviewFetchResponse {
 
 #[utoipa::path(
     post,
-    path = "/api/chat/link-preview",
+    path = "/api/v1/chat/link-preview",
     tag = "chat",
     operation_id = "fetchChatLinkPreview",
     request_body = LinkPreviewFetchRequest,

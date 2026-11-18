@@ -121,14 +121,14 @@ fn start(
     head: &str,
     basis: &str,
 ) -> reqwest::blocking::Response {
-    bearer(c.post(format!("{base}/api/account/head")), &user.token)
+    bearer(c.post(format!("{base}/api/v1/account/head")), &user.token)
         .json(&json!({ "head": head, "basis": basis }))
         .send()
         .unwrap()
 }
 
 fn basis(c: &Client, base: &str, user: &User) -> String {
-    get(c, base, user, "/api/account/index/contacts")["basis"]
+    get(c, base, user, "/api/v1/account/index/contacts")["basis"]
         .as_str()
         .expect("a basis before the first head")
         .to_owned()
@@ -154,23 +154,26 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     };
     let put_pins = |base_revision: i64, revision: u64, head: Option<&str>| {
         // The one record of the account-records scope `pins`.
-        bearer(c.post(format!("{base}/api/account/records")), &user.token)
-            .json(
-                &json!({ "head": head, "puts": [{ "scope": "pins", "id": "pins",
+        bearer(
+            c.post(format!("{base}/api/v1/account/records")),
+            &user.token,
+        )
+        .json(
+            &json!({ "head": head, "puts": [{ "scope": "pins", "id": "pins",
                 "baseRevision": base_revision, "envelope": pins(revision) }] }),
-            )
-            .send()
-            .unwrap()
+        )
+        .send()
+        .unwrap()
     };
     let mut chain = Chain::new(&user.binding);
 
     // No head yet: a listed write goes in without one (not started).
     assert_eq!(
-        get(&c, &base, &user, "/api/account/head")["head"],
+        get(&c, &base, &user, "/api/v1/account/head")["head"],
         Value::Null
     );
     assert_eq!(put_pins(0, 1, None).status(), StatusCode::OK);
-    let index = get(&c, &base, &user, "/api/account/index/pins");
+    let index = get(&c, &base, &user, "/api/v1/account/index/pins");
     assert_eq!(index["head"], Value::Null);
     assert_eq!(index["values"], json!([["pins", 1]]));
     let on = index["basis"].as_str().unwrap().to_owned();
@@ -196,7 +199,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
         StatusCode::CREATED
     );
     assert_eq!(
-        get(&c, &base, &user, "/api/account/head")["head"],
+        get(&c, &base, &user, "/api/v1/account/head")["head"],
         json!(first)
     );
     assert_eq!(
@@ -249,7 +252,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     let label = uuid::Uuid::new_v4().to_string();
     let label_id = format!("label:{label}");
     let create_label = |head: Option<&str>| {
-        bearer(c.post(format!("{base}/api/mail/labels")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/mail/labels")), &user.token)
             .json(&json!({ "id": label, "name": sealed_name(&user.binding, MailNameKind::Label, &label, 1),
                            "color": "#336699", "head": head }))
             .send()
@@ -263,7 +266,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     assert_eq!(create_label(Some(&third)).status(), StatusCode::CREATED);
     let recolour = |head: Option<&str>| {
         bearer(
-            c.patch(format!("{base}/api/mail/labels/{label}")),
+            c.patch(format!("{base}/api/v1/mail/labels/{label}")),
             &user.token,
         )
         .json(&json!({ "color": "#663399", "head": head }))
@@ -276,7 +279,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
 
     // A folder delete names every folder it removes, as the server finds them.
     let folder = |parent: Option<&str>, id: &str, head: &str| {
-        bearer(c.post(format!("{base}/api/mail/folders")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/mail/folders")), &user.token)
             .json(
                 &json!({ "id": id, "parentId": parent, "color": "#336699", "head": head,
                            "name": sealed_name(&user.binding, MailNameKind::Folder, id, 1) }),
@@ -299,7 +302,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     assert_eq!(folder(Some(&outer), &inner, &fifth), StatusCode::CREATED);
     let delete = |removes: Vec<&str>, head: Option<&str>| {
         bearer(
-            c.delete(format!("{base}/api/mail/folders/{outer}")),
+            c.delete(format!("{base}/api/v1/mail/folders/{outer}")),
             &user.token,
         )
         .json(&json!({ "removes": removes, "head": head }))
@@ -324,28 +327,28 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     );
 
     // The chain, a page at a time, and an index with the head it goes with.
-    let heads = get(&c, &base, &user, "/api/account/heads?from=1");
+    let heads = get(&c, &base, &user, "/api/v1/account/heads?from=1");
     assert_eq!(heads["heads"].as_array().unwrap().len(), 6);
     assert_eq!(heads["heads"][0], json!(first));
     assert_eq!(heads["heads"][5], json!(sixth));
     assert_eq!(heads["next"], Value::Null);
     assert_eq!(
-        get(&c, &base, &user, "/api/account/heads?from=7"),
+        get(&c, &base, &user, "/api/v1/account/heads?from=7"),
         json!({ "heads": [], "next": null })
     );
     let bad = bearer(
-        c.get(format!("{base}/api/account/heads?from=0")),
+        c.get(format!("{base}/api/v1/account/heads?from=0")),
         &user.token,
     )
     .send()
     .unwrap();
     assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        get(&c, &base, &user, "/api/account/index/mailNames"),
+        get(&c, &base, &user, "/api/v1/account/index/mailNames"),
         json!({ "head": sixth, "values": [[label_id, 1]], "basis": null })
     );
     let unknown = bearer(
-        c.get(format!("{base}/api/account/index/settings")),
+        c.get(format!("{base}/api/v1/account/index/settings")),
         &user.token,
     )
     .send()
@@ -422,7 +425,7 @@ fn every_kind_of_listed_write_takes_the_head() {
     assert_eq!(
         send(
             Method::POST,
-            "/api/contacts",
+            "/api/v1/contacts",
             contact(&user, &uid(1), 1),
             None
         ),
@@ -431,7 +434,7 @@ fn every_kind_of_listed_write_takes_the_head() {
     // The index lists contacts by their UID (client-chosen, unique per
     // account, kept for good): a head is made before the write.
     let made = chain.make("contacts", &[(&uid(1), 1)]);
-    let r = bearer(c.post(format!("{base}/api/contacts")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/contacts")), &user.token)
         .json(&{
             let mut body = contact(&user, &uid(1), 1);
             body["head"] = json!(b64(&made.1));
@@ -450,7 +453,7 @@ fn every_kind_of_listed_write_takes_the_head() {
     assert_eq!(
         send(
             Method::PUT,
-            &format!("/api/contacts/{id}"),
+            &format!("/api/v1/contacts/{id}"),
             update.clone(),
             None
         ),
@@ -463,7 +466,7 @@ fn every_kind_of_listed_write_takes_the_head() {
     assert_eq!(
         send(
             Method::PUT,
-            &format!("/api/contacts/{id}"),
+            &format!("/api/v1/contacts/{id}"),
             renamed,
             Some(&b64(&head.1))
         )
@@ -473,23 +476,28 @@ fn every_kind_of_listed_write_takes_the_head() {
     let head = chain.keep(chain.make("contacts", &[(&uid(1), 2)]));
     ok(send(
         Method::PUT,
-        &format!("/api/contacts/{id}"),
+        &format!("/api/v1/contacts/{id}"),
         update,
         Some(&head),
     ));
     let import = json!({ "contacts": [contact(&user, &uid(2), 1), contact(&user, &uid(3), 1)] });
     assert_eq!(
-        send(Method::POST, "/api/contacts/import", import.clone(), None),
+        send(
+            Method::POST,
+            "/api/v1/contacts/import",
+            import.clone(),
+            None
+        ),
         required
     );
     let head = chain.keep(chain.make("contacts", &[(&uid(1), 2), (&uid(2), 1), (&uid(3), 1)]));
     ok(send(
         Method::POST,
-        "/api/contacts/import",
+        "/api/v1/contacts/import",
         import,
         Some(&head),
     ));
-    let indexed: Vec<String> = get(&c, &base, &user, "/api/account/index/contacts")["values"]
+    let indexed: Vec<String> = get(&c, &base, &user, "/api/v1/account/index/contacts")["values"]
         .as_array()
         .unwrap()
         .iter()
@@ -497,7 +505,7 @@ fn every_kind_of_listed_write_takes_the_head() {
         .collect();
     assert_eq!(indexed, vec![uid(1), uid(2), uid(3)]);
     // Deletes name the rows by their ids, as the contacts list gives them.
-    let listed: Vec<String> = get(&c, &base, &user, "/api/contacts")["contacts"]
+    let listed: Vec<String> = get(&c, &base, &user, "/api/v1/contacts")["contacts"]
         .as_array()
         .unwrap()
         .iter()
@@ -508,7 +516,7 @@ fn every_kind_of_listed_write_takes_the_head() {
     assert_eq!(
         send(
             Method::DELETE,
-            &format!("/api/contacts/{id}"),
+            &format!("/api/v1/contacts/{id}"),
             json!({}),
             None
         ),
@@ -517,19 +525,19 @@ fn every_kind_of_listed_write_takes_the_head() {
     let head = chain.keep(chain.make("contacts", &[(&uid(2), 1), (&uid(3), 1)]));
     ok(send(
         Method::DELETE,
-        &format!("/api/contacts/{id}"),
+        &format!("/api/v1/contacts/{id}"),
         json!({}),
         Some(&head),
     ));
     let many = json!({ "ids": listed });
     assert_eq!(
-        send(Method::POST, "/api/contacts/delete", many.clone(), None),
+        send(Method::POST, "/api/v1/contacts/delete", many.clone(), None),
         required
     );
     let head = chain.keep(chain.make("contacts", &[]));
     ok(send(
         Method::POST,
-        "/api/contacts/delete",
+        "/api/v1/contacts/delete",
         many,
         Some(&head),
     ));
@@ -542,17 +550,22 @@ fn every_kind_of_listed_write_takes_the_head() {
         "conditions": [{ "field": "subject", "op": "contains", "value": "x" }],
         "actions": { "star": true } });
     assert_eq!(
-        send(Method::POST, "/api/mail/filters", create.clone(), None),
+        send(Method::POST, "/api/v1/mail/filters", create.clone(), None),
         required
     );
     let head = chain.keep(chain.make("mailNames", &[(&filter_id, 1)]));
-    ok(send(Method::POST, "/api/mail/filters", create, Some(&head)));
+    ok(send(
+        Method::POST,
+        "/api/v1/mail/filters",
+        create,
+        Some(&head),
+    ));
     let rename = json!({ "baseNameRevision": 1,
         "name": sealed_name(&user.binding, MailNameKind::Filter, &filter, 2) });
     assert_eq!(
         send(
             Method::PATCH,
-            &format!("/api/mail/filters/{filter}"),
+            &format!("/api/v1/mail/filters/{filter}"),
             rename.clone(),
             None
         ),
@@ -561,14 +574,14 @@ fn every_kind_of_listed_write_takes_the_head() {
     let head = chain.keep(chain.make("mailNames", &[(&filter_id, 2)]));
     ok(send(
         Method::PATCH,
-        &format!("/api/mail/filters/{filter}"),
+        &format!("/api/v1/mail/filters/{filter}"),
         rename,
         Some(&head),
     ));
     assert_eq!(
         send(
             Method::PATCH,
-            &format!("/api/mail/filters/{filter}"),
+            &format!("/api/v1/mail/filters/{filter}"),
             json!({ "enabled": false }),
             Some(&head)
         )
@@ -577,14 +590,14 @@ fn every_kind_of_listed_write_takes_the_head() {
     );
     ok(send(
         Method::PATCH,
-        &format!("/api/mail/filters/{filter}"),
+        &format!("/api/v1/mail/filters/{filter}"),
         json!({ "enabled": false }),
         None,
     ));
     assert_eq!(
         send(
             Method::DELETE,
-            &format!("/api/mail/filters/{filter}"),
+            &format!("/api/v1/mail/filters/{filter}"),
             json!({}),
             None
         ),
@@ -593,7 +606,7 @@ fn every_kind_of_listed_write_takes_the_head() {
     let head = chain.keep(chain.make("mailNames", &[]));
     ok(send(
         Method::DELETE,
-        &format!("/api/mail/filters/{filter}"),
+        &format!("/api/v1/mail/filters/{filter}"),
         json!({}),
         Some(&head),
     ));
@@ -619,7 +632,7 @@ fn every_kind_of_listed_write_takes_the_head() {
     // In the account-records store (docs/plans/account-records.md).
     let keep = json!({ "puts": [{ "scope": "passSecrets", "id": vault.id,
         "baseRevision": 0, "envelope": secret(1_791_633_600_001) }] });
-    let path = "/api/account/records";
+    let path = "/api/v1/account/records";
     assert_eq!(send(Method::POST, path, keep.clone(), None), required);
     let head = chain.keep(chain.make("passSecrets", &[(&vault.id, 1_791_633_600_001)]));
     ok(send(Method::POST, path, keep, Some(&head)));
@@ -695,7 +708,7 @@ fn a_wipe_starts_the_chain_again_with_nothing_old_in_it() {
         StatusCode::CREATED
     );
     let second = chain.keep(chain.make("mailNames", &[(&folder_id, 1)]));
-    let r = bearer(c.post(format!("{base}/api/mail/folders")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/folders")), &user.token)
         .json(
             &json!({ "id": folder, "parentId": null, "color": "#336699", "head": second,
                        "name": sealed_name(&user.binding, MailNameKind::Folder, &folder, 1) }),
@@ -704,7 +717,7 @@ fn a_wipe_starts_the_chain_again_with_nothing_old_in_it() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::CREATED);
     let third = chain.keep(chain.make("mailNames", &[(&folder_id, 1), (&label_id, 1)]));
-    let r = bearer(c.post(format!("{base}/api/mail/labels")), &user.token)
+    let r = bearer(c.post(format!("{base}/api/v1/mail/labels")), &user.token)
         .json(&json!({ "id": label, "color": "#336699", "head": third,
                        "name": sealed_name(&user.binding, MailNameKind::Label, &label, 1) }))
         .send()
@@ -731,7 +744,10 @@ fn a_wipe_starts_the_chain_again_with_nothing_old_in_it() {
     );
     setup["grant"] = json!(grant);
     let r = bearer(
-        c.post(format!("{base}/api/admin/users/{}/wipe", user.id)),
+        c.post(format!(
+            "{base}/api/v1/admin/accounts/{}/reset-keys",
+            user.id
+        )),
         &admin_token,
     )
     .json(&setup)
@@ -746,15 +762,15 @@ fn a_wipe_starts_the_chain_again_with_nothing_old_in_it() {
     // No head; the label is gone; the folder kept its place, not its name,
     // and is left out of the index until named.
     assert_eq!(
-        get(&c, &base, &user, "/api/account/head")["head"],
+        get(&c, &base, &user, "/api/v1/account/head")["head"],
         Value::Null
     );
-    let index = get(&c, &base, &user, "/api/account/index/mailNames");
+    let index = get(&c, &base, &user, "/api/v1/account/index/mailNames");
     assert_eq!(
         (index["head"].clone(), index["values"].clone()),
         (Value::Null, json!([]))
     );
-    let places = get(&c, &base, &user, "/api/mail/places");
+    let places = get(&c, &base, &user, "/api/v1/mail/places");
     assert_eq!(places["labels"], json!([]));
     assert_eq!(places["folders"][0]["id"], json!(folder));
     assert_eq!(places["folders"][0]["name"], Value::Null);
@@ -771,7 +787,7 @@ fn a_wipe_starts_the_chain_again_with_nothing_old_in_it() {
     );
     let second = chain.keep(chain.make("mailNames", &[(&folder_id, 1)]));
     let r = bearer(
-        c.patch(format!("{base}/api/mail/folders/{folder}")),
+        c.patch(format!("{base}/api/v1/mail/folders/{folder}")),
         &user.token,
     )
     .json(
@@ -782,7 +798,7 @@ fn a_wipe_starts_the_chain_again_with_nothing_old_in_it() {
     .unwrap();
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
     assert_eq!(
-        get(&c, &base, &user, "/api/account/index/mailNames"),
+        get(&c, &base, &user, "/api/v1/account/index/mailNames"),
         json!({ "head": second, "values": [[folder_id, 1]], "basis": null })
     );
     purge_accounts(&c, &base, &[&user]);
@@ -824,7 +840,7 @@ fn two_heads_made_on_one_predecessor_at_once_one_wins() {
                     scope.spawn(move || {
                         barrier.wait();
                         code(
-                            bearer(c.post(format!("{base}/api/contacts")), &user.token)
+                            bearer(c.post(format!("{base}/api/v1/contacts")), &user.token)
                                 .json(body)
                                 .send()
                                 .unwrap(),
@@ -841,7 +857,7 @@ fn two_heads_made_on_one_predecessor_at_once_one_wins() {
             .count();
         assert_eq!((won, lost), (1, 1), "round {round}: {statuses:?}");
         // The chain has exactly the winner's head after the first.
-        let heads = get(&c, &base, &user, "/api/account/heads?from=1");
+        let heads = get(&c, &base, &user, "/api/v1/account/heads?from=1");
         assert_eq!(heads["heads"].as_array().unwrap().len(), 2);
         purge_accounts(&c, &base, &[&user]);
     }

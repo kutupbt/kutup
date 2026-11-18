@@ -78,7 +78,7 @@ export function useTrash() {
     enabled: identity.isSuccess,
     queryFn: async (): Promise<TrashEntry[]> => {
       const me = identity.data!
-      const { data } = await api.get<{ folders: TrashFolderRow[]; files: TrashFileRow[] }>('/trash')
+      const { data } = await api.get<{ folders: TrashFolderRow[]; files: TrashFileRow[] }>('/drive/trash')
       const folders = await Promise.all(
         data.folders.map(async (row): Promise<TrashEntry> => {
           const opened = await openOwnedCollectionV1(row, me).catch(() => null)
@@ -191,7 +191,7 @@ function useTrashMutation<T>(fn: (input: T) => Promise<void>) {
         queryClient.invalidateQueries({ queryKey: ['storage'] }),
       ])
       // Purging frees quota.
-      const { data } = await api.get<{ storageUsedBytes: number }>('/user/me')
+      const { data } = await api.get<{ storageUsedBytes: number }>('/account')
       updateSession({ storageUsedBytes: data.storageUsedBytes })
     },
   })
@@ -231,7 +231,7 @@ async function placeOf(entry: TrashEntry, me: DriveIdentity, queryClient: QueryC
   if (!parentId) return atTopLevel(me.roots)
   const known = cachedFolderIndex(queryClient)?.byId.get(parentId)
   if (known?.key) return inFolder(known)
-  const { data } = await api.get<CollectionRowWithTimes>(`/collections/${parentId}`)
+  const { data } = await api.get<CollectionRowWithTimes>(`/drive/collections/${parentId}`)
   const parent = await openRow(data, me)
   return parent.key ? inFolder(parent) : null
 }
@@ -273,7 +273,7 @@ export async function restoreEntry(
   ask?: AskRestoreName,
 ): Promise<void> {
   if (typeof entry === 'string') {
-    await api.post(`/trash/${entry}/restore`)
+    await api.post(`/drive/trash/${entry}/restore`)
     return
   }
   const name = entry.name
@@ -282,7 +282,7 @@ export async function restoreEntry(
     top && name ? await nameFieldsIn(atTopLevel(me.roots), name) : undefined
   for (let attempt = 0; ; attempt++) {
     try {
-      await api.post(`/trash/${entry.id}/restore`, body)
+      await api.post(`/drive/trash/${entry.id}/restore`, body)
       // A rename it came back with is the file's newest metadata.
       if (entry.type === 'file' && typeof body?.metadataRevision === 'number') {
         await acceptFileMetadata(entry.id, body.metadataRevision).catch(() => undefined)
@@ -321,12 +321,12 @@ export function useRestore(ask?: AskRestoreName) {
 
 export function usePurge() {
   return useTrashMutation(async (id: string) => {
-    await api.delete(`/trash/${id}`)
+    await api.delete(`/drive/trash/${id}`)
   })
 }
 
 export function useEmptyTrash() {
   return useTrashMutation(async (_: void) => {
-    await api.delete('/trash')
+    await api.delete('/drive/trash')
   })
 }

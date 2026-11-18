@@ -24,13 +24,13 @@ pub struct ContentHashRequest {
     pub content_hash: String,
 }
 
-/// `PUT /api/files/{id}/content-hash` — what a file's content is recognised
+/// `PUT /api/v1/drive/files/{id}/content-hash` — what a file's content is recognised
 /// by in its folder, recorded once the upload has read it all. Whoever can
 /// write the folder (or edit the file shared by itself).
 #[utoipa::path(
     put,
-    path = "/api/files/{id}/content-hash",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/content-hash",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = ContentHashRequest,
@@ -86,15 +86,15 @@ pub struct AvailableHashes {
     pub available: Vec<String>,
 }
 
-/// `POST /api/collections/{id}/available-hashes` — which of these names are
+/// `POST /api/v1/drive/collections/{id}/available-hashes` — which of these names are
 /// free in the folder (Proton Drive's `checkAvailableHashes`): "Keep both"
 /// and a restore into a taken name pick `name (n)` against the server, not a
 /// listing that may be stale. Whoever can write the folder, ten at a time,
 /// rate-limited per account; it tells no more than listing the folder does.
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/available-hashes",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/available-hashes",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Folder id")),
     request_body = AvailableHashesRequest,
@@ -115,12 +115,12 @@ pub async fn available_hashes(
     Ok(Json(AvailableHashes { available }).into_response())
 }
 
-/// `POST /api/drive/top-level-available-hashes` — the same among the
+/// `POST /api/v1/drive/top-level-available-hashes` — the same among the
 /// account's top-level folders.
 #[utoipa::path(
     post,
-    path = "/api/drive/top-level-available-hashes",
-    tag = "collections",
+    path = "/api/v1/drive/top-level-available-hashes",
+    tag = "drive",
     security(("BearerAuth" = [])),
     request_body = AvailableHashesRequest,
     responses((status = 200, description = "The free ones", body = AvailableHashes))

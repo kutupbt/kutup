@@ -62,7 +62,7 @@ pub struct DrivePerson {
     /// Their address now, to show (`user@server`).
     pub account: String,
     /// On this server; the keys below are then filled in. For someone on
-    /// another server, look them up by id (`/api/users/by-id`).
+    /// another server, look them up by id (`/api/v1/accounts/by-id`).
     pub local: bool,
     pub account_incarnation_id: Option<String>,
     /// Their Drive HPKE key, to seal them your profile key.
@@ -208,12 +208,12 @@ async fn store(
     Ok(())
 }
 
-/// `GET /api/drive/people` — everyone you share a folder with or who
+/// `GET /api/v1/drive/people` — everyone you share a folder with or who
 /// shares one with you, with what you need to exchange profile keys, and
 /// the keys exchanged so far.
 #[utoipa::path(
     get,
-    path = "/api/drive/people",
+    path = "/api/v1/drive/people",
     tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "People you share with", body = DrivePeopleResponse))
@@ -322,12 +322,12 @@ pub async fn list_people(
     Ok(Json(DrivePeopleResponse { people }))
 }
 
-/// `PUT /api/drive/profile-keys` — give someone you share a folder with
+/// `PUT /api/v1/drive/profile-keys` — give someone you share a folder with
 /// (either way round) your profile key. Delivered to their server when
 /// they are on another one; `404` when there is no share between you.
 #[utoipa::path(
     put,
-    path = "/api/drive/profile-keys",
+    path = "/api/v1/drive/profile-keys",
     tag = "drive",
     security(("BearerAuth" = [])),
     request_body = PutProfileKeyRequest,
@@ -467,7 +467,7 @@ pub async fn put_profile_key(
 #[utoipa::path(
     put,
     path = "/api/fed/drive/profile-keys",
-    tag = "drive federation",
+    tag = "drive.federation",
     request_body = FederatedProfileKey,
     responses(
         (status = 200, description = "Stored"),

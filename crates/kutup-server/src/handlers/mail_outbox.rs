@@ -26,10 +26,10 @@ fn id_of(value: &str) -> AppResult<Uuid> {
     Uuid::parse_str(value).map_err(|_| AppError::not_found("not found"))
 }
 
-/// `GET /api/mail/outbox/{id}` — how a held send went.
+/// `GET /api/v1/mail/outbox/{id}` — how a held send went.
 #[utoipa::path(
     get,
-    path = "/api/mail/outbox/{id}",
+    path = "/api/v1/mail/outbox/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "The held send")),
@@ -75,11 +75,11 @@ pub async fn status(
     }))
 }
 
-/// `POST /api/mail/outbox/{id}/cancel` — Undo: the send does not go, its
+/// `POST /api/v1/mail/outbox/{id}/cancel` — Undo: the send does not go, its
 /// draft stays. 409 once it has gone out.
 #[utoipa::path(
     post,
-    path = "/api/mail/outbox/{id}/cancel",
+    path = "/api/v1/mail/outbox/{id}/cancel",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "The held send")),

@@ -58,7 +58,7 @@ export function useServerName() {
 export function useAdminUsers() {
   return useQuery({
     queryKey: usersKey,
-    queryFn: async () => (await api.get<UserRow[]>('/admin/users')).data,
+    queryFn: async () => (await api.get<UserRow[]>('/admin/accounts')).data,
   })
 }
 
@@ -90,7 +90,7 @@ async function temporaryPassword(tempPassword: string, auth: { grant: string } |
  */
 async function resetGrant(id: string, adminPassword: string): Promise<string> {
   const grant = await accountGrant(adminPassword, 'adminReset')
-  const { data } = await api.post<{ grant: string }>(`/admin/users/${encodeURIComponent(id)}/reset-grant`, { grant })
+  const { data } = await api.post<{ grant: string }>(`/admin/accounts/${encodeURIComponent(id)}/reset-grant`, { grant })
   return data.grant
 }
 
@@ -102,7 +102,7 @@ export interface CreateUserInput {
 
 export function useCreateUser() {
   return useAdminMutation(async ({ username, tempPassword, storageQuotaBytes }: CreateUserInput) => {
-    await api.post('/admin/users', { username, ...(await temporaryPassword(tempPassword, null)), storageQuotaBytes })
+    await api.post('/admin/accounts', { username, ...(await temporaryPassword(tempPassword, null)), storageQuotaBytes })
   })
 }
 
@@ -120,13 +120,13 @@ export type UserPatch = Partial<{
 
 export function useUpdateUser() {
   return useAdminMutation(async ({ id, patch }: { id: string; patch: UserPatch }) => {
-    await api.put(`/admin/users/${encodeURIComponent(id)}`, patch)
+    await api.put(`/admin/accounts/${encodeURIComponent(id)}`, patch)
   })
 }
 
 export function useForceDisable2fa() {
   return useAdminMutation(async (id: string) => {
-    await api.delete(`/admin/users/${encodeURIComponent(id)}/2fa`)
+    await api.delete(`/admin/accounts/${encodeURIComponent(id)}/2fa`)
   })
 }
 
@@ -140,7 +140,7 @@ export interface ResetInput {
 export function useRotateTempPassword() {
   return useAdminMutation(async ({ id, tempPassword, adminPassword }: ResetInput) => {
     const grant = await resetGrant(id, adminPassword.take())
-    await api.post(`/admin/users/${encodeURIComponent(id)}/rotate-temp-password`, {
+    await api.post(`/admin/accounts/${encodeURIComponent(id)}/rotate-temp-password`, {
       grant,
       ...(await temporaryPassword(tempPassword, { grant })),
     })
@@ -150,21 +150,21 @@ export function useRotateTempPassword() {
 export function useWipeUser() {
   return useAdminMutation(async ({ id, tempPassword, adminPassword }: ResetInput) => {
     const grant = await resetGrant(id, adminPassword.take())
-    await api.post(`/admin/users/${encodeURIComponent(id)}/wipe`, { grant, ...(await temporaryPassword(tempPassword, { grant })) })
+    await api.post(`/admin/accounts/${encodeURIComponent(id)}/reset-keys`, { grant, ...(await temporaryPassword(tempPassword, { grant })) })
   })
 }
 
 /** Closes the account: deleted after the waiting period unless kept. */
 export function useCloseUser() {
   return useAdminMutation(async (id: string) => {
-    await api.post(`/admin/users/${encodeURIComponent(id)}/close`)
+    await api.post(`/admin/accounts/${encodeURIComponent(id)}/close`)
   })
 }
 
 /** Sets (or, with `reference` null, clears) a legal hold. */
 export function useLegalHold() {
   return useAdminMutation(async ({ id, reference }: { id: string; reference: string | null }) => {
-    const path = `/admin/users/${encodeURIComponent(id)}/legal-hold`
+    const path = `/admin/accounts/${encodeURIComponent(id)}/legal-hold`
     if (reference === null) await api.delete(path)
     else await api.put(path, { reference })
   })
@@ -172,7 +172,7 @@ export function useLegalHold() {
 
 export function useDeleteUser() {
   return useAdminMutation(async (id: string) => {
-    await api.delete(`/admin/users/${encodeURIComponent(id)}`)
+    await api.delete(`/admin/accounts/${encodeURIComponent(id)}`)
   })
 }
 
@@ -286,7 +286,7 @@ export function useRegistrationCodeUses(id: string | null) {
 export function useUserRegistrationCode(accountId: string) {
   return useQuery({
     queryKey: [...usersKey, accountId, 'registration-code'],
-    queryFn: async () => (await api.get<SignedUpWith | null>(`/admin/users/${accountId}/registration-code`)).data,
+    queryFn: async () => (await api.get<SignedUpWith | null>(`/admin/accounts/${accountId}/registration-code`)).data,
   })
 }
 
@@ -362,7 +362,7 @@ export function usePeerEvidence(domain: string | null) {
 
 export type ReportReason = 'phishing' | 'malware' | 'illegal' | 'abuse' | 'other'
 
-/** One report on a public link (`GET /api/admin/reports`). */
+/** One report on a public link (`GET /api/v1/admin/reports`). */
 export interface LinkReport {
   id: string
   reason: ReportReason
@@ -446,13 +446,13 @@ export type BlockReason = 'legal_order' | 'abuse' | 'other'
 /** Blocks a public link: 451 for a legal order, 410 otherwise; its open reports close. */
 export function useBlockLink() {
   return useAdminMutation(async ({ shareId, reason, reference }: { shareId: string; reason: BlockReason; reference: string }) => {
-    await api.post(`/admin/shares/${encodeURIComponent(shareId)}/block`, { reason, reference: reference.trim() || undefined })
+    await api.post(`/admin/public-links/${encodeURIComponent(shareId)}/block`, { reason, reference: reference.trim() || undefined })
   })
 }
 
 export function useUnblockLink() {
   return useAdminMutation(async (shareId: string) => {
-    await api.delete(`/admin/shares/${encodeURIComponent(shareId)}/block`)
+    await api.delete(`/admin/public-links/${encodeURIComponent(shareId)}/block`)
   })
 }
 

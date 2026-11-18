@@ -139,10 +139,10 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
     }))
 }
 
-/// `GET /api/mail/settings`.
+/// `GET /api/v1/mail/settings`.
 #[utoipa::path(
     get,
-    path = "/api/mail/settings",
+    path = "/api/v1/mail/settings",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The account's mail settings", body = MailSettings))
@@ -183,10 +183,10 @@ pub struct UpdateMailSettings {
     pub keep_moved_sent: Option<bool>,
 }
 
-/// `PATCH /api/mail/settings`.
+/// `PATCH /api/v1/mail/settings`.
 #[utoipa::path(
     patch,
-    path = "/api/mail/settings",
+    path = "/api/v1/mail/settings",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = UpdateMailSettings,
@@ -340,11 +340,11 @@ pub struct EmptyMailFolder {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/empty` — deletes everything in Trash or Spam for
+/// `POST /api/v1/mail/messages/empty` — deletes everything in Trash or Spam for
 /// good (Proton's "Delete all"), freeing its storage.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/empty",
+    path = "/api/v1/mail/messages/empty",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = EmptyMailFolder,

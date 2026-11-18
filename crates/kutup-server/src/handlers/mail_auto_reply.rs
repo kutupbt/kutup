@@ -113,10 +113,10 @@ async fn current(state: &AppState, user_id: Uuid) -> AppResult<AutoReply> {
     })
 }
 
-/// `GET /api/mail/auto-reply`.
+/// `GET /api/v1/mail/auto-reply`.
 #[utoipa::path(
     get,
-    path = "/api/mail/auto-reply",
+    path = "/api/v1/mail/auto-reply",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "The account's auto-reply", body = AutoReply))
@@ -132,11 +132,11 @@ fn minute(value: Option<i16>) -> AppResult<i16> {
         .ok_or_else(|| AppError::bad_request("times are minutes after midnight, 0 to 1439"))
 }
 
-/// `PUT /api/mail/auto-reply` — saves it whole; whoever was answered may be
+/// `PUT /api/v1/mail/auto-reply` — saves it whole; whoever was answered may be
 /// answered again.
 #[utoipa::path(
     put,
-    path = "/api/mail/auto-reply",
+    path = "/api/v1/mail/auto-reply",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = AutoReplySettings,

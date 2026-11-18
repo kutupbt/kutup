@@ -11,7 +11,7 @@ async function saveProfileName(context: BrowserContext, name: string): Promise<P
   const field = page.getByTestId('account-profile-name')
   await expect(field).toBeVisible({ timeout: 60_000 })
   await field.fill(name)
-  const saved = page.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/chat/profile')
+  const saved = page.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/chat/profile')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   expect((await saved).status()).toBeLessThan(300)
   await expect(page.getByText('Profile saved')).toBeVisible()
@@ -20,7 +20,7 @@ async function saveProfileName(context: BrowserContext, name: string): Promise<P
 
 /** Waits until this Drive has handed its profile key to the people it shares with. */
 function profileKeySent(page: Page) {
-  return page.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/drive/profile-keys', { timeout: 60_000 })
+  return page.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/drive/profile-keys', { timeout: 60_000 })
 }
 
 // docs/plans/chat-crypto-move.md: the profile is sealed and opened by the

@@ -508,7 +508,7 @@ pub async fn rate_limit_fed_users(
     .await
 }
 
-/// 30/min/IP — `/api/users/by-address/{address}`.
+/// 30/min/IP — `/api/v1/accounts/by-address/{address}`.
 pub async fn rate_limit_user_lookup(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,
@@ -517,7 +517,7 @@ pub async fn rate_limit_user_lookup(
     limit(addr, &ratelimit::USER_LOOKUP, None, req, next).await
 }
 
-/// 10/hr/IP — `/api/auth/register`.
+/// 10/hr/IP — `/api/v1/auth/register`.
 pub async fn rate_limit_register(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,
@@ -544,7 +544,7 @@ pub async fn rate_limit_csp_reports(
     limit(addr, &ratelimit::CSP_REPORTS, None, req, next).await
 }
 
-/// 120/min/IP — every `/api/admin/*` route.
+/// 120/min/IP — every `/api/v1/admin/*` route.
 pub async fn rate_limit_admin(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,

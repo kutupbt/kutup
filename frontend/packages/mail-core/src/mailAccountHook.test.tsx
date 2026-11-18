@@ -22,7 +22,7 @@ vi.mock('@kutup/session/client', () => ({
       if (path === '/mail/addresses') {
         return Promise.resolve({ data: [{ id: 'a', address: 'ada@kutup.test', state: 'active', keys: [{}], keyList: { data: 'd', signature: 's' } }] })
       }
-      if (path === '/user/me') return Promise.resolve({ data: { server: 'kutup.test', accountId: 'me' } })
+      if (path === '/account') return Promise.resolve({ data: { server: 'kutup.test', accountId: 'me' } })
       return Promise.resolve({ data: null })
     },
   },

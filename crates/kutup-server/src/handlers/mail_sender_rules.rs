@@ -28,10 +28,10 @@ fn kind(value: &str) -> AppResult<Kind> {
     Kind::parse(value).ok_or_else(|| AppError::bad_request("kind is spam, block or allow"))
 }
 
-/// `GET /api/mail/sender-rules` — the account's block, spam and allow entries.
+/// `GET /api/v1/mail/sender-rules` — the account's block, spam and allow entries.
 #[utoipa::path(
     get,
-    path = "/api/mail/sender-rules",
+    path = "/api/v1/mail/sender-rules",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Entries, newest first", body = [MailSenderRule]))
@@ -66,11 +66,11 @@ pub struct SetMailSenderRules {
     pub kind: String,
 }
 
-/// `POST /api/mail/sender-rules` — puts addresses or domains on a list; one
+/// `POST /api/v1/mail/sender-rules` — puts addresses or domains on a list; one
 /// already on another list moves to this one (Proton's overwrite).
 #[utoipa::path(
     post,
-    path = "/api/mail/sender-rules",
+    path = "/api/v1/mail/sender-rules",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = SetMailSenderRules,
@@ -146,10 +146,10 @@ pub struct UpdateMailSenderRule {
     pub kind: String,
 }
 
-/// `PATCH /api/mail/sender-rules/{id}` — moves an entry to another list.
+/// `PATCH /api/v1/mail/sender-rules/{id}` — moves an entry to another list.
 #[utoipa::path(
     patch,
-    path = "/api/mail/sender-rules/{id}",
+    path = "/api/v1/mail/sender-rules/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Entry id")),
@@ -185,10 +185,10 @@ pub struct DeleteMailSenderRules {
     pub ids: Vec<String>,
 }
 
-/// `POST /api/mail/sender-rules/delete` — removes entries ("Unblock").
+/// `POST /api/v1/mail/sender-rules/delete` — removes entries ("Unblock").
 #[utoipa::path(
     post,
-    path = "/api/mail/sender-rules/delete",
+    path = "/api/v1/mail/sender-rules/delete",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = DeleteMailSenderRules,

@@ -332,12 +332,12 @@ fn verify_envelope(
         .map_err(|_| AppError::bad_request("the file share does not match the file or the person"))
 }
 
-/// `POST /api/files/{id}/share` — share a file with someone here, or change
+/// `POST /api/v1/drive/files/{id}/share` — share a file with someone here, or change
 /// what they may do. Owner only.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/share",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/share",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = ShareFileRequest,
@@ -421,11 +421,11 @@ pub struct FileSharingSettings {
     pub editors_can_share: bool,
 }
 
-/// `PUT /api/files/{id}/sharing` — the owner's sharing settings for a file.
+/// `PUT /api/v1/drive/files/{id}/sharing` — the owner's sharing settings for a file.
 #[utoipa::path(
     put,
-    path = "/api/files/{id}/sharing",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/sharing",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = FileSharingSettings,
@@ -501,11 +501,11 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
         .collect())
 }
 
-/// `GET /api/files/{id}/access` — who the file itself is shared with. Owner only.
+/// `GET /api/v1/drive/files/{id}/access` — who the file itself is shared with. Owner only.
 #[utoipa::path(
     get,
-    path = "/api/files/{id}/access",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/access",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     responses((status = 200, description = "The file's people", body = FileAccess))
@@ -770,12 +770,12 @@ async fn store_envelopes(
     Ok(())
 }
 
-/// `PUT /api/files/{id}/shares` — re-seal the shares left at an older key
+/// `PUT /api/v1/drive/files/{id}/shares` — re-seal the shares left at an older key
 /// generation (someone else moved the file to a new key). Owner only.
 #[utoipa::path(
     put,
-    path = "/api/files/{id}/shares",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/shares",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = ResealRequest,
@@ -809,14 +809,14 @@ pub async fn reseal(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/files/{id}/rotate` — remove people from a shared file: the file
+/// `POST /api/v1/drive/files/{id}/rotate` — remove people from a shared file: the file
 /// moves to a new key (as a folder rotation does), re-sealed for everyone who
 /// stays, all at once or not at all. Owner only; the request must name
 /// exactly the file's current people.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/rotate",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/rotate",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = RotateFileAccessRequest,
@@ -968,13 +968,13 @@ pub async fn rotate(
     Ok(Json(file_access_of(&state, file_id, next, true).await?).into_response())
 }
 
-/// `GET /api/shared-files` — files shared with you by themselves, with the
+/// `GET /api/v1/drive/shared-with-me` — files shared with you by themselves, with the
 /// envelope and the owner's identity keys to open and check them. A file in
 /// the trash is left out.
 #[utoipa::path(
     get,
-    path = "/api/shared-files",
-    tag = "files",
+    path = "/api/v1/drive/shared-with-me",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Files shared with you", body = Vec<SharedFile>))
 )]
@@ -1084,14 +1084,14 @@ pub struct PendingFileShare {
     pub collection_id: Uuid,
 }
 
-/// `GET /api/file-shares/pending` — your files whose shares wait for you:
+/// `GET /api/v1/drive/shared-with-me/pending` — your files whose shares wait for you:
 /// someone else moved the file to a new key, or the folder moved past the
 /// key the file is wrapped at. Your app re-keys the file if needed and
-/// re-seals the shares (`PUT /api/files/{id}/shares`).
+/// re-seals the shares (`PUT /api/v1/drive/files/{id}/shares`).
 #[utoipa::path(
     get,
-    path = "/api/file-shares/pending",
-    tag = "files",
+    path = "/api/v1/drive/shared-with-me/pending",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Files with shares to bring up to date", body = Vec<PendingFileShare>))
 )]
@@ -1144,15 +1144,15 @@ pub struct SharedByMeItem {
     pub links: i64,
 }
 
-/// `GET /api/shared-by-me` — what you share: your folders shared with people
+/// `GET /api/v1/drive/shared-by-me` — what you share: your folders shared with people
 /// (here or on other servers) or by link, and your files shared by
 /// themselves, with how many of each. Names stay encrypted; the app decrypts
 /// them from your own folder listings. Folders and files in the trash are
 /// left out.
 #[utoipa::path(
     get,
-    path = "/api/shared-by-me",
-    tag = "files",
+    path = "/api/v1/drive/shared-by-me",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "What you share", body = Vec<SharedByMeItem>))
 )]

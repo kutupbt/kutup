@@ -35,10 +35,10 @@ pub struct HeadView {
     head: Option<String>,
 }
 
-/// `GET /api/account/head` — the account's newest head.
+/// `GET /api/v1/account/head` — the account's newest head.
 #[utoipa::path(
     get,
-    path = "/api/account/head",
+    path = "/api/v1/account/head",
     tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, body = HeadView))
@@ -69,13 +69,13 @@ pub struct HeadsView {
     next: Option<i64>,
 }
 
-/// `GET /api/account/heads?from=n` — the chain from `n` toward the newest, a
+/// `GET /api/v1/account/heads?from=n` — the chain from `n` toward the newest, a
 /// page at a time, for a device to check that the current head descends from
 /// its last own write. `410` with `code: "tooOld"` when `n` is more than
 /// `RETENTION` heads behind the newest.
 #[utoipa::path(
     get,
-    path = "/api/account/heads",
+    path = "/api/v1/account/heads",
     tag = "account",
     security(("BearerAuth" = [])),
     params(HeadsQuery),
@@ -117,7 +117,7 @@ pub struct IndexView {
     #[schema(value_type = Vec<Vec<serde_json::Value>>)]
     values: Vec<(String, i64)>,
     /// Before the account's first head: what it holds, to start the chain on
-    /// (`POST /api/account/head`).
+    /// (`POST /api/v1/account/head`).
     basis: Option<String>,
 }
 
@@ -130,12 +130,12 @@ pub struct StartHead {
     basis: String,
 }
 
-/// `POST /api/account/head` — starts the account's chain: its first head,
+/// `POST /api/v1/account/head` — starts the account's chain: its first head,
 /// made on the `basis` an index answered with. `409 head_conflict` when the
 /// account has a head already or a listed write landed since (read again).
 #[utoipa::path(
     post,
-    path = "/api/account/head",
+    path = "/api/v1/account/head",
     tag = "account",
     security(("BearerAuth" = [])),
     request_body = StartHead,
@@ -159,14 +159,14 @@ pub async fn start(
     Ok(StatusCode::CREATED.into_response())
 }
 
-/// `GET /api/account/index/{scope}` — a scope's `(id, revision)` pairs and
+/// `GET /api/v1/account/index/{scope}` — a scope's `(id, revision)` pairs and
 /// the head read with them (one snapshot). Scopes: `contacts`, `mailNames`,
 /// `pins`, `passSecrets`, `chatGroups`, `chatContacts`, `photosLibrary`,
 /// `chatAttachments`, `contactGroups`, `calendarSettings`, `joinedMeetings`;
 /// any other is `404` (a client treats it as a scope with no index yet).
 #[utoipa::path(
     get,
-    path = "/api/account/index/{scope}",
+    path = "/api/v1/account/index/{scope}",
     tag = "account",
     security(("BearerAuth" = [])),
     params(("scope" = String, Path, description = "contacts, mailNames, pins, passSecrets, chatGroups, chatContacts, photosLibrary, chatAttachments, contactGroups, calendarSettings or joinedMeetings")),

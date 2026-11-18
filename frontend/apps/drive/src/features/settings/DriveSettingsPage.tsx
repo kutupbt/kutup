@@ -24,11 +24,11 @@ export function DriveSettingsPage() {
   const queryClient = useQueryClient()
   const me = useQuery({
     queryKey: ['me'],
-    queryFn: async () => (await api.get<{ versionRetentionDays: number }>('/user/me')).data,
+    queryFn: async () => (await api.get<{ versionRetentionDays: number }>('/account')).data,
   })
   const retention = useMutation({
     mutationFn: async (days: number) => {
-      await api.patch('/user/me', { versionRetentionDays: days })
+      await api.patch('/account', { versionRetentionDays: days })
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['me'] }),
   })

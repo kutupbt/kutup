@@ -176,7 +176,7 @@ api.interceptors.request.use(async (config) => {
  * Origin are its credential).
  */
 const SIGN_IN_CALL =
-  /(?:^|\/api)\/auth\/(?:login\/(?:start|finish|2fa)|register|opaque\/register\/(?:start|finish)|complete-setup|recover\/(?:preflight|grant)|refresh|logout|registration-code\/check|settings|forks\/consume)$/
+  /(?:^|\/api\/v1)\/auth\/(?:login\/(?:start|finish|2fa)|register|opaque\/register\/(?:start|finish)|complete-setup|recover\/(?:preflight|grant)|refresh|logout|registration-code\/check|settings|forks\/consume)$/
 
 // Auto-refresh on 401
 let isRefreshing = false
@@ -232,7 +232,7 @@ api.interceptors.response.use(
     // refreshing would end this origin's other tabs when there is no
     // session, or retry with another account's token when there is one.
     // Signed-in password checks restart themselves (reauth.ts). Every other
-    // call, /api/auth/sessions and /api/auth/forks included, refreshes.
+    // call, /api/v1/auth/sessions and /api/v1/auth/forks included, refreshes.
     const code = (error.response?.data as { code?: unknown } | undefined)?.code
     const skipRefresh =
       SIGN_IN_CALL.test((originalRequest.url ?? '').split('?')[0]!) ||

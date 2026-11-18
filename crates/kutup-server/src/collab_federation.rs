@@ -1214,7 +1214,7 @@ pub async fn versions_patch(
 }
 
 /// `POST /api/fed/drive/collab/claim-seed` — whether the calling server's
-/// editor seeds a never-saved document (as `/api/files/{id}/claim-seed`).
+/// editor seeds a never-saved document (as `/api/v1/drive/files/{id}/claim-seed`).
 pub async fn claim_seed(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1714,7 +1714,7 @@ fn file_route(share_id: &str) -> AppResult<RemoteRoute> {
     })
 }
 
-/// `GET /api/drive/federation/shares/{shareId}/files/{fileId}/collab/ws` —
+/// `GET /api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}/collab/ws` —
 /// live editing of a file in a folder on another server, through this one.
 pub async fn ws_folder_file(
     State(state): State<AppState>,
@@ -1733,7 +1733,7 @@ pub async fn ws_folder_file(
     .await
 }
 
-/// `GET /api/drive/federation/file-shares/{id}/collab/ws` — live editing of a
+/// `GET /api/v1/drive/federation/file-shares/{id}/collab/ws` — live editing of a
 /// file shared by itself from another server, through this one.
 pub async fn ws_shared_file(
     State(state): State<AppState>,
@@ -2220,9 +2220,9 @@ async fn relay_claim_seed(
     Ok(Json(claimed).into_response())
 }
 
-// Routes: the same suffixes as `/api/files/{id}/…`, under a remote file's
-// base (`/api/drive/federation/shares/{shareId}/files/{fileId}` or
-// `/api/drive/federation/file-shares/{id}`).
+// Routes: the same suffixes as `/api/v1/drive/files/{id}/…`, under a remote file's
+// base (`/api/v1/drive/federation/folder-shares/{shareId}/files/{fileId}` or
+// `/api/v1/drive/federation/file-shares/{id}`).
 
 pub async fn folder_versions(
     State(s): State<AppState>,

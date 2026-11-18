@@ -40,7 +40,10 @@ export function appUrl(app: App, path = '/', server: Server = 'primary'): string
  */
 export function apiUrl(path: string, server: Server = 'primary'): string {
   const base = (server === 'primary' ? process.env.E2E_API_URL : process.env.E2E_SECONDARY_API_URL) ?? appOrigin('account', server)
-  return `${base.replace(/\/+$/, '')}/api${path.startsWith('/') ? path : `/${path}`}`
+  const rel = path.startsWith('/') ? path : `/${path}`
+  // Health is unversioned (docs/plans/api-surface.md §1.2); the rest is v1.
+  const version = rel === '/health' || rel.startsWith('/health/') ? '' : '/v1'
+  return `${base.replace(/\/+$/, '')}/api${version}${rel}`
 }
 
 /** The federation domain of a server, when E2E_*_DOMAIN names it. */
@@ -183,7 +186,7 @@ function learnAccountId(page: Page, account: Account): () => Promise<void> {
   const answers: Promise<void>[] = []
   page.on('response', (response) => {
     const path = new URL(response.url()).pathname
-    if (!response.ok() || !(path.endsWith('/api/auth/login/finish') || path.endsWith('/api/auth/register'))) return
+    if (!response.ok() || !(path.endsWith('/api/v1/auth/login/finish') || path.endsWith('/api/v1/auth/register'))) return
     answers.push(
       response.json().then(
         (body: { accountId?: unknown }) => {

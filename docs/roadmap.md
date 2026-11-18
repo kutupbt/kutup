@@ -23,7 +23,7 @@ The bar for the first `v*` tag:
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
 5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it in both responsive web layouts. See `docs/api.md` → Admin.
 6. **Basic abuse protection.** ✅ Shipped: per-IP limits on login/preflight/register/recovery/federation/admin (env-overridable `RATE_LIMIT_*`), per-account login lockout (`LOGIN_LOCKOUT_*`), per-token TOTP blocking, and proxy-aware client-IP resolution (X-Real-IP). See `docs/self-hosting.md`.
-7. **Documentation tracks reality.** ✅ Shipped: full docs sweep against the shipped code (stale Go-stack references scrubbed, env vars + endpoints verified), and every HTTP operation is annotated with `#[utoipa::path]` so `GET /api-docs/openapi.json` lists the complete API (a coverage test in `openapi.rs` keeps it honest). Interactive Swagger UI remains deferred (see below).
+7. **Documentation tracks reality.** ✅ Shipped: full docs sweep against the shipped code (stale Go-stack references scrubbed, env vars + endpoints verified), and every HTTP operation is annotated with `#[utoipa::path]` so `GET /api/v1/openapi.json` lists the complete API (a coverage test in `openapi.rs` keeps it honest). Interactive Swagger UI remains deferred (see below).
 
 Items below are organized by **whether they block v1** vs. whether they can ship in a subsequent release.
 
@@ -317,7 +317,7 @@ position doesn't count.
 
 ### Security log: sign-ins and 2FA events (Proton parity)
 
-`account_security_events` (`GET /api/user/security-events`) records what
+`account_security_events` (`GET /api/v1/account/security-events`) records what
 changes an account's sign-in: password changes, recoveries, setup rotations
 and admin resets. Proton's security log also lists sign-ins (successful and
 failed) and two-step changes. Next kinds: `signIn`, `totpOn`, `totpOff`,
@@ -556,7 +556,7 @@ names unambiguous):
 | # | Slice | Gate |
 |---|---|---|
 | 1 | **Spike**: `libsignal-protocol` + `spqr` on wasm32 | ✅ **GO** (2026-07-12, `spikes/libsignal-wasm/`) — compiles for the browser target on stable, full PQXDH+Triple-Ratchet round-trip executes in wasm; web client shares `kutup-chat-core` |
-| 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
+| 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/v1/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
 | 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
 | 4 | Web contact privacy and trust | **Implemented and two-server verified.** Account-signed complete manifest history, durable gray-TOFU/green-QR/red-quarantine state, explicit account-incarnation replacement, message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block, no identified fallback, and the shared typed XChaCha profile envelope are restart- and two-server-browser verified. |
@@ -919,7 +919,7 @@ albums) is the second reference.
   Storage pages in both apps show the shared total. **Done (2026-10-09):**
   Chat joined the same pool; there is no separate Chat quota any more
   (migration `081_one_storage_pool` folded Chat usage into it). The Account
-  app's Settings → Storage page (`GET /api/user/storage`) shows the pool as a
+  app's Settings → Storage page (`GET /api/v1/account/storage`) shows the pool as a
   ring, largest category first (file kinds worked out in the browser from
   decrypted names, then trash, earlier versions, previews, Chat attachments,
   Chat history, uploads in progress). "Free up space" empties the trash,
@@ -1271,7 +1271,7 @@ its offset there.
 
 ### Drive · resumable new versions (Replace above 2 GiB)
 
-Done (October 2026): a version goes over tus (`POST /api/uploads` with
+Done (October 2026): a version goes over tus (`POST /api/v1/drive/uploads` with
 `versionOf`, docs/api.md), resumable and of any size, as Proton Drive's
 revisions; its metadata and content hash land with it. Still by multipart
 (2 GiB): versions into folders on other servers.
@@ -1314,8 +1314,8 @@ Done (October 2026): each person in the file and folder share dialogs has a
 role menu on their row (file: Can view, Can edit; folder: Can view, Can add
 and edit, Can delete files they added) with Remove in the same menu. A
 change re-seals that person's access at the current key and the server
-updates their permission in place (`POST /api/files/:id/share`,
-`POST /api/collections/:id/share`); nobody is re-added and no key rotates.
+updates their permission in place (`POST /api/v1/drive/files/:id/share`,
+`POST /api/v1/drive/collections/:id/share`); nobody is re-added and no key rotates.
 Lowering someone stops their writes; they keep the key they already had, as
 a viewer does. The file dialog takes the role beside the address. Browser
 spec 47 covers both.
@@ -1533,7 +1533,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   - `latestVersionId` on the `GET /collections/:id/files` rows (one
     `LEFT JOIN LATERAL`) — kills the sync engine's per-file `list_versions`
     polling (its remote-change signal; `drive_files.updated_at` is never bumped).
-  - `trashRetentionDays` in `GET /api/auth/settings` — lets `kutup trash ls`
+  - `trashRetentionDays` in `GET /api/v1/auth/settings` — lets `kutup trash ls`
     show an accurate EXPIRES column on any server config (currently omitted
     rather than hardcoding 30).
 - **Web: seeding after a lost claim.** An editor that loses `claim-seed`
@@ -1557,7 +1557,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   AEAD envelopes under a derived content key — CLI restore round-trips
   CLI/sync-created files, not live-collab documents. Needs the collab
   content-key path if full parity is wanted.
-- **`kutup admin` command group.** The full `/api/admin/*` surface (users,
+- **`kutup admin` command group.** The full `/api/v1/admin/*` surface (users,
   quotas, stats, activity, settings, 2FA reset, wipe) has no CLI coverage;
   useful for self-hosters. Deliberately deferred from the improvements batch.
 
@@ -1565,7 +1565,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
 
 The Rust `kutup-server` (`crates/kutup-server`)
 generates its OpenAPI spec with `utoipa` and serves the machine-readable document at
-`GET /api-docs/openapi.json`. The Go server served an **interactive Swagger UI** at
+`GET /api/v1/openapi.json`. The Go server served an **interactive Swagger UI** at
 `/swagger/*` (`swaggo/fiber-swagger`). That route is not yet restored in Rust: the
 `utoipa-swagger-ui` crate downloads the Swagger UI bundle from GitHub in its build
 script, which breaks offline/sandboxed builds (and the rule that the server compiles

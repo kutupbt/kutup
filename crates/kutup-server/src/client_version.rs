@@ -299,6 +299,52 @@ pub async fn client_version_gate(
     next.run(req).await
 }
 
+/// What answers a path no route has (docs/plans/api-surface.md §1.3):
+/// an API version this server doesn't serve is `404 apiVersionUnsupported`
+/// (the server is older than the client), an unversioned `/api/…` path —
+/// what a client from before versions calls — is `426 clientTooOld`, and
+/// anything else is a plain `404 notFound`.
+pub async fn api_fallback(req: Request) -> Response {
+    let path = req.uri().path();
+    if let Some(rest) = path.strip_prefix("/api/v") {
+        let number: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let tail = &rest[number.len()..];
+        if !number.is_empty() && (tail.is_empty() || tail.starts_with('/')) {
+            let served = number
+                .parse::<u32>()
+                .is_ok_and(|n| API_VERSIONS.contains(&n));
+            if !served {
+                return AppError::not_found("this server does not serve that API version")
+                    .with_details(serde_json::json!({
+                        "code": "apiVersionUnsupported",
+                        "supported": API_VERSIONS,
+                    }))
+                    .into_response();
+            }
+            return AppError::not_found("not found").into_response();
+        }
+    }
+    let unversioned = path.starts_with("/api/")
+        && !path.starts_with("/api/fed/")
+        && !exempt(path)
+        && path != "/api/";
+    if unversioned {
+        let client = named_client(&req)
+            .as_deref()
+            .and_then(parse_client)
+            .map(|(client, _)| client.as_str())
+            .unwrap_or("unknown");
+        return AppError::new(StatusCode::UPGRADE_REQUIRED, "client too old")
+            .with_details(serde_json::json!({
+                "code": "clientTooOld",
+                "clientType": client,
+                "minimum": null,
+            }))
+            .into_response();
+    }
+    AppError::not_found("not found").into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

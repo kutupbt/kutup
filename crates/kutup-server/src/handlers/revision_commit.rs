@@ -2,7 +2,7 @@
 //! slice 3, "The commit, as Proton's"). A block-format upload lands as an
 //! *uploaded revision*: stored, checked and counted in quota, but not
 //! current, since the metadata commits to the manifest's digest, known only
-//! after the last block. `POST /api/files/{id}/revisions/{revisionId}/commit`
+//! after the last block. `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`
 //! brings the sealed metadata and, in one transaction, makes the revision
 //! current: a new file appears in its folder, or a new version becomes the
 //! file's content with the content it replaced kept in its history.
@@ -80,11 +80,11 @@ struct Uploaded {
     uploaded: bool,
 }
 
-/// `POST /api/files/{id}/revisions/{revisionId}/commit`
+/// `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit`
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/revisions/{revisionId}/commit",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/revisions/{revisionId}/commit",
+    tag = "drive",
     operation_id = "commitFileRevision",
     security(("BearerAuth" = [])),
     params(

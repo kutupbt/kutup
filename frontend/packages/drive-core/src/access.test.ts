@@ -84,7 +84,7 @@ describe('removing someone while others are not yet upgraded', () => {
   it('removes them too once the owner confirmed, and seals to everyone else', async () => {
     await rotateFolder(folder as never, me as never, access, removal, undefined, { members: ['old'], federatedShares: ['far'] })
     const [path, body] = http.post.mock.calls[0] as [string, { members: { accountId: string; namedShareEnvelope: string }[]; federatedShares: unknown[]; removed: Record<string, string[]> }]
-    expect(path).toBe('/collections/folder/rotate')
+    expect(path).toBe('/drive/collections/folder/rotate')
     expect(body.members).toEqual([{ accountId: 'new', namedShareEnvelope: 'sealed-to-key-new' }])
     expect(body.federatedShares).toEqual([])
     expect(body.removed).toEqual({ members: ['gone', 'old'], publicLinks: [], federatedShares: ['far'] })

@@ -75,14 +75,14 @@ pub(crate) async fn writable_folder(
     }
 }
 
-/// `POST /api/files/{id}/move` — move a file to another folder of the same
+/// `POST /api/v1/drive/files/{id}/move` — move a file to another folder of the same
 /// owner. Needs edit rights on both. The client re-seals only the file's
 /// key for the destination; a file its source folder has rotated past is
 /// re-keyed first, so no one removed from the source can follow it.
 #[utoipa::path(
     post,
-    path = "/api/files/{id}/move",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/move",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = MoveFileRequest,
@@ -190,13 +190,13 @@ pub struct MoveCollectionRequest {
     pub name_hash_generation: Option<u32>,
 }
 
-/// `POST /api/collections/{id}/move` — put a folder under another of the
+/// `POST /api/v1/drive/collections/{id}/move` — put a folder under another of the
 /// owner's folders, or at the top level. Owner only. A folder never goes
 /// into itself or anything under it.
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/move",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/move",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = MoveCollectionRequest,

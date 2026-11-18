@@ -5,7 +5,7 @@
 // sync pair is kept so callers (axios, tus-js-client, raw fetch) share one
 // accessor and a future non-web client can plug in a different base.
 
-const API_BASE = '/api'
+const API_BASE = '/api/v1'
 
 export async function resolveApiBase(): Promise<string> {
   return API_BASE

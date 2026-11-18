@@ -1,7 +1,7 @@
 //! Accounts by their permanent id (docs/plans/account-ids.md): what a client
 //! holding someone's (server, account id) asks to show them by their address
 //! now, or to read their identity again. Names reach an id only through the
-//! address lookup (`/api/users/by-address`); everything else asks by id.
+//! address lookup (`/api/v1/accounts/by-address`); everything else asks by id.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -136,7 +136,7 @@ pub(crate) fn forget_remote(server: &str, incarnation_id: &str) {
     });
 }
 
-/// `GET /api/users/by-id/{accountId}?server=` — an account by its permanent
+/// `GET /api/v1/accounts/{accountId}?server=` — an account by its permanent
 /// id: its address now (server-asserted, shown as a label) and its identity.
 /// Another server's is asked of it through federation (its pinned identity,
 /// never a URL from the query): one fetch per account at a time, whose
@@ -145,7 +145,7 @@ pub(crate) fn forget_remote(server: &str, incarnation_id: &str) {
 /// so nobody's lookups use up anyone else's.
 #[utoipa::path(
     get,
-    path = "/api/users/by-id/{accountId}",
+    path = "/api/v1/accounts/{accountId}",
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("accountId" = String, Path, description = "Permanent account id"), ByIdQuery),
@@ -261,7 +261,7 @@ async fn fetch(state: &AppState, person: &AccountRef) -> AppResult<Fetched> {
 #[utoipa::path(
     get,
     path = "/api/fed/drive/accounts/{accountId}",
-    tag = "drive federation",
+    tag = "drive.federation",
     params(("accountId" = String, Path)),
     responses(
         (status = 200, description = "The account", body = AccountLookupResponse),

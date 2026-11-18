@@ -60,7 +60,7 @@ async function federationOn(): Promise<boolean> {
   if (federationCache && federationCache.accountId === session.accountId && now - federationCache.at < FEDERATION_CHECK_MS) {
     return federationCache.on
   }
-  const { data } = await api.get<{ federation?: 'on' | 'off' }>('/user/me')
+  const { data } = await api.get<{ federation?: 'on' | 'off' }>('/account')
   const on = data.federation !== 'off'
   federationCache = { accountId: session.accountId, on, at: now }
   return on
@@ -80,20 +80,20 @@ async function ensureMayReach(server: string): Promise<void> {
 export class ApiChatTransport implements ChatTransportPort {
   async listDevices(): Promise<ChatDevice[]> {
     return api
-      .get<{ devices: ChatDevice[] }>('/chat/device')
+      .get<{ devices: ChatDevice[] }>('/chat/devices')
       .then((response) => response.data.devices)
   }
 
   async revokeDevice(deviceId: number): Promise<void> {
-    await api.delete(`/chat/device/${deviceId}`)
+    await api.delete(`/chat/devices/${deviceId}`)
   }
 
   async renameDevice(deviceId: number, name: string): Promise<void> {
-    await api.patch(`/chat/device/${deviceId}`, { name })
+    await api.patch(`/chat/devices/${deviceId}`, { name })
   }
 
   async registerDevice(request: unknown): Promise<unknown> {
-    return api.post('/chat/device', request).then((response) => response.data)
+    return api.post('/chat/devices', request).then((response) => response.data)
   }
 
   setDeviceAuth(deviceId: number, credential: string): void {
@@ -153,7 +153,7 @@ export class ApiChatTransport implements ChatTransportPort {
   /** The `session` hash this device's manifest entry carries: its sign-in, as the server works it out. */
   async fetchDeviceSession(): Promise<string> {
     return api
-      .get<{ session: string }>('/device-session')
+      .get<{ session: string }>('/account/devices/session')
       .then((response) => response.data.session)
   }
 
@@ -196,7 +196,7 @@ export class ApiChatTransport implements ChatTransportPort {
 
   async fetchSealedSenderPolicy(domain: string): Promise<unknown> {
     return api
-      .get(`/chat/sealed-sender/domains/${encodeURIComponent(domain)}/policy`)
+      .get(`/chat/sealed-sender/servers/${encodeURIComponent(domain)}/policy`)
       .then((response) => response.data)
   }
 

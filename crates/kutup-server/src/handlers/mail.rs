@@ -90,7 +90,7 @@ pub struct MailMessage {
     /// Its attached files (Proton's AttachmentsMetadata), for the list.
     pub attachments: Vec<crate::mail::headers::AttachmentMeta>,
     /// A scheduled message (folder `scheduled`): when it is sent, and its
-    /// held send, to take it back with `POST /api/mail/outbox/{id}/cancel`.
+    /// held send, to take it back with `POST /api/v1/mail/outbox/{id}/cancel`.
     #[serde(with = "time::serde::rfc3339::option")]
     pub scheduled_at: Option<OffsetDateTime>,
     pub outbox_id: Option<String>,
@@ -441,11 +441,11 @@ fn parse_cursor(value: &str, sort: Sort) -> AppResult<Cursor> {
     })
 }
 
-/// `GET /api/mail/messages?folder=&q=&before=&limit=` — one folder (or
+/// `GET /api/v1/mail/messages?folder=&q=&before=&limit=` — one folder (or
 /// Starred, or all mail), newest first, optionally searched.
 #[utoipa::path(
     get,
-    path = "/api/mail/messages",
+    path = "/api/v1/mail/messages",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(MailListQuery),
@@ -481,12 +481,12 @@ pub struct SearchIndexPage {
     pub total: Option<i64>,
 }
 
-/// `GET /api/mail/search-index` — every message of your own mailbox, newest
+/// `GET /api/v1/mail/search-index` — every message of your own mailbox, newest
 /// first, for the browser to open and index (docs/plans/mail-body-search.md;
 /// it keeps Drafts by their rows alone).
 #[utoipa::path(
     get,
-    path = "/api/mail/search-index",
+    path = "/api/v1/mail/search-index",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(SearchIndexQuery),
@@ -609,7 +609,7 @@ pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Fee
     "mail_change_floors",
 );
 
-/// `GET /api/mail/search-index/changes?since=` — what changed in your own
+/// `GET /api/v1/mail/search-index/changes?since=` — what changed in your own
 /// mailbox since `since`, for body search to keep the list rows it holds
 /// current (docs/plans/mail-body-search.md; Proton's event loop). Only
 /// changes made by transactions that have all finished are answered, so
@@ -617,7 +617,7 @@ pub(crate) const SEARCH_FEED: crate::change_feed::Feed = crate::change_feed::Fee
 /// feed is now.
 #[utoipa::path(
     get,
-    path = "/api/mail/search-index/changes",
+    path = "/api/v1/mail/search-index/changes",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(SearchChangesQuery),
@@ -876,12 +876,12 @@ pub struct SearchAddressesQuery {
     pub group: Option<String>,
 }
 
-/// `GET /api/mail/search-addresses` — what advanced search's Address can
+/// `GET /api/v1/mail/search-addresses` — what advanced search's Address can
 /// be (Proton's): your own addresses and the distribution lists you are
 /// in, or a shared mailbox's own address.
 #[utoipa::path(
     get,
-    path = "/api/mail/search-addresses",
+    path = "/api/v1/mail/search-addresses",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(SearchAddressesQuery),
@@ -1213,13 +1213,13 @@ pub struct MailReceiptSent {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/{id}/receipt` — notes that the reader sent the
+/// `POST /api/v1/mail/messages/{id}/receipt` — notes that the reader sent the
 /// read receipt the message asked for (Proton's "Send read receipt"). The
 /// client sends the receipt itself, as mail (RFC 8098), so its contents
 /// stay end to end where the original was.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/{id}/receipt",
+    path = "/api/v1/mail/messages/{id}/receipt",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Message id")),
@@ -1267,12 +1267,12 @@ pub struct UnsubscribeMailList {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/{id}/unsubscribe` — unsubscribes from the
+/// `POST /api/v1/mail/messages/{id}/unsubscribe` — unsubscribes from the
 /// message's mailing list (Proton's one-click unsubscribe), or records that
 /// the reader did, so the message says "Unsubscribed".
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/{id}/unsubscribe",
+    path = "/api/v1/mail/messages/{id}/unsubscribe",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Message id")),
@@ -1324,11 +1324,11 @@ pub async fn unsubscribe(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-/// `GET /api/mail/messages/{id}/content` — the stored message: a binary
+/// `GET /api/v1/mail/messages/{id}/content` — the stored message: a binary
 /// OpenPGP message encrypted to the address key.
 #[utoipa::path(
     get,
-    path = "/api/mail/messages/{id}/content",
+    path = "/api/v1/mail/messages/{id}/content",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Message id"), MailboxQuery),
@@ -1423,11 +1423,11 @@ pub struct UpdatedMailMessages {
     pub updated: u64,
 }
 
-/// `PATCH /api/mail/messages` — marks read or unread, stars, or files up
+/// `PATCH /api/v1/mail/messages` — marks read or unread, stars, or files up
 /// to 500 messages at once. Moving to Trash marks them read, as Proton does.
 #[utoipa::path(
     patch,
-    path = "/api/mail/messages",
+    path = "/api/v1/mail/messages",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = UpdateMailMessages,
@@ -1597,12 +1597,12 @@ pub struct SnoozeMailMessages {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/snooze` — Proton's Snooze: Inbox messages wait
+/// `POST /api/v1/mail/messages/snooze` — Proton's Snooze: Inbox messages wait
 /// in Snoozed until `until`, then come back unread; without `until`,
 /// snoozed messages come back now.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/snooze",
+    path = "/api/v1/mail/messages/snooze",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = SnoozeMailMessages,
@@ -1662,7 +1662,7 @@ pub struct BatchMailMessages {
     /// All mail is not one (Proton's select all leaves it out).
     pub place: String,
     pub seen: Option<bool>,
-    /// As in `PATCH /api/mail/messages`.
+    /// As in `PATCH /api/v1/mail/messages`.
     pub folder: Option<String>,
     pub custom_folder: Option<String>,
     #[serde(default)]
@@ -1673,12 +1673,12 @@ pub struct BatchMailMessages {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/batch` — Proton's select all: marks read or
+/// `POST /api/v1/mail/messages/batch` — Proton's select all: marks read or
 /// unread, files or labels every message in a place at once, past the
-/// loaded page; the same rules as `PATCH /api/mail/messages`.
+/// loaded page; the same rules as `PATCH /api/v1/mail/messages`.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/batch",
+    path = "/api/v1/mail/messages/batch",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = BatchMailMessages,
@@ -1763,12 +1763,12 @@ pub struct DeleteMailMessages {
     pub group: Option<String>,
 }
 
-/// `POST /api/mail/messages/delete` — deletes messages for good, only from
+/// `POST /api/v1/mail/messages/delete` — deletes messages for good, only from
 /// Trash, Spam and Drafts (elsewhere the client moves to Trash first, as
 /// Proton does). Frees their storage at once.
 #[utoipa::path(
     post,
-    path = "/api/mail/messages/delete",
+    path = "/api/v1/mail/messages/delete",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = DeleteMailMessages,
@@ -1878,12 +1878,12 @@ pub struct MailCountsQuery {
     pub conversations: bool,
 }
 
-/// `GET /api/mail/counts` — unread and total per folder, for Starred, and
+/// `GET /api/v1/mail/counts` — unread and total per folder, for Starred, and
 /// for each of the account's folders (`folder:<id>`) and labels
 /// (`label:<id>`, outside Spam and Trash); by conversation when asked.
 #[utoipa::path(
     get,
-    path = "/api/mail/counts",
+    path = "/api/v1/mail/counts",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(MailCountsQuery),
@@ -1936,11 +1936,11 @@ pub async fn counts(
     ))
 }
 
-/// `GET /api/mail/threads/{id}` — every message of one of your threads,
+/// `GET /api/v1/mail/threads/{id}` — every message of one of your threads,
 /// oldest first.
 #[utoipa::path(
     get,
-    path = "/api/mail/threads/{id}",
+    path = "/api/v1/mail/threads/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Thread id"), MailboxQuery),

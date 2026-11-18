@@ -45,7 +45,7 @@ export async function writeMedia(file: DriveFile, media: MediaMetadataV1 | null,
     file.fileKey,
     fileMetadataOf(file, { media: media ?? undefined, ...(sha256 && !file.sha256 ? { sha256 } : {}) }),
   )
-  await api.put(`/files/${file.id}`, next)
+  await api.put(`/drive/files/${file.id}`, next)
   // This device's own write: the file's newest metadata.
   await acceptFileMetadata(file.id, next.metadataRevision).catch(() => undefined)
 }

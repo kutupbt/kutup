@@ -4,7 +4,7 @@ import { getOrCreateTabId } from './identity'
 
 /**
  * The collab WebSocket for a file, with a single-use ticket for `device`
- * (`POST /api/device-ticket`: a browser can't set the device header on a
+ * (`POST /api/v1/account/devices/tickets`: a browser can't set the device header on a
  * socket), naming this tab (`getOrCreateTabId`): the room's peer list
  * carries it. Asked again before every connect, reconnects included: a ticket
  * is good once, for a minute. `/api` is same-origin in every Kutup web app.

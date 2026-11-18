@@ -84,7 +84,8 @@ impl Stack {
 
     fn keys(&self, token: &str) -> Value {
         bearer(
-            self.c.get(format!("{}/api/auth/security-keys", self.base)),
+            self.c
+                .get(format!("{}/api/v1/auth/security-keys", self.base)),
             token,
         )
         .send()
@@ -110,7 +111,11 @@ impl Stack {
     fn register_start(&self, user: &User, proof: Value) -> (StatusCode, Value) {
         let mut body = proof;
         body["grant"] = json!(reauth_grant(&self.c, &self.base, user, "totp"));
-        status_and_body(self.post(&user.token, "/api/auth/security-keys/register/start", body))
+        status_and_body(self.post(
+            &user.token,
+            "/api/v1/auth/security-keys/register/start",
+            body,
+        ))
     }
 
     fn register_finish(
@@ -129,7 +134,7 @@ impl Stack {
         .unwrap();
         status_and_body(self.post(
             &user.token,
-            "/api/auth/security-keys/register/finish",
+            "/api/v1/auth/security-keys/register/finish",
             json!({ "name": name, "credential": credential }),
         ))
     }
@@ -161,7 +166,10 @@ impl Stack {
     fn sign_in_options(&self, pre_auth: &str) -> Value {
         let r = self
             .c
-            .post(format!("{}/api/auth/login/security-key/start", self.base))
+            .post(format!(
+                "{}/api/v1/auth/login/security-key/start",
+                self.base
+            ))
             .json(&json!({ "preAuthToken": pre_auth }))
             .send()
             .unwrap();
@@ -172,7 +180,10 @@ impl Stack {
     fn sign_in_finish(&self, pre_auth: &str, credential: &Value) -> (StatusCode, Value) {
         status_and_body(
             self.c
-                .post(format!("{}/api/auth/login/security-key/finish", self.base))
+                .post(format!(
+                    "{}/api/v1/auth/login/security-key/finish",
+                    self.base
+                ))
                 .header("x-kutup-client", "cli")
                 .json(&json!({ "preAuthToken": pre_auth, "credential": credential }))
                 .send()
@@ -216,7 +227,7 @@ impl Stack {
     fn proof(&self, user: &User, authenticator: &mut Authenticator) -> Value {
         let r = self.post(
             &user.token,
-            "/api/auth/security-keys/proof/start",
+            "/api/v1/auth/security-keys/proof/start",
             json!({}),
         );
         assert_eq!(r.status(), StatusCode::OK);
@@ -229,7 +240,7 @@ impl Stack {
         body["grant"] = json!(reauth_grant(&self.c, &self.base, user, "totp"));
         bearer(
             self.c
-                .delete(format!("{}/api/auth/security-keys/{id}", self.base)),
+                .delete(format!("{}/api/v1/auth/security-keys/{id}", self.base)),
             &user.token,
         )
         .json(&body)
@@ -242,8 +253,10 @@ impl Stack {
         body["grant"] = json!(reauth_grant(&self.c, &self.base, user, "totp"));
         body["requireUv"] = json!(on);
         bearer(
-            self.c
-                .put(format!("{}/api/auth/security-keys/require-uv", self.base)),
+            self.c.put(format!(
+                "{}/api/v1/auth/security-keys/require-uv",
+                self.base
+            )),
             &user.token,
         )
         .json(&body)
@@ -253,7 +266,7 @@ impl Stack {
     }
 
     fn session_version(&self, token: &str) -> String {
-        bearer(self.c.get(format!("{}/api/user/me", self.base)), token)
+        bearer(self.c.get(format!("{}/api/v1/account", self.base)), token)
             .send()
             .unwrap()
             .headers()
@@ -287,7 +300,7 @@ fn security_keys_add_sign_in_and_go() {
     // Adding takes the password proved again.
     let r = s.post(
         &user.token,
-        "/api/auth/security-keys/register/start",
+        "/api/v1/auth/security-keys/register/start",
         json!({ "grant": "" }),
     );
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
@@ -355,7 +368,7 @@ fn security_keys_add_sign_in_and_go() {
     let spare_id = s.key_id(&user, "Spare");
     let rename = |name: &str| {
         bearer(
-            s.c.patch(format!("{}/api/auth/security-keys/{spare_id}", s.base)),
+            s.c.patch(format!("{}/api/v1/auth/security-keys/{spare_id}", s.base)),
             &user.token,
         )
         .json(&json!({ "name": name }))
@@ -468,7 +481,7 @@ fn adding_a_factor_while_two_step_is_on_takes_one() {
     // The authenticator app beside the keys: its new code alone is refused;
     // with a recovery code (or a key) proved too, it joins them.
     let setup: Value = bearer(
-        s.c.post(format!("{}/api/user/2fa/setup", s.base)),
+        s.c.post(format!("{}/api/v1/account/2fa/setup", s.base)),
         &user.token,
     )
     .send()
@@ -482,7 +495,7 @@ fn adding_a_factor_while_two_step_is_on_takes_one() {
         body["grant"] = json!(reauth_grant(&s.c, &s.base, &user, "totp"));
         status_and_body(
             bearer(
-                s.c.post(format!("{}/api/user/2fa/verify", s.base)),
+                s.c.post(format!("{}/api/v1/account/2fa/verify", s.base)),
                 &user.token,
             )
             .json(&body)
@@ -619,7 +632,7 @@ fn the_recovery_phrase_removes_the_keys() {
         kutup_crypto::kdf::derive_recovery_auth_proof(&user.recovery_entropy, &user.binding)
             .unwrap();
     let granted: Value =
-        s.c.post(format!("{}/api/auth/recover/grant", s.base))
+        s.c.post(format!("{}/api/v1/auth/recover/grant", s.base))
             .json(&json!({ "name": user.username, "recoveryProof": b64(proof.as_slice()) }))
             .send()
             .unwrap()
@@ -701,7 +714,7 @@ fn a_lowered_key_limit_keeps_the_keys() {
 
     let r = bearer(
         s.c.put(format!(
-            "{}/api/admin/users/{id}/limits/security_keys_per_account",
+            "{}/api/v1/admin/accounts/{id}/entitlements/security_keys_per_account",
             s.base
         )),
         &admin_token,
