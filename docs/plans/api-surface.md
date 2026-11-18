@@ -1,7 +1,7 @@
 # API pass: the API surface made once, before the wipe
 
-Status: **approved** (main, 2026-11-17; decisions in §10). The build starts
-after W7's group 1 (the renames) lands on `wipe/w7`.
+Status: **built** on `wipe/api-pass` (slices 1–8, 2026-11-18); decisions in
+§10, what was built differently in §11.
 Branch `wipe/api-pass` on `wipe/w7` 4f9ccdd9. It follows W7
 (docs/plans/w7-schema.md): W7 renames the schema, this renames what clients
 and peers see: paths, versions, JSON field names, client storage names, and
@@ -1321,3 +1321,44 @@ web (ci.yml browser job list).
 
 The `server_instance` table goes into the W7 baseline; main has asked the
 second session.
+
+## 11. As built (2026-11-18)
+
+Where the build differs from the plan above:
+
+- **Paths** are written out in full in `build_router` (no `Router::nest`):
+  the map was applied by one tool to routes, `utoipa` paths and every
+  caller, and `scripts/check-api-names.py` (in `gate.sh static`) keeps any
+  unversioned path from coming back. A router `fallback` answers the bare
+  and the unknown-version paths.
+- **Release check:** a production server built without `KUTUP_RELEASE`
+  still starts (CI images are built without it); `publish-images.sh` stamps
+  it. The service worker keeps no caches, so `clientTooOld` needs no worker
+  update, only the reload.
+- **Instance check:** one `GET /api/health` at boot and per CLI command
+  (accepted); web push is not unsubscribed on a reset.
+- **Storage:** the per-account key is the permanent account id (not a hash
+  with the instance id: a reset clears the origin anyway). Preferences
+  keep one key each in the `kutup.<app>.<thing>` form rather than one JSON
+  value per app. The chat store keeps its IndexedDB version numbers (its
+  Rust migrations key on them). The revision guard is
+  `kutup.account.revisionsSeen` (it serves account records, not only
+  Drive). Notification tags and window event names keep their names.
+- **Fields:** plain `username` fields stay (the name itself); only the
+  user-id-shaped ones were renamed. Local variables named `user_id` in the
+  server are internal and were left; every struct field and every wire
+  name changed.
+- **OpenAPI:** tags are by app (`drive`, `drive.federation`, `chat.backup`,
+  …); the duplicate schema names, the response-suffix normalisation and the
+  routes-equal-operations test are left for later.
+- **Federation:** `fedVersions` and `426 federationVersionUnsupported` are
+  in; the sender-side `incompatible` peer state is not (one version exists).
+  The lookup by name is one route with two answers: the account
+  (`?name=`), or the rename chains naming it (`?name=&renames=all`).
+- **Links:** an album's link opened on Drive or Office goes to Photos, and
+  a non-album link opened on Photos goes to Drive; Office keeps its folder
+  documents (`/s/<token>/<fileId>`).
+- **Sign-out** clears, besides the account's own keys and databases, its
+  rows in the shared stores and Mail's search index, through cleanups each
+  app registers at boot.
+

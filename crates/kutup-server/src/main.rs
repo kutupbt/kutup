@@ -871,7 +871,7 @@ fn build_router(state: AppState) -> Router {
         // /internal, and the hook authenticates with a bearer token.
         .route("/internal/mail/rcpt", post(crate::mail::rcpt_hook))
         .route(
-            "/api/federation/policies/:feature",
+            "/api/v1/federation/policies/:feature",
             get(crate::federation::get_local_feature_policy),
         )
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
