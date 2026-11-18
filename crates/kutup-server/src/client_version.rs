@@ -327,7 +327,7 @@ pub async fn api_fallback(req: Request) -> Response {
             .into_response();
         }
     }
-    if let Some(rest) = path.strip_prefix("/api/v1/v") {
+    if let Some(rest) = path.strip_prefix("/api/v") {
         let number: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         let tail = &rest[number.len()..];
         if !number.is_empty() && (tail.is_empty() || tail.starts_with('/')) {
@@ -402,6 +402,34 @@ mod tests {
     #[test]
     fn the_compiled_floor_is_valid() {
         let _ = floors();
+    }
+
+    #[tokio::test]
+    async fn unrouted_paths_say_which_side_is_too_old() {
+        async fn answer(path: &str) -> (StatusCode, serde_json::Value) {
+            let req = Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = api_fallback(req).await;
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), 1 << 16)
+                .await
+                .unwrap();
+            (status, serde_json::from_slice(&body).unwrap())
+        }
+        let (status, body) = answer("/api/v1/no-such-route").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["code"], "notFound");
+        let (status, body) = answer("/api/v2/account").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["code"], "apiVersionUnsupported");
+        let (status, body) = answer("/api/files/x").await;
+        assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
+        assert_eq!(body["code"], "clientTooOld");
+        let (status, body) = answer("/api/fed/v3/chat/messages").await;
+        assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
+        assert_eq!(body["code"], "federationVersionUnsupported");
     }
 
     #[test]

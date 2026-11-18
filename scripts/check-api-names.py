@@ -27,7 +27,9 @@ EXTENSIONS = ('.rs', '.ts', '.tsx', '.js', '.mjs')
 # A path in a string literal: /api/ then anything but the versioned and
 # unversioned prefixes. The bare prefixes themselves are fine (`"/api/"`,
 # `"/api/fed/"` in prefix checks).
-OLD_PATH = re.compile(r"""["'`]/api/(?!v1/|v1["'`]|fed/v2/|fed/["'`]|fed/v["'`]|health|csp-report|["'`])""")
+# A path rewritten twice (`/api/v1/v…`) is as wrong as an unversioned one.
+DOUBLE = re.compile(r"/api/v1/v[0-9\"'`]")
+OLD_PATH = re.compile(r"""["'`]/api/(?!v1/|v1["'`]|v["'`]|fed/v2/|fed/["'`]|fed/v["'`]|health|csp-report|["'`])""")
 OLD_FED = re.compile(r"""/api/fed/(?!v2/|v\{|v[0-9]|v["'`]|["'`])""")
 WIRE = re.compile(
     r"""["'](userId|ownerUserId|uploaderUserId|recipientUserId|sharerUserId|collectionOwnerUserId|authorUserId|targetUserId|adminUserId|totalUsers|activeUsers)["']"""
@@ -68,6 +70,8 @@ for top in CODE_DIRS:
                     found = []
                     if OLD_PATH.search(line) and not any(a in line for a in PATH_ALLOWED_LINES):
                         found.append('an unversioned API path')
+                    if DOUBLE.search(line):
+                        found.append('a path versioned twice')
                     if OLD_FED.search(line):
                         found.append('a federation path outside /api/fed/v2')
                     if WIRE.search(line):
