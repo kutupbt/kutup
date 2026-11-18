@@ -183,8 +183,9 @@
     "binEmpty": "The recycle bin is empty.",
     "empty": "No entries in {{group}} yet.",
     "pick": "Choose an entry to see it.",
-    "searchHelp": "Search words in the title, user name, URL, notes, tags and fields. Narrow with title:, user:, url:, notes:, tag:, group:, attr:, attachment:, password:, is:expired, is:weak, has:totp; -word leaves out, \"quotes\" keep spaces, * matches anything.",
+    "searchHelp": "Search words in the title, user name, URL, notes, tags and fields. Narrow with title:, user:, url:, notes:, tag:, group:, attr:, attachment:, password:, is:expired, is:weak, has:totp; -word or !word leaves out, +word matches whole values, \"quotes\" keep spaces, * matches anything.",
     "wholeVault": "Whole vault",
+    "withBin": "Include the recycle bin",
     "searching": "Searching…"
   },
   "entry": {

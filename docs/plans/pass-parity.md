@@ -164,9 +164,9 @@ read-only vault has no selection and no dragging.
 | Fields searched | all standard fields, attributes, tags, groups | ✅ | title, user name, URL, notes, tags and unprotected custom fields; attachments' and groups' names with `attachment:` and `group:`; the password with `password:`; protected custom fields never |
 | Scope | the database or the current group | ✅ | the chosen group, or "Whole vault" while searching; never across vaults |
 | Field modifiers (`title:`, `url:`, `user:`, `notes:`, `attr:`, `tag:`, `is:expired`, `is:weak`…) | `DatabaseOperations.adoc` "Modifiers and Fields" | ✅ | KeePassXC's: `title:`/`t:`, `username:`/`user:`/`u:`, `password:`/`p:`, `url:`, `notes:`/`n:`, `attr:`, `attachment:`/`a:`, `group:`/`g:`, `tag:`, `uuid:`, `is:expired`, `is:expired-N`, `is:weak` (the health report's, honouring "exclude from reports"), `has:totp`; the search box's tooltip lists them |
-| Wildcards, regular expressions, `!` negation, exact `+` | "Wild Card Characters and Logical Operators" | 🟡 | `*`, `-` to leave out and `"quotes"` for spaces; no regular expressions, `!` or `+` yet |
+| Wildcards, regular expressions, `!` negation, exact `+` | "Wild Card Characters and Logical Operators" | 🟡 | `*`, `-` or `!` to leave out, `+` for the whole value (combined in any order: `!+u:admin`) and `"quotes"` for spaces; no regular expressions (their engine would grow the WASM by tens of KB) |
 | Saved searches | tag view (`gui/tag/TagView.cpp`) | ❌ | |
-| Search the recycle bin | | 🟡 | only by opening the bin and searching there |
+| Search the recycle bin | | ✅ | "Include the recycle bin" beside "Whole vault" while searching (KeePassXC leaves the bin out), or by opening the bin and searching there |
 
 ## Password generator
 

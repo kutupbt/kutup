@@ -155,6 +155,8 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
     savePrefs(next)
   }
   const [wholeVault, setWholeVault] = useState(false)
+  // KeePassXC leaves the recycle bin out of a search; this takes it in.
+  const [withBin, setWithBin] = useState(false)
   // The vault's own search (kutup_pass::search: fields, -, quotes, *),
   // asked once typing settles; null while there is no search.
   const rate = useStrength()
@@ -185,7 +187,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
     const everywhere = wholeVault && needle !== ''
     const inGroup = (entry: EntryView) => {
       if (viewingBin) return entry.inRecycleBin
-      if (!groupId || everywhere) return !entry.inRecycleBin
+      if (!groupId || everywhere) return (withBin && needle !== '') || !entry.inRecycleBin
       return entry.groupId === groupId
     }
     // The last answer stays until the next one comes (no flicker while typing).
@@ -195,7 +197,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
       prefs.sort,
       prefs.descending,
     )
-  }, [view.entries, groupId, viewingBin, needle, found, wholeVault, prefs.sort, prefs.descending])
+  }, [view.entries, groupId, viewingBin, needle, found, wholeVault, withBin, prefs.sort, prefs.descending])
   const tags = useMemo(() => vaultTags(view), [view])
   const entry = entryId ? view.entries.find((e) => e.id === entryId) : undefined
   const kept = secrets.data?.some((s) => s.fileId === fileId) ?? false
@@ -496,6 +498,11 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
               {needle && groupId && !viewingBin ? (
                 <Button variant={wholeVault ? 'secondary' : 'ghost'} size="sm" aria-pressed={wholeVault} onClick={() => setWholeVault(!wholeVault)}>
                   {t('entries.wholeVault')}
+                </Button>
+              ) : null}
+              {needle && !viewingBin && view.recycleBinEnabled && (!groupId || wholeVault) ? (
+                <Button variant={withBin ? 'secondary' : 'ghost'} size="sm" aria-pressed={withBin} onClick={() => setWithBin(!withBin)} data-testid="search-with-bin">
+                  {t('entries.withBin')}
                 </Button>
               ) : null}
               <DropdownMenu>

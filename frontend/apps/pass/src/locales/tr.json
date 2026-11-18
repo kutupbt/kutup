@@ -183,8 +183,9 @@
     "binEmpty": "Geri dönüşüm kutusu boş.",
     "empty": "{{group}} içinde henüz kayıt yok.",
     "pick": "Görmek için bir kayıt seçin.",
-    "searchHelp": "Başlık, kullanıcı adı, URL, notlar, etiketler ve alanlarda arar. title:, user:, url:, notes:, tag:, group:, attr:, attachment:, password:, is:expired, is:weak, has:totp ile daraltın; -kelime dışarıda bırakır, \"tırnak\" boşlukları korur, * her şeyle eşleşir.",
+    "searchHelp": "Başlık, kullanıcı adı, URL, notlar, etiketler ve alanlarda arar. title:, user:, url:, notes:, tag:, group:, attr:, attachment:, password:, is:expired, is:weak, has:totp ile daraltın; -kelime ya da !kelime dışarıda bırakır, +kelime değerin tamamıyla eşleşir, \"tırnak\" boşlukları korur, * her şeyle eşleşir.",
     "wholeVault": "Tüm kasa",
+    "withBin": "Geri dönüşüm kutusunu da ara",
     "searching": "Aranıyor…"
   },
   "entry": {

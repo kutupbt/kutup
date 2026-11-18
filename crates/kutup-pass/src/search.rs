@@ -3,8 +3,10 @@
 //!
 //! A query is words, each a part every matching entry holds. A word may name
 //! the field it looks in (`title:bank`, `u:ayse`, `tag:work`, `is:expired`),
-//! be negated (`-old`), quoted to keep spaces (`"my bank"`) and hold `*`
-//! for any run of characters (`*.example.com`). Text is folded as Kutup's
+//! be negated (`-old`, or `!old` as KeePassXC also writes it), match the
+//! whole value with `+` (`+title:bank` finds "Bank", not "Bank card"),
+//! quoted to keep spaces (`"my bank"`) and hold `*` for any run of
+//! characters (`*.example.com`). The modifiers combine (`!+u:admin`). Text is folded as Kutup's
 //! other searches fold it (`kutup_search::fold`: Turkish I's, accents, case),
 //! so `istanbul` finds "İstanbul". Without a field, a word looks in the
 //! title, user name, URL, notes, tags and custom fields that aren't
@@ -71,6 +73,8 @@ pub struct Term {
     /// Folded; `*` stands for any run of characters.
     pub pattern: String,
     pub negated: bool,
+    /// The whole value must match (KeePassXC's `+`), not a part of it.
+    pub exact: bool,
 }
 
 /// What a search needs besides the vault.
@@ -91,7 +95,16 @@ pub fn parse(query: &str) -> Vec<Term> {
         if chars.peek().is_none() {
             break;
         }
-        let negated = chars.next_if_eq(&'-').is_some();
+        // KeePassXC's modifiers, in any order: `-` or `!` leaves out, `+`
+        // matches whole values.
+        let (mut negated, mut exact) = (false, false);
+        while let Some(c) = chars.next_if(|c| matches!(c, '-' | '!' | '+')) {
+            if c == '+' {
+                exact = true;
+            } else {
+                negated = true;
+            }
+        }
         // The word up to the next space outside quotes; the quotes go.
         let mut word = String::new();
         let mut quoted = false;
@@ -118,6 +131,7 @@ pub fn parse(query: &str) -> Vec<Term> {
             field,
             pattern,
             negated,
+            exact,
         });
     }
     terms
@@ -141,11 +155,36 @@ fn holds(text: &str, pattern: &str) -> bool {
     true
 }
 
-fn field_holds(entry: &Entry, key: &str, pattern: &str) -> bool {
+/// Whether all of folded `text` is `pattern`, `*` matching any run.
+fn is_whole(text: &str, pattern: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return text == pattern;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !text.starts_with(first) || text.len() < first.len() + last.len() || !text.ends_with(last) {
+        return false;
+    }
+    holds(
+        &text[first.len()..text.len() - last.len()],
+        &parts[1..parts.len() - 1].join("*"),
+    )
+}
+
+/// How a term compares one folded value: a part of it, or all of it.
+fn compare(exact: bool) -> fn(&str, &str) -> bool {
+    if exact {
+        is_whole
+    } else {
+        holds
+    }
+}
+
+fn field_holds(entry: &Entry, key: &str, pattern: &str, exact: bool) -> bool {
     entry
         .fields
         .get(key)
-        .is_some_and(|value| holds(&kutup_search::fold(value.get()), pattern))
+        .is_some_and(|value| compare(exact)(&kutup_search::fold(value.get()), pattern))
 }
 
 fn group_names(db: &Database, mut group: Option<GroupId>) -> Vec<String> {
@@ -162,6 +201,8 @@ fn group_names(db: &Database, mut group: Option<GroupId>) -> Vec<String> {
 
 fn term_holds(db: &Database, entry: &Entry, term: &Term, context: &Context<'_>) -> bool {
     let p = term.pattern.as_str();
+    let x = term.exact;
+    let holds = compare(x);
     let custom = || {
         entry
             .fields
@@ -172,7 +213,7 @@ fn term_holds(db: &Database, entry: &Entry, term: &Term, context: &Context<'_>) 
         Field::Default => {
             ["Title", "UserName", "URL", "Notes"]
                 .iter()
-                .any(|key| field_holds(entry, key, p))
+                .any(|key| field_holds(entry, key, p, x))
                 || entry
                     .tags
                     .iter()
@@ -181,11 +222,11 @@ fn term_holds(db: &Database, entry: &Entry, term: &Term, context: &Context<'_>) 
                     !value.is_protected() && holds(&kutup_search::fold(value.get()), p)
                 })
         }
-        Field::Title => field_holds(entry, "Title", p),
-        Field::UserName => field_holds(entry, "UserName", p),
-        Field::Password => field_holds(entry, "Password", p),
-        Field::Url => field_holds(entry, "URL", p),
-        Field::Notes => field_holds(entry, "Notes", p),
+        Field::Title => field_holds(entry, "Title", p, x),
+        Field::UserName => field_holds(entry, "UserName", p, x),
+        Field::Password => field_holds(entry, "Password", p, x),
+        Field::Url => field_holds(entry, "URL", p, x),
+        Field::Notes => field_holds(entry, "Notes", p, x),
         Field::Attribute => custom().any(|(key, value)| {
             holds(&kutup_search::fold(key), p)
                 || (!value.is_protected() && holds(&kutup_search::fold(value.get()), p))

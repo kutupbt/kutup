@@ -259,3 +259,33 @@ fn a_query_parses_into_terms() {
     assert!(terms[0].negated);
     assert_eq!(terms[2].field, Field::Default);
 }
+
+#[test]
+fn keepassxc_modifiers_exact_and_bang() {
+    let v = vault();
+    // `+`: the whole value, folded; `*` still stands for any run.
+    assert_eq!(found(&v, "+title:posta", &[], 1), vec![1]);
+    assert_eq!(found(&v, "+title:ziraat", &[], 1), Vec::<usize>::new());
+    assert_eq!(found(&v, "+title:ziraat*", &[], 1), vec![0]);
+    assert_eq!(found(&v, "+title:*bankasi", &[], 1), vec![0]);
+    assert_eq!(found(&v, "+u:ayse", &[], 1), vec![0]);
+    // `!` leaves out, as `-` does; the modifiers combine in any order.
+    assert_eq!(
+        found(&v, "!title:posta", &[], 1),
+        found(&v, "-title:posta", &[], 1)
+    );
+    let without_ayse = found(&v, "!+u:ayse", &[], 1);
+    assert!(!without_ayse.contains(&0) && without_ayse.contains(&1));
+    assert_eq!(found(&v, "+!u:ayse", &[], 1), without_ayse);
+}
+
+#[test]
+fn modifiers_parse_in_any_order() {
+    let terms = parse("!+u:x +-title:y +z");
+    assert!(terms[0].negated && terms[0].exact);
+    assert!(terms[1].negated && terms[1].exact);
+    assert_eq!(terms[1].field, Field::Title);
+    assert!(!terms[2].negated && terms[2].exact);
+    // A lone modifier asks for nothing.
+    assert!(parse("+ ! -").is_empty());
+}
