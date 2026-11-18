@@ -3251,12 +3251,18 @@ fn queue_withdrawn_send(a_db: &str) {
     runtime.block_on(async {
         let user = uuid::Uuid::new_v4();
         let mut tx = pool.begin().await.unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(user)
+            .bind(format!("withdrawn{}", &user.simple().to_string()[..10]))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        // Federation off: the account's own entitlement (docs/plans/w7-schema.md §5).
         sqlx::query(
-            "INSERT INTO accounts (id, username, identity_suite, federation)
-             VALUES ($1, $2, 2, 'off')",
+            "INSERT INTO account_entitlements (account_id, key, value, source)
+             VALUES ($1, 'server.federation', 0, 'account')",
         )
         .bind(user)
-        .bind(format!("withdrawn{}", &user.simple().to_string()[..10]))
         .execute(&mut *tx)
         .await
         .unwrap();
