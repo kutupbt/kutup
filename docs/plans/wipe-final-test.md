@@ -96,7 +96,7 @@ taken down until §4.3 ends.
 - **Stack T** (lane 2, CI-like): `docker-compose.yml` with CI's mail-browser env (APP_ENV=test, `RATE_LIMITS_RELAXED`, `MAIL_DEFAULT_DELAY_SEND_SECONDS=0`, `CHAT_GROUPS=true`, the same `E2E_PSQL`). It is used for the specs that were written against CI's stack.
 
 Bring them up one after another: `docker compose up --detach --build --wait`,
-then `curl --fail --insecure https://localhost:<port>/api/auth/settings`
+then `curl --fail --insecure https://localhost:<port>/api/v1/auth/settings` (the API pass's versioned path; the bare `/api/…` answers 426)
 (10 min each; the frontend image bakes the WASM).
 
 **Pass:** both answer. On Stack P, `docker compose logs backend` has no
