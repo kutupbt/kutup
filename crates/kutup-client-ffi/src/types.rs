@@ -99,7 +99,7 @@ pub enum ChatHttpMethod {
     Put,
 }
 
-/// A relative request under the authenticated server API base (`…/api`). The
+/// A relative request under the authenticated server API base (`…/api/v1`). The
 /// platform adapter adds authorization and executes it with URLSession/OkHttp.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ChatHttpRequest {

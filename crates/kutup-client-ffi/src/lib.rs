@@ -329,7 +329,7 @@ pub struct NativeAccountKeys {
     pub master_key: Vec<u8>,
     /// Its generation (`masterKeyGeneration`; 1 until the first rotation).
     pub master_key_generation: u32,
-    /// The account's master-key keyring records, as `GET /api/account/roots`
+    /// The account's master-key keyring records, as `GET /api/v1/account/roots`
     /// and the sign-in answered them (`masterKeyring`, base64-decoded): each
     /// older master key, sealed under the one after it, so records sealed
     /// before a rotation still open (docs/plans/mk-rotation-exercise.md).

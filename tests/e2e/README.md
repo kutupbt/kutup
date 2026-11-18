@@ -65,7 +65,7 @@ for app in account drive chat office maps photos contacts mail pass calendar; do
 done
 export E2E_APP_ORIGIN='https://{app}.localhost:39443'
 docker compose up --detach --build --wait
-curl --fail --insecure https://localhost:39443/api/auth/settings
+curl --fail --insecure https://localhost:39443/api/v1/auth/settings
 ```
 
 The Nginx health check and bounded `curl` probe are the readiness boundary. Do
