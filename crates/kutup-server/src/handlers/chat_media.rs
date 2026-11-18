@@ -812,7 +812,7 @@ pub async fn deliver_local(
         }));
     }
     let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND is_active=true")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND state = 'active'")
             .bind(recipient)
             .fetch_optional(&mut *transaction)
             .await?;

@@ -796,7 +796,7 @@ async fn public_keys(
             AND a.disabled_at IS NULL
             AND (a.state = 'active'
                  OR (a.state = 'receiving' AND a.receive_until > now()))
-            AND u.is_active",
+            AND u.state = 'active'",
     )
     .bind(address)
     .fetch_optional(&state.pool)
@@ -911,7 +911,7 @@ pub(crate) async fn lookup_address(
         return Ok(None);
     };
     let (account_id, authority): (Uuid, String) = sqlx::query_as(
-        "SELECT u.id, kutup_b64(u.account_authority_public_key) FROM mail_addresses a JOIN accounts u ON u.id = a.account_id
+        "SELECT u.id, COALESCE(kutup_b64(u.account_authority_public_key), '') FROM mail_addresses a JOIN accounts u ON u.id = a.account_id
           WHERE a.id = $1",
     )
     .bind(address_id)

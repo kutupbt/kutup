@@ -21,6 +21,7 @@ const settings = {
   chatGroupAvatarPendingSeconds: 3600,
   passVaultMaxBytes: 64 * 1024 * 1024,
   driveStreamCacheBlocks: 3,
+  driveVersionRetentionChoices: [7, 30, 90],
 }
 const registry = [
   {
@@ -51,5 +52,7 @@ describe('Administration → Server settings', () => {
     expect(field.getAttribute('min')).toBe('2')
     expect(field.getAttribute('max')).toBe('9')
     expect((field as HTMLInputElement).value).toBe('3')
+    const choices = await screen.findByLabelText(/Version retention choices/)
+    expect((choices as HTMLInputElement).value).toBe('7, 30, 90')
   })
 })

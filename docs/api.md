@@ -240,7 +240,8 @@ Specific codes, where an app does something particular (a test in
 | `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
 | `sign_in_required` | 403 | Public links on this server open only for someone signed in to it |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
-| `keysPendingUpgrade` | 409 | The person's Drive key is still X25519 (identity suite 1): share with them once they have signed in again (docs/plans/pq-shares.md) |
+| `keysPendingUpgrade` | 409 | The person can't be shared with yet: an account here with no keys (one an administrator made or reset, before its first sign-in), or one on another server still on an X25519 Drive key (docs/plans/pq-shares.md); share with them once they have signed in again |
+| `versionRetentionNotOffered` | 400 | `PATCH /api/user/me`: the version retention period is not one the administrators offer; `choices` lists those that are |
 | `peerOutdated` | 502 | The other server runs an older version without post-quantum Drive keys and must upgrade before sharing |
 | `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
 | `registrationCodeRequired` | 403 | Registration needs a referral code and none was given |
@@ -944,12 +945,20 @@ Return the current user's profile (public key + storage stats). The encrypted ke
   "storageUsedBytes": 104857600,
   "isAdmin": false,
   "color": "",
-  "versionRetentionDays": 30
+  "versionRetentionDays": 30,
+  "versionRetentionChoices": [7, 30, 90, 180, 365, 3650]
 }
 ```
 
 `storageQuotaBytes` / `storageUsedBytes` are the account's one storage pool.
 Drive, Photos, Office, Maps and Chat all count against it.
+
+`versionRetentionChoices` are the periods (days, ascending) the
+administrators offer for keeping Drive file versions
+(`driveVersionRetentionChoices` in `PUT /api/admin/settings`).
+`PATCH /api/user/me` with `{ "versionRetentionDays": 90 }` takes one of them
+(`400 versionRetentionNotOffered` otherwise, with the `choices`). An account
+keeps a period taken off the list since, until it chooses another.
 
 ---
 
@@ -5597,7 +5606,7 @@ for an unknown account; `409 accountDeleting` once its deletion has begun.
 
 ### DELETE /api/admin/users/:id/2fa
 
-Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears the sealed authenticator secret, `totp_enabled` and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
+Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears the sealed authenticator secret (and one being set up) and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
 
 **Auth:** Bearer JWT (admin)
 
@@ -5860,6 +5869,7 @@ Return current global server settings.
   "chatGroupAvatarStoragePerGroupBytes": 82002,
   "chatGroupAvatarPendingSeconds": 86400,
   "passVaultMaxBytes": 67108864,
+  "driveVersionRetentionChoices": [7, 30, 90, 180, 365, 3650],
   "calendarsPerAccount": 25,
   "calendarEventsPerCalendar": 25000,
   "calendarSyncBatch": 10,
@@ -5910,6 +5920,12 @@ page.
 
 `passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
 upload: 1 MiB to 1 GiB (`400` otherwise), 64 MiB at first.
+
+`driveVersionRetentionChoices` (site setting `drive.version_retention_choices`)
+are the periods an account may choose to keep its Drive file versions for:
+1 to 20 whole numbers of days, each 1 to 36500, ascending with none twice
+(`400` otherwise); 7, 30, 90, 180, 365 and 3650 at first. A new account
+starts at 30 days.
 
 `chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
 for the groups it hosts: 8233, 16425, 32809 or 41001.

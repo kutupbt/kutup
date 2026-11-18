@@ -770,14 +770,14 @@ pub async fn register(
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
             username, master_key_envelope, recovery_key_envelope,
-            public_key, account_authority_public_key, account_authority_key_id,
+            drive_xwing_public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
             opaque_record, opaque_suite, opaque_server_key_id,
             recovery_key_verifier, storage_quota_bytes, drive_key_binding,
-            key_binding, id, identity_suite, drive_key_binding_epoch
+            key_binding, id, identity_suite, drive_key_binding_epoch, keys_set_up_at
         ) VALUES ($2,kutup_unb64($3),kutup_unb64($4),kutup_unb64($5),kutup_unb64($6),
                   decode($7, 'hex'),decode($8, 'hex'),kutup_unb64($9),$10,$11,$12,$13,$14,
-                  kutup_unb64($15),$1::uuid,$16,2,1)
+                  kutup_unb64($15),$1::uuid,$16,2,1,now())
         RETURNING id"#,
     )
     .bind(&req.key_binding)
@@ -868,9 +868,12 @@ pub(crate) async fn signed_in_answer(
         bool,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT kutup_b64(master_key_envelope), kutup_b64(public_key),
-                  totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes,
-                  (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), is_first_login,
+        r#"SELECT COALESCE(kutup_b64(master_key_envelope), ''),
+                  COALESCE(kutup_b64(drive_xwing_public_key), ''),
+                  totp_secret_sealed IS NOT NULL, role <> 'member', storage_quota_bytes,
+                  storage_used_bytes,
+                  (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)),
+                  keys_set_up_at IS NULL,
                   COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding::text, ''),
                   COALESCE(substring(sha256(opaque_record) from 1 for 16) = $2, false)
            FROM accounts WHERE id = $1"#,
@@ -992,7 +995,7 @@ pub async fn login_two_fa(
     // The authenticator app's secret, only once it is turned on: a secret
     // still being set up never signs anyone in.
     let row: Option<(Option<Vec<u8>>, bool)> = sqlx::query_as(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END, (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
+        "SELECT totp_secret_sealed, (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
          FROM accounts WHERE id = $1",
     )
     .bind(Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
@@ -1082,8 +1085,9 @@ pub(crate) async fn issue_after_second_step(
 ) -> AppResult<Response> {
     type Row = (String, String, bool, i64, i64, String, bool, String, String);
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT kutup_b64(master_key_envelope), kutup_b64(public_key),
-                  is_admin, storage_quota_bytes, storage_used_bytes,
+        r#"SELECT COALESCE(kutup_b64(master_key_envelope), ''),
+                  COALESCE(kutup_b64(drive_xwing_public_key), ''),
+                  role <> 'member', storage_quota_bytes, storage_used_bytes,
                   COALESCE(username, ''), (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), COALESCE(color, ''),
                   COALESCE(key_binding::text, '')
            FROM accounts WHERE id = $1"#,
@@ -1348,10 +1352,11 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         String,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, COALESCE(key_binding::text, ''), COALESCE(username, ''), kutup_b64(public_key),
-                  totp_enabled,
+        r#"SELECT id, COALESCE(key_binding::text, ''), COALESCE(username, ''),
+                  COALESCE(kutup_b64(drive_xwing_public_key), ''),
+                  totp_secret_sealed IS NOT NULL,
                   storage_quota_bytes, storage_used_bytes,
-                  is_admin, COALESCE(color, ''), version_retention_days, public_sharing,
+                  role <> 'member', COALESCE(color, ''), version_retention_days, public_sharing,
                   federation
            FROM accounts WHERE id = $1"#,
     )
@@ -1405,6 +1410,8 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
+        version_retention_choices: crate::site_settings::version_retention_choices(&state.pool)
+            .await?,
         public_sharing,
         federation,
         renames: crate::models::RenameAnchor {
@@ -1454,10 +1461,22 @@ pub async fn update_me(
     }
 
     if let Some(days) = req.version_retention_days {
-        if !crate::version_retention::RETENTION_DAYS.contains(&days) {
-            return Err(AppError::bad_request(
-                "versionRetentionDays must be 7, 30, 90, 180, 365 or 3650",
-            ));
+        // One of the periods the administrators offer
+        // (`drive.version_retention_choices`).
+        let choices = crate::site_settings::version_retention_choices(&state.pool).await?;
+        if !choices.contains(&days) {
+            let offered = choices
+                .iter()
+                .map(i32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(AppError::bad_request(format!(
+                "versionRetentionDays must be one of {offered}"
+            ))
+            .with_details(serde_json::json!({
+                "code": "versionRetentionNotOffered",
+                "choices": choices,
+            })));
         }
         sqlx::query("UPDATE accounts SET version_retention_days = $1 WHERE id = $2")
             .bind(days)
@@ -1580,7 +1599,8 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
     let user_id = parse_uuid(&user.user_id)?;
     let sealed = seal_totp_secret(&state, user_id, &secret).await?;
     let set = sqlx::query(
-        "UPDATE accounts SET totp_secret_sealed = $1 WHERE id = $2 AND NOT totp_enabled",
+        "UPDATE accounts SET totp_pending_secret_sealed = $1
+          WHERE id = $2 AND totp_secret_sealed IS NULL",
     )
     .bind(&sealed)
     .bind(user_id)
@@ -1610,7 +1630,7 @@ pub async fn verify_totp(
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
     let sealed: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT totp_secret_sealed FROM accounts WHERE id = $1")
+        sqlx::query_scalar("SELECT totp_pending_secret_sealed FROM accounts WHERE id = $1")
             .bind(parse_uuid(&user.user_id)?)
             .fetch_optional(&state.pool)
             .await?
@@ -1645,7 +1665,9 @@ pub async fn verify_totp(
     )
     .await?;
     let enabled = sqlx::query(
-        "UPDATE accounts SET totp_enabled = true WHERE id = $1 AND totp_secret_sealed = $2",
+        "UPDATE accounts SET totp_secret_sealed = totp_pending_secret_sealed,
+                             totp_pending_secret_sealed = NULL
+          WHERE id = $1 AND totp_pending_secret_sealed = $2",
     )
     .bind(user_id)
     .bind(&sealed)
@@ -1813,12 +1835,11 @@ pub(crate) async fn prove_second_factor(
             SecondFactor::Wrong
         });
     }
-    let sealed: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END FROM accounts WHERE id = $1",
-    )
-    .bind(user_id)
-    .fetch_one(&mut **tx)
-    .await?;
+    let sealed: Option<Vec<u8>> =
+        sqlx::query_scalar("SELECT totp_secret_sealed FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&mut **tx)
+            .await?;
     // A destroyed secret checks no code; a recovery code still does.
     let secret = match sealed {
         Some(sealed) => open_totp_secret(state, user_id, &sealed).await?,
@@ -1950,7 +1971,8 @@ pub async fn disable_totp(
     // codes): only the authenticator app goes.
     let kind = if factors.keys > 0 {
         sqlx::query(
-            "UPDATE accounts SET totp_enabled = false, totp_secret_sealed = NULL WHERE id = $1",
+            "UPDATE accounts SET totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL
+              WHERE id = $1",
         )
         .bind(user_id)
         .execute(&mut *tx)
@@ -1994,10 +2016,11 @@ pub async fn complete_setup(
     let (user_id, setup_epoch) = jwt::validate_setup_token(token, &state.config.jwt_secret)
         .map_err(|_| setup_token_invalid())?;
 
-    let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM accounts WHERE id = $1")
-        .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
-        .fetch_optional(&state.pool)
-        .await?;
+    let active: Option<bool> =
+        sqlx::query_scalar("SELECT state = 'active' FROM accounts WHERE id = $1")
+            .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some(true) = active else {
         return Err(AppError::unauthorized("account disabled"));
     };
@@ -2044,7 +2067,7 @@ pub async fn complete_setup(
         r#"UPDATE accounts SET
               opaque_record = $1, opaque_suite = $9, opaque_server_key_id = $10,
               master_key_envelope = kutup_unb64($2), recovery_key_envelope = kutup_unb64($3),
-              public_key = kutup_unb64($4),
+              drive_xwing_public_key = kutup_unb64($4),
               account_authority_public_key = kutup_unb64($5),
               account_authority_key_id = decode($6, 'hex'),
               account_incarnation_id = decode($7, 'hex'),
@@ -2053,8 +2076,8 @@ pub async fn complete_setup(
               drive_key_binding = kutup_unb64($13),
               key_binding = $14::uuid,
               identity_suite = 2, drive_key_binding_epoch = 1,
-              is_first_login = false, updated_at = NOW()
-           WHERE id = $12 AND is_first_login
+              keys_set_up_at = NOW(), updated_at = NOW()
+           WHERE id = $12 AND keys_set_up_at IS NULL
              AND substring(sha256(opaque_record) from 1 for 16) = $15"#,
     )
     .bind(&opaque_record)
@@ -2097,7 +2120,8 @@ pub async fn complete_setup(
     tx.commit().await?;
 
     let (is_admin, quota, used, username): (bool, i64, i64, String) = sqlx::query_as(
-        "SELECT is_admin, storage_quota_bytes, storage_used_bytes, COALESCE(username, '') FROM accounts WHERE id = $1",
+        "SELECT role <> 'member', storage_quota_bytes, storage_used_bytes, COALESCE(username, '')
+           FROM accounts WHERE id = $1",
     )
     .bind(uid)
     .fetch_one(&state.pool)
@@ -2179,7 +2203,7 @@ pub(crate) async fn credential_held(
 ) -> AppResult<Option<Option<i16>>> {
     Ok(sqlx::query_scalar(
         "SELECT opaque_server_key_id FROM accounts
-         WHERE id = $1 AND is_active
+         WHERE id = $1 AND state = 'active'
            AND substring(sha256(opaque_record) from 1 for 16) = $2
          FOR SHARE",
     )

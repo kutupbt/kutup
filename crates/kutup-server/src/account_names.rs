@@ -27,7 +27,7 @@ pub async fn current<'e, E: sqlx::PgExecutor<'e>>(
 ) -> AppResult<Option<Uuid>> {
     Ok(sqlx::query_scalar(
         "SELECT n.account_id FROM account_names n JOIN accounts u ON u.id = n.account_id
-          WHERE n.folded = kutup_fold($1) AND n.state = 'current' AND u.is_active",
+          WHERE n.folded = kutup_fold($1) AND n.state = 'current' AND u.state = 'active'",
     )
     .bind(name)
     .fetch_optional(executor)
@@ -449,17 +449,12 @@ mod tests {
             format!("old_a{tag}"),
         );
         for (id, name) in [(a, &name_a), (b, &name_b)] {
-            sqlx::query(
-                "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                    public_key, account_authority_public_key,
-                    account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-                 VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-            )
-            .bind(id)
-            .bind(name)
-            .execute(&pool)
-            .await
-            .unwrap();
+            sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+                .bind(id)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
         }
         for (name, user_id, state, free) in [
             (&name_a, a, "current", None),
@@ -526,10 +521,8 @@ mod tests {
         let (current, held) = (format!("now{tag}"), format!("was{tag}"));
         let incarnation = "a".repeat(64);
         sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, decode($3, 'hex'), '')",
+            "INSERT INTO accounts (id, username, account_incarnation_id, identity_suite)
+             VALUES ($1, $2, decode($3, 'hex'), 2)",
         )
         .bind(user_id)
         .bind(&current)
@@ -612,17 +605,12 @@ mod tests {
             format!("old_{tag}"),
             format!("gone{tag}"),
         );
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-        )
-        .bind(user_id)
-        .bind(&current)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(user_id)
+            .bind(&current)
+            .execute(&pool)
+            .await
+            .unwrap();
         for (name, state, receive, free) in [
             (&current, "current", None, None),
             (&closing, "held", Some("-1 hour"), Some("+30 days")),

@@ -90,8 +90,10 @@ Per file, never touching the newest version or `keep_forever` ones:
 | 7 days – retention | the newest per day |
 | > retention | none |
 
-Retention is the file **owner's** setting, `users.version_retention_days`:
-7, 30 (default), 90, 180, 365 or 3650 days, in Account → Settings. The
+Retention is the file **owner's** setting, `accounts.version_retention_days`
+(30 days at first), chosen in Drive → Settings from the periods the
+administrators offer (site setting `drive.version_retention_choices`; 7, 30,
+90, 180, 365 and 3650 days at first). The
 policy is a pure function with unit tests; the job applies it and releases
 quota. (Fixes 4.)
 

@@ -99,7 +99,7 @@ fn valid_admin_username(s: &str) -> bool {
 /// disabled, wiped or deleted.
 async fn is_break_glass(state: &AppState, id: Uuid) -> AppResult<bool> {
     Ok(
-        sqlx::query_scalar("SELECT is_break_glass FROM accounts WHERE id = $1")
+        sqlx::query_scalar("SELECT role = 'breakGlassAdmin' FROM accounts WHERE id = $1")
             .bind(id)
             .fetch_optional(&state.pool)
             .await?
@@ -177,10 +177,13 @@ struct UserRow {
 pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
     let users: Vec<UserRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
-                  is_admin, is_active, state, suspended_reason, closes_at,
+                  role <> 'member' AS is_admin, state = 'active' AS is_active, state,
+                  suspended_reason, closes_at,
                   legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
                   public_sharing, federation,
-                  totp_enabled, is_first_login, created_at, is_break_glass AS is_protected
+                  totp_secret_sealed IS NOT NULL AS totp_enabled,
+                  keys_set_up_at IS NULL AS is_first_login, created_at,
+                  role = 'breakGlassAdmin' AS is_protected
            FROM accounts ORDER BY created_at DESC"#,
     )
     .fetch_all(&state.pool)
@@ -296,11 +299,8 @@ pub async fn create_user(
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
                username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
-               master_key_envelope, recovery_key_envelope,
-               public_key, account_authority_public_key, account_authority_key_id,
-               account_incarnation_id, drive_signing_public_key,
-               is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2::uuid,$3,$4,$5,'','','','',''::bytea,''::bytea,'',false,true,$6)
+               identity_suite, storage_quota_bytes
+           ) VALUES ($1,$2::uuid,$3,$4,$5,2,$6)
            RETURNING id"#,
     )
     .bind(&req.username)
@@ -377,7 +377,7 @@ pub async fn update_user(
 
     // Load the target's current state for the break-glass + last-admin guards.
     let (target_is_admin, target_is_active): (bool, bool) =
-        sqlx::query_as("SELECT is_admin, is_active FROM accounts WHERE id = $1")
+        sqlx::query_as("SELECT role <> 'member', state = 'active' FROM accounts WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?
@@ -400,7 +400,7 @@ pub async fn update_user(
     // Last-admin guard: don't let a demote/disable leave zero usable admins.
     if (wants_demote || wants_disable) && target_is_admin && target_is_active {
         let other_usable: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM accounts WHERE is_admin AND is_active AND id != $1",
+            "SELECT COUNT(*) FROM accounts WHERE role <> 'member' AND state = 'active' AND id != $1",
         )
         .bind(target)
         .fetch_one(&state.pool)
@@ -541,8 +541,15 @@ pub async fn update_user(
         tx.commit().await?;
     }
     if let Some(a) = req.is_admin {
-        sqlx::query("UPDATE accounts SET is_admin = $1 WHERE id = $2")
-            .bind(a)
+        // The break-glass administrator keeps its role (guarded above for a
+        // demotion; a promotion leaves it as it is).
+        let role = if a {
+            crate::models::AccountRole::Admin
+        } else {
+            crate::models::AccountRole::Member
+        };
+        sqlx::query("UPDATE accounts SET role = $1 WHERE id = $2 AND role <> 'breakGlassAdmin'")
+            .bind(role.as_str())
             .bind(target)
             .execute(&state.pool)
             .await
@@ -647,7 +654,7 @@ pub async fn close_user(
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let (is_admin, is_active): (bool, bool) =
-        sqlx::query_as("SELECT is_admin, is_active FROM accounts WHERE id = $1")
+        sqlx::query_as("SELECT role <> 'member', state = 'active' FROM accounts WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?
@@ -657,7 +664,7 @@ pub async fn close_user(
     }
     if is_admin && is_active {
         let other_usable: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM accounts WHERE is_admin AND is_active AND id != $1",
+            "SELECT COUNT(*) FROM accounts WHERE role <> 'member' AND state = 'active' AND id != $1",
         )
         .bind(target)
         .fetch_one(&state.pool)
@@ -1066,7 +1073,7 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
 
     let stats = StatsResponse {
         total_users: scalar("SELECT COUNT(*) FROM accounts").await,
-        active_users: scalar("SELECT COUNT(*) FROM accounts WHERE is_active = true").await,
+        active_users: scalar("SELECT COUNT(*) FROM accounts WHERE state = 'active'").await,
         total_files: scalar("SELECT COUNT(*) FROM drive_files").await,
         // ::bigint — SUM(bigint) yields NUMERIC, which sqlx cannot decode as i64;
         // without the cast this silently fell back to 0 via unwrap_or.
@@ -1133,6 +1140,8 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         "chatGroupAvatarStoragePerGroupBytes": avatar.storage_bytes,
         "chatGroupAvatarPendingSeconds": avatar.pending_seconds,
         "passVaultMaxBytes": crate::site_settings::pass_vault_max_bytes(&state.pool).await?,
+        "driveVersionRetentionChoices":
+            crate::site_settings::version_retention_choices(&state.pool).await?,
     });
     if let Some(object) = settings.as_object_mut() {
         object.extend(numeric);
@@ -1167,6 +1176,7 @@ pub struct UpdateSettingsRequest {
     #[serde(deserialize_with = "present")]
     chat_group_avatar_pending_seconds: Option<Option<i64>>,
     pass_vault_max_bytes: Option<i64>,
+    drive_version_retention_choices: Option<Vec<i32>>,
 }
 
 /// A field that is present: `Some(None)` for `null`, so a missing field
@@ -1207,6 +1217,7 @@ pub async fn update_settings(
         && req.chat_group_avatar_storage_per_group_bytes.is_none()
         && req.chat_group_avatar_pending_seconds.is_none()
         && req.pass_vault_max_bytes.is_none()
+        && req.drive_version_retention_choices.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -1214,6 +1225,12 @@ pub async fn update_settings(
         crate::site_settings::validate_pass_vault_max_bytes(value)
             .map_err(AppError::bad_request)?;
     }
+    let version_retention_choices = req
+        .drive_version_retention_choices
+        .as_deref()
+        .map(crate::site_settings::validate_version_retention_choices)
+        .transpose()
+        .map_err(AppError::bad_request)?;
     if req
         .default_storage_quota_bytes
         .is_some_and(|quota| quota <= 0)
@@ -1350,6 +1367,16 @@ pub async fn update_settings(
         .await
         .map_err(|_| AppError::internal("internal error"))?;
     }
+    if let Some(days) = &version_retention_choices {
+        sqlx::query(
+            "INSERT INTO site_settings (key, value) VALUES ($1, $2) \
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
+        .bind(crate::site_settings::DRIVE_VERSION_RETENTION_CHOICES)
+        .bind(crate::site_settings::version_retention_choices_value(days))
+        .execute(&mut *transaction)
+        .await?;
+    }
     for (key, value) in [
         (
             crate::site_settings::CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP,
@@ -1423,6 +1450,7 @@ pub async fn update_settings(
             "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
             "chatGroupAvatarPendingSeconds": req.chat_group_avatar_pending_seconds,
             "passVaultMaxBytes": req.pass_vault_max_bytes,
+            "driveVersionRetentionChoices": version_retention_choices,
         }),
     )
     .await;
@@ -2429,7 +2457,7 @@ pub struct RotateTempPasswordRequest {
 }
 
 /// `POST /api/admin/users/{id}/rotate-temp-password` — replaces the temp password of an
-/// account still in `is_first_login` state. Such an account has no key material yet, so
+/// account that has not set up its keys (`keys_set_up_at` NULL). Such an account has no key material yet, so
 /// this destroys nothing. For an established account this is a `409`: under E2EE the
 /// server cannot reset a password without destroying the user's data — they self-serve
 /// via `/auth/recover`, or the admin wipes (see `wipe_user`).
@@ -2455,10 +2483,11 @@ pub async fn rotate_temp_password(
     let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let row: Option<bool> = sqlx::query_scalar("SELECT is_first_login FROM accounts WHERE id = $1")
-        .bind(target)
-        .fetch_optional(&state.pool)
-        .await?;
+    let row: Option<bool> =
+        sqlx::query_scalar("SELECT keys_set_up_at IS NULL FROM accounts WHERE id = $1")
+            .bind(target)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some(is_first_login) = row else {
         return Err(AppError::not_found("not found"));
     };
@@ -2474,7 +2503,7 @@ pub async fn rotate_temp_password(
     let rotated = sqlx::query(
         "UPDATE accounts SET key_binding = $2::uuid, opaque_record = $3, opaque_suite = $4,
                 opaque_server_key_id = $5, updated_at = NOW()
-          WHERE id = $1 AND is_first_login",
+          WHERE id = $1 AND keys_set_up_at IS NULL",
     )
     .bind(target)
     .bind(&key_binding)
@@ -2592,7 +2621,7 @@ pub struct WipeUserRequest {
 /// password and recovery phrase. Their data is cryptographically unreachable anyway;
 /// this makes it official: purges every owned collection (files, versions, assets, S3
 /// blobs, shares), erases the key bundle + TOTP + device signing keys, and resets the
-/// account to `is_first_login` with the supplied temp password. Email/username/quota
+/// account to not set up (`keys_set_up_at` NULL) with the supplied temp password. Email/username/quota
 /// survive. Irreversible. Design: `docs/research/10-admin-password-reset.md`.
 #[utoipa::path(
     post,
@@ -2710,15 +2739,15 @@ pub async fn wipe_user(
     crate::account_roots::delete(&mut tx, target).await?;
     sqlx::query(
         r#"UPDATE accounts SET
-               master_key_envelope = '', recovery_key_envelope = '',
-               public_key = '', account_authority_public_key = '',
-               account_authority_key_id = ''::bytea, account_incarnation_id = ''::bytea,
-               drive_signing_public_key = '',
+               master_key_envelope = NULL, recovery_key_envelope = NULL,
+               drive_xwing_public_key = NULL, account_authority_public_key = NULL,
+               account_authority_key_id = NULL, account_incarnation_id = NULL,
+               drive_signing_public_key = NULL,
                recovery_key_verifier = NULL, drive_key_binding = NULL,
                key_binding = $1::uuid, opaque_record = $3, opaque_suite = $4,
                opaque_server_key_id = $5,
-               totp_secret_sealed = NULL, totp_enabled = false,
-               is_first_login = true, updated_at = NOW()
+               totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL,
+               keys_set_up_at = NULL, updated_at = NOW()
            WHERE id = $2"#,
     )
     .bind(&key_binding)
@@ -3155,17 +3184,12 @@ mod tests {
             .unwrap();
         let (reset, kept) = (Uuid::new_v4(), Uuid::new_v4());
         for user_id in [reset, kept] {
-            sqlx::query(
-                "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                    public_key, account_authority_public_key,
-                    account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-                 VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-            )
-            .bind(user_id)
-            .bind(format!("reset{}", &user_id.simple().to_string()[..12]))
-            .execute(&pool)
-            .await
-            .unwrap();
+            sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+                .bind(user_id)
+                .bind(format!("reset{}", &user_id.simple().to_string()[..12]))
+                .execute(&pool)
+                .await
+                .unwrap();
             // One record in each of the two Chat list scopes.
             for scope in [RecordScope::ChatGroups, RecordScope::ChatContacts] {
                 sqlx::query(

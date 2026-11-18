@@ -27,21 +27,20 @@ pub(crate) fn keys_pending_upgrade() -> AppError {
     .with_details(serde_json::json!({ "code": "keysPendingUpgrade" }))
 }
 
-/// Refuses (`keysPendingUpgrade`) a share to a local account that is still
-/// on identity suite 1.
+/// Refuses (`keysPendingUpgrade`) a share to a local account that has no
+/// keys yet: one an administrator made or reset, until its first sign-in
+/// sets them up (`keys_set_up_at`).
 pub(crate) async fn require_sealable<'e, E: sqlx::PgExecutor<'e>>(
     executor: E,
     user_id: uuid::Uuid,
 ) -> AppResult<()> {
-    let suite: Option<i16> =
-        sqlx::query_scalar("SELECT identity_suite FROM accounts WHERE id = $1")
+    let set_up: Option<bool> =
+        sqlx::query_scalar("SELECT keys_set_up_at IS NOT NULL FROM accounts WHERE id = $1")
             .bind(user_id)
             .fetch_optional(executor)
             .await?;
-    match suite {
-        Some(suite) if suite < kutup_crypto::identity::IDENTITY_SUITE as i16 => {
-            Err(keys_pending_upgrade())
-        }
+    match set_up {
+        Some(false) => Err(keys_pending_upgrade()),
         _ => Ok(()),
     }
 }
@@ -118,12 +117,12 @@ pub async fn drive_identities(
         i32,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, username, kutup_b64(account_authority_public_key), kutup_b64(public_key),
+        "SELECT id, username, kutup_b64(account_authority_public_key), kutup_b64(drive_xwing_public_key),
                 kutup_b64(drive_signing_public_key),
                 kutup_b64(drive_key_binding), identity_suite, drive_key_binding_epoch
            FROM accounts
           WHERE id IN (SELECT kutup_current_account(name) FROM unnest($1::text[]) AS name)
-            AND is_active AND NOT is_first_login",
+            AND state = 'active' AND keys_set_up_at IS NOT NULL",
     )
     .bind(&usernames)
     .fetch_all(&state.pool)

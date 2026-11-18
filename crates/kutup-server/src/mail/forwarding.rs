@@ -300,7 +300,7 @@ pub async fn outside_refusal(
     state: &AppState,
     account: Uuid,
 ) -> Result<Option<&'static str>, crate::error::AppError> {
-    let is_admin: bool = sqlx::query_scalar("SELECT is_admin FROM accounts WHERE id = $1")
+    let is_admin: bool = sqlx::query_scalar("SELECT role <> 'member' FROM accounts WHERE id = $1")
         .bind(account)
         .fetch_one(&state.pool)
         .await?;
@@ -446,7 +446,7 @@ pub async fn tidy(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
            LEFT JOIN accounts bu ON bu.id = b.account_id
           WHERE f.kind = 'endToEnd' AND f.state <> 'outdated'
-            AND (NOT fu.is_active OR NOT COALESCE(bu.is_active, true))",
+            AND (fu.state <> 'active' OR NOT COALESCE(bu.state = 'active', true))",
     )
     .fetch_all(pool)
     .await?;
@@ -598,7 +598,7 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
            LEFT JOIN accounts u ON u.id = b.account_id
           WHERE f.forwarder_address_id = $1 AND f.state = 'active'
             AND f.verified_at IS NOT NULL
-            AND (f.kind = 'outside' OR (b.state = 'active' AND b.disabled_at IS NULL AND u.is_active))",
+            AND (f.kind = 'outside' OR (b.state = 'active' AND b.disabled_at IS NULL AND u.state = 'active'))",
     )
     .bind(arrived.address_id)
     .fetch_all(&state.pool)

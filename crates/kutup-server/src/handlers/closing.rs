@@ -63,9 +63,10 @@ pub async fn close(
 ) -> AppResult<Response> {
     let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
     let (protected, last_admin): (bool, bool) = sqlx::query_as(
-        "SELECT is_break_glass,
-                is_admin AND NOT EXISTS (SELECT 1 FROM accounts o
-                                          WHERE o.is_admin AND o.is_active AND o.id <> u.id)
+        "SELECT role = 'breakGlassAdmin',
+                role <> 'member' AND NOT EXISTS (SELECT 1 FROM accounts o
+                                          WHERE o.role <> 'member' AND o.state = 'active'
+                                            AND o.id <> u.id)
            FROM accounts u WHERE id = $1",
     )
     .bind(user_id)

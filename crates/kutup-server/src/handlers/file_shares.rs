@@ -235,8 +235,8 @@ struct Party {
 
 async fn party(pool: &PgPool, user_id: Uuid, domain: &str) -> AppResult<Party> {
     let row: Option<(Option<String>, String, Option<String>)> = sqlx::query_as(
-        "SELECT username, encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key)
-         FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT username, COALESCE(encode(account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(drive_signing_public_key), '')
+         FROM accounts WHERE id = $1 AND state = 'active'",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -463,8 +463,8 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), kutup_b64(u.public_key),
-                u.identity_suite, kutup_b64(u.drive_signing_public_key), fs.can_edit, fs.key_generation, fs.created_at
+        "SELECT u.id, u.username, COALESCE(encode(u.account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(u.drive_xwing_public_key), ''),
+                u.identity_suite, COALESCE(kutup_b64(u.drive_signing_public_key), ''), fs.can_edit, fs.key_generation, fs.created_at
          FROM drive_file_shares fs JOIN accounts u ON u.id = fs.recipient_account_id
          WHERE fs.file_id = $1 ORDER BY fs.created_at",
     )

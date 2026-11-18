@@ -3829,20 +3829,19 @@ CREATE TABLE public.account_ui_preferences (
 
 CREATE TABLE public.accounts (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    master_key_envelope bytea NOT NULL,
-    recovery_key_envelope bytea NOT NULL,
-    public_key bytea NOT NULL,
-    account_authority_public_key bytea NOT NULL,
-    account_authority_key_id bytea NOT NULL,
-    account_incarnation_id bytea NOT NULL,
-    drive_signing_public_key bytea NOT NULL,
-    totp_enabled boolean DEFAULT false NOT NULL,
+    master_key_envelope bytea,
+    recovery_key_envelope bytea,
+    drive_xwing_public_key bytea,
+    account_authority_public_key bytea,
+    account_authority_key_id bytea,
+    account_incarnation_id bytea,
+    drive_signing_public_key bytea,
     storage_quota_bytes bigint DEFAULT '10737418240'::bigint NOT NULL,
     storage_used_bytes bigint DEFAULT 0 NOT NULL,
-    is_admin boolean DEFAULT false NOT NULL,
+    role text DEFAULT 'member'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    is_first_login boolean DEFAULT false NOT NULL,
+    keys_set_up_at timestamp with time zone,
     username text NOT NULL,
     recovery_key_verifier text,
     color text,
@@ -3852,11 +3851,11 @@ CREATE TABLE public.accounts (
     opaque_record bytea,
     opaque_suite smallint,
     opaque_server_key_id smallint,
-    is_break_glass boolean DEFAULT false NOT NULL,
-    identity_suite smallint DEFAULT 1 NOT NULL,
+    identity_suite smallint NOT NULL,
     drive_key_binding_epoch integer DEFAULT 1 NOT NULL,
     security_keys_require_uv boolean DEFAULT false NOT NULL,
     totp_secret_sealed bytea,
+    totp_pending_secret_sealed bytea,
     data_key_lost_at timestamp with time zone,
     state text DEFAULT 'active'::text NOT NULL,
     suspended_reason text,
@@ -3872,7 +3871,6 @@ CREATE TABLE public.accounts (
     deleting_for text,
     deletion_attempts integer DEFAULT 0 NOT NULL,
     deletion_next_try_at timestamp with time zone,
-    is_active boolean GENERATED ALWAYS AS ((state = 'active'::text)) STORED,
     public_sharing text DEFAULT 'on'::text NOT NULL,
     federation text DEFAULT 'on'::text NOT NULL,
     master_key_generation integer DEFAULT 1 NOT NULL,
@@ -3883,7 +3881,7 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_deletion_attempts_check CHECK ((deletion_attempts >= 0)),
     CONSTRAINT accounts_drive_key_binding_epoch_check CHECK ((drive_key_binding_epoch > 0)),
     CONSTRAINT accounts_federation_check CHECK ((federation = ANY (ARRAY['on'::text, 'off'::text]))),
-    CONSTRAINT accounts_identity_suite_check CHECK ((identity_suite = ANY (ARRAY[1, 2]))),
+    CONSTRAINT accounts_identity_suite_check CHECK ((identity_suite = 2)),
     CONSTRAINT accounts_key_binding_check CHECK (((key_binding)::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
     CONSTRAINT accounts_legal_hold CHECK ((((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)) AND ((legal_hold_reference IS NOT NULL) OR (legal_hold_by_account_id IS NULL)))),
     CONSTRAINT accounts_legal_hold_reference_check CHECK (((char_length(legal_hold_reference) >= 1) AND (char_length(legal_hold_reference) <= 200))),
@@ -3892,17 +3890,20 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_opaque_record_check CHECK (((octet_length(opaque_record) >= 1) AND (octet_length(opaque_record) <= 1024))),
     CONSTRAINT accounts_opaque_server_key_id_check CHECK ((opaque_server_key_id > 0)),
     CONSTRAINT accounts_opaque_suite_check CHECK ((opaque_suite = 1)),
+    CONSTRAINT accounts_keys_set_up CHECK (((keys_set_up_at IS NULL) OR ((octet_length(master_key_envelope) > 0) AND (octet_length(recovery_key_envelope) > 0) AND (octet_length(drive_xwing_public_key) > 0) AND (octet_length(account_authority_public_key) > 0) AND (account_authority_key_id IS NOT NULL) AND (account_incarnation_id IS NOT NULL) AND (octet_length(drive_signing_public_key) > 0) AND (key_binding IS NOT NULL) AND (octet_length(drive_key_binding) > 0)))),
     CONSTRAINT accounts_public_sharing_check CHECK ((public_sharing = ANY (ARRAY['on'::text, 'off'::text]))),
+    CONSTRAINT accounts_role_check CHECK ((role = ANY (ARRAY['member'::text, 'admin'::text, 'breakGlassAdmin'::text]))),
     CONSTRAINT accounts_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'closing'::text]))),
     CONSTRAINT accounts_suspended_before_close CHECK (((suspended_before_close IS NULL) OR (state = 'closing'::text))),
     CONSTRAINT accounts_suspended_before_close_check CHECK ((suspended_before_close = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text]))),
     CONSTRAINT accounts_suspended_reason CHECK (((state = 'suspended'::text) = (suspended_reason IS NOT NULL))),
     CONSTRAINT accounts_suspended_reason_check CHECK ((suspended_reason = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text]))),
     CONSTRAINT accounts_totp_secret_sealed_check CHECK (((totp_secret_sealed IS NULL) OR ((octet_length(totp_secret_sealed) >= 47) AND (octet_length(totp_secret_sealed) <= 200)))),
+    CONSTRAINT accounts_totp_pending_secret_sealed_check CHECK (((totp_pending_secret_sealed IS NULL) OR ((octet_length(totp_pending_secret_sealed) >= 47) AND (octet_length(totp_pending_secret_sealed) <= 200)))),
     CONSTRAINT accounts_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
-    CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days = ANY (ARRAY[7, 30, 90, 180, 365, 3650]))),
-    CONSTRAINT accounts_account_authority_key_id_bytes CHECK ((octet_length(account_authority_key_id) = ANY (ARRAY[0, 32]))),
-    CONSTRAINT accounts_account_incarnation_id_bytes CHECK ((octet_length(account_incarnation_id) = ANY (ARRAY[0, 32])))
+    CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days > 0)),
+    CONSTRAINT accounts_account_authority_key_id_bytes CHECK ((octet_length(account_authority_key_id) = 32)),
+    CONSTRAINT accounts_account_incarnation_id_bytes CHECK ((octet_length(account_incarnation_id) = 32))
 );
 
 
@@ -7089,7 +7090,7 @@ CREATE INDEX accounts_closing_due ON public.accounts USING btree (closes_at) WHE
 -- Name: accounts_one_break_glass; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX accounts_one_break_glass ON public.accounts USING btree ((true)) WHERE is_break_glass;
+CREATE UNIQUE INDEX accounts_one_break_glass ON public.accounts USING btree ((true)) WHERE (role = 'breakGlassAdmin'::text);
 
 
 --

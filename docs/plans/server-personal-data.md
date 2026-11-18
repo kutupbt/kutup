@@ -165,9 +165,9 @@ keeps them; reports on them are operator tooling.
 **As built (L4, A5 and A7):**
 - `accounts.state` (`active`, `suspended` with `suspended_reason`, `closing` with
   `closing_by` and `closes_at`), `state_changed_at`, `purpose_ended_at` (set
-  when closing, cleared when kept). `is_active` stays, generated as
-  `state = 'active'`, for the queries that route, deliver and sign in;
-  nothing writes it.
+  when closing, cleared when kept). The queries that route, deliver and
+  sign in read `state = 'active'` (the generated `is_active` went in W7,
+  docs/plans/w7-schema.md §4).
 - Closing: `POST /api/user/close` with a reauth grant (`close`), or an
   admin's `POST /api/admin/users/{id}/close`. Every sign-in and grant ends. A
   sign-in that passes every step gets no session but a grant (`keep`, no

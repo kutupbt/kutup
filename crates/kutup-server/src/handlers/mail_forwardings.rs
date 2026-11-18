@@ -442,7 +442,7 @@ async fn local_person(
     }
     Ok(sqlx::query_as(
         "SELECT a.id, a.account_id, a.address, a.disabled_at IS NOT NULL FROM mail_addresses a
-           JOIN accounts u ON u.id = a.account_id AND u.is_active
+           JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
           WHERE a.folded = kutup_address_folded($1)
             AND a.state = 'active' AND a.group_id IS NULL",
     )

@@ -405,7 +405,9 @@
         "d90": "90 days",
         "d180": "6 months",
         "d365": "1 year",
-        "d3650": "10 years"
+        "d3650": "10 years",
+        "days_one": "{{count}} day",
+        "days_other": "{{count}} days"
       }
     },
     "view": {

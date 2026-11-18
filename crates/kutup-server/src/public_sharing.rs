@@ -150,7 +150,7 @@ pub async fn ensure_may_share(pool: &PgPool, owner: uuid::Uuid) -> AppResult<()>
 /// viewer is signed in to this server.
 pub async fn ensure_link_up(pool: &PgPool, token: &str, signed_in: bool) -> AppResult<()> {
     let row: Option<(bool, Option<String>, String)> = sqlx::query_as(
-        "SELECT p.removed_at IS NOT NULL OR NOT u.is_active,
+        "SELECT p.removed_at IS NOT NULL OR u.state <> 'active',
                 COALESCE(p.blocked_reason, kutup_target_blocked(p.share_type, p.target_id)),
                 u.public_sharing
            FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id

@@ -1581,17 +1581,12 @@ mod tests {
         // (counted), and a member holds a list copy with a key packet
         // (counted nowhere: its object is one of the group's above).
         let member = uuid::Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-        )
-        .bind(member)
-        .bind(format!("member{}", &tag[..12]))
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(member)
+            .bind(format!("member{}", &tag[..12]))
+            .execute(&pool)
+            .await
+            .unwrap();
         let address: uuid::Uuid = sqlx::query_scalar(
             "INSERT INTO mail_addresses (address, group_id) VALUES ($1, $2) RETURNING id",
         )

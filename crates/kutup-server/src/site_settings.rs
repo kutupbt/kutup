@@ -176,6 +176,64 @@ pub async fn pass_vault_max_bytes(pool: &PgPool) -> Result<i64, sqlx::Error> {
     )
 }
 
+/// How long an account may choose to keep its Drive file versions, in days
+/// (docs/plans/drive-versions-v2.md), set under Administration → Server
+/// settings → Drive. Stored as the days in ascending order, comma-separated.
+/// A new account starts at 30 days (`accounts.version_retention_days`); an
+/// account keeps a period an administrator later takes off the list until
+/// it chooses another.
+pub const DRIVE_VERSION_RETENTION_CHOICES: &str = "drive.version_retention_choices";
+pub const DRIVE_VERSION_RETENTION_CHOICES_DEFAULT: [i32; 6] = [7, 30, 90, 180, 365, 3650];
+/// The most choices the list holds, and the longest one (100 years).
+pub const MAX_VERSION_RETENTION_CHOICES: usize = 20;
+pub const MAX_VERSION_RETENTION_DAYS: i32 = 36_500;
+
+/// One to 20 periods of 1 to 36500 days, ascending, none twice.
+pub fn validate_version_retention_choices(days: &[i32]) -> Result<Vec<i32>, &'static str> {
+    if days.is_empty() || days.len() > MAX_VERSION_RETENTION_CHOICES {
+        return Err("version retention offers 1 to 20 periods");
+    }
+    if days
+        .iter()
+        .any(|&day| !(1..=MAX_VERSION_RETENTION_DAYS).contains(&day))
+    {
+        return Err("a version retention period is 1 to 36500 days");
+    }
+    if days.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err("version retention periods are in ascending order, none twice");
+    }
+    Ok(days.to_vec())
+}
+
+/// The stored form of a checked list.
+pub fn version_retention_choices_value(days: &[i32]) -> String {
+    days.iter()
+        .map(i32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The periods an account may choose now: the stored ones, else the first
+/// ones. Read on every change, so an administrator's edit applies at once.
+pub async fn version_retention_choices<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+) -> Result<Vec<i32>, sqlx::Error> {
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT value FROM site_settings WHERE key = $1")
+            .bind(DRIVE_VERSION_RETENTION_CHOICES)
+            .fetch_optional(executor)
+            .await?;
+    Ok(stored
+        .and_then(|value| {
+            value
+                .split(',')
+                .map(|day| day.trim().parse::<i32>().ok())
+                .collect::<Option<Vec<_>>>()
+        })
+        .and_then(|days| validate_version_retention_choices(&days).ok())
+        .unwrap_or_else(|| DRIVE_VERSION_RETENTION_CHOICES_DEFAULT.to_vec()))
+}
+
 /// Group avatars on this home (docs/plans/pairwise-groups.md, "Avatar"):
 /// the largest blob it takes (one of the avatar lengths), the most its
 /// avatars may take per group (the current blob and a pending upload), and
@@ -1607,6 +1665,24 @@ mod tests {
         assert!(validate_pass_vault_max_bytes(1024 * 1024).is_ok());
         assert!(validate_pass_vault_max_bytes(1024 * 1024 - 1).is_err());
         assert!(validate_pass_vault_max_bytes(1024 * 1024 * 1024 + 1).is_err());
+    }
+
+    #[test]
+    fn version_retention_choices_are_an_ascending_list_within_bounds() {
+        let first = DRIVE_VERSION_RETENTION_CHOICES_DEFAULT;
+        assert_eq!(validate_version_retention_choices(&first).unwrap(), first);
+        assert_eq!(
+            version_retention_choices_value(&first),
+            "7,30,90,180,365,3650"
+        );
+        assert!(validate_version_retention_choices(&[1]).is_ok());
+        assert!(validate_version_retention_choices(&[MAX_VERSION_RETENTION_DAYS]).is_ok());
+        assert!(validate_version_retention_choices(&[]).is_err());
+        assert!(validate_version_retention_choices(&[0, 30]).is_err());
+        assert!(validate_version_retention_choices(&[MAX_VERSION_RETENTION_DAYS + 1]).is_err());
+        assert!(validate_version_retention_choices(&[30, 7]).is_err());
+        assert!(validate_version_retention_choices(&[30, 30]).is_err());
+        assert!(validate_version_retention_choices(&[1; 21]).is_err());
     }
 
     #[test]

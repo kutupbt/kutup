@@ -313,7 +313,7 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
         // Mail to an old (receiving) address is answered too, always from
         // the account's current one: the old address sends nothing.
         "SELECT a.address, m.folder, m.headers,
-                COALESCE(NULLIF(i.display_name, ''), u.username), u.is_admin, cur.address
+                COALESCE(NULLIF(i.display_name, ''), u.username), u.role <> 'member', cur.address
            FROM mail_messages m
            JOIN mail_addresses a ON a.id = m.address_id
            JOIN accounts u ON u.id = a.account_id

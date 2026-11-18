@@ -242,8 +242,8 @@ pub async fn access(
         OffsetDateTime,
     );
     let members: Vec<MemberRow> = sqlx::query_as(
-        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), kutup_b64(u.public_key),
-                u.identity_suite, kutup_b64(u.drive_signing_public_key), cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
+        "SELECT u.id, u.username, COALESCE(encode(u.account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(u.drive_xwing_public_key), ''),
+                u.identity_suite, COALESCE(kutup_b64(u.drive_signing_public_key), ''), cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
          FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1 ORDER BY cs.created_at",
     )
@@ -618,7 +618,7 @@ pub async fn rotate(
 
     // Exactly the current access, split into kept and removed.
     let members: Vec<(Uuid, Option<String>, String)> = sqlx::query_as(
-        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex')
+        "SELECT u.id, u.username, COALESCE(encode(u.account_incarnation_id, 'hex'), '')
          FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1",
     )

@@ -40,6 +40,20 @@ const AVATAR_PENDING_SECONDS = { min: 60, max: 7 * 24 * 3600 } as const
 /** The largest Pass vault upload is set in MiB. */
 const MIB = 1024 * 1024
 
+/** The server's bounds (site_settings::validate_version_retention_choices). */
+const MAX_RETENTION_CHOICES = 20
+const MAX_VERSION_RETENTION_DAYS = 36500
+
+/** "7, 30, 90" as days, or null when it isn't such a list (ascending, none twice, within bounds). */
+function parseRetentionChoices(text: string): number[] | null {
+  const parts = text.split(',').map((part) => part.trim())
+  if (parts.length > MAX_RETENTION_CHOICES || parts.some((part) => !/^\d+$/.test(part))) return null
+  const days = parts.map(Number)
+  if (days.some((day) => day < 1 || day > MAX_VERSION_RETENTION_DAYS)) return null
+  if (days.some((day, index) => index > 0 && day <= days[index - 1])) return null
+  return days
+}
+
 export function ServerSettingsPage() {
   const { t } = useTranslation()
   const settings = useAdminSettings()
@@ -83,6 +97,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
     avatarStorage: z.coerce.number<number>().int(t('admin.settings.groupAvatarStorageRange')).max(MAX_AVATAR_STORAGE, t('admin.settings.groupAvatarStorageRange')),
     avatarPending: z.coerce.number<number>().int(t('admin.settings.groupAvatarPendingRange')).min(AVATAR_PENDING_SECONDS.min, t('admin.settings.groupAvatarPendingRange')).max(AVATAR_PENDING_SECONDS.max, t('admin.settings.groupAvatarPendingRange')),
     passVaultMib: z.coerce.number<number>().int(t('admin.settings.passVaultMaxRange')).min(1, t('admin.settings.passVaultMaxRange')).max(1024, t('admin.settings.passVaultMaxRange')),
+    retentionChoices: z.string().refine((text) => parseRetentionChoices(text) !== null, t('admin.settings.versionRetentionChoicesInvalid')),
   }).refine((v) => v.avatarStorage >= 2 * v.avatarMax, { path: ['avatarStorage'], message: t('admin.settings.groupAvatarStorageRange') })
   const { register, control, handleSubmit, reset, formState: { errors, isDirty } } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
@@ -102,6 +117,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
       avatarStorage: settings.chatGroupAvatarStoragePerGroupBytes,
       avatarPending: settings.chatGroupAvatarPendingSeconds,
       passVaultMib: Math.round(settings.passVaultMaxBytes / MIB),
+      retentionChoices: settings.driveVersionRetentionChoices.join(', '),
     })
   }, [settings, registry, reset])
 
@@ -121,6 +137,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
         chatGroupAvatarStoragePerGroupBytes: v.avatarStorage,
         chatGroupAvatarPendingSeconds: v.avatarPending,
         passVaultMaxBytes: v.passVaultMib * MIB,
+        driveVersionRetentionChoices: parseRetentionChoices(v.retentionChoices) ?? settings.driveVersionRetentionChoices,
       },
       { onSuccess: () => toast.success(t('admin.settings.saved')) },
     ),
@@ -251,6 +268,9 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
           <Card>
             <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
               {numericFields('drive')}
+              <Field label={t('admin.settings.versionRetentionChoices')} error={errors.retentionChoices?.message} description={t('admin.settings.versionRetentionChoicesHint')} required>
+                {(field) => <Input {...field} {...register('retentionChoices')} inputMode="numeric" data-testid="admin-version-retention-choices" />}
+              </Field>
             </CardContent>
           </Card>
         </Section>

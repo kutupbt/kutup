@@ -740,11 +740,8 @@ async fn bootstrap_admin(
     let res: Result<uuid::Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
             username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
-            master_key_envelope, recovery_key_envelope,
-            public_key, account_authority_public_key, account_authority_key_id,
-            account_incarnation_id, drive_signing_public_key,
-            is_admin, is_first_login, storage_quota_bytes, is_break_glass
-        ) VALUES ($1,$2::uuid,$3,$4,$5,'','','','',''::bytea,''::bytea,'',true,true,$6,true)
+            identity_suite, storage_quota_bytes, role
+        ) VALUES ($1,$2::uuid,$3,$4,$5,2,$6,$7)
         RETURNING id"#,
     )
     .bind(username)
@@ -753,6 +750,7 @@ async fn bootstrap_admin(
     .bind(kutup_crypto::opaque::SUITE as i16)
     .bind(opaque_server_key_id as i16)
     .bind(storage_quota_bytes)
+    .bind(crate::models::AccountRole::BreakGlassAdmin.as_str())
     .fetch_one(&mut *tx)
     .await;
     let created = match res {

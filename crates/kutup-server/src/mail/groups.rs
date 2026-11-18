@@ -88,7 +88,7 @@ pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receive
         "SELECT * FROM (
            SELECT DISTINCT ON (u.id) u.id AS account_id, a.id AS address_id, a.address, k.public_key
              FROM mail_group_members m
-             JOIN accounts u ON u.id = m.account_id AND u.is_active
+             JOIN accounts u ON u.id = m.account_id AND u.state = 'active'
              JOIN mail_addresses a ON a.account_id = u.id AND a.state = 'active'
                                   AND a.disabled_at IS NULL
              JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
@@ -109,7 +109,7 @@ pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receive
              JOIN mail_addresses a ON a.account_id = u.id AND a.state = 'active'
                                   AND a.disabled_at IS NULL
              JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-            WHERE u.is_admin AND u.is_active
+            WHERE u.role <> 'member' AND u.state = 'active'
             ORDER BY u.id, a.position, a.created_at
          ) r ORDER BY r.address",
     )

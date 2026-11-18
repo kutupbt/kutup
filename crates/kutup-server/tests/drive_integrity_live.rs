@@ -307,7 +307,7 @@ fn admin_delete_user_hands_contributions_over() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-        sqlx::query("UPDATE accounts SET is_admin = true WHERE id = $1::uuid")
+        sqlx::query("UPDATE accounts SET role = 'admin' WHERE id = $1::uuid")
             .bind(&admin.id)
             .execute(&pool)
             .await

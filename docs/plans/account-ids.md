@@ -175,7 +175,7 @@ What landed, and where it differs from the note above:
   - Shared folders carry `ownerServer`, so the owner is `(ownerServer, ownerUserId)`.
   - `GET /api/shared-files` carries `server` and `sharerUserId`.
   - Folder and file access lists carry the federated recipient's `recipientAccountId`; the owner re-seals to it through the by-id lookup.
-- **Break-glass admin** is protected by `users.is_break_glass`, set when `bootstrap_admin` makes it (one at most). The configured name stays reserved as a name.
+- **Break-glass admin** is protected by `accounts.role = 'breakGlassAdmin'`, set when `bootstrap_admin` makes it (one at most). The configured name stays reserved as a name.
 - **Kept as is:**
   - `drive_profile_keys` keeps no address column. People's labels come from the shares and accounts when listed.
   - `federated_incoming_*_shares.owner_user_id` keeps its name: it already is the owner's account id, as `collections.owner_user_id` and the JSON `ownerUserId` are.

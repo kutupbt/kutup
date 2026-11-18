@@ -62,7 +62,7 @@ Instead:
 - **Private key at rest.** `users.drive_private_key_envelope`
   (`AccountRecordPurpose::DriveHpkePrivateKey`, `Exact(32)`) keeps its shape
   and now holds the seed. Sign-in and session forks carry 32 bytes as before.
-- **Public key.** `users.public_key` holds the 1216-byte key, base64 at 1624
+- **Public key.** `accounts.drive_xwing_public_key` holds the 1216-byte key, base64 at 1624
   characters. Nothing caps that column.
 - **Drive key binding** (`drive_key_binding.rs`). The suite becomes **2**
   ("X-Wing + Ed25519"), and the signed message carries the 1216-byte key. Its
@@ -70,7 +70,7 @@ Instead:
   suite, HPKE key, signing key.
 - **Chat account manifest** (`AccountManifestV1.drive`). This gets a new
   `AccountIdentitySuiteId::XWingEd25519V2` with a 1216-byte `hpkePublicKey`, and
-  the server still requires it to equal `users.public_key`. Clients pin it in
+  the server still requires it to equal `accounts.drive_xwing_public_key`. Clients pin it in
   `manifest_trust.drive_hpke_public_key` (chat-core SQLite and IndexedDB).
   - Rule: within one incarnation the key changes only through the one-way
     suite upgrade below (a higher suite, consecutive manifests, the same

@@ -51,7 +51,7 @@ contact's PGP preferences).
 | Mail | senders whose images load, block/spam/allow lists, filters, folder notify and expanded, auto-reply, identity and signature | their own tables |
 | Pass | site icons (through Kutup or off) | `pass_settings` |
 | Pass | PIN | `pass_pins` (bcrypt) |
-| Drive | version retention, folder colours | `accounts.version_retention_days`, `drive_collections.color` |
+| Drive | version retention (from the site's `drive.version_retention_choices`), folder colours | `accounts.version_retention_days`, `drive_collections.color` |
 | Photos | upload and library folders; favourites, archived, hidden | `photos_preferences`; account records `photosLibrary` (sealed) |
 | Maps | on/off, provider, through proxy, save folder | `account_map_preferences` |
 | Contacts | per-contact encrypt, sign, scheme | inside the encrypted contact card |

@@ -45,7 +45,7 @@ pub async fn local_user<'e, E: sqlx::PgExecutor<'e>>(
     let id = Uuid::parse_str(&account.account_id)
         .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
     Ok(
-        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND is_active")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND state = 'active'")
             .bind(id)
             .fetch_optional(executor)
             .await?,
@@ -66,7 +66,7 @@ pub async fn local_user_for_peer<'e, E: sqlx::PgExecutor<'e>>(
     let id = Uuid::parse_str(&account.account_id)
         .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
     Ok(sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE id = $1 AND is_active AND kutup_account_federates(id)",
+        "SELECT id FROM accounts WHERE id = $1 AND state = 'active' AND kutup_account_federates(id)",
     )
     .bind(id)
     .fetch_optional(executor)

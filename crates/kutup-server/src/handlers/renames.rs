@@ -86,7 +86,7 @@ pub async fn check(
             .with_details(json!({ "code": "rateLimited" })));
     }
     let incarnation: String = sqlx::query_scalar(
-        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1",
+        "SELECT COALESCE(encode(account_incarnation_id, 'hex'), '') FROM accounts WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
@@ -205,10 +205,10 @@ pub async fn rename(
     let mut tx = state.pool.begin().await?;
     type Account = (String, String, String, bool, bool);
     let (username, incarnation, authority, first_login, break_glass): Account = sqlx::query_as(
-        "SELECT COALESCE(username, ''), encode(account_incarnation_id, 'hex'),
-                kutup_b64(account_authority_public_key),
-                is_first_login, is_break_glass
-           FROM accounts WHERE id = $1 AND is_active FOR UPDATE",
+        "SELECT COALESCE(username, ''), COALESCE(encode(account_incarnation_id, 'hex'), ''),
+                COALESCE(kutup_b64(account_authority_public_key), ''),
+                keys_set_up_at IS NULL, role = 'breakGlassAdmin'
+           FROM accounts WHERE id = $1 AND state = 'active' FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *tx)

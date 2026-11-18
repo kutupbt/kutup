@@ -51,11 +51,11 @@ pub(crate) async fn local_identity(
         i32,
     );
     let row: Option<Row> = sqlx::query_as(
-        "SELECT username, kutup_b64(public_key), encode(account_incarnation_id, 'hex'),
+        "SELECT username, kutup_b64(drive_xwing_public_key), encode(account_incarnation_id, 'hex'),
                 kutup_b64(drive_signing_public_key),
                 kutup_b64(account_authority_public_key), kutup_b64(drive_key_binding), identity_suite,
                 drive_key_binding_epoch
-           FROM accounts WHERE id = $1 AND is_active AND NOT is_first_login AND username IS NOT NULL
+           FROM accounts WHERE id = $1 AND state = 'active' AND keys_set_up_at IS NOT NULL AND username IS NOT NULL
             -- To another server, an account that doesn't talk to other
             -- servers is no account (crate::federation_switch).
             AND (NOT $2 OR kutup_account_federates(id))",

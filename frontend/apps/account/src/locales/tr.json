@@ -1104,8 +1104,11 @@
         "webauthnCeremonySeconds": "Güvenlik anahtarı istemi (saniye)",
         "webauthnCeremonySecondsHint": "Anahtar eklerken ya da oturum açarken güvenlik anahtarına dokunma isteminin açık kaldığı süre."
       },
-      "drive": "Drive yüklemeleri ve akış",
-      "driveHint": "Bir dosyanın en fazla ne kadar büyük olabileceği ve video ile seslerin inerken nasıl oynatıldığı.",
+      "drive": "Drive",
+      "driveHint": "Bir dosyanın en fazla ne kadar büyük olabileceği, video ile seslerin inerken nasıl oynatıldığı ve dosya sürümlerinin ne kadar saklanabileceği.",
+      "versionRetentionChoices": "Sürüm saklama seçenekleri (gün)",
+      "versionRetentionChoicesHint": "Dosya sürümlerinin saklanması için seçilebilecek süreler, gün olarak, virgülle ayrılmış (örneğin 7, 30, 90). 1 ile 36500 gün arasında en fazla 20 süre. Kaldırdığınız bir süreyi seçmiş olan kişi, başka bir süre seçene kadar onu korur.",
+      "versionRetentionChoicesInvalid": "Virgülle ayrılmış, her biri 1 ile 36500 arasında, en fazla 20 farklı tam gün sayısı.",
       "driveLimits": {
         "driveUploadMaxBytes": "En büyük yükleme (bayt)",
         "driveUploadMaxBytesHint": "Tek bir yüklemenin şifreli olarak saklayabileceği en büyük dosya.",

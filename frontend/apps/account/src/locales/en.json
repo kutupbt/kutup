@@ -1104,8 +1104,11 @@
         "webauthnCeremonySeconds": "Security key prompt (seconds)",
         "webauthnCeremonySecondsHint": "How long a prompt to touch a security key stays open, when adding one or signing in."
       },
-      "drive": "Drive uploads and streaming",
-      "driveHint": "How large a file may be, and how videos and audio play while they download.",
+      "drive": "Drive",
+      "driveHint": "How large a file may be, how videos and audio play while they download, and how long file versions may be kept.",
+      "versionRetentionChoices": "Version retention choices (days)",
+      "versionRetentionChoicesHint": "The periods people can choose to keep file versions for, in days, separated by commas (for example 7, 30, 90). Up to 20 periods of 1 to 36500 days. Someone who chose a period you remove keeps it until they choose another.",
+      "versionRetentionChoicesInvalid": "Up to 20 different whole numbers of days, each 1 to 36500, separated by commas.",
       "driveLimits": {
         "driveUploadMaxBytes": "Largest upload (bytes)",
         "driveUploadMaxBytesHint": "The largest file one upload stores, encrypted.",

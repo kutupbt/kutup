@@ -3252,10 +3252,8 @@ fn queue_withdrawn_send(a_db: &str) {
         let user = uuid::Uuid::new_v4();
         let mut tx = pool.begin().await.unwrap();
         sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key, account_authority_key_id,
-                account_incarnation_id, drive_signing_public_key, federation)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '', 'off')",
+            "INSERT INTO accounts (id, username, identity_suite, federation)
+             VALUES ($1, $2, 2, 'off')",
         )
         .bind(user)
         .bind(format!("withdrawn{}", &user.simple().to_string()[..10]))

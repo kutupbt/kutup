@@ -303,6 +303,8 @@ export interface AdminSettings {
   chatGroupAvatarPendingSeconds: number
   /** The largest `.kdbx` file Kutup Pass takes in an upload, in bytes (1 MiB to 1 GiB). */
   passVaultMaxBytes: number
+  /** The Drive version retention periods an account may choose, in days, ascending. */
+  driveVersionRetentionChoices: number[]
   /** Calendars (site_settings::CALENDAR_SETTINGS). */
   calendarsPerAccount: number
   calendarEventsPerCalendar: number

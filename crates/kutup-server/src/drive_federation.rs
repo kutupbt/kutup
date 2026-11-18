@@ -714,10 +714,10 @@ pub async fn get_user(
             i32,
         );
         let identity: Option<Row> = sqlx::query_as(
-            "SELECT id, username, kutup_b64(public_key), encode(account_incarnation_id, 'hex'),
-                    kutup_b64(drive_signing_public_key), kutup_b64(account_authority_public_key),
-                    kutup_b64(drive_key_binding), identity_suite, drive_key_binding_epoch
-             FROM accounts WHERE id = kutup_current_account($1) AND is_active = true
+            "SELECT id, username, COALESCE(kutup_b64(drive_xwing_public_key), ''), COALESCE(encode(account_incarnation_id, 'hex'), ''),
+                    COALESCE(kutup_b64(drive_signing_public_key), ''), COALESCE(kutup_b64(account_authority_public_key), ''),
+                    COALESCE(kutup_b64(drive_key_binding), ''), identity_suite, drive_key_binding_epoch
+             FROM accounts WHERE id = kutup_current_account($1) AND state = 'active'
               AND kutup_account_federates(id)",
         )
         .bind(username)
@@ -797,7 +797,7 @@ pub async fn accept_incoming_share(
     validate_capability(&request.capability)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let local_incarnation: String = sqlx::query_scalar(
-        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT COALESCE(encode(account_incarnation_id, 'hex'), '') FROM accounts WHERE id = $1 AND state = 'active'",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -1037,7 +1037,7 @@ pub async fn refresh_incoming_share(
     .ok_or_else(|| AppError::not_found("share not found"))?;
     let (server, capability, collection_id, epoch, statement_hash, owner_id, authority) = stored;
     let local_incarnation: String = sqlx::query_scalar(
-        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT COALESCE(encode(account_incarnation_id, 'hex'), '') FROM accounts WHERE id = $1 AND state = 'active'",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)

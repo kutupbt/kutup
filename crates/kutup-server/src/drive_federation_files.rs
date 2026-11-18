@@ -592,7 +592,7 @@ async fn fetch_verified_file_invite(
 /// The account's current incarnation (an active account's).
 async fn local_incarnation(state: &AppState, user_id: Uuid) -> AppResult<String> {
     sqlx::query_scalar(
-        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT COALESCE(encode(account_incarnation_id, 'hex'), '') FROM accounts WHERE id = $1 AND state = 'active'",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)

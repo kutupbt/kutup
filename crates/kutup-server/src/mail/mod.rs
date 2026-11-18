@@ -211,7 +211,7 @@ async fn own_domain_row(
     sqlx::query_as(
         "SELECT a.id, a.account_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
-           JOIN accounts u ON u.id = a.account_id AND u.is_active
+           JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
           WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
             AND a.disabled_at IS NULL
@@ -266,7 +266,7 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     const SELECT: &str =
         "SELECT a.id, a.account_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
-           JOIN accounts u ON u.id = a.account_id AND u.is_active
+           JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
            JOIN organization_members m ON m.account_id = a.account_id AND m.organization_id = $3
                                       AND m.state = 1
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary";

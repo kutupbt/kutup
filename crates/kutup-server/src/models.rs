@@ -112,6 +112,9 @@ pub struct AdminSettingsResponse {
     pub chat_group_avatar_pending_seconds: i64,
     /// The largest `.kdbx` file Kutup Pass takes in an upload: 1 MiB to 1 GiB.
     pub pass_vault_max_bytes: i64,
+    /// The Drive version retention periods an account may choose (days,
+    /// ascending; 1 to 20 of them, each 1 to 36500).
+    pub drive_version_retention_choices: Vec<i32>,
 }
 
 /// `GET /api/auth/recover/preflight`: what a recovery proof is derived with.
@@ -162,6 +165,10 @@ pub struct MeResponse {
     pub color: String,
     /// How long this account's file versions are kept (days).
     pub version_retention_days: i32,
+    /// The periods it may choose from (days, ascending), as the
+    /// administrators set them; `versionRetentionDays` may be one taken off
+    /// the list since.
+    pub version_retention_choices: Vec<i32>,
     /// Where the account's rename chain stands (`sequence` 0 and no `digest`
     /// before a first rename): what its own devices anchor to.
     /// Whether this account may share by public link (`on`, `off`), as an
@@ -546,6 +553,8 @@ pub struct UpdateAdminSettingsRequest {
     pub chat_group_avatar_pending_seconds: Option<i64>,
     /// 1 MiB to 1 GiB.
     pub pass_vault_max_bytes: Option<i64>,
+    /// Days, ascending, none twice: 1 to 20 periods of 1 to 36500 days.
+    pub drive_version_retention_choices: Option<Vec<i32>>,
 }
 
 /// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.
@@ -558,6 +567,45 @@ pub struct StatsResponse {
     #[serde(rename = "totalStorageUsedBytes")]
     pub total_storage_used: i64,
     pub total_collections: i64,
+}
+
+/// What an account may do on its server: `accounts.role`. An organization
+/// role is the organization's own (`organization_members.role`).
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountRole {
+    Member,
+    /// Administers the server.
+    Admin,
+    /// The administrator `bootstrap_admin` made (at most one): never demoted,
+    /// suspended, closed or reset.
+    BreakGlassAdmin,
+}
+
+impl AccountRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Member => "member",
+            Self::Admin => "admin",
+            Self::BreakGlassAdmin => "breakGlassAdmin",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "member" => Some(Self::Member),
+            "admin" => Some(Self::Admin),
+            "breakGlassAdmin" => Some(Self::BreakGlassAdmin),
+            _ => None,
+        }
+    }
+
+    /// Administers the server (the break-glass administrator too).
+    pub const fn is_admin(self) -> bool {
+        !matches!(self, Self::Member)
+    }
 }
 
 #[cfg(test)]
@@ -586,6 +634,24 @@ mod tests {
         })
         .unwrap();
         assert_eq!(body, r#"{"error":"nope"}"#);
+    }
+
+    #[test]
+    fn account_roles_read_as_stored() {
+        for role in [
+            AccountRole::Member,
+            AccountRole::Admin,
+            AccountRole::BreakGlassAdmin,
+        ] {
+            assert_eq!(AccountRole::parse(role.as_str()), Some(role));
+            assert_eq!(
+                serde_json::to_value(role).unwrap(),
+                serde_json::json!(role.as_str())
+            );
+        }
+        assert_eq!(AccountRole::parse("is_admin"), None);
+        assert!(!AccountRole::Member.is_admin());
+        assert!(AccountRole::Admin.is_admin() && AccountRole::BreakGlassAdmin.is_admin());
     }
 
     #[test]

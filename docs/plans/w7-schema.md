@@ -259,6 +259,33 @@ Actions, old → new:
 - The `deleting_*` claim columns stay: they are the deletion job's
   bookkeeping.
 
+**As built (group 4):**
+- `role` CHECK (`member`, `admin`, `breakGlassAdmin`), `member` by default;
+  Rust `models::AccountRole`. The API keeps its booleans (`isAdmin`,
+  `isProtected`), computed from it; a promotion never touches the
+  break-glass administrator's role. `accounts_one_break_glass` is a unique
+  index on `role = 'breakGlassAdmin'`.
+- The key columns are nullable, NULL until set up (an administrator's
+  account, a reset one). `accounts_keys_set_up` requires, once
+  `keys_set_up_at` is set, both envelopes, the X-Wing, authority and Drive
+  signing keys and `drive_key_binding` non-empty and the authority key id,
+  incarnation id and `key_binding` present. `recovery_key_envelope` is in it:
+  every setup path (sign-up, first sign-in) and the master-key rotation
+  write one, and the recovery phrase is not optional. Authority key id and
+  incarnation id are exactly 32 bytes when present. Sign-up sets
+  `keys_set_up_at` with the keys; the first sign-in's setup sets it in the
+  same UPDATE as the keys.
+- `totp_enabled` went, but the authenticator's secret being set up (before
+  its first code) moved to its own column, `totp_pending_secret_sealed`;
+  `totp_secret_sealed IS NOT NULL` is "the authenticator app is on".
+- Sharing to a local account that has not set up its keys is refused
+  (`keysPendingUpgrade`) by `keys_set_up_at`, as it was by suite 1 before.
+- `drive.version_retention_choices`: an admin setting outside the numeric
+  registry (it is a list), stored as ascending comma-separated days, edited
+  in Administration → Server settings → Drive (`driveVersionRetentionChoices`),
+  checked by `PATCH /api/user/me`; `/api/user/me` gives the account its
+  `versionRetentionChoices`. The column keeps only `> 0`.
+
 ## 5. Entitlements
 
 `account_entitlements (account_id, key text, value bigint, source text,

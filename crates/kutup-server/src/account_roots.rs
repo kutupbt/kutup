@@ -306,17 +306,12 @@ mod tests {
             .await
             .unwrap();
         let user = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
-        )
-        .bind(user)
-        .bind(format!("roots{}", &user.simple().to_string()[..12]))
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            .bind(user)
+            .bind(format!("roots{}", &user.simple().to_string()[..12]))
+            .execute(&pool)
+            .await
+            .unwrap();
         let roots = checked_first(&first(), BINDING).unwrap();
         let mut tx = pool.begin().await.unwrap();
         store(&mut tx, user, &roots).await.unwrap();

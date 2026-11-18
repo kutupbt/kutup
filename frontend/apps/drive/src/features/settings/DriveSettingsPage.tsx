@@ -11,8 +11,8 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { readDefaultView, writeDefaultView, type DefaultView } from '../explorer/prefs'
 
-/** The retention periods the server accepts (docs/plans/drive-versions-v2.md). */
-const VERSION_RETENTION_DAYS = [7, 30, 90, 180, 365, 3650] as const
+/** The periods with a name of their own ("1 week", "6 months"); any other reads "N days". */
+const NAMED_RETENTION_DAYS: ReadonlySet<number> = new Set([7, 30, 90, 180, 365, 3650])
 
 /**
  * How Drive behaves: how long file versions are kept (for the account), and
@@ -24,8 +24,18 @@ export function DriveSettingsPage() {
   const queryClient = useQueryClient()
   const me = useQuery({
     queryKey: ['me'],
-    queryFn: async () => (await api.get<{ versionRetentionDays: number }>('/user/me')).data,
+    queryFn: async () =>
+      (await api.get<{ versionRetentionDays: number; versionRetentionChoices: number[] }>('/user/me')).data,
   })
+  // The periods the administrators offer (drive.version_retention_choices),
+  // with the account's own when it was taken off the list since.
+  const choices = me.data
+    ? [...new Set([...me.data.versionRetentionChoices, me.data.versionRetentionDays])].sort((a, b) => a - b)
+    : []
+  const retentionLabel = (days: number) =>
+    NAMED_RETENTION_DAYS.has(days)
+      ? t(`settings.versions.retention.d${days}`)
+      : t('settings.versions.retention.days', { count: days })
   const retention = useMutation({
     mutationFn: async (days: number) => {
       await api.patch('/user/me', { versionRetentionDays: days })
@@ -55,9 +65,9 @@ export function DriveSettingsPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {VERSION_RETENTION_DAYS.map((days) => (
+                {choices.map((days) => (
                   <SelectItem key={days} value={String(days)}>
-                    {t(`settings.versions.retention.d${days}`)}
+                    {retentionLabel(days)}
                   </SelectItem>
                 ))}
               </SelectContent>
