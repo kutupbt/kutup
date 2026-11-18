@@ -91,14 +91,14 @@ function openSignIn() {
   return { request: 'ke1', finish: vi.fn(), openMasterKey: vi.fn(() => Promise.resolve(new Uint8Array(32))), register: vi.fn(), close: vi.fn() }
 }
 
-const session = { accessToken: 'a', sessionId: 's', accountId: 'u', username: 'alice', masterKeyEnvelope: 'm', publicKey: 'p', keyBinding: 'kb' }
+const session = { accessToken: 'a', sessionId: 's', accountId: 'u', username: 'alice', masterKeyEnvelope: 'm', driveXwingPublicKey: 'p', keyBinding: 'kb' }
 
 describe('signIn', () => {
   it('ends the sign-in and drops the keys when the server publishes another Drive key', async () => {
     const masterKey = new Uint8Array(32).fill(7)
     const driveKey = new Uint8Array(32).fill(9)
     const opened = { ...openSignIn(), openMasterKey: vi.fn(() => Promise.resolve(masterKey)) }
-    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, publicKey: 'other' }, signIn: opened })
+    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, driveXwingPublicKey: 'other' }, signIn: opened })
     crypto_.driveKeysOf.mockResolvedValueOnce({ publicKey: 'p', privateKey: driveKey })
     post.mockResolvedValue({ data: {} })
     await expect(signIn('alice', 'pw')).rejects.toThrow('another Drive key')

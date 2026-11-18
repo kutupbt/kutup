@@ -292,7 +292,6 @@ pub async fn consume_fork(
         sessions::consume_fork(&state.pool, &req.selector, child, user_agent(&headers)).await?;
     let access = jwt::generate_access_token(
         &consumed.account_id.to_string(),
-        consumed.is_admin,
         &consumed.issued.session_id.to_string(),
         &state.config.jwt_secret,
     )

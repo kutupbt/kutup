@@ -818,7 +818,7 @@ fn registration_payload(
         "masterKeyEnvelope": master_key_envelope,
         "recoveryKeyEnvelope": recovery_key_envelope,
         "accountRoots": common::sealed_roots(&roots, &master_key, &binding),
-        "publicKey": b64(&identity.drive_hpke_public_key()),
+        "driveXwingPublicKey": b64(&identity.drive_hpke_public_key()),
         "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
         "accountAuthorityKeyId": identity.authority_key_id(),
         "accountIncarnationId": identity.incarnation_id(),
@@ -835,7 +835,7 @@ fn registration_payload(
 
 fn register_account(c: &Client, base: &str, email: &str, username: &str) -> (String, String) {
     let payload = registration_payload(c, base, email, username, None);
-    let public_key = payload["publicKey"].as_str().unwrap().to_owned();
+    let public_key = payload["driveXwingPublicKey"].as_str().unwrap().to_owned();
     // Sign-up answers a session (the client sends `x-kutup-client: cli`);
     // the account then signs in afresh, as it always did here.
     let response = c
@@ -877,7 +877,7 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
             .unwrap(),
         "bootstrap admin setup",
     );
-    assert_eq!(setup["isAdmin"], true);
+    assert_eq!(setup["role"], "breakGlassAdmin");
     setup["accessToken"].as_str().unwrap().to_string()
 }
 

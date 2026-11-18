@@ -429,7 +429,7 @@ uses admits exactly N accounts however many sign up at once.
   "masterKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "recoveryKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "accountRoots": ["<canonical base64 AccountRecordV1>", "… five"],
-  "publicKey": "<base64>",
+  "driveXwingPublicKey": "<base64 X-Wing public key>",
   "accountAuthorityPublicKey": "<base64 32 bytes>",
   "accountAuthorityKeyId": "<lowercase SHA-256 hex>",
   "accountIncarnationId": "<lowercase SHA-256 hex>",
@@ -585,9 +585,9 @@ malformed finalization is a `400`.
   "accountAuthorityPublicKey": "<base64 32 bytes>",
   "masterKeyGeneration": 1,
   "masterKeyring": [],
-  "publicKey": "<base64>",
+  "driveXwingPublicKey": "<base64>",
   "keyBinding": "<the account's key binding (a UUID v4)>",
-  "isAdmin": false,
+  "role": "member",
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 104857600
 }
@@ -831,7 +831,7 @@ record goes with it.
   "sessionId": "<uuid>",
   "accountId": "<uuid>",
   "username": "alice",
-  "isAdmin": false,
+  "role": "member",
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 0
 }
@@ -969,16 +969,23 @@ Return the current user's profile (public key + storage stats). The encrypted ke
   "address": "alice@example.com",
   "envelopeBinding": "<the account's key binding>",
   "username": "alice",
-  "publicKey": "<base64>",
-  "totpEnabled": false,
+  "driveXwingPublicKey": "<base64>",
+  "twoFactor": "off",
+  "securityKeys": 0,
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 104857600,
-  "isAdmin": false,
+  "role": "member",
   "color": "",
   "versionRetentionDays": 30,
   "versionRetentionChoices": [7, 30, 90, 180, 365, 3650]
 }
 ```
+
+`role` is `member`, `admin` or `breakGlassAdmin` (the administrator
+`bootstrap_admin` made: never demoted, suspended, closed or reset).
+`twoFactor` is the authenticator app: `on`, `pending` (set up, its first code
+not confirmed yet) or `off`; two-step sign-in is on while it is `on` or
+`securityKeys` is above 0. `driveXwingPublicKey` is the account's Drive key.
 
 `storageQuotaBytes` / `storageUsedBytes` are the account's one storage pool.
 Drive, Photos, Office, Maps and Chat all count against it.
@@ -5439,7 +5446,7 @@ before sending, never the page's address (it can name a file or a person).
 
 ## Admin
 
-All admin endpoints require the `isAdmin` flag on the JWT and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
+All admin endpoints require an administrator's session (`role` `admin` or `breakGlassAdmin`) and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
 
 Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/v1/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; payloads name accounts by id only (no username snapshot). Some rows are the server's own (a job or an operator command, for example a federation identity rotation): their `adminAccountId` is the nil UUID, shown as "system".
 
@@ -5463,7 +5470,7 @@ Logged as `report.dismiss`.
 Take the reported link down (it answers `410 linkRemoved` from then on) and
 close every open report on it. `204`; `404` for no such open report. Logged as
 `share.remove`. Disabling the owner (`PUT /api/v1/admin/accounts/:id` with
-`isActive: false`) takes every link of theirs down and closes their reports.
+`state: "suspended"`) takes every link of theirs down and closes their reports.
 
 ### POST /api/v1/admin/public-links/:id/block · DELETE /api/v1/admin/public-links/:id/block
 
@@ -5518,26 +5525,24 @@ List all registered users.
     "username": "alice",
     "storageQuotaBytes": 10737418240,
     "storageUsedBytes": 524288000,
-    "isAdmin": false,
-    "isActive": true,
+    "role": "member",
     "state": "closing",
     "closesAt": "2026-11-20T10:00:00Z",
     "legalHoldReference": "case 2026/17",
     "legalHoldAt": "2026-11-06T09:00:00Z",
-    "totpEnabled": false,
-    "createdAt": "2026-03-14T12:00:00Z",
-    "isProtected": false
+    "twoFactor": "off",
+    "keysSetUp": true,
+    "createdAt": "2026-03-14T12:00:00Z"
   }
 ]
 ```
 
 `state` is `active`, `suspended` (with `suspendedReason`: `admin`,
 `operatorOrder` or `security`) or `closing` (with `closesAt`, when it is
-deleted); `isActive` is `state == "active"` (docs/plans/server-personal-data.md,
-A5). `legalHoldReference` and `legalHoldAt` are present while a legal hold is
+deleted) (docs/plans/server-personal-data.md, A5). `legalHoldReference` and `legalHoldAt` are present while a legal hold is
 set.
 
-`isProtected` is `true` for the break-glass admin (the account from the `ADMIN_ACCOUNT` env var, known by its username). Protected users cannot be demoted, disabled, or deleted — the relevant mutations below return `403`.
+`role` is `member`, `admin` or `breakGlassAdmin`: the break-glass admin (the account from the `ADMIN_ACCOUNT` env var) cannot be demoted, disabled, or deleted — the relevant mutations below return `403`. `twoFactor` is the authenticator app (`on`, `pending`, `off`); `keysSetUp` is false while the account is still on the temporary password an administrator gave it.
 
 ---
 
@@ -5582,20 +5587,20 @@ Update a user. All fields are optional; only the ones present in the request are
 ```json
 {
   "storageQuotaBytes": 21474836480,
-  "isActive": false,
+  "state": "suspended",
   "suspendedReason": "operatorOrder",
-  "isAdmin": false
+  "role": "member"
 }
 ```
 
-`isActive: false` suspends the account (`suspendedReason`, default `admin`);
+`state: "suspended"` suspends the account (`suspendedReason`, default `admin`);
 its sign-ins end. A closing account is `409 accountClosing`: keep it first.
-`isActive: true` makes a suspended account active again, and keeps a closing
+`state: "active"` makes a suspended account active again, and keeps a closing
 one (as it was before it closed: a suspended account is suspended again, with
 its reason, and records `accountKept`) until its date (`409 accountDeleting` after: the closing job may be
 deleting it; a held account can still be kept). `storageQuotaBytes` gives the
 account its own quota (above 0; audited as `account.setEntitlement` with `key`
-`account.storage_quota_bytes`). `isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
+`account.storage_quota_bytes`). `role` (`member` or `admin`) demotes or promotes the user, from its next request on (the session row carries it; tokens carry no role).
 
 **Response:** `200 OK` `{"message": "updated"}`. `403` if the request would demote or disable the break-glass admin; `400` if it would leave zero usable admins.
 
@@ -5618,7 +5623,7 @@ keyed hashes (docs/plans/server-personal-data.md, A7).
 
 Close the account: every sign-in ends, and it is deleted after
 `account.closing_days` (a Privacy and retention setting, default 14) unless it
-is kept, by its owner at sign-in or here (`PUT` with `isActive: true`).
+is kept, by its owner at sign-in or here (`PUT` with `state: "active"`).
 Recorded as `account.close`.
 
 **Auth:** Bearer JWT (admin)
@@ -5658,7 +5663,7 @@ Force-disable a user's TOTP two-factor authentication — an admin override for 
 
 ### POST /api/v1/admin/accounts/:id/rotate-temp-password
 
-Replace the temporary password of an account still in first-login state (`isFirstLogin: true`). Such an account has no E2EE key material yet, so nothing is destroyed. For an established account this returns `409` — under E2EE the server cannot reset a password without destroying the user's data; the user self-serves with the recovery phrase (`POST /api/v1/auth/recover/grant`), or the admin wipes (below). Design: `docs/research/10-admin-password-reset.md`.
+Replace the temporary password of an account still in first-login state (`keysSetUp: false`). Such an account has no E2EE key material yet, so nothing is destroyed. For an established account this returns `409` — under E2EE the server cannot reset a password without destroying the user's data; the user self-serves with the recovery phrase (`POST /api/v1/auth/recover/grant`), or the admin wipes (below). Design: `docs/research/10-admin-password-reset.md`.
 
 **Auth:** Bearer JWT (admin)
 

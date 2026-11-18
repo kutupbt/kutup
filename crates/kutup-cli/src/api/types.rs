@@ -43,7 +43,8 @@ pub struct RegisterRequest {
     /// The account's root records, sealed under its master key
     /// (docs/plans/identity-root.md).
     pub account_roots: Vec<String>,
-    pub public_key: String,
+    /// The account's Drive key (X-Wing).
+    pub drive_xwing_public_key: String,
     pub account_authority_public_key: String,
     pub account_authority_key_id: String,
     pub account_incarnation_id: String,
@@ -66,8 +67,9 @@ pub struct LoginResponse {
     pub account_id: String,
     #[serde(default)]
     pub username: String,
+    /// `member`, `admin` or `breakGlassAdmin`; none on the setup/2FA steps.
     #[serde(default)]
-    pub is_admin: bool,
+    pub role: Option<String>,
     #[serde(default)]
     pub storage_quota_bytes: i64,
     #[serde(default)]
@@ -87,7 +89,7 @@ pub struct LoginResponse {
     #[serde(default)]
     pub master_keyring: Vec<String>,
     #[serde(default)]
-    pub public_key: String,
+    pub drive_xwing_public_key: String,
     /// What the account's sealed keys are bound to; only with a session.
     #[serde(default, rename = "keyBinding")]
     pub envelope_binding: String,
@@ -186,10 +188,12 @@ pub struct AccountMe {
     /// What the account's envelopes are bound to now.
     #[serde(default)]
     pub envelope_binding: String,
+    /// `member`, `admin` or `breakGlassAdmin`.
     #[serde(default)]
-    pub is_admin: bool,
+    pub role: String,
+    /// The authenticator app: `on`, `pending` (not confirmed yet) or `off`.
     #[serde(default)]
-    pub totp_enabled: bool,
+    pub two_factor: String,
     /// Security keys the account has: two-step sign-in is on with them too.
     #[serde(default)]
     pub security_keys: i64,

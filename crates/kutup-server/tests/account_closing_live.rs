@@ -169,7 +169,7 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin,
     )
-    .json(&json!({ "isActive": false }))
+    .json(&json!({ "state": "suspended" }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::CONFLICT);
@@ -177,7 +177,7 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin,
     )
-    .json(&json!({ "isActive": true }))
+    .json(&json!({ "state": "active" }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
@@ -188,7 +188,7 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin,
     )
-    .json(&json!({ "isActive": false, "suspendedReason": "operatorOrder" }))
+    .json(&json!({ "state": "suspended", "suspendedReason": "operatorOrder" }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::OK);

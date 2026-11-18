@@ -70,14 +70,24 @@ export interface FileRow {
 
 export type SuspendedReason = 'admin' | 'operatorOrder' | 'security'
 
+/** What an account may do on its server (`breakGlassAdmin`: the one `bootstrap_admin` made). */
+export type AccountRole = 'member' | 'admin' | 'breakGlassAdmin'
+
+/** The authenticator app: on, set up but not confirmed by a first code yet, or off. */
+export type TwoFactorState = 'on' | 'pending' | 'off'
+
+/** Administers the server (the break-glass administrator too). */
+export function administers(role: AccountRole | undefined): boolean {
+  return role === 'admin' || role === 'breakGlassAdmin'
+}
+
 export interface UserRow {
   id: string
   username: string
   storageQuotaBytes: number
   storageUsedBytes: number
-  isAdmin: boolean
-  /** The state is `active`. */
-  isActive: boolean
+  /** `breakGlassAdmin` is never demoted, suspended, closed or reset (the UI disables those). */
+  role: AccountRole
   /** `active`, `suspended` or `closing` (docs/plans/server-personal-data.md, A5). */
   state: 'active' | 'suspended' | 'closing'
   /** Why a suspended account is. */
@@ -95,19 +105,14 @@ export interface UserRow {
   deletionAttempts: number
   /** When its data key was found not to open: what was sealed under it is lost. */
   dataKeyLostAt?: string
-  totpEnabled: boolean
+  /** The authenticator app. */
+  twoFactor: TwoFactorState
   /**
-   * Still on the admin-issued temp password — no key material yet. Gates the
-   * admin "Rotate temp password" action (safe only in this state).
+   * The account has set up its keys. Until then it is on the admin-issued
+   * temp password, and "Rotate temp password" is safe (only then).
    */
-  isFirstLogin: boolean
+  keysSetUp: boolean
   createdAt: string
-  /**
-   * True for the break-glass admin (the account from the `ADMIN_ACCOUNT`
-   * env var). The UI disables demote / disable / delete for this user —
-   * the backend rejects those mutations with 403.
-   */
-  isProtected: boolean
 }
 
 export interface LoginResponse {
@@ -119,11 +124,12 @@ export interface LoginResponse {
   accountRoots?: string[]
   /** The authority the newest identity root must derive, with the session only. */
   accountAuthorityPublicKey?: string
-  publicKey: string
-  isAdmin: boolean
+  /** The account's Drive key (X-Wing), with the session only. */
+  driveXwingPublicKey?: string
+  /** With the session only. */
+  role?: AccountRole
   storageQuotaBytes: number
   storageUsedBytes: number
-  totpEnabled?: boolean
 }
 
 export interface IncomingShare {

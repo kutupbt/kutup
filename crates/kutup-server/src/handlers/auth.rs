@@ -57,7 +57,8 @@ pub struct RegisterRequest {
     /// each, the identity and Drive roots at generation 1, sealed under the
     /// master key for the key binding.
     account_roots: Vec<String>,
-    public_key: String,
+    /// The account's Drive key (X-Wing).
+    drive_xwing_public_key: String,
     account_authority_public_key: String,
     account_authority_key_id: String,
     account_incarnation_id: String,
@@ -114,8 +115,13 @@ pub struct LoginResponse {
     /// empty before a first rotation.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     master_keyring: Vec<String>,
-    public_key: String,
-    is_admin: bool,
+    /// The account's Drive key (X-Wing); empty on the setup/2FA branches.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    drive_xwing_public_key: String,
+    /// `member`, `admin` or `breakGlassAdmin`; left out on the setup/2FA
+    /// branches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<crate::models::AccountRole>,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
     color: String,
@@ -320,7 +326,8 @@ pub struct CompleteSetupResponse {
     refresh_token: Option<String>,
     account_id: String,
     username: String,
-    is_admin: bool,
+    /// `member`, `admin` or `breakGlassAdmin`.
+    role: crate::models::AccountRole,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
 }
@@ -381,7 +388,7 @@ fn checked_drive_key_binding(
         account,
         &req.account_authority_public_key,
         1,
-        &req.public_key,
+        &req.drive_xwing_public_key,
         &req.drive_signing_public_key,
         &req.drive_key_binding,
     )?;
@@ -428,9 +435,9 @@ fn validate_account_identity(req: &RegisterRequest) -> AppResult<()> {
     let authority: [u8; 32] = authority.try_into().expect("validated length");
     // The Drive key is X-Wing (identity suite 2, docs/plans/pq-shares.md).
     decode_canonical_base64_exact(
-        &req.public_key,
+        &req.drive_xwing_public_key,
         kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN,
-        "publicKey",
+        "driveXwingPublicKey",
     )?;
     decode_canonical_base64_exact(&req.drive_signing_public_key, 32, "driveSigningPublicKey")?;
     if req.account_authority_key_id
@@ -783,7 +790,7 @@ pub async fn register(
     .bind(&req.username)
     .bind(&req.master_key_envelope)
     .bind(&req.recovery_key_envelope)
-    .bind(&req.public_key)
+    .bind(&req.drive_xwing_public_key)
     .bind(&req.account_authority_public_key)
     .bind(&req.account_authority_key_id)
     .bind(&req.account_incarnation_id)
@@ -855,7 +862,7 @@ pub(crate) async fn signed_in_answer(
         String,
         String,
         bool,
-        bool,
+        String,
         i64,
         bool,
         bool,
@@ -867,7 +874,7 @@ pub(crate) async fn signed_in_answer(
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT COALESCE(kutup_b64(master_key_envelope), ''),
                   COALESCE(kutup_b64(drive_xwing_public_key), ''),
-                  totp_secret_sealed IS NOT NULL, role <> 'member', storage_used_bytes,
+                  totp_secret_sealed IS NOT NULL, role, storage_used_bytes,
                   (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)),
                   keys_set_up_at IS NULL,
                   COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding::text, ''),
@@ -882,7 +889,7 @@ pub(crate) async fn signed_in_answer(
         master_key_envelope,
         pub_key,
         totp_enabled,
-        is_admin,
+        role,
         used_bytes,
         is_active,
         is_first_login,
@@ -951,7 +958,7 @@ pub(crate) async fn signed_in_answer(
         &username,
         &master_key_envelope,
         &pub_key,
-        is_admin,
+        crate::models::AccountRole::stored(&role),
         quota_bytes,
         used_bytes,
         &color,
@@ -1079,11 +1086,11 @@ pub(crate) async fn issue_after_second_step(
     user_id: &str,
     epoch: &[u8],
 ) -> AppResult<Response> {
-    type Row = (String, String, bool, i64, String, bool, String, String);
+    type Row = (String, String, String, i64, String, bool, String, String);
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT COALESCE(kutup_b64(master_key_envelope), ''),
                   COALESCE(kutup_b64(drive_xwing_public_key), ''),
-                  role <> 'member', storage_used_bytes,
+                  role, storage_used_bytes,
                   COALESCE(username, ''), (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), COALESCE(color, ''),
                   COALESCE(key_binding::text, '')
            FROM accounts WHERE id = $1"#,
@@ -1094,7 +1101,7 @@ pub(crate) async fn issue_after_second_step(
     let Some((
         master_key_envelope,
         pub_key,
-        is_admin,
+        role,
         used_bytes,
         username,
         is_active,
@@ -1120,7 +1127,7 @@ pub(crate) async fn issue_after_second_step(
         &username,
         &master_key_envelope,
         &pub_key,
-        is_admin,
+        crate::models::AccountRole::stored(&role),
         quota_bytes,
         used_bytes,
         &color,
@@ -1306,7 +1313,6 @@ pub async fn refresh(
     };
     let access = jwt::generate_access_token(
         &session.account_id.to_string(),
-        session.is_admin,
         &session.session_id.to_string(),
         &state.config.jwt_secret,
     )
@@ -1343,8 +1349,9 @@ pub async fn get_me(State(state): State<AppState>, user: AuthAccount) -> AppResu
         String,
         String,
         bool,
-        i64,
         bool,
+        i64,
+        String,
         String,
         i32,
         Option<i64>,
@@ -1355,9 +1362,9 @@ pub async fn get_me(State(state): State<AppState>, user: AuthAccount) -> AppResu
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, COALESCE(key_binding::text, ''), COALESCE(username, ''),
                   COALESCE(kutup_b64(drive_xwing_public_key), ''),
-                  totp_secret_sealed IS NOT NULL,
+                  totp_secret_sealed IS NOT NULL, totp_pending_secret_sealed IS NOT NULL,
                   storage_used_bytes,
-                  role <> 'member', COALESCE(color, ''), version_retention_days,
+                  role, COALESCE(color, ''), version_retention_days,
                   (SELECT value FROM account_entitlements WHERE account_id = u.id AND key = $2),
                   kutup_account_federates(u.id)
            FROM accounts u WHERE id = $1"#,
@@ -1371,10 +1378,11 @@ pub async fn get_me(State(state): State<AppState>, user: AuthAccount) -> AppResu
         id,
         envelope_binding,
         username,
-        public_key,
-        totp_enabled,
+        drive_xwing_public_key,
+        totp_on,
+        totp_pending,
         used,
-        is_admin,
+        role,
         color,
         version_retention_days,
         public_sharing,
@@ -1407,12 +1415,12 @@ pub async fn get_me(State(state): State<AppState>, user: AuthAccount) -> AppResu
         address,
         envelope_binding,
         username,
-        public_key,
-        totp_enabled,
+        drive_xwing_public_key,
+        two_factor: crate::models::TwoFactorState::of(totp_on, totp_pending),
         security_keys: crate::two_factor::factors(&state.pool, id).await?.keys,
         storage_quota_bytes: quota,
         storage_used_bytes: used,
-        is_admin,
+        role: crate::models::AccountRole::stored(&role),
         color,
         version_retention_days,
         version_retention_choices: crate::site_settings::version_retention_choices(&state.pool)
@@ -2090,7 +2098,7 @@ pub async fn complete_setup(
     .bind(&opaque_record)
     .bind(&req.master_key_envelope)
     .bind(&req.recovery_key_envelope)
-    .bind(&req.public_key)
+    .bind(&req.drive_xwing_public_key)
     .bind(&req.account_authority_public_key)
     .bind(&req.account_authority_key_id)
     .bind(&req.account_incarnation_id)
@@ -2127,13 +2135,14 @@ pub async fn complete_setup(
     tx.commit().await?;
 
     let quota = crate::storage_pool::quota(&state.pool, uid).await?;
-    let (is_admin, used, username): (bool, i64, String) = sqlx::query_as(
-        "SELECT role <> 'member', storage_used_bytes, COALESCE(username, '')
+    let (role, used, username): (String, i64, String) = sqlx::query_as(
+        "SELECT role, storage_used_bytes, COALESCE(username, '')
            FROM accounts WHERE id = $1",
     )
     .bind(uid)
     .fetch_one(&state.pool)
     .await?;
+    let role = crate::models::AccountRole::stored(&role);
 
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(&headers)).await?;
     // An admin reset may land between the setup and its session.
@@ -2156,7 +2165,6 @@ pub async fn complete_setup(
     tx.commit().await?;
     let access = jwt::generate_access_token(
         &user_id,
-        is_admin,
         &issued.session_id.to_string(),
         &state.config.jwt_secret,
     )
@@ -2167,7 +2175,7 @@ pub async fn complete_setup(
         refresh_token: (!client.uses_cookie()).then(|| issued.refresh_token.clone()),
         account_id: user_id,
         username,
-        is_admin,
+        role,
         storage_quota_bytes: quota,
         storage_used_bytes: used,
     };
@@ -2262,7 +2270,7 @@ async fn issue_tokens_and_respond(
     username: &str,
     master_key_envelope: &str,
     pub_key: &str,
-    is_admin: bool,
+    role: crate::models::AccountRole,
     quota: i64,
     used: i64,
     color: &str,
@@ -2342,7 +2350,6 @@ async fn issue_tokens_and_respond(
     let keys = crate::account_roots::account_keys(&state.pool, uid).await?;
     let access = jwt::generate_access_token(
         user_id,
-        is_admin,
         &issued.session_id.to_string(),
         &state.config.jwt_secret,
     )
@@ -2358,8 +2365,8 @@ async fn issue_tokens_and_respond(
         account_authority_public_key: keys.account_authority_public_key,
         master_key_generation: keys.master_key_generation,
         master_keyring: keys.master_keyring,
-        public_key: pub_key.to_string(),
-        is_admin,
+        drive_xwing_public_key: pub_key.to_string(),
+        role: Some(role),
         storage_quota_bytes: quota,
         storage_used_bytes: used,
         color: color.to_string(),
@@ -2626,7 +2633,7 @@ mod tests {
         )
         .unwrap();
         let mut request = RegisterRequest {
-            public_key: STANDARD.encode(identity.drive_hpke_public_key()),
+            drive_xwing_public_key: STANDARD.encode(identity.drive_hpke_public_key()),
             account_authority_public_key: STANDARD.encode(identity.authority_public_key()),
             account_authority_key_id: identity.authority_key_id(),
             account_incarnation_id: identity.incarnation_id(),
@@ -2659,9 +2666,10 @@ mod tests {
         let obj = body.as_object().unwrap();
         // Present (non-omitempty), zero-valued:
         assert_eq!(obj["accessToken"], "");
-        assert_eq!(obj["isAdmin"], false);
         assert_eq!(obj["storageQuotaBytes"], 0);
         // omitempty, absent at default:
+        assert!(!obj.contains_key("role"));
+        assert!(!obj.contains_key("driveXwingPublicKey"));
         assert!(!obj.contains_key("requiresTotp"));
         assert!(!obj.contains_key("preAuthToken"));
         // Set on this branch:

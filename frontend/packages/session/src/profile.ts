@@ -1,6 +1,7 @@
 // Turn unlocked keys + a live access token into the app's Session.
 
 import { accountHead, HeadBlockedError } from './accountHead'
+import type { AccountRole, TwoFactorState } from './api-types'
 import api from './client'
 import type { SessionKeys } from './keys'
 import { resetSessionVersion, setSessionVersionHandler } from './sessionVersion'
@@ -15,11 +16,13 @@ export interface MeResponse {
   address: string
   envelopeBinding: string
   username: string
-  publicKey: string
-  totpEnabled: boolean
+  /** The account's Drive key (X-Wing). */
+  driveXwingPublicKey: string
+  /** The authenticator app; two-step sign-in is on with it `on` or a security key. */
+  twoFactor: TwoFactorState
   storageQuotaBytes: number
   storageUsedBytes: number
-  isAdmin: boolean
+  role: AccountRole
   color: string
   /**
    * Where the account's rename chain ends (docs/plans/username-renames.md):
@@ -97,10 +100,10 @@ export async function activateSession(
       address: me.address,
       envelopeBinding: keys.keyBinding,
       username: me.username || null,
-      isAdmin: me.isAdmin,
+      role: me.role,
       storageQuotaBytes: me.storageQuotaBytes,
       storageUsedBytes: me.storageUsedBytes,
-      totpEnabled: me.totpEnabled,
+      twoFactor: me.twoFactor,
       color: me.color || null,
       publicKey: keys.publicKey,
       masterKey: keys.masterKey,
@@ -137,8 +140,8 @@ export async function recheckAccount(): Promise<void> {
   updateSession({
     address: me.address,
     username: me.username || null,
-    isAdmin: me.isAdmin,
-    totpEnabled: me.totpEnabled,
+    role: me.role,
+    twoFactor: me.twoFactor,
   })
 }
 

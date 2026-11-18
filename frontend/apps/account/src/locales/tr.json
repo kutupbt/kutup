@@ -706,8 +706,11 @@
       "disabled": "Devre dışı",
       "closing": "Kapanıyor",
       "awaitingSetup": "İlk giriş bekleniyor",
-      "on": "Açık",
-      "off": "Kapalı",
+      "twoFactor": {
+        "on": "Açık",
+        "pending": "Henüz onaylanmadı",
+        "off": "Kapalı"
+      },
       "emptyTitle": "Henüz kullanıcı yok",
       "emptyDescription": "İlk hesabı Yeni kullanıcı ile oluşturun.",
       "noMatchTitle": "Eşleşen kullanıcı yok",

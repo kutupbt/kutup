@@ -336,9 +336,9 @@ Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\
     let used_now = common::used(&c, &base, &user.token);
     update(json!({ "storageQuotaBytes": used_now }));
     rcpt(452);
-    update(json!({ "storageQuotaBytes": 10_i64 << 30, "isActive": false }));
+    update(json!({ "storageQuotaBytes": 10_i64 << 30, "state": "suspended" }));
     rcpt(550);
-    update(json!({ "isActive": true }));
+    update(json!({ "state": "active" }));
     rcpt(250);
     let r = bearer(
         c.delete(format!("{base}/api/v1/admin/accounts/{}", user.id)),
@@ -939,7 +939,7 @@ fn sending_safety() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin,
     )
-    .json(&json!({ "isAdmin": true }))
+    .json(&json!({ "role": "admin" }))
     .send()
     .unwrap();
     assert!(r.status().is_success());
@@ -2177,7 +2177,7 @@ fn distribution_lists_and_role_groups() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", dave_user.id)),
         &admin,
     )
-    .json(&json!({ "isAdmin": true }))
+    .json(&json!({ "role": "admin" }))
     .send()
     .unwrap();
     assert!(r.status().is_success());

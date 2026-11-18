@@ -697,7 +697,7 @@ fn a_deleted_or_deactivated_manager_means_a_new_signer() {
             .put(format!("{}/api/v1/admin/accounts/{}", live.base, carol.id)),
         &live.admin_token,
     )
-    .json(&json!({ "isActive": false }))
+    .json(&json!({ "state": "suspended" }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::OK, "deactivate Carol");

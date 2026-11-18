@@ -101,7 +101,7 @@ fn sign_up_takes_only_the_id_minted_for_it() {
             body["accountAuthorityPublicKey"] = json!(b64(&identity.authority_public_key()));
             body["accountAuthorityKeyId"] = json!(identity.authority_key_id());
             body["accountIncarnationId"] = json!(identity.incarnation_id());
-            body["publicKey"] = json!(b64(&identity.drive_hpke_public_key()));
+            body["driveXwingPublicKey"] = json!(b64(&identity.drive_hpke_public_key()));
             body["driveSigningPublicKey"] = json!(b64(&identity.drive_signing_public_key()));
             body["driveKeyBinding"] = json!(b64(&kutup_crypto::drive_key_binding::sign(
                 &identity, &other, 1

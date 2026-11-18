@@ -2,7 +2,8 @@
 """The API pass's names stay (docs/plans/api-surface.md §8): no client path
 outside /api/v1/ (but the unversioned few), no federation path outside
 /api/fed/v2/, no user-named wire field, no old client storage name, no
-snake_case error code (every `code` is one camelCase word: docs/api.md, Errors).
+account field of before the role model (isAdmin, isActive, totpEnabled,
+isFirstLogin, isProtected), no snake_case error code (every `code` is one camelCase word: docs/api.md, Errors).
 
 Run from the repository root; prints each offending line and exits 1.
 """
@@ -31,6 +32,8 @@ EXTENSIONS = ('.rs', '.ts', '.tsx', '.js', '.mjs')
 # A path rewritten twice (`/api/v1/v…`) is as wrong as an unversioned one.
 # The same in a regular expression's escaped form (`\/api\/files\/…`).
 ESCAPED = re.compile(r"\\/api\\/(?!v1|fed\\/v2|health|csp|/)")
+# A path joined to a base (`format!("{base}/api/…")`, `${base}/api/…`).
+JOINED = re.compile(r"\}/api/(?!v1[/{$]|v2/account|fed/v2/|health|csp-report)")
 DOUBLE = re.compile(r"/api/v1/v[0-9\"'`]")
 OLD_PATH = re.compile(r"""["'`]/api/(?!v1[/"'`$]|v["'`]|fed/v2/|fed/["'`]|fed/v["'`]|health|csp-report|["'`])""")
 OLD_FED = re.compile(r"""/api/fed/(?!v2/|v\{|v[0-9]|v["'`]|["'`])""")
@@ -46,6 +49,15 @@ OLD_STORAGE = re.compile(
     r"""|pending-uploads|account-head:|revision:|upload:|chat-engine|chat-updates|chat-focus|chat-notifier|chat-call-desk|chat-in-call)\b"""
     r"""|kutup:chat:|kutup_cursor_color_v1|kutup\.sealed\.v1|kutup\.chat\.liveShares\.v1|kutup\.notes\.sourceMode|notificationBanner\.dismissed"""
 )
+# The account fields the role/state model replaced (W7 group 4): `role`,
+# `state`, `twoFactor`, `keysSetUp`, `driveXwingPublicKey` stand for them.
+# `isActive` is refused only as a key: editors and router links have their own.
+OLD_ACCOUNT = re.compile(
+    r"""["'](isAdmin|isActive|totpEnabled|isFirstLogin|isProtected)["']"""
+    r"""|(?:\.|\?\.)(isAdmin|totpEnabled|isFirstLogin|isProtected)\b"""
+    r"""|\b(isAdmin|totpEnabled|isFirstLogin|isProtected|isActive)\??:\s"""
+)
+
 # An error code in snake_case: built (`"code": "nameTaken"`, `{ code:
 # 'nameTaken' }`) or matched (`code === 'nameTaken'`, `code.as_deref() ==
 # Some("nameTaken")`, `apiErrorCode(e) === 'not_found'`).
@@ -85,6 +97,8 @@ for top in CODE_DIRS:
                     found = []
                     if OLD_PATH.search(line) and not any(a in line for a in PATH_ALLOWED_LINES):
                         found.append('an unversioned API path')
+                    if JOINED.search(line) and not any(a in line for a in PATH_ALLOWED_LINES):
+                        found.append('an unversioned API path after a base')
                     if ESCAPED.search(line):
                         found.append('an unversioned API path in a pattern')
                     if DOUBLE.search(line):
@@ -93,6 +107,8 @@ for top in CODE_DIRS:
                         found.append('a federation path outside /api/fed/v2')
                     if WIRE.search(line):
                         found.append('a user-named wire field')
+                    if OLD_ACCOUNT.search(line):
+                        found.append('an account field the role model replaced')
                     if SNAKE_CODE.search(line):
                         found.append('a snake_case error code')
                     if rel not in STORAGE_ALLOWED and OLD_STORAGE.search(line):

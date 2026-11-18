@@ -1362,3 +1362,15 @@ Where the build differs from the plan above:
   rows in the shared stores and Mail's search index, through cleanups each
   app registers at boot.
 
+- **Error codes** are one camelCase word everywhere (`nameTaken`,
+  `revisionConflict`, …); `check-api-names.py` and the server's
+  documented-codes test refuse a snake_case one.
+- **Account fields** follow the role model (W7 group 4): `role`
+  (`member` | `admin` | `breakGlassAdmin`) for `isAdmin` and `isProtected`,
+  `state` for `isActive` (also in the admin update: `state: active |
+  suspended`, `role: member | admin`), `twoFactor` (`on` | `pending` |
+  `off`, the authenticator app) for `totpEnabled`, `keysSetUp` for
+  `isFirstLogin`, `driveXwingPublicKey` for the account's `publicKey`
+  (sign-up and setup bodies, sign-in, `/account`). Access tokens carry no
+  role: the session row says what an account may do. The lookups that name
+  another account's Drive key keep `driveHpkePublicKey` for now.

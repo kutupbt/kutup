@@ -603,7 +603,6 @@ pub async fn create_fork(
 pub struct ConsumedFork {
     pub issued: IssuedSession,
     pub account_id: Uuid,
-    pub is_admin: bool,
     pub payload: Vec<u8>,
 }
 
@@ -634,15 +633,15 @@ pub async fn consume_fork(
         tx.commit().await?;
         return Err(AppError::unauthorized("invalid fork"));
     }
-    let parent: Option<(Uuid, bool)> = sqlx::query_as(
-        "SELECT s.account_id, u.role <> 'member' FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
+    let parent: Option<Uuid> = sqlx::query_scalar(
+        "SELECT s.account_id FROM auth_sessions s JOIN accounts u ON u.id = s.account_id
          WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.state = 'active'
          FOR UPDATE OF s",
     )
     .bind(parent_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((user_id, is_admin)) = parent else {
+    let Some(user_id) = parent else {
         tx.commit().await?;
         return Err(AppError::unauthorized("invalid fork"));
     };
@@ -670,7 +669,6 @@ pub async fn consume_fork(
             refresh_token,
         },
         account_id: user_id,
-        is_admin,
         payload,
     })
 }

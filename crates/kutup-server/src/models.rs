@@ -163,15 +163,18 @@ pub struct AccountResponse {
     /// What the account's envelopes carry now (docs/plans/account-identity.md).
     pub envelope_binding: String,
     pub username: String,
-    pub public_key: String,
-    /// The authenticator app is on.
-    pub totp_enabled: bool,
+    /// The account's Drive key (X-Wing), what shares to it are sealed to.
+    pub drive_xwing_public_key: String,
+    /// The authenticator app: `on`, `pending` (set up, its first code not
+    /// confirmed yet) or `off`.
+    pub two_factor: TwoFactorState,
     /// Security keys the account has (a compromised one included): two-step
-    /// sign-in is on while this or `totp_enabled` is.
+    /// sign-in is on while this is above 0 or `twoFactor` is `on`.
     pub security_keys: i64,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
-    pub is_admin: bool,
+    /// `member`, `admin` or `breakGlassAdmin`.
+    pub role: AccountRole,
     pub color: String,
     /// How long this account's file versions are kept (days).
     pub version_retention_days: i32,
@@ -525,17 +528,18 @@ pub struct CreateAdminAccountRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminAccountRequest {
     pub storage_quota_bytes: Option<i64>,
-    /// False suspends the account; true makes a suspended or closing account
-    /// active again (a closing one is kept).
-    pub is_active: Option<bool>,
-    /// Why it is suspended (with `isActive: false`): `admin` (the default),
+    /// `suspended` suspends the account; `active` makes a suspended or
+    /// closing account active again (a closing one is kept).
+    pub state: Option<String>,
+    /// Why it is suspended (with `state: suspended`): `admin` (the default),
     /// `operatorOrder` or `security`.
     pub suspended_reason: Option<String>,
     /// Whether it may share by public link: `on` or `off`.
     pub public_sharing: Option<String>,
     /// Whether it talks to other servers: `on` or `off`.
     pub federation: Option<String>,
-    pub is_admin: Option<bool>,
+    /// `member` or `admin`.
+    pub role: Option<AccountRole>,
 }
 
 /// `PUT /api/v1/admin/settings` body — mirrors `handlers.UpdateAdminSettingsRequest`.
@@ -580,6 +584,28 @@ pub struct StatsResponse {
     pub total_collections: i64,
 }
 
+/// The authenticator app's state: its sealed secret (`on`), a secret set
+/// up but not confirmed by a first code (`pending`), or neither (`off`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TwoFactorState {
+    On,
+    Pending,
+    Off,
+}
+
+impl TwoFactorState {
+    pub const fn of(on: bool, pending: bool) -> Self {
+        if on {
+            Self::On
+        } else if pending {
+            Self::Pending
+        } else {
+            Self::Off
+        }
+    }
+}
+
 /// What an account may do on its server: `accounts.role`. An organization
 /// role is the organization's own (`organization_members.role`).
 #[derive(
@@ -602,6 +628,12 @@ impl AccountRole {
             Self::Admin => "admin",
             Self::BreakGlassAdmin => "breakGlassAdmin",
         }
+    }
+
+    /// The stored role; the column's CHECK allows nothing else, and an
+    /// unknown one is taken as the least (`member`).
+    pub fn stored(value: &str) -> Self {
+        Self::parse(value).unwrap_or(Self::Member)
     }
 
     pub fn parse(value: &str) -> Option<Self> {

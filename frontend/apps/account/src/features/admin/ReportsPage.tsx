@@ -178,7 +178,7 @@ export function ReportsPage() {
           errorFallback={t('admin.reports.actionFailed')}
           onConfirm={() =>
             update.mutate(
-              { id: pending.report.ownerAccountId, patch: { isActive: false } },
+              { id: pending.report.ownerAccountId, patch: { state: 'suspended' } },
               {
                 onSuccess: () => {
                   toast.success(t('admin.reports.disabled'))

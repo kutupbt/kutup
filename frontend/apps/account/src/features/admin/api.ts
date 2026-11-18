@@ -108,14 +108,14 @@ export function useCreateUser() {
 }
 
 export type UserPatch = Partial<{
-  /** False suspends (with `suspendedReason`); true makes a suspended or closing account active. */
-  isActive: boolean
+  /** `suspended` suspends (with `suspendedReason`); `active` makes a suspended or closing account active. */
+  state: 'active' | 'suspended'
   suspendedReason: SuspendedReason
   /** Whether it may share by public link. */
   publicSharing: 'on' | 'off'
   /** Whether it talks to other servers. */
   federation: 'on' | 'off'
-  isAdmin: boolean
+  role: 'member' | 'admin'
   storageQuotaBytes: number
 }>
 

@@ -168,8 +168,11 @@ pub async fn check_shares(
         .fetch_optional(&mut *conn)
         .await?;
         let Some(current) = current else {
-            return Err(AppError::bad_request("a member has no account keys yet")
-                .with_details(serde_json::json!({ "code": "noAccountKey", "accountId": user_id })));
+            return Err(
+                AppError::bad_request("a member has no account keys yet").with_details(
+                    serde_json::json!({ "code": "noAccountKey", "accountId": user_id }),
+                ),
+            );
         };
         if mail_key::group_key_share_incarnation(&share)
             .ok()

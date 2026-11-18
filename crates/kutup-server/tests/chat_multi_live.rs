@@ -727,7 +727,7 @@ fn limits_and_inactive_accounts_answer_as_set() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", carol.user.id)),
         &admin,
     )
-    .json(&json!({ "isActive": false }))
+    .json(&json!({ "state": "suspended" }))
     .send()
     .unwrap();
     assert!(r.status().is_success(), "deactivate: {}", r.status());

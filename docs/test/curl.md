@@ -22,7 +22,7 @@ curl --insecure --silent -X POST https://localhost:38443/api/v1/auth/register \
     "loginKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "masterKeyEnvelope": "S1VUUEFFMQAAAQEAABB0ZXN0QGV4YW1wbGUuY29tJHfwtPzRJ9xNvol1mHoKXyjNjJ25+8qlAAAAMJFcjAe0u9Km+mtjVuVv+zV6d28wIw5oexWbRggZMjQ4Wz0fgvwwBLT1s4ZmSeAtYg==",
     "recoveryKeyEnvelope": "S1VUUEFFMQAAAQIAABB0ZXN0QGV4YW1wbGUuY29tUF4VvGfWEX+5PwSlg+YDzPwKYZYe+MVpAAAAMH0nCNyq3eXxgQsONFv2wH8ja/djLUC0hOq7uqkUv48u4wXY9WacGyftLHZcQgiOjA==",
-    "publicKey": "cHVia2V5",
+    "driveXwingPublicKey": "cHVia2V5",
     "accountProtectionSuite": 1,
     "accountProtectionSalt": "AAAAAAAAAAAAAAAAAAAAAA==",
     "argonMemoryKib": 65536,

@@ -115,9 +115,9 @@ struct AccountRow {
     username: String,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
-    is_admin: bool,
-    /// The state is `active`.
-    is_active: bool,
+    /// `member`, `admin` or `breakGlassAdmin` (never demoted, suspended,
+    /// closed or reset).
+    role: String,
     /// `active`, `suspended` or `closing` (docs/plans/server-personal-data.md, A5).
     state: String,
     /// Why a suspended account is: `admin`, `operatorOrder` or `security`.
@@ -154,16 +154,15 @@ struct AccountRow {
     public_sharing: String,
     /// Whether it talks to other servers: `on` or `off`.
     federation: String,
-    #[serde(rename = "totpEnabled")]
-    totp_enabled: bool,
-    /// Still on the admin-issued temp password (no key material yet). Gates the
-    /// admin "rotate temp password" action.
-    is_first_login: bool,
+    /// The authenticator app: `on`, `pending` (not confirmed by a first
+    /// code yet) or `off`.
+    two_factor: String,
+    /// The account has set up its keys; until then it is on the temporary
+    /// password an administrator gave (which "rotate temp password" replaces).
+    keys_set_up: bool,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String)]
     created_at: OffsetDateTime,
-    /// Marks the break-glass admin — the UI disables demote/disable/delete for this user.
-    is_protected: bool,
 }
 
 /// `GET /api/v1/admin/accounts` — mirrors `ListUsers`.
@@ -174,23 +173,27 @@ struct AccountRow {
     security(("BearerAuth" = [])),
     responses((status = 200, description = "All user accounts", body = Vec<AccountRow>))
 )]
-pub async fn list_users(State(state): State<AppState>, _admin: AdminAccount) -> AppResult<Response> {
+pub async fn list_users(
+    State(state): State<AppState>,
+    _admin: AdminAccount,
+) -> AppResult<Response> {
     let users: Vec<AccountRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username,
                   COALESCE((SELECT value FROM account_entitlements
                              WHERE account_id = accounts.id AND key = $1 AND value > 0),
                            $2) AS storage_quota_bytes,
                   storage_used_bytes,
-                  role <> 'member' AS is_admin, state = 'active' AS is_active, state,
+                  role, state,
                   suspended_reason, closes_at,
                   legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
                   CASE WHEN (SELECT value FROM account_entitlements
                               WHERE account_id = accounts.id AND key = $3) = 0
                        THEN 'off' ELSE 'on' END AS public_sharing,
                   CASE WHEN kutup_account_federates(id) THEN 'on' ELSE 'off' END AS federation,
-                  totp_secret_sealed IS NOT NULL AS totp_enabled,
-                  keys_set_up_at IS NULL AS is_first_login, created_at,
-                  role = 'breakGlassAdmin' AS is_protected
+                  CASE WHEN totp_secret_sealed IS NOT NULL THEN 'on'
+                       WHEN totp_pending_secret_sealed IS NOT NULL THEN 'pending'
+                       ELSE 'off' END AS two_factor,
+                  keys_set_up_at IS NOT NULL AS keys_set_up, created_at
            FROM accounts ORDER BY created_at DESC"#,
     )
     .bind(crate::entitlements::STORAGE_QUOTA)
@@ -370,11 +373,14 @@ pub async fn create_user(
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateAccountRequest {
     storage_quota_bytes: Option<i64>,
-    is_active: Option<bool>,
+    /// `active` or `suspended`.
+    state: Option<String>,
     suspended_reason: Option<String>,
     public_sharing: Option<String>,
     federation: Option<String>,
-    is_admin: Option<bool>,
+    /// `member` or `admin` (the break-glass administrator is made only by
+    /// `bootstrap_admin`).
+    role: Option<crate::models::AccountRole>,
 }
 
 /// `PUT /api/v1/admin/accounts/{id}` — mirrors `UpdateUser`. Each present field is one UPDATE.
@@ -394,6 +400,20 @@ pub async fn update_user(
     Json(req): Json<UpdateAccountRequest>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let make_active = match req.state.as_deref() {
+        None => None,
+        Some("active") => Some(true),
+        Some("suspended") => Some(false),
+        Some(_) => return Err(AppError::bad_request("state must be active or suspended")),
+    };
+    let make_admin = match req.role {
+        None => None,
+        Some(crate::models::AccountRole::Member) => Some(false),
+        Some(crate::models::AccountRole::Admin) => Some(true),
+        Some(crate::models::AccountRole::BreakGlassAdmin) => {
+            return Err(AppError::bad_request("role must be member or admin"))
+        }
+    };
 
     // Load the target's current state for the break-glass + last-admin guards.
     let (target_is_admin, target_is_active): (bool, bool) =
@@ -403,8 +423,8 @@ pub async fn update_user(
             .await?
             .ok_or_else(|| AppError::not_found("not found"))?;
 
-    let wants_demote = req.is_admin == Some(false);
-    let wants_disable = req.is_active == Some(false);
+    let wants_demote = make_admin == Some(false);
+    let wants_disable = make_active == Some(false);
     let suspended_reason = req.suspended_reason.as_deref().unwrap_or("admin");
     if !["admin", "operatorOrder", "security"].contains(&suspended_reason) {
         return Err(AppError::bad_request(
@@ -461,7 +481,7 @@ pub async fn update_user(
         .await?;
         tx.commit().await?;
     }
-    if let Some(a) = req.is_active {
+    if let Some(a) = make_active {
         let mut tx = state.pool.begin().await?;
         if a {
             // Active again: a suspension lifted, or a closing account kept
@@ -594,7 +614,7 @@ pub async fn update_user(
         .await?;
         tx.commit().await?;
     }
-    if let Some(a) = req.is_admin {
+    if let Some(a) = make_admin {
         // The break-glass administrator keeps its role (guarded above for a
         // demotion; a promotion leaves it as it is).
         let role = if a {
@@ -615,14 +635,14 @@ pub async fn update_user(
     if let Some(q) = req.storage_quota_bytes {
         changes.insert("storageQuotaBytes".into(), json!(q));
     }
-    if let Some(a) = req.is_active {
-        changes.insert("isActive".into(), json!(a));
-        if !a {
+    if let Some(wanted) = &req.state {
+        changes.insert("state".into(), json!(wanted));
+        if make_active == Some(false) {
             changes.insert("suspendedReason".into(), json!(suspended_reason));
         }
     }
-    if let Some(a) = req.is_admin {
-        changes.insert("isAdmin".into(), json!(a));
+    if let Some(role) = req.role {
+        changes.insert("role".into(), json!(role.as_str()));
     }
     if let Some(sharing) = &req.public_sharing {
         changes.insert("publicSharing".into(), json!(sharing));
@@ -692,7 +712,7 @@ pub async fn delete_user(
 
 /// `POST /api/v1/admin/accounts/{id}/close` — closes the account: deleted after
 /// `account.closing_days`, unless kept (by its owner at sign-in, or here with
-/// `isActive: true`) (docs/plans/server-personal-data.md, A5).
+/// `state: active`) (docs/plans/server-personal-data.md, A5).
 #[utoipa::path(
     post,
     path = "/api/v1/admin/accounts/{id}/close",

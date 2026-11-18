@@ -706,8 +706,11 @@
       "disabled": "Disabled",
       "closing": "Closing",
       "awaitingSetup": "Awaiting first sign-in",
-      "on": "On",
-      "off": "Off",
+      "twoFactor": {
+        "on": "On",
+        "pending": "Not confirmed yet",
+        "off": "Off"
+      },
       "emptyTitle": "No users yet",
       "emptyDescription": "Create the first account with New user.",
       "noMatchTitle": "No matching users",

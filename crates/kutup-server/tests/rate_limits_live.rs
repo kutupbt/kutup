@@ -164,7 +164,9 @@ fn administrators_set_rate_limits() {
     let own_id = me(&c, &base, &own.token)["id"].as_str().unwrap().to_owned();
     let account_put = |key: &str, value: Value| {
         let r = bearer(
-            c.put(format!("{base}/api/v1/admin/accounts/{own_id}/entitlements/{key}")),
+            c.put(format!(
+                "{base}/api/v1/admin/accounts/{own_id}/entitlements/{key}"
+            )),
             &admin.token,
         )
         .json(&json!({ "value": value }))
@@ -175,7 +177,9 @@ fn administrators_set_rate_limits() {
     };
     // An account can't set its own, even more generous, value.
     let r = bearer(
-        c.put(format!("{base}/api/v1/admin/accounts/{own_id}/entitlements/{LIMIT}")),
+        c.put(format!(
+            "{base}/api/v1/admin/accounts/{own_id}/entitlements/{LIMIT}"
+        )),
         &own.token,
     )
     .json(&json!({ "value": 3000 }))

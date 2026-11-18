@@ -1178,7 +1178,7 @@ fn reports_take_public_links_down() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", alice.id)),
         &admin.token,
     )
-    .json(&json!({ "isActive": false }))
+    .json(&json!({ "state": "suspended" }))
     .send()
     .unwrap();
     assert!(disabled.status().is_success());
@@ -1204,7 +1204,7 @@ fn reports_take_public_links_down() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", alice.id)),
         &admin.token,
     )
-    .json(&json!({ "isActive": true }))
+    .json(&json!({ "state": "active" }))
     .send()
     .unwrap();
     assert!(enabled.status().is_success());

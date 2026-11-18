@@ -255,7 +255,7 @@ pub(crate) fn login_with_password(
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
         .context("derive the account's keys")?;
     let public_key = b64.encode(identity.drive_hpke_public_key());
-    if public_key != resp.public_key {
+    if public_key != resp.drive_xwing_public_key {
         bail!("the server publishes another Drive key than this account's master key derives");
     }
     let private_key = identity.drive_hpke_private_key().to_vec();

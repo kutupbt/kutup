@@ -1,6 +1,7 @@
 //! JWT issue/verify — mirrors `backend/utils/jwt.go` (`golang-jwt/jwt/v5` → `jsonwebtoken`).
 //!
-//! HS256 over `JWT_SECRET`. Claims carry `userId` + `isAdmin` plus the registered
+//! HS256 over `JWT_SECRET`. Claims carry `accountId` (never a role: what the
+//! account may do is read from its session row on every request) plus the registered
 //! `exp`/`iat`, and a `sub` ("setup" | "pre-auth") that marks special-purpose tokens.
 //! Access tokens have an empty subject and carry the server-side session id (`sid`);
 //! the auth layer rejects any token whose subject is set and checks that the session
@@ -17,8 +18,6 @@ use time::OffsetDateTime;
 pub struct Claims {
     #[serde(rename = "accountId")]
     pub account_id: String,
-    #[serde(rename = "isAdmin")]
-    pub is_admin: bool,
     /// Registered `sub`. Empty/absent for access & refresh tokens; "setup" / "pre-auth"
     /// for the short-lived special tokens. `omitempty` in Go ⇒ skip when empty here.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -47,11 +46,10 @@ fn sign(claims: &Claims, secret: &str) -> Result<String, jsonwebtoken::errors::E
     )
 }
 
-fn base_claims(user_id: &str, is_admin: bool, sub: &str, ttl_secs: i64) -> Claims {
+fn base_claims(user_id: &str, sub: &str, ttl_secs: i64) -> Claims {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     Claims {
         account_id: user_id.to_string(),
-        is_admin,
         sub: sub.to_string(),
         sid: String::new(),
         ep: String::new(),
@@ -63,11 +61,10 @@ fn base_claims(user_id: &str, is_admin: bool, sub: &str, ttl_secs: i64) -> Claim
 /// 15-minute access token bound to a server-side session.
 pub fn generate_access_token(
     user_id: &str,
-    is_admin: bool,
     session_id: &str,
     secret: &str,
 ) -> Result<String, jsonwebtoken::errors::Error> {
-    let mut claims = base_claims(user_id, is_admin, "", ACCESS_TTL_SECS);
+    let mut claims = base_claims(user_id, "", ACCESS_TTL_SECS);
     claims.sid = session_id.to_string();
     sign(&claims, secret)
 }
@@ -86,7 +83,7 @@ pub fn generate_setup_token(
     secret: &str,
 ) -> Result<String, jsonwebtoken::errors::Error> {
     sign(
-        &with_epoch(base_claims(user_id, false, "setup", SETUP_TTL_SECS), epoch),
+        &with_epoch(base_claims(user_id, "setup", SETUP_TTL_SECS), epoch),
         secret,
     )
 }
@@ -99,10 +96,7 @@ pub fn generate_pre_auth_token(
     secret: &str,
 ) -> Result<String, jsonwebtoken::errors::Error> {
     sign(
-        &with_epoch(
-            base_claims(user_id, false, "pre-auth", PRE_AUTH_TTL_SECS),
-            epoch,
-        ),
+        &with_epoch(base_claims(user_id, "pre-auth", PRE_AUTH_TTL_SECS), epoch),
         secret,
     )
 }
@@ -185,10 +179,9 @@ mod tests {
 
     #[test]
     fn access_token_roundtrips_with_claims() {
-        let t = generate_access_token("u1", true, "s1", SECRET).unwrap();
+        let t = generate_access_token("u1", "s1", SECRET).unwrap();
         let c = validate_token(&t, SECRET).unwrap();
         assert_eq!(c.account_id, "u1");
-        assert!(c.is_admin);
         assert_eq!(c.sub, "");
         assert_eq!(c.sid, "s1");
         assert_eq!(c.exp - c.iat, ACCESS_TTL_SECS);
@@ -196,7 +189,7 @@ mod tests {
 
     #[test]
     fn wrong_secret_is_rejected() {
-        let t = generate_access_token("u1", false, "s1", SECRET).unwrap();
+        let t = generate_access_token("u1", "s1", SECRET).unwrap();
         assert!(validate_token(&t, "another-secret-also-32-bytes-long-yeah").is_err());
     }
 
@@ -220,12 +213,12 @@ mod tests {
     #[test]
     fn an_expired_setup_token_is_still_known_as_one() {
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        let mut claims = base_claims("u7", false, "setup", SETUP_TTL_SECS);
+        let mut claims = base_claims("u7", "setup", SETUP_TTL_SECS);
         claims.exp = now - 10;
         let expired = sign(&claims, SECRET).unwrap();
         assert!(validate_setup_token(&expired, SECRET).is_err());
         assert!(is_setup_token_signed(&expired, SECRET));
-        let access = generate_access_token("u7", false, "s7", SECRET).unwrap();
+        let access = generate_access_token("u7", "s7", SECRET).unwrap();
         assert!(!is_setup_token_signed(&access, SECRET));
         assert!(!is_setup_token_signed(
             &expired,
@@ -237,7 +230,7 @@ mod tests {
     fn access_validation_rejects_special_tokens() {
         let setup = generate_setup_token("u4", &[4; 16], SECRET).unwrap();
         assert!(validate_access_token(&setup, SECRET).is_err());
-        let access = generate_access_token("u4", false, "s4", SECRET).unwrap();
+        let access = generate_access_token("u4", "s4", SECRET).unwrap();
         assert_eq!(
             validate_access_token(&access, SECRET).unwrap(),
             ("u4".to_string(), "s4".to_string())
@@ -249,7 +242,6 @@ mod tests {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let claims = Claims {
             account_id: "u5".into(),
-            is_admin: false,
             sub: String::new(),
             sid: String::new(),
             ep: String::new(),
@@ -266,7 +258,6 @@ mod tests {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let claims = Claims {
             account_id: "u6".into(),
-            is_admin: false,
             sub: String::new(),
             sid: String::new(),
             ep: String::new(),

@@ -495,7 +495,7 @@ fn the_session_version_changes_when_the_account_does() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin_token,
     )
-    .json(&json!({ "isAdmin": true }))
+    .json(&json!({ "role": "admin" }))
     .send()
     .unwrap();
     assert!(
@@ -512,7 +512,7 @@ fn the_session_version_changes_when_the_account_does() {
         c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin_token,
     )
-    .json(&json!({ "isAdmin": false }))
+    .json(&json!({ "role": "member" }))
     .send()
     .unwrap();
     assert!(demoted.status().is_success());

@@ -48,7 +48,8 @@ interface LoginResponse {
    */
   masterKeyGeneration?: number
   masterKeyring?: string[]
-  publicKey: string
+  /** The account's Drive key (X-Wing); with the session only. */
+  driveXwingPublicKey?: string
   /** What the account's keys are bound to (docs/plans/account-identity.md); only with a session. */
   keyBinding?: string
   requiresTotp?: boolean
@@ -207,7 +208,7 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
       throw isIdentityRootMismatch(error) ? new AccountKeysMismatchError() : error
     }
     const { publicKey, privateKey } = await driveKeysOf(roots.identityRoot)
-    if (publicKey !== data.publicKey) {
+    if (publicKey !== data.driveXwingPublicKey) {
       // This sign-in is over: ended on the server too (best effort), and the
       // keys dropped here, as for a key-binding mismatch (profile.ts).
       setAccessToken(data.accessToken)
@@ -348,7 +349,7 @@ function registrationBody(keys: AccountKeys) {
     masterKeyEnvelope: keys.masterKeyEnvelope,
     recoveryKeyEnvelope: keys.recoveryKeyEnvelope,
     accountRoots: keys.accountRoots,
-    publicKey: keys.publicKey,
+    driveXwingPublicKey: keys.publicKey,
     accountAuthorityPublicKey: keys.accountAuthorityPublicKey,
     accountAuthorityKeyId: keys.accountAuthorityKeyId,
     accountIncarnationId: keys.accountIncarnationId,
