@@ -5082,7 +5082,7 @@ ALTER TABLE ONLY public.drive_file_versions
 --
 
 ALTER TABLE public.drive_file_versions
-    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
+    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (octet_length(revision_content_envelope) = 356))) NOT VALID;
 
 
 --
@@ -5106,7 +5106,7 @@ ALTER TABLE ONLY public.drive_files
 --
 
 ALTER TABLE public.drive_files
-    ADD CONSTRAINT drive_files_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
+    ADD CONSTRAINT drive_files_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (octet_length(revision_content_envelope) = 356))) NOT VALID;
 
 
 --
