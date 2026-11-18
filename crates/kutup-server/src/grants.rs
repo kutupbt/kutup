@@ -336,12 +336,13 @@ mod tests {
             .unwrap();
         }
         sweep(&pool).await.unwrap();
-        let events: Vec<(String, i32)> =
-            sqlx::query_as("SELECT kind, count FROM account_security_events WHERE account_id = $1")
-                .bind(user)
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let events: Vec<(String, i32)> = sqlx::query_as(
+            "SELECT kind, count FROM account_security_events WHERE subject_account_id = $1",
+        )
+        .bind(user)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
         assert_eq!(events, vec![("signInFailedPassword".to_owned(), 2)]);
         sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(user)

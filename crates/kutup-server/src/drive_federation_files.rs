@@ -212,7 +212,7 @@ pub async fn create_federated_file_share(
         .map_err(|_| {
             AppError::bad_request("the file share does not match the file or the person")
         })?;
-    let recipient_username = crate::drive_federation::recipient_label(
+    crate::drive_federation::note_recipient(
         &state,
         &user.user_id,
         &recipient,
@@ -223,14 +223,13 @@ pub async fn create_federated_file_share(
     let capability = random_token(32);
     sqlx::query(
         "INSERT INTO drive_federated_outgoing_file_shares
-            (file_id, sharer_account_id, recipient_username, recipient_server,
+            (file_id, sharer_account_id, recipient_server,
              recipient_incarnation_id, share_envelope, key_generation, capability_hash, can_edit,
              recipient_account_id)
-         VALUES ($1,$2,$3,$4,decode($5, 'hex'),kutup_unb64($6),$7,decode($8, 'hex'),$9,$10)",
+         VALUES ($1,$2,$3,decode($4, 'hex'),kutup_unb64($5),$6,decode($7, 'hex'),$8,$9)",
     )
     .bind(file_id)
     .bind(owner)
-    .bind(&recipient_username)
     .bind(recipient_domain)
     .bind(&recipient_incarnation)
     .bind(&request.share_envelope)
@@ -636,14 +635,29 @@ pub async fn accept_file_share(
         &incarnation,
     )
     .await?;
+    // The owner's address, as their server gives it, kept by their account
+    // id before the share that names them.
+    crate::remote_renames::note_account(
+        &state.pool,
+        server,
+        invite.owner_user_id,
+        &invite.owner_incarnation_id,
+        &invite.owner_account,
+    )
+    .await?;
     let row: IncomingFileShare = sqlx::query_as(
-        "INSERT INTO drive_federated_incoming_file_shares
-            (account_id, owner_server, remote_capability, capability_hash, remote_file_id,
-             owner_account_id, owner_account, owner_incarnation_id, owner_signing_public_key)
-         VALUES ($1,$2,$3,decode($4, 'hex'),$5,$6,$7,decode($8, 'hex'),kutup_unb64($9))
-         ON CONFLICT (account_id, owner_server, capability_hash) DO UPDATE SET
-             remote_file_id = EXCLUDED.remote_file_id
-         RETURNING id, owner_server, remote_file_id, owner_account, created_at",
+        "WITH s AS (
+             INSERT INTO drive_federated_incoming_file_shares
+                 (account_id, owner_server, remote_capability, capability_hash, remote_file_id,
+                  owner_account_id, owner_incarnation_id, owner_signing_public_key)
+             VALUES ($1,$2,$3,decode($4, 'hex'),$5,$6,decode($7, 'hex'),kutup_unb64($8))
+             ON CONFLICT (account_id, owner_server, capability_hash) DO UPDATE SET
+                 remote_file_id = EXCLUDED.remote_file_id
+             RETURNING id, owner_server, owner_account_id, remote_file_id, created_at)
+         SELECT s.id, s.owner_server, s.remote_file_id, r.current_address AS owner_account,
+                s.created_at
+           FROM s JOIN remote_account_renames r
+                ON r.server = s.owner_server AND r.account_id = s.owner_account_id",
     )
     .bind(user_id)
     .bind(server)
@@ -651,7 +665,6 @@ pub async fn accept_file_share(
     .bind(capability_hash(&request.capability))
     .bind(invite.file.id)
     .bind(invite.owner_user_id)
-    .bind(&invite.owner_account)
     .bind(&invite.owner_incarnation_id)
     .bind(&invite.owner_signing_public_key)
     .fetch_one(&state.pool)
@@ -674,8 +687,12 @@ pub async fn list_file_shares(
     let user_id = trusted_uuid(&user.user_id)?;
     Ok(Json(
         sqlx::query_as(
-            "SELECT id, owner_server, remote_file_id, owner_account, created_at
-             FROM drive_federated_incoming_file_shares WHERE account_id = $1 ORDER BY created_at",
+            "SELECT s.id, s.owner_server, s.remote_file_id, r.current_address AS owner_account,
+                    s.created_at
+               FROM drive_federated_incoming_file_shares s
+               JOIN remote_account_renames r
+                 ON r.server = s.owner_server AND r.account_id = s.owner_account_id
+              WHERE s.account_id = $1 ORDER BY s.created_at",
         )
         .bind(user_id)
         .fetch_all(&state.pool)
@@ -766,6 +783,15 @@ pub async fn get_file_share(
             "the shared file's owner identity changed; accept the invite again",
         ));
     }
+    // What the owner's server says of their address now.
+    let owner_account = crate::remote_renames::note_account(
+        &state.pool,
+        &share.remote_domain,
+        share.owner_user_id,
+        &invite.owner_incarnation_id,
+        &invite.owner_account,
+    )
+    .await?;
     Ok(Json(IncomingFileShareNow {
         id: share.id,
         remote_domain: share.remote_domain,
@@ -774,7 +800,7 @@ pub async fn get_file_share(
         key_generation: invite.key_generation,
         can_edit: invite.can_edit,
         owner_user_id: invite.owner_user_id,
-        owner_account: invite.owner_account,
+        owner_account,
         owner_incarnation_id: invite.owner_incarnation_id,
         owner_signing_public_key: invite.owner_signing_public_key,
         created_at: share.created_at,

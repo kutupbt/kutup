@@ -228,6 +228,18 @@ keeps them; reports on them are operator tooling.
 
   Not on the security events: they are per account, user-visible, and pruned
   by count.
+- **As built (W7, docs/plans/w7-schema.md §6):** both tables have one column
+  shape: `id`, `kind`, `actor_kind` (`account` | `admin` | `job` | `peer`),
+  `actor_account_id`, `subject_account_id`, `at`, `payload`, `count`,
+  `chain_version`, `previous_hash`, `row_hash`. The admin log is chained
+  (`chain_version` 1, genesis `previous_hash` 32 zero bytes, both hashes NOT
+  NULL by a CHECK on `chain_version`); its kinds are `AdminAction`
+  (`src/audit_log.rs`), and the server's own rows are actor `job` with no
+  account. Security events are `chain_version` 0 with no hashes; what made
+  them (`actingSessionId`, `actingClient`, `clientSealed`) and their names
+  (`oldName`, `newName`) are payload keys, and which actors and names each
+  kind takes is the kind table in `src/security_events.rs`, not a database
+  CHECK.
 - **What is logged, added to today's kinds:**
   - **Sign-ins:** `signIn`, `signInFailedPassword` (only when the pending
     OPAQUE login names a real account; OPAQUE finds a wrong password on the
@@ -297,7 +309,8 @@ keeps them; reports on them are operator tooling.
 
   The raw string is never stored.
 - **Sealing:** the family is sealed under the account data key (A2) in
-  `auth_sessions.client_sealed` and `account_security_events.client_sealed`.
+  `auth_sessions.client_sealed` and the security event's payload
+  (`clientSealed`, base64).
   APIs return the three fields; `describeUserAgent` leaves the browser.
 - **Feedback** sends the same parsed family, not `navigator.userAgent`.
 - **Retention, as site settings:**
@@ -315,8 +328,8 @@ keeps them; reports on them are operator tooling.
 - `crate::client_family::parse` names Firefox, Chrome, Edge, Safari, Opera,
   Samsung Internet and the CLI, with the major version, and Windows, macOS,
   Linux, Android, iOS and ChromeOS.
-- The family is sealed as `client_sealed` on `auth_sessions` and
-  `account_security_events`, for each row. An event opens its session's family
+- The family is sealed as `client_sealed` on `auth_sessions` and as
+  `clientSealed` in each `account_security_events` row's payload. An event opens its session's family
   and re-seals it for itself, so it outlives the session.
 - Ended sessions go after `session_record_grace_days` (default 30), unless a
   session forked from one still lives.

@@ -355,7 +355,10 @@ async function recordPin(me: DriveIdentity, person: PublishedIdentity, update: P
 
 // ------------------------------------------------------------- renames
 
-/** One account's rename chain, as `GET /api/users/renames/:address` and `409 renamed` give it. */
+/**
+ * One account's rename chain, as `GET /api/users/renames/:address` and `409
+ * renamed` give it. Whose it is is in every statement (`accountId`, signed).
+ */
 export interface RenameChainEntry {
   incarnationId: string
   authorityPublicKey: string
@@ -376,6 +379,14 @@ export function renamesOf(error: unknown): RenameChains | null {
   if (!isAxiosError(error) || error.response?.status !== 409) return null
   const data = error.response.data as { code?: string; renames?: RenameChains } | undefined
   return data?.code === 'renamed' && data.renames && Array.isArray(data.renames.chains) ? data.renames : null
+}
+
+/**
+ * The account id a chain's statements sign (all must name the same, which
+ * verifying checks): for a chain of someone the caller knows no id for.
+ */
+function signedAccountId(entry: RenameChainEntry): string {
+  return entry.chain[0]?.accountId ?? ''
 }
 
 /** The rename chains that name `address`. */
@@ -426,7 +437,7 @@ export async function followRename(me: DriveIdentity, address: string, renames: 
   for (const entry of renames.chains) {
     if (entry.state !== 'current') continue
     try {
-      const view = await verifyAccountRenameChain(entry.authorityPublicKey, entry.chain)
+      const view = await verifyAccountRenameChain(entry.authorityPublicKey, signedAccountId(entry), entry.chain)
       const folded = await Promise.all(view.addresses.map((a) => foldAddress(a)))
       if (asked !== null && folded.includes(asked) && (await foldAddress(view.current)) !== asked) {
         return { now: view.current, formerly: address, verified: false }
@@ -455,7 +466,7 @@ export interface PendingPin {
  * renames since the first meeting. The list isn't touched; the pin is
  * written in its own time, and then followed as any other.
  */
-async function followPending(pending: PendingPin, current: string): Promise<AccountRename[]> {
+async function followPending(account: AccountRef, pending: PendingPin, current: string): Promise<AccountRename[]> {
   let renames: RenameChains
   try {
     renames = await fetchRenames(current)
@@ -466,7 +477,7 @@ async function followPending(pending: PendingPin, current: string): Promise<Acco
   const entry = renames.chains.find((chain) => chain.authorityPublicKey === pending.authorityPublicKey && chain.state === 'current')
   if (!entry || entry.chain.length === 0 || !(await sameAddress(entry.current, current))) return []
   try {
-    const view = await verifyAccountRenameChain(pending.authorityPublicKey, entry.chain)
+    const view = await verifyAccountRenameChain(pending.authorityPublicKey, account.accountId, entry.chain)
     if (!(await sameAddress(view.current, current))) return []
   } catch {
     return []
@@ -506,7 +517,7 @@ export async function followAccountRenames(
   store = null
   const pins = await pinStore(me)
   const pin = pins.pins.list.pins.find((known) => sameAccount(known.account, account))
-  if (!pin) return pending ? followPending(pending, current) : []
+  if (!pin) return pending ? followPending(account, pending, current) : []
   const label = pinAddress(pin)
   if (label && (await sameAddress(label, current))) return []
   let renames: RenameChains
@@ -628,7 +639,7 @@ export async function currentAddressOf(address: string, authority: string): Prom
   for (const entry of renames.chains) {
     if (entry.authorityPublicKey !== authority || entry.state !== 'current') continue
     try {
-      const view = await verifyAccountRenameChain(authority, entry.chain)
+      const view = await verifyAccountRenameChain(authority, signedAccountId(entry), entry.chain)
       const folded = await Promise.all(view.addresses.map((a) => foldAddress(a)))
       if (asked !== null && folded.includes(asked)) return view.current
     } catch {

@@ -3685,6 +3685,7 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
         serde_json::from_value(entry["chain"].clone()).unwrap();
     let view = kutup_crypto::account_rename::verify_chain(
         &alice.identity.authority_public_key(),
+        alice.id.parse().unwrap(),
         &statements,
     )
     .unwrap();

@@ -50,7 +50,8 @@ pub struct SecurityEventView {
     /// For a rename: the new name.
     #[serde(skip_serializing_if = "Option::is_none")]
     new_name: Option<String>,
-    /// An administrator's reset of this account.
+    /// Done by an administrator (a reset, a closed or freed name, two-factor
+    /// turned off, a closing account kept, or the account's data opened).
     by_admin: bool,
     /// How many times it happened: a failed sign-in's repeats within ten
     /// minutes are one event.
@@ -91,7 +92,7 @@ pub async fn list(
     // A cursor is one of the caller's own events, as a page handed it out.
     if let Some(cursor) = query.cursor {
         let known: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM account_security_events WHERE id = $1 AND account_id = $2)",
+            "SELECT EXISTS (SELECT 1 FROM account_security_events WHERE id = $1 AND subject_account_id = $2)",
         )
         .bind(cursor)
         .bind(user_id)

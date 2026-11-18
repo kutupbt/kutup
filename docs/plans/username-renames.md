@@ -14,7 +14,14 @@ renames (#193) are on `slate/renames`, not yet merged.
   they are: nothing is sealed to a name (docs/plans/account-identity.md).
 - The proof is the account's rename chain: `AccountRenameV1` statements signed
   by the authority, numbered from 1, each starting where the last ended
-  (`crates/kutup-crypto/src/account_rename.rs` on `slate/renames`).
+  (`crates/kutup-crypto/src/account_rename.rs`). A rename is the account's
+  statement about itself, so it binds the account's permanent id (since W7,
+  label `kutup/account/rename/v2`): a verifier checks it against the account
+  it looked the chain up for, and a server can't hang one account's genuine
+  chain onto another id. The signed bytes are the label (NUL included), the
+  incarnation id (32 bytes), the account id (16, the UUID's bytes), the
+  sequence (u64 BE), `previous` and `current` (each a u16 BE length and its
+  UTF-8), and `issuedAtMs` (i64 BE).
   `verify_chain` refuses gaps, forks and time going backwards;
   `RenameChainView::extends` lets a verifier refuse a rollback.
 - Statements about one relationship (named shares, profile key shares, MLS
@@ -83,8 +90,9 @@ another authority, so every pin of the old owner warns (#193).
    > address now.
    (The numbers are the server's settings, from `GET /api/auth/settings`.)
 3. The client builds, from the master key:
-   - the `AccountRenameV1` statement: `sequence` = stored chain length + 1,
-     `previous` = the current address, `current` = the new one;
+   - the `AccountRenameV1` statement: `accountId` = the account's own id,
+     `sequence` = stored chain length + 1, `previous` = the current address,
+     `current` = the new one;
    - a new `DriveKeyBindingV1` for the new address, same keys;
    - a mail address key and signed key list for the new address
      (`generateMailAddressKey`, `signMailKeyList` in `kutup-crypto-wasm`), or
@@ -96,7 +104,8 @@ another authority, so every pin of the old owner warns (#193).
 4. `POST /api/user/rename` (section 7). The server checks: the grant; setup
    done; not the break-glass account; the name's form and folded availability;
    the limits (section 8); the statement (`verify` against
-   `users.account_authority_public_key`, incarnation, sequence = next,
+   `users.account_authority_public_key` and the account's id, incarnation,
+   sequence = next,
    `previous` = the current address, `issued_at_ms` within 10 minutes and not
    before the last statement); `verify_chain` over the stored chain plus it;
    the re-issued binding against the new address.
@@ -393,7 +402,7 @@ availability function also checks `mail_groups` and live `mail_addresses`.
   ```json
   {
     "grant": "kg1_…",
-    "rename": { "incarnationId": "…", "sequence": 1,
+    "rename": { "incarnationId": "…", "accountId": "<uuid>", "sequence": 1,
                 "previous": "alice@kutup.dev", "current": "alicia@kutup.dev",
                 "issuedAtMs": 1792000000000, "signature": "<base64>" },
     "driveKeyBinding": "<canonical base64>",
@@ -421,8 +430,9 @@ availability function also checks `mail_groups` and live `mail_addresses`.
   `409 renamed` with that list. Delivery routes accept a held name and route
   it.
 - `POST /api/fed/accounts/renames` → body `{ "version": 1, "username",
-  "incarnationId", "authorityPublicKey", "chain" }` → `204`; `400` for a chain
-  that does not verify or a username that is not its current; `409` for one
+  "accountId", "incarnationId", "authorityPublicKey", "chain" }` → `204`;
+  `400` for a chain that does not verify, a username that is not its current,
+  or an `accountId` that is not the one the chain signs; `409` for one
   that does not extend the cached one; `429` past the per-domain cap.
 - `GET /api/user/security-events`: kinds `rename` and `nameDropped`, with
   `oldName` and `newName`.
@@ -597,17 +607,21 @@ Migration `20261015010000_account_renames_federation`; `crate::remote_renames`.
 commits and then every 30 seconds, with
   backoff to 6 hours, for 7 days; a peer without either feature, or one this server
   may not send to, is dropped at once (it learns at its next lookup).
-- **Keeping chains** (`remote_account_renames`, one per domain and incarnation): kept
-  when it verifies (the incarnation is the authority's hash, so no stored authority is
-  needed), every address is on the domain that gave it, and it extends the one kept;
-  a shorter one is a rollback and a different one a fork, neither kept. At most
-  50,000 per domain. Every address a chain names is indexed folded.
-- **Rows move by incarnation only** (incoming and outgoing federated shares, profile
-  keys, collaboration devices). A peer can sign a chain for a fresh authority claiming
-  one of its names; that is another incarnation and moves nothing (tested). A profile
-  key whose new address already has one stays under the old address until the next
-  key exchange replaces it (logged with its ids); the person sees the old address on
-  that one key until then.
+- **Keeping chains** (`remote_account_renames`, one per server and account id since
+  W7, docs/plans/w7-schema.md §1.3; the chain's account id is the one its
+  statements sign, the account's own word; an announce's `accountId` is routing and
+  must equal it): kept when it verifies (the
+  incarnation is the authority's hash, every statement names the one account id), every address is on the domain that gave it,
+  and it extends the one kept; a shorter one is a rollback and a different one a
+  fork, neither kept. Another incarnation of the same account replaces the kept one
+  only by announce (an admin reset). At most 50,000 chains per domain. Every address a
+  chain names is indexed folded.
+- **Nothing moves.** The row is the one place a remote account's address lives: it is
+  made when the account is first met (a share to or from it, from what its server
+  says, without a chain), and the share tables carry only (server, account id),
+  with a foreign key to it, and join it to show the address. A chain arriving later
+  replaces the label. A peer can sign a chain for a fresh authority claiming one of
+  its names; it is kept only under the account id it names (tested).
 - **A peer's `409 renamed`** to Chat keys, manifests, history and profile lookups and
   the Drive user lookup is relayed to the client, its chains verified and kept (this
   closes an R1 gap: those answers were `502`). Chat's federated errors now carry their

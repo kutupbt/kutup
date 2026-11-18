@@ -547,8 +547,9 @@ can't tell a managed account from a private one, as at Proton.
   shares and escrows are deleted.
 - Each of these is a security event for the member (`orgJoined`, `orgLeft`,
   `orgRemoved`, `orgAccessGranted`, `orgAccessRevoked`, `orgReset`,
-  `orgSignIn`); the CHECK list on `account_security_events.kind` grows in
-  the same migration.
+  `orgSignIn`); the kind table in `src/security_events.rs` gains them
+  with the slice that writes them (W7 moved the kinds out of the database
+  CHECK, and left out these unwritten ones).
 
 ### 5b. Chat by custom-domain address (the user, 2026-11-03; builds with O5)
 

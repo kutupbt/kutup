@@ -134,6 +134,16 @@ columns. The columns already named `account_id` / `*_account_id` stay.
   - The share tables drop their labels and join it for display. The
     rename-relabel code (`remote_renames.rs` apply_rows) goes.
 - Every `incarnation_id` becomes bytea(32) (§2).
+- **Built (group 4):** every rename statement signs the account id
+  (`accountId`, label `kutup/account/rename/v2`: a self-statement binds the
+  account id), so a chain is kept under the id it signs, never one its server
+  gives beside it; an announce's routing `accountId` must equal it. A remote account first met (a share to or from it)
+  gets a row without a chain (`sequence` 0, no authority or digest) from what
+  its server says (`remote_renames::note_account`), before the share row,
+  which has a foreign key to it; a chain later replaces that label. Another
+  incarnation of the same account (an admin reset there) replaces the row by
+  announce or a new meeting, never by a lookup's answer. Rows without a chain
+  don't count against the per-domain cap and answer no lookup.
 
 ## 2. Encoding
 

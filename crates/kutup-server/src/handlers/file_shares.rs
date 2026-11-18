@@ -620,9 +620,14 @@ async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<Federa
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, recipient_username, recipient_server, recipient_account_id,
-                encode(recipient_incarnation_id, 'hex'), can_edit, key_generation, created_at
-         FROM drive_federated_outgoing_file_shares WHERE file_id = $1 ORDER BY created_at",
+        "SELECT s.id, split_part(r.current_address, '@', 1), s.recipient_server,
+                s.recipient_account_id, encode(s.recipient_incarnation_id, 'hex'), s.can_edit,
+                s.key_generation, s.created_at
+         FROM drive_federated_outgoing_file_shares s
+         -- Their address now (remote_renames): the share names them by id.
+         JOIN remote_account_renames r
+           ON r.server = s.recipient_server AND r.account_id = s.recipient_account_id
+         WHERE s.file_id = $1 ORDER BY s.created_at",
     )
     .bind(file_id)
     .fetch_all(pool)

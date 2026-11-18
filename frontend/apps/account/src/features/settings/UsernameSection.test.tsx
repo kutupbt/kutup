@@ -29,7 +29,14 @@ vi.mock('@kutup/crypto/accountRename', () => ({
   signAccountRename,
 }))
 vi.mock('@kutup/mail-core/addressKey', () => ({ firstAddressKey, ownAddressState }))
-const session = { address: 'ada.l@kutup.test', username: 'ada.l', masterKey: new Uint8Array(32), roots: testRoots(0), envelopeBinding: 'b' }
+const session = {
+  userId: '00000000-0000-4000-8000-0000000000a1',
+  address: 'ada.l@kutup.test',
+  username: 'ada.l',
+  masterKey: new Uint8Array(32),
+  roots: testRoots(0),
+  envelopeBinding: 'b',
+}
 vi.mock('@kutup/session/store', () => ({ useRequiredSession: () => session, getSession: () => session }))
 
 const { UsernameSection } = await import('./UsernameSection')
@@ -57,8 +64,8 @@ beforeEach(() => {
   accountGrant.mockResolvedValue('grant-1')
   recheckAccount.mockResolvedValue(undefined)
   firstAddressKey.mockResolvedValue({ publicKey: 'pk', privateKeyEnvelope: 'env', keyList: { data: 'd', signature: 's' } })
-  signAccountRename.mockImplementation((_key: string, sequence: number, previous: string, current: string) =>
-    Promise.resolve({ incarnationId: 'i', sequence, previous, current, issuedAtMs: 1, signature: 'sig' }),
+  signAccountRename.mockImplementation((_key: string, accountId: string, sequence: number, previous: string, current: string) =>
+    Promise.resolve({ incarnationId: 'i', accountId, sequence, previous, current, issuedAtMs: 1, signature: 'sig' }),
   )
 })
 
@@ -115,7 +122,7 @@ describe('the rename dialog', () => {
     expect(path).toBe('/user/rename')
     expect(body).toMatchObject({
       grant: 'grant-1',
-      rename: { sequence: 1, previous: 'ada.l@kutup.test', current: 'ada-lovelace@kutup.test' },
+      rename: { accountId: session.userId, sequence: 1, previous: 'ada.l@kutup.test', current: 'ada-lovelace@kutup.test' },
       mailAddress: { publicKey: 'pk' },
     })
     // The Drive key binding names the account's id: a rename keeps it.

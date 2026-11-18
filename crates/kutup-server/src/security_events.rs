@@ -9,111 +9,165 @@
 //! a row. Old events go by the retention job ([`prune`]), for the days the
 //! Privacy and retention settings say, and past the newest of each kind they
 //! keep per account.
+//!
+//! Its columns are the admin log's (docs/plans/w7-schema.md §6): `kind` (a
+//! [`Kind`]), `actor_kind` with `actor_account_id` (the administrator, or
+//! the account itself when one of its sessions acted; none when no one is
+//! known), `subject_account_id` (whose log it is), `at`, `payload` (the keys
+//! in [`PAYLOAD_KEYS`]), `count`, and `chain_version` 0 with no hashes:
+//! pruned per kind, this log is not chained. Which actors and names each kind
+//! takes is the kind table's, held by [`insert`], not the database's.
 
 use uuid::Uuid;
 
 use crate::error::AppResult;
 
+/// Who did an event (`actor_kind`, the same values as the admin log's).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    PasswordChange,
-    Recovery,
-    Rotate,
-    AdminReset,
-    AccountReset,
-    /// A new username (`old_name`, `new_name`).
-    Rename,
-    /// Receiving at a held name ended by its owner (`old_name`).
-    NameDropped,
-    /// Receiving at a held name ended by an administrator.
-    NameClosed,
-    /// A held name freed by an administrator before its date.
-    NameFreed,
-    /// A custom mail domain the account held, lost (`old_name` is the
-    /// domain): another account proved it, or its DNS stopped proving it.
-    DomainLost,
-    /// Two-factor sign-in turned on (its recovery codes made).
-    TwoFactorOn,
-    /// Two-factor sign-in turned off: by the owner, an administrator, or the
-    /// recovery phrase's path.
-    TwoFactorOff,
-    /// A recovery code took the second factor's place.
-    RecoveryCodeUsed,
-    /// New recovery codes made; the old ones stopped working.
-    RecoveryCodesRenewed,
-    /// A security key added (`old_name` is its name, as for every key
-    /// event).
-    SecurityKeyAdded,
-    /// A security key removed (`old_name` is its name).
-    SecurityKeyRemoved,
-    /// A security key's counter went back with no other use of it in flight:
-    /// it may have been cloned, and is no longer used; its owner removes it
-    /// (and adds it again, if it is theirs). `old_name` is its name.
-    SecurityKeyCompromised,
-    /// The authenticator app turned on beside a security key (two-step
-    /// sign-in was on already).
-    AuthenticatorOn,
-    /// The authenticator app turned off; security keys keep two-step
-    /// sign-in on.
-    AuthenticatorOff,
-    /// A sign-in completed (a session made).
-    SignIn,
-    /// A wrong password for this account (only when the sign-in named it);
-    /// repeats fold into one row with a count.
-    SignInFailedPassword,
-    /// A wrong second step (code, security key or recovery code); repeats fold.
-    SignInFailed2fa,
-    /// A session signed out by its own device.
-    SignOut,
-    /// One session ended from another (Settings → Sessions).
-    SessionRevoked,
-    /// Every other session ended at once.
-    AllSessionsRevoked,
-    /// An administrator opened this account's data in the admin console.
-    AdminAccess,
-    /// The owner asked for the account to be deleted; it is closing.
-    AccountClosing,
-    /// A closing account was kept.
-    AccountKept,
-    /// A new master key and recovery phrase (docs/plans/mk-rotation-exercise.md);
-    /// the account's other sign-ins end.
-    MasterKeyRotated,
+pub enum ActorKind {
+    /// The account itself (or someone signing in as it).
+    Account,
+    /// An administrator.
+    Admin,
+    /// The server on its own (a job, a DNS check).
+    Job,
 }
 
-impl Kind {
-    pub fn as_str(self) -> &'static str {
+impl ActorKind {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Kind::PasswordChange => "passwordChange",
-            Kind::Recovery => "recovery",
-            Kind::Rotate => "rotate",
-            Kind::AdminReset => "adminReset",
-            Kind::AccountReset => "accountReset",
-            Kind::Rename => "rename",
-            Kind::NameDropped => "nameDropped",
-            Kind::NameClosed => "nameClosed",
-            Kind::NameFreed => "nameFreed",
-            Kind::DomainLost => "domainLost",
-            Kind::TwoFactorOn => "twoFactorOn",
-            Kind::TwoFactorOff => "twoFactorOff",
-            Kind::RecoveryCodeUsed => "recoveryCodeUsed",
-            Kind::RecoveryCodesRenewed => "recoveryCodesRenewed",
-            Kind::SecurityKeyAdded => "securityKeyAdded",
-            Kind::SecurityKeyRemoved => "securityKeyRemoved",
-            Kind::SecurityKeyCompromised => "securityKeyCompromised",
-            Kind::AuthenticatorOn => "authenticatorOn",
-            Kind::AuthenticatorOff => "authenticatorOff",
-            Kind::SignIn => "signIn",
-            Kind::SignInFailedPassword => "signInFailedPassword",
-            Kind::SignInFailed2fa => "signInFailed2fa",
-            Kind::SignOut => "signOut",
-            Kind::SessionRevoked => "sessionRevoked",
-            Kind::AllSessionsRevoked => "allSessionsRevoked",
-            Kind::AdminAccess => "adminAccess",
-            Kind::AccountClosing => "accountClosing",
-            Kind::AccountKept => "accountKept",
-            Kind::MasterKeyRotated => "masterKeyRotated",
+            ActorKind::Account => "account",
+            ActorKind::Admin => "admin",
+            ActorKind::Job => "job",
         }
     }
+}
+
+/// Which names an event's payload carries (`oldName`, and `newName`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Names {
+    None,
+    /// `oldName`: the name it was about.
+    Old,
+    /// `oldName` and `newName`.
+    OldNew,
+}
+
+/// The payload keys an event may carry: what made it (a session's id, its
+/// client, and its browser sealed for this row), and its names.
+pub const PAYLOAD_KEYS: [&str; 5] = [
+    "actingSessionId",
+    "actingClient",
+    "clientSealed",
+    "oldName",
+    "newName",
+];
+
+/// Declares [`Kind`]: each kind, its string, who may do it (the first is
+/// who did it when no session or administrator is named) and its names.
+/// The table replaces the database's per-kind checks
+/// (docs/plans/w7-schema.md §6); [`insert`] holds every row to it.
+macro_rules! kinds {
+    ($($(#[$doc:meta])* $variant:ident = $name:literal [$($actor:ident),+] $names:ident),* $(,)?) => {
+        /// Every kind of security event.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Kind {
+            $($(#[$doc])* $variant),*
+        }
+
+        impl Kind {
+            /// Every kind, for the table's own test.
+            #[cfg(test)]
+            pub const ALL: &'static [Kind] = &[$(Kind::$variant),*];
+
+            /// The kind as the log stores it.
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Kind::$variant => $name),*
+                }
+            }
+
+            /// Who may do it; the first when the caller names no one.
+            pub const fn actors(self) -> &'static [ActorKind] {
+                match self {
+                    $(Kind::$variant => &[$(ActorKind::$actor),+]),*
+                }
+            }
+
+            /// The names its payload carries.
+            pub const fn names(self) -> Names {
+                match self {
+                    $(Kind::$variant => Names::$names),*
+                }
+            }
+        }
+    };
+}
+
+kinds! {
+    PasswordChange = "passwordChange" [Account] None,
+    Recovery = "recovery" [Account] None,
+    Rotate = "rotate" [Account] None,
+    AdminReset = "adminReset" [Admin] None,
+    AccountReset = "accountReset" [Admin] None,
+    /// A new username (`oldName`, `newName`).
+    Rename = "rename" [Account] OldNew,
+    /// Receiving at a held name ended by its owner (`oldName`).
+    NameDropped = "nameDropped" [Account] Old,
+    /// Receiving at a held name ended by an administrator.
+    NameClosed = "nameClosed" [Admin] Old,
+    /// A held name freed by an administrator before its date.
+    NameFreed = "nameFreed" [Admin] Old,
+    /// A custom mail domain the account held, lost (`oldName` is the
+    /// domain): another account proved it, or its DNS stopped proving it.
+    DomainLost = "domainLost" [Job] Old,
+    /// Two-factor sign-in turned on (its recovery codes made).
+    TwoFactorOn = "twoFactorOn" [Account] None,
+    /// Two-factor sign-in turned off: by the owner, an administrator, or the
+    /// recovery phrase's path.
+    TwoFactorOff = "twoFactorOff" [Account, Admin] None,
+    /// A recovery code took the second factor's place.
+    RecoveryCodeUsed = "recoveryCodeUsed" [Account] None,
+    /// New recovery codes made; the old ones stopped working.
+    RecoveryCodesRenewed = "recoveryCodesRenewed" [Account] None,
+    /// A security key added (`oldName` is its name, as for every key
+    /// event).
+    SecurityKeyAdded = "securityKeyAdded" [Account] Old,
+    /// A security key removed (`oldName` is its name).
+    SecurityKeyRemoved = "securityKeyRemoved" [Account] Old,
+    /// A security key's counter went back with no other use of it in flight:
+    /// it may have been cloned, and is no longer used; its owner removes it
+    /// (and adds it again, if it is theirs). `oldName` is its name.
+    SecurityKeyCompromised = "securityKeyCompromised" [Account] Old,
+    /// The authenticator app turned on beside a security key (two-step
+    /// sign-in was on already).
+    AuthenticatorOn = "authenticatorOn" [Account] None,
+    /// The authenticator app turned off; security keys keep two-step
+    /// sign-in on.
+    AuthenticatorOff = "authenticatorOff" [Account] None,
+    /// A sign-in completed (a session made).
+    SignIn = "signIn" [Account] None,
+    /// A wrong password for this account (only when the sign-in named it);
+    /// repeats fold into one row with a count.
+    SignInFailedPassword = "signInFailedPassword" [Account] None,
+    /// A wrong second step (code, security key or recovery code); repeats fold.
+    SignInFailed2fa = "signInFailed2fa" [Account] None,
+    /// A session signed out by its own device.
+    SignOut = "signOut" [Account] None,
+    /// One session ended from another (Settings → Sessions).
+    SessionRevoked = "sessionRevoked" [Account] None,
+    /// Every other session ended at once.
+    AllSessionsRevoked = "allSessionsRevoked" [Account] None,
+    /// An administrator opened this account's data in the admin console
+    /// (repeats fold, across administrators: no admin is named).
+    AdminAccess = "adminAccess" [Admin] None,
+    /// The owner asked for the account to be deleted; it is closing.
+    AccountClosing = "accountClosing" [Account] None,
+    /// A closing account was kept: by its owner or an administrator.
+    AccountKept = "accountKept" [Account, Admin] None,
+    /// A new master key and recovery phrase (docs/plans/mk-rotation-exercise.md);
+    /// the account's other sign-ins end.
+    MasterKeyRotated = "masterKeyRotated" [Account] None,
 }
 
 /// Records `kind` for `user_id` inside `tx`, made from `session` (copied:
@@ -142,6 +196,50 @@ pub async fn record_names(
     insert(tx, user_id, kind, session, admin, Some(old_name), new_name).await
 }
 
+/// Who did `kind`: the administrator when one is named, else the account when
+/// one of its sessions acted, else the kind's first actor; and the account
+/// to name as the actor (the administrator, or the subject for a session;
+/// none otherwise). An error when the kind's table doesn't allow the actor or
+/// the names given aren't the kind's.
+fn actor(
+    subject: Uuid,
+    kind: Kind,
+    session: Option<Uuid>,
+    admin: Option<Uuid>,
+    old_name: Option<&str>,
+    new_name: Option<&str>,
+) -> AppResult<(ActorKind, Option<Uuid>)> {
+    let (actor, account) = match (admin, session) {
+        (Some(admin), _) => (ActorKind::Admin, Some(admin)),
+        (None, Some(_)) => (ActorKind::Account, Some(subject)),
+        (None, None) => (kind.actors()[0], None),
+    };
+    if !kind.actors().contains(&actor) {
+        return Err(crate::error::AppError::internal(format!(
+            "a {} security event is not done by {}",
+            kind.as_str(),
+            actor.as_str()
+        )));
+    }
+    let names = match (old_name.is_some(), new_name.is_some()) {
+        (false, false) => Names::None,
+        (true, false) => Names::Old,
+        (true, true) => Names::OldNew,
+        (false, true) => {
+            return Err(crate::error::AppError::internal(
+                "a security event with a new name and no old one",
+            ))
+        }
+    };
+    if names != kind.names() {
+        return Err(crate::error::AppError::internal(format!(
+            "a {} security event's names are not {names:?}",
+            kind.as_str()
+        )));
+    }
+    Ok((actor, account))
+}
+
 async fn insert(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -151,6 +249,7 @@ async fn insert(
     old_name: Option<&str>,
     new_name: Option<&str>,
 ) -> AppResult<()> {
+    let (actor_kind, actor_account) = actor(user_id, kind, session, admin, old_name, new_name)?;
     let id = Uuid::new_v4();
     // What made it: the session's client, and its browser re-sealed for this
     // row (a session's own goes when the session does; the event stays).
@@ -180,21 +279,34 @@ async fn insert(
         }
         _ => (None, None),
     };
+    // The payload: PAYLOAD_KEYS in order, an absent value no key; the sealed
+    // client in standard padded base64 (as `kutup_b64`).
+    let values: [Option<String>; PAYLOAD_KEYS.len()] = [
+        session.map(|session| session.to_string()),
+        acting_client,
+        client_sealed.map(|sealed| {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(sealed)
+        }),
+        old_name.map(str::to_owned),
+        new_name.map(str::to_owned),
+    ];
+    let payload: serde_json::Map<String, serde_json::Value> = PAYLOAD_KEYS
+        .iter()
+        .zip(values)
+        .filter_map(|(key, value)| Some(((*key).to_owned(), serde_json::Value::String(value?))))
+        .collect();
     sqlx::query(
         "INSERT INTO account_security_events
-             (id, account_id, kind, acting_session_id, acting_client, client_sealed, admin_account_id,
-              old_name, new_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             (id, kind, actor_kind, actor_account_id, subject_account_id, payload)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(id)
-    .bind(user_id)
     .bind(kind.as_str())
-    .bind(session)
-    .bind(acting_client)
-    .bind(client_sealed)
-    .bind(admin)
-    .bind(old_name)
-    .bind(new_name)
+    .bind(actor_kind.as_str())
+    .bind(actor_account)
+    .bind(user_id)
+    .bind(serde_json::Value::Object(payload))
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -218,7 +330,7 @@ pub async fn record_folded(pool: &sqlx::PgPool, user_id: Uuid, kind: Kind) -> Ap
     let folded = sqlx::query(
         "UPDATE account_security_events SET count = count + 1
           WHERE id = (SELECT id FROM account_security_events
-                       WHERE account_id = $1 AND kind = $2
+                       WHERE subject_account_id = $1 AND kind = $2
                          AND at > now() - make_interval(secs => $3)
                        ORDER BY at DESC, id DESC LIMIT 1)",
     )
@@ -243,12 +355,12 @@ pub async fn prune(pool: &sqlx::PgPool, days: i64, kept_per_kind: i64) -> AppRes
         "DELETE FROM account_security_events e
           WHERE (e.at < now() - make_interval(days => $1::int)
                  OR e.id IN (SELECT id FROM (
-                        SELECT id, row_number() OVER (PARTITION BY account_id, kind
+                        SELECT id, row_number() OVER (PARTITION BY subject_account_id, kind
                                                       ORDER BY at DESC, id DESC) AS n
                           FROM account_security_events) ranked
                       WHERE ranked.n > $2))
             -- A legal hold keeps everything of its account (A5).
-            AND NOT kutup_account_held(e.account_id)",
+            AND NOT kutup_account_held(e.subject_account_id)",
     )
     .bind(days)
     .bind(kept_per_kind)
@@ -286,15 +398,16 @@ pub async fn list(
 ) -> AppResult<Vec<Event>> {
     let mut conn = pool.acquire().await?;
     let mut events: Vec<Event> = sqlx::query_as(
-        "SELECT e.id, e.kind, e.at, e.acting_session_id, e.acting_client, e.client_sealed,
-                (e.kind IN ('adminReset', 'accountReset', 'nameClosed', 'nameFreed')
-                 OR (e.kind = 'accountKept' AND e.admin_account_id IS NOT NULL)) AS by_admin,
-                e.old_name, e.new_name, e.count
+        "SELECT e.id, e.kind, e.at, (e.payload->>'actingSessionId')::uuid AS acting_session_id,
+                e.payload->>'actingClient' AS acting_client,
+                kutup_unb64(e.payload->>'clientSealed') AS client_sealed,
+                e.actor_kind = 'admin' AS by_admin,
+                e.payload->>'oldName' AS old_name, e.payload->>'newName' AS new_name, e.count
          FROM account_security_events e
-         WHERE e.account_id = $1
+         WHERE e.subject_account_id = $1
            AND ($2::uuid IS NULL OR (e.at, e.id) < (
                SELECT c.at, c.id FROM account_security_events c
-               WHERE c.id = $2 AND c.account_id = $1))
+               WHERE c.id = $2 AND c.subject_account_id = $1))
          ORDER BY e.at DESC, e.id DESC
          LIMIT $3",
     )
@@ -314,4 +427,130 @@ pub async fn list(
         );
     }
     Ok(events)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn camel(word: &str) -> bool {
+        let mut bytes = word.bytes();
+        bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+            && bytes.all(|b| b.is_ascii_alphanumeric())
+    }
+
+    /// One table names every kind: each string unique and camelCase, its
+    /// actors listed once each, and the payload keys camelCase.
+    #[test]
+    fn every_kind_is_in_the_table_once() {
+        let mut seen = std::collections::BTreeSet::new();
+        for kind in Kind::ALL {
+            let name = kind.as_str();
+            assert!(seen.insert(name), "{name} is listed twice");
+            assert!(camel(name), "{name} is not camelCase");
+            let actors = kind.actors();
+            assert!(!actors.is_empty(), "{name} has no actor");
+            for (i, actor) in actors.iter().enumerate() {
+                assert!(!actors[..i].contains(actor), "{name}: {actor:?} twice");
+            }
+        }
+        assert_eq!(seen.len(), Kind::ALL.len());
+        for key in PAYLOAD_KEYS {
+            assert!(camel(key), "payload key {key} is not camelCase");
+        }
+    }
+
+    /// What the database's checks held before the table (w7-schema.md §6):
+    /// which kinds an administrator may do, and which carry names.
+    #[test]
+    fn the_table_keeps_the_old_checks() {
+        let by_admin: Vec<&str> = Kind::ALL
+            .iter()
+            .filter(|kind| kind.actors().contains(&ActorKind::Admin))
+            .map(|kind| kind.as_str())
+            .collect();
+        assert_eq!(
+            by_admin,
+            [
+                "adminReset",
+                "accountReset",
+                "nameClosed",
+                "nameFreed",
+                "twoFactorOff",
+                "adminAccess",
+                "accountKept"
+            ]
+        );
+        let named: Vec<&str> = Kind::ALL
+            .iter()
+            .filter(|kind| kind.names() != Names::None)
+            .map(|kind| kind.as_str())
+            .collect();
+        assert_eq!(
+            named,
+            [
+                "rename",
+                "nameDropped",
+                "nameClosed",
+                "nameFreed",
+                "domainLost",
+                "securityKeyAdded",
+                "securityKeyRemoved",
+                "securityKeyCompromised"
+            ]
+        );
+        assert_eq!(Kind::Rename.names(), Names::OldNew);
+    }
+
+    #[test]
+    fn the_actor_follows_the_table() {
+        let (account, admin, session) =
+            (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        // A session acts as its account; an administrator is named.
+        assert_eq!(
+            actor(account, Kind::SignIn, Some(session), None, None, None).unwrap(),
+            (ActorKind::Account, Some(account))
+        );
+        assert_eq!(
+            actor(account, Kind::TwoFactorOff, None, Some(admin), None, None).unwrap(),
+            (ActorKind::Admin, Some(admin))
+        );
+        // No one named: the kind's first actor, no account.
+        assert_eq!(
+            actor(account, Kind::SignInFailedPassword, None, None, None, None).unwrap(),
+            (ActorKind::Account, None)
+        );
+        assert_eq!(
+            actor(account, Kind::AdminAccess, None, None, None, None).unwrap(),
+            (ActorKind::Admin, None)
+        );
+        assert_eq!(
+            actor(
+                account,
+                Kind::DomainLost,
+                None,
+                None,
+                Some("a.example"),
+                None
+            )
+            .unwrap(),
+            (ActorKind::Job, None)
+        );
+        // Not the kind's actor, or not its names.
+        assert!(actor(account, Kind::SignIn, None, Some(admin), None, None).is_err());
+        assert!(actor(account, Kind::AdminReset, Some(session), None, None, None).is_err());
+        assert!(actor(account, Kind::Rename, Some(session), None, Some("a"), None).is_err());
+        assert!(actor(account, Kind::SignIn, Some(session), None, Some("a"), None).is_err());
+        assert!(actor(account, Kind::NameDropped, Some(session), None, None, None).is_err());
+        assert!(actor(account, Kind::Rename, Some(session), None, None, Some("b")).is_err());
+        assert!(actor(
+            account,
+            Kind::Rename,
+            Some(session),
+            None,
+            Some("a"),
+            Some("b")
+        )
+        .is_ok());
+    }
 }

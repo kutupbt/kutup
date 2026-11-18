@@ -231,9 +231,18 @@ fn rules() -> RuleVectors {
     let frank = acct("example.org", "7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d");
     let stranger = acct("kutup.dev", "8d40e3f1-5e70-4192-9d3e-4f5a6b7c8d9e");
     let chain = vec![
-        account_rename::sign(&dave_keys, 1, "dave@kutup.dev", "davey@kutup.dev", T).unwrap(),
         account_rename::sign(
             &dave_keys,
+            dave.id(),
+            1,
+            "dave@kutup.dev",
+            "davey@kutup.dev",
+            T,
+        )
+        .unwrap(),
+        account_rename::sign(
+            &dave_keys,
+            dave.id(),
             2,
             "davey@kutup.dev",
             "david@kutup.dev",

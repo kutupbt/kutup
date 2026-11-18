@@ -41,8 +41,14 @@ pub(crate) async fn audit(
     let Ok(admin_uuid) = Uuid::parse_str(admin_user_id) else {
         return;
     };
-    if let Err(e) =
-        crate::audit_log::append(pool, admin_uuid, action, target_user_id, &payload).await
+    if let Err(e) = crate::audit_log::append(
+        pool,
+        crate::audit_log::Actor::Admin(admin_uuid),
+        action,
+        target_user_id,
+        &payload,
+    )
+    .await
     {
         tracing::warn!("audit log write failed ({action}): {}", e.message);
     }
@@ -501,7 +507,7 @@ pub async fn update_user(
         }
         crate::audit_log::append_in(
             &mut tx,
-            crate::handlers::trusted_uuid(&admin.user_id)?,
+            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.user_id)?),
             AdminAction::AccountSetFederation,
             Some(target),
             &json!({ "federation": federation }),
@@ -526,7 +532,7 @@ pub async fn update_user(
             .await?;
         crate::audit_log::append_in(
             &mut tx,
-            crate::handlers::trusted_uuid(&admin.user_id)?,
+            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.user_id)?),
             AdminAction::AccountSetPublicSharing,
             Some(target),
             &json!({ "publicSharing": sharing }),
@@ -2784,13 +2790,15 @@ pub struct ActivityQuery {
 #[serde(rename_all = "camelCase")]
 struct ActivityEntry {
     id: i64,
+    /// The row's kind (an `AdminAction`, `area.verb`).
     action: String,
+    /// The acting admin; the nil id for the server's own steps (actor `job`).
     admin_user_id: Uuid,
     /// The acting admin's live username — `null` once that account is deleted.
     admin_username: Option<String>,
     target_user_id: Option<Uuid>,
-    /// The target's live username — `null` once deleted; the payload keeps
-    /// the at-action-time snapshot.
+    /// The target's live username — `null` once deleted (payloads name
+    /// accounts by id only).
     target_username: Option<String>,
     payload: serde_json::Value,
     #[serde(with = "time::serde::rfc3339")]
@@ -2959,14 +2967,16 @@ async fn load_activity_entries(
         serde_json::Value,
         OffsetDateTime,
     );
+    // The server's own rows (actor `job`) name the nil id as their admin,
+    // which the activity page shows as "system".
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT l.id, l.action, l.admin_account_id, a.username,
-                  l.target_account_id, t.username, l.payload, l.occurred_at
+        r#"SELECT l.id, l.kind, COALESCE(l.actor_account_id, '00000000-0000-0000-0000-000000000000'::uuid),
+                  a.username, l.subject_account_id, t.username, l.payload, l.at
            FROM admin_audit_log l
-           LEFT JOIN accounts a ON a.id = l.admin_account_id
-           LEFT JOIN accounts t ON t.id = l.target_account_id
+           LEFT JOIN accounts a ON a.id = l.actor_account_id
+           LEFT JOIN accounts t ON t.id = l.subject_account_id
            WHERE ($1::bigint IS NULL OR l.id < $1)
-             AND ($2::text IS NULL OR left(l.action, char_length($2)) = $2)
+             AND ($2::text IS NULL OR left(l.kind, char_length($2)) = $2)
              AND ($3::text IS NULL
                   OR l.payload->>'domain' = $3
                   OR EXISTS (

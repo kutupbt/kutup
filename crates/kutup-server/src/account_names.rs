@@ -80,6 +80,9 @@ pub async fn chains(
     .await?;
     let mut chains: Vec<Value> = Vec::new();
     let mut last: Option<String> = None;
+    // Whose chain it is is in every statement (`accountId`, signed), so a
+    // peer keeps it by the account (remote_renames) without taking this
+    // server's word for it.
     for (incarnation_id, authority, _sequence, current, _latest, statement, state) in rows {
         if last.as_deref() != Some(incarnation_id.as_str()) {
             chains.push(json!({

@@ -363,29 +363,33 @@
     "otherAccountFingerprint": "09399 57463 96810 59485 92603 49622 96904 76825 74532 15988 36688 61790"
   },
   "accountRename": {
-    "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, chained 1, 2, …; a client accepts only chains that verify and extend what it saw.",
+    "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, binding the account id, chained 1, 2, …; a client accepts only chains that verify for the account id it looked up and extend what it saw.",
     "masterKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+    "accountId": "00000000-0000-4000-8000-0000000000a1",
+    "otherAccountId": "00000000-0000-4000-8000-0000000000b2",
     "authorityPublicKey": "L7ufiPkKWVyJEEY4psjgc/s7U+udm/RqZdwwKcHfyDE=",
     "otherAuthorityPublicKey": "NtTt6Y2mlS7yLMBo1r/CJ6tnIMCecuIn4EHRlujaang=",
     "chain": [
       {
         "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+        "accountId": "00000000-0000-4000-8000-0000000000a1",
         "sequence": 1,
         "previous": "alice@kutup.dev",
         "current": "alicia@kutup.dev",
         "issuedAtMs": 1790000000000,
-        "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+        "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
       },
       {
         "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+        "accountId": "00000000-0000-4000-8000-0000000000a1",
         "sequence": 2,
         "previous": "alicia@kutup.dev",
         "current": "ali@kutup.dev",
         "issuedAtMs": 1790000001000,
-        "signature": "B9+yBrLW+esOKzvn/sqr+UpdL6OXYafNEtw+13PGqJ9FLkbX+T7jy1Kc3O2Uz3ANO8M+o05nVVybqKnOKcgiDg=="
+        "signature": "n2ATxe6Gg8CKkkn9jEa0E6kVeUHqNP7Jbad/+K6720JnaKhIFnhGik5Ar6Yq9NOSN81p5jcAnFQVp9HRlQ6/AQ=="
       }
     ],
-    "firstSigningBytes": "6b757475702f6163636f756e742f72656e616d652f763100ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f40000000000000001000f616c696365406b757475702e6465760010616c69636961406b757475702e646576000001a0c4506c00",
+    "firstSigningBytes": "6b757475702f6163636f756e742f72656e616d652f763200ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4000000000000400080000000000000a10000000000000001000f616c696365406b757475702e6465760010616c69636961406b757475702e646576000001a0c4506c00",
     "first": "alice@kutup.dev",
     "current": "ali@kutup.dev",
     "invalidChains": [
@@ -394,11 +398,12 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 2,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "+gPiIiu5tdeKMrK9q3uZdbKmPmNDM8uOOpEVz6PsjEa358kyFmQwYkwgMOOauTPFXc6qq9o+t4MFqLsB5YEwDw=="
+            "signature": "55GbfUBwGw1uQEX+6kqDlTpfCRtinWlvT6slFcRsXSzBZ6Q0UO/i0cmYZMkB+cdu/sBeEem3G31izf2omlorDg=="
           }
         ]
       },
@@ -407,19 +412,21 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
           },
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 2,
             "previous": "bob@kutup.dev",
             "current": "ali@kutup.dev",
             "issuedAtMs": 1790000001000,
-            "signature": "LsVqX5E+a6F26CABAI8lDRXJySwvDwxDsrRz/+CxoG3V+mKtxU/QcAV9e97Szjp9M5TAnnHuTI/wRJTXuShYCQ=="
+            "signature": "eg/Th+fWdg6rgVK3epugBsoEWbUqBT5Hzy10vgperLt0cUJddFEFyJffyD0ont2Pk/5kMllp2fQ2RpZE6s0vBA=="
           }
         ]
       },
@@ -428,19 +435,21 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
           },
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 2,
             "previous": "alicia@kutup.dev",
             "current": "ali@kutup.dev",
             "issuedAtMs": 1789999999000,
-            "signature": "SKeDOV14Noo+1XYSIjvQoHmkIFQkonFGFx8dlGtYStS3mQeHukDJ5pU+8HSbWK/mAdzQ6WTS5ESa4fkBcfL+BA=="
+            "signature": "VJ3XWH2WLOT3VqoVhvxE2papGi3z/7ybl2U9iMEkuXRIHsnzEGmulhrqVv/kgHGehGg7tO3Ue40Ce9nxAtu8CQ=="
           }
         ]
       },
@@ -449,19 +458,21 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
           },
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 2,
             "previous": "alicia@kutup.dev",
             "current": "mallory@kutup.dev",
             "issuedAtMs": 1790000001000,
-            "signature": "B9+yBrLW+esOKzvn/sqr+UpdL6OXYafNEtw+13PGqJ9FLkbX+T7jy1Kc3O2Uz3ANO8M+o05nVVybqKnOKcgiDg=="
+            "signature": "n2ATxe6Gg8CKkkn9jEa0E6kVeUHqNP7Jbad/+K6720JnaKhIFnhGik5Ar6Yq9NOSN81p5jcAnFQVp9HRlQ6/AQ=="
           }
         ]
       },
@@ -470,11 +481,12 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@kutup.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "1wKUXDJXcqB5nkjTj0Mp/P4qQoyxLhE4dlm3g1c4SlMkkEvV+Sj7O+DQDADuln9fivqBlFFnpEfR/yJWTNXsAQ=="
+            "signature": "F88gvs/ePkD+w5IUctohxluNkICtEnIlCrQOETpJQ+6mLgtg6IdkkdV7d/EMgobrkjl4K74RN79JcpYWUaMWAw=="
           }
         ]
       },
@@ -483,11 +495,58 @@
         "chain": [
           {
             "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
             "sequence": 1,
             "previous": "alice@kutup.dev",
             "current": "alicia@other.dev",
             "issuedAtMs": 1790000000000,
-            "signature": "qF7yedznSHVLNYtFDpm/LQjdytY3UVr05bmSK56LQCe08eff64EkmyxqXsgB0QauPF7BcbBa8gwPaJiuaL9gCA=="
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
+          }
+        ]
+      },
+      {
+        "why": "names another account id",
+        "chain": [
+          {
+            "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
+            "sequence": 1,
+            "previous": "alice@kutup.dev",
+            "current": "alicia@kutup.dev",
+            "issuedAtMs": 1790000000000,
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
+          },
+          {
+            "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000b2",
+            "sequence": 2,
+            "previous": "alicia@kutup.dev",
+            "current": "ali@kutup.dev",
+            "issuedAtMs": 1790000001000,
+            "signature": "rpGPhlmwEbqsnHKrEpzsosmxp8iFv1eN+d+tTR716QgcX9D87Mc3jKJWn67d6TcuFHQr5EtSH2Fw5kQf6XZ7DQ=="
+          }
+        ]
+      },
+      {
+        "why": "account id relabelled",
+        "chain": [
+          {
+            "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000a1",
+            "sequence": 1,
+            "previous": "alice@kutup.dev",
+            "current": "alicia@kutup.dev",
+            "issuedAtMs": 1790000000000,
+            "signature": "jQ7mS1M9GxcnI3O7RxpV+8N1bwtu/JNHZqH1dDEuRzNm/lqeQxXXSTUOcbLcmgWmb2wwKXOffa4uCkhoXWoIDg=="
+          },
+          {
+            "incarnationId": "ceb120d98a717f18648b41773730fceb87045effb18e09324d671411f60150f4",
+            "accountId": "00000000-0000-4000-8000-0000000000b2",
+            "sequence": 2,
+            "previous": "alicia@kutup.dev",
+            "current": "ali@kutup.dev",
+            "issuedAtMs": 1790000001000,
+            "signature": "n2ATxe6Gg8CKkkn9jEa0E6kVeUHqNP7Jbad/+K6720JnaKhIFnhGik5Ar6Yq9NOSN81p5jcAnFQVp9HRlQ6/AQ=="
           }
         ]
       },

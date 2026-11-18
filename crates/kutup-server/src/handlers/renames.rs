@@ -268,8 +268,14 @@ pub async fn rename(
         .ok()
         .and_then(|k| k.try_into().ok())
         .ok_or_else(|| AppError::internal("account authority"))?;
+    // The account's own statement about itself: it names this account's id,
+    // or it is no rename of this account.
+    let account_id = kutup_crypto::account_ref::AccountId::from_bytes(user_id.into_bytes());
+    if statement.account_id != account_id.to_string() {
+        return Err(rename_invalid("another account"));
+    }
     statement
-        .verify(&authority_key)
+        .verify(&authority_key, account_id)
         .map_err(|_| rename_invalid("signature"))?;
     if statement.incarnation_id != incarnation {
         return Err(rename_invalid("another incarnation"));
@@ -299,7 +305,8 @@ pub async fn rename(
         .collect::<Result<_, _>>()
         .map_err(|_| AppError::internal("a stored rename"))?;
     chain.push(statement.clone());
-    let view = verify_chain(&authority_key, &chain).map_err(|_| rename_invalid("the chain"))?;
+    let view = verify_chain(&authority_key, account_id, &chain)
+        .map_err(|_| rename_invalid("the chain"))?;
 
     // The limits: one counted rename per 30 days; going back to the name just
     // left within 7 days of that rename is free, once, and restarts the clock.
@@ -599,7 +606,7 @@ pub async fn drop_name(
     // people may still write to, not something to repeat at will.
     let last: Option<time::OffsetDateTime> = sqlx::query_scalar(
         "SELECT max(at) FROM account_security_events
-          WHERE account_id = $1 AND kind = 'nameDropped' AND admin_account_id IS NULL",
+          WHERE subject_account_id = $1 AND kind = 'nameDropped' AND actor_kind = 'account'",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)

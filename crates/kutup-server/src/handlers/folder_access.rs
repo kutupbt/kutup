@@ -280,10 +280,14 @@ pub async fn access(
         OffsetDateTime,
     );
     let federated: Vec<FederatedRow> = sqlx::query_as(
-        "SELECT id, recipient_username, recipient_server, recipient_account_id,
-                kutup_b64(named_share_envelope), can_upload, can_delete, upload_quota_bytes,
-                created_at
-         FROM drive_federated_outgoing_shares WHERE collection_id = $1 ORDER BY created_at",
+        "SELECT s.id, split_part(r.current_address, '@', 1), s.recipient_server,
+                s.recipient_account_id, kutup_b64(s.named_share_envelope), s.can_upload,
+                s.can_delete, s.upload_quota_bytes, s.created_at
+         FROM drive_federated_outgoing_shares s
+         -- Their address now (remote_renames): the share names them by id.
+         JOIN remote_account_renames r
+           ON r.server = s.recipient_server AND r.account_id = s.recipient_account_id
+         WHERE s.collection_id = $1 ORDER BY s.created_at",
     )
     .bind(collection_id)
     .fetch_all(&state.pool)

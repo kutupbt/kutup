@@ -145,12 +145,28 @@ export interface CryptoWasmModule {
   /** `{ server, accountId }` → `aci:<uuid>@<server>`, both checked. */
   accountRefString(server: string, accountId: string): string
   foldAddress(address: string): string | undefined
-  signAccountRename(identityRoot: IdentityRoot, sequence: number, previous: string, current: string, issuedAtMs: number): string
+  signAccountRename(
+    identityRoot: IdentityRoot,
+    accountId: string,
+    sequence: number,
+    previous: string,
+    current: string,
+    issuedAtMs: number,
+  ): string
   verifyAccountRenameChain(
     authorityPublicBase64: string,
+    accountId: string,
     chainJson: string,
     knownDigestsJson?: string | null,
-  ): { incarnationId: string; first: string; current: string; addresses: string[]; sequence: number; digests: string[] }
+  ): {
+    incarnationId: string
+    accountId: string
+    first: string
+    current: string
+    addresses: string[]
+    sequence: number
+    digests: string[]
+  }
   recordIdentityPin(
     pinsJson: string,
     account: { server: string; accountId: string },

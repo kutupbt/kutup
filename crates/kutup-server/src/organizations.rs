@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(lost_by, organization);
         for owner in [alice, bob] {
             let told: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM account_security_events WHERE account_id = $1 AND kind = 'domainLost'",
+                "SELECT count(*) FROM account_security_events WHERE subject_account_id = $1 AND kind = 'domainLost'",
             )
             .bind(owner)
             .fetch_one(&pool)

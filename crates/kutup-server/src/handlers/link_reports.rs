@@ -478,7 +478,7 @@ pub async fn block_link(
     // In the block's own transaction: the record of who blocked what, why.
     crate::audit_log::append_in(
         &mut tx,
-        admin_uuid,
+        crate::audit_log::Actor::Admin(admin_uuid),
         AdminAction::ShareBlock,
         Some(owner),
         &json!({
@@ -542,7 +542,7 @@ pub async fn unblock_link(
     }
     crate::audit_log::append_in(
         &mut tx,
-        admin_uuid,
+        crate::audit_log::Actor::Admin(admin_uuid),
         AdminAction::ShareUnblock,
         Some(owner),
         &json!({ "shareId": share, "reason": reason }),

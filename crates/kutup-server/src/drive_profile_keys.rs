@@ -252,19 +252,20 @@ pub async fn list_people(
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
-    // Remote people by (server, account id), with the address each share
-    // last named them by (kept current by rename announces), to show.
+    // Remote people by (server, account id), with the address they go by
+    // now (remote_renames: kept current by rename announces), to show.
     let remote: Vec<(String, Uuid, String)> = sqlx::query_as(
-        "SELECT DISTINCT ON (server, account_id) server, account_id, account FROM (
-             SELECT s.recipient_server AS server, s.recipient_account_id AS account_id,
-                    s.recipient_username || '@' || s.recipient_server AS account
+        "SELECT r.server, r.account_id, r.current_address FROM (
+             SELECT s.recipient_server AS server, s.recipient_account_id AS account_id
                FROM drive_federated_outgoing_shares s
                JOIN drive_collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
               WHERE s.sharer_account_id = $1
-             UNION ALL
-             SELECT owner_server, owner_account_id, owner_account
+             UNION
+             SELECT owner_server, owner_account_id
                FROM drive_federated_incoming_shares WHERE account_id = $1) people
-         ORDER BY server, account_id, account",
+         JOIN remote_account_renames r
+           ON r.server = people.server AND r.account_id = people.account_id
+         ORDER BY r.server, r.account_id",
     )
     .bind(user_id)
     .fetch_all(&state.pool)

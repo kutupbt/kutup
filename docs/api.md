@@ -1196,7 +1196,8 @@ receiving nothing.
   list (sequence 1, that key primary), as `POST /api/mail/addresses/{id}/keys`
   takes them, stored in the rename's transaction so mail to the new address is
   never deferred; sent exactly when the check says `needsKey` (otherwise
-  `renameInvalid`). The display
+  `renameInvalid`). The statement must name this account's id (`accountId`,
+  signed), or it is `renameInvalid`. The display
   name and signature move to the new address. Errors: `renameInvalid`, `grantInvalid`, `breakGlassAccount`,
   `setupRequired`, `nameTaken`, `nameReserved`, `renameConflict`,
   `tooManyHeldNames`, `renameTooSoon`. One counted rename per 30 days; going
@@ -1208,10 +1209,15 @@ receiving nothing.
   receiving there ends now; the name stays held until its date (`notHeld`;
   `dropTooSoon`: one drop per 30 days).
 - `GET /api/users/renames/:address[?incarnationId=]` → `{ "version": 1,
-  "chains": [{ "incarnationId", "authorityPublicKey", "current", "state":
-  "current" | "held" | "gone", "chain": [<AccountRenameV1>, …] }] }`, newest
-  first; a reused name appears in several. Clients verify every chain against
-  their pins (`version` other than 1: unverifiable, warn). For another
+  "chains": [{ "incarnationId", "authorityPublicKey", "current",
+  "state": "current" | "held" | "gone", "chain": [<AccountRenameV1>, …] }] }`,
+  newest first; a reused name appears in several. An `AccountRenameV1` is `{
+  "incarnationId", "accountId", "sequence", "previous", "current",
+  "issuedAtMs", "signature" }`: `accountId` is the account's permanent id,
+  signed with the rest (`kutup/account/rename/v2`), the same in every
+  statement of a chain, so whose chain it is is the account's own word, never
+  the server's. Clients verify every chain against
+  their pins and the account id they know (`version` other than 1: unverifiable, warn). For another
   server's address: the chains this server keeps of it (from announces, earlier
   lookups and relayed `409 renamed`), asked of that server when none is fresh
   (a day). The server unreachable and nothing kept: `{ "version": 1, "chains":
@@ -4979,14 +4985,19 @@ rename chain naming `username@<this server>`, in any spelling, as `GET
 ### POST /api/fed/{chat|drive}/accounts/renames
 
 Signed (under `chat.v2` or `drive.v1`). A peer announces one of its accounts'
-renames: `{ "version": 1, "username", "incarnationId", "authorityPublicKey",
-"chain": [<AccountRenameV1>, …] }`, the whole chain, `username` its last
-current. Kept when it verifies (the incarnation is its authority's hash, every
-address is on the sending server) and extends the one kept (`204`); then this
-server's rows about that incarnation (incoming and outgoing federated shares,
-profile keys, collaboration devices) move to the new address, by incarnation
-only. `400` for a chain that does not check out, `409` for one that does not
-extend the one kept, `429` past 50,000 chains of that server or 600 announces
+renames: `{ "version": 1, "username", "accountId", "incarnationId",
+"authorityPublicKey", "chain": [<AccountRenameV1>, …] }`, the whole chain,
+`username` its last current. `accountId` is routing: it must be the id every
+statement signs (`400` otherwise). Kept as that account's address here
+(`remote_account_renames`, one row per (server, account id), the id the chain
+signs) when it verifies (the incarnation is its authority's hash, every
+statement names the one account id, every address is on the sending
+server) and extends the one kept, or replaces another incarnation's (an admin
+reset there) (`204`). Rows naming the account (incoming and outgoing federated
+shares, the Drive people list) carry only its id and show this address, so
+nothing is relabelled. `400` for a chain that does not check out, `409` for one
+that does not extend the one kept, `429` past 50,000 chains of that server
+(accounts only met by a share, without a chain, don't count) or 600 announces
 a minute. Announces are sent after a rename commits to every pinned peer not
 quarantined, retried with backoff for 7 days.
 
@@ -5384,7 +5395,7 @@ before sending, never the page's address (it can name a file or a person).
 
 All admin endpoints require the `isAdmin` flag on the JWT and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
 
-Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; the human-readable identities (usernames) are snapshotted into the row's `payload` at action time.
+Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; payloads name accounts by id only (no username snapshot). Some rows are the server's own (a job or an operator command, for example a federation identity rotation): their `adminUserId` is the nil UUID, shown as "system".
 
 ### GET /api/admin/reports
 
@@ -5710,8 +5721,9 @@ the response is downloaded as `kutup-admin-audit.csv`.
 ### GET /api/admin/activity/verify
 
 The admin log's integrity (docs/plans/server-personal-data.md, A8): each row
-stores the previous row's hash and its own, over its admin, action, target,
-time and payload. This walks the chain from the oldest row kept.
+stores the previous row's hash and its own, over its actor kind and actor,
+kind, subject account, time, payload and count; the first row's previous hash
+is 32 zero bytes. This walks the chain from the oldest row kept.
 
 **Auth:** Bearer JWT (admin)
 

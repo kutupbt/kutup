@@ -69,7 +69,7 @@ pre-wipe, nothing stored needs reading under the old layout.
 | Federation delivery messages (`FederatedChatTransaction.sender/recipient`, sealed, media offer, anonymous MLS, key-package requests and bundles) | addresses | (`server`, `accountId`) | Signal routes by ServiceId (`MessageController`) |
 
 Unchanged:
-- `AccountRenameV1`: the signed history of names.
+- `AccountRenameV1`: the signed history of names (since W7 it also signs the account id, `kutup/account/rename/v2`: a self-statement binds the id, so a chain can't be hung onto another account).
 - Per-address OpenPGP keys, the address in their sealed payload and their user ID: the exception.
 - `device_registration`, `account_envelope`, `opaque`, `kdf`, `account_head`, `mail_names`, `contact_card`, `pass_vault`, `collection_*`, `drive_envelope`, collab frames, `photos_library`: they already bind permanent ids.
 
@@ -232,10 +232,11 @@ nobody has checked yet.
   every read joins on the member's current incarnation, so an old share is
   never served and the member shows `needsKeys`. A manager re-seals for the
   new identity after confirming it; the upsert replaces the old row.
-- `remote_account_renames` (a peer's chain, by domain and incarnation): a
-  peer's reset starts a new chain under the new incarnation; the old one
-  stays as that incarnation's history (an address can appear in several
-  chains), within the per-domain cap.
+- `remote_account_renames` (since W7 one row per (server, account id),
+  docs/plans/w7-schema.md §1.3): a peer's reset starts a new chain under the
+  new incarnation, which replaces the kept row when it arrives by announce or
+  when the account is met again (a share, its refresh); a lookup's answer,
+  which lists old incarnations too, never replaces it.
 - `remote_collab_devices` (a peer's devices): the old incarnation's devices
   no longer renew and go at the daily sweep, after the lease and its grace,
   or sooner once no share names that incarnation. Shares to the old
