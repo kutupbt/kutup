@@ -739,7 +739,6 @@ pub async fn register(
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
-    let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let federation_default = crate::federation_switch::site_default(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     // The account id this server minted for the sign-up (register/start),
@@ -773,11 +772,11 @@ pub async fn register(
             drive_xwing_public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
             opaque_record, opaque_suite, opaque_server_key_id,
-            recovery_key_verifier, storage_quota_bytes, drive_key_binding,
+            recovery_key_verifier, drive_key_binding,
             key_binding, id, identity_suite, drive_key_binding_epoch, keys_set_up_at
         ) VALUES ($2,kutup_unb64($3),kutup_unb64($4),kutup_unb64($5),kutup_unb64($6),
-                  decode($7, 'hex'),decode($8, 'hex'),kutup_unb64($9),$10,$11,$12,$13,$14,
-                  kutup_unb64($15),$1::uuid,$16,2,1,now())
+                  decode($7, 'hex'),decode($8, 'hex'),kutup_unb64($9),$10,$11,$12,$13,
+                  kutup_unb64($14),$1::uuid,$15,2,1,now())
         RETURNING id"#,
     )
     .bind(&req.key_binding)
@@ -793,7 +792,6 @@ pub async fn register(
     .bind(kutup_crypto::opaque::SUITE as i16)
     .bind(opaque_server_key_id)
     .bind(&recovery_verifier)
-    .bind(storage_quota_bytes)
     .bind(&drive_key_binding)
     .bind(account_id)
     .fetch_one(&mut *tx)
@@ -859,7 +857,6 @@ pub(crate) async fn signed_in_answer(
         bool,
         bool,
         i64,
-        i64,
         bool,
         bool,
         String,
@@ -870,8 +867,7 @@ pub(crate) async fn signed_in_answer(
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT COALESCE(kutup_b64(master_key_envelope), ''),
                   COALESCE(kutup_b64(drive_xwing_public_key), ''),
-                  totp_secret_sealed IS NOT NULL, role <> 'member', storage_quota_bytes,
-                  storage_used_bytes,
+                  totp_secret_sealed IS NOT NULL, role <> 'member', storage_used_bytes,
                   (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)),
                   keys_set_up_at IS NULL,
                   COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding::text, ''),
@@ -887,7 +883,6 @@ pub(crate) async fn signed_in_answer(
         pub_key,
         totp_enabled,
         is_admin,
-        quota_bytes,
         used_bytes,
         is_active,
         is_first_login,
@@ -947,6 +942,7 @@ pub(crate) async fn signed_in_answer(
         .into_response());
     }
 
+    let quota_bytes = crate::storage_pool::quota(&state.pool, parse_uuid(&user_id)?).await?;
     issue_tokens_and_respond(
         state,
         headers,
@@ -1083,11 +1079,11 @@ pub(crate) async fn issue_after_second_step(
     user_id: &str,
     epoch: &[u8],
 ) -> AppResult<Response> {
-    type Row = (String, String, bool, i64, i64, String, bool, String, String);
+    type Row = (String, String, bool, i64, String, bool, String, String);
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT COALESCE(kutup_b64(master_key_envelope), ''),
                   COALESCE(kutup_b64(drive_xwing_public_key), ''),
-                  role <> 'member', storage_quota_bytes, storage_used_bytes,
+                  role <> 'member', storage_used_bytes,
                   COALESCE(username, ''), (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), COALESCE(color, ''),
                   COALESCE(key_binding::text, '')
            FROM accounts WHERE id = $1"#,
@@ -1099,7 +1095,6 @@ pub(crate) async fn issue_after_second_step(
         master_key_envelope,
         pub_key,
         is_admin,
-        quota_bytes,
         used_bytes,
         username,
         is_active,
@@ -1112,6 +1107,11 @@ pub(crate) async fn issue_after_second_step(
     if !is_active {
         return Err(AppError::unauthorized("account disabled"));
     }
+    let quota_bytes = crate::storage_pool::quota(
+        &state.pool,
+        Uuid::parse_str(user_id).map_err(|_| AppError::unauthorized("unauthorized"))?,
+    )
+    .await?;
     issue_tokens_and_respond(
         state,
         headers,
@@ -1344,23 +1344,26 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         String,
         bool,
         i64,
-        i64,
         bool,
         String,
         i32,
-        String,
-        String,
+        Option<i64>,
+        bool,
     );
+    // Public sharing: off only with the account's own switch at 0
+    // (`crate::public_sharing`).
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, COALESCE(key_binding::text, ''), COALESCE(username, ''),
                   COALESCE(kutup_b64(drive_xwing_public_key), ''),
                   totp_secret_sealed IS NOT NULL,
-                  storage_quota_bytes, storage_used_bytes,
-                  role <> 'member', COALESCE(color, ''), version_retention_days, public_sharing,
-                  federation
-           FROM accounts WHERE id = $1"#,
+                  storage_used_bytes,
+                  role <> 'member', COALESCE(color, ''), version_retention_days,
+                  (SELECT value FROM account_entitlements WHERE account_id = u.id AND key = $2),
+                  kutup_account_federates(u.id)
+           FROM accounts u WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
+    .bind(crate::entitlements::PUBLIC_SHARING)
     .fetch_optional(&state.pool)
     .await?;
 
@@ -1370,17 +1373,19 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         username,
         public_key,
         totp_enabled,
-        quota,
         used,
         is_admin,
         color,
         version_retention_days,
         public_sharing,
-        federation,
+        federates,
     )) = row
     else {
         return Err(AppError::not_found("user not found"));
     };
+    let quota = crate::storage_pool::quota(&state.pool, id).await?;
+    let public_sharing = crate::public_sharing::account_switch(public_sharing).to_owned();
+    let federation = if federates { "on" } else { "off" }.to_owned();
     let address = if username.is_empty() {
         String::new()
     } else {
@@ -2119,8 +2124,9 @@ pub async fn complete_setup(
     crate::account_names::set_incarnation(&mut tx, uid, &req.account_incarnation_id).await?;
     tx.commit().await?;
 
-    let (is_admin, quota, used, username): (bool, i64, i64, String) = sqlx::query_as(
-        "SELECT role <> 'member', storage_quota_bytes, storage_used_bytes, COALESCE(username, '')
+    let quota = crate::storage_pool::quota(&state.pool, uid).await?;
+    let (is_admin, used, username): (bool, i64, String) = sqlx::query_as(
+        "SELECT role <> 'member', storage_used_bytes, COALESCE(username, '')
            FROM accounts WHERE id = $1",
     )
     .bind(uid)

@@ -172,12 +172,15 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
             }
         },
     };
-    let (address_id, user_id, public_key, quota, used) = row.ok_or_else(unknown)?;
+    let (address_id, user_id, public_key, used) = row.ok_or_else(unknown)?;
     // An address whose keys are not stored yet (a new account, or a rename,
     // moments before its client uploads them): try again later, never a
     // permanent refusal.
     let public_key = public_key.ok_or_else(try_later)?;
     let reserved = crate::storage_pool::reserved(&state.pool, user_id, Default::default())
+        .await
+        .map_err(|_| try_later())?;
+    let quota = crate::storage_pool::quota(&state.pool, user_id)
         .await
         .map_err(|_| try_later())?;
     if used.saturating_add(reserved) >= quota {
@@ -200,8 +203,8 @@ enum CustomDomain {
     OverCap,
 }
 
-/// A recipient's address id, account, primary key (none yet), quota and use.
-type RecipientRow = (Uuid, Uuid, Option<Vec<u8>>, i64, i64);
+/// A recipient's address id, account, primary key (none yet) and use.
+type RecipientRow = (Uuid, Uuid, Option<Vec<u8>>, i64);
 
 /// An address on the server's own domain, in any folded spelling.
 async fn own_domain_row(
@@ -209,7 +212,7 @@ async fn own_domain_row(
     address: &str,
 ) -> Result<Option<RecipientRow>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT a.id, a.account_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
+        "SELECT a.id, a.account_id, k.public_key, u.storage_used_bytes
            FROM mail_addresses a
            JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
@@ -263,8 +266,7 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     }
     let (domain_id, catch_all) = (held.id, held.catch_all_address_id);
     // An address of an enabled member of the domain's organization.
-    const SELECT: &str =
-        "SELECT a.id, a.account_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
+    const SELECT: &str = "SELECT a.id, a.account_id, k.public_key, u.storage_used_bytes
            FROM mail_addresses a
            JOIN accounts u ON u.id = a.account_id AND u.state = 'active'
            JOIN organization_members m ON m.account_id = a.account_id AND m.organization_id = $3

@@ -506,6 +506,7 @@ pub struct CreateAdminUserRequest {
     /// The temporary password, registered by the administrator's client.
     #[serde(flatten)]
     pub setup: crate::handlers::admin::TempRegistration,
+    /// The account's own quota; 0 leaves it on the site's default.
     pub storage_quota_bytes: i64,
 }
 

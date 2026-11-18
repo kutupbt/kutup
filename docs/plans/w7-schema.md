@@ -304,6 +304,31 @@ updated_at)`, PK `(account_id, key)`; `source` is `admin` | `plan` |
   same shape for org scope.
 - Usage counters (`storage_used_bytes`) are not entitlements.
 
+**As built (group 4):**
+- `crate::entitlements` reads and writes both tables (`Holder::Account` /
+  `Holder::Organization`); every former reader of
+  `account_setting_overrides`, `organization_setting_overrides` and the three
+  account columns goes through it or the SQL below.
+- `source` also takes `account` (account table only): the account holder's
+  own federation switch (Settings → Privacy, the `federationAbroad` consent
+  withdrawn) is neither an administrator's, a plan's nor an organization's.
+- Quota: the key `account.storage_quota_bytes` (named finally now, like the
+  two switches); `storage_pool::quota` resolves account > site
+  `default_storage_quota_bytes` (key unchanged) > 10 GiB. An account without
+  its own follows the site default as it changes (before, the default was
+  copied in at creation). `POST /api/admin/users` writes one only for a
+  quota given above 0 (the New user page sends 0 unless the field was
+  edited); `PUT /api/admin/users/{id}` writes one and logs
+  `account.setEntitlement` `{key, value, previous}`.
+- `drive.public_sharing`: 0 off, 1 or none follows the site's switch; the
+  API still says `on`/`off`. `server.federation`: written at sign-up and admin
+  creation from `federation_default`, so a later change of the default leaves
+  existing accounts as they are; none (the break-glass account) follows the
+  default. `kutup_account_federates` reads it. The admin switches keep their
+  own actions (`account.setFederation`, `account.setPublicSharing`).
+- Values that are not whole numbers: none. The site's `public_sharing`
+  (`on`/`off`/`signedIn`) stays a site setting; the account's is 0/1.
+
 ## 6. Event rows
 
 - **Shape:** `admin_audit_log` and `account_security_events` share one column

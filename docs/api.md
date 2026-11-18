@@ -2459,8 +2459,8 @@ lifts one by its name (`204`; `404` for a name not blocked), audited
 Administrators only. One account's limits over the site's: `{ "maxDomains":
 0–100 | null, "maxAddresses": 1–1000 | null, "catchAll": bool | null }`, `null`
 keeping the site's. `maxDomains` and `catchAll` are the account's
-organization's (`organization_setting_overrides`), `maxAddresses` its own
-(`account_setting_overrides`); setting an organization's limit for an account
+organization's (`organization_entitlements`), `maxAddresses` its own
+(`account_entitlements`); setting an organization's limit for an account
 without one makes its organization of one, so a limit (0 blocks custom
 domains) can be set before the first domain. `GET` adds `maxDomainsRange` and
 `maxAddressesRange` (`{ min, max }`, the ranges of the site settings they
@@ -5528,7 +5528,10 @@ asked: an account signs in with its username.
 }
 ```
 
-`storageQuotaBytes` is optional and defaults to 10 GB. Returns `201 Created` `{"message": "user created"}`. `400` for a record that is not one (a password sent as it is included), `409` if the username is already taken, `409 keyBindingTaken`, `409 opaqueKeyStale`.
+`storageQuotaBytes` is optional: given (above 0), it is the account's own
+quota (the entitlement `account.storage_quota_bytes`); 0 or none leaves the
+account on the site's default storage quota, which follows that setting as it
+changes. Returns `201 Created` `{"message": "user created"}`. `400` for a record that is not one (a password sent as it is included), `409` if the username is already taken, `409 keyBindingTaken`, `409 opaqueKeyStale`.
 
 ---
 
@@ -5553,7 +5556,9 @@ its sign-ins end. A closing account is `409 accountClosing`: keep it first.
 `isActive: true` makes a suspended account active again, and keeps a closing
 one (as it was before it closed: a suspended account is suspended again, with
 its reason, and records `accountKept`) until its date (`409 accountDeleting` after: the closing job may be
-deleting it; a held account can still be kept). `isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
+deleting it; a held account can still be kept). `storageQuotaBytes` gives the
+account its own quota (above 0; audited as `account.setEntitlement` with `key`
+`account.storage_quota_bytes`). `isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
 
 **Response:** `200 OK` `{"message": "updated"}`. `403` if the request would demote or disable the break-glass admin; `400` if it would leave zero usable admins.
 

@@ -155,14 +155,14 @@ impl Settings {
     pub const ACCOUNT_KEY: &'static str = KEYS[1].0;
 
     /// `organization`'s limits: the site's, with the organization's own
-    /// values (`organization_setting_overrides`) where set and in range.
+    /// values (`organization_entitlements`) where set and in range.
     pub async fn for_org<'e, E: sqlx::PgExecutor<'e>>(
         &self,
         executor: E,
         organization: uuid::Uuid,
     ) -> Result<Self, sqlx::Error> {
         let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT key, value FROM organization_setting_overrides
+            "SELECT key, value FROM organization_entitlements
               WHERE organization_id = $1 AND key = ANY($2)",
         )
         .bind(organization)
@@ -189,14 +189,14 @@ impl Settings {
     }
 
     /// `account`'s address limit: the site's, with the account's own value
-    /// (`account_setting_overrides`) where set and in range.
+    /// (`account_entitlements`) where set and in range.
     pub async fn for_account(
         &self,
         pool: &PgPool,
         account: uuid::Uuid,
     ) -> Result<Self, sqlx::Error> {
         let own: Option<i64> = sqlx::query_scalar(
-            "SELECT value FROM account_setting_overrides WHERE account_id = $1 AND key = $2",
+            "SELECT value FROM account_entitlements WHERE account_id = $1 AND key = $2",
         )
         .bind(account)
         .bind(Self::ACCOUNT_KEY)

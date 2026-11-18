@@ -344,7 +344,8 @@ keeps them; reports on them are operator tooling.
     code is `link_blocked` with the reason, so the public page says why;
     owner and admin takedowns keep `link_removed`.
   - Unblocking is possible; both directions are audited.
-- **Per account:** `accounts.public_sharing` (`on`, `off`), which an admin sets
+- **Per account:** the entitlement `drive.public_sharing` (1 on, 0 off; none
+  follows the site's), shown as `on`/`off`, which an admin sets
   per account. While `off`, the account can't create public links, and its
   existing ones answer `410 sharing_off`.
 - **Site-wide:** a site setting `public_sharing`: `on`, `off`, or
@@ -363,7 +364,7 @@ keeps them; reports on them are operator tooling.
   sharing_off` while either switch is off; `signedIn` still makes links.
 - The site switch is the site setting `public_sharing` (default `on`), set in
   Server settings → Accounts and shown in the public settings. The account
-  switch is `accounts.public_sharing`, on the admin's user page and in
+  switch is the entitlement `drive.public_sharing`, on the admin's user page and in
   `/user/me`.
 - Blocks: `POST`/`DELETE /api/admin/shares/:id/block` (reason `legalOrder`,
   `abuse`, `other`; an admin-only reference), from the Reports page; open
@@ -414,7 +415,8 @@ keeps them; reports on them are operator tooling.
   too) and `consents` (a row per change, ordered by a sequence) are
   append-only for the app role. A purpose's text is the current document of
   the purpose's kind.
-- The federation switch (`accounts.federation`, default from the site setting
+- The federation switch (the entitlement `server.federation`, 1 or 0, written
+  as an account is made from the site setting
   `federation_default`): off, the account is no account to other servers by
   the same code path an unknown one takes (`kutup_account_federates` in each
   peer-facing query: Chat lookups, deliveries, the sealed store, multi-sends,

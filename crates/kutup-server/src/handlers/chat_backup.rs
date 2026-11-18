@@ -304,10 +304,7 @@ pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()>
 
 async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupStatusV1> {
     let (quota, used): (i64, i64) =
-        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM accounts WHERE id=$1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+        crate::storage_pool::quota_and_used(&state.pool, user_id).await?;
     let delivery_media_bytes: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(logical_bytes),0)::bigint
          FROM chat_media_references WHERE account_id=$1",

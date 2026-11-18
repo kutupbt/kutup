@@ -136,14 +136,10 @@ pub struct AccountLimitsResponse {
 
 /// The account's own values, by key, as stored.
 async fn own_values(state: &AppState, account: Uuid) -> AppResult<HashMap<String, i64>> {
-    Ok(sqlx::query_as::<_, (String, i64)>(
-        "SELECT key, value FROM account_setting_overrides WHERE account_id = $1",
+    Ok(
+        crate::entitlements::all(&state.pool, crate::entitlements::Holder::Account(account))
+            .await?,
     )
-    .bind(account)
-    .fetch_all(&state.pool)
-    .await?
-    .into_iter()
-    .collect())
 }
 
 async fn site_value(state: &AppState, setting: &NumericSetting) -> AppResult<Option<String>> {
@@ -348,26 +344,14 @@ pub async fn update(
         }
     };
     let previous = own_values(&state, id).await?.get(&stored_key).copied();
-    match request.value {
-        Some(value) => {
-            sqlx::query(
-                "INSERT INTO account_setting_overrides (account_id, key, value) VALUES ($1, $2, $3)
-                 ON CONFLICT (account_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-            )
-            .bind(id)
-            .bind(&stored_key)
-            .bind(value)
-            .execute(&state.pool)
-            .await?;
-        }
-        None => {
-            sqlx::query("DELETE FROM account_setting_overrides WHERE account_id = $1 AND key = $2")
-                .bind(id)
-                .bind(&stored_key)
-                .execute(&state.pool)
-                .await?;
-        }
-    }
+    crate::entitlements::set_or_clear(
+        &state.pool,
+        crate::entitlements::Holder::Account(id),
+        &stored_key,
+        request.value,
+        crate::entitlements::Source::Admin,
+    )
+    .await?;
     let site = ratelimit::reload(&state.pool).await?;
     crate::handlers::admin::audit(
         &state.pool,

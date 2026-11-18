@@ -75,13 +75,13 @@ pub(crate) fn apply_overrides(rows: Vec<(String, String, i64)>) {
     *OVERRIDES.write().unwrap() = overrides;
 }
 
-/// Every account's own values, as stored (`account_setting_overrides`, keyed
+/// Every account's own values, as stored (`account_entitlements`, keyed
 /// `rate_limit.<key>`), by limit key.
 pub async fn stored_overrides(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, String, i64)>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT account_id::text, substr(key, length($1) + 1), value FROM account_setting_overrides
+        "SELECT account_id::text, substr(key, length($1) + 1), value FROM account_entitlements
          WHERE starts_with(key, $1)",
     )
     .bind(SETTING_PREFIX)

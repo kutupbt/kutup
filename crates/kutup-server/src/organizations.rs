@@ -225,8 +225,8 @@ mod tests {
             AddRefusal::AccountLimit
         );
         sqlx::query(
-            "INSERT INTO organization_setting_overrides (organization_id, key, value)
-             VALUES ($1, 'mail_domains.per_organization', 2)",
+            "INSERT INTO organization_entitlements (organization_id, key, value, source)
+             VALUES ($1, 'mail_domains.per_organization', 2, 'admin')",
         )
         .bind(organization)
         .execute(&pool)

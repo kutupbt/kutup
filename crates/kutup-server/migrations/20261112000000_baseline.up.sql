@@ -66,7 +66,13 @@ END $$;
 CREATE FUNCTION public.kutup_account_federates(account uuid) RETURNS boolean
     LANGUAGE sql STABLE
     AS $$
-    SELECT EXISTS (SELECT 1 FROM accounts WHERE id = account AND federation = 'on')
+    -- The account's own switch (an entitlement), else the site's default.
+    SELECT EXISTS (SELECT 1 FROM accounts WHERE id = account)
+       AND COALESCE(
+             (SELECT value = 1 FROM account_entitlements
+               WHERE account_id = account AND key = 'server.federation'),
+             (SELECT value <> 'off' FROM site_settings WHERE key = 'federation_default'),
+             true)
 $$;
 
 
@@ -3377,15 +3383,17 @@ CREATE TABLE public.organization_members (
 
 
 --
--- Name: organization_setting_overrides; Type: TABLE; Schema: public; Owner: -
+-- Name: organization_entitlements; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.organization_setting_overrides (
+CREATE TABLE public.organization_entitlements (
     organization_id uuid NOT NULL,
     key text NOT NULL,
     value bigint NOT NULL,
+    source text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT organization_setting_overrides_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text))
+    CONSTRAINT organization_entitlements_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text)),
+    CONSTRAINT organization_entitlements_source_check CHECK ((source = ANY (ARRAY['admin'::text, 'plan'::text, 'organization'::text])))
 );
 
 
@@ -3797,15 +3805,17 @@ CREATE TABLE public.account_security_keys (
 
 
 --
--- Name: account_setting_overrides; Type: TABLE; Schema: public; Owner: -
+-- Name: account_entitlements; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.account_setting_overrides (
+CREATE TABLE public.account_entitlements (
     account_id uuid NOT NULL,
     key text NOT NULL,
     value bigint NOT NULL,
+    source text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_setting_overrides_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text))
+    CONSTRAINT account_entitlements_key_check CHECK ((key ~ '^[a-z0-9_.]{1,80}$'::text)),
+    CONSTRAINT account_entitlements_source_check CHECK ((source = ANY (ARRAY['admin'::text, 'plan'::text, 'organization'::text, 'account'::text])))
 );
 
 
@@ -3836,7 +3846,6 @@ CREATE TABLE public.accounts (
     account_authority_key_id bytea,
     account_incarnation_id bytea,
     drive_signing_public_key bytea,
-    storage_quota_bytes bigint DEFAULT '10737418240'::bigint NOT NULL,
     storage_used_bytes bigint DEFAULT 0 NOT NULL,
     role text DEFAULT 'member'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -3871,8 +3880,6 @@ CREATE TABLE public.accounts (
     deleting_for text,
     deletion_attempts integer DEFAULT 0 NOT NULL,
     deletion_next_try_at timestamp with time zone,
-    public_sharing text DEFAULT 'on'::text NOT NULL,
-    federation text DEFAULT 'on'::text NOT NULL,
     master_key_generation integer DEFAULT 1 NOT NULL,
     CONSTRAINT accounts_closing CHECK ((((state = 'closing'::text) = (closing_by IS NOT NULL)) AND ((state = 'closing'::text) = (closes_at IS NOT NULL)))),
     CONSTRAINT accounts_closing_by_check CHECK ((closing_by = ANY (ARRAY['user'::text, 'admin'::text, 'restore'::text]))),
@@ -3880,7 +3887,6 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_deleting_for_check CHECK ((deleting_for = ANY (ARRAY['delete'::text, 'reset'::text]))),
     CONSTRAINT accounts_deletion_attempts_check CHECK ((deletion_attempts >= 0)),
     CONSTRAINT accounts_drive_key_binding_epoch_check CHECK ((drive_key_binding_epoch > 0)),
-    CONSTRAINT accounts_federation_check CHECK ((federation = ANY (ARRAY['on'::text, 'off'::text]))),
     CONSTRAINT accounts_identity_suite_check CHECK ((identity_suite = 2)),
     CONSTRAINT accounts_key_binding_check CHECK (((key_binding)::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
     CONSTRAINT accounts_legal_hold CHECK ((((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)) AND ((legal_hold_reference IS NOT NULL) OR (legal_hold_by_account_id IS NULL)))),
@@ -3891,7 +3897,6 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_opaque_server_key_id_check CHECK ((opaque_server_key_id > 0)),
     CONSTRAINT accounts_opaque_suite_check CHECK ((opaque_suite = 1)),
     CONSTRAINT accounts_keys_set_up CHECK (((keys_set_up_at IS NULL) OR ((octet_length(master_key_envelope) > 0) AND (octet_length(recovery_key_envelope) > 0) AND (octet_length(drive_xwing_public_key) > 0) AND (octet_length(account_authority_public_key) > 0) AND (account_authority_key_id IS NOT NULL) AND (account_incarnation_id IS NOT NULL) AND (octet_length(drive_signing_public_key) > 0) AND (key_binding IS NOT NULL) AND (octet_length(drive_key_binding) > 0)))),
-    CONSTRAINT accounts_public_sharing_check CHECK ((public_sharing = ANY (ARRAY['on'::text, 'off'::text]))),
     CONSTRAINT accounts_role_check CHECK ((role = ANY (ARRAY['member'::text, 'admin'::text, 'breakGlassAdmin'::text]))),
     CONSTRAINT accounts_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'closing'::text]))),
     CONSTRAINT accounts_suspended_before_close CHECK (((suspended_before_close IS NULL) OR (state = 'closing'::text))),
@@ -5579,11 +5584,11 @@ ALTER TABLE ONLY public.organization_members
 
 
 --
--- Name: organization_setting_overrides organization_setting_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: organization_entitlements organization_entitlements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.organization_setting_overrides
-    ADD CONSTRAINT organization_setting_overrides_pkey PRIMARY KEY (organization_id, key);
+ALTER TABLE ONLY public.organization_entitlements
+    ADD CONSTRAINT organization_entitlements_pkey PRIMARY KEY (organization_id, key);
 
 
 --
@@ -5835,11 +5840,11 @@ ALTER TABLE ONLY public.account_security_keys
 
 
 --
--- Name: account_setting_overrides account_setting_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: account_entitlements account_entitlements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.account_setting_overrides
-    ADD CONSTRAINT account_setting_overrides_pkey PRIMARY KEY (account_id, key);
+ALTER TABLE ONLY public.account_entitlements
+    ADD CONSTRAINT account_entitlements_pkey PRIMARY KEY (account_id, key);
 
 
 --
@@ -8708,11 +8713,11 @@ ALTER TABLE ONLY public.organization_members
 
 
 --
--- Name: organization_setting_overrides organization_setting_overrides_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: organization_entitlements organization_entitlements_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.organization_setting_overrides
-    ADD CONSTRAINT organization_setting_overrides_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.organization_entitlements
+    ADD CONSTRAINT organization_entitlements_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organizations(id) ON DELETE CASCADE;
 
 
 --
@@ -8892,11 +8897,11 @@ ALTER TABLE ONLY public.account_security_keys
 
 
 --
--- Name: account_setting_overrides account_setting_overrides_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: account_entitlements account_entitlements_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.account_setting_overrides
-    ADD CONSTRAINT account_setting_overrides_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.account_entitlements
+    ADD CONSTRAINT account_entitlements_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --
@@ -9871,7 +9876,7 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: organization_setting_overrides; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: organization_entitlements; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -10003,7 +10008,7 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
--- Data for Name: account_setting_overrides; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: account_entitlements; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 

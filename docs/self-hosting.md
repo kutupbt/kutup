@@ -159,10 +159,11 @@ copies.
 
 Each account has one storage pool. Drive, Photos, Office, Maps and Chat
 (message-history ciphertext, ordinary delivery media, and protected history
-media) all count against it. New accounts get the **Default storage quota
-(GiB)** set under **Admin → Server settings** (10 GiB until changed); existing
-accounts keep theirs. Change an individual account's **Storage quota (GiB)**
-under **Admin → Users**. Lowering
+media) all count against it. Every account gets the **Default storage quota
+(GiB)** set under **Admin → Server settings** (10 GiB until changed), and a
+change applies to all of them at once, except an account given its own
+**Storage quota (GiB)** under **Admin → Users** (or a quota other than the
+default when it was created there), which keeps that one. Lowering
 a quota below current use preserves reads and blocks new charged work rather
 than evicting files or history.
 

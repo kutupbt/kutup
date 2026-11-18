@@ -176,16 +176,26 @@ struct UserRow {
 )]
 pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
     let users: Vec<UserRow> = sqlx::query_as(
-        r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
+        r#"SELECT id, COALESCE(username, '') AS username,
+                  COALESCE((SELECT value FROM account_entitlements
+                             WHERE account_id = accounts.id AND key = $1 AND value > 0),
+                           $2) AS storage_quota_bytes,
+                  storage_used_bytes,
                   role <> 'member' AS is_admin, state = 'active' AS is_active, state,
                   suspended_reason, closes_at,
                   legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
-                  public_sharing, federation,
+                  CASE WHEN (SELECT value FROM account_entitlements
+                              WHERE account_id = accounts.id AND key = $3) = 0
+                       THEN 'off' ELSE 'on' END AS public_sharing,
+                  CASE WHEN kutup_account_federates(id) THEN 'on' ELSE 'off' END AS federation,
                   totp_secret_sealed IS NOT NULL AS totp_enabled,
                   keys_set_up_at IS NULL AS is_first_login, created_at,
                   role = 'breakGlassAdmin' AS is_protected
            FROM accounts ORDER BY created_at DESC"#,
     )
+    .bind(crate::entitlements::STORAGE_QUOTA)
+    .bind(crate::storage_pool::default_quota(&state.pool).await?)
+    .bind(crate::entitlements::PUBLIC_SHARING)
     .fetch_all(&state.pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
@@ -244,6 +254,7 @@ pub struct CreateUserRequest {
     /// The temporary password, registered by the administrator's client.
     #[serde(flatten)]
     setup: TempRegistration,
+    /// The account's own quota; 0 (or none) leaves it on the site's.
     storage_quota_bytes: i64,
 }
 
@@ -262,7 +273,7 @@ pub struct CreateUserRequest {
 pub async fn create_user(
     State(state): State<AppState>,
     admin: AdminUser,
-    Json(mut req): Json<CreateUserRequest>,
+    Json(req): Json<CreateUserRequest>,
 ) -> AppResult<Response> {
     let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     if req.username.is_empty() {
@@ -273,13 +284,12 @@ pub async fn create_user(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
     }
-    if req.storage_quota_bytes == 0 {
-        // The account's one storage pool, for every app (crate::storage_pool).
-        req.storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
-    }
-    if req.storage_quota_bytes <= 0 {
+    // The account's one storage pool, for every app (crate::storage_pool):
+    // its own quota only when one is given, else the site's applies.
+    if req.storage_quota_bytes < 0 {
         return Err(AppError::bad_request("storage quota must be positive"));
     }
+    let own_quota = (req.storage_quota_bytes > 0).then_some(req.storage_quota_bytes);
 
     let federation_default = crate::federation_switch::site_default(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
@@ -299,8 +309,8 @@ pub async fn create_user(
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
                username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
-               identity_suite, storage_quota_bytes
-           ) VALUES ($1,$2::uuid,$3,$4,$5,2,$6)
+               identity_suite
+           ) VALUES ($1,$2::uuid,$3,$4,$5,2)
            RETURNING id"#,
     )
     .bind(&req.username)
@@ -308,7 +318,6 @@ pub async fn create_user(
     .bind(&opaque_record)
     .bind(kutup_crypto::opaque::SUITE as i16)
     .bind(opaque_server_key_id)
-    .bind(req.storage_quota_bytes)
     .fetch_one(&mut *tx)
     .await;
     let new_id = match res {
@@ -316,6 +325,16 @@ pub async fn create_user(
         Err(e) => return Err(map_insert_conflict(e)),
     };
     crate::account_names::claim(&mut tx, &req.username, new_id, None).await?;
+    if let Some(quota) = own_quota {
+        crate::entitlements::set(
+            &mut *tx,
+            crate::entitlements::Holder::Account(new_id),
+            crate::entitlements::STORAGE_QUOTA,
+            quota,
+            crate::entitlements::Source::Admin,
+        )
+        .await?;
+    }
     // Whether it talks to other servers starts as the site says.
     crate::federation_switch::start_account(&mut tx, new_id, federation_default).await?;
     if !crate::handlers::mail_keys::create_own_address(
@@ -335,7 +354,7 @@ pub async fn create_user(
         AdminAction::AccountCreate,
         Some(new_id),
         json!({
-            "storageQuotaBytes": req.storage_quota_bytes,
+            "storageQuotaBytes": own_quota,
         }),
     )
     .await;
@@ -414,12 +433,32 @@ pub async fn update_user(
         if q <= 0 {
             return Err(AppError::bad_request("storage quota must be positive"));
         }
-        sqlx::query("UPDATE accounts SET storage_quota_bytes = $1 WHERE id = $2")
-            .bind(q)
-            .bind(target)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| AppError::internal("internal error"))?;
+        // The account's own quota, an entitlement, with its own record.
+        let holder = crate::entitlements::Holder::Account(target);
+        let mut tx = state.pool.begin().await?;
+        let previous =
+            crate::entitlements::get(&mut *tx, holder, crate::entitlements::STORAGE_QUOTA).await?;
+        crate::entitlements::set(
+            &mut *tx,
+            holder,
+            crate::entitlements::STORAGE_QUOTA,
+            q,
+            crate::entitlements::Source::Admin,
+        )
+        .await?;
+        crate::audit_log::append_in(
+            &mut tx,
+            crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.user_id)?),
+            AdminAction::AccountSetEntitlement,
+            Some(target),
+            &json!({
+                "key": crate::entitlements::STORAGE_QUOTA,
+                "value": q,
+                "previous": previous,
+            }),
+        )
+        .await?;
+        tx.commit().await?;
     }
     if let Some(a) = req.is_active {
         let mut tx = state.pool.begin().await?;
@@ -501,9 +540,20 @@ pub async fn update_user(
         let on = federation == "on";
         let mut tx = state.pool.begin().await?;
         if on {
-            crate::federation_switch::turn_on(&mut tx, target, None, "admin").await?;
+            crate::federation_switch::turn_on(
+                &mut tx,
+                target,
+                None,
+                crate::federation_switch::By::Admin,
+            )
+            .await?;
         } else {
-            crate::federation_switch::turn_off(&mut tx, target).await?;
+            crate::federation_switch::turn_off(
+                &mut tx,
+                target,
+                crate::federation_switch::By::Admin,
+            )
+            .await?;
         }
         crate::audit_log::append_in(
             &mut tx,
@@ -525,11 +575,14 @@ pub async fn update_user(
         // With its own record, in one transaction: a switch that turns an
         // account's links off is evidence of who did it.
         let mut tx = state.pool.begin().await?;
-        sqlx::query("UPDATE accounts SET public_sharing = $1 WHERE id = $2")
-            .bind(sharing)
-            .bind(target)
-            .execute(&mut *tx)
-            .await?;
+        crate::entitlements::set(
+            &mut *tx,
+            crate::entitlements::Holder::Account(target),
+            crate::entitlements::PUBLIC_SHARING,
+            i64::from(sharing == "on"),
+            crate::entitlements::Source::Admin,
+        )
+        .await?;
         crate::audit_log::append_in(
             &mut tx,
             crate::audit_log::Actor::Admin(crate::handlers::trusted_uuid(&admin.user_id)?),

@@ -41,6 +41,7 @@ mod drive_federation_ranges;
 mod drive_names;
 mod drive_profile_keys;
 mod drive_writes;
+mod entitlements;
 mod error;
 mod federation;
 mod federation_outbox;
@@ -723,13 +724,6 @@ async fn bootstrap_admin(
         }
     };
 
-    let storage_quota_bytes = match crate::storage_pool::default_quota(pool).await {
-        Ok(quota) => quota,
-        Err(error) => {
-            tracing::error!(%error, "bootstrapAdmin: could not read the default quota; not creating the account");
-            return;
-        }
-    };
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -740,8 +734,8 @@ async fn bootstrap_admin(
     let res: Result<uuid::Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
             username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
-            identity_suite, storage_quota_bytes, role
-        ) VALUES ($1,$2::uuid,$3,$4,$5,2,$6,$7)
+            identity_suite, role
+        ) VALUES ($1,$2::uuid,$3,$4,$5,2,$6)
         RETURNING id"#,
     )
     .bind(username)
@@ -749,7 +743,6 @@ async fn bootstrap_admin(
     .bind(&opaque_record)
     .bind(kutup_crypto::opaque::SUITE as i16)
     .bind(opaque_server_key_id as i16)
-    .bind(storage_quota_bytes)
     .bind(crate::models::AccountRole::BreakGlassAdmin.as_str())
     .fetch_one(&mut *tx)
     .await;

@@ -15,7 +15,7 @@
 //!   DELETE  /api/uploads/{id}    — cancel: abort the multipart, free reserved quota
 //!
 //! Quota is soft-reserved: available bytes for a new upload are
-//! `storage_quota_bytes - storage_used_bytes - SUM(uploads.total_bytes - received_bytes)`,
+//! `quota - storage_used_bytes - SUM(uploads.total_bytes - received_bytes)`,
 //! so a half-uploaded 50 GB file blocks a concurrent 50 GB attempt without polluting
 //! `storage_used_bytes`. The revision's commit charges it, atomically with the
 //! `drive_files` INSERT.

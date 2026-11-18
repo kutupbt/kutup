@@ -349,7 +349,7 @@ pub struct NumericSetting {
     pub per_account: bool,
 }
 
-/// The `account_setting_overrides` key prefix of an account's own rate limits
+/// The `account_entitlements` key prefix of an account's own rate limits
 /// (`rate_limit.<key>`, as `site_settings` names the site's).
 pub const RATE_LIMIT_PREFIX: &str = "rate_limit.";
 
@@ -408,7 +408,7 @@ impl NumericSetting {
         account: uuid::Uuid,
     ) -> Result<i64, sqlx::Error> {
         let (own, site): (Option<i64>, Option<String>) = sqlx::query_as(
-            "SELECT (SELECT value FROM account_setting_overrides WHERE account_id = $2 AND key = $1),
+            "SELECT (SELECT value FROM account_entitlements WHERE account_id = $2 AND key = $1),
                     (SELECT value FROM site_settings WHERE key = $1)",
         )
         .bind(self.key)
