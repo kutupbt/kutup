@@ -33,7 +33,7 @@ impl ChatHttpClient for MockHttp {
         match (request.method, request.path.as_str()) {
             // The account's first device re-registers: the server takes its
             // manifest as the head and answers device 1.
-            (ChatHttpMethod::Post, "/chat/device") => {
+            (ChatHttpMethod::Post, "/chat/devices") => {
                 assert!(request.chat_device.is_none(), "a registration has no credential header");
                 self.registrations.fetch_add(1, Ordering::Relaxed);
                 let body = request.body_json.expect("registration body");
@@ -107,7 +107,7 @@ impl ChatHttpClient for MockHttp {
             }
             // The sign-in this device is under: what a new device's manifest
             // entry names.
-            (ChatHttpMethod::Get, "/device-session") => Ok(ChatHttpResponse {
+            (ChatHttpMethod::Get, "/account/devices/session") => Ok(ChatHttpResponse {
                 status: 200,
                 body_json: r#"{"session":"5f0c6c1e8a3b4d2e9f710b1c2d3e4f505f0c6c1e8a3b4d2e9f710b1c2d3e4f50"}"#.into(), instance_id: None, }),
             _ => Err(KutupChatError::Transport {
