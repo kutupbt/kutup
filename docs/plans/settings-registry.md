@@ -78,7 +78,7 @@ for storage.
   per-account setting and each per-account rate limit, with its value, the
   site's value, and whether the account has its own.
 - `PUT /api/admin/users/{id}/limits/{key}` takes `{ value | null }`, checks
-  the bounds, and is audited as `user.setting` or `user.rate_limit`. It
+  the bounds, and is audited as `account.setEntitlement` or `account.setRateLimit`. It
   replaces `/api/admin/users/{id}/rate-limits` (pre-production, so a
   breaking change is fine).
 

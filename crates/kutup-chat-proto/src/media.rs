@@ -25,7 +25,7 @@ const LEDGER_ENTRY_MAGIC: &[u8; 8] = b"KUTPCE1\0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[repr(u8)]
 pub enum ChatMediaClassV1 {
     File = 1,
@@ -251,7 +251,7 @@ impl ChatMediaDeliveryOfferV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum ChatMediaDeliveryStatusV1 {
     Stored,
     AlreadyStored,
@@ -303,7 +303,7 @@ impl FederatedChatMediaTransactionV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[repr(u8)]
 pub enum ChatMediaConversationKindV1 {
     Direct = 1,
@@ -335,7 +335,7 @@ impl TryFrom<u8> for ChatMediaConversationKindV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[repr(u8)]
 pub enum ChatAttachmentLedgerStateV1 {
     Active = 1,

@@ -1137,7 +1137,7 @@
       "unverified": "Pending verification"
     },
     "kind": {
-      "end_to_end": "End-to-end encrypted",
+      "endToEnd": "End-to-end encrypted",
       "outside": "Not end-to-end encrypted"
     },
     "notice": {

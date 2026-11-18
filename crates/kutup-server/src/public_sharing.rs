@@ -5,13 +5,13 @@
 //! aren't covered.
 //!
 //! A link that may not be opened answers, whatever is asked of it:
-//! - `451 link_blocked` (reason `legal_order`) or `410 link_blocked` (another
+//! - `451 link_blocked` (reason `legalOrder`) or `410 link_blocked` (another
 //!   reason) when an operator blocked it;
 //! - `410 link_removed` when an administrator took it down, or its owner's
 //!   account is not active;
 //! - `410 sharing_off` while public sharing is off, site-wide or for its
 //!   owner;
-//! - `403 sign_in_required` while public sharing is `signed_in` and the
+//! - `403 sign_in_required` while public sharing is `signedIn` and the
 //!   viewer is not signed in to this server.
 
 use axum::http::StatusCode;
@@ -27,7 +27,7 @@ pub const SETTING: &str = "public_sharing";
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum PublicSharing {
     /// Anyone with the link.
     On,
@@ -43,7 +43,7 @@ impl PublicSharing {
         match self {
             Self::On => "on",
             Self::Off => "off",
-            Self::SignedIn => "signed_in",
+            Self::SignedIn => "signedIn",
         }
     }
 
@@ -51,7 +51,7 @@ impl PublicSharing {
         match value {
             "on" => Some(Self::On),
             "off" => Some(Self::Off),
-            "signed_in" => Some(Self::SignedIn),
+            "signedIn" => Some(Self::SignedIn),
             _ => None,
         }
     }
@@ -93,7 +93,7 @@ fn sharing_off_as(status: StatusCode, scope: &str) -> AppError {
 
 /// A link an operator blocked: 451 for a legal order, else 410.
 pub fn link_blocked(reason: &str) -> AppError {
-    let status = if reason == "legal_order" {
+    let status = if reason == "legalOrder" {
         StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS
     } else {
         StatusCode::GONE
@@ -128,7 +128,7 @@ pub async fn ensure_target_open(
 }
 
 /// Whether `owner` may make a public link now: `403 sharing_off` while
-/// sharing is off for the site or the account. `signed_in` still makes
+/// sharing is off for the site or the account. `signedIn` still makes
 /// links (they open for signed-in viewers).
 pub async fn ensure_may_share(pool: &PgPool, owner: uuid::Uuid) -> AppResult<()> {
     if site(pool).await? == PublicSharing::Off {
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn a_legal_block_is_451_and_another_410() {
         assert_eq!(
-            link_blocked("legal_order").status,
+            link_blocked("legalOrder").status,
             StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS
         );
         assert_eq!(link_blocked("abuse").status, StatusCode::GONE);

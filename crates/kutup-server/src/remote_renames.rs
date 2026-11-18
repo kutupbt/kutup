@@ -845,7 +845,7 @@ async fn deliver_one(
     .fetch_one(&state.pool)
     .await?;
     if !federates {
-        return settle(false, Some("federation_off"), json!({})).await;
+        return settle(false, Some("federationOff"), json!({})).await;
     }
     let rows: Vec<(Value, String, String)> = sqlx::query_as(
         "SELECT statement, kutup_b64(authority_public_key), current FROM account_renames
@@ -855,7 +855,7 @@ async fn deliver_one(
     .fetch_all(&state.pool)
     .await?;
     let Some((_, authority, current)) = rows.last().cloned() else {
-        return settle(false, Some("no_chain"), json!({})).await;
+        return settle(false, Some("noChain"), json!({})).await;
     };
     let chain: Vec<AccountRenameV1> = rows
         .into_iter()
@@ -891,7 +891,7 @@ async fn deliver_one(
             tracing::warn!(%destination, %incarnation, "a peer refused a rename announce");
             return settle(
                 false,
-                Some("remote_rejection"),
+                Some("remoteRejection"),
                 json!({ "status": response.status.as_u16() }),
             )
             .await;
@@ -900,7 +900,7 @@ async fn deliver_one(
         // A peer without Chat and Drive federation, or one this server may
         // not send to: it learns on its next lookup.
         Ok(Err(error)) if refused_feature(&error) => {
-            return settle(false, Some("peer_unsupported"), json!({})).await;
+            return settle(false, Some("peerUnsupported"), json!({})).await;
         }
         Ok(Err(error)) => format!("{error:#}"),
     };

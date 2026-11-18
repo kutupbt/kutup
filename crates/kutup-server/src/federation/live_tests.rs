@@ -465,19 +465,19 @@ async fn live_identity_trust_policy_and_replay_invariants() {
 
     let audit_actions: Vec<String> = sqlx::query_scalar(
         "SELECT action FROM admin_audit_log
-         WHERE action LIKE 'federation.identity.%' ORDER BY id",
+         WHERE action LIKE 'federation.%' ORDER BY id",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
     for required in [
-        "federation.identity.genesis",
-        "federation.identity.rotate-local",
-        "federation.identity.pin",
-        "federation.identity.verify",
-        "federation.identity.advance-remote",
-        "federation.identity.quarantine",
-        "federation.identity.repin",
+        "federation.createIdentity",
+        "federation.rotateIdentity",
+        "federation.pinPeer",
+        "federation.verifyPeer",
+        "federation.advancePeer",
+        "federation.quarantinePeer",
+        "federation.repinPeer",
     ] {
         assert!(audit_actions.iter().any(|action| action == required));
     }

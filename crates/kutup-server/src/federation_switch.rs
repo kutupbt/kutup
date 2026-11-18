@@ -9,7 +9,7 @@
 //!   Its groups and shares stay; federated ones go quiet, as with a member who
 //!   can't be reached. Nothing is deleted.
 //! - A new account takes the site setting `federation_default` (`on`).
-//! - Turning it on asks the `federation_abroad` consent when a document for it
+//! - Turning it on asks the `federationAbroad` consent when a document for it
 //!   is published (`409 consentRequired` without it); withdrawing that
 //!   consent turns it off.
 
@@ -31,7 +31,7 @@ use crate::AppState;
 pub const DEFAULT_SETTING: &str = "federation_default";
 
 /// The consent purpose turning it on asks for.
-pub const PURPOSE: &str = "federation_abroad";
+pub const PURPOSE: &str = "federationAbroad";
 
 /// The refusal of a request that would reach another server for an account
 /// whose federation is off.
@@ -109,7 +109,7 @@ pub async fn turn_off(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> sqlx
         .await?;
     sqlx::query(
         "UPDATE federation_outbox
-            SET state = 'rejected', error_class = 'federation_off', updated_at = now()
+            SET state = 'rejected', error_class = 'federationOff', updated_at = now()
           WHERE kind = 'rename' AND state = 'pending'
             AND payload->>'incarnation' IN
                 (SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1)",
@@ -127,7 +127,7 @@ pub async fn after_off(state: &AppState, user_id: Uuid) -> AppResult<()> {
     state.collab_federation.close_account(state, user_id).await
 }
 
-/// Turns it on, in the caller's transaction: with the `federation_abroad`
+/// Turns it on, in the caller's transaction: with the `federationAbroad`
 /// consent given (now, under `document_id`, or before) when its document is
 /// published.
 pub async fn turn_on(
@@ -167,7 +167,7 @@ pub async fn turn_on(
 pub struct FederationRequest {
     /// Talk to other servers.
     on: bool,
-    /// Turning it on: the `federation_abroad` text the person read, when one
+    /// Turning it on: the `federationAbroad` text the person read, when one
     /// is published (the consent is given with it).
     document_id: Option<Uuid>,
 }
@@ -181,7 +181,7 @@ pub struct FederationRequest {
     request_body = FederationRequest,
     responses(
         (status = 204, description = "Set"),
-        (status = 409, description = "consentRequired: a federation_abroad document is published and the consent isn't given"),
+        (status = 409, description = "consentRequired: a federationAbroad document is published and the consent isn't given"),
     )
 )]
 pub async fn put_federation(
@@ -273,7 +273,7 @@ mod tests {
         // A text for the purpose: on needs the consent, given with it.
         let text: Uuid = sqlx::query_scalar(
             "INSERT INTO legal_documents (kind, version, language, url, sha256)
-             VALUES ('federation_abroad', $1, 'en', 'https://example.org/f', sha256('f'))
+             VALUES ('federationAbroad', $1, 'en', 'https://example.org/f', sha256('f'))
              RETURNING id",
         )
         .bind(Uuid::new_v4().to_string())
@@ -361,7 +361,7 @@ mod tests {
         tx.commit().await.unwrap();
         assert_eq!(
             queued(2).await,
-            vec![("rejected".into(), Some("federation_off".into()))]
+            vec![("rejected".into(), Some("federationOff".into()))]
         );
 
         // A live location it shares: read here, not by a peer.

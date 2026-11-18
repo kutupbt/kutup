@@ -704,7 +704,10 @@ async fn admin_name(
             if let Some(owner) = owner {
                 close_address(&mut tx, owner, &held_name, &state.config.chat_server_name).await?;
             }
-            (security_events::Kind::NameClosed, "name.close")
+            (
+                security_events::Kind::NameClosed,
+                crate::audit_log::AdminAction::NameClose,
+            )
         }
         AdminAction::Free => {
             sqlx::query("DELETE FROM account_names WHERE folded = kutup_fold($1)")
@@ -722,7 +725,10 @@ async fn admin_name(
                 .execute(&mut *tx)
                 .await?;
             }
-            (security_events::Kind::NameFreed, "name.free")
+            (
+                security_events::Kind::NameFreed,
+                crate::audit_log::AdminAction::NameFree,
+            )
         }
     };
     if let Some(owner) = owner {

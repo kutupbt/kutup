@@ -317,8 +317,8 @@ fn registration_modes_and_codes() {
     .json()
     .unwrap();
     let text = activity.to_string();
-    assert!(text.contains("registration_code.created"));
-    assert!(text.contains("registration_code.revoked"));
+    assert!(text.contains("registrationCode.create"));
+    assert!(text.contains("registrationCode.revoke"));
     assert!(
         !text.contains(&code.replace('-', "")) && !text.contains(&code),
         "no code in the log"

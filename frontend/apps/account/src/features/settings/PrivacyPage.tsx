@@ -17,7 +17,7 @@ import { documentName, oneEach, type LegalDocument } from '../auth/legal'
 import { meKey, useMe } from './api'
 
 /** The core's consent purposes (docs/plans/server-personal-data.md, A4). */
-const PURPOSES = ['federation_abroad', 'marketing'] as const
+const PURPOSES = ['federationAbroad', 'marketing'] as const
 type Purpose = (typeof PURPOSES)[number]
 
 interface Consent {
@@ -95,8 +95,8 @@ export function PrivacyPage() {
                     federation.mutate({ on: false, documentId: null })
                     return
                   }
-                  const text = oneEach(view.data.documents.filter((d) => d.kind === 'federation_abroad'), i18n.language)[0]
-                  const given = view.data.consents.find((c) => c.purpose === 'federation_abroad')?.given ?? false
+                  const text = oneEach(view.data.documents.filter((d) => d.kind === 'federationAbroad'), i18n.language)[0]
+                  const given = view.data.consents.find((c) => c.purpose === 'federationAbroad')?.given ?? false
                   if (text && !given) setAsking(true)
                   else federation.mutate({ on: true, documentId: null })
                 }}
@@ -107,7 +107,7 @@ export function PrivacyPage() {
           </Card>
           {asking ? (
             <FederationConsent
-              text={oneEach(view.data.documents.filter((d) => d.kind === 'federation_abroad'), i18n.language)[0]}
+              text={oneEach(view.data.documents.filter((d) => d.kind === 'federationAbroad'), i18n.language)[0]}
               pending={federation.isPending}
               onCancel={() => setAsking(false)}
               onAgree={(documentId) => federation.mutate({ on: true, documentId }, { onSuccess: () => setAsking(false) })}
@@ -181,7 +181,7 @@ function FederationConsent({
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{t('settings.privacy.federation.consentTitle')}</DialogTitle>
-          <DialogDescription>{t('settings.privacy.purposes.federation_abroad.description')}</DialogDescription>
+          <DialogDescription>{t('settings.privacy.purposes.federationAbroad.description')}</DialogDescription>
         </DialogHeader>
         <a
           href={text.url}

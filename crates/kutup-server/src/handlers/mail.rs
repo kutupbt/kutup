@@ -56,7 +56,7 @@ pub struct MailMessage {
     pub labels: Vec<String>,
     pub seen: bool,
     pub starred: bool,
-    /// `zero_access` (encrypted on arrival) or `end_to_end`.
+    /// `zeroAccess` (encrypted on arrival) or `endToEnd`.
     pub protection: String,
     /// Stored (encrypted) size in bytes.
     pub size: i64,

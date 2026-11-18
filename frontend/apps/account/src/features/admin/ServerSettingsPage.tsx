@@ -20,7 +20,7 @@ import { Choice } from './federation/Choice'
 import { bytesToGib, gibToBytes } from './helpers'
 
 const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
-const SHARING: readonly PublicSharing[] = ['on', 'signed_in', 'off']
+const SHARING: readonly PublicSharing[] = ['on', 'signedIn', 'off']
 const ON_OFF: readonly ('on' | 'off')[] = ['on', 'off']
 
 /** The server's bounds (site_settings::validate_chat_delivery_retention_days). */
@@ -64,7 +64,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
   const linkJoins = z.coerce.number<number>().int(t('admin.settings.groupLinkJoinsRange')).min(1, t('admin.settings.groupLinkJoinsRange')).max(MAX_LINK_JOINS, t('admin.settings.groupLinkJoinsRange'))
   const schema = z.object({
     registrationMode: z.enum(['on', 'code', 'off']),
-    publicSharing: z.enum(['on', 'signed_in', 'off']),
+    publicSharing: z.enum(['on', 'signedIn', 'off']),
     federationDefault: z.enum(['on', 'off']),
     quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,

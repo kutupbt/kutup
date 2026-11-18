@@ -114,7 +114,7 @@ pub async fn park_for_upgrade(
         id,
         sequence,
         Duration::from_secs(seconds.max(1) as u64),
-        "peer_unsupported",
+        "peerUnsupported",
         error,
     )
     .await

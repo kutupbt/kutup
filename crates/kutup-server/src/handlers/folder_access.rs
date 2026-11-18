@@ -152,7 +152,7 @@ pub struct AccessLink {
     pub expires_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    /// Why an operator blocked what the link reaches (`legal_order`,
+    /// Why an operator blocked what the link reaches (`legalOrder`,
     /// `abuse`, `other`): it doesn't open, and stays until they lift it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,

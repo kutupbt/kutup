@@ -131,7 +131,7 @@ impl Event {
     fn kind(self) -> &'static str {
         match self {
             Event::Bounce => "bounce",
-            Event::SpamRefused => "spam_refused",
+            Event::SpamRefused => "spamRefused",
         }
     }
 }

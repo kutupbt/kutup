@@ -100,9 +100,9 @@ export function chatMediaPresentationV1(
 
 export type ChatMediaDeliveryStatusV1 =
   | 'stored'
-  | 'already_stored'
+  | 'alreadyStored'
   | 'queued'
-  | 'storage_full'
+  | 'storageFull'
 
 export interface ChatMediaDeliveryResponseV1 {
   operationId: string

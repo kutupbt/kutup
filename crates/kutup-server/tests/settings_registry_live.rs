@@ -216,7 +216,7 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
     let activity = admin.get("/api/admin/activity?limit=20");
     assert!(
         activity["entries"].as_array().unwrap().iter().any(|e| {
-            e["action"] == "user.setting"
+            e["action"] == "account.setEntitlement"
                 && e["targetUserId"] == small_id
                 && e["payload"]["key"] == "drive_upload_max_bytes"
         }),

@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
 use crate::middleware::{AdminUser, AuthUser};
@@ -337,7 +338,7 @@ pub async fn resolve_feedback(
     audit(
         &state.pool,
         &admin.user_id,
-        "feedback.resolve",
+        AdminAction::FeedbackResolve,
         owner,
         json!({ "feedbackId": id, "resolution": req.resolution, "githubUrl": github_url }),
     )
@@ -371,7 +372,7 @@ pub async fn delete_feedback(
     audit(
         &state.pool,
         &admin.user_id,
-        "feedback.delete",
+        AdminAction::FeedbackDelete,
         owner,
         json!({ "feedbackId": id }),
     )

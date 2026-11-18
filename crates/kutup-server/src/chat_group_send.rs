@@ -363,7 +363,7 @@ pub(crate) async fn endorsement(
     .into();
     let mut tx = state.pool.begin().await?;
     let used =
-        crate::handlers::chat::anonymous_count(&mut tx, "group_send_issue", &digest, 1, 86_400)
+        crate::handlers::chat::anonymous_count(&mut tx, "groupSendIssue", &digest, 1, 86_400)
             .await?;
     tx.commit().await?;
     if used > allowed {

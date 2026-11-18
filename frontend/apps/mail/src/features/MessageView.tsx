@@ -339,7 +339,7 @@ export function MessageView({
               opened.data.pgp.pinned && opened.data.signed && !opened.data.verified ? (
                 <Alert variant="warn">{t('read.pgpSignatureFailed')}</Alert>
               ) : null
-            ) : opened.data.signed && !opened.data.verified && message.protection === 'end_to_end' ? (
+            ) : opened.data.signed && !opened.data.verified && message.protection === 'endToEnd' ? (
               <Alert variant="warn">{t('read.signatureFailed')}</Alert>
             ) : null}
             {opened.data.parsed.autoReply ? <Alert variant="info">{t('read.autoReply')}</Alert> : null}

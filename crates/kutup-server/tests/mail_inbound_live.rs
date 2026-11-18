@@ -248,7 +248,7 @@ Message-ID: <reply-{tag}@sender.test>\r\nIn-Reply-To: <first-{tag}@sender.test>\
     assert_eq!(first_row["from"]["address"], "caglar@sender.test");
     assert_eq!(first_row["from"]["name"], "Çağlar");
     assert_eq!(first_row["to"][0]["address"], address.as_str());
-    assert_eq!(first_row["protection"], "zero_access");
+    assert_eq!(first_row["protection"], "zeroAccess");
     assert_eq!(first_row["seen"], false);
     assert_eq!(
         reply_row["threadId"], first_row["threadId"],
@@ -463,7 +463,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     assert!(statuses.contains(&("carol@outside.test".into(), "sent".into())));
     assert_eq!(sent["message"]["folder"], "sent");
     assert_eq!(sent["message"]["bcc"][0]["address"], "carol@outside.test");
-    assert_eq!(sent["message"]["protection"], "zero_access");
+    assert_eq!(sent["message"]["protection"], "zeroAccess");
 
     // Bob's copy: in his inbox, end to end, opening with his key and signed
     // by Alice, with no Bcc anywhere.
@@ -472,7 +472,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
         .iter()
         .find(|m| m["messageId"] == message_id.as_str())
         .expect("delivered to Bob");
-    assert_eq!(row["protection"], "end_to_end");
+    assert_eq!(row["protection"], "endToEnd");
     assert_eq!(row["from"]["address"], alice.address.as_str());
     assert_eq!(row["subject"], "Özel");
     assert_eq!(row["bcc"], json!([]));
@@ -543,7 +543,7 @@ Content-Type: text/plain; charset=utf-8\r\n\r\nSadece Bob ve Dave okusun.\r\n",
     assert_eq!(r.status(), 200, "reply: {}", r.text().unwrap_or_default());
     let reply_row = send_result(r)["message"].clone();
     assert_eq!(reply_row["threadId"], row["threadId"]);
-    assert_eq!(reply_row["protection"], "end_to_end");
+    assert_eq!(reply_row["protection"], "endToEnd");
     let thread: Value = bearer(
         c.get(format!(
             "{base}/api/mail/threads/{own_thread}",
@@ -1096,7 +1096,7 @@ Date: Sat, 10 Oct 2026 10:00:00 +0000\r\n",
     let r = send(recipients, vec![("pgp0", package)]);
     assert_eq!(r.status(), 200, "send PGP");
     let sent = send_result(r);
-    assert_eq!(sent["message"]["protection"], "end_to_end", "sent: {sent}");
+    assert_eq!(sent["message"]["protection"], "endToEnd", "sent: {sent}");
     assert_eq!(
         sent["recipients"],
         json!([{ "address": dave, "status": "sent" }])
@@ -1146,7 +1146,7 @@ In-Reply-To: <{message_id}>\r\nDate: Sat, 10 Oct 2026 10:05:00 +0000\r\n",
         assert!(Instant::now() < deadline, "Dave's reply never arrived");
         std::thread::sleep(Duration::from_secs(1));
     };
-    assert_eq!(row["protection"], "end_to_end", "reply: {row}");
+    assert_eq!(row["protection"], "endToEnd", "reply: {row}");
     let stored = bearer(
         c.get(format!(
             "{base}/api/mail/messages/{}/content",
@@ -1993,7 +1993,7 @@ fn distribution_lists_and_role_groups() {
         (&carol_user, &carol),
     ] {
         let row = wait_for(&c, &base, user, &message_id);
-        assert_eq!(row["protection"], "zero_access");
+        assert_eq!(row["protection"], "zeroAccess");
         assert!(open_row(&c, &base, user, address, &row).contains(&format!("Hello team {tag}")));
     }
     assert!(messages(&c, &base, &dave_user.token)
@@ -2102,7 +2102,7 @@ fn distribution_lists_and_role_groups() {
     );
     for (user, address) in [(&alice_user, &alice), (&carol_user, &carol)] {
         let row = wait_for(&c, &base, user, &kutup_id);
-        assert_eq!(row["protection"], "end_to_end");
+        assert_eq!(row["protection"], "endToEnd");
         assert!(
             open_row(&c, &base, user, address, &row).contains(&format!("Bob to the team {tag}"))
         );
@@ -2674,7 +2674,7 @@ fn shared_mailboxes() {
         .into_iter()
         .find(|m| m["messageId"] == carol_id.as_str())
         .expect("Carol's mail in the mailbox");
-    assert_eq!(thanks["protection"], "end_to_end");
+    assert_eq!(thanks["protection"], "endToEnd");
 
     // Bob leaves: only with a new key, which he never gets.
     let alice_only = json!([{ "userId": alice_user.id, "role": "owner", "canSendAs": true }]);
@@ -2805,7 +2805,7 @@ fn shared_mailboxes() {
             assert!(Instant::now() < deadline, "the PGP message never arrived");
             std::thread::sleep(Duration::from_secs(1));
         };
-        assert_eq!(row["protection"], "end_to_end");
+        assert_eq!(row["protection"], "endToEnd");
         let outer = mail_key::decrypt(
             &second.secret_key,
             &content(&alice_user, &row).bytes().unwrap(),
@@ -2873,7 +2873,7 @@ fn mail_settings_all_mail_and_emptying() {
         .unwrap();
     assert_eq!(
         settings,
-        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgp_mime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14, "unreadFavicon": false, "keepMovedSent": false })
+        json!({ "autoDeleteDays": 0, "almostAllMail": false, "viewLayout": "column", "density": "comfortable", "composerMode": "popup", "viewMode": "conversation", "signOutside": true, "attachPublicKey": false, "pgpScheme": "pgpMime", "confirmLink": true, "pageSize": 50, "spamAction": "ask", "remoteImages": "ask", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 10, "draftType": "html", "textDirection": "ltr", "fontFace": "arial", "fontSize": 14, "unreadFavicon": false, "keepMovedSent": false })
     );
     // Proton's page sizes only.
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
@@ -2942,12 +2942,12 @@ fn mail_settings_all_mail_and_emptying() {
         "All mail has the Trash by default"
     );
     let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
-        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true }))
+        .json(&json!({ "almostAllMail": true, "autoDeleteDays": 30, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spamAndUnsubscribe", "remoteImages": "always", "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true }))
         .send()
         .unwrap();
     assert_eq!(
         r.json::<Value>().unwrap(),
-        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spam_and_unsubscribe", "remoteImages": "always", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true, "keepMovedSent": true })
+        json!({ "autoDeleteDays": 30, "almostAllMail": true, "viewLayout": "row", "density": "compact", "composerMode": "maximized", "viewMode": "message", "signOutside": false, "attachPublicKey": true, "pgpScheme": "inline", "confirmLink": false, "pageSize": 200, "spamAction": "spamAndUnsubscribe", "remoteImages": "always", "imageProxy": true, "embeddedImages": true, "removeImageMetadata": true, "delaySendSeconds": 20, "draftType": "plain", "textDirection": "rtl", "fontFace": "georgia", "fontSize": 18, "unreadFavicon": true, "keepMovedSent": true })
     );
     assert!(
         all(&c).iter().all(|m| m["id"] != trashed.as_str()),
@@ -3156,7 +3156,7 @@ fn encrypt_off_sign_on_between_kutup_users() {
         .iter()
         .find(|m| m["subject"] == "readable")
         .expect("delivered");
-    assert_eq!(message["protection"], "zero_access");
+    assert_eq!(message["protection"], "zeroAccess");
     let stored = bearer(
         c.get(format!(
             "{base}/api/mail/messages/{}/content",
@@ -3184,7 +3184,7 @@ fn encrypt_off_sign_on_between_kutup_users() {
     let sent = folder(&c, &base, &bob.token, "sent");
     assert_eq!(
         sent.iter().find(|m| m["subject"] == "readable").unwrap()["protection"],
-        "end_to_end"
+        "endToEnd"
     );
 
     // Readable without the readable message: refused.
@@ -3372,7 +3372,7 @@ fn auto_reply_answers_once_per_sender() {
     let reply = wait_answers(&bob, "inbox", 1).remove(0);
     assert_eq!(reply["subject"], "Auto: Toplantı");
     assert_eq!(reply["inReplyTo"], first.as_str());
-    assert_eq!(reply["protection"], "zero_access");
+    assert_eq!(reply["protection"], "zeroAccess");
     assert_eq!(reply["from"]["address"], alice_address.address.as_str());
     let content = open_row(&c, &base, &bob, &bob_address, &reply);
     assert!(
@@ -3659,7 +3659,7 @@ fn outside_sending_is_set_by_administrators() {
         .or_else(|| activity.as_array())
         .unwrap()
         .iter()
-        .filter(|e| e["action"] == "mail.outside_sending.update")
+        .filter(|e| e["action"] == "mail.updateOutsideSending")
         .collect();
     assert!(
         changes

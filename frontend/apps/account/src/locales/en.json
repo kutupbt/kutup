@@ -90,8 +90,8 @@
     "continue": "Continue",
     "kinds": {
       "terms": "Terms of Service",
-      "privacy_notice": "Privacy Notice",
-      "federation_abroad": "consent text for talking to other servers",
+      "privacyNotice": "Privacy Notice",
+      "federationAbroad": "consent text for talking to other servers",
       "marketing": "consent text for news and offers"
     }
   },
@@ -220,7 +220,7 @@
       "withdrawnAt": "Withdrawn on {{date}}",
       "failed": "Your choice could not be saved. Try again.",
       "purposes": {
-        "federation_abroad": {
+        "federationAbroad": {
           "title": "Talking to other servers",
           "description": "Let your Chat and Drive reach people on other Kutup servers, which may be in other countries. Withdrawing it stops that."
         },
@@ -662,7 +662,7 @@
       "publishTitle": "Publish a version",
       "publishHint": "A published version is never changed: publish a new one. A new required version is shown to everyone at their next sign-in.",
       "kind": "Kind",
-      "kindHint": "terms, privacy_notice, a consent purpose (federation_abroad, marketing), or your own.",
+      "kindHint": "terms, privacyNotice, a consent purpose (federationAbroad, marketing), or your own.",
       "version": "Version",
       "language": "Language",
       "languageHint": "A code such as en, tr or pt-BR.",
@@ -806,7 +806,7 @@
       "suspendedReason": "Why it is disabled",
       "suspendedReasons": {
         "admin": "An administrator's decision",
-        "operator_order": "An order to the operator",
+        "operatorOrder": "An order to the operator",
         "security": "A security concern"
       },
       "legalHold": "Legal hold",
@@ -836,7 +836,7 @@
       "blockDescription": "The link {{name}} shared stops opening. A legal order makes it answer “unavailable for legal reasons”; any other reason, “blocked”. Its open reports are closed. You can lift the block later.",
       "blockReason": "Why",
       "blockReasons": {
-        "legal_order": "A legal order",
+        "legalOrder": "A legal order",
         "abuse": "Abuse",
         "other": "Another reason"
       },
@@ -846,7 +846,7 @@
       "unblock": "Lift the block",
       "unblocked": "Block lifted",
       "blockedAs": {
-        "legal_order": "blocked under a legal order",
+        "legalOrder": "blocked under a legal order",
         "abuse": "blocked for abuse",
         "other": "blocked"
       },
@@ -900,48 +900,49 @@
       "emptyDescription": "Nothing matches these filters yet.",
       "system": "System",
       "deletedUser": "a deleted user",
+      "deletedAccount": "a deleted account",
       "actions": {
-        "userCreate": "{{admin}} created {{target}}",
-        "userUpdate": "{{admin}} updated {{target}}",
-        "userDelete": "{{admin}} deleted {{target}}",
-        "user2faDisable": "{{admin}} turned off 2FA for {{target}}",
-        "userRotateTempPassword": "{{admin}} replaced the temporary password of {{target}}",
-        "userWipe": "{{admin}} wiped {{target}}",
-        "userClose": "{{admin}} closed {{target}}: deleted after the waiting period",
-        "userLegalHoldSet": "{{admin}} put {{target}} under a legal hold ({{reference}})",
-        "userLegalHoldClear": "{{admin}} lifted the legal hold on {{target}} ({{reference}})",
-        "adminView": "{{admin}} opened {{target}}'s details",
+        "accountCreate": "{{admin}} created {{target}}",
+        "accountUpdate": "{{admin}} updated {{target}}",
+        "accountDelete": "{{admin}} deleted {{target}}",
+        "accountDisableTwoFactor": "{{admin}} turned off 2FA for {{target}}",
+        "accountRotateTempPassword": "{{admin}} replaced the temporary password of {{target}}",
+        "accountResetKeys": "{{admin}} wiped {{target}}",
+        "accountClose": "{{admin}} closed {{target}}: deleted after the waiting period",
+        "accountSetLegalHold": "{{admin}} put {{target}} under a legal hold ({{reference}})",
+        "accountClearLegalHold": "{{admin}} lifted the legal hold on {{target}} ({{reference}})",
+        "accountView": "{{admin}} opened {{target}}'s details",
         "settingsUpdate": "{{admin}} changed server settings",
-        "mapsSettingsUpdate": "{{admin}} changed the map settings",
-        "federationPolicyUpdate": "{{admin}} set {{feature}} federation to {{mode}}",
-        "federationRuleUpsert": "{{admin}} changed the federation rule for {{domain}}",
-        "federationRuleDelete": "{{admin}} removed the federation rule for {{domain}}",
-        "federationIdentityGenesis": "{{admin}} created this server's federation identity",
-        "federationIdentityRotateLocal": "{{admin}} rotated this server's federation identity",
-        "federationIdentityPin": "{{admin}} pinned {{domain}} on first use",
-        "federationIdentityVerify": "{{admin}} verified {{domain}}",
-        "federationIdentityAdvance": "{{admin}} accepted an authenticated identity rotation from {{domain}}",
-        "federationIdentityQuarantine": "{{admin}} quarantined {{domain}}",
-        "federationIdentityRepin": "{{admin}} re-pinned {{domain}} (break-glass)",
-        "federationPeerRetry": "{{admin}} retried discovery for {{domain}}",
-        "federationPeerRetryBulk": "{{admin}} retried discovery for several servers",
+        "mapsUpdateSettings": "{{admin}} changed the map settings",
+        "federationUpdatePolicy": "{{admin}} set {{feature}} federation to {{mode}}",
+        "federationSetRule": "{{admin}} changed the federation rule for {{domain}}",
+        "federationDeleteRule": "{{admin}} removed the federation rule for {{domain}}",
+        "federationCreateIdentity": "{{admin}} created this server's federation identity",
+        "federationRotateIdentity": "{{admin}} rotated this server's federation identity",
+        "federationPinPeer": "{{admin}} pinned {{domain}} on first use",
+        "federationVerifyPeer": "{{admin}} verified {{domain}}",
+        "federationAdvancePeer": "{{admin}} accepted an authenticated identity rotation from {{domain}}",
+        "federationQuarantinePeer": "{{admin}} quarantined {{domain}}",
+        "federationRepinPeer": "{{admin}} re-pinned {{domain}} (break-glass)",
+        "federationRetryPeer": "{{admin}} retried discovery for {{domain}}",
+        "federationRetryPeers": "{{admin}} retried discovery for several servers",
         "unknown": "{{admin}}: {{action}}",
-        "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail",
+        "mailUpdateSending": "{{admin}} changed how {{target}} may send mail",
         "reportDismiss": "{{admin}} dismissed a report on a link of {{target}}",
         "legalPublish": "{{admin}} published {{kind}} version {{version}}",
-        "userPublicSharing": "{{admin}} turned public links {{state}} for {{target}}",
+        "accountSetPublicSharing": "{{admin}} turned public links {{state}} for {{target}}",
         "shareBlock": "{{admin}} blocked a link {{target}} shared",
         "shareUnblock": "{{admin}} lifted the block on a link {{target}} shared",
         "shareRemove": "{{admin}} took down a public link of {{target}}",
-        "mailOutsideSendingUpdate": "{{admin}} changed who may send to outside addresses from {{from}} to {{to}}",
-        "registrationCodeCreated": "{{admin}} made a referral code (…{{hint}})",
-        "registrationCodeRevoked": "{{admin}} revoked the referral code …{{hint}}",
-        "rateLimitUpdate": "{{admin}} set {{limit}} to {{value}}",
-        "rateLimitReset": "{{admin}} reset {{limit}} to its first value",
-        "userRateLimitUpdate": "{{admin}} set {{limit}} to {{value}} for {{target}}",
-        "userRateLimitReset": "{{admin}} gave {{target}} the server's {{limit}} again",
-        "userSettingUpdate": "{{admin}} set {{limit}} to {{value}} for {{target}}",
-        "userSettingReset": "{{admin}} gave {{target}} the server's {{limit}} again"
+        "mailUpdateOutsideSending": "{{admin}} changed who may send to outside addresses from {{from}} to {{to}}",
+        "registrationCodeCreate": "{{admin}} made a referral code (…{{hint}})",
+        "registrationCodeRevoke": "{{admin}} revoked the referral code …{{hint}}",
+        "settingsSetRateLimit": "{{admin}} set {{limit}} to {{value}}",
+        "settingsSetRateLimitReset": "{{admin}} reset {{limit}} to its first value",
+        "accountSetRateLimit": "{{admin}} set {{limit}} to {{value}} for {{target}}",
+        "accountSetRateLimitReset": "{{admin}} gave {{target}} the server's {{limit}} again",
+        "accountSetEntitlement": "{{admin}} set {{limit}} to {{value}} for {{target}}",
+        "accountSetEntitlementReset": "{{admin}} gave {{target}} the server's {{limit}} again"
       }
     },
     "settings": {
@@ -1014,7 +1015,7 @@
       "publicSharingHint": "Who may open links shared with “anyone with the link”. Signed-in only keeps a test server's links among its own accounts.",
       "publicSharingMode": {
         "on": "Anyone with the link",
-        "signed_in": "Only people signed in here",
+        "signedIn": "Only people signed in here",
         "off": "Off: no public links"
       },
       "registrationMode": {

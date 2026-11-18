@@ -31,7 +31,7 @@ pub struct MailSettings {
     /// Every new message carries your public key as an attachment (Proton's
     /// `AttachPublicKey`).
     pub attach_public_key: bool,
-    /// `pgp_mime` or `inline`: how mail to outside OpenPGP users is
+    /// `pgpMime` or `inline`: how mail to outside OpenPGP users is
     /// encrypted or signed (Proton's `PGPScheme`); Inline is plain text.
     pub pgp_scheme: String,
     /// `column`: the reading pane beside the list; `row`: below it
@@ -51,8 +51,8 @@ pub struct MailSettings {
     /// Messages or conversations on a page of the list: 50, 100 or 200
     /// (Proton's `PageSize`).
     pub page_size: i32,
-    /// Moving list mail to Spam: `ask`, `just_spam`, or
-    /// `spam_and_unsubscribe` (Proton's `SpamAction`, "Auto-unsubscribe").
+    /// Moving list mail to Spam: `ask`, `justSpam`, or
+    /// `spamAndUnsubscribe` (Proton's `SpamAction`, "Auto-unsubscribe").
     pub spam_action: String,
     /// Remote images: `ask` (blocked until loaded) or `always` (Proton's
     /// "Auto show remote images"); never automatic in Spam.
@@ -117,7 +117,7 @@ pub(crate) async fn settings_of(state: &AppState, user_id: Uuid) -> AppResult<Ma
         almost_all_mail: false,
         sign_outside: true,
         attach_public_key: false,
-        pgp_scheme: "pgp_mime".into(),
+        pgp_scheme: "pgpMime".into(),
         view_layout: "column".into(),
         density: "comfortable".into(),
         composer_mode: "popup".into(),
@@ -239,10 +239,10 @@ pub async fn update(
     if request
         .spam_action
         .as_deref()
-        .is_some_and(|a| !["ask", "just_spam", "spam_and_unsubscribe"].contains(&a))
+        .is_some_and(|a| !["ask", "justSpam", "spamAndUnsubscribe"].contains(&a))
     {
         return Err(AppError::bad_request(
-            "spam action is ask, just_spam or spam_and_unsubscribe",
+            "spam action is ask, justSpam or spamAndUnsubscribe",
         ));
     }
     let one_of = |value: &Option<String>, allowed: [&str; 2]| {
@@ -252,11 +252,11 @@ pub async fn update(
         || !one_of(&request.density, ["comfortable", "compact"])
         || !one_of(&request.composer_mode, ["popup", "maximized"])
         || !one_of(&request.view_mode, ["conversation", "message"])
-        || !one_of(&request.pgp_scheme, ["pgp_mime", "inline"])
+        || !one_of(&request.pgp_scheme, ["pgpMime", "inline"])
         || !one_of(&request.remote_images, ["ask", "always"])
     {
         return Err(AppError::bad_request(
-            "layout is column or row, density comfortable or compact, the composer popup or maximized, view conversation or message, PGP pgp_mime or inline, remote images ask or always",
+            "layout is column or row, density comfortable or compact, the composer popup or maximized, view conversation or message, PGP pgpMime or inline, remote images ask or always",
         ));
     }
     sqlx::query(
@@ -267,7 +267,7 @@ pub async fn update(
               unread_favicon, keep_moved_sent)
          VALUES ($1, COALESCE($2, 0), COALESCE($3, false), COALESCE($4, 'column'),
                  COALESCE($5, 'comfortable'), COALESCE($6, 'popup'), COALESCE($7, 'conversation'),
-                 COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgp_mime'), COALESCE($11, true),
+                 COALESCE($8, true), COALESCE($9, false), COALESCE($10, 'pgpMime'), COALESCE($11, true),
                  COALESCE($12, 50), COALESCE($13, 'ask'), COALESCE($14, 'ask'),
                  COALESCE($15, $16), COALESCE($17, 'html'), COALESCE($18, 'ltr'),
                  COALESCE($19, 'arial'), COALESCE($20, 14), COALESCE($21, true), COALESCE($22, true), COALESCE($23, true),

@@ -230,11 +230,11 @@ Specific codes, where an app does something particular (a test in
 | `deviceNotAuthorized` | 403 | A collaboration device the account has not vouched for (an unanswered, used or expired challenge, a statement that does not verify, a revoked device or one of an earlier incarnation): register one again, do not sign out |
 | `tooManyDevices` | 409 | The account has 20 collaboration devices in use (trusted, renewed within 30 days): the user removes one under Account → Devices; nothing is removed for them |
 | `link_removed` | 404/410 | The shared link was removed |
-| `link_blocked` | 451/410 | An operator blocked the public link: `451` for a legal order, `410` otherwise; `reason` is `legal_order`, `abuse` or `other` |
+| `link_blocked` | 451/410 | An operator blocked the public link: `451` for a legal order, `410` otherwise; `reason` is `legalOrder`, `abuse` or `other` |
 | `sharing_off` | 403/410 | Public links are off, for the whole server or the link owner's account: `403` when making one (with `scope`: `site` or `account`), `410` when opening one (no scope: a link's holder isn't told whose switch it was) |
 | `targetBlocked` | 409 | Making a public link to what an operator blocked links to (`reason`) |
 | `federationOff` | 403 | This account doesn't talk to other servers (Settings → Privacy): a request that would reach one is refused |
-| `consentRequired` | 409 | Turning on talking to other servers needs the `federation_abroad` consent: a text for it is published (`purpose` names it) |
+| `consentRequired` | 409 | Turning on talking to other servers needs the `federationAbroad` consent: a text for it is published (`purpose` names it) |
 | `acknowledgementsRequired` | 400 | Sign-up without confirming the current version of every required document (`kinds` names those missing); see `GET /api/legal/documents` |
 | `documentNotCurrent` | 400 | A document named that is not the current version (an acknowledgement, or the text a consent is given under) |
 | `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
@@ -1281,12 +1281,12 @@ exact text shown). Nothing published means nothing is asked.
 - `GET /api/user/consents`: `{ consents: [{ purpose, given, documentId, at }],
   documents }`, each purpose's latest state and its current text.
   `PUT /api/user/consents` `{ purpose, given, documentId? }` (`purpose`:
-  `federation_abroad` or `marketing`): giving one names the current document of
+  `federationAbroad` or `marketing`): giving one names the current document of
   the purpose's kind when one is published (`400 documentNotCurrent`). Each
   change is a new row; the records are append-only for the server.
 - `PUT /api/user/federation` `{ on, documentId? }`: whether this account's
   Chat and Drive talk to other Kutup servers (`federation` in `/user/me`).
-  Turning it on, when a `federation_abroad` text is published, gives that
+  Turning it on, when a `federationAbroad` text is published, gives that
   consent under `documentId` (or needs it given before: `409
   consentRequired`); withdrawing the consent turns it off. While off, the
   account's requests that would reach another server are `403
@@ -2162,7 +2162,7 @@ outside forwarding lasts (as Proton's). k is sealed at once under
 `MAIL_FORWARDING_KEYS` and no answer carries it. **Auth:** Bearer JWT, but
 for the three `external` endpoints.
 
-A forwarding: `{ "id", "kind": "end_to_end"|"outside", "state":
+A forwarding: `{ "id", "kind": "endToEnd"|"outside", "state":
 "pending"|"active"|"outdated"|"paused"|"rejected", "forwarderAddress",
 "forwardeeEmail", "match": "all"|"any", "conditions": [filter conditions on
 sender, subject, attachments], "skipped": <messages that couldn't be
@@ -2468,7 +2468,7 @@ first, at most 200 per page (default 50).
 **Auth:** Bearer JWT
 
 **Response:** `{ "messages": [{ "id", "threadId", "folder", "seen", "starred", "protection", "size", "receivedAt", "sentAt", "subject", "from": { "address", "name" }, "to": [...], "cc": [...], "replyTo": [...], "messageId", "attachmentCount" }], "next": "..." }`.
-`protection` is `zero_access` (encrypted on arrival) or `end_to_end` (between
+`protection` is `zeroAccess` (encrypted on arrival) or `endToEnd` (between
 Kutup users, or arrived OpenPGP-encrypted by its sender). Pass
 `next` as `before` for the next page; it is absent on the last. Instead,
 `page` (from 0) pages by number, `limit` to a page (Proton's paging), and the
@@ -2551,7 +2551,7 @@ messages must be From you with the same Message-ID and no Bcc header; a PGP
 message must hold an encrypted OpenPGP message, and `mime` is refused when
 nobody needs it. The server stores `key packet || data packet` for you
 (Sent) and each Kutup recipient (Inbox), hands `mime` and each PGP message
-to Stalwart, and deletes the draft. Your sent copy is `end_to_end` when no
+to Stalwart, and deletes the draft. Your sent copy is `endToEnd` when no
 recipient got the plaintext.
 
 **Response:** `{ "message": {...your sent copy...}, "recipients": [{ "address", "status" }] }`,
@@ -3962,7 +3962,7 @@ token.
 account (docs/plans/server-personal-data.md, A11).
 
 **Every public route** (`/api/share/:token…`) answers, before anything else:
-while the server's public sharing is `signed_in`, `403 sign_in_required`
+while the server's public sharing is `signedIn`, `403 sign_in_required`
 without a signed-in caller (`401` when a sign-in is sent but no longer holds,
 so the page refreshes it; the web pages send their sign-in when they have
 one); `451`/`410 link_blocked` when an operator blocked what the link
@@ -5411,7 +5411,7 @@ close every open report on it. `204`; `404` for no such open report. Logged as
 ### POST /api/admin/shares/:id/block · DELETE /api/admin/shares/:id/block
 
 An operator's block on one public link (by its id, `shareId` in a report):
-`{ "reason": "legal_order" | "abuse" | "other", "reference"?: "…" }`
+`{ "reason": "legalOrder" | "abuse" | "other", "reference"?: "…" }`
 (the reference, at most 200 characters, is for the administrators). The link
 answers `451 link_blocked` for a legal order and `410 link_blocked` otherwise,
 as does every other link to what it reaches, and its open reports close as
@@ -5421,7 +5421,7 @@ its record are one transaction. `DELETE` lifts the block. `204`;
 `share.unblock`. Reports carry the link's `shareBlockedReason`.
 
 Public sharing for the whole server is `publicSharing` in
-`GET`/`PUT /api/admin/settings` (`on`, `off`, `signed_in`; also in the public
+`GET`/`PUT /api/admin/settings` (`on`, `off`, `signedIn`; also in the public
 `GET /api/auth/settings`), and for one account `publicSharing` (`on`, `off`)
 in `PUT /api/admin/users/:id` (also in the user list and the account's
 `GET /api/user/me`).
@@ -5475,7 +5475,7 @@ List all registered users.
 ```
 
 `state` is `active`, `suspended` (with `suspendedReason`: `admin`,
-`operator_order` or `security`) or `closing` (with `closesAt`, when it is
+`operatorOrder` or `security`) or `closing` (with `closesAt`, when it is
 deleted); `isActive` is `state == "active"` (docs/plans/server-personal-data.md,
 A5). `legalHoldReference` and `legalHoldAt` are present while a legal hold is
 set.
@@ -5523,7 +5523,7 @@ Update a user. All fields are optional; only the ones present in the request are
 {
   "storageQuotaBytes": 21474836480,
   "isActive": false,
-  "suspendedReason": "operator_order",
+  "suspendedReason": "operatorOrder",
   "isAdmin": false
 }
 ```
@@ -5557,7 +5557,7 @@ keyed hashes (docs/plans/server-personal-data.md, A7).
 Close the account: every sign-in ends, and it is deleted after
 `account_closing_days` (a Privacy and retention setting, default 14) unless it
 is kept, by its owner at sign-in or here (`PUT` with `isActive: true`).
-Recorded as `user.close`.
+Recorded as `account.close`.
 
 **Auth:** Bearer JWT (admin)
 
@@ -5572,7 +5572,7 @@ is closing already.
 Set (or change) and lift a legal hold. While it is set nothing deletes the
 account or anything of it: the closing job waits, an admin delete or reset is
 `409 legalHold`, and the retention jobs pass its sessions, security events and
-admin-log rows by. Recorded as `user.legalHold.set` / `user.legalHold.clear`,
+admin-log rows by. Recorded as `account.setLegalHold` / `account.clearLegalHold`,
 with the reference.
 
 **Auth:** Bearer JWT (admin)
@@ -5672,12 +5672,12 @@ cursor remains stable.
   "entries": [
     {
       "id": 7,
-      "action": "user.create",
+      "action": "account.create",
       "adminUserId": "<uuid>",
       "adminUsername": "admin",
       "targetUserId": "<uuid>",
       "targetUsername": "newuser",
-      "payload": { "username": "newuser", "storageQuotaBytes": 10737418240 },
+      "payload": { "storageQuotaBytes": 10737418240 },
       "occurredAt": "2026-06-11T11:22:33Z"
     }
   ],
@@ -5685,14 +5685,18 @@ cursor remains stable.
 }
 ```
 
-Actions include user/settings changes plus `federation.policy.*`,
-`federation.rule.*`, `federation.peer.*`, and `federation.identity.*`. Identity
-pin, authenticated rotation, quarantine, verification, and break-glass re-pin
-events retain full fingerprints, sequences, and reasons but never private
-signing keys or Drive capabilities. `adminUsername`/`targetUsername` are the live
-identities and become `null` once the referenced account is deleted — the
-`payload` snapshot keeps the trail readable. `nextBefore` is non-null while
-older pages remain.
+Actions are `area.verb`, two camelCase segments with the verb imperative
+(`account.create`, `settings.setRateLimit`, `mailGroup.updateMembers`,
+`federation.updatePolicy`, `federation.pinPeer`, …); the full list, with the
+payload keys each may carry, is `AdminAction` in
+`crates/kutup-server/src/audit_log.rs`. Identity pin, authenticated rotation,
+quarantine, verification, and break-glass re-pin events retain full
+fingerprints, sequences, and reasons but never private signing keys or Drive
+capabilities. Payloads name accounts by id only, never by username (A8): the
+account is `targetUserId`. `adminUsername`/`targetUsername` are the live
+identities and become `null` once the referenced account is deleted (the page
+then shows "a deleted account"). `nextBefore` is non-null while older pages
+remain.
 
 ### GET /api/admin/activity/export
 
@@ -5719,7 +5723,7 @@ of the oldest rows breaks it too; `appendOnly` is false
 while the server runs as the database's owner (`DATABASE_OWNER_URL` unset).
 
 Opening one account's limits, mail-domain overrides or mail-sending state
-writes an `admin.view` row here, and `adminAccess` in that account's security
+writes an `account.view` row here, and `adminAccess` in that account's security
 log.
 
 ---
@@ -5780,7 +5784,7 @@ Every rate limit the server keeps (docs/plans/admin-rate-limits.md):
 `{ "value": 20 }`, or `{ "value": null }` to go back to the first value, and
 answers the limit as it is now. A value outside `min`–`max` is `400`, an
 unknown key `404`. It applies at once on this backend and within 30 seconds
-on the others; each change writes a `settings.rate_limit` audit entry.
+on the others; each change writes a `settings.setRateLimit` audit entry.
 
 ### GET /api/admin/users/{id}/limits · PUT /api/admin/users/{id}/limits/{key}
 
@@ -5806,8 +5810,8 @@ own value (`{ "value": 3 }`) or takes it back (`null`); it answers the entry
 as it is now. A value outside the range is `400` (never clamped), and so is a
 setting or rate limit that doesn't limit one account; an unknown key is
 `404`. Lowering a value below what the account already uses only stops new
-growth: nothing is removed. Each change writes a `user.setting` or
-`user.rate_limit` audit entry.
+growth: nothing is removed. Each change writes an `account.setEntitlement` or
+`account.setRateLimit` audit entry.
 
 ### GET /api/admin/settings/registry
 
@@ -5948,7 +5952,7 @@ Codes that admit a sign-up when the registration mode asks for one
 (docs/plans/registration-codes.md). A code is 20 Crockford base32 characters
 (100 random bits) shown once, when it is made; the server keeps only its HMAC
 under a key of its own, so a database dump gives no usable code. Each change is
-in the audit log (`registration_code.created`, `registration_code.revoked`).
+in the audit log (`registrationCode.create`, `registrationCode.revoke`).
 
 - `POST /api/admin/registration-codes` with `{ "note": "beta testers",
   "expiresAt": "2026-11-01T00:00:00Z" | null, "maxUses": 5 | null }` (a note of
@@ -6067,7 +6071,7 @@ Update the emergency stop and one feature policy:
 ```
 
 Returns the full control-plane response, wakes the Chat outbox, and audits
-`federation.policy.update`. The global stop denies every feature. A disabled
+`federation.updatePolicy`. The global stop denies every feature. A disabled
 Chat feature also hides public discovery. `allowlist` requires an explicit
 directional allow, `blocklist` permits inherited directions except explicit
 blocks, and `open` permits every admitted direction. Admission never bypasses
@@ -6087,13 +6091,13 @@ domain. The local domain cannot be added.
 ```
 
 Returns the full response, wakes pending Chat delivery for the domain, and
-audits `federation.rule.upsert`.
+audits `federation.setRule`.
 
 ### DELETE /api/admin/federation/rules/:feature/:domain
 
 Delete the feature-scoped rule. Returns the full response, or `404` when the
 rule does not exist, wakes pending Chat delivery, and audits
-`federation.rule.delete`.
+`federation.deleteRule`.
 
 ### POST /api/admin/federation/peers/:domain/verify
 
@@ -6109,7 +6113,7 @@ fingerprint through an independent channel. Body:
 Evict positive and negative discovery caches, retry authenticated discovery
 through either enabled Chat or Drive capability, and wake pending Chat
 delivery. The returned control-plane state exposes the new discovery result or
-`lastDiscoveryError`. The outcome is audited as `federation.peer.retry`.
+`lastDiscoveryError`. The outcome is audited as `federation.retryPeer`.
 
 ### POST /api/admin/federation/peers/retry
 
@@ -6121,7 +6125,7 @@ not abort the others.
 ```
 
 The response contains `{domain, refreshed, error}` per peer and the complete
-batch result is retained in `federation.peer.retry-bulk` audit evidence.
+batch result is retained in `federation.retryPeers` audit evidence.
 
 ### GET /api/admin/federation/peers/:domain/evidence
 

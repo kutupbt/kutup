@@ -90,8 +90,8 @@
     "continue": "Devam et",
     "kinds": {
       "terms": "Hizmet Koşulları",
-      "privacy_notice": "Aydınlatma Metni",
-      "federation_abroad": "diğer sunucularla iletişim rıza metni",
+      "privacyNotice": "Aydınlatma Metni",
+      "federationAbroad": "diğer sunucularla iletişim rıza metni",
       "marketing": "haber ve teklif rıza metni"
     }
   },
@@ -220,7 +220,7 @@
       "withdrawnAt": "{{date}} tarihinde geri alındı",
       "failed": "Seçiminiz kaydedilemedi. Yeniden deneyin.",
       "purposes": {
-        "federation_abroad": {
+        "federationAbroad": {
           "title": "Diğer sunucularla iletişim",
           "description": "Sohbet ve Drive'ınızın, başka ülkelerde olabilecek diğer Kutup sunucularındaki kişilere ulaşmasına izin verin. Geri alırsanız bu durur."
         },
@@ -662,7 +662,7 @@
       "publishTitle": "Sürüm yayımla",
       "publishHint": "Yayımlanan bir sürüm hiç değiştirilmez: yenisini yayımlayın. Zorunlu yeni bir sürüm herkese bir sonraki oturum açışında gösterilir.",
       "kind": "Tür",
-      "kindHint": "terms, privacy_notice, bir rıza amacı (federation_abroad, marketing) ya da kendi türünüz.",
+      "kindHint": "terms, privacyNotice, bir rıza amacı (federationAbroad, marketing) ya da kendi türünüz.",
       "version": "Sürüm",
       "language": "Dil",
       "languageHint": "en, tr ya da pt-BR gibi bir kod.",
@@ -806,7 +806,7 @@
       "suspendedReason": "Devre dışı bırakılma nedeni",
       "suspendedReasons": {
         "admin": "Yönetici kararı",
-        "operator_order": "İşletmeciye verilen bir karar",
+        "operatorOrder": "İşletmeciye verilen bir karar",
         "security": "Bir güvenlik kaygısı"
       },
       "legalHold": "Yasal saklama",
@@ -836,7 +836,7 @@
       "blockDescription": "{{name}} kullanıcısının paylaştığı bağlantı artık açılmaz. Yasal karar seçilirse “hukuki nedenlerle kullanılamıyor”, başka bir neden seçilirse “engellendi” yanıtını verir. Açık şikâyetleri kapatılır. Engeli daha sonra kaldırabilirsiniz.",
       "blockReason": "Neden",
       "blockReasons": {
-        "legal_order": "Yasal karar",
+        "legalOrder": "Yasal karar",
         "abuse": "Kötüye kullanım",
         "other": "Başka bir neden"
       },
@@ -846,7 +846,7 @@
       "unblock": "Engeli kaldır",
       "unblocked": "Engel kaldırıldı",
       "blockedAs": {
-        "legal_order": "yasal karar üzerine engellendi",
+        "legalOrder": "yasal karar üzerine engellendi",
         "abuse": "kötüye kullanım nedeniyle engellendi",
         "other": "engellendi"
       },
@@ -900,48 +900,49 @@
       "emptyDescription": "Bu filtrelerle eşleşen bir şey yok.",
       "system": "Sistem",
       "deletedUser": "silinmiş bir kullanıcı",
+      "deletedAccount": "silinmiş bir hesap",
       "actions": {
-        "userCreate": "{{admin}}, {{target}} hesabını oluşturdu",
-        "userUpdate": "{{admin}}, {{target}} hesabını güncelledi",
-        "userDelete": "{{admin}}, {{target}} hesabını sildi",
-        "user2faDisable": "{{admin}}, {{target}} için 2FA'yı kapattı",
-        "userRotateTempPassword": "{{admin}}, {{target}} için geçici parolayı değiştirdi",
-        "userWipe": "{{admin}}, {{target}} hesabını sıfırladı",
-        "userClose": "{{admin}}, {{target}} hesabını kapattı: bekleme süresinden sonra silinecek",
-        "userLegalHoldSet": "{{admin}}, {{target}} hesabına yasal saklama koydu ({{reference}})",
-        "userLegalHoldClear": "{{admin}}, {{target}} hesabındaki yasal saklamayı kaldırdı ({{reference}})",
-        "adminView": "{{admin}}, {{target}} hesabının ayrıntılarını açtı",
+        "accountCreate": "{{admin}}, {{target}} hesabını oluşturdu",
+        "accountUpdate": "{{admin}}, {{target}} hesabını güncelledi",
+        "accountDelete": "{{admin}}, {{target}} hesabını sildi",
+        "accountDisableTwoFactor": "{{admin}}, {{target}} için 2FA'yı kapattı",
+        "accountRotateTempPassword": "{{admin}}, {{target}} için geçici parolayı değiştirdi",
+        "accountResetKeys": "{{admin}}, {{target}} hesabını sıfırladı",
+        "accountClose": "{{admin}}, {{target}} hesabını kapattı: bekleme süresinden sonra silinecek",
+        "accountSetLegalHold": "{{admin}}, {{target}} hesabına yasal saklama koydu ({{reference}})",
+        "accountClearLegalHold": "{{admin}}, {{target}} hesabındaki yasal saklamayı kaldırdı ({{reference}})",
+        "accountView": "{{admin}}, {{target}} hesabının ayrıntılarını açtı",
         "settingsUpdate": "{{admin}} sunucu ayarlarını değiştirdi",
-        "mapsSettingsUpdate": "{{admin}} harita ayarlarını değiştirdi",
-        "federationPolicyUpdate": "{{admin}}, {{feature}} federasyonunu {{mode}} olarak ayarladı",
-        "federationRuleUpsert": "{{admin}}, {{domain}} için federasyon kuralını değiştirdi",
-        "federationRuleDelete": "{{admin}}, {{domain}} için federasyon kuralını kaldırdı",
-        "federationIdentityGenesis": "{{admin}} bu sunucunun federasyon kimliğini oluşturdu",
-        "federationIdentityRotateLocal": "{{admin}} bu sunucunun federasyon kimliğini yeniledi",
-        "federationIdentityPin": "{{admin}}, {{domain}} sunucusunu ilk kullanımda sabitledi",
-        "federationIdentityVerify": "{{admin}}, {{domain}} sunucusunu doğruladı",
-        "federationIdentityAdvance": "{{admin}}, {{domain}} sunucusundan doğrulanmış bir kimlik yenilemesini kabul etti",
-        "federationIdentityQuarantine": "{{admin}}, {{domain}} sunucusunu karantinaya aldı",
-        "federationIdentityRepin": "{{admin}}, {{domain}} sunucusunu yeniden sabitledi (acil durum)",
-        "federationPeerRetry": "{{admin}}, {{domain}} için keşfi yeniden denedi",
-        "federationPeerRetryBulk": "{{admin}} birkaç sunucu için keşfi yeniden denedi",
+        "mapsUpdateSettings": "{{admin}} harita ayarlarını değiştirdi",
+        "federationUpdatePolicy": "{{admin}}, {{feature}} federasyonunu {{mode}} olarak ayarladı",
+        "federationSetRule": "{{admin}}, {{domain}} için federasyon kuralını değiştirdi",
+        "federationDeleteRule": "{{admin}}, {{domain}} için federasyon kuralını kaldırdı",
+        "federationCreateIdentity": "{{admin}} bu sunucunun federasyon kimliğini oluşturdu",
+        "federationRotateIdentity": "{{admin}} bu sunucunun federasyon kimliğini yeniledi",
+        "federationPinPeer": "{{admin}}, {{domain}} sunucusunu ilk kullanımda sabitledi",
+        "federationVerifyPeer": "{{admin}}, {{domain}} sunucusunu doğruladı",
+        "federationAdvancePeer": "{{admin}}, {{domain}} sunucusundan doğrulanmış bir kimlik yenilemesini kabul etti",
+        "federationQuarantinePeer": "{{admin}}, {{domain}} sunucusunu karantinaya aldı",
+        "federationRepinPeer": "{{admin}}, {{domain}} sunucusunu yeniden sabitledi (acil durum)",
+        "federationRetryPeer": "{{admin}}, {{domain}} için keşfi yeniden denedi",
+        "federationRetryPeers": "{{admin}} birkaç sunucu için keşfi yeniden denedi",
         "unknown": "{{admin}}: {{action}}",
-        "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
+        "mailUpdateSending": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
         "reportDismiss": "{{admin}}, {{target}} kullanıcısının bir bağlantısıyla ilgili bildirimi kapattı",
         "legalPublish": "{{admin}}, {{kind}} belgesinin {{version}} sürümünü yayımladı",
-        "userPublicSharing": "{{admin}}, {{target}} için herkese açık bağlantıları {{state}} yaptı",
+        "accountSetPublicSharing": "{{admin}}, {{target}} için herkese açık bağlantıları {{state}} yaptı",
         "shareBlock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantıyı engelledi",
         "shareUnblock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantının engelini kaldırdı",
         "shareRemove": "{{admin}}, {{target}} kullanıcısının herkese açık bir bağlantısını kaldırdı",
-        "mailOutsideSendingUpdate": "{{admin}}, dış adreslere kimin gönderebileceğini {{from}} yerine {{to}} yaptı",
-        "registrationCodeCreated": "{{admin}} bir davet kodu oluşturdu (…{{hint}})",
-        "registrationCodeRevoked": "{{admin}} …{{hint}} davet kodunu iptal etti",
-        "rateLimitUpdate": "{{admin}}, {{limit}} sınırını {{value}} yaptı",
-        "rateLimitReset": "{{admin}}, {{limit}} sınırını ilk değerine döndürdü",
-        "userRateLimitUpdate": "{{admin}}, {{target}} için {{limit}} sınırını {{value}} yaptı",
-        "userRateLimitReset": "{{admin}}, {{target}} için {{limit}} sınırını yeniden sunucunun değerine döndürdü",
-        "userSettingUpdate": "{{admin}}, {{target}} için {{limit}} ayarını {{value}} yaptı",
-        "userSettingReset": "{{admin}}, {{target}} için {{limit}} ayarını yeniden sunucunun değerine döndürdü"
+        "mailUpdateOutsideSending": "{{admin}}, dış adreslere kimin gönderebileceğini {{from}} yerine {{to}} yaptı",
+        "registrationCodeCreate": "{{admin}} bir davet kodu oluşturdu (…{{hint}})",
+        "registrationCodeRevoke": "{{admin}} …{{hint}} davet kodunu iptal etti",
+        "settingsSetRateLimit": "{{admin}}, {{limit}} sınırını {{value}} yaptı",
+        "settingsSetRateLimitReset": "{{admin}}, {{limit}} sınırını ilk değerine döndürdü",
+        "accountSetRateLimit": "{{admin}}, {{target}} için {{limit}} sınırını {{value}} yaptı",
+        "accountSetRateLimitReset": "{{admin}}, {{target}} için {{limit}} sınırını yeniden sunucunun değerine döndürdü",
+        "accountSetEntitlement": "{{admin}}, {{target}} için {{limit}} ayarını {{value}} yaptı",
+        "accountSetEntitlementReset": "{{admin}}, {{target}} için {{limit}} ayarını yeniden sunucunun değerine döndürdü"
       }
     },
     "settings": {
@@ -1014,7 +1015,7 @@
       "publicSharingHint": "“Bağlantıya sahip herkes” ile paylaşılan bağlantıları kimlerin açabileceği. Yalnızca oturum açanlar seçeneği bir deneme sunucusunun bağlantılarını kendi hesaplarıyla sınırlar.",
       "publicSharingMode": {
         "on": "Bağlantıya sahip herkes",
-        "signed_in": "Yalnızca burada oturum açanlar",
+        "signedIn": "Yalnızca burada oturum açanlar",
         "off": "Kapalı: herkese açık bağlantı yok"
       },
       "registrationMode": {

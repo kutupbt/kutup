@@ -371,7 +371,7 @@ fn chat_media_capability_and_quota_recovery(
             .unwrap(),
         "destination Chat-media quota rejection",
     );
-    assert_eq!(full["status"], "storage_full");
+    assert_eq!(full["status"], "storageFull");
     assert!(full["storageReferenceId"].is_null());
 
     // Restoring quota and retrying the exact immutable object with a fresh
@@ -423,7 +423,7 @@ fn chat_media_capability_and_quota_recovery(
 
 /// A media offer v1 refused without recording it, as the outbox migration
 /// leaves it (docs/plans/federation-outbox.md): pending again at A as
-/// `closing_sequence` under its own sequence N, while B's mark stayed at
+/// `closingSequence` under its own sequence N, while B's mark stayed at
 /// N-1. Here it is an offer that has expired since: B now refuses it and
 /// records the refusal at N, and the real offer behind it is stored under
 /// N+1, so nothing waits on N. Needs both servers' databases
@@ -1083,7 +1083,7 @@ fn account_of(c: &Client, base: &str, token: &str) -> AccountRef {
 /// A plain mismatch from before wire version 2, as the outbox migration
 /// leaves it (docs/plans/federation-outbox.md): under v1 B never recorded
 /// the mismatched sequence N (its mark stayed at N-1), and A's row moved to
-/// `closing_sequence` at N with its stale request. Alice's corrected resend
+/// `closingSequence` at N with its stale request. Alice's corrected resend
 /// then closes N first (B records its 409 there), goes under N+1 and is
 /// delivered, and so is the send after it: nothing waits on N. Needs both
 /// servers' databases (`KUTUP_FEDERATION_DB_A`, `KUTUP_FEDERATION_DB_B`).
@@ -1152,7 +1152,7 @@ fn closing_sequence_from_before_v2(
                       recipient_account_id, payload, state, error_class)
                  VALUES ('chat', 'b.test', $1, $2, $3::uuid, $4::uuid,
                          jsonb_build_object('request', $5::jsonb, 'sender', $3::text),
-                         'pending', 'closing_sequence')",
+                         'pending', 'closingSequence')",
             )
             .bind(next)
             .bind(format!("{alice_id}:{device}:{send_id}"))
@@ -2658,7 +2658,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .all(|entry| entry["action"].as_str().unwrap().starts_with("federation.")));
     assert!(filtered_entries
         .iter()
-        .any(|entry| entry["action"] == "federation.peer.retry-bulk"));
+        .any(|entry| entry["action"] == "federation.retryPeers"));
 
     let audit_export = c
         .get(format!(
@@ -2676,7 +2676,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .unwrap()
         .starts_with("text/csv"));
     let audit_csv = audit_export.text().unwrap();
-    assert!(audit_csv.contains("federation.peer.retry-bulk"));
+    assert!(audit_csv.contains("federation.retryPeers"));
     assert!(audit_csv.contains("b.test"));
     assert!(!audit_csv.contains("capability"));
 
@@ -2917,12 +2917,12 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| entry["action"] == "federation.policy.update"));
+        .any(|entry| entry["action"] == "federation.updatePolicy"));
     assert!(activity["entries"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| entry["action"] == "federation.rule.upsert"));
+        .any(|entry| entry["action"] == "federation.setRule"));
 
     let typed_first: AccountPreKeyBundlesResponse =
         serde_json::from_value(bundles_first.clone()).unwrap();
@@ -3546,7 +3546,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
         });
         assert_eq!(
             (settled.0.as_str(), settled.1.as_deref()),
-            ("rejected", Some("federation_off")),
+            ("rejected", Some("federationOff")),
             "the off account's queued send is withdrawn: {:?}",
             settled.2
         );

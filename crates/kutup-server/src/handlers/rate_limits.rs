@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::middleware::AdminUser;
 use crate::ratelimit::{self, FirstFrom, Per, Section, Spec, Unit};
@@ -122,7 +123,7 @@ pub async fn list(
 
 /// `PUT /api/admin/rate-limits/{key}` — sets one limit, or resets it to its
 /// first value. It applies at once on this backend and within 30 seconds on
-/// the others; audited as `settings.rate_limit`.
+/// the others; audited as `settings.setRateLimit`.
 #[utoipa::path(
     put,
     path = "/api/admin/rate-limits/{key}",
@@ -179,7 +180,7 @@ pub async fn update(
     crate::handlers::admin::audit(
         &state.pool,
         &admin.user_id,
-        "settings.rate_limit",
+        AdminAction::SettingsSetRateLimit,
         None,
         json!({
             "key": spec.key,

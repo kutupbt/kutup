@@ -62,7 +62,7 @@ pub struct SettingsResponse {
     pub old_address_receive_days: i64,
     /// The largest `.kdbx` file Kutup Pass takes in an upload, in bytes.
     pub pass_vault_max_bytes: i64,
-    /// Who may open public links: `on`, `off` or `signed_in` (the share
+    /// Who may open public links: `on`, `off` or `signedIn` (the share
     /// dialogs say why links are off).
     pub public_sharing: crate::public_sharing::PublicSharing,
 }
@@ -81,7 +81,7 @@ pub struct FeedbackSettings {
 pub struct AdminSettingsResponse {
     /// Who may register: `on`, `code` (with a referral code) or `off`.
     pub registration_mode: crate::registration::RegistrationMode,
-    /// Who may open public links: `on`, `off` or `signed_in`
+    /// Who may open public links: `on`, `off` or `signedIn`
     /// (docs/plans/server-personal-data.md, A11).
     pub public_sharing: crate::public_sharing::PublicSharing,
     /// Whether a new account talks to other servers.
@@ -511,7 +511,7 @@ pub struct UpdateAdminUserRequest {
     /// active again (a closing one is kept).
     pub is_active: Option<bool>,
     /// Why it is suspended (with `isActive: false`): `admin` (the default),
-    /// `operator_order` or `security`.
+    /// `operatorOrder` or `security`.
     pub suspended_reason: Option<String>,
     /// Whether it may share by public link: `on` or `off`.
     pub public_sharing: Option<String>,
@@ -525,7 +525,7 @@ pub struct UpdateAdminUserRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminSettingsRequest {
     pub registration_mode: Option<crate::registration::RegistrationMode>,
-    /// Who may open public links: `on`, `off` or `signed_in`.
+    /// Who may open public links: `on`, `off` or `signedIn`.
     pub public_sharing: Option<crate::public_sharing::PublicSharing>,
     /// Whether a new account talks to other servers.
     pub federation_default: Option<bool>,

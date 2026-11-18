@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use super::identity::insert_system_audit;
 use super::{AuthenticatedFederationRequest, FederationRequestSpec, FederationStack};
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::AppState;
@@ -207,13 +208,13 @@ impl FeaturePolicyStore {
         insert_system_audit(
             &mut tx,
             if previous.is_some() {
-                "federation.feature-policy.rotate"
+                AdminAction::FederationRotateFeaturePolicy
             } else {
-                "federation.feature-policy.bootstrap"
+                AdminAction::FederationCreateFeaturePolicy
             },
             json!({
                 "actorType": match rotation {
-                    PolicyRotation::Operator => "operator-command",
+                    PolicyRotation::Operator => "operatorCommand",
                     PolicyRotation::Refuse | PolicyRotation::Automatic => "system",
                 },
                 "domain": envelope.domain,
@@ -234,7 +235,7 @@ impl FeaturePolicyStore {
         envelope: &FederatedFeaturePolicyEnvelopeV1,
     ) -> anyhow::Result<bool> {
         if envelope.domain != expected_domain {
-            self.record_folded(envelope, "wrong_domain").await?;
+            self.record_folded(envelope, "wrongDomain").await?;
             anyhow::bail!("remote feature policy has the wrong domain");
         }
         let mut tx = self.pool.begin().await?;

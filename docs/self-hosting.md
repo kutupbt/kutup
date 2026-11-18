@@ -411,7 +411,7 @@ yourself (for rotation, say), copy it into the environment unchanged,
 
 ```sh
 docker compose exec -T postgres psql -U kutup -d kutup -Atc \
-  "SELECT encode(private_key, 'base64') FROM server_generated_keys WHERE purpose = 'federation-identity'"
+  "SELECT encode(private_key, 'base64') FROM server_generated_keys WHERE purpose = 'federationIdentity'"
 ```
 
 and set it as `FEDERATION_SIGNING_KEY` with `FEDERATION_SERVER_NAME` equal to
@@ -803,7 +803,7 @@ and withdraw consents in Settings → Privacy.
 Whether an account's Chat and Drive talk to other Kutup servers is its own
 switch (Settings → Privacy); new accounts start as **Server settings →
 Accounts → New accounts talk to other servers** says, and an administrator
-can set one account's. When you publish a `federation_abroad` text, turning
+can set one account's. When you publish a `federationAbroad` text, turning
 it on asks for that consent, and withdrawing the consent turns it off. Mail
 is email, not federation: it isn't covered.
 

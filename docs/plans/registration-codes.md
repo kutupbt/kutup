@@ -42,7 +42,7 @@ A single site setting, `registration_mode`, replaces `registration_enabled`:
 - **Stored:** never the code itself.
   - The table keeps `code_hash = HMAC-SHA256(k, canonical code)`, unique. `k` is
     a key the server makes once and keeps in its database (`server_keys`,
-    `registration-codes`), rotated with no other secret: a dump of the codes
+    `registrationCodes`), rotated with no other secret: a dump of the codes
     table alone gives no usable codes.
   - Looking up the hash is the comparison, so there is no timing oracle on a stored
     string.
@@ -127,8 +127,8 @@ Who invited whom is `registration_code_uses.user_id` → `registration_codes.cre
   - `GET /api/admin/registration-codes/{id}/uses`: username and time.
   - A user's admin page shows "Invited with code …, created by …".
 - **Audit log:**
-  - `registration_code.created` {id, hint, maxUses, expiresAt};
-  - `registration_code.revoked` {id};
+  - `registrationCode.create` {id, hint, note, maxUses, expiresAt};
+  - `registrationCode.revoke` {id, hint};
   - signing up is not an administrator's action, so it is not in the audit log;
     `registration_code_uses` records it;
   - `site.setting_changed` for the mode.

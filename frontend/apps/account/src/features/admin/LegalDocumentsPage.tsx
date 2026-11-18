@@ -17,7 +17,7 @@ import { documentName } from '../auth/legal'
 import { useLegalDocuments, usePublishDocument } from './api'
 
 /** Kinds the pages know by name; any other lowercase kind works too. */
-const KNOWN_KINDS = ['terms', 'privacy_notice', 'federation_abroad', 'marketing']
+const KNOWN_KINDS = ['terms', 'privacyNotice', 'federationAbroad', 'marketing']
 const HEX64 = /^[0-9a-fA-F]{64}$/
 
 /**
@@ -61,7 +61,7 @@ export function LegalDocumentsPage() {
               <Field label={t('admin.legal.kind')} description={t('admin.legal.kindHint')} required>
                 {(field) => (
                   <>
-                    <Input {...field} value={form.kind} list="legal-kinds" onChange={(e) => set({ kind: e.target.value.toLowerCase() })} />
+                    <Input {...field} value={form.kind} list="legal-kinds" onChange={(e) => set({ kind: e.target.value.replace(/^[A-Z]/, (c) => c.toLowerCase()) })} />
                     <datalist id="legal-kinds">
                       {KNOWN_KINDS.map((kind) => (
                         <option key={kind} value={kind} />

@@ -289,14 +289,14 @@ export interface ChatAttachmentDescriptorV1 {
 }
 
 /**
- * `mls_group` is the removed MLS groups' kind, kept so stored ledger records
+ * `mlsGroup` is the removed MLS groups' kind, kept so stored ledger records
  * still read; pairwise groups take no attachments yet.
  */
-export type ChatMediaConversationKindV1 = 'direct' | 'mls_group' | 'note_to_self'
+export type ChatMediaConversationKindV1 = 'direct' | 'mlsGroup' | 'noteToSelf'
 export type ChatAttachmentLedgerStateV1 =
   | 'active'
   | 'cleared'
-  | 'saved_to_drive'
+  | 'savedToDrive'
   | 'expired'
 
 export interface ChatAttachmentLedgerEntryV1 {

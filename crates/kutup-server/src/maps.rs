@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::{AdminUser, AuthUser};
@@ -715,7 +716,7 @@ pub async fn admin_put(
     crate::handlers::admin::audit(
         &state.pool,
         &admin.user_id,
-        "maps.settings.update",
+        AdminAction::MapsUpdateSettings,
         None,
         serde_json::json!({
             "enabled": settings.enabled,

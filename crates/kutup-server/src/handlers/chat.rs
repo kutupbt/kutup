@@ -2056,11 +2056,11 @@ pub(crate) async fn consume_anonymous_rate(
     let count = anonymous_count(tx, scope_type, scope_digest, 1, window_seconds).await?;
     if count > limit {
         let metric_scope = match scope_type {
-            "capability_bundle" => "capability_bundle",
-            "capability_minute" => "capability_minute",
-            "capability_day" => "capability_day",
+            "capabilityBundle" => "capability_bundle",
+            "capabilityMinute" => "capability_minute",
+            "capabilityDay" => "capability_day",
             "recipient" => "recipient",
-            "federation_origin" => "federation_origin",
+            "federationOrigin" => "federation_origin",
             _ => "unknown",
         };
         crate::telemetry::rate_limit_rejection(metric_scope);
@@ -2111,7 +2111,7 @@ pub(crate) async fn load_user_bundles(
         }
         consume_anonymous_rate(
             &mut tx,
-            "capability_bundle",
+            "capabilityBundle",
             capability,
             crate::ratelimit::Limit::SealedCapabilityBundles,
         )
@@ -2461,7 +2461,7 @@ pub async fn send_sealed_batch(
         let mut tx = state.pool.begin().await?;
         let count = anonymous_count(
             &mut tx,
-            "ip_bytes",
+            "ipBytes",
             &address_digest,
             i64::try_from(bytes).unwrap_or(i64::MAX),
             60,
@@ -2703,14 +2703,14 @@ pub(crate) async fn store_sealed_messages(
 
     consume_anonymous_rate(
         tx,
-        "capability_minute",
+        "capabilityMinute",
         &presented_hash,
         crate::ratelimit::Limit::SealedCapabilityMinute,
     )
     .await?;
     consume_anonymous_rate(
         tx,
-        "capability_day",
+        "capabilityDay",
         &presented_hash,
         crate::ratelimit::Limit::SealedCapabilityDay,
     )
@@ -2743,7 +2743,7 @@ pub(crate) async fn store_sealed_messages(
         .into();
         consume_anonymous_rate(
             tx,
-            "federation_origin",
+            "federationOrigin",
             &origin_digest,
             crate::ratelimit::Limit::SealedOrigin,
         )

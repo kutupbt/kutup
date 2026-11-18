@@ -1246,9 +1246,9 @@ export class ChatService {
       const receipt = await deliverChatMediaV1(due.descriptor, recipient, capability, due.operationId)
       switch (receipt.status) {
         case 'stored':
-        case 'already_stored':
+        case 'alreadyStored':
           return 'stored'
-        case 'storage_full':
+        case 'storageFull':
           return 'storageFull'
         default:
           return 'waiting'
@@ -1517,8 +1517,8 @@ export class ChatService {
     await this.attachmentLedger.create({
       version: 1,
       conversationKind: conversation.kind === 'group'
-        ? 'mls_group'
-        : address === self ? 'note_to_self' : 'direct',
+        ? 'mlsGroup'
+        : address === self ? 'noteToSelf' : 'direct',
       conversationReference: address,
       messageId,
       attachmentId: descriptor.attachmentId,
