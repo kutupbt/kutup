@@ -56,7 +56,7 @@ vi.mock('@kutup/session/accountHead', async () => {
           return await change.send(`head-${attempt}`)
         } catch (error) {
           const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code
-          if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < 5) continue
+          if ((code === 'headConflict' || code === 'revisionConflict') && attempt < 5) continue
           throw error
         }
       }

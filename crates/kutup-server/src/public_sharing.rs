@@ -5,13 +5,13 @@
 //! aren't covered.
 //!
 //! A link that may not be opened answers, whatever is asked of it:
-//! - `451 link_blocked` (reason `legalOrder`) or `410 link_blocked` (another
+//! - `451 linkBlocked` (reason `legalOrder`) or `410 linkBlocked` (another
 //!   reason) when an operator blocked it;
-//! - `410 link_removed` when an administrator took it down, or its owner's
+//! - `410 linkRemoved` when an administrator took it down, or its owner's
 //!   account is not active;
-//! - `410 sharing_off` while public sharing is off, site-wide or for its
+//! - `410 sharingOff` while public sharing is off, site-wide or for its
 //!   owner;
-//! - `403 sign_in_required` while public sharing is `signedIn` and the
+//! - `403 signInRequired` while public sharing is `signedIn` and the
 //!   viewer is not signed in to this server.
 
 use axum::http::StatusCode;
@@ -88,7 +88,7 @@ pub async fn set_site(
 
 fn sharing_off_as(status: StatusCode, scope: &str) -> AppError {
     AppError::new(status, "public sharing is off")
-        .with_details(json!({ "code": "sharing_off", "scope": scope }))
+        .with_details(json!({ "code": "sharingOff", "scope": scope }))
 }
 
 /// A link an operator blocked: 451 for a legal order, else 410.
@@ -99,13 +99,13 @@ pub fn link_blocked(reason: &str) -> AppError {
         StatusCode::GONE
     };
     AppError::new(status, "this link was blocked")
-        .with_details(json!({ "code": "link_blocked", "reason": reason }))
+        .with_details(json!({ "code": "linkBlocked", "reason": reason }))
 }
 
 /// A link that opens only for someone signed in to this server.
 pub fn sign_in_required() -> AppError {
     AppError::new(StatusCode::FORBIDDEN, "sign in to open this link")
-        .with_details(json!({ "code": "sign_in_required" }))
+        .with_details(json!({ "code": "signInRequired" }))
 }
 
 /// Refuses a new link to what an operator blocked (any link of the target,
@@ -127,7 +127,7 @@ pub async fn ensure_target_open(
     }
 }
 
-/// Whether `owner` may make a public link now: `403 sharing_off` while
+/// Whether `owner` may make a public link now: `403 sharingOff` while
 /// sharing is off for the site or the account. `signedIn` still makes
 /// links (they open for signed-in viewers).
 pub async fn ensure_may_share(pool: &PgPool, owner: uuid::Uuid) -> AppResult<()> {
@@ -177,7 +177,7 @@ pub async fn ensure_link_up(pool: &PgPool, token: &str, signed_in: bool) -> AppR
     // holder doesn't learn which (the owner's own calls say).
     if site == PublicSharing::Off || account_sharing == "off" {
         return Err(AppError::new(StatusCode::GONE, "public sharing is off")
-            .with_details(json!({ "code": "sharing_off" })));
+            .with_details(json!({ "code": "sharingOff" })));
     }
     Ok(())
 }

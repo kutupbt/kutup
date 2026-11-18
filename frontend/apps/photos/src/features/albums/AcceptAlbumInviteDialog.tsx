@@ -42,7 +42,7 @@ export function AcceptAlbumInviteDialog({ open, onClose }: { open: boolean; onCl
 
   const fieldError = value.trim() && !invite ? t('albums.invite.invalid') : notAlbum ? t('albums.invite.notAlbum') : undefined
   const error = accept.error
-    ? apiErrorCode(accept.error) === 'not_found'
+    ? apiErrorCode(accept.error) === 'notFound'
       ? t('albums.invite.notFound')
       : apiErrorCode(accept.error) === 'forbidden'
         ? t('albums.invite.notForYou')

@@ -97,7 +97,7 @@ fn contact_revisions() {
     let late = put(body(&user, "Ayşe Yılmaz", T + 6, T + 6), T);
     assert_eq!(late.status(), StatusCode::CONFLICT);
     let late: Value = late.json().unwrap();
-    assert_eq!(late["code"], "revision_conflict");
+    assert_eq!(late["code"], "revisionConflict");
     assert_eq!(late["revision"], T + 5);
     // Started from the current one, it is stored.
     assert_eq!(

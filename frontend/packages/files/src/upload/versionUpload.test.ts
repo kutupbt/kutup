@@ -67,9 +67,9 @@ describe('a new version over tus', () => {
 
 describe('a refused version', () => {
   it('tells a changed file apart from another open upload', () => {
-    expect(versionRefusalOf(refusal(409, { code: 'version_conflict', error: 'x' }))).toEqual(new VersionConflict('version'))
-    expect((versionRefusalOf(refusal(409, { code: 'version_conflict' })) as VersionConflict).kind).toBe('version')
-    expect((versionRefusalOf(refusal(409, { code: 'revision_conflict' })) as VersionConflict).kind).toBe('revision')
+    expect(versionRefusalOf(refusal(409, { code: 'versionConflict', error: 'x' }))).toEqual(new VersionConflict('version'))
+    expect((versionRefusalOf(refusal(409, { code: 'versionConflict' })) as VersionConflict).kind).toBe('version')
+    expect((versionRefusalOf(refusal(409, { code: 'revisionConflict' })) as VersionConflict).kind).toBe('revision')
     expect((versionRefusalOf(refusal(409, { error: 'file key changed' })) as VersionConflict).kind).toBe('key')
     expect((versionRefusalOf(refusal(409, { error: 'file needs a re-key' })) as VersionConflict).kind).toBe('key')
     const ours = versionRefusalOf(refusal(409, { code: 'versionUploading', uploadId: 'u1', idleSeconds: 42, yours: true }))
@@ -85,8 +85,8 @@ describe('a refused version', () => {
   })
 
   it('is nothing for other answers', () => {
-    expect(versionRefusalOf(refusal(409, { code: 'name_taken' }))).toBeNull()
-    expect(versionRefusalOf(refusal(413, { code: 'version_conflict' }))).toBeNull()
+    expect(versionRefusalOf(refusal(409, { code: 'nameTaken' }))).toBeNull()
+    expect(versionRefusalOf(refusal(413, { code: 'versionConflict' }))).toBeNull()
     expect(versionRefusalOf(refusal(409, 'not json'))).toBeNull()
     expect(versionRefusalOf(new Error('network'))).toBeNull()
   })

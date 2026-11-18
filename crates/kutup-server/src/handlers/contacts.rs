@@ -299,7 +299,7 @@ pub async fn list(
     responses(
         (status = 201, description = "Added", body = ContactRow),
         (status = 400, description = "Not a valid, account-signed contact"),
-        (status = 409, description = "A contact with this UID exists, or head_conflict / head_required"),
+        (status = 409, description = "A contact with this UID exists, or headConflict / headRequired"),
         (status = 413, description = "Storage full"),
     )
 )]
@@ -358,7 +358,7 @@ pub struct ContactUpdate {
 }
 
 /// `PUT /api/v1/contacts/{id}` — replaces a contact (same UID) if nobody changed
-/// it since `baseRevision`; `409` with `code: "revision_conflict"` and the
+/// it since `baseRevision`; `409` with `code: "revisionConflict"` and the
 /// current revision otherwise.
 #[utoipa::path(
     put,

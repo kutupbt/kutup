@@ -431,7 +431,7 @@ pub struct TrashFolderRow {
     pub epoch_statement_hash: String,
     pub color: Option<String>,
     /// Where a restore puts it: its parent while that folder is live, else
-    /// the top level (null). Its name is hashed there (`409 name_taken`).
+    /// the top level (null). Its name is hashed there (`409 nameTaken`).
     pub parent_collection_id: Option<String>,
     /// Files trashed together with this folder (its whole subtree).
     pub items: i64,

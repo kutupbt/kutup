@@ -130,7 +130,7 @@ async function sealToBlob(
  * as "Keep both" does), so the server keeps the name unique, and its
  * content hash is recorded once it is stored
  * (docs/plans/drive-unique-names.md). `sha256`: the content's, when it was
- * read already. A taken name rejects with the server's `name_taken`
+ * read already. A taken name rejects with the server's `nameTaken`
  * (`asNameTaken`).
  */
 export async function uploadOne(

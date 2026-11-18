@@ -362,7 +362,7 @@ reader requires the served revision to be the named one:
   so the smallest binding is the metadata itself: every block-format state
   is stored with the file's next metadata naming it (the version request
   carries `metadataEnvelope` and `metadataRevision`, as a whole-file save
-  does; a `409 revision_conflict` returns the current metadata, and the
+  does; a `409 revisionConflict` returns the current metadata, and the
   saver seals on top of it once). The public page asks for that state by id
   (`?revision=`) and refuses any other. Signed-in readers and the live
   session still take the newest state the version list shows (the live
@@ -662,7 +662,7 @@ worker (open question 7).
     `Upload-Length` the object's length, sealed block by block, two blocks a
     PATCH, then the commit with `FileMetadataV2` (`originalRevisionId` on a
     new file's first) and the `RevisionContent` envelope. `409
-    revision_conflict` reads the file again and seals on top once;
+    revisionConflict` reads the file again and seals on top once;
     `alreadyCommitted` is success; a new file's taken name moves to the next
     free one (up to 3); `objectMissing` and other refusals cancel the
     upload; `notUploaded` and lost connections keep the record.
@@ -1012,7 +1012,7 @@ Each slice is a PR.
      row or stores the version as a tus version lands (docs/api.md).
    - Web side: the client picks the revision id, sends it in the tus
      `Upload-Metadata`, and commits after the last PATCH (`commit.ts`). A
-     `409 revision_conflict` re-reads the file from its folder's listing and
+     `409 revisionConflict` re-reads the file from its folder's listing and
      seals the metadata again on top of it, once (a version keeps a name
      changed meanwhile); `alreadyCommitted` is success. A refusal at the
      commit (name taken, file changed) cancels the upload (tus DELETE).

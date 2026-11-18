@@ -104,18 +104,18 @@ export interface NameHolder {
   contentHash: string | null
 }
 
-/** The name is taken in that place (`409 name_taken`). */
+/** The name is taken in that place (`409 nameTaken`). */
 export class NameTaken extends Error {
   constructor(readonly holder: NameHolder | null) {
     super('an item with this name is already here')
   }
 }
 
-/** The holder of a `409 name_taken` from a response body; null if it is not one. */
+/** The holder of a `409 nameTaken` from a response body; null if it is not one. */
 export function nameTakenFromBody(status: number, body: unknown): NameTaken | null {
   if (status !== 409 || !body || typeof body !== 'object') return null
   const { code, holder } = body as { code?: unknown; holder?: Partial<NameHolder> }
-  if (code !== 'name_taken') return null
+  if (code !== 'nameTaken') return null
   const valid = holder && (holder.kind === 'file' || holder.kind === 'folder') && typeof holder.id === 'string'
   return new NameTaken(valid ? { kind: holder.kind!, id: holder.id!, contentHash: holder.contentHash ?? null } : null)
 }

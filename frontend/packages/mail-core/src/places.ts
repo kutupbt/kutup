@@ -102,9 +102,9 @@ export async function sealGuardedName(
   return { sealed: await sealMailName(session.masterKeys, session.envelopeBinding, kind, id, revision, name), revision }
 }
 
-/** Another device renamed it first (the server's `revision_conflict`). */
+/** Another device renamed it first (the server's `revisionConflict`). */
 export function isRevisionConflict(error: unknown): boolean {
-  return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revision_conflict'
+  return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revisionConflict'
 }
 
 /** Folders nest at most this deep (the server enforces it too). */

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The API pass's names stay (docs/plans/api-surface.md §8): no client path
 outside /api/v1/ (but the unversioned few), no federation path outside
-/api/fed/v2/, no user-named wire field, no old client storage name.
+/api/fed/v2/, no user-named wire field, no old client storage name, no
+snake_case error code (every `code` is one camelCase word: docs/api.md, Errors).
 
 Run from the repository root; prints each offending line and exits 1.
 """
@@ -45,6 +46,18 @@ OLD_STORAGE = re.compile(
     r"""|pending-uploads|account-head:|revision:|upload:|chat-engine|chat-updates|chat-focus|chat-notifier|chat-call-desk|chat-in-call)\b"""
     r"""|kutup:chat:|kutup_cursor_color_v1|kutup\.sealed\.v1|kutup\.chat\.liveShares\.v1|kutup\.notes\.sourceMode|notificationBanner\.dismissed"""
 )
+# An error code in snake_case: built (`"code": "name_taken"`, `{ code:
+# 'name_taken' }`) or matched (`code === 'name_taken'`, `code.as_deref() ==
+# Some("name_taken")`, `apiErrorCode(e) === 'not_found'`).
+SNAKE = r"""["'`][a-z][a-z0-9]*(?:_[a-z0-9]+)+["'`]"""
+SNAKE_CODE = re.compile(
+    r"""["']code["']\s*:\s*""" + SNAKE
+    + r"""|\bcode\??:\s*""" + SNAKE
+    + r"""|(?:\bcode|Code\([^)]*\))[\w.()?]*\s*[!=]==?\s*(?:Some\()?""" + SNAKE
+)
+# The Errors table of docs/api.md: each code cell is camelCase too.
+DOCS_CODE = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`")
+
 # Where the old storage names are named on purpose: the sweep that clears
 # them from browsers of before (instance.ts) and its tests.
 STORAGE_ALLOWED = {
@@ -80,14 +93,27 @@ for top in CODE_DIRS:
                         found.append('a federation path outside /api/fed/v2')
                     if WIRE.search(line):
                         found.append('a user-named wire field')
+                    if SNAKE_CODE.search(line):
+                        found.append('a snake_case error code')
                     if rel not in STORAGE_ALLOWED and OLD_STORAGE.search(line):
                         found.append('an old storage name')
                     for what in found:
                         problems.append(f'{rel}:{number}: {what}: {stripped[:140]}')
+
+with open(os.path.join(ROOT, 'docs/api.md'), encoding='utf-8') as handle:
+    in_errors = False
+    for number, line in enumerate(handle, 1):
+        if line.startswith('## '):
+            in_errors = line.strip() == '## Errors'
+        elif in_errors and line.startswith('|'):
+            # The code column: the first cell, or the second of the defaults.
+            for cell in line.split('|')[1:3]:
+                for code in DOCS_CODE.findall(cell):
+                    problems.append(f'docs/api.md:{number}: a snake_case error code: {code}')
 
 for problem in problems:
     print(problem)
 if problems:
     print(f'check-api-names: {len(problems)} line(s) use names the API pass replaced', file=sys.stderr)
     sys.exit(1)
-print('check-api-names: every path, wire field and storage name is the API pass\'s')
+print('check-api-names: every path, wire field, storage name and error code is the API pass\'s')

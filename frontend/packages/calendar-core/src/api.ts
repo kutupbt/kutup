@@ -489,7 +489,7 @@ export async function loadEvents(
 
 /**
  * One change refused by an events sync, with its code (`uidTaken`,
- * `eventLimit`, `revision_conflict` when another device saved first,
+ * `eventLimit`, `revisionConflict` when another device saved first,
  * `sequenceBehind`…).
  */
 export class EventRefusedError extends Error {

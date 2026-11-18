@@ -3,11 +3,11 @@
 //! Every write of a listed value (a contact, a group-list entry, a mail folder, label or filter
 //! name, the identity pins, a Pass vault secret) also writes the account's
 //! next head, in its transaction: the head's sequence must be the current
-//! one plus one (`409 head_conflict`), and once the account has a head, a
-//! listed write without one is refused (`409 head_required`). The server
+//! one plus one (`409 headConflict`), and once the account has a head, a
+//! listed write without one is refused (`409 headRequired`). The server
 //! never opens a head: each is an account record of the account (its key
 //! binding), whose header says its sequence and the digest of the head before
-//! it, which must be the newest head kept (`409 head_conflict`). It keeps the newest
+//! it, which must be the newest head kept (`409 headConflict`). It keeps the newest
 //! [`RETENTION`] + 1 (so a device anchored [`RETENTION`] heads back still gets
 //! its whole segment, anchor included).
 //!
@@ -182,19 +182,19 @@ impl NextHead {
 
 fn head_conflict(current: Option<i64>) -> AppError {
     AppError::conflict("the account head moved: read it again")
-        .with_details(json!({ "code": "head_conflict", "sequence": current }))
+        .with_details(json!({ "code": "headConflict", "sequence": current }))
 }
 
 fn head_required() -> AppError {
     AppError::conflict("this account keeps a head: the write needs the next one")
-        .with_details(json!({ "code": "head_required" }))
+        .with_details(json!({ "code": "headRequired" }))
 }
 
 /// Last in a listed write's transaction, after [`lock`]: makes `next` the
 /// account's head.
 /// - No head yet and none given: nothing (the chain is not started).
-/// - A head kept and none given: `head_required`.
-/// - Given: its sequence must follow the current one, else `head_conflict`
+/// - A head kept and none given: `headRequired`.
+/// - Given: its sequence must follow the current one, else `headConflict`
 ///   (also with no head yet: a chain starts only with [`start`], on its
 ///   basis); older heads past the window go.
 pub async fn advance(
@@ -496,7 +496,7 @@ pub async fn index(
 }
 
 /// Starts the account's chain: `next` (sequence 1), made on `basis` (as the
-/// index gave it). Under [`lock`]: `409 head_conflict` when a head exists or
+/// index gave it). Under [`lock`]: `409 headConflict` when a head exists or
 /// the basis moved (a listed write landed since).
 pub async fn start(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,

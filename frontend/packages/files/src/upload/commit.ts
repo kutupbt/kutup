@@ -58,7 +58,7 @@ export interface CommitOptions {
 }
 
 /**
- * Makes an uploaded revision current. A `409 revision_conflict` (someone
+ * Makes an uploaded revision current. A `409 revisionConflict` (someone
  * else's commit or rename landed meanwhile) re-reads the file and seals the
  * metadata again on top of it, once; `alreadyCommitted` (an interrupted
  * commit that took effect) is success. Anything else is thrown.
@@ -76,7 +76,7 @@ export async function commitRevision(opts: CommitOptions): Promise<void> {
   } catch (error) {
     const code = conflictCode(error)
     if (code === 'alreadyCommitted') return
-    if (code !== 'revision_conflict' || !opts.collectionId) throw error
+    if (code !== 'revisionConflict' || !opts.collectionId) throw error
   }
   const row = await currentFileRow(opts.collectionId, opts.fileId)
   try {

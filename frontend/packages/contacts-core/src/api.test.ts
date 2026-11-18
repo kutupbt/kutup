@@ -59,7 +59,7 @@ vi.mock('@kutup/session/accountHead', async () => {
           return await change.send(`head-${attempt}`)
         } catch (error) {
           const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code
-          if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < 5) continue
+          if ((code === 'headConflict' || code === 'revisionConflict') && attempt < 5) continue
           throw error
         }
       }
@@ -146,7 +146,7 @@ describe('writing contacts', () => {
   })
 
   it('saves an edit with the next head; sends it again when only another value moved', async () => {
-    http.put.mockRejectedValueOnce(conflict('head_conflict')).mockResolvedValue({ data: {} })
+    http.put.mockRejectedValueOnce(conflict('headConflict')).mockResolvedValue({ data: {} })
     head.index = () => [['u-1', 5]]
     await putContact(session, { id: 'r1', uid: 'u-1', revision: 5 }, draft('Ada'))
     expect(http.put).toHaveBeenCalledTimes(2)
@@ -154,7 +154,7 @@ describe('writing contacts', () => {
   })
 
   it('does not lay a form over a contact another device changed', async () => {
-    http.put.mockRejectedValueOnce(conflict('revision_conflict'))
+    http.put.mockRejectedValueOnce(conflict('revisionConflict'))
     head.index = (attempt) => [['u-1', attempt > 1 ? 6 : 5]]
     await expect(putContact(session, { id: 'r1', uid: 'u-1', revision: 5 }, draft('Ada'))).rejects.toBeInstanceOf(ContactChangedError)
     expect(http.put).toHaveBeenCalledTimes(1)

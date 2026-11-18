@@ -509,7 +509,7 @@ fn calendars_and_events() {
     );
     assert_eq!(
         (results[0]["status"].as_u64(), results[0]["code"].as_str()),
-        (Some(409), Some("revision_conflict")),
+        (Some(409), Some("revisionConflict")),
         "{results:?}"
     );
     // A SEQUENCE lower than the stored one: refused.
@@ -643,7 +643,7 @@ fn calendars_and_events() {
         &id,
         json!([{ "delete": { "id": event_id, "baseRevision": 2 } }]),
     );
-    assert_eq!(results[0]["code"], "revision_conflict", "{results:?}");
+    assert_eq!(results[0]["code"], "revisionConflict", "{results:?}");
     // Deleted with its events; the storage goes back.
     let results = sync(
         &c,
@@ -918,7 +918,7 @@ fn repeating_events() {
             assert_eq!(results[0]["event"]["rangeEndUtc"], "2026-10-26T09:00:00Z");
         } else {
             // Sent again: the cut is a conflict the app reads as done.
-            assert_eq!(results[0]["code"], "revision_conflict", "{results:?}");
+            assert_eq!(results[0]["code"], "revisionConflict", "{results:?}");
         }
         assert_eq!(results[1]["status"], 200, "{results:?}");
     }

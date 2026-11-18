@@ -131,7 +131,7 @@ pub struct StartHead {
 }
 
 /// `POST /api/v1/account/head` — starts the account's chain: its first head,
-/// made on the `basis` an index answered with. `409 head_conflict` when the
+/// made on the `basis` an index answered with. `409 headConflict` when the
 /// account has a head already or a listed write landed since (read again).
 #[utoipa::path(
     post,
@@ -141,7 +141,7 @@ pub struct StartHead {
     request_body = StartHead,
     responses(
         (status = 201, description = "The chain is started"),
-        (status = 409, description = "head_conflict")
+        (status = 409, description = "headConflict")
     )
 )]
 pub async fn start(

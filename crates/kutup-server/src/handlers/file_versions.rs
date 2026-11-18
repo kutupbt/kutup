@@ -427,7 +427,7 @@ const MAX_LABEL_CHARS: usize = 200;
     ),
     responses(
         (status = 201, description = "The stored version", body = VersionRow),
-        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revision_conflict`: `metadataRevision` is not the file's current + 1 (`metadataRevision` and `metadataEnvelope` give the current one)"),
+        (status = 409, description = "`code: versionConflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revisionConflict`: `metadataRevision` is not the file's current + 1 (`metadataRevision` and `metadataEnvelope` give the current one)"),
         (status = 413, description = "Storage quota exceeded, or larger than `driveVersionMaxBytes`")
     )
 )]
@@ -768,7 +768,7 @@ pub(crate) async fn current_whole_version(
     .await
 }
 
-/// `409 version_conflict` (naming the current version) unless the file still
+/// `409 versionConflict` (naming the current version) unless the file still
 /// holds what a save was based on.
 pub(crate) fn check_based_on(
     based_on: Option<Option<Uuid>>,
@@ -780,7 +780,7 @@ pub(crate) fn check_based_on(
             |id| id.to_string(),
         );
         return Err(AppError::conflict("the file changed since")
-            .with_details(serde_json::json!({ "code": "version_conflict", "current": current })));
+            .with_details(serde_json::json!({ "code": "versionConflict", "current": current })));
     }
     Ok(())
 }

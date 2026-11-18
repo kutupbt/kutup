@@ -205,13 +205,13 @@ fn links_follow_blocks_and_both_switches() {
     assert_eq!(status, StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
     assert_eq!(
         (body["code"].as_str(), body["reason"].as_str()),
-        (Some("link_blocked"), Some("legalOrder"))
+        (Some("linkBlocked"), Some("legalOrder"))
     );
     for link in [&token, &second] {
         all_refuse(
             &every_route(&c, &base, link, None),
             StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-            "link_blocked",
+            "linkBlocked",
         );
     }
     let (status, body) = make_link(&c, &base, &owner, &folder).unwrap_err();
@@ -248,17 +248,17 @@ fn links_follow_blocks_and_both_switches() {
     let (status, body) = open(&c, &base, &token, None);
     assert_eq!(
         (status, body["code"].as_str(), body.get("scope")),
-        (StatusCode::GONE, Some("sharing_off"), None)
+        (StatusCode::GONE, Some("sharingOff"), None)
     );
     all_refuse(
         &every_route(&c, &base, &token, None),
         StatusCode::GONE,
-        "sharing_off",
+        "sharingOff",
     );
     let (status, body) = make_link(&c, &base, &owner, &folder).unwrap_err();
     assert_eq!(
         (status, body["code"].as_str(), body["scope"].as_str()),
-        (StatusCode::FORBIDDEN, Some("sharing_off"), Some("account"))
+        (StatusCode::FORBIDDEN, Some("sharingOff"), Some("account"))
     );
     assert_eq!(me(&c, &base, &owner.token)["publicSharing"], "off");
     assert_eq!(set_account("on"), StatusCode::OK);
@@ -274,7 +274,7 @@ fn links_follow_blocks_and_both_switches() {
     all_refuse(
         &every_route(&c, &base, &token, None)[..GET_ROUTES],
         StatusCode::FORBIDDEN,
-        "sign_in_required",
+        "signInRequired",
     );
     assert_eq!(
         open(&c, &base, &token, Some("not-a-token")).0,
@@ -288,7 +288,7 @@ fn links_follow_blocks_and_both_switches() {
     all_refuse(
         &every_route(&c, &base, &token, Some(&viewer.token))[..GET_ROUTES],
         StatusCode::GONE,
-        "sharing_off",
+        "sharingOff",
     );
     let settings: Value = c
         .get(format!("{base}/api/v1/auth/settings"))

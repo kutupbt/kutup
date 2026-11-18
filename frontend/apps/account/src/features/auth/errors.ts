@@ -26,7 +26,7 @@ export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: stri
     return t(error.code === 'opaqueKeyStale' ? 'auth.errors.serverKeyChanged' : 'auth.errors.keyBindingTaken')
   }
   const code = apiErrorCode(error)
-  if (code === 'too_many_requests') {
+  if (code === 'tooManyRequests') {
     // The address's limiter (a minute) or the account's lockout (a while).
     return t(bodyCode(error) === 'rateLimited' ? 'auth.errors.slowDown' : 'auth.errors.locked')
   }

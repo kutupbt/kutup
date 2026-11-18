@@ -1364,13 +1364,13 @@ async fn call_home<T: Serialize, R: DeserializeOwned>(
     }
 }
 
-/// A conditional save's `version_conflict` answer from the file's server,
+/// A conditional save's `versionConflict` answer from the file's server,
 /// passed on with the version it names (checked: a version id or `original`).
 fn version_conflict(body: &[u8]) -> Option<AppError> {
     let answer: serde_json::Value = serde_json::from_slice(body).ok()?;
     // Someone else's metadata landed first: the file's metadata as it is now
     // goes back to the editor, which seals on top of it.
-    if answer.get("code")?.as_str()? == "revision_conflict" {
+    if answer.get("code")?.as_str()? == "revisionConflict" {
         let revision = answer.get("metadataRevision")?.as_i64()?;
         let envelope = match answer.get("metadataEnvelope") {
             None => None,
@@ -1384,7 +1384,7 @@ fn version_conflict(body: &[u8]) -> Option<AppError> {
         };
         return Some(crate::drive_blob::revision_conflict_at(revision, envelope));
     }
-    if answer.get("code")?.as_str()? != "version_conflict" {
+    if answer.get("code")?.as_str()? != "versionConflict" {
         return None;
     }
     let current = answer.get("current")?.as_str()?;
@@ -1393,7 +1393,7 @@ fn version_conflict(body: &[u8]) -> Option<AppError> {
     }
     Some(
         AppError::conflict("the file changed since")
-            .with_details(serde_json::json!({ "code": "version_conflict", "current": current })),
+            .with_details(serde_json::json!({ "code": "versionConflict", "current": current })),
     )
 }
 

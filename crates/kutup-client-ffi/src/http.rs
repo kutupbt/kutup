@@ -213,7 +213,7 @@ impl ChatTransport for NativeTransport {
                         .and_then(|code| code.as_str())
                         .map(str::to_owned)
                 });
-            if code.as_deref() == Some("head_required") {
+            if code.as_deref() == Some("headRequired") {
                 return Err(ChatError::Transport(
                     "this account's identity pins need the account head, which this client does not write yet".into(),
                 ));

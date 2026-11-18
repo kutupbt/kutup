@@ -443,7 +443,7 @@ pub struct DeletedMailFolder {
     responses(
         (status = 200, description = "Removed", body = DeletedMailFolder),
         (status = 404, description = "No such folder"),
-        (status = 409, description = "head_conflict: the folders it removes are not those named"),
+        (status = 409, description = "headConflict: the folders it removes are not those named"),
     )
 )]
 pub async fn delete_folder(
@@ -487,7 +487,7 @@ pub async fn delete_folder(
         if named != actual {
             return Err(
                 AppError::conflict("the folders this removes changed: read them again")
-                    .with_details(serde_json::json!({ "code": "head_conflict" })),
+                    .with_details(serde_json::json!({ "code": "headConflict" })),
             );
         }
     }

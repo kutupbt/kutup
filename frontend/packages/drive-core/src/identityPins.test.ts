@@ -235,7 +235,7 @@ vi.mock('@kutup/session/accountHead', async () => {
   }
   const conflicted = (error: unknown) => {
     const code = (error as { response?: { status?: number; data?: { code?: string } } }).response?.data?.code
-    return code === 'head_conflict' || code === 'revision_conflict'
+    return code === 'headConflict' || code === 'revisionConflict'
   }
   const client = {
     records: () => (head.blocked ? Promise.reject(new actual.HeadBlockedError('fork')) : Promise.resolve().then(copy)),
@@ -267,7 +267,7 @@ vi.mock('@kutup/session/accountHead', async () => {
 vi.mock('@kutup/session/client', () => {
   const notFound = () => Object.assign(new Error('404'), { isAxiosError: true, response: { status: 404 } })
   const conflict = () =>
-    Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict' } } })
+    Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revisionConflict' } } })
   // The server's side of a pins batch: stored only on top of the revision it started from.
   head.store = (baseRevision: number, envelope: string, sealedHead: string) => {
     const body = { baseRevision, envelope, head: sealedHead }

@@ -38,7 +38,7 @@ vi.mock('@kutup/session/accountHead', async () => {
           return change.done
         } catch (error) {
           const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code
-          if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < 5) continue
+          if ((code === 'headConflict' || code === 'revisionConflict') && attempt < 5) continue
           throw error
         }
       }
@@ -73,7 +73,7 @@ const BINDING = '5f0c2f6e-1d2b-4c3a-8e9f-0a1b2c3d4e5f'
 const session = { accountId: 'u1', masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)), roots: testRoots(0), envelopeBinding: BINDING } as unknown as Session
 const row = (kind: string, binding: string, revision = T) => ({ fileId: 'v', envelope: `${kind}:${binding}:v:${revision}`, state: 'open' as const, revision })
 const kept = (id: string, kind: string, revision: number): [string, number, string] => [id, revision, `${kind}:${BINDING}:${id}:${revision}`]
-const conflict = (revision: number): Error => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict', revision } } })
+const conflict = (revision: number): Error => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revisionConflict', revision } } })
 
 /** A vault handle whose keepKey seals the fake way, at the revision asked. */
 function handle(mine: string[] = []) {

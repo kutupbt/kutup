@@ -204,7 +204,7 @@ fn an_uploaded_file_appears_only_once_committed() {
             2,
             &revision_content_at(&file, &revision)
         )),
-        (StatusCode::CONFLICT, Value::from("revision_conflict"))
+        (StatusCode::CONFLICT, Value::from("revisionConflict"))
     );
     assert!(!listed(&c, &base, &owner.token, &folder, &file.id));
 
@@ -420,7 +420,7 @@ fn a_version_commit_keeps_the_old_content_in_history() {
     assert_eq!(send(form(None)).status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         code(send(form(Some("2")))),
-        (StatusCode::CONFLICT, Value::from("revision_conflict"))
+        (StatusCode::CONFLICT, Value::from("revisionConflict"))
     );
     assert_eq!(send(form(Some("1"))).status(), StatusCode::CREATED);
 
@@ -452,7 +452,7 @@ fn a_version_commit_keeps_the_old_content_in_history() {
                 stale as i64,
                 &revision_content_at(&file, &version)
             )),
-            (StatusCode::CONFLICT, Value::from("revision_conflict"))
+            (StatusCode::CONFLICT, Value::from("revisionConflict"))
         );
     }
     let metadata = metadata_v2(&file, &version, next_manifest, 14, 2);

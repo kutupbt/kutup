@@ -328,12 +328,12 @@ keeps them; reports on them are operator tooling.
 - **Operator block:** `drive_public_shares` gains `blocked_at`, `blocked_reason`
   (`legalOrder`, `abuse`, `other`) and `blocked_reference` (admin-only).
   - A blocked link answers `451` for `legalOrder` and `410` otherwise. The
-    code is `link_blocked` with the reason, so the public page says why;
-    owner and admin takedowns keep `link_removed`.
+    code is `linkBlocked` with the reason, so the public page says why;
+    owner and admin takedowns keep `linkRemoved`.
   - Unblocking is possible; both directions are audited.
 - **Per account:** `accounts.public_sharing` (`on`, `off`), which an admin sets
   per account. While `off`, the account can't create public links, and its
-  existing ones answer `410 sharing_off`.
+  existing ones answer `410 sharingOff`.
 - **Site-wide:** a site setting `public_sharing`: `on`, `off`, or
   `signedIn` (only someone signed in to this server can open a public link).
   - Applies at creation and when a link is served.
@@ -344,10 +344,10 @@ keeps them; reports on them are operator tooling.
 
 **As built (L5):**
 - `crate::public_sharing` holds the three controls and the one check every
-  public route makes first (`ensure_link_up`): `451`/`410 link_blocked`,
-  `410 link_removed`, `410 sharing_off` (with `scope`: `site` or
-  `account`), `403 sign_in_required`. Making a link answers `403
-  sharing_off` while either switch is off; `signedIn` still makes links.
+  public route makes first (`ensure_link_up`): `451`/`410 linkBlocked`,
+  `410 linkRemoved`, `410 sharingOff` (with `scope`: `site` or
+  `account`), `403 signInRequired`. Making a link answers `403
+  sharingOff` while either switch is off; `signedIn` still makes links.
 - The site switch is the site setting `public_sharing` (default `on`), set in
   Server settings → Accounts and shown in the public settings. The account
   switch is `accounts.public_sharing`, on the admin's user page and in

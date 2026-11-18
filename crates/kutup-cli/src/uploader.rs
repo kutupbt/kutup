@@ -484,7 +484,7 @@ pub(crate) fn make_bar(progress: &Progress, plain_total: i64, name: &str) -> Pro
 /// Creates a sub-collection under `parent_id` (used by `upload -r` and the
 /// sync engine), its name kept unique under the parent's hash key. Returns
 /// `(collection_id, collection_key)`; a taken name is the server's
-/// `name_taken` (`ApiError::name_taken`).
+/// `nameTaken` (`ApiError::name_taken`).
 pub fn create_sub_collection(
     client: &Client,
     name: &str,

@@ -35,7 +35,7 @@ vi.mock('@kutup/session/accountHead', async () => {
           return change.done
         } catch (error) {
           const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code
-          if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < 5) continue
+          if ((code === 'headConflict' || code === 'revisionConflict') && attempt < 5) continue
           throw error
         }
       }
@@ -84,7 +84,7 @@ describe('Chat pins under the account head', () => {
     // Only another value moved: sent again on the new head.
     head.record = () => ({ revision: 5, envelope: 'D' })
     head.send.mockReset()
-    head.send.mockRejectedValueOnce(conflict('head_conflict')).mockResolvedValue()
+    head.send.mockRejectedValueOnce(conflict('headConflict')).mockResolvedValue()
     expect(await transport.storeIdentityPins({ baseRevision: 5, envelope: 'E', revision: 6 })).toBe(true)
     expect(head.send).toHaveBeenCalledTimes(2)
 

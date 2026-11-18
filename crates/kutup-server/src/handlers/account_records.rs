@@ -356,8 +356,8 @@ struct Put {
 }
 
 /// `POST /api/v1/account/records` — stores and deletes records with the next
-/// head, all or nothing. `409 revision_conflict` lists every record not at
-/// its base revision; `head_conflict` and `head_required` as for any listed
+/// head, all or nothing. `409 revisionConflict` lists every record not at
+/// its base revision; `headConflict` and `headRequired` as for any listed
 /// write.
 #[utoipa::path(
     post,
@@ -369,7 +369,7 @@ struct Put {
         (status = 200, description = "Applied", body = BatchResult),
         (status = 400, description = "Not a valid batch, or a scope is full"),
         (status = 404, description = "A Pass secret's vault is gone or not the caller's"),
-        (status = 409, description = "revision_conflict (with conflicts), head_conflict, head_required or masterKeyStale"),
+        (status = 409, description = "revisionConflict (with conflicts), headConflict, headRequired or masterKeyStale"),
     )
 )]
 pub async fn batch(
@@ -481,7 +481,7 @@ pub async fn batch(
     }
     if !conflicts.is_empty() {
         return Err(AppError::conflict("records were changed elsewhere")
-            .with_details(json!({ "code": "revision_conflict", "conflicts": conflicts })));
+            .with_details(json!({ "code": "revisionConflict", "conflicts": conflicts })));
     }
 
     // The scopes' counts after the batch.

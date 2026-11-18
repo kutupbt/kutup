@@ -111,7 +111,7 @@ impl Client {
 
     /// Restores one trashed root to where it was; with `rename`, under the
     /// new name it carries (when its own is taken there, or a folder comes
-    /// back at the top level: `409` `name_taken` / `nameNeeded`).
+    /// back at the top level: `409` `nameTaken` / `nameNeeded`).
     pub fn restore_trash(&self, id: &str, rename: Option<&RestoreRequest>) -> Result<()> {
         let mut request = self.request(Method::POST, &format!("/drive/trash/{id}/restore"));
         if let Some(rename) = rename {

@@ -70,7 +70,7 @@ async function listedContacts<T>(session: Session, edit: (index: VerifiedIndex) 
 
 /**
  * Another device changed the contact since the edit started (the server's
- * `revision_conflict`, or the head's index listing another revision): the
+ * `revisionConflict`, or the head's index listing another revision): the
  * person's form is not laid over it.
  */
 export class ContactChangedError extends Error {
@@ -239,10 +239,10 @@ async function prepare(session: Session, uid: string, input: ContactDraft, base 
   return { body: { summary: signed.summary, signature: signed.signature, card }, revision, uid }
 }
 
-/** Another device saved the contact first (the server's `revision_conflict`, or the head saying so). */
+/** Another device saved the contact first (the server's `revisionConflict`, or the head saying so). */
 export function isRevisionConflict(error: unknown): boolean {
   if (error instanceof ContactChangedError) return true
-  return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revision_conflict'
+  return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revisionConflict'
 }
 
 /**

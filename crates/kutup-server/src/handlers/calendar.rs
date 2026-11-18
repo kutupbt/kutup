@@ -849,7 +849,7 @@ pub enum EventChange {
         reminders: Option<Vec<crate::calendar_reminders::Reminder>>,
     },
     /// `base_revision`: the event's stored revision the change was made
-    /// from; another is `409 revision_conflict`.
+    /// from; another is `409 revisionConflict`.
     #[serde(rename_all = "camelCase")]
     Update {
         id: Uuid,

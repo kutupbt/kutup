@@ -271,7 +271,7 @@ fn vault_secrets() {
     );
     assert_eq!(late.status(), StatusCode::CONFLICT);
     let late: Value = late.json().unwrap();
-    assert_eq!(late["code"], "revision_conflict");
+    assert_eq!(late["code"], "revisionConflict");
     assert_eq!(late["conflicts"][0]["revision"].as_u64(), Some(kept_now));
     let older = b64(&seal_vault_secret(
         &owner.master_key,

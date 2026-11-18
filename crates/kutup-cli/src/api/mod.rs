@@ -66,10 +66,10 @@ pub struct ApiError {
     /// uploader (it may go on with it), false for the folder's owner (who
     /// may only cancel it).
     pub yours: Option<bool>,
-    /// A `409 name_taken`: what holds the name in that place
+    /// A `409 nameTaken`: what holds the name in that place
     /// (docs/plans/drive-unique-names.md).
     pub name_taken: Option<NameHolder>,
-    /// A `409 version_conflict`: the version the file holds now, which a
+    /// A `409 versionConflict`: the version the file holds now, which a
     /// conditional save (`basedOn`) did not start from: a version id, or
     /// `original` (docs/plans/pass.md, "Saving without overwriting").
     pub version_conflict: Option<String>,
@@ -91,7 +91,7 @@ impl ApiError {
         let name_taken = parsed
             .as_ref()
             .filter(|v| {
-                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("name_taken")
+                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("nameTaken")
             })
             .map(|v| {
                 let holder = v.get("holder");
@@ -110,7 +110,7 @@ impl ApiError {
         let version_conflict = parsed
             .as_ref()
             .filter(|v| {
-                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("version_conflict")
+                status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("versionConflict")
             })
             .and_then(|v| v.get("current")?.as_str().map(str::to_string));
         let code = parsed
@@ -640,7 +640,7 @@ mod tests {
         let e = ApiError::from_parts(
             409,
             "Conflict",
-            r#"{"error":"the file changed since","code":"version_conflict","current":"original"}"#
+            r#"{"error":"the file changed since","code":"versionConflict","current":"original"}"#
                 .into(),
         );
         assert_eq!(e.version_conflict.as_deref(), Some("original"));

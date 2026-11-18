@@ -438,7 +438,7 @@ export class AccountHeadClient {
         return
       } catch (error) {
         // Another device started it (or a listed write landed): check that one.
-        if (conflictCode(error) === 'head_conflict' && attempt < WRITE_TRIES) continue
+        if (conflictCode(error) === 'headConflict' && attempt < WRITE_TRIES) continue
         throw error
       }
     }
@@ -534,7 +534,7 @@ export class AccountHeadClient {
         return result
       } catch (error) {
         const code = conflictCode(error)
-        if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < WRITE_TRIES) continue
+        if ((code === 'headConflict' || code === 'revisionConflict') && attempt < WRITE_TRIES) continue
         throw error
       } finally {
         base?.free()
@@ -690,7 +690,7 @@ export class AccountHeadClient {
         return change.done
       } catch (error) {
         const code = conflictCode(error)
-        if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < WRITE_TRIES) continue
+        if ((code === 'headConflict' || code === 'revisionConflict') && attempt < WRITE_TRIES) continue
         throw error
       } finally {
         base?.free()

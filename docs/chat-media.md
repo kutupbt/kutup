@@ -280,7 +280,7 @@ cannot classify or join an entry to a sender or conversation.
 
 Writes are batches of `POST /api/v1/account/records` with the next account head:
 each entity's put names the revision it read, so a retried or raced write is
-refused (`revision_conflict`) and the client reads again and redoes it. The
+refused (`revisionConflict`) and the client reads again and redoes it. The
 account head covers the scope (a count and digest of every `(id, revision)`),
 so a server that rolls an entity back, drops one or brings an old one back is
 caught when the client checks the scope's index against the verified head.

@@ -143,7 +143,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         ],
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert_eq!(code(r), "version_conflict");
+    assert_eq!(code(r), "versionConflict");
     let r = create_version(&c, &base, &owner.token, &file.id, 1 << 50, &fields);
     assert_eq!(r.status(), StatusCode::PAYLOAD_TOO_LARGE);
     // A new file's fields are not a version's, its metadata comes with the
@@ -227,7 +227,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         &version.revision_content(),
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert_eq!(code(r), "revision_conflict");
+    assert_eq!(code(r), "revisionConflict");
     let r = commit(
         &c,
         &base,
@@ -298,7 +298,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         &small.revision_content(),
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert_eq!(code(r), "revision_conflict");
+    assert_eq!(code(r), "revisionConflict");
     let r = bearer(c.delete(format!("{base}{late}")), &owner.token)
         .header("Tus-Resumable", "1.0.0")
         .send()

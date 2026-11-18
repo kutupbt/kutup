@@ -405,7 +405,7 @@ their own plans. See [`mobile-build.md`](mobile-build.md) and
 `kutup-client-ffi`'s HTTP transport stores Chat's identity pin list (the
 `pins` record of the account-records store, docs/plans/account-records.md)
 without the account head today, and reads it unverified. On an account that
-keeps one, the server refuses the write (409 `head_required`), and Chat's pin
+keeps one, the server refuses the write (409 `headRequired`), and Chat's pin
 sync, which is best effort, keeps to its own pins. Before a native app ships,
 its transport reads the records with every page's head verified and writes
 them with the next head, through Rust `account_head` and

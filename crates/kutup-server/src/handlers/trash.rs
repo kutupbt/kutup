@@ -185,7 +185,7 @@ pub struct RestoreRequest {
 /// `POST /api/v1/drive/trash/{id}/restore` — puts a trash root back where it was. A file whose
 /// folder is still in the trash is a 409 (restore the folder instead); a folder whose
 /// original parent is gone or trashed comes back at the top level. Its name must be
-/// free where it lands: a taken one is `409 name_taken`, and a folder landing at the
+/// free where it lands: a taken one is `409 nameTaken`, and a folder landing at the
 /// top level is `409 nameNeeded` (its hash belonged to the folder it left); the
 /// client then restores with a name of its own and its hash, in the same request.
 #[utoipa::path(

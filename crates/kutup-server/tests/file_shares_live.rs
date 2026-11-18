@@ -1017,7 +1017,7 @@ fn file_link(c: &Client, base: &str, owner: &User, file: &Sealed) -> String {
 }
 
 /// Reports on public links: anyone reports, an administrator takes the link
-/// down or disables its owner, and the link answers `410 link_removed`. Needs
+/// down or disables its owner, and the link answers `410 linkRemoved`. Needs
 /// the database too, to make an admin: `KUTUP_LIVE_DATABASE_URL`.
 #[test]
 fn reports_take_public_links_down() {
@@ -1139,7 +1139,7 @@ fn reports_take_public_links_down() {
     ] {
         let r = c.get(format!("{base}{path}")).send().unwrap();
         assert_eq!(r.status(), StatusCode::GONE, "{path}");
-        assert_eq!(r.json::<Value>().unwrap()["code"], "link_removed", "{path}");
+        assert_eq!(r.json::<Value>().unwrap()["code"], "linkRemoved", "{path}");
     }
     assert_eq!(
         report(&token, json!({ "reason": "other" })),
@@ -1187,7 +1187,7 @@ fn reports_take_public_links_down() {
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::GONE);
-    assert_eq!(r.json::<Value>().unwrap()["code"], "link_removed");
+    assert_eq!(r.json::<Value>().unwrap()["code"], "linkRemoved");
     let resolved = get(
         &c,
         format!("{base}/api/v1/admin/reports?status=resolved"),

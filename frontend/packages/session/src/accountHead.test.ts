@@ -473,7 +473,7 @@ describe('listed writes', () => {
     await expect(
       client.listedWrite('pins', async () => {
         edits++
-        return { changes: [['pins', 6]], send: () => Promise.reject(refused(409, edits < 3 ? 'head_conflict' : 'revision_conflict')) }
+        return { changes: [['pins', 6]], send: () => Promise.reject(refused(409, edits < 3 ? 'headConflict' : 'revisionConflict')) }
       }),
     ).rejects.toBeInstanceOf(AxiosError)
     expect(edits).toBe(5)
@@ -481,7 +481,7 @@ describe('listed writes', () => {
     await expect(
       client.listedWrite('pins', async () => {
         edits++
-        return { changes: [['pins', 6]], send: () => (edits < 2 ? Promise.reject(refused(409, 'head_conflict')) : Promise.resolve('ok')) }
+        return { changes: [['pins', 6]], send: () => (edits < 2 ? Promise.reject(refused(409, 'headConflict')) : Promise.resolve('ok')) }
       }),
     ).resolves.toBe('ok')
     expect(edits).toBe(2)
@@ -603,7 +603,7 @@ describe('account records', () => {
       'GET /account/records/pins?after=1': () => page([], [], 1, head),
       'POST /account/records': () => {
         tries++
-        if (tries === 1) throw conflict409('revision_conflict')
+        if (tries === 1) throw conflict409('revisionConflict')
         return { seq: 2 }
       },
     })
@@ -722,7 +722,7 @@ describe('races (the #202 review)', () => {
         send: (head: string) => {
           sent.push(head)
           // The server takes a head only on top of its newest.
-          if (unseal(head).previous !== digest(server.head)) return Promise.reject(conflict409('head_conflict'))
+          if (unseal(head).previous !== digest(server.head)) return Promise.reject(conflict409('headConflict'))
           server = { head, values: [...server.values, ['b', 7]] }
           return Promise.resolve('ok')
         },
@@ -814,7 +814,7 @@ describe('at sign-in', () => {
       'GET /account/index/contacts': () => (started ? { head: theirs, values: [], basis: null } : { head: null, values: [], basis: 'b' }),
       'POST /account/head': () => {
         started = true
-        throw refused(409, 'head_conflict')
+        throw refused(409, 'headConflict')
       },
     })
     await new AccountHeadClient(engine, store, http).atSignIn()

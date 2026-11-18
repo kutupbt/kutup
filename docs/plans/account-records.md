@@ -93,7 +93,7 @@ Only `mail_messages` carries the change feed (`srv/change_feed.rs`).
   - A retried batch that already landed fails its revision checks: the
     client reads again and finds its change there (Signal's model). No
     replay table.
-  - A conflict answers `409 revision_conflict` with the current revision of
+  - A conflict answers `409 revisionConflict` with the current revision of
     each record that conflicted.
 - `values` for the record scopes becomes one generic query on
   `account_records`. Contacts, mail names and calendars keep their own query
@@ -243,7 +243,7 @@ parallel.
 
 Slice 4 moves `kutup-client-ffi`'s pins to the records routes with today's
 behaviour: read unverified, written without a head (an account that keeps
-one refuses it with `head_required`). The FFI has no head manager yet, and
+one refuses it with `headRequired`). The FFI has no head manager yet, and
 building one is the native-apps work: it is done together with
 `start_client`'s head check (docs/roadmap.md, "Native iOS and Android
 apps"), not as a half head manager here.

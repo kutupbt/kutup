@@ -95,11 +95,11 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
     const status = response?.status
     const code = response?.data?.code
     // The server's controls on public links (docs/plans/server-personal-data.md, A11).
-    if (code === 'link_blocked') throw new PublicAlbumError(status === 451 ? 'blockedLegal' : 'blocked')
-    if (code === 'sharing_off') throw new PublicAlbumError('sharingOff')
-    if (code === 'sign_in_required') throw new PublicAlbumError('signInRequired')
-    // Taken down by the server's administrators: `410` `link_removed`.
-    const gone = code === 'link_removed' ? 'removed' : 'expired'
+    if (code === 'linkBlocked') throw new PublicAlbumError(status === 451 ? 'blockedLegal' : 'blocked')
+    if (code === 'sharingOff') throw new PublicAlbumError('sharingOff')
+    if (code === 'signInRequired') throw new PublicAlbumError('signInRequired')
+    // Taken down by the server's administrators: `410` `linkRemoved`.
+    const gone = code === 'linkRemoved' ? 'removed' : 'expired'
     throw new PublicAlbumError(status === 404 ? 'notFound' : status === 410 ? gone : 'other')
   }
   // A folder's or a file's link shows in Drive (docs/plans/api-surface.md §7).

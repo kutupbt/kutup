@@ -180,7 +180,7 @@ fn identity_pins_sync_by_revision() {
     let again = put(0, seal(T + 1));
     assert_eq!(again.status(), StatusCode::CONFLICT);
     let body: Value = again.json().unwrap();
-    assert_eq!(body["code"], "revision_conflict");
+    assert_eq!(body["code"], "revisionConflict");
     assert_eq!(body["conflicts"][0]["revision"], T);
     // Not newer than its base: refused.
     assert_eq!(put(T as i64, seal(T)).status(), StatusCode::BAD_REQUEST);

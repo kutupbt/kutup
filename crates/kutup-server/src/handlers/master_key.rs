@@ -83,7 +83,7 @@ fn checked(
         (status = 204, description = "The new master key is the account's; its other sign-ins ended"),
         (status = 400, description = "rotationInvalid: a record is not this rotation's"),
         (status = 403, description = "grantInvalid"),
-        (status = 409, description = "head_conflict (read the head again), opaqueKeyStale, or organizationKeys (the account holds organization keys or an escrow, which a rotation can't carry yet)")
+        (status = 409, description = "headConflict (read the head again), opaqueKeyStale, or organizationKeys (the account holds organization keys or an escrow, which a rotation can't carry yet)")
     )
 )]
 pub async fn rotate(

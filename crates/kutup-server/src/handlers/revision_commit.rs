@@ -97,7 +97,7 @@ struct Uploaded {
         (status = 400, description = "An envelope not sealed for this file, key generation and metadata revision, a `revisionContentEnvelope` not sealed for this file, revision and key generation, an invalid `nameHash`, or a `nameHash` with a version"),
         (status = 403, description = "The caller may no longer write the file or into its folder"),
         (status = 404, description = "No uploaded revision of this file by the caller"),
-        (status = 409, description = "`code: revision_conflict`: `metadataRevision` is not the current + 1 (1 for a new file). `code: alreadyCommitted`: the revision is already current or in the history. `code: notUploaded`: the upload is still in progress. `code: version_conflict`: the file no longer holds the version the upload was based on. `code: name_taken`: the name was taken meanwhile (commit again with another name and its `nameHash`). `code: objectMissing`: the revision's object is not in storage (upload again). A key change or a folder gone: the commit cannot apply (cancel the upload)"),
+        (status = 409, description = "`code: revisionConflict`: `metadataRevision` is not the current + 1 (1 for a new file). `code: alreadyCommitted`: the revision is already current or in the history. `code: notUploaded`: the upload is still in progress. `code: versionConflict`: the file no longer holds the version the upload was based on. `code: name_taken`: the name was taken meanwhile (commit again with another name and its `nameHash`). `code: objectMissing`: the revision's object is not in storage (upload again). A key change or a folder gone: the commit cannot apply (cancel the upload)"),
         (status = 413, description = "The quota was lowered below what the revision needs")
     )
 )]

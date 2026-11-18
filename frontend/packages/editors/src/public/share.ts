@@ -120,18 +120,18 @@ export function linkKey(): Uint8Array | null {
 
 /**
  * Why the server refused a link: unknown, expired, or taken down (by an
- * administrator, or with its owner's account: `410` `link_removed`).
+ * administrator, or with its owner's account: `410` `linkRemoved`).
  */
 export function linkFailure(error: unknown): PublicFailure {
   const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
   // The server's controls on public links (docs/plans/server-personal-data.md, A11).
   const code = response?.data?.code
-  if (code === 'link_blocked') return response?.status === 451 ? 'blockedLegal' : 'blocked'
-  if (code === 'sharing_off') return 'sharingOff'
-  if (code === 'sign_in_required') return 'signInRequired'
-  if (apiErrorCode(error) === 'not_found') return 'notFound'
+  if (code === 'linkBlocked') return response?.status === 451 ? 'blockedLegal' : 'blocked'
+  if (code === 'sharingOff') return 'sharingOff'
+  if (code === 'signInRequired') return 'signInRequired'
+  if (apiErrorCode(error) === 'notFound') return 'notFound'
   if (response?.status !== 410) return 'other'
-  return response.data?.code === 'link_removed' ? 'removed' : 'expired'
+  return response.data?.code === 'linkRemoved' ? 'removed' : 'expired'
 }
 
 const shareBase = (token: string) => `/drive/public-links/${encodeURIComponent(token)}`

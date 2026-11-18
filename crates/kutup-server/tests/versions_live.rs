@@ -306,7 +306,7 @@ fn versions_v2_contract() {
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
     let body: Value = r.json().unwrap();
-    assert_eq!(body["code"], "version_conflict");
+    assert_eq!(body["code"], "versionConflict");
     assert_eq!(body["current"], v_id.as_str());
     assert_eq!(count(), stored);
     assert_eq!(used(&c, &base, &token), before);

@@ -3,7 +3,7 @@
 //! Clients send each name's hash under the folder's hash key; the server
 //! keeps them apart among a folder's files and subfolders together, and
 //! among an owner's top-level folders, without reading a name. A clash is
-//! `409 name_taken` naming what holds the name, before any byte is stored.
+//! `409 nameTaken` naming what holds the name, before any byte is stored.
 //!
 //! Gated on `KUTUP_LIVE_SERVER`:
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
@@ -112,7 +112,7 @@ fn row(c: &Client, base: &str, user: &User, folder: &Folder, id: &str) -> Value 
 fn assert_taken(r: Response, kind: &str, holder: &str) -> Value {
     assert_eq!(r.status(), StatusCode::CONFLICT);
     let body: Value = r.json().unwrap();
-    assert_eq!(body["code"], "name_taken", "{body}");
+    assert_eq!(body["code"], "nameTaken", "{body}");
     assert_eq!(body["holder"]["kind"], kind, "{body}");
     assert_eq!(body["holder"]["id"], holder, "{body}");
     body

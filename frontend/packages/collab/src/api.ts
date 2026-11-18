@@ -120,7 +120,7 @@ export interface NewVersion {
   metadata?: { metadataEnvelope: string; metadataRevision: number }
 }
 
-/** The current metadata a `409 revision_conflict` carries (null when it carries none). */
+/** The current metadata a `409 revisionConflict` carries (null when it carries none). */
 function currentMetadataOf(body: { metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined): CurrentMetadata | null {
   if (!body) return null
   const { metadataRevision, metadataEnvelope } = body
@@ -174,10 +174,10 @@ export async function createVersion(
     const body = axios.isAxiosError(err)
       ? (err.response?.data as { code?: string; current?: string; metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined)
       : undefined
-    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'version_conflict' && body.current) {
+    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'versionConflict' && body.current) {
       throw new VersionConflictError(body.current)
     }
-    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'revision_conflict') {
+    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'revisionConflict') {
       throw new MetadataConflictError(currentMetadataOf(body))
     }
     throw err

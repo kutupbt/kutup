@@ -184,12 +184,12 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     let first_b64 = b64(&first.1);
     assert_eq!(
         code(put_pins(1, 2, Some(&first_b64))),
-        (StatusCode::CONFLICT, json!("head_conflict"))
+        (StatusCode::CONFLICT, json!("headConflict"))
     );
     assert_eq!(put_pins(1, 2, None).status(), StatusCode::OK);
     assert_eq!(
         code(start(&c, &base, &user, &first_b64, &on)),
-        (StatusCode::CONFLICT, json!("head_conflict")),
+        (StatusCode::CONFLICT, json!("headConflict")),
         "the basis moved"
     );
     let first = chain.keep(chain.make("pins", &[("pins", 2)]));
@@ -204,14 +204,14 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     );
     assert_eq!(
         code(start(&c, &base, &user, &first, &on)),
-        (StatusCode::CONFLICT, json!("head_conflict")),
+        (StatusCode::CONFLICT, json!("headConflict")),
         "once only"
     );
 
     // From now on: none is refused, a skipped sequence is refused.
     assert_eq!(
         code(put_pins(2, 3, None)),
-        (StatusCode::CONFLICT, json!("head_required"))
+        (StatusCode::CONFLICT, json!("headRequired"))
     );
     let second = chain.make("pins", &[("pins", 3)]);
     let skipped = {
@@ -231,7 +231,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     };
     assert_eq!(
         code(put_pins(2, 3, Some(&detached))),
-        (StatusCode::CONFLICT, json!("head_conflict"))
+        (StatusCode::CONFLICT, json!("headConflict"))
     );
     // Another account's head (its key binding): refused.
     let foreign = b64(&account_head::seal(
@@ -260,7 +260,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     };
     assert_eq!(
         code(create_label(None)),
-        (StatusCode::CONFLICT, json!("head_required"))
+        (StatusCode::CONFLICT, json!("headRequired"))
     );
     let third = chain.keep(chain.make("mailNames", &[(&label_id, 1)]));
     assert_eq!(create_label(Some(&third)).status(), StatusCode::CREATED);
@@ -311,13 +311,13 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     };
     assert_eq!(
         code(delete(vec![&inner, &outer], None)),
-        (StatusCode::CONFLICT, json!("head_required"))
+        (StatusCode::CONFLICT, json!("headRequired"))
     );
     let sixth = chain.make("mailNames", &[(&label_id, 1)]);
     let sixth_b64 = b64(&sixth.1);
     assert_eq!(
         code(delete(vec![&outer], Some(&sixth_b64))),
-        (StatusCode::CONFLICT, json!("head_conflict")),
+        (StatusCode::CONFLICT, json!("headConflict")),
         "the folder inside goes too"
     );
     let sixth = chain.keep(sixth);
@@ -418,7 +418,7 @@ fn every_kind_of_listed_write_takes_the_head() {
     };
     use reqwest::Method;
     let ok = |(status, _): (StatusCode, Value)| assert!(status.is_success(), "{status}");
-    let required = (StatusCode::CONFLICT, json!("head_required"));
+    let required = (StatusCode::CONFLICT, json!("headRequired"));
 
     // Contacts: create, update, import, delete one, delete many.
     let uid = |n: u8| format!("urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f{n:02x}");
@@ -677,7 +677,7 @@ fn two_chain_starts_at_once_one_wins() {
             .count();
         let lost = statuses
             .iter()
-            .filter(|(s, c)| *s == StatusCode::CONFLICT && c == "head_conflict")
+            .filter(|(s, c)| *s == StatusCode::CONFLICT && c == "headConflict")
             .count();
         assert_eq!((won, lost), (1, 1), "{statuses:?}");
         purge_accounts(&c, &base, &[&user]);
@@ -853,7 +853,7 @@ fn two_heads_made_on_one_predecessor_at_once_one_wins() {
         let won = statuses.iter().filter(|(s, _)| s.is_success()).count();
         let lost = statuses
             .iter()
-            .filter(|(s, c)| *s == StatusCode::CONFLICT && c == "head_conflict")
+            .filter(|(s, c)| *s == StatusCode::CONFLICT && c == "headConflict")
             .count();
         assert_eq!((won, lost), (1, 1), "round {round}: {statuses:?}");
         // The chain has exactly the winner's head after the first.

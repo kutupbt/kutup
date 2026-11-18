@@ -83,7 +83,7 @@ export interface StreamUploadOptions {
 
 /**
  * The name to commit a new file under when its own was taken while it
- * uploaded (`409 name_taken` at the commit): the next free one in its
+ * uploaded (`409 nameTaken` at the commit): the next free one in its
  * folder and its hash, as a "Keep both" picks it. The bytes stay as they
  * are; only the metadata and the name hash change.
  */
@@ -107,7 +107,7 @@ export interface UploadedFile {
 }
 
 /**
- * The name is taken in the folder (`409 name_taken`), with what holds it
+ * The name is taken in the folder (`409 nameTaken`), with what holds it
  * when the server said (docs/plans/drive-unique-names.md).
  */
 export class UploadNameTaken extends Error {
@@ -628,7 +628,7 @@ function refusalFromBody(status: number, raw: unknown): UploadNameTaken | Versio
   if (status !== 409) return null
   const body = bodyOf(raw)
   if (!body) return null
-  if (body.code === 'name_taken') {
+  if (body.code === 'nameTaken') {
     const holder = body.holder as { kind?: unknown; id?: unknown; contentHash?: unknown } | null | undefined
     return new UploadNameTaken(
       holder && (holder.kind === 'file' || holder.kind === 'folder') && typeof holder.id === 'string'
@@ -636,8 +636,8 @@ function refusalFromBody(status: number, raw: unknown): UploadNameTaken | Versio
         : null,
     )
   }
-  if (body.code === 'version_conflict') return new VersionConflict('version')
-  if (body.code === 'revision_conflict') return new VersionConflict('revision')
+  if (body.code === 'versionConflict') return new VersionConflict('version')
+  if (body.code === 'revisionConflict') return new VersionConflict('revision')
   if (body.code === 'versionUploading') {
     return new VersionUploading(
       typeof body.uploadId === 'string' ? body.uploadId : null,

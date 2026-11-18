@@ -885,7 +885,7 @@ impl Version {
 /// `POST /api/v1/drive/files/{id}/versions` with `fields`, committing `version`
 /// inline with the file's next metadata. The test doesn't track the file's
 /// metadata revision: a first request names revision 1, which no stored
-/// file can take next, and the `409 revision_conflict` it gets names the
+/// file can take next, and the `409 revisionConflict` it gets names the
 /// current one, on top of which the save is sealed again (as clients do).
 /// Any other answer to the first request is the answer.
 pub fn save_version(
@@ -923,7 +923,7 @@ pub fn save_version(
     let current = (first.status == StatusCode::CONFLICT)
         .then(|| first.json::<Value>().ok())
         .flatten()
-        .filter(|body| body["code"] == "revision_conflict")
+        .filter(|body| body["code"] == "revisionConflict")
         .and_then(|body| body["metadataRevision"].as_i64());
     match current {
         Some(current) => Answer::of(send(current + 1)),

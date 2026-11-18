@@ -53,7 +53,7 @@ describe('restoring at the top level', () => {
     let restores = 0
     post.mockImplementation((path: string, body?: { hashes?: string[] }) => {
       if (path.endsWith('available-hashes')) return { data: { available: body!.hashes!.filter((h) => !taken.has(h)) } }
-      if (restores++ === 0) throw conflict({ code: 'name_taken', holder: { kind: 'folder', id: 'x' } })
+      if (restores++ === 0) throw conflict({ code: 'nameTaken', holder: { kind: 'folder', id: 'x' } })
       return { data: {} }
     })
     const ask = vi.fn().mockResolvedValue(true)
@@ -68,7 +68,7 @@ describe('restoring at the top level', () => {
   it('leaves it in the trash when the person says so', async () => {
     post.mockImplementation((path: string, body?: { hashes?: string[] }) => {
       if (path.endsWith('available-hashes')) return { data: { available: body!.hashes } }
-      throw conflict({ code: 'name_taken' })
+      throw conflict({ code: 'nameTaken' })
     })
     await expect(restoreEntry(folder, me, new QueryClient(), () => Promise.resolve(false))).rejects.toBeInstanceOf(RestoreCancelled)
   })

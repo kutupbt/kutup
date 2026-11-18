@@ -259,7 +259,7 @@ fn restore(profile: &str, json: bool, id: &str, name: Option<&str>) -> Result<()
                     .downcast_ref::<ApiError>()
                     .filter(|e| e.status == 409)
                     .and_then(|e| e.code.as_deref())
-                    .filter(|code| matches!(*code, "name_taken" | "nameNeeded"))
+                    .filter(|code| matches!(*code, "nameTaken" | "nameNeeded"))
                     .is_some();
                 if !needs_name {
                     // The server 409s a file whose parent folder is itself still trashed.

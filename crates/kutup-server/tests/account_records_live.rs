@@ -188,7 +188,7 @@ fn records_land_in_batches_under_the_head() {
     let (status, body) = account.batch(json!({ "puts": [put(&a, 0, &a1)] }));
     assert_eq!(
         (status, body["code"].as_str()),
-        (StatusCode::CONFLICT, Some("head_required"))
+        (StatusCode::CONFLICT, Some("headRequired"))
     );
 
     // Two new records with the next head; the revisions are the headers'.
@@ -232,7 +232,7 @@ fn records_land_in_batches_under_the_head() {
         "deletes": [{ "scope": "chatContacts", "id": b, "baseRevision": 4 }],
     }));
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["code"], "revision_conflict");
+    assert_eq!(body["code"], "revisionConflict");
     let mut conflicts: Vec<(String, i64)> = body["conflicts"]
         .as_array()
         .unwrap()
@@ -275,7 +275,7 @@ fn records_land_in_batches_under_the_head() {
     }));
     assert_eq!(
         (status, body["code"].as_str()),
-        (StatusCode::CONFLICT, Some("revision_conflict"))
+        (StatusCode::CONFLICT, Some("revisionConflict"))
     );
 
     // From 2: a's new revision and b's tombstone, in counter order.
@@ -395,7 +395,7 @@ fn contact_groups_calendar_settings_and_joined_meetings_are_records() {
     let (status, body) = account.batch(json!({ "head": again, "puts": [meeting(0)] }));
     assert_eq!(
         (status, body["code"].as_str()),
-        (StatusCode::CONFLICT, Some("revision_conflict"))
+        (StatusCode::CONFLICT, Some("revisionConflict"))
     );
     let (status, _) = account.batch(json!({ "puts": [meeting(1)] }));
     assert_eq!(status, StatusCode::BAD_REQUEST);

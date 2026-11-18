@@ -184,10 +184,13 @@ fn a_legal_hold_stops_a_deletion_until_it_is_cleared() {
     assert_eq!(row(&users(&c))["state"], "active");
 
     // Suspended, with why.
-    let r = bearer(c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)), &admin)
-        .json(&json!({ "isActive": false, "suspendedReason": "operatorOrder" }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
+        &admin,
+    )
+    .json(&json!({ "isActive": false, "suspendedReason": "operatorOrder" }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let listed = row(&users(&c));
     assert_eq!(
