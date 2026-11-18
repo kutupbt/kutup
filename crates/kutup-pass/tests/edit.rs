@@ -320,6 +320,69 @@ fn attachments_are_added_replaced_and_removed() {
 }
 
 #[test]
+fn an_attachment_is_renamed_keeping_its_contents() {
+    let mut db = vault();
+    let id = add(&mut db, "Sertifika", 1);
+    let b64 = |data: &[u8]| base64::engine::general_purpose::STANDARD.encode(data);
+    for (name, data) in [("a.pem", &b"one"[..]), ("b.pem", &b"two"[..])] {
+        run(
+            &mut db,
+            Op::AddAttachment {
+                entry_id: id.clone(),
+                name: name.into(),
+                data: b64(data),
+            },
+            2,
+        );
+    }
+    run(
+        &mut db,
+        Op::RenameAttachment {
+            entry_id: id.clone(),
+            name: "a.pem".into(),
+            new_name: " cert.pem ".into(),
+        },
+        3,
+    );
+    let e = &db.entries[&eid(&id)];
+    assert_eq!(view::attachment(&db, e, "cert.pem"), Some(&b"one"[..]));
+    assert!(view::attachment(&db, e, "a.pem").is_none());
+    // Onto a name the entry has, refused; a missing one, not found.
+    let taken = apply(
+        &mut db,
+        &Op::RenameAttachment {
+            entry_id: id.clone(),
+            name: "cert.pem".into(),
+            new_name: "b.pem".into(),
+        },
+        at(4),
+    );
+    assert!(taken.is_err());
+    assert!(apply(
+        &mut db,
+        &Op::RenameAttachment {
+            entry_id: id.clone(),
+            name: "gone.pem".into(),
+            new_name: "x".into(),
+        },
+        at(4),
+    )
+    .is_err());
+    // The same name changes nothing.
+    let same = apply(
+        &mut db,
+        &Op::RenameAttachment {
+            entry_id: id.clone(),
+            name: "b.pem".into(),
+            new_name: "b.pem".into(),
+        },
+        at(4),
+    )
+    .unwrap();
+    assert!(!same.changed);
+}
+
+#[test]
 fn an_earlier_state_can_be_restored() {
     let mut db = vault();
     let id = add(&mut db, "Banka", 1);

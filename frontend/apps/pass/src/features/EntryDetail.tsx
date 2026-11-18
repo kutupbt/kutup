@@ -1,5 +1,5 @@
-import { ArchiveRestore, Copy, CopyPlus, Download, ExternalLink, Eye, EyeOff, FolderInput, History, Paperclip, Pencil, QrCode, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArchiveRestore, Copy, CopyPlus, ExternalLink, Eye, EyeOff, FolderInput, History, Pencil, QrCode, Trash2 } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert } from '@kutup/ui/components/alert'
@@ -8,7 +8,7 @@ import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { copyText } from '@kutup/ui/lib/clipboard'
-import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
+import { formatInstant } from '@kutup/ui/lib/format'
 import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, STANDARD_FIELDS, type EntryView, type OtpView, type VaultView, type ResolvedField } from '../vault/types'
 import { CloneDialog } from './CloneDialog'
@@ -16,8 +16,8 @@ import { HistoryDialog } from './HistoryDialog'
 import { TotpQrDialog } from './TotpQrDialog'
 import { SiteIcon } from './SiteIcon'
 import { IconDialog } from './IconDialog'
+import { AttachmentsSection } from './AttachmentsSection'
 import { iconSources } from '../lib/icons'
-import { bytesToBase64 } from '../lib/bytes'
 import { copySecret } from '../lib/copySecret'
 
 function Row({ label, children, actions }: { label: string; children: ReactNode; actions?: ReactNode }) {
@@ -128,16 +128,6 @@ function OtpRow({ session, entryId, uri }: { session: VaultSession; entryId: str
   )
 }
 
-function downloadBytes(bytes: Uint8Array, name: string) {
-  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'application/octet-stream' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
-}
-
-
 /** One entry: its fields to copy, its one-time code, attachments, history and what to do with it. */
 export function EntryDetail({
   session,
@@ -161,7 +151,6 @@ export function EntryDetail({
   const [confirmDelete, setConfirmDelete] = useState<'recycle' | 'forGood' | null>(null)
   const [changingIcon, setChangingIcon] = useState(false)
   const [cloning, setCloning] = useState(false)
-  const attachInput = useRef<HTMLInputElement>(null)
   const canEdit = session.canEdit
   const resolved = useResolvedFields(session, entry)
   // What is shown and copied: references and placeholders resolved.
@@ -328,62 +317,7 @@ export function EntryDetail({
             </Row>
           ) : null}
         </dl>
-        <section className="mt-6" aria-label={t('detail.attachments')}>
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium">{t('detail.attachments')}</h3>
-            {canEdit && !entry.inRecycleBin ? (
-              <>
-                <input
-                  ref={attachInput}
-                  type="file"
-                  hidden
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    e.target.value = ''
-                    if (!file) return
-                    if (file.size > 50 * 1024 * 1024) {
-                      toast.error(t('detail.attachmentTooLarge'))
-                      return
-                    }
-                    void file.arrayBuffer().then((buffer) =>
-                      run({ op: 'addAttachment', entryId: entry.id, name: file.name, data: bytesToBase64(new Uint8Array(buffer)) }, t('detail.attached')),
-                    )
-                  }}
-                />
-                <Button variant="ghost" size="sm" onClick={() => attachInput.current?.click()}>
-                  <Paperclip />
-                  {t('detail.attach')}
-                </Button>
-              </>
-            ) : null}
-          </div>
-          {entry.attachments.length === 0 ? (
-            <p className="mt-1 text-xs text-muted-foreground">{t('detail.noAttachments')}</p>
-          ) : (
-            <ul className="mt-2 space-y-1">
-              {entry.attachments.map((a) => (
-                <li key={a.name} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
-                  <Paperclip className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                  <span className="text-xs text-muted-foreground">{formatBytes(a.size, i18n.language)}</span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={t('detail.download', { name: a.name })}
-                    onClick={() => void session.vault().attachment(entry.id, a.name).then((bytes) => downloadBytes(bytes, a.name))}
-                  >
-                    <Download />
-                  </Button>
-                  {canEdit ? (
-                    <Button variant="ghost" size="icon" aria-label={t('detail.removeAttachment', { name: a.name })} onClick={() => void run({ op: 'removeAttachment', entryId: entry.id, name: a.name })}>
-                      <Trash2 />
-                    </Button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <AttachmentsSection entry={entry} session={session} canEdit={canEdit} run={run} />
         <footer className="mt-6 space-y-1 text-xs text-muted-foreground">
           {entry.modified ? <p>{t('detail.modified', { when: formatInstant(entry.modified, i18n.language) })}</p> : null}
           {entry.created ? <p>{t('detail.created', { when: formatInstant(entry.created, i18n.language) })}</p> : null}

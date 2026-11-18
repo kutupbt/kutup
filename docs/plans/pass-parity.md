@@ -108,7 +108,7 @@ but offers no way to see or change it.
 | Title, user name, password, URL, notes | Edit entry | ✅ | `EntryEditor.tsx`, `EntryDetail.tsx`; copy buttons; the clipboard is cleared after 30 seconds if unchanged (`lib/copySecret.ts`) |
 | Additional attributes (custom fields) | Advanced → Additional attributes | ✅ | add, rename, remove, protect |
 | Protected fields (hidden, in-memory protection) | "Protect" per attribute | ✅ | protected values hidden with reveal; the password is always protected |
-| Attachments | Advanced → Attachments | 🟡 | add (up to 50 MB), download, remove; no rename, no preview, one file at a time |
+| Attachments | Advanced → Attachments | ✅ | add one or several (up to 50 MB each; names the entry has are listed once, to replace or skip), download, rename, remove; preview of images and text files in the page (no PDF: the page's CSP stays closed to it) |
 | History: list, compare, restore | History tab | ✅ | `HistoryDialog.tsx`, `restoreHistory` |
 | History: delete an item, delete all | History tab → Delete | ✅ | the History dialog: Delete per version, Delete all versions, asked first; remembered in the entry's `KutupHistoryDeleted` so another device's copy doesn't bring them back ([`pass.md`](pass.md)) |
 | Expiry | Expires + presets | ✅ | date and time; an expired entry warns and shows in the security report; no presets ("in 3 months") |

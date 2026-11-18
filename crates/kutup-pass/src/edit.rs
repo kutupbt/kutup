@@ -129,6 +129,13 @@ pub enum Op {
         entry_id: String,
         name: String,
     },
+    /// Renames an attachment; refused when the entry has one of the new
+    /// name already. The old name stays in the entry's history.
+    RenameAttachment {
+        entry_id: String,
+        name: String,
+        new_name: String,
+    },
     /// Gives the entry its own picture (a KeePass custom icon; a PNG,
     /// base64), reusing one of the vault's with the same bytes, or with
     /// `None` the default key icon again. The previous state goes into the
@@ -713,6 +720,30 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                 e.attachments.remove(name);
                 Ok(())
             })?
+        }
+        Op::RenameAttachment {
+            entry_id: e,
+            name,
+            new_name,
+        } => {
+            let id = entry_id(db, e)?;
+            let new_name = check_name(new_name, "attachment name")?;
+            let entry = &db.entries[&id];
+            if !entry.attachments.contains_key(name) {
+                return Err(EditError::NotFound("attachment"));
+            }
+            if new_name == *name {
+                Applied::default()
+            } else {
+                if entry.attachments.contains_key(&new_name) {
+                    return Err(invalid("the entry has an attachment of that name already"));
+                }
+                edit_entry(db, id, now, |_, e| {
+                    let attachment = e.attachments.remove(name).expect("checked above");
+                    e.attachments.insert(new_name.clone(), attachment);
+                    Ok(())
+                })?
+            }
         }
         Op::SetEntryIcon { id, data, builtin } => {
             let id = entry_id(db, id)?;

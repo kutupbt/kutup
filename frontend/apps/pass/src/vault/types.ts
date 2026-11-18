@@ -131,6 +131,7 @@ export type Op =
   | { op: 'clearReview'; id: string }
   | { op: 'addAttachment'; entryId: string; name: string; data: string }
   | { op: 'removeAttachment'; entryId: string; name: string }
+  | { op: 'renameAttachment'; entryId: string; name: string; newName: string }
   /** A PNG (base64) as the entry's own picture, or null for the default icon. */
   | { op: 'setEntryIcon'; id: string; data: string | null; builtin?: number }
   | { op: 'setGroupIcon'; id: string; data: string | null; builtin?: number }
