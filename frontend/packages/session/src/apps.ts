@@ -92,3 +92,17 @@ export function appUrl(app: keyof AppDirectory, path = '/'): string {
 export function setAppDirectoryForTesting(value: AppDirectory | null): void {
   directory = value
 }
+
+/**
+ * A public link opened on another app than the one that shows it (an album
+ * link on drive., a folder link on photos.): the same `/s/<token>` there,
+ * fragment kept (docs/plans/api-surface.md §7), so links survive moves of
+ * what shows them. Returns whether it navigated.
+ */
+export async function goToLinkHome(app: keyof AppDirectory, token: string): Promise<boolean> {
+  await loadAppDirectory()
+  const target = new URL(appUrl(app, `/s/${encodeURIComponent(token)}`))
+  if (target.origin === window.location.origin) return false
+  window.location.replace(`${target.toString()}${window.location.hash}`)
+  return true
+}

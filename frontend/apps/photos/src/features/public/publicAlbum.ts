@@ -1,4 +1,4 @@
-import { fromBase64, openFileMetadataV1, openPublicLinkCollectionKeyV1 } from '@kutup/crypto'
+import { openFileMetadataV1, openPublicLinkCollectionKeyV1 } from '@kutup/crypto'
 import { openAlbumFileKeyV1 } from '@kutup/crypto/album'
 import { DRIVE_ENVELOPE_PURPOSE, openDriveEnvelope } from '@kutup/crypto/driveEnvelope'
 import { toDriveFile } from '@kutup/drive-core/files'
@@ -16,6 +16,8 @@ import { getAccessToken } from '@kutup/session/store'
 import type { FileRow } from '@kutup/session/api-types'
 import { joinLivePhotos, type Photo } from '../library/library'
 import { newestFirst } from '../library/timeline'
+import { parseLinkFragment } from '@kutup/crypto/linkFragment'
+import { goToLinkHome } from '@kutup/session/apps'
 
 // An album's public link (docs/plans/photos.md): the album key sealed under
 // a link key that lives only in the URL fragment, so the server never holds
@@ -23,6 +25,7 @@ import { newestFirst } from '../library/timeline'
 
 export type PublicFailure =
   | 'missingKey'
+  | 'newerLink'
   | 'notFound'
   | 'expired'
   | 'removed'
@@ -72,15 +75,11 @@ export interface PublicAlbum {
   photos: PublicPhoto[]
 }
 
-/** The link's key, from the fragment (`#key=…`), which browsers never send. */
+/** The link's key, from the fragment (`#v1.…`), which browsers never send. */
 function linkKey(): Uint8Array | null {
-  try {
-    const key = new URLSearchParams(window.location.hash.slice(1)).get('key')
-    const bytes = key ? fromBase64(key) : null
-    return bytes && bytes.length === 32 ? bytes : null
-  } catch {
-    return null
-  }
+  const fragment = parseLinkFragment(window.location.hash)
+  if (fragment.kind === 'newer') throw new PublicAlbumError('newerLink')
+  return fragment.kind === 'key' ? fragment.key : null
 }
 
 const base = (token: string) => `/drive/public-links/${encodeURIComponent(token)}`
@@ -103,6 +102,8 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
     const gone = code === 'link_removed' ? 'removed' : 'expired'
     throw new PublicAlbumError(status === 404 ? 'notFound' : status === 410 ? gone : 'other')
   }
+  // A folder's or a file's link shows in Drive (docs/plans/api-surface.md §7).
+  if (share.collectionKind !== 'album' && (await goToLinkHome('drive', token))) return new Promise<PublicAlbum>(() => undefined)
   if (share.collectionKind !== 'album' || !share.nameEnvelope || !share.nameRevision) throw new PublicAlbumError('notAlbum')
   let albumKey: Uint8Array
   let name: string

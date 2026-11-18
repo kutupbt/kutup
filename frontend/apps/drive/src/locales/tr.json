@@ -360,6 +360,10 @@
       "waiting": {
         "title": "Sahibi bekleniyor",
         "description": "Bu dosya yeni bir anahtara geçti ve sahibi bu bağlantıyı henüz güncellemedi. Sahibi Kutup Depo’yu açtığında yeniden çalışır."
+      },
+      "newerLink": {
+        "title": "Bu bağlantı daha yeni bir Kutup gerektiriyor",
+        "description": "Bu sunucunun çalıştırdığından daha yeni bir Kutup sürümüyle oluşturulmuş. Paylaşan kişiye sorun ya da sunucu güncellendikten sonra yeniden deneyin."
       }
     }
   },

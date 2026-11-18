@@ -4,7 +4,6 @@
 // lists a folder's link, Office shows a document reached by one.
 
 import {
-  fromBase64,
   openDriveObject,
   openFileMetadataV1,
   openFileRecordV1,
@@ -29,6 +28,8 @@ import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
 import api from '@kutup/session/client'
 import { getAccessToken } from '@kutup/session/store'
 import { apiErrorCode } from '@kutup/ui/lib/apiError'
+import { parseLinkFragment } from '@kutup/crypto/linkFragment'
+import { goToLinkHome } from '@kutup/session/apps'
 
 interface ShareInfo {
   /** 'collection': a folder's files; 'file': one file (docs/plans/drive-file-sharing.md). */
@@ -44,6 +45,8 @@ interface ShareInfo {
   expiresAt?: string | null
   /** A link to one file: the file (its key is `collectionKeyEnvelope`, of generation `collectionKeyEpoch`). */
   file?: PublicFileRow
+  /** A collection's kind: `album` is Photos'. */
+  collectionKind?: string
 }
 
 export interface PublicFileRow {
@@ -85,6 +88,7 @@ export interface PublicShare {
 
 export type PublicFailure =
   | 'missingKey'
+  | 'newerLink'
   | 'notFound'
   | 'expired'
   | 'removed'
@@ -107,15 +111,11 @@ export function publicFailure(error: unknown): PublicFailure {
   return error instanceof PublicLinkError ? error.failure : 'other'
 }
 
-/** The key lives only in the fragment (`#key=…`), which browsers never send to a server. */
+/** The key lives only in the fragment (`#v1.…`), which browsers never send to a server. */
 export function linkKey(): Uint8Array | null {
-  try {
-    const key = new URLSearchParams(window.location.hash.slice(1)).get('key')
-    const bytes = key ? fromBase64(key) : null
-    return bytes && bytes.length === 32 ? bytes : null
-  } catch {
-    return null
-  }
+  const fragment = parseLinkFragment(window.location.hash)
+  if (fragment.kind === 'newer') throw new PublicLinkError('newerLink')
+  return fragment.kind === 'key' ? fragment.key : null
 }
 
 /**
@@ -155,6 +155,12 @@ export async function loadShare(token: string): Promise<PublicShare> {
     throw new PublicLinkError(linkFailure(error))
   }
   if (share.expiresAt && Date.parse(share.expiresAt) < Date.now()) throw new PublicLinkError('expired')
+  // An album's link shows in Photos: opened on Drive or Office, it goes
+  // there (docs/plans/api-surface.md §7). Office's documents in a shared
+  // folder (`/s/<token>/<fileId>`) stay where they are.
+  if (share.collectionKind === 'album' && (await goToLinkHome('photos', token))) {
+    return new Promise<PublicShare>(() => undefined)
+  }
   const files = share.shareType === 'file' ? [await loadFile(share, key)] : await loadFolder(token, share, key)
   return { shareType: share.shareType, ownerAccount: share.ownerAccount, files }
 }

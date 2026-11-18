@@ -6,7 +6,6 @@ import {
   renameOwnedCollectionV1,
   sealNamedShareEnvelope,
   sealPublicLinkCollectionKeyV1,
-  toBase64,
 } from '@kutup/crypto'
 import type { AccountRef } from '@kutup/crypto/accountRef'
 import type { AccountRoots } from '@kutup/crypto/accountRoots'
@@ -22,6 +21,7 @@ import { acceptFileMetadata } from './metadataGuard'
 import { atTopLevel, inFolder, nameFieldsIn, nameHashIn, randomNameHash, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
 import { confirmRecipient, lookupAddress } from './identityPins'
+import { encodeLinkFragment } from '@kutup/crypto/linkFragment'
 
 /** Every Drive mutation refreshes folders (names, timestamps) and the files it touched. */
 export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) => Promise<R>) {
@@ -143,7 +143,7 @@ export function useLeaveRemoteShare() {
  * Photos, a document's on Office.
  */
 export function publicLinkUrl(token: string, linkKey: Uint8Array, app: 'drive' | 'photos' | 'office' = 'drive'): string {
-  return appUrl(app, `/s/${token}#key=${encodeURIComponent(toBase64(linkKey))}`)
+  return appUrl(app, `/s/${token}${encodeLinkFragment(linkKey)}`)
 }
 
 /**
