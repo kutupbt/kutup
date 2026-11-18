@@ -259,11 +259,11 @@ async fn remote_access(
     let hash = capability_hash(capability);
     let file: Option<(bool, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_edit AND s.key_generation = f.key_generation AND f.key_epoch = c.key_epoch,
-                s.recipient_account_id, s.recipient_incarnation_id
+                s.recipient_account_id, encode(s.recipient_incarnation_id, 'hex')
          FROM drive_federated_outgoing_file_shares s
          JOIN drive_files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN drive_collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_server = $2 AND s.file_id = $3
+         WHERE s.capability_hash = decode($1, 'hex') AND s.recipient_server = $2 AND s.file_id = $3
            -- An mailbox_owner that doesn't talk to other servers has, to them, no
            -- shares (crate::federation_switch).
            AND kutup_account_federates(c.owner_account_id)",
@@ -282,11 +282,11 @@ async fn remote_access(
     }
     let folder: Option<(bool, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_upload AND f.key_epoch = c.key_epoch,
-                s.recipient_account_id, s.recipient_incarnation_id
+                s.recipient_account_id, encode(s.recipient_incarnation_id, 'hex')
          FROM drive_federated_outgoing_shares s
          JOIN drive_collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
          JOIN drive_files f ON f.collection_id = c.id AND f.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_server = $2 AND f.id = $3
+         WHERE s.capability_hash = decode($1, 'hex') AND s.recipient_server = $2 AND f.id = $3
            -- An mailbox_owner that doesn't talk to other servers has, to them, no
            -- shares (crate::federation_switch).
            AND kutup_account_federates(c.owner_account_id)",

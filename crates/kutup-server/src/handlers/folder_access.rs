@@ -44,7 +44,8 @@ pub struct EpochLink {
 /// A folder's complete key history, oldest first.
 pub(crate) async fn epoch_chain(pool: &PgPool, collection_id: Uuid) -> AppResult<Vec<EpochLink>> {
     Ok(sqlx::query_as(
-        "SELECT epoch, epoch_statement, epoch_statement_hash, previous_key_envelope
+        "SELECT epoch, epoch_statement,
+                encode(epoch_statement_hash, 'hex') AS epoch_statement_hash, previous_key_envelope
          FROM drive_collection_key_epoch_history WHERE collection_id = $1 ORDER BY epoch",
     )
     .bind(collection_id)
@@ -192,7 +193,7 @@ async fn owned_folder(
     lock: bool,
 ) -> AppResult<(i32, i64, String)> {
     let sql = format!(
-        "SELECT key_epoch, name_revision, epoch_statement_hash FROM drive_collections
+        "SELECT key_epoch, name_revision, encode(epoch_statement_hash, 'hex') FROM drive_collections
          WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL{}",
         if lock { " FOR UPDATE" } else { "" }
     );
@@ -240,7 +241,7 @@ pub async fn access(
         OffsetDateTime,
     );
     let members: Vec<MemberRow> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
+        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), u.public_key, u.identity_suite,
                 u.drive_signing_public_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
          FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1 ORDER BY cs.created_at",
@@ -555,7 +556,7 @@ pub async fn rotate(
 
     // The owner's identity, which signs the chain and every share.
     let (incarnation, signing_key, authority_key): (String, String, String) = sqlx::query_as(
-        "SELECT account_incarnation_id, drive_signing_public_key,
+        "SELECT encode(account_incarnation_id, 'hex'), drive_signing_public_key,
                     account_authority_public_key FROM accounts WHERE id = $1",
     )
     .bind(owner)
@@ -611,7 +612,7 @@ pub async fn rotate(
 
     // Exactly the current access, split into kept and removed.
     let members: Vec<(Uuid, Option<String>, String)> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id
+        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex')
          FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1",
     )
@@ -725,7 +726,7 @@ pub async fn rotate(
     // Apply it all.
     sqlx::query(
         "UPDATE drive_collections SET key_epoch = $2, owner_key_envelope = $3, name_envelope = $4,
-                name_revision = $5, epoch_statement = $6, epoch_statement_hash = $7,
+                name_revision = $5, epoch_statement = $6, epoch_statement_hash = decode($7, 'hex'),
                 updated_at = NOW()
          WHERE id = $1",
     )
@@ -742,7 +743,7 @@ pub async fn rotate(
         "INSERT INTO drive_collection_key_epoch_history
             (collection_id, epoch, owner_key_envelope, epoch_statement, epoch_statement_hash,
              previous_key_envelope)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         VALUES ($1, $2, $3, $4, decode($5, 'hex'), $6)",
     )
     .bind(collection_id)
     .bind(next)
@@ -810,7 +811,7 @@ pub async fn rotate(
             .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
         sqlx::query(
             "UPDATE drive_federated_outgoing_shares SET named_share_envelope = $2,
-                                                   recipient_incarnation_id = $3
+                                                   recipient_incarnation_id = decode($3, 'hex')
              WHERE id = $1",
         )
         .bind(share.id)

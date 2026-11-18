@@ -616,7 +616,7 @@ pub async fn patch_upload(
     let inserted = sqlx::query(
         "INSERT INTO chat_media_objects
          (attachment_id,origin_account_id,origin_server,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash,storage_path)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+         VALUES ($1,$2,$3,$4,$5,decode($6,'hex'),$7,$8)",
     )
     .bind(attachment_id)
     .bind(user_id)
@@ -797,7 +797,7 @@ pub async fn deliver_local(
         .execute(&mut *transaction)
         .await?;
     let existing_operation: Option<(String, Uuid)> = sqlx::query_as(
-        "SELECT offer_digest,storage_reference_id
+        "SELECT encode(offer_digest,'hex'),storage_reference_id
          FROM chat_media_origin_delivery_operations
          WHERE origin_account_id=$1 AND operation_id=$2",
     )
@@ -837,7 +837,7 @@ pub async fn deliver_local(
     }
     type ObjectRow = (Uuid, i16, i64, String, Vec<u8>);
     let object: Option<ObjectRow> = sqlx::query_as(
-        "SELECT origin_account_id,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
+        "SELECT origin_account_id,suite,ciphertext_bytes,encode(ciphertext_sha256,'hex'),retrieval_token_hash
          FROM chat_media_objects WHERE attachment_id=$1",
     )
     .bind(attachment_id)
@@ -936,7 +936,7 @@ pub async fn deliver_local(
         "INSERT INTO chat_media_origin_delivery_operations
          (origin_account_id,operation_id,recipient_account_id,attachment_id,ciphertext_bytes,
           ciphertext_sha256,offer_digest,storage_reference_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+         VALUES ($1,$2,$3,$4,$5,decode($6,'hex'),decode($7,'hex'),$8)",
     )
     .bind(origin_user_id)
     .bind(operation_id)
@@ -1089,7 +1089,7 @@ pub async fn reference_info(
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let row: Option<(Uuid, i64, String)> = sqlx::query_as(
-        "SELECT r.id,o.ciphertext_bytes,o.ciphertext_sha256
+        "SELECT r.id,o.ciphertext_bytes,encode(o.ciphertext_sha256,'hex')
          FROM chat_media_references r JOIN chat_media_objects o ON o.attachment_id=r.attachment_id
          WHERE r.account_id=$1 AND r.attachment_id=$2",
     )

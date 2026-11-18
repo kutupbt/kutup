@@ -85,11 +85,12 @@ pub async fn check(
         return Err(AppError::too_many_requests("too many requests")
             .with_details(json!({ "code": "rateLimited" })));
     }
-    let incarnation: String =
-        sqlx::query_scalar("SELECT account_incarnation_id FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let incarnation: String = sqlx::query_scalar(
+        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let mut conn = state.pool.acquire().await?;
     let view = match account_names::available(
         &mut conn,
@@ -204,7 +205,7 @@ pub async fn rename(
     let mut tx = state.pool.begin().await?;
     type Account = (String, String, String, bool, bool);
     let (username, incarnation, authority, first_login, break_glass): Account = sqlx::query_as(
-        "SELECT COALESCE(username, ''), account_incarnation_id, account_authority_public_key,
+        "SELECT COALESCE(username, ''), encode(account_incarnation_id, 'hex'), account_authority_public_key,
                 is_first_login, is_break_glass
            FROM accounts WHERE id = $1 AND is_active FOR UPDATE",
     )
@@ -234,7 +235,7 @@ pub async fn rename(
     let (stored_len, left_before): (i64, bool) = sqlx::query_as(
         "SELECT COUNT(*),
                 COALESCE(bool_or(previous = $2 OR current = $2), false)
-           FROM account_renames WHERE incarnation_id = $1",
+           FROM account_renames WHERE incarnation_id = decode($1, 'hex')",
     )
     .bind(&incarnation)
     .bind(&statement.previous)
@@ -275,7 +276,7 @@ pub async fn rename(
     type Stored = (serde_json::Value, bool, time::OffsetDateTime, String);
     let stored: Vec<Stored> = sqlx::query_as(
         "SELECT statement, counted, accepted_at, previous FROM account_renames
-          WHERE incarnation_id = $1 ORDER BY sequence",
+          WHERE incarnation_id = decode($1, 'hex') ORDER BY sequence",
     )
     .bind(&incarnation)
     .fetch_all(&mut *tx)
@@ -408,7 +409,7 @@ pub async fn rename(
         "INSERT INTO account_renames
              (incarnation_id, sequence, account_id, authority_public_key, previous, current,
               counted, statement, digest)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+         VALUES (decode($1, 'hex'), $2, $3, $4, $5, $6, $7, $8, decode($9, 'hex'))",
     )
     .bind(&incarnation)
     .bind(statement.sequence as i32)

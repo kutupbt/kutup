@@ -214,7 +214,7 @@ async fn open(
              key_epoch, storage_path, s3_upload_id,
              kind, key_generation, content_hash, based_on, revision_id, blob_suite,
              metadata_envelope, metadata_revision)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'version',$9,$10,$11,$12,$13,NULL,NULL)",
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'version',$9,decode($10, 'hex'),$11,$12,$13,NULL,NULL)",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -480,7 +480,7 @@ async fn record(
     )
     .await?;
     sqlx::query(
-        "UPDATE drive_files SET metadata_envelope = $2, metadata_revision = $3, content_hash = $4,
+        "UPDATE drive_files SET metadata_envelope = $2, metadata_revision = $3, content_hash = decode($4, 'hex'),
                           updated_at = NOW()
          WHERE id = $1",
     )

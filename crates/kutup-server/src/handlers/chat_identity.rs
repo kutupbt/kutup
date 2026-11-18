@@ -398,11 +398,12 @@ pub async fn distribute_identity(
     // A retry after a lost answer: this manifest is already the head, the
     // distribution done and its syncs queued once. Answer as before, before
     // any check of the rows it changed.
-    let head: Option<String> =
-        sqlx::query_scalar("SELECT manifest_hash FROM chat_device_manifests WHERE account_id = $1")
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let head: Option<String> = sqlx::query_scalar(
+        "SELECT encode(manifest_hash, 'hex') FROM chat_device_manifests WHERE account_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     if head.as_deref()
         == Some(
             request

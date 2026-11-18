@@ -766,7 +766,7 @@ async fn bootstrap_admin(
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
             is_admin, is_first_login, storage_quota_bytes, is_break_glass
-        ) VALUES ($1,$2::uuid,$3,$4,$5,'','','','','','','',true,true,$6,true)
+        ) VALUES ($1,$2::uuid,$3,$4,$5,'','','','',''::bytea,''::bytea,'',true,true,$6,true)
         RETURNING id"#,
     )
     .bind(username)

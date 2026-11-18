@@ -68,7 +68,7 @@ impl FederationReplayStore {
         let mut transaction = self.pool.begin().await?;
         lock_reservation(&mut transaction, origin, request_id).await?;
         let existing: Option<(String, OffsetDateTime)> = sqlx::query_as(
-            "SELECT request_hash, expires_at
+            "SELECT encode(request_hash, 'hex'), expires_at
              FROM federation_request_replays
              WHERE origin = $1 AND request_id = $2",
         )
@@ -99,7 +99,7 @@ impl FederationReplayStore {
                 sqlx::query(
                     "INSERT INTO federation_request_replays
                      (origin, request_id, request_hash, first_seen_at, expires_at)
-                     VALUES ($1, $2, $3, $4, $5)
+                     VALUES ($1, $2, decode($3, 'hex'), $4, $5)
                      ON CONFLICT (origin, request_id) DO UPDATE
                      SET request_hash = EXCLUDED.request_hash,
                          first_seen_at = EXCLUDED.first_seen_at,

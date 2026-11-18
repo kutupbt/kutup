@@ -53,7 +53,7 @@ pub async fn chains(
                      AND lower(split_part(previous, '@', 2)) = lower($2))
                  OR (kutup_fold(split_part(current, '@', 1)) = kutup_fold($1)
                      AND lower(split_part(current, '@', 2)) = lower($2)))
-         SELECT r.incarnation_id, r.authority_public_key, r.sequence, r.current,
+         SELECT encode(r.incarnation_id, 'hex'), r.authority_public_key, r.sequence, r.current,
                 to_char(max(r.accepted_at) OVER (PARTITION BY r.incarnation_id),
                         'YYYY-MM-DD\"T\"HH24:MI:SS.US') AS latest,
                 r.statement,
@@ -61,7 +61,9 @@ pub async fn chains(
                   WHERE n.folded = kutup_fold(split_part(r.current, '@', 1))
                     AND n.incarnation_id = r.incarnation_id)
            FROM account_renames r JOIN named USING (incarnation_id)
-          WHERE ($3::text IS NULL OR r.incarnation_id = $3)
+          WHERE ($3::text IS NULL
+                 -- From the query string unchecked: not hex matches nothing.
+                 OR r.incarnation_id = CASE WHEN $3 ~ '^([0-9a-f]{2})*$' THEN decode($3, 'hex') END)
             -- To another server, an account that doesn't talk to other
             -- servers has no names (crate::federation_switch).
             AND (NOT $4 OR NOT EXISTS (SELECT 1 FROM accounts u
@@ -202,7 +204,7 @@ pub async fn available(
     // Locked, so a held name taken back is not freed (the sweep, an
     // administrator) between this answer and the write that relies on it.
     let held: Option<(Option<Uuid>, Option<String>, String)> = sqlx::query_as(
-        "SELECT account_id, incarnation_id, state FROM account_names WHERE folded = $1 FOR UPDATE",
+        "SELECT account_id, encode(incarnation_id, 'hex'), state FROM account_names WHERE folded = $1 FOR UPDATE",
     )
     .bind(&folded)
     .fetch_optional(&mut *conn)
@@ -242,7 +244,7 @@ pub async fn claim(
 ) -> AppResult<()> {
     let inserted = sqlx::query(
         "INSERT INTO account_names (folded, name, account_id, incarnation_id, state)
-         VALUES (kutup_fold($1), $1, $2, NULLIF($3, ''), 'current')
+         VALUES (kutup_fold($1), $1, $2, decode(NULLIF($3, ''), 'hex'), 'current')
          ON CONFLICT DO NOTHING",
     )
     .bind(name)
@@ -264,7 +266,7 @@ pub async fn set_incarnation(
     incarnation: &str,
 ) -> AppResult<()> {
     sqlx::query(
-        "UPDATE account_names SET incarnation_id = $2
+        "UPDATE account_names SET incarnation_id = decode($2, 'hex')
           WHERE account_id = $1 AND state = 'current'",
     )
     .bind(user_id)
@@ -447,7 +449,7 @@ mod tests {
                 "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                     public_key, account_authority_public_key,
                     account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-                 VALUES ($1, $2, '', '', '', '', '', '', '')",
+                 VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
             )
             .bind(id)
             .bind(name)
@@ -523,7 +525,7 @@ mod tests {
             "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', $3, '')",
+             VALUES ($1, $2, '', '', '', '', ''::bytea, decode($3, 'hex'), '')",
         )
         .bind(user_id)
         .bind(&current)
@@ -537,7 +539,7 @@ mod tests {
         ] {
             sqlx::query(
                 "INSERT INTO account_names (folded, name, account_id, incarnation_id, state, free_at)
-                 VALUES (kutup_fold($1), $1, $2, $3, $4, now() + $5::interval)",
+                 VALUES (kutup_fold($1), $1, $2, decode($3, 'hex'), $4, now() + $5::interval)",
             )
             .bind(name)
             .bind(user_id)
@@ -610,7 +612,7 @@ mod tests {
             "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
+             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
         )
         .bind(user_id)
         .bind(&current)

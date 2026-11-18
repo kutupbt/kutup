@@ -179,7 +179,7 @@ mod tests {
             "INSERT INTO accounts (username, master_key_envelope, recovery_key_envelope, public_key,
                                 account_authority_public_key, account_authority_key_id,
                                 account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, '', '', '', '', '', '', '') RETURNING id",
+             VALUES ($1, '', '', '', '', ''::bytea, ''::bytea, '') RETURNING id",
         )
         .bind(format!("{name}{}", &tag[..12]))
         .fetch_one(pool)

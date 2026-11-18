@@ -348,7 +348,7 @@ impl FeaturePolicyStore {
         sqlx::query(
             "INSERT INTO federation_feature_policy_failures
              (domain, feature_type, failure_class, evidence_digest, received_value)
-             VALUES ($1,$2,$3,$4,$5)",
+             VALUES ($1,$2,$3,decode($4, 'hex'),$5)",
         )
         .bind(&envelope.domain)
         .bind(envelope.feature_type.as_u16() as i16)
@@ -562,7 +562,7 @@ async fn insert_envelope(
         "INSERT INTO federation_feature_policy_documents
          (domain, feature_type, sequence, policy_hash,
           federation_identity_generation, envelope, is_local)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)",
+         VALUES ($1,$2,$3,decode($4, 'hex'),$5,$6,$7)",
     )
     .bind(&envelope.domain)
     .bind(envelope.feature_type.as_u16() as i16)

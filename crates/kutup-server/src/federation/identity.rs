@@ -196,7 +196,7 @@ async fn load_local_documents(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> anyhow::Result<Vec<FederationIdentityDocumentV1>> {
     let rows: Vec<(i64, String, String, serde_json::Value)> = sqlx::query_as(
-        "SELECT sequence, document_hash, key_id, document
+        "SELECT sequence, encode(document_hash, 'hex'), encode(key_id, 'hex'), document
          FROM federation_local_identity_documents ORDER BY sequence",
     )
     .fetch_all(&mut **transaction)
@@ -240,7 +240,7 @@ async fn insert_local_document(
     sqlx::query(
         "INSERT INTO federation_local_identity_documents
          (sequence, document_hash, key_id, document, created_at)
-         VALUES ($1, $2, $3, $4, $5)",
+         VALUES ($1, decode($2, 'hex'), decode($3, 'hex'), $4, $5)",
     )
     .bind(sequence)
     .bind(document.document_hash()?)

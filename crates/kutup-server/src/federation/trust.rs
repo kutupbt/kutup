@@ -194,7 +194,7 @@ impl FederationTrustStore {
         validate_server_name(domain).map_err(anyhow::Error::msg)?;
         type PeerRow = (String, String);
         let row: Option<PeerRow> = sqlx::query_as(
-            "SELECT current_document_hash, current_public_key
+            "SELECT encode(current_document_hash, 'hex'), current_public_key
              FROM federation_peer_identities WHERE domain = $1",
         )
         .bind(domain)
@@ -360,7 +360,7 @@ impl FederationTrustStore {
         sqlx::query(
             "UPDATE federation_peer_identities
              SET trust_state = 'verified', current_sequence = $2,
-                 current_document_hash = $3, current_key_id = $4,
+                 current_document_hash = decode($3, 'hex'), current_key_id = decode($4, 'hex'),
                  current_public_key = $5, verified_at = $6,
                  quarantine_reason = NULL, pending_document = NULL,
                  pending_identity_chain = NULL, pending_document_hash = NULL,
@@ -471,8 +471,8 @@ async fn observe_existing(
         .map_err(|_| anyhow::anyhow!("peer identity sequence exceeds PostgreSQL BIGINT"))?;
     sqlx::query(
         "UPDATE federation_peer_identities
-         SET current_sequence = $2, current_document_hash = $3,
-             current_key_id = $4, current_public_key = $5,
+         SET current_sequence = $2, current_document_hash = decode($3, 'hex'),
+             current_key_id = decode($4, 'hex'), current_public_key = $5,
              last_seen_at = $6, updated_at = $6
          WHERE domain = $1",
     )
@@ -521,7 +521,7 @@ async fn quarantine_peer(
         "UPDATE federation_peer_identities
          SET trust_state = 'quarantined', quarantine_reason = $2,
              pending_document = $3, pending_identity_chain = $4,
-             pending_document_hash = $5, last_seen_at = $6, updated_at = $6
+             pending_document_hash = decode($5, 'hex'), last_seen_at = $6, updated_at = $6
          WHERE domain = $1",
     )
     .bind(domain)
@@ -563,8 +563,9 @@ async fn load_peer(
         Option<String>,
     );
     let row: Option<StoredPeerRow> = sqlx::query_as(
-        "SELECT trust_state, current_sequence, current_document_hash,
-                    current_key_id, pending_identity_chain, pending_document_hash
+        "SELECT trust_state, current_sequence, encode(current_document_hash, 'hex'),
+                    encode(current_key_id, 'hex'), pending_identity_chain,
+                    encode(pending_document_hash, 'hex')
              FROM federation_peer_identities WHERE domain = $1",
     )
     .bind(domain)
@@ -600,7 +601,7 @@ async fn insert_peer(
         "INSERT INTO federation_peer_identities
          (domain, trust_state, current_sequence, current_document_hash,
           current_key_id, current_public_key, first_seen_at, last_seen_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $7)",
+         VALUES ($1, $2, $3, decode($4, 'hex'), decode($5, 'hex'), $6, $7, $7, $7)",
     )
     .bind(domain)
     .bind(trust.as_str())
@@ -627,7 +628,7 @@ async fn insert_identity_documents(
         sqlx::query(
             "INSERT INTO federation_peer_identity_documents
              (domain, sequence, document_hash, key_id, document, acceptance, recorded_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             VALUES ($1, $2, decode($3, 'hex'), decode($4, 'hex'), $5, $6, $7)
              ON CONFLICT (domain, sequence, document_hash) DO NOTHING",
         )
         .bind(domain)
@@ -655,7 +656,7 @@ async fn accept_identity_documents(
         sqlx::query(
             "INSERT INTO federation_peer_identity_documents
              (domain, sequence, document_hash, key_id, document, acceptance, recorded_at)
-             VALUES ($1, $2, $3, $4, $5, 'accepted', $6)
+             VALUES ($1, $2, decode($3, 'hex'), decode($4, 'hex'), $5, 'accepted', $6)
              ON CONFLICT (domain, sequence, document_hash) DO UPDATE
              SET acceptance = 'accepted'",
         )

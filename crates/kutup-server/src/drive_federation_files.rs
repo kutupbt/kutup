@@ -189,7 +189,7 @@ pub async fn create_federated_file_share(
         return Err(AppError::forbidden("only the owner shares this file"));
     };
     let sender: (String, String) = sqlx::query_as(
-        "SELECT account_incarnation_id, drive_signing_public_key FROM accounts WHERE id = $1",
+        "SELECT encode(account_incarnation_id, 'hex'), drive_signing_public_key FROM accounts WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&state.pool)
@@ -225,7 +225,7 @@ pub async fn create_federated_file_share(
             (file_id, sharer_account_id, recipient_username, recipient_server,
              recipient_incarnation_id, share_envelope, key_generation, capability_hash, can_edit,
              recipient_account_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+         VALUES ($1,$2,$3,$4,decode($5, 'hex'),$6,$7,decode($8, 'hex'),$9,$10)",
     )
     .bind(file_id)
     .bind(owner)
@@ -277,7 +277,7 @@ async fn outgoing_file_share(
          FROM drive_federated_outgoing_file_shares s
          JOIN drive_files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN drive_collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_server = $2
+         WHERE s.capability_hash = decode($1, 'hex') AND s.recipient_server = $2
            -- An mailbox_owner that doesn't talk to other servers has, to them, no
            -- shares (crate::federation_switch).
            AND kutup_account_federates(c.owner_account_id)",
@@ -360,7 +360,7 @@ pub async fn get_file_invite(
         |federation, authenticated, share| {
             let file = federated_file(&state, share.file_id).await?;
             let owner: (Uuid, Option<String>, String, Option<String>) = sqlx::query_as(
-            "SELECT u.id, u.username, u.account_incarnation_id, u.drive_signing_public_key
+            "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), u.drive_signing_public_key
              FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id JOIN accounts u ON u.id = c.owner_account_id
              WHERE f.id = $1",
         )
@@ -447,11 +447,12 @@ pub async fn get_file_content(
         {
             return Ok(part);
         }
-        let stored_digest: Option<String> =
-            sqlx::query_scalar("SELECT ciphertext_sha256 FROM drive_files WHERE id = $1")
-                .bind(share.file_id)
-                .fetch_one(&state.pool)
-                .await?;
+        let stored_digest: Option<String> = sqlx::query_scalar(
+            "SELECT encode(ciphertext_sha256, 'hex') FROM drive_files WHERE id = $1",
+        )
+        .bind(share.file_id)
+        .fetch_one(&state.pool)
+        .await?;
         let digest = match content.version {
             None => match stored_digest {
                 Some(digest) => digest,
@@ -587,7 +588,7 @@ async fn fetch_verified_file_invite(
 /// The account's current incarnation (an active account's).
 async fn local_incarnation(state: &AppState, user_id: Uuid) -> AppResult<String> {
     sqlx::query_scalar(
-        "SELECT account_incarnation_id FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -634,7 +635,7 @@ pub async fn accept_file_share(
         "INSERT INTO drive_federated_incoming_file_shares
             (account_id, owner_server, remote_capability, capability_hash, remote_file_id,
              owner_account_id, owner_account, owner_incarnation_id, owner_signing_public_key)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         VALUES ($1,$2,$3,decode($4, 'hex'),$5,$6,$7,decode($8, 'hex'),$9)
          ON CONFLICT (account_id, owner_server, capability_hash) DO UPDATE SET
              remote_file_id = EXCLUDED.remote_file_id
          RETURNING id, owner_server, remote_file_id, owner_account, created_at",
@@ -703,7 +704,7 @@ async fn incoming(state: &AppState, user: &AuthAccount, id: &str) -> AppResult<I
     );
     let row: Row = sqlx::query_as(
         "SELECT id, owner_server, remote_capability, remote_file_id, owner_account_id,
-                owner_incarnation_id, owner_signing_public_key, created_at
+                encode(owner_incarnation_id, 'hex'), owner_signing_public_key, created_at
          FROM drive_federated_incoming_file_shares WHERE id = $1 AND account_id = $2",
     )
     .bind(id)

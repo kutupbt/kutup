@@ -113,7 +113,7 @@ fn decode_envelope(envelope: &str) -> AppResult<ProfileKeyEnvelopeV1> {
 
 async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option<LocalAccount>> {
     let row: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, account_incarnation_id, drive_signing_public_key
+        "SELECT id, encode(account_incarnation_id, 'hex'), drive_signing_public_key
          FROM accounts WHERE id = $1 AND is_active = true
           -- To another server, an account that doesn't talk to other servers
           -- is no account (crate::federation_switch).
@@ -189,7 +189,7 @@ async fn store(
         "INSERT INTO drive_profile_keys
              (account_id, direction, peer_server, peer_account_id, peer_incarnation_id, envelope,
               profile_version)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         VALUES ($1, $2, $3, $4, decode($5, 'hex'), $6, decode($7, 'hex'))
          ON CONFLICT (account_id, direction, peer_server, peer_account_id) DO UPDATE SET
              peer_incarnation_id = EXCLUDED.peer_incarnation_id,
              envelope = EXCLUDED.envelope,
@@ -226,7 +226,7 @@ pub async fn list_people(
     let domain = state.config.chat_server_name.as_str();
     type LocalRow = (Uuid, String, String, String, i16, Option<String>);
     let local: Vec<LocalRow> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
+        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), u.public_key, u.identity_suite,
                 u.drive_signing_public_key
          FROM accounts u
          WHERE u.is_active = true AND u.username IS NOT NULL AND u.id <> $1 AND u.id IN (
@@ -270,7 +270,8 @@ pub async fn list_people(
     .fetch_all(&state.pool)
     .await?;
     let exchanged: Vec<(String, String, Uuid, String, String)> = sqlx::query_as(
-        "SELECT direction, peer_server, peer_account_id, envelope, profile_version
+        "SELECT direction, peer_server, peer_account_id, envelope,
+                encode(profile_version, 'hex')
          FROM drive_profile_keys WHERE account_id = $1",
     )
     .bind(user_id)

@@ -589,7 +589,7 @@ pub async fn create_federated_share(
     }
 
     let sender: (String, String) = sqlx::query_as(
-        "SELECT account_incarnation_id, drive_signing_public_key FROM accounts WHERE id = $1",
+        "SELECT encode(account_incarnation_id, 'hex'), drive_signing_public_key FROM accounts WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&state.pool)
@@ -624,7 +624,7 @@ pub async fn create_federated_share(
              recipient_server, named_share_envelope, capability_hash,
              can_upload, can_delete, upload_quota_bytes, recipient_incarnation_id,
              recipient_account_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+         VALUES ($1,$2,$3,$4,$5,decode($6, 'hex'),$7,$8,$9,decode($10, 'hex'),$11)",
     )
     .bind(collection_id)
     .bind(owner)
@@ -700,7 +700,7 @@ pub async fn get_user(
             i32,
         );
         let identity: Option<Row> = sqlx::query_as(
-            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
+            "SELECT id, username, public_key, encode(account_incarnation_id, 'hex'), drive_signing_public_key,
                     account_authority_public_key, drive_key_binding, identity_suite,
                     drive_key_binding_epoch
              FROM accounts WHERE id = kutup_current_account($1) AND is_active = true
@@ -783,7 +783,7 @@ pub async fn accept_incoming_share(
     validate_capability(&request.capability)?;
     let user_id = trusted_uuid(&user.account_id)?;
     let local_incarnation: String = sqlx::query_scalar(
-        "SELECT account_incarnation_id FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -806,7 +806,8 @@ pub async fn accept_incoming_share(
              owner_account_id, owner_account, owner_incarnation_id,
              owner_signing_public_key, owner_authority_public_key,
              can_upload, can_delete, upload_quota_bytes, collection_kind)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+         VALUES ($1,$2,$3,decode($4, 'hex'),$5,$6,$7,$8,$9,$10,decode($11, 'hex'),$12,$13,
+                 decode($14, 'hex'),$15,$16,$17,$18,$19,$20)
          ON CONFLICT (account_id, owner_server, capability_hash) DO UPDATE SET
              remote_collection_id = EXCLUDED.remote_collection_id,
              named_share_envelope = EXCLUDED.named_share_envelope,
@@ -1002,7 +1003,7 @@ pub async fn refresh_incoming_share(
     type Stored = (String, String, Uuid, i32, String, Uuid, String);
     let stored: Stored = sqlx::query_as(
         "SELECT owner_server, remote_capability, remote_collection_id, key_epoch,
-                epoch_statement_hash, owner_account_id, owner_authority_public_key
+                encode(epoch_statement_hash, 'hex'), owner_account_id, owner_authority_public_key
          FROM drive_federated_incoming_shares WHERE id = $1 AND account_id = $2",
     )
     .bind(share_uuid)
@@ -1012,7 +1013,7 @@ pub async fn refresh_incoming_share(
     .ok_or_else(|| AppError::not_found("share not found"))?;
     let (server, capability, collection_id, epoch, statement_hash, owner_id, authority) = stored;
     let local_incarnation: String = sqlx::query_scalar(
-        "SELECT account_incarnation_id FROM accounts WHERE id = $1 AND is_active = true",
+        "SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -1100,14 +1101,16 @@ pub async fn refresh_incoming_share(
     let refreshed: IncomingDriveShare = sqlx::query_as(
         "UPDATE drive_federated_incoming_shares SET
             named_share_envelope = $3, name_envelope = $4, key_epoch = $5, name_revision = $6,
-            epoch_statement = $7, epoch_statement_hash = $8, owner_account = $9,
-            owner_incarnation_id = $10, owner_signing_public_key = $11,
+            epoch_statement = $7, epoch_statement_hash = decode($8, 'hex'), owner_account = $9,
+            owner_incarnation_id = decode($10, 'hex'), owner_signing_public_key = $11,
             can_upload = $12, can_delete = $13, upload_quota_bytes = $14
          WHERE id = $1 AND account_id = $2
          RETURNING id, owner_server, remote_collection_id, named_share_envelope,
                    name_envelope, key_epoch, name_revision, epoch_statement,
-                   epoch_statement_hash, owner_account_id, owner_account,
-                   owner_incarnation_id, owner_signing_public_key,
+                   encode(epoch_statement_hash, 'hex') AS epoch_statement_hash,
+                   owner_account_id, owner_account,
+                   encode(owner_incarnation_id, 'hex') AS owner_incarnation_id,
+                   owner_signing_public_key,
                    owner_authority_public_key, can_upload, can_delete,
                    upload_quota_bytes, collection_kind, created_at",
     )
@@ -1197,8 +1200,10 @@ pub async fn list_incoming_shares(
     let rows: Vec<IncomingDriveShare> = sqlx::query_as(
         "SELECT id, owner_server, remote_collection_id, named_share_envelope,
                   name_envelope, key_epoch, name_revision, epoch_statement,
-                  epoch_statement_hash, owner_account_id, owner_account,
-                  owner_incarnation_id, owner_signing_public_key,
+                  encode(epoch_statement_hash, 'hex') AS epoch_statement_hash,
+                  owner_account_id, owner_account,
+                  encode(owner_incarnation_id, 'hex') AS owner_incarnation_id,
+                  owner_signing_public_key,
                   owner_authority_public_key, can_upload, can_delete,
                   upload_quota_bytes, collection_kind, created_at
            FROM drive_federated_incoming_shares
@@ -1531,9 +1536,9 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
         );
         let collection: Option<InviteRow> = sqlx::query_as(
             "SELECT c.id, c.name_envelope, c.key_epoch, c.name_revision,
-                    c.epoch_statement, c.epoch_statement_hash, c.owner_account_id,
+                    c.epoch_statement, encode(c.epoch_statement_hash, 'hex'), c.owner_account_id,
                     s.named_share_envelope, mailbox_owner.username,
-                    mailbox_owner.account_incarnation_id, mailbox_owner.drive_signing_public_key,
+                    encode(mailbox_owner.account_incarnation_id, 'hex'), mailbox_owner.drive_signing_public_key,
                     mailbox_owner.account_authority_public_key, c.kind
          FROM drive_collections c
          JOIN drive_federated_outgoing_shares s ON s.collection_id = c.id
@@ -1729,7 +1734,7 @@ pub async fn download_file(
             }
         };
         let file: Option<Option<String>> = sqlx::query_scalar(
-            "SELECT ciphertext_sha256
+            "SELECT encode(ciphertext_sha256, 'hex')
          FROM drive_files WHERE id = $1 AND deleted_at IS NULL AND (collection_id = $2
              OR id IN (SELECT file_id FROM photos_album_items WHERE album_id = $2))",
         )
@@ -2004,7 +2009,7 @@ pub async fn upload_file(
                  storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id,
                  original_key_generation, name_hash, content_revision_id,
                  blob_suite, revision_content_envelope)
-             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,1,$12,$13,$14,$15)",
+             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,decode($10, 'hex'),$11,1,decode($12, 'hex'),$13,$14,$15)",
             )
             .bind(file_id)
             .bind(share.collection_id)
@@ -2193,7 +2198,7 @@ pub(crate) async fn outgoing_share(
                 s.can_upload, s.can_delete, s.upload_quota_bytes, c.key_epoch
          FROM drive_federated_outgoing_shares s
          JOIN drive_collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_server = $2
+         WHERE s.capability_hash = decode($1, 'hex') AND s.recipient_server = $2
            -- An mailbox_owner that doesn't talk to other servers has, to them, no
            -- shares (crate::federation_switch).
            AND kutup_account_federates(c.owner_account_id)",
@@ -2412,11 +2417,12 @@ pub(crate) async fn ensure_version_digest(
     version: Uuid,
     content: &crate::file_content::CurrentContent,
 ) -> AppResult<String> {
-    let cached: Option<Option<String>> =
-        sqlx::query_scalar("SELECT ciphertext_sha256 FROM drive_file_versions WHERE id = $1")
-            .bind(version)
-            .fetch_optional(&state.pool)
-            .await?;
+    let cached: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT encode(ciphertext_sha256, 'hex') FROM drive_file_versions WHERE id = $1",
+    )
+    .bind(version)
+    .fetch_optional(&state.pool)
+    .await?;
     if let Some(Some(digest)) = cached {
         return Ok(digest);
     }
@@ -2425,7 +2431,7 @@ pub(crate) async fn ensure_version_digest(
         .await
         .map_err(|error| AppError::internal(format!("read Drive version for digest: {error}")))?;
     let digest = sha256_hex(object).await?;
-    sqlx::query("UPDATE drive_file_versions SET ciphertext_sha256 = $2 WHERE id = $1 AND ciphertext_sha256 IS NULL")
+    sqlx::query("UPDATE drive_file_versions SET ciphertext_sha256 = decode($2, 'hex') WHERE id = $1 AND ciphertext_sha256 IS NULL")
         .bind(version)
         .bind(&digest)
         .execute(&state.pool)
@@ -2475,7 +2481,7 @@ pub(crate) async fn ensure_ciphertext_digest(
     }
     let digest = hex::encode(digest.finish());
     sqlx::query(
-        "UPDATE drive_files SET ciphertext_sha256 = $2
+        "UPDATE drive_files SET ciphertext_sha256 = decode($2, 'hex')
          WHERE id = $1 AND ciphertext_sha256 IS NULL",
     )
     .bind(file_id)
@@ -2545,7 +2551,7 @@ async fn prior_mutation(
     operation: &str,
 ) -> AppResult<Option<(StatusCode, Vec<u8>)>> {
     let row: Option<(String, String, i16, String, Vec<u8>)> = sqlx::query_as(
-        "SELECT request_hash, operation, response_status,
+        "SELECT encode(request_hash, 'hex'), operation, response_status,
                 response_content_type, response_body
          FROM drive_federation_mutations
          WHERE origin = $1 AND request_id = $2",
@@ -2587,7 +2593,7 @@ async fn record_mutation(
         "INSERT INTO drive_federation_mutations
             (origin, request_id, request_hash, share_id, operation,
              response_status, response_content_type, response_body)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+         VALUES ($1,$2,decode($3, 'hex'),$4,$5,$6,$7,$8)",
     )
     .bind(origin)
     .bind(request_id)

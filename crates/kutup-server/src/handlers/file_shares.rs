@@ -235,7 +235,7 @@ struct Party {
 
 async fn party(pool: &PgPool, user_id: Uuid, domain: &str) -> AppResult<Party> {
     let row: Option<(Option<String>, String, Option<String>)> = sqlx::query_as(
-        "SELECT username, account_incarnation_id, drive_signing_public_key
+        "SELECT username, encode(account_incarnation_id, 'hex'), drive_signing_public_key
          FROM accounts WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
@@ -463,7 +463,7 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
+        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), u.public_key, u.identity_suite,
                 u.drive_signing_public_key, fs.can_edit, fs.key_generation, fs.created_at
          FROM drive_file_shares fs JOIN accounts u ON u.id = fs.recipient_account_id
          WHERE fs.file_id = $1 ORDER BY fs.created_at",
@@ -620,7 +620,7 @@ async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<Federa
     );
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT id, recipient_username, recipient_server, recipient_account_id,
-                recipient_incarnation_id, can_edit, key_generation, created_at
+                encode(recipient_incarnation_id, 'hex'), can_edit, key_generation, created_at
          FROM drive_federated_outgoing_file_shares WHERE file_id = $1 ORDER BY created_at",
     )
     .bind(file_id)
@@ -665,7 +665,7 @@ async fn store_federated_envelopes(
 ) -> AppResult<()> {
     for member in envelopes {
         let target: Option<(Uuid, String, String)> = sqlx::query_as(
-            "SELECT recipient_account_id, recipient_server, recipient_incarnation_id
+            "SELECT recipient_account_id, recipient_server, encode(recipient_incarnation_id, 'hex')
              FROM drive_federated_outgoing_file_shares WHERE id = $1 AND file_id = $2",
         )
         .bind(member.id)
@@ -1018,12 +1018,12 @@ pub async fn shared_with_me(
         "SELECT fs.file_id, fs.share_envelope, fs.can_edit, fs.key_generation,
                 f.key_epoch = c.key_epoch AS folder_key_current, fs.created_at AS shared_at,
                 c.owner_account_id, o.username AS owner_username,
-                o.account_incarnation_id AS owner_incarnation_id,
+                encode(o.account_incarnation_id, 'hex') AS owner_incarnation_id,
                 o.drive_signing_public_key AS owner_signing_public_key,
                 h.previous_metadata_envelope AS metadata_envelope,
                 h.previous_metadata_revision AS metadata_revision,
                 fs.sharer_account_id, s.username AS sharer_username,
-                s.account_incarnation_id AS sharer_incarnation_id,
+                encode(s.account_incarnation_id, 'hex') AS sharer_incarnation_id,
                 s.drive_signing_public_key AS sharer_signing_public_key,
                 f.editors_can_share
          FROM drive_file_shares fs

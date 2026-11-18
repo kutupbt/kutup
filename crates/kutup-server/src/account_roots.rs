@@ -309,7 +309,7 @@ mod tests {
             "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
+             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
         )
         .bind(user)
         .bind(format!("roots{}", &user.simple().to_string()[..12]))

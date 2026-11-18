@@ -116,16 +116,16 @@ CREATE TABLE public.account_names (
     folded text NOT NULL,
     name text NOT NULL,
     account_id uuid,
-    incarnation_id text,
+    incarnation_id bytea,
     state text NOT NULL,
     receive_until timestamp with time zone,
     free_at timestamp with time zone,
     CONSTRAINT account_names_check CHECK (((state = 'held'::text) = (free_at IS NOT NULL))),
     CONSTRAINT account_names_check1 CHECK (((state = 'held'::text) OR (account_id IS NOT NULL))),
     CONSTRAINT account_names_folded_check CHECK ((folded ~ '^[a-z0-9]{1,32}$'::text)),
-    CONSTRAINT account_names_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT account_names_name_check CHECK ((name ~ '^[a-z0-9_-]{3,32}$'::text)),
-    CONSTRAINT account_names_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text])))
+    CONSTRAINT account_names_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text]))),
+    CONSTRAINT account_names_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32))
 );
 
 
@@ -345,11 +345,11 @@ CREATE TABLE public.account_heads (
     account_id uuid NOT NULL,
     sequence bigint NOT NULL,
     sealed bytea NOT NULL,
-    incarnation_id text NOT NULL,
+    incarnation_id bytea NOT NULL,
     written_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_heads_incarnation_id_check CHECK ((incarnation_id <> ''::text)),
     CONSTRAINT account_heads_sealed_check CHECK (((octet_length(sealed) >= 1) AND (octet_length(sealed) <= 16384))),
-    CONSTRAINT account_heads_sequence_check CHECK ((sequence >= 1))
+    CONSTRAINT account_heads_sequence_check CHECK ((sequence >= 1)),
+    CONSTRAINT account_heads_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32))
 );
 
 
@@ -408,7 +408,7 @@ CREATE TABLE public.account_records (
 --
 
 CREATE TABLE public.account_renames (
-    incarnation_id text NOT NULL,
+    incarnation_id bytea NOT NULL,
     sequence integer NOT NULL,
     account_id uuid,
     authority_public_key text NOT NULL,
@@ -416,11 +416,11 @@ CREATE TABLE public.account_renames (
     current text NOT NULL,
     counted boolean NOT NULL,
     statement jsonb NOT NULL,
-    digest text NOT NULL,
+    digest bytea NOT NULL,
     accepted_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_renames_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT account_renames_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT account_renames_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000)))
+    CONSTRAINT account_renames_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000))),
+    CONSTRAINT account_renames_digest_bytes CHECK ((octet_length(digest) = 32)),
+    CONSTRAINT account_renames_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32))
 );
 
 
@@ -833,17 +833,17 @@ CREATE TABLE public.chat_backup_bases (
     generation bigint NOT NULL,
     covered_cursor bigint NOT NULL,
     ciphertext_bytes bigint NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
     storage_path text NOT NULL,
     state text DEFAULT 'staged'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone DEFAULT (now() + '24:00:00'::interval) NOT NULL,
     committed_at timestamp with time zone,
     CONSTRAINT chat_backup_bases_ciphertext_bytes_check CHECK (((ciphertext_bytes > 0) AND (ciphertext_bytes <= 134218752))),
-    CONSTRAINT chat_backup_bases_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_backup_bases_covered_cursor_check CHECK ((covered_cursor >= 0)),
     CONSTRAINT chat_backup_bases_generation_check CHECK ((generation > 0)),
-    CONSTRAINT chat_backup_bases_state_check CHECK ((state = ANY (ARRAY['staged'::text, 'committed'::text])))
+    CONSTRAINT chat_backup_bases_state_check CHECK ((state = ANY (ARRAY['staged'::text, 'committed'::text]))),
+    CONSTRAINT chat_backup_bases_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
 );
 
 
@@ -855,11 +855,11 @@ CREATE TABLE public.chat_backup_device_heads (
     account_id uuid NOT NULL,
     source_device_id integer NOT NULL,
     last_device_sequence bigint NOT NULL,
-    last_segment_digest character(64) NOT NULL,
+    last_segment_digest bytea NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_device_heads_last_device_sequence_check CHECK ((last_device_sequence > 0)),
-    CONSTRAINT chat_backup_device_heads_last_segment_digest_check CHECK ((last_segment_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backup_device_heads_source_device_id_check CHECK ((source_device_id > 0))
+    CONSTRAINT chat_backup_device_heads_source_device_id_check CHECK ((source_device_id > 0)),
+    CONSTRAINT chat_backup_device_heads_last_segment_digest_bytes CHECK ((octet_length(last_segment_digest) = 32))
 );
 
 
@@ -871,12 +871,12 @@ CREATE TABLE public.chat_backup_media_objects (
     account_id uuid NOT NULL,
     media_id bytea NOT NULL,
     ciphertext_bytes bigint NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
     storage_path text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_media_objects_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
-    CONSTRAINT chat_backup_media_objects_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backup_media_objects_media_id_check CHECK ((octet_length(media_id) = 32))
+    CONSTRAINT chat_backup_media_objects_media_id_check CHECK ((octet_length(media_id) = 32)),
+    CONSTRAINT chat_backup_media_objects_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
 );
 
 
@@ -887,11 +887,11 @@ CREATE TABLE public.chat_backup_media_objects (
 CREATE TABLE public.chat_backup_media_operations (
     account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
-    request_digest character(64) NOT NULL,
+    request_digest bytea NOT NULL,
     media_id bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_media_operations_media_id_check CHECK ((octet_length(media_id) = 32)),
-    CONSTRAINT chat_backup_media_operations_request_digest_check CHECK ((request_digest ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_backup_media_operations_request_digest_bytes CHECK ((octet_length(request_digest) = 32))
 );
 
 
@@ -916,10 +916,10 @@ CREATE TABLE public.chat_backup_media_reconciliation_pages (
     account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
     page_index integer NOT NULL,
-    request_digest character(64) NOT NULL,
+    request_digest bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_media_reconciliation_pages_page_index_check CHECK ((page_index >= 0)),
-    CONSTRAINT chat_backup_media_reconciliation_pages_request_digest_check CHECK ((request_digest ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_backup_media_reconciliation_pages_request_digest_bytes CHECK ((octet_length(request_digest) = 32))
 );
 
 
@@ -931,14 +931,14 @@ CREATE TABLE public.chat_backup_media_reconciliations (
     account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
     target_generation bigint NOT NULL,
-    reference_set_digest character(64) NOT NULL,
+    reference_set_digest bytea NOT NULL,
     next_page integer DEFAULT 0 NOT NULL,
     completed boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_media_reconciliations_next_page_check CHECK ((next_page >= 0)),
-    CONSTRAINT chat_backup_media_reconciliations_reference_set_digest_check CHECK ((reference_set_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backup_media_reconciliations_target_generation_check CHECK ((target_generation > 0))
+    CONSTRAINT chat_backup_media_reconciliations_target_generation_check CHECK ((target_generation > 0)),
+    CONSTRAINT chat_backup_media_reconciliations_reference_set_digest_bytes CHECK ((octet_length(reference_set_digest) = 32))
 );
 
 
@@ -961,10 +961,10 @@ CREATE TABLE public.chat_backup_media_references (
 CREATE TABLE public.chat_backup_provision_operations (
     account_id uuid NOT NULL,
     operation_id uuid NOT NULL,
-    request_digest character(64) NOT NULL,
+    request_digest bytea NOT NULL,
     backup_incarnation_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chat_backup_provision_operations_request_digest_check CHECK ((request_digest ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_backup_provision_operations_request_digest_bytes CHECK ((octet_length(request_digest) = 32))
 );
 
 
@@ -978,20 +978,20 @@ CREATE TABLE public.chat_backup_segments (
     operation_id uuid NOT NULL,
     source_device_id integer NOT NULL,
     device_sequence bigint NOT NULL,
-    previous_segment_digest character(64) NOT NULL,
+    previous_segment_digest bytea NOT NULL,
     account_manifest_sequence bigint NOT NULL,
     ciphertext_bytes integer NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
     ciphertext bytea NOT NULL,
     acknowledged_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_backup_segments_account_manifest_sequence_check CHECK ((account_manifest_sequence > 0)),
     CONSTRAINT chat_backup_segments_check CHECK ((octet_length(ciphertext) = ciphertext_bytes)),
     CONSTRAINT chat_backup_segments_ciphertext_bytes_check CHECK (((ciphertext_bytes > 0) AND (ciphertext_bytes <= 263168))),
-    CONSTRAINT chat_backup_segments_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_backup_segments_cursor_check CHECK ((cursor > 0)),
     CONSTRAINT chat_backup_segments_device_sequence_check CHECK ((device_sequence > 0)),
-    CONSTRAINT chat_backup_segments_previous_segment_digest_check CHECK ((previous_segment_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backup_segments_source_device_id_check CHECK ((source_device_id > 0))
+    CONSTRAINT chat_backup_segments_source_device_id_check CHECK ((source_device_id > 0)),
+    CONSTRAINT chat_backup_segments_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32)),
+    CONSTRAINT chat_backup_segments_previous_segment_digest_bytes CHECK ((octet_length(previous_segment_digest) = 32))
 );
 
 
@@ -1006,10 +1006,10 @@ CREATE TABLE public.chat_backups (
     protection_domain smallint NOT NULL,
     root_envelope text NOT NULL,
     signer_authorization jsonb NOT NULL,
-    signer_authorization_digest character(64) NOT NULL,
+    signer_authorization_digest bytea NOT NULL,
     current_cursor bigint DEFAULT 0 NOT NULL,
     current_generation bigint DEFAULT 0 NOT NULL,
-    current_manifest_digest character(64) DEFAULT repeat('0'::text, 64) NOT NULL,
+    current_manifest_digest bytea DEFAULT decode(repeat('00'::text, 32), 'hex'::text) NOT NULL,
     current_manifest jsonb,
     current_base_object_id uuid,
     latest_protected_at timestamp with time zone,
@@ -1019,11 +1019,11 @@ CREATE TABLE public.chat_backups (
     CONSTRAINT chat_backups_current_cursor_check CHECK ((current_cursor >= 0)),
     CONSTRAINT chat_backups_current_generation_check CHECK ((current_generation >= 0)),
     CONSTRAINT chat_backups_current_manifest_check CHECK (((current_manifest IS NULL) OR (jsonb_typeof(current_manifest) = 'object'::text))),
-    CONSTRAINT chat_backups_current_manifest_digest_check CHECK ((current_manifest_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_backups_protection_domain_check CHECK ((protection_domain = 1)),
     CONSTRAINT chat_backups_signer_authorization_check CHECK ((jsonb_typeof(signer_authorization) = 'object'::text)),
-    CONSTRAINT chat_backups_signer_authorization_digest_check CHECK ((signer_authorization_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_backups_suite_check CHECK ((suite = 1))
+    CONSTRAINT chat_backups_suite_check CHECK ((suite = 1)),
+    CONSTRAINT chat_backups_current_manifest_digest_bytes CHECK ((octet_length(current_manifest_digest) = 32)),
+    CONSTRAINT chat_backups_signer_authorization_digest_bytes CHECK ((octet_length(signer_authorization_digest) = 32))
 );
 
 
@@ -1033,8 +1033,8 @@ CREATE TABLE public.chat_backups (
 
 CREATE TABLE public.chat_call_link_knocks (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    room_id text NOT NULL,
-    participant_id text NOT NULL,
+    room_id bytea NOT NULL,
+    participant_id bytea NOT NULL,
     label bytea NOT NULL,
     ticket_hash bytea NOT NULL,
     status smallint DEFAULT 0 NOT NULL,
@@ -1043,10 +1043,11 @@ CREATE TABLE public.chat_call_link_knocks (
     seat_hash bytea NOT NULL,
     account_id uuid,
     CONSTRAINT chat_call_link_knocks_label_check CHECK ((octet_length(label) = 168)),
-    CONSTRAINT chat_call_link_knocks_participant_id_check CHECK ((participant_id ~ '^[0-9a-f]{32}$'::text)),
     CONSTRAINT chat_call_link_knocks_seat_hash_check CHECK ((octet_length(seat_hash) = 32)),
     CONSTRAINT chat_call_link_knocks_status_check CHECK ((status = ANY (ARRAY[0, 1, 2]))),
-    CONSTRAINT chat_call_link_knocks_ticket_hash_check CHECK ((octet_length(ticket_hash) = 32))
+    CONSTRAINT chat_call_link_knocks_ticket_hash_check CHECK ((octet_length(ticket_hash) = 32)),
+    CONSTRAINT chat_call_link_knocks_participant_id_bytes CHECK ((octet_length(participant_id) = 16)),
+    CONSTRAINT chat_call_link_knocks_room_id_bytes CHECK ((octet_length(room_id) = 16))
 );
 
 
@@ -1055,8 +1056,8 @@ CREATE TABLE public.chat_call_link_knocks (
 --
 
 CREATE TABLE public.chat_call_link_seats (
-    room_id text NOT NULL,
-    participant_id text NOT NULL,
+    room_id bytea NOT NULL,
+    participant_id bytea NOT NULL,
     seat_hash bytea NOT NULL,
     role smallint,
     no_screen boolean DEFAULT false NOT NULL,
@@ -1064,9 +1065,10 @@ CREATE TABLE public.chat_call_link_seats (
     issued_at timestamp with time zone DEFAULT now() NOT NULL,
     last_minted_at timestamp with time zone DEFAULT now() NOT NULL,
     account_id uuid,
-    CONSTRAINT chat_call_link_seats_participant_id_check CHECK ((participant_id ~ '^[0-9a-f]{32}$'::text)),
     CONSTRAINT chat_call_link_seats_role_check CHECK ((role = ANY (ARRAY[1, 2]))),
-    CONSTRAINT chat_call_link_seats_seat_hash_check CHECK ((octet_length(seat_hash) = 32))
+    CONSTRAINT chat_call_link_seats_seat_hash_check CHECK ((octet_length(seat_hash) = 32)),
+    CONSTRAINT chat_call_link_seats_participant_id_bytes CHECK ((octet_length(participant_id) = 16)),
+    CONSTRAINT chat_call_link_seats_room_id_bytes CHECK ((octet_length(room_id) = 16))
 );
 
 
@@ -1075,9 +1077,9 @@ CREATE TABLE public.chat_call_link_seats (
 --
 
 CREATE TABLE public.chat_call_links (
-    room_id text NOT NULL,
+    room_id bytea NOT NULL,
     owner_account_id uuid NOT NULL,
-    nonce text NOT NULL,
+    nonce bytea NOT NULL,
     access_token_hash bytea NOT NULL,
     info bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1089,8 +1091,8 @@ CREATE TABLE public.chat_call_links (
     CONSTRAINT chat_call_links_access_token_hash_check CHECK ((octet_length(access_token_hash) = 32)),
     CONSTRAINT chat_call_links_host_token_hash_check CHECK (((host_token_hash IS NULL) OR (octet_length(host_token_hash) = 32))),
     CONSTRAINT chat_call_links_info_check CHECK ((octet_length(info) = 552)),
-    CONSTRAINT chat_call_links_nonce_check CHECK ((nonce ~ '^[0-9a-f]{32}$'::text)),
-    CONSTRAINT chat_call_links_room_id_check CHECK ((room_id ~ '^[0-9a-f]{32}$'::text))
+    CONSTRAINT chat_call_links_nonce_bytes CHECK ((octet_length(nonce) = 16)),
+    CONSTRAINT chat_call_links_room_id_bytes CHECK ((octet_length(room_id) = 16))
 );
 
 
@@ -1100,12 +1102,13 @@ CREATE TABLE public.chat_call_links (
 
 CREATE TABLE public.chat_delivery_capabilities (
     account_id uuid NOT NULL,
-    profile_version character(64) NOT NULL,
+    profile_version bytea NOT NULL,
     profile_revision bigint NOT NULL,
     capability_hash bytea NOT NULL,
     rotated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_delivery_capabilities_capability_hash_check CHECK ((octet_length(capability_hash) = 32)),
-    CONSTRAINT chat_delivery_capabilities_profile_revision_check CHECK ((profile_revision > 0))
+    CONSTRAINT chat_delivery_capabilities_profile_revision_check CHECK ((profile_revision > 0)),
+    CONSTRAINT chat_delivery_capabilities_profile_version_bytes CHECK ((octet_length(profile_version) = 32))
 );
 
 
@@ -1115,17 +1118,17 @@ CREATE TABLE public.chat_delivery_capabilities (
 
 CREATE TABLE public.chat_device_manifest_history (
     account_id uuid NOT NULL,
-    incarnation_id character(64) NOT NULL,
+    incarnation_id bytea NOT NULL,
     version bigint NOT NULL,
-    manifest_hash character(64) NOT NULL,
-    authority_key_id character(64) NOT NULL,
+    manifest_hash bytea NOT NULL,
+    authority_key_id bytea NOT NULL,
     manifest jsonb NOT NULL,
     accepted_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chat_device_manifest_history_authority_key_id_check CHECK ((authority_key_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_device_manifest_history_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_device_manifest_history_manifest_check CHECK ((jsonb_typeof(manifest) = 'object'::text)),
-    CONSTRAINT chat_device_manifest_history_manifest_hash_check CHECK ((manifest_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_device_manifest_history_version_check CHECK ((version > 0))
+    CONSTRAINT chat_device_manifest_history_version_check CHECK ((version > 0)),
+    CONSTRAINT chat_device_manifest_history_authority_key_id_bytes CHECK ((octet_length(authority_key_id) = 32)),
+    CONSTRAINT chat_device_manifest_history_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32)),
+    CONSTRAINT chat_device_manifest_history_manifest_hash_bytes CHECK ((octet_length(manifest_hash) = 32))
 );
 
 
@@ -1136,13 +1139,13 @@ CREATE TABLE public.chat_device_manifest_history (
 CREATE TABLE public.chat_device_manifests (
     account_id uuid NOT NULL,
     version bigint NOT NULL,
-    manifest_hash text NOT NULL,
-    authority_key_id text NOT NULL,
+    manifest_hash bytea NOT NULL,
+    authority_key_id bytea NOT NULL,
     manifest jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chat_device_manifests_authority_key_id_check CHECK ((length(authority_key_id) = 64)),
-    CONSTRAINT chat_device_manifests_manifest_hash_check CHECK ((length(manifest_hash) = 64)),
-    CONSTRAINT chat_device_manifests_version_check CHECK ((version > 0))
+    CONSTRAINT chat_device_manifests_version_check CHECK ((version > 0)),
+    CONSTRAINT chat_device_manifests_authority_key_id_bytes CHECK ((octet_length(authority_key_id) = 32)),
+    CONSTRAINT chat_device_manifests_manifest_hash_bytes CHECK ((octet_length(manifest_hash) = 32))
 );
 
 
@@ -1315,7 +1318,7 @@ CREATE TABLE public.chat_media_federation_inbound_pending (
     origin text NOT NULL,
     sequence bigint NOT NULL,
     operation_id uuid NOT NULL,
-    transaction_digest character(64) NOT NULL,
+    transaction_digest bytea NOT NULL,
     recipient_account_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
     ciphertext_bytes bigint NOT NULL,
@@ -1325,7 +1328,7 @@ CREATE TABLE public.chat_media_federation_inbound_pending (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_media_federation_inbound_pending_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
     CONSTRAINT chat_media_federation_inbound_pending_sequence_check CHECK ((sequence > 0)),
-    CONSTRAINT chat_media_federation_inbound_pending_transaction_digest_check CHECK ((transaction_digest ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_media_federation_inbound_pending_transaction_digest_bytes CHECK ((octet_length(transaction_digest) = 32))
 );
 
 
@@ -1356,13 +1359,13 @@ CREATE TABLE public.chat_media_objects (
     origin_server text NOT NULL,
     suite smallint NOT NULL,
     ciphertext_bytes bigint NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
     retrieval_token_hash bytea NOT NULL,
     storage_path text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_media_objects_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
-    CONSTRAINT chat_media_objects_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_media_objects_retrieval_token_hash_check CHECK ((octet_length(retrieval_token_hash) = 32))
+    CONSTRAINT chat_media_objects_retrieval_token_hash_check CHECK ((octet_length(retrieval_token_hash) = 32)),
+    CONSTRAINT chat_media_objects_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
 );
 
 
@@ -1376,13 +1379,13 @@ CREATE TABLE public.chat_media_origin_delivery_operations (
     recipient_account_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
     ciphertext_bytes bigint NOT NULL,
-    ciphertext_sha256 character(64) NOT NULL,
-    offer_digest character(64) NOT NULL,
+    ciphertext_sha256 bytea NOT NULL,
+    offer_digest bytea NOT NULL,
     storage_reference_id uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_media_origin_delivery_operations_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
-    CONSTRAINT chat_media_origin_delivery_operations_ciphertext_sha256_check CHECK ((ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT chat_media_origin_delivery_operations_offer_digest_check CHECK ((offer_digest ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_media_origin_delivery_operations_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32)),
+    CONSTRAINT chat_media_origin_delivery_operations_offer_digest_bytes CHECK ((octet_length(offer_digest) = 32))
 );
 
 
@@ -1487,7 +1490,7 @@ CREATE TABLE public.chat_one_time_pre_keys (
 CREATE TABLE public.chat_profiles (
     account_id uuid NOT NULL,
     suite smallint NOT NULL,
-    version character(64) NOT NULL,
+    profile_version bytea NOT NULL,
     revision bigint NOT NULL,
     source_device_id integer NOT NULL,
     name_ciphertext text NOT NULL,
@@ -1500,7 +1503,8 @@ CREATE TABLE public.chat_profiles (
     CONSTRAINT chat_profiles_access_key_verifier_check CHECK ((octet_length(access_key_verifier) = 32)),
     CONSTRAINT chat_profiles_revision_check CHECK ((revision > 0)),
     CONSTRAINT chat_profiles_source_device_id_check CHECK ((((source_device_id >= 1) AND (source_device_id <= 127)) OR (source_device_id = 128))),
-    CONSTRAINT chat_profiles_suite_check CHECK ((suite = 1))
+    CONSTRAINT chat_profiles_suite_check CHECK ((suite = 1)),
+    CONSTRAINT chat_profiles_profile_version_bytes CHECK ((octet_length(profile_version) = 32))
 );
 
 
@@ -1583,12 +1587,12 @@ CREATE TABLE public.drive_collection_key_epoch_history (
     epoch integer NOT NULL,
     owner_key_envelope text NOT NULL,
     epoch_statement text NOT NULL,
-    epoch_statement_hash text NOT NULL,
+    epoch_statement_hash bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     previous_key_envelope text,
     CONSTRAINT drive_collection_key_epoch_history_epoch_check CHECK ((epoch > 0)),
-    CONSTRAINT drive_collection_key_epoch_history_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_collection_key_epoch_history_previous_key CHECK (((epoch = 1) = (previous_key_envelope IS NULL)))
+    CONSTRAINT drive_collection_key_epoch_history_previous_key CHECK (((epoch = 1) = (previous_key_envelope IS NULL))),
+    CONSTRAINT drive_collection_key_epoch_history_epoch_statement_hash_bytes CHECK ((octet_length(epoch_statement_hash) = 32))
 );
 
 
@@ -1622,7 +1626,7 @@ CREATE TABLE public.drive_collections (
     key_epoch integer NOT NULL,
     name_revision bigint NOT NULL,
     epoch_statement text NOT NULL,
-    epoch_statement_hash text NOT NULL,
+    epoch_statement_hash bytea NOT NULL,
     parent_collection_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1630,16 +1634,16 @@ CREATE TABLE public.drive_collections (
     deleted_at timestamp with time zone,
     trash_root_id uuid,
     kind text DEFAULT 'folder'::text NOT NULL,
-    name_hash text,
+    name_hash bytea,
     name_hash_generation integer,
     CONSTRAINT drive_collections_album_top_level CHECK (((kind = 'folder'::text) OR (parent_collection_id IS NULL))),
-    CONSTRAINT drive_collections_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_collections_folder_name_hash CHECK (((kind <> 'folder'::text) OR (name_hash IS NOT NULL))),
     CONSTRAINT drive_collections_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_collections_kind_check CHECK ((kind = ANY (ARRAY['folder'::text, 'album'::text]))),
-    CONSTRAINT drive_collections_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_collections_name_hash_generation_check CHECK (((name_hash_generation IS NULL) OR ((name_hash_generation > 0) AND (kind = 'folder'::text)))),
-    CONSTRAINT drive_collections_name_revision_check CHECK ((name_revision > 0))
+    CONSTRAINT drive_collections_name_revision_check CHECK ((name_revision > 0)),
+    CONSTRAINT drive_collections_epoch_statement_hash_bytes CHECK ((octet_length(epoch_statement_hash) = 32)),
+    CONSTRAINT drive_collections_name_hash_bytes CHECK ((octet_length(name_hash) = 32))
 );
 
 
@@ -1784,7 +1788,7 @@ CREATE TABLE public.document_acknowledgements (
 CREATE TABLE public.drive_federation_mutations (
     origin text NOT NULL,
     request_id text NOT NULL,
-    request_hash text NOT NULL,
+    request_hash bytea NOT NULL,
     share_id uuid NOT NULL,
     operation text NOT NULL,
     response_status smallint NOT NULL,
@@ -1795,10 +1799,10 @@ CREATE TABLE public.drive_federation_mutations (
     CONSTRAINT drive_federation_mutations_origin_check CHECK ((origin = lower(origin))),
     CONSTRAINT drive_federation_mutations_origin_check1 CHECK (((length(origin) >= 3) AND (length(origin) <= 253))),
     CONSTRAINT drive_federation_mutations_origin_check2 CHECK ((origin ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT drive_federation_mutations_request_hash_check CHECK ((request_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federation_mutations_request_id_check CHECK (((length(request_id) >= 1) AND (length(request_id) <= 128))),
     CONSTRAINT drive_federation_mutations_request_id_check1 CHECK ((request_id ~ '^[A-Za-z0-9._~-]+$'::text)),
-    CONSTRAINT drive_federation_mutations_response_status_check CHECK (((response_status >= 100) AND (response_status <= 599)))
+    CONSTRAINT drive_federation_mutations_response_status_check CHECK (((response_status >= 100) AND (response_status <= 599))),
+    CONSTRAINT drive_federation_mutations_request_hash_bytes CHECK ((octet_length(request_hash) = 32))
 );
 
 
@@ -1810,16 +1814,16 @@ CREATE TABLE public.drive_profile_keys (
     account_id uuid NOT NULL,
     direction text NOT NULL,
     envelope text NOT NULL,
-    profile_version text NOT NULL,
+    profile_version bytea NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    peer_incarnation_id text NOT NULL,
+    peer_incarnation_id bytea NOT NULL,
     peer_server text NOT NULL,
     peer_account_id uuid NOT NULL,
     CONSTRAINT drive_profile_keys_direction_check CHECK ((direction = ANY (ARRAY['sent'::text, 'received'::text]))),
     CONSTRAINT drive_profile_keys_envelope_check CHECK ((length(envelope) <= 4096)),
-    CONSTRAINT drive_profile_keys_peer_incarnation_id_check CHECK ((peer_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_profile_keys_peer_server_check CHECK (((peer_server = lower(peer_server)) AND ((length(peer_server) >= 3) AND (length(peer_server) <= 253)))),
-    CONSTRAINT drive_profile_keys_profile_version_check CHECK ((profile_version ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT drive_profile_keys_peer_incarnation_id_bytes CHECK ((octet_length(peer_incarnation_id) = 32)),
+    CONSTRAINT drive_profile_keys_profile_version_bytes CHECK ((octet_length(profile_version) = 32))
 );
 
 
@@ -1832,18 +1836,18 @@ CREATE TABLE public.drive_federated_incoming_file_shares (
     account_id uuid NOT NULL,
     owner_server text NOT NULL,
     remote_capability text NOT NULL,
-    capability_hash text NOT NULL,
+    capability_hash bytea NOT NULL,
     remote_file_id uuid NOT NULL,
     owner_account_id uuid NOT NULL,
     owner_account text NOT NULL,
-    owner_incarnation_id text NOT NULL,
+    owner_incarnation_id bytea NOT NULL,
     owner_signing_public_key text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT drive_federated_incoming_file_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_federated_incoming_file_shares_owner_incarnation_id_check CHECK ((owner_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_incoming_file_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
     CONSTRAINT drive_federated_incoming_file_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
-    CONSTRAINT drive_federated_incoming_file_shares_owner_server_check CHECK ((owner_server = lower(owner_server)))
+    CONSTRAINT drive_federated_incoming_file_shares_owner_server_check CHECK ((owner_server = lower(owner_server))),
+    CONSTRAINT drive_federated_incoming_file_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
+    CONSTRAINT drive_federated_incoming_file_shares_owner_incarnation_id_bytes CHECK ((octet_length(owner_incarnation_id) = 32))
 );
 
 
@@ -1856,17 +1860,17 @@ CREATE TABLE public.drive_federated_incoming_shares (
     account_id uuid NOT NULL,
     owner_server text NOT NULL,
     remote_capability text NOT NULL,
-    capability_hash text NOT NULL,
+    capability_hash bytea NOT NULL,
     remote_collection_id uuid NOT NULL,
     named_share_envelope text NOT NULL,
     name_envelope text NOT NULL,
     key_epoch integer NOT NULL,
     name_revision bigint NOT NULL,
     epoch_statement text NOT NULL,
-    epoch_statement_hash text NOT NULL,
+    epoch_statement_hash bytea NOT NULL,
     owner_account_id uuid NOT NULL,
     owner_account text NOT NULL,
-    owner_incarnation_id text NOT NULL,
+    owner_incarnation_id bytea NOT NULL,
     owner_signing_public_key text NOT NULL,
     owner_authority_public_key text NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
@@ -1874,19 +1878,19 @@ CREATE TABLE public.drive_federated_incoming_shares (
     upload_quota_bytes bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     collection_kind text DEFAULT 'folder'::text NOT NULL,
-    CONSTRAINT drive_federated_incoming_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_incoming_shares_collection_kind_check CHECK ((collection_kind = ANY (ARRAY['folder'::text, 'album'::text]))),
-    CONSTRAINT drive_federated_incoming_shares_epoch_statement_hash_check CHECK ((epoch_statement_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_incoming_shares_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_federated_incoming_shares_name_revision_check CHECK ((name_revision > 0)),
     CONSTRAINT drive_federated_incoming_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
-    CONSTRAINT drive_federated_incoming_shares_owner_incarnation_id_check CHECK ((owner_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_incoming_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
     CONSTRAINT drive_federated_incoming_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
     CONSTRAINT drive_federated_incoming_shares_owner_server_check CHECK ((owner_server = lower(owner_server))),
     CONSTRAINT drive_federated_incoming_shares_owner_server_check1 CHECK (((length(owner_server) >= 3) AND (length(owner_server) <= 253))),
     CONSTRAINT drive_federated_incoming_shares_owner_server_check2 CHECK ((owner_server ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT drive_federated_incoming_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0)))
+    CONSTRAINT drive_federated_incoming_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0))),
+    CONSTRAINT drive_federated_incoming_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
+    CONSTRAINT drive_federated_incoming_shares_epoch_statement_hash_bytes CHECK ((octet_length(epoch_statement_hash) = 32)),
+    CONSTRAINT drive_federated_incoming_shares_owner_incarnation_id_bytes CHECK ((octet_length(owner_incarnation_id) = 32))
 );
 
 
@@ -1900,20 +1904,20 @@ CREATE TABLE public.drive_federated_outgoing_file_shares (
     sharer_account_id uuid NOT NULL,
     recipient_username text NOT NULL,
     recipient_server text NOT NULL,
-    recipient_incarnation_id text NOT NULL,
+    recipient_incarnation_id bytea NOT NULL,
     share_envelope text NOT NULL,
     key_generation integer NOT NULL,
-    capability_hash text NOT NULL,
+    capability_hash bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     can_edit boolean DEFAULT false NOT NULL,
     recipient_account_id uuid NOT NULL,
-    CONSTRAINT drive_federated_outgoing_file_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_outgoing_file_shares_key_generation_check CHECK ((key_generation > 0)),
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
-    CONSTRAINT drive_federated_outgoing_file_shares_recipient_incarnation_id_c CHECK ((recipient_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
-    CONSTRAINT drive_federated_outgoing_file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096))
+    CONSTRAINT drive_federated_outgoing_file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096)),
+    CONSTRAINT drive_federated_outgoing_file_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
+    CONSTRAINT drive_federated_outgoing_file_shares_recipient_incarnation_id_bytes CHECK ((octet_length(recipient_incarnation_id) = 32))
 );
 
 
@@ -1928,21 +1932,21 @@ CREATE TABLE public.drive_federated_outgoing_shares (
     recipient_username text NOT NULL,
     recipient_server text NOT NULL,
     named_share_envelope text NOT NULL,
-    capability_hash text NOT NULL,
+    capability_hash bytea NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
     can_delete boolean DEFAULT false NOT NULL,
     upload_quota_bytes bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    recipient_incarnation_id character(64) NOT NULL,
+    recipient_incarnation_id bytea NOT NULL,
     recipient_account_id uuid NOT NULL,
-    CONSTRAINT drive_federated_outgoing_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_outgoing_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check2 CHECK ((recipient_server ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT drive_federated_outgoing_shares_recipient_incarnation_check CHECK ((recipient_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_federated_outgoing_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
-    CONSTRAINT drive_federated_outgoing_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0)))
+    CONSTRAINT drive_federated_outgoing_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0))),
+    CONSTRAINT drive_federated_outgoing_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
+    CONSTRAINT drive_federated_outgoing_shares_recipient_incarnation_id_bytes CHECK ((octet_length(recipient_incarnation_id) = 32))
 );
 
 
@@ -1990,7 +1994,7 @@ CREATE TABLE public.federation_feature_policy_documents (
     domain text NOT NULL,
     feature_type smallint NOT NULL,
     sequence bigint NOT NULL,
-    policy_hash character(64) NOT NULL,
+    policy_hash bytea NOT NULL,
     federation_identity_generation bigint NOT NULL,
     envelope jsonb NOT NULL,
     is_local boolean NOT NULL,
@@ -1999,8 +2003,8 @@ CREATE TABLE public.federation_feature_policy_documents (
     CONSTRAINT federation_feature_policy_documents_domain_check CHECK ((domain = lower(domain))),
     CONSTRAINT federation_feature_policy_documents_envelope_check CHECK ((jsonb_typeof(envelope) = 'object'::text)),
     CONSTRAINT federation_feature_policy_documents_feature_type_check CHECK ((feature_type = 1)),
-    CONSTRAINT federation_feature_policy_documents_policy_hash_check CHECK ((policy_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_feature_policy_documents_sequence_check CHECK ((sequence > 0))
+    CONSTRAINT federation_feature_policy_documents_sequence_check CHECK ((sequence > 0)),
+    CONSTRAINT federation_feature_policy_documents_policy_hash_bytes CHECK ((octet_length(policy_hash) = 32))
 );
 
 
@@ -2013,11 +2017,11 @@ CREATE TABLE public.federation_feature_policy_failures (
     domain text NOT NULL,
     feature_type smallint NOT NULL,
     failure_class text NOT NULL,
-    evidence_digest character(64) NOT NULL,
+    evidence_digest bytea NOT NULL,
     received_value jsonb,
     occurred_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT federation_feature_policy_failures_evidence_digest_check CHECK ((evidence_digest ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_feature_policy_failures_failure_class_check CHECK ((failure_class = ANY (ARRAY['rollback'::text, 'gap'::text, 'wrong_domain'::text, 'unknown_type'::text, 'malformed'::text, 'signature'::text, 'identity_chain'::text, 'configuration_replacement'::text])))
+    CONSTRAINT federation_feature_policy_failures_failure_class_check CHECK ((failure_class = ANY (ARRAY['rollback'::text, 'gap'::text, 'wrong_domain'::text, 'unknown_type'::text, 'malformed'::text, 'signature'::text, 'identity_chain'::text, 'configuration_replacement'::text]))),
+    CONSTRAINT federation_feature_policy_failures_evidence_digest_bytes CHECK ((octet_length(evidence_digest) = 32))
 );
 
 
@@ -2030,12 +2034,13 @@ CREATE TABLE public.federation_inbound (
     origin text NOT NULL,
     sequence bigint NOT NULL,
     transaction_id text,
-    digest text,
+    digest bytea,
     status smallint NOT NULL,
     answer jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT federation_inbound_sequence_check CHECK ((sequence > 0)),
-    CONSTRAINT federation_inbound_status_check CHECK (((status >= 200) AND (status <= 599)))
+    CONSTRAINT federation_inbound_status_check CHECK (((status >= 200) AND (status <= 599))),
+    CONSTRAINT federation_inbound_digest_bytes CHECK ((octet_length(digest) = 32))
 );
 
 
@@ -2058,14 +2063,14 @@ CREATE TABLE public.federation_inbound_state (
 
 CREATE TABLE public.federation_local_identity_documents (
     sequence bigint NOT NULL,
-    document_hash text NOT NULL,
-    key_id text NOT NULL,
+    document_hash bytea NOT NULL,
+    key_id bytea NOT NULL,
     document jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT federation_local_identity_documents_document_check CHECK ((jsonb_typeof(document) = 'object'::text)),
-    CONSTRAINT federation_local_identity_documents_document_hash_check CHECK ((document_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_local_identity_documents_key_id_check CHECK ((key_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_local_identity_documents_sequence_check CHECK ((sequence >= 0))
+    CONSTRAINT federation_local_identity_documents_sequence_check CHECK ((sequence >= 0)),
+    CONSTRAINT federation_local_identity_documents_document_hash_bytes CHECK ((octet_length(document_hash) = 32)),
+    CONSTRAINT federation_local_identity_documents_key_id_bytes CHECK ((octet_length(key_id) = 32))
 );
 
 
@@ -2106,8 +2111,8 @@ CREATE TABLE public.federation_peer_identities (
     domain text NOT NULL,
     trust_state text NOT NULL,
     current_sequence bigint NOT NULL,
-    current_document_hash text NOT NULL,
-    current_key_id text NOT NULL,
+    current_document_hash bytea NOT NULL,
+    current_key_id bytea NOT NULL,
     current_public_key text NOT NULL,
     first_seen_at timestamp with time zone NOT NULL,
     last_seen_at timestamp with time zone NOT NULL,
@@ -2115,23 +2120,22 @@ CREATE TABLE public.federation_peer_identities (
     quarantine_reason text,
     pending_document jsonb,
     pending_identity_chain jsonb,
-    pending_document_hash text,
+    pending_document_hash bytea,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     current_api_base text,
     capabilities jsonb DEFAULT '[]'::jsonb NOT NULL,
     discovery_expires_at timestamp with time zone,
     last_discovery_error text,
     CONSTRAINT federation_peer_identities_capabilities_check CHECK ((jsonb_typeof(capabilities) = 'array'::text)),
-    CONSTRAINT federation_peer_identities_check CHECK ((((trust_state = 'quarantined'::text) AND (quarantine_reason IS NOT NULL) AND (pending_document IS NOT NULL) AND (jsonb_typeof(pending_document) = 'object'::text) AND (pending_identity_chain IS NOT NULL) AND (jsonb_typeof(pending_identity_chain) = 'array'::text) AND (jsonb_array_length(pending_identity_chain) > 0) AND (pending_document_hash IS NOT NULL)) OR ((trust_state <> 'quarantined'::text) AND (quarantine_reason IS NULL) AND (pending_document IS NULL) AND (pending_identity_chain IS NULL) AND (pending_document_hash IS NULL)))),
-    CONSTRAINT federation_peer_identities_current_document_hash_check CHECK ((current_document_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_peer_identities_current_key_id_check CHECK ((current_key_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT federation_peer_identities_current_public_key_check CHECK ((current_public_key ~ '^[A-Za-z0-9+/]{43}=$'::text)),
     CONSTRAINT federation_peer_identities_current_sequence_check CHECK ((current_sequence >= 0)),
     CONSTRAINT federation_peer_identities_domain_check CHECK ((domain = lower(domain))),
     CONSTRAINT federation_peer_identities_domain_check1 CHECK (((length(domain) >= 3) AND (length(domain) <= 253))),
     CONSTRAINT federation_peer_identities_domain_check2 CHECK ((domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT federation_peer_identities_pending_document_hash_check CHECK (((pending_document_hash IS NULL) OR (pending_document_hash ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT federation_peer_identities_trust_state_check CHECK ((trust_state = ANY (ARRAY['tofu'::text, 'verified'::text, 'quarantined'::text])))
+    CONSTRAINT federation_peer_identities_trust_state_check CHECK ((trust_state = ANY (ARRAY['tofu'::text, 'verified'::text, 'quarantined'::text]))),
+    CONSTRAINT federation_peer_identities_current_document_hash_bytes CHECK ((octet_length(current_document_hash) = 32)),
+    CONSTRAINT federation_peer_identities_current_key_id_bytes CHECK ((octet_length(current_key_id) = 32)),
+    CONSTRAINT federation_peer_identities_pending_document_hash_bytes CHECK ((octet_length(pending_document_hash) = 32))
 );
 
 
@@ -2142,16 +2146,16 @@ CREATE TABLE public.federation_peer_identities (
 CREATE TABLE public.federation_peer_identity_documents (
     domain text NOT NULL,
     sequence bigint NOT NULL,
-    document_hash text NOT NULL,
-    key_id text NOT NULL,
+    document_hash bytea NOT NULL,
+    key_id bytea NOT NULL,
     document jsonb NOT NULL,
     acceptance text NOT NULL,
     recorded_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT federation_peer_identity_documents_acceptance_check CHECK ((acceptance = ANY (ARRAY['accepted'::text, 'quarantined'::text, 'superseded'::text]))),
     CONSTRAINT federation_peer_identity_documents_document_check CHECK ((jsonb_typeof(document) = 'object'::text)),
-    CONSTRAINT federation_peer_identity_documents_document_hash_check CHECK ((document_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_peer_identity_documents_key_id_check CHECK ((key_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT federation_peer_identity_documents_sequence_check CHECK ((sequence >= 0))
+    CONSTRAINT federation_peer_identity_documents_sequence_check CHECK ((sequence >= 0)),
+    CONSTRAINT federation_peer_identity_documents_document_hash_bytes CHECK ((octet_length(document_hash) = 32)),
+    CONSTRAINT federation_peer_identity_documents_key_id_bytes CHECK ((octet_length(key_id) = 32))
 );
 
 
@@ -2174,16 +2178,16 @@ CREATE TABLE public.federation_policy (
 CREATE TABLE public.federation_request_replays (
     origin text NOT NULL,
     request_id text NOT NULL,
-    request_hash text NOT NULL,
+    request_hash bytea NOT NULL,
     first_seen_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT federation_request_replays_check CHECK ((expires_at > first_seen_at)),
     CONSTRAINT federation_request_replays_origin_check CHECK ((origin = lower(origin))),
     CONSTRAINT federation_request_replays_origin_check1 CHECK (((length(origin) >= 3) AND (length(origin) <= 253))),
     CONSTRAINT federation_request_replays_origin_check2 CHECK ((origin ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT federation_request_replays_request_hash_check CHECK ((request_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT federation_request_replays_request_id_check CHECK (((length(request_id) >= 1) AND (length(request_id) <= 128))),
-    CONSTRAINT federation_request_replays_request_id_check1 CHECK ((request_id ~ '^[A-Za-z0-9._~-]+$'::text))
+    CONSTRAINT federation_request_replays_request_id_check1 CHECK ((request_id ~ '^[A-Za-z0-9._~-]+$'::text)),
+    CONSTRAINT federation_request_replays_request_hash_bytes CHECK ((octet_length(request_hash) = 32))
 );
 
 
@@ -2341,7 +2345,7 @@ CREATE TABLE public.drive_file_versions (
     keep_forever boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     kind text NOT NULL,
-    ciphertext_sha256 text,
+    ciphertext_sha256 bytea,
     key_generation integer NOT NULL,
     parent_version_id uuid,
     remote_author_server text,
@@ -2349,7 +2353,8 @@ CREATE TABLE public.drive_file_versions (
     blob_suite smallint DEFAULT 2 NOT NULL,
     revision_content_envelope text,
     CONSTRAINT drive_file_versions_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'yjs'::text]))),
-    CONSTRAINT drive_file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL)))
+    CONSTRAINT drive_file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL))),
+    CONSTRAINT drive_file_versions_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
 );
 
 
@@ -2373,26 +2378,26 @@ CREATE TABLE public.drive_files (
     seed_committed boolean DEFAULT false NOT NULL,
     deleted_at timestamp with time zone,
     trash_root_id uuid,
-    ciphertext_sha256 text,
+    ciphertext_sha256 bytea,
     original_pruned boolean DEFAULT false NOT NULL,
     fed_share_id uuid,
     original_key_generation integer NOT NULL,
     key_generation integer NOT NULL,
     collab_log_floor bigint DEFAULT 0 NOT NULL,
     editors_can_share boolean DEFAULT false NOT NULL,
-    name_hash text NOT NULL,
-    content_hash text,
+    name_hash bytea NOT NULL,
+    content_hash bytea,
     content_revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
     blob_suite smallint DEFAULT 2 NOT NULL,
     revision_content_envelope text,
-    CONSTRAINT drive_files_ciphertext_sha256_check CHECK (((ciphertext_sha256 IS NULL) OR (ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT drive_files_collab_log_floor_check CHECK ((collab_log_floor >= 0)),
-    CONSTRAINT drive_files_content_hash_check CHECK ((content_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT drive_files_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_files_key_generation CHECK ((key_generation > 0)),
     CONSTRAINT drive_files_metadata_revision_check CHECK ((metadata_revision > 0)),
-    CONSTRAINT drive_files_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_files_original_key_generation CHECK ((original_key_generation > 0))
+    CONSTRAINT drive_files_original_key_generation CHECK ((original_key_generation > 0)),
+    CONSTRAINT drive_files_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32)),
+    CONSTRAINT drive_files_content_hash_bytes CHECK ((octet_length(content_hash) = 32)),
+    CONSTRAINT drive_files_name_hash_bytes CHECK ((octet_length(name_hash) = 32))
 );
 
 
@@ -2458,7 +2463,7 @@ CREATE TABLE public.mail_address_keys (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     address_id uuid NOT NULL,
     fingerprint text NOT NULL,
-    sha256_fingerprint character(64) NOT NULL,
+    sha256_fingerprint text NOT NULL,
     public_key bytea NOT NULL,
     private_key_envelope bytea NOT NULL,
     is_primary boolean NOT NULL,
@@ -2827,9 +2832,9 @@ CREATE TABLE public.mail_group_key_shares (
     account_id uuid NOT NULL,
     share bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    member_incarnation_id text NOT NULL,
-    CONSTRAINT mail_group_key_shares_member_incarnation_check CHECK ((member_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT mail_group_key_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 16384)))
+    member_incarnation_id bytea NOT NULL,
+    CONSTRAINT mail_group_key_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 16384))),
+    CONSTRAINT mail_group_key_shares_member_incarnation_id_bytes CHECK ((octet_length(member_incarnation_id) = 32))
 );
 
 
@@ -2841,7 +2846,7 @@ CREATE TABLE public.mail_group_keys (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     group_id uuid NOT NULL,
     fingerprint text NOT NULL,
-    sha256_fingerprint character(64) NOT NULL,
+    sha256_fingerprint text NOT NULL,
     public_key bytea NOT NULL,
     is_primary boolean DEFAULT false NOT NULL,
     flags integer DEFAULT 3 NOT NULL,
@@ -2908,11 +2913,11 @@ CREATE TABLE public.mail_group_signing_shares (
     signer_public_key bytea NOT NULL,
     account_id uuid NOT NULL,
     share bytea NOT NULL,
-    member_incarnation_id text NOT NULL,
+    member_incarnation_id bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT mail_group_signing_shares_member_incarnation_id_check CHECK ((member_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT mail_group_signing_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 2048))),
-    CONSTRAINT mail_group_signing_shares_signer_public_key_check CHECK ((octet_length(signer_public_key) = 32))
+    CONSTRAINT mail_group_signing_shares_signer_public_key_check CHECK ((octet_length(signer_public_key) = 32)),
+    CONSTRAINT mail_group_signing_shares_member_incarnation_id_bytes CHECK ((octet_length(member_incarnation_id) = 32))
 );
 
 
@@ -3523,11 +3528,11 @@ CREATE TABLE public.remote_account_manifests (
     domain text NOT NULL,
     account_id uuid NOT NULL,
     sequence bigint NOT NULL,
-    manifest_hash text NOT NULL,
+    manifest_hash bytea NOT NULL,
     manifest jsonb NOT NULL,
     fetched_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT remote_account_manifests_manifest_hash_check CHECK ((manifest_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT remote_account_manifests_sequence_check CHECK ((sequence >= 1))
+    CONSTRAINT remote_account_manifests_sequence_check CHECK ((sequence >= 1)),
+    CONSTRAINT remote_account_manifests_manifest_hash_bytes CHECK ((octet_length(manifest_hash) = 32))
 );
 
 
@@ -3537,7 +3542,7 @@ CREATE TABLE public.remote_account_manifests (
 
 CREATE TABLE public.remote_account_renames (
     domain text NOT NULL,
-    incarnation_id character(64) NOT NULL,
+    incarnation_id bytea NOT NULL,
     authority_public_key text NOT NULL,
     sequence integer NOT NULL,
     head_digest bytea NOT NULL,
@@ -3548,9 +3553,9 @@ CREATE TABLE public.remote_account_renames (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT remote_account_renames_domain_check CHECK ((domain = lower(domain))),
     CONSTRAINT remote_account_renames_head_digest_check CHECK ((octet_length(head_digest) = 32)),
-    CONSTRAINT remote_account_renames_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT remote_account_renames_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000))),
-    CONSTRAINT remote_account_renames_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text, 'gone'::text])))
+    CONSTRAINT remote_account_renames_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text, 'gone'::text]))),
+    CONSTRAINT remote_account_renames_incarnation_id_bytes CHECK ((octet_length(incarnation_id) = 32))
 );
 
 
@@ -3581,7 +3586,7 @@ CREATE TABLE public.retired_account_ids (
 
 CREATE TABLE public.chat_sealed_sender_certificates (
     certificate_id bigint NOT NULL,
-    root_id text NOT NULL,
+    root_id bytea NOT NULL,
     root_public_key text NOT NULL,
     certificate text NOT NULL,
     online_private_key bytea,
@@ -3593,7 +3598,7 @@ CREATE TABLE public.chat_sealed_sender_certificates (
     CONSTRAINT chat_sealed_sender_certificates_check CHECK ((activates_at >= published_at)),
     CONSTRAINT chat_sealed_sender_certificates_check1 CHECK ((expires_at > activates_at)),
     CONSTRAINT chat_sealed_sender_certificates_online_private_key_check CHECK ((octet_length(online_private_key) = 32)),
-    CONSTRAINT chat_sealed_sender_certificates_root_id_check CHECK ((root_id ~ '^[0-9a-f]{64}$'::text))
+    CONSTRAINT chat_sealed_sender_certificates_root_id_bytes CHECK ((octet_length(root_id) = 32))
 );
 
 
@@ -3702,20 +3707,21 @@ CREATE TABLE public.drive_uploads (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     pending_bytes bytea DEFAULT '\x'::bytea NOT NULL,
-    name_hash text,
+    name_hash bytea,
     kind text DEFAULT 'file'::text NOT NULL,
     key_generation integer,
-    content_hash text,
+    content_hash bytea,
     based_on text,
     revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
     blob_suite smallint DEFAULT 2 NOT NULL,
     uploaded_at timestamp with time zone,
     CONSTRAINT drive_uploads_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_uploads_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'version'::text]))),
-    CONSTRAINT drive_uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (content_hash ~ '^[0-9a-f]{64}$'::text))))),
+    CONSTRAINT drive_uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (octet_length(content_hash) = 32))))),
     CONSTRAINT drive_uploads_metadata_revision_check CHECK ((metadata_revision > 0)),
-    CONSTRAINT drive_uploads_name_hash_check CHECK ((name_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT drive_uploads_uploaded_check CHECK (((uploaded_at IS NULL) OR ((blob_suite = 2) AND (received_bytes = total_bytes))))
+    CONSTRAINT drive_uploads_uploaded_check CHECK (((uploaded_at IS NULL) OR ((blob_suite = 2) AND (received_bytes = total_bytes)))),
+    CONSTRAINT drive_uploads_content_hash_bytes CHECK ((octet_length(content_hash) = 32)),
+    CONSTRAINT drive_uploads_name_hash_bytes CHECK ((octet_length(name_hash) = 32))
 );
 
 
@@ -3808,8 +3814,8 @@ CREATE TABLE public.accounts (
     recovery_key_envelope text NOT NULL,
     public_key text NOT NULL,
     account_authority_public_key text NOT NULL,
-    account_authority_key_id character(64) NOT NULL,
-    account_incarnation_id character(64) NOT NULL,
+    account_authority_key_id bytea NOT NULL,
+    account_incarnation_id bytea NOT NULL,
     drive_signing_public_key text NOT NULL,
     totp_enabled boolean DEFAULT false NOT NULL,
     storage_quota_bytes bigint DEFAULT '10737418240'::bigint NOT NULL,
@@ -3851,8 +3857,6 @@ CREATE TABLE public.accounts (
     public_sharing text DEFAULT 'on'::text NOT NULL,
     federation text DEFAULT 'on'::text NOT NULL,
     master_key_generation integer DEFAULT 1 NOT NULL,
-    CONSTRAINT accounts_account_authority_key_id_check CHECK (((account_authority_key_id = ''::bpchar) OR (account_authority_key_id ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT accounts_account_incarnation_id_check CHECK (((account_incarnation_id = ''::bpchar) OR (account_incarnation_id ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT accounts_closing CHECK ((((state = 'closing'::text) = (closing_by IS NOT NULL)) AND ((state = 'closing'::text) = (closes_at IS NOT NULL)))),
     CONSTRAINT accounts_closing_by_check CHECK ((closing_by = ANY (ARRAY['user'::text, 'admin'::text, 'restore'::text]))),
     CONSTRAINT accounts_color_format CHECK (((color IS NULL) OR (color ~ '^#[0-9a-fA-F]{6}$'::text))),
@@ -3877,7 +3881,9 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_suspended_reason_check CHECK ((suspended_reason = ANY (ARRAY['admin'::text, 'operator_order'::text, 'security'::text]))),
     CONSTRAINT accounts_totp_secret_sealed_check CHECK (((totp_secret_sealed IS NULL) OR ((octet_length(totp_secret_sealed) >= 47) AND (octet_length(totp_secret_sealed) <= 200)))),
     CONSTRAINT accounts_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
-    CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days = ANY (ARRAY[7, 30, 90, 180, 365, 3650])))
+    CONSTRAINT accounts_version_retention_days_check CHECK ((version_retention_days = ANY (ARRAY[7, 30, 90, 180, 365, 3650]))),
+    CONSTRAINT accounts_account_authority_key_id_bytes CHECK ((octet_length(account_authority_key_id) = ANY (ARRAY[0, 32]))),
+    CONSTRAINT accounts_account_incarnation_id_bytes CHECK ((octet_length(account_incarnation_id) = ANY (ARRAY[0, 32])))
 );
 
 
@@ -4605,7 +4611,7 @@ ALTER TABLE ONLY public.chat_one_time_pre_keys
 --
 
 ALTER TABLE ONLY public.chat_profiles
-    ADD CONSTRAINT chat_profiles_pkey PRIMARY KEY (account_id, version);
+    ADD CONSTRAINT chat_profiles_pkey PRIMARY KEY (account_id, profile_version);
 
 
 --

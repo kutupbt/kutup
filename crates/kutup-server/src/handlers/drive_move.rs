@@ -154,7 +154,7 @@ pub async fn move_file(
     crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(file_id)).await?;
     sqlx::query(
         "UPDATE drive_files SET collection_id = $2, key_epoch = $3, file_key_envelope = $4,
-                          name_hash = $5, content_hash = $6
+                          name_hash = decode($5, 'hex'), content_hash = decode($6, 'hex')
          WHERE id = $1",
     )
     .bind(file_id)
@@ -271,7 +271,7 @@ pub async fn move_collection(
     let generation =
         crate::drive_names::hash_generation(&mut tx, place, req.name_hash_generation).await?;
     sqlx::query(
-        "UPDATE drive_collections SET parent_collection_id = $2, name_hash = $3, name_hash_generation = $4
+        "UPDATE drive_collections SET parent_collection_id = $2, name_hash = decode($3, 'hex'), name_hash_generation = $4
          WHERE id = $1",
     )
         .bind(folder)

@@ -295,7 +295,7 @@ pub async fn create_user(
                public_key, account_authority_public_key, account_authority_key_id,
                account_incarnation_id, drive_signing_public_key,
                is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2::uuid,$3,$4,$5,'','','','','','','',false,true,$6)
+           ) VALUES ($1,$2::uuid,$3,$4,$5,'','','','',''::bytea,''::bytea,'',false,true,$6)
            RETURNING id"#,
     )
     .bind(&req.username)
@@ -1796,7 +1796,7 @@ pub async fn get_federation_control_plane(
     }
     let delivery_counts = federation_delivery_counts(&state.pool).await?;
     let peers = sqlx::query_as::<_, PeerRow>(
-        "SELECT domain, trust_state, current_sequence, current_key_id,
+        "SELECT domain, trust_state, current_sequence, encode(current_key_id, 'hex') AS current_key_id,
                 current_api_base, capabilities, first_seen_at, last_seen_at,
                 verified_at, discovery_expires_at, quarantine_reason,
                 pending_document->'key'->>'keyId' AS pending_fingerprint,
@@ -2126,7 +2126,7 @@ pub async fn get_federation_peer_evidence(
     let domain = canonical_federation_domain(&domain)?;
     type PeerEvidenceRow = (String, String, Option<String>, Option<String>);
     let peer: PeerEvidenceRow = sqlx::query_as(
-        "SELECT trust_state, current_document_hash, pending_document_hash, quarantine_reason
+        "SELECT trust_state, encode(current_document_hash, 'hex'), encode(pending_document_hash, 'hex'), quarantine_reason
          FROM federation_peer_identities WHERE domain = $1",
     )
     .bind(&domain)
@@ -2143,7 +2143,7 @@ pub async fn get_federation_peer_evidence(
         OffsetDateTime,
     );
     let mut rows: Vec<DocumentRow> = sqlx::query_as(
-        "SELECT sequence, document_hash, key_id, document, acceptance, recorded_at
+        "SELECT sequence, encode(document_hash, 'hex'), encode(key_id, 'hex'), document, acceptance, recorded_at
          FROM federation_peer_identity_documents
          WHERE domain = $1
          ORDER BY sequence DESC, recorded_at DESC, document_hash
@@ -2719,7 +2719,7 @@ pub async fn wipe_user(
         r#"UPDATE accounts SET
                master_key_envelope = '', recovery_key_envelope = '',
                public_key = '', account_authority_public_key = '',
-               account_authority_key_id = '', account_incarnation_id = '',
+               account_authority_key_id = ''::bytea, account_incarnation_id = ''::bytea,
                drive_signing_public_key = '',
                recovery_key_verifier = NULL, drive_key_binding = NULL,
                key_binding = $1::uuid, opaque_record = $3, opaque_suite = $4,
@@ -3162,7 +3162,7 @@ mod tests {
                 "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                     public_key, account_authority_public_key,
                     account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-                 VALUES ($1, $2, '', '', '', '', '', '', '')",
+                 VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
             )
             .bind(user_id)
             .bind(format!("reset{}", &user_id.simple().to_string()[..12]))

@@ -112,7 +112,7 @@ pub async fn turn_off(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> sqlx
             SET state = 'rejected', error_class = 'federation_off', updated_at = now()
           WHERE kind = 'rename' AND state = 'pending'
             AND payload->>'incarnation' IN
-                (SELECT account_incarnation_id FROM accounts WHERE id = $1)",
+                (SELECT encode(account_incarnation_id, 'hex') FROM accounts WHERE id = $1)",
     )
     .bind(user_id)
     .execute(&mut **tx)
@@ -214,7 +214,7 @@ mod tests {
             "INSERT INTO accounts (id, username, master_key_envelope, recovery_key_envelope,
                 public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
+             VALUES ($1, $2, '', '', '', '', ''::bytea, ''::bytea, '')",
         )
         .bind(user_id)
         .bind(format!("fed{}", &user_id.simple().to_string()[..12]))
@@ -315,7 +315,7 @@ mod tests {
             .unwrap();
         let user = account(&pool).await;
         let incarnation = format!("{:064x}", user.as_u128());
-        sqlx::query("UPDATE accounts SET account_incarnation_id = $2 WHERE id = $1")
+        sqlx::query("UPDATE accounts SET account_incarnation_id = decode($2, 'hex') WHERE id = $1")
             .bind(user)
             .bind(&incarnation)
             .execute(&pool)
@@ -326,7 +326,7 @@ mod tests {
             "INSERT INTO federation_peer_identities
                  (domain, trust_state, current_sequence, current_document_hash, current_key_id,
                   current_public_key, first_seen_at, last_seen_at)
-             VALUES ($1, 'tofu', 1, $2, $2, $3, now(), now())",
+             VALUES ($1, 'tofu', 1, decode($2, 'hex'), decode($2, 'hex'), $3, now(), now())",
         )
         .bind(&peer)
         .bind("ab".repeat(32))

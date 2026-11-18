@@ -708,7 +708,8 @@ pub(crate) async fn store_manifest(
     // The common serialization point for every device-set change.
     let account: (String, String, String, String, String) = sqlx::query_as(
         "SELECT public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key
+                encode(account_authority_key_id, 'hex'), encode(account_incarnation_id, 'hex'),
+                drive_signing_public_key
          FROM accounts WHERE id = $1 FOR UPDATE",
     )
     .bind(user_id)
@@ -740,7 +741,7 @@ pub(crate) async fn store_manifest(
     }
 
     let current: Option<(i64, String, serde_json::Value)> = sqlx::query_as(
-        "SELECT version, manifest_hash, manifest
+        "SELECT version, encode(manifest_hash, 'hex'), manifest
          FROM chat_device_manifests WHERE account_id = $1 FOR UPDATE",
     )
     .bind(user_id)
@@ -830,7 +831,7 @@ pub(crate) async fn store_manifest(
     sqlx::query(
         "INSERT INTO chat_device_manifests
              (account_id, version, manifest_hash, authority_key_id, manifest)
-         VALUES ($1,$2,$3,$4,$5)
+         VALUES ($1,$2,decode($3,'hex'),decode($4,'hex'),$5)
          ON CONFLICT (account_id) DO UPDATE SET
              version = EXCLUDED.version,
              manifest_hash = EXCLUDED.manifest_hash,
@@ -848,7 +849,7 @@ pub(crate) async fn store_manifest(
     sqlx::query(
         "INSERT INTO chat_device_manifest_history
              (account_id, incarnation_id, version, manifest_hash, authority_key_id, manifest)
-         VALUES ($1,$2,$3,$4,$5,$6)
+         VALUES ($1,decode($2,'hex'),$3,decode($4,'hex'),decode($5,'hex'),$6)
          ON CONFLICT (account_id, incarnation_id, version) DO NOTHING",
     )
     .bind(user_id)
@@ -1132,7 +1133,7 @@ pub async fn get_manifest_history(
     let page_from = query.page_from_sequence.unwrap_or(query.from_sequence);
     let values: Vec<serde_json::Value> = sqlx::query_scalar(
         "SELECT manifest FROM chat_device_manifest_history
-         WHERE account_id = $1 AND incarnation_id = $2 AND version BETWEEN $3 AND $4
+         WHERE account_id = $1 AND incarnation_id = decode($2, 'hex') AND version BETWEEN $3 AND $4
          ORDER BY version LIMIT 65",
     )
     .bind(target_id)
@@ -1271,11 +1272,11 @@ pub async fn put_profile(
 
     sqlx::query(
         "INSERT INTO chat_profiles
-             (account_id, suite, version, revision, source_device_id, name_ciphertext,
+             (account_id, suite, profile_version, revision, source_device_id, name_ciphertext,
               avatar_ciphertext, wrapped_key, access_key_verifier, is_current,
               about_ciphertext)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10)
-         ON CONFLICT (account_id, version) DO UPDATE SET
+         VALUES ($1,$2,decode($3,'hex'),$4,$5,$6,$7,$8,$9,true,$10)
+         ON CONFLICT (account_id, profile_version) DO UPDATE SET
              suite = EXCLUDED.suite,
              revision = EXCLUDED.revision,
              source_device_id = EXCLUDED.source_device_id,
@@ -1302,7 +1303,7 @@ pub async fn put_profile(
     sqlx::query(
         "INSERT INTO chat_delivery_capabilities
              (account_id, profile_version, profile_revision, capability_hash, rotated_at)
-         VALUES ($1,$2,$3,$4,now())
+         VALUES ($1,decode($2,'hex'),$3,$4,now())
          ON CONFLICT (account_id) DO UPDATE SET
              profile_version = EXCLUDED.profile_version,
              profile_revision = EXCLUDED.profile_revision,
@@ -1420,11 +1421,11 @@ pub(crate) async fn load_public_profile(
     access_key: &[u8],
 ) -> AppResult<Option<ChatProfileResponse>> {
     let row: Option<PublicProfileRow> = sqlx::query_as(
-        "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
-                p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
+        "SELECT p.suite, encode(p.profile_version, 'hex'), p.revision, p.source_device_id,
+                p.name_ciphertext, p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
          FROM chat_profiles p
          JOIN accounts u ON u.id = p.account_id
-         WHERE u.id = $1 AND u.is_active = true AND p.version = $2",
+         WHERE u.id = $1 AND u.is_active = true AND p.profile_version = decode($2, 'hex')",
     )
     .bind(user_id)
     .bind(version)
@@ -1478,12 +1479,12 @@ async fn load_own_profile_in(
     let account = crate::account_ids::local(server_name, user_id)?;
     let suffix = if lock { " FOR UPDATE" } else { "" };
     let sql = format!(
-        "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
-                p.avatar_ciphertext, p.about_ciphertext, p.wrapped_key, p.access_key_verifier,
-                c.capability_hash
+        "SELECT p.suite, encode(p.profile_version, 'hex'), p.revision, p.source_device_id,
+                p.name_ciphertext, p.avatar_ciphertext, p.about_ciphertext, p.wrapped_key,
+                p.access_key_verifier, c.capability_hash
          FROM chat_profiles p
          JOIN chat_delivery_capabilities c ON c.account_id = p.account_id
-              AND c.profile_version = p.version AND c.profile_revision = p.revision
+              AND c.profile_version = p.profile_version AND c.profile_revision = p.revision
          WHERE p.account_id = $1 AND p.is_current = true{suffix}"
     );
     let row: Option<OwnProfileRow> = sqlx::query_as(&sql)
@@ -1590,6 +1591,16 @@ async fn insert_kem_pool(
 /// `GET /api/v1/chat/devices` — the account's Chat devices: those its manifest
 /// lists with Chat keys (a registration not listed yet, waiting out the
 /// listing grace, isn't one).
+/// A Chat device as `list_devices` reads it: id, suite, name (none: unnamed),
+/// created, last seen.
+type ChatDeviceRow = (
+    i32,
+    i16,
+    Option<String>,
+    OffsetDateTime,
+    Option<OffsetDateTime>,
+);
+
 #[utoipa::path(
     get,
     path = "/api/v1/chat/devices",
@@ -1600,14 +1611,7 @@ async fn insert_kem_pool(
 )]
 pub async fn list_devices(State(state): State<AppState>, auth: AuthAccount) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.account_id)?;
-    type DeviceRow = (
-        i32,
-        i16,
-        Option<String>,
-        OffsetDateTime,
-        Option<OffsetDateTime>,
-    );
-    let rows: Vec<DeviceRow> = sqlx::query_as(
+    let rows: Vec<ChatDeviceRow> = sqlx::query_as(
         "SELECT device_id, suite, name, created_at, last_seen_at
          FROM account_devices WHERE account_id = $1 AND suite IS NOT NULL ORDER BY device_id",
     )
