@@ -177,7 +177,8 @@ pub async fn account_keys(pool: &sqlx::PgPool, user_id: Uuid) -> AppResult<Accou
         .execute(&mut *tx)
         .await?;
     let (authority, generation): (String, i32) = sqlx::query_as(
-        "SELECT account_authority_public_key, master_key_generation FROM accounts WHERE id = $1",
+        "SELECT kutup_b64(account_authority_public_key), master_key_generation FROM accounts
+         WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)

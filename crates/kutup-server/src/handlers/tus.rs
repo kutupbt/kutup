@@ -386,7 +386,7 @@ pub async fn create(
              file_key_envelope, key_epoch, \
              storage_path, s3_upload_id, name_hash, revision_id, blob_suite, \
              metadata_envelope, metadata_revision) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,decode($10, 'hex'),$11,$12,NULL,NULL)",
+         VALUES ($1,$2,$3,$4,$5,kutup_unb64($6),$7,$8,$9,decode($10, 'hex'),$11,$12,NULL,NULL)",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -598,7 +598,7 @@ pub async fn patch(
     }
     let row: Option<UploadRow> = match sqlx::query_as(
         "SELECT collection_id, file_id, total_bytes, received_bytes, \
-                file_key_envelope, key_epoch, \
+                kutup_b64(file_key_envelope) AS file_key_envelope, key_epoch, \
                 storage_path, s3_upload_id, s3_part_etags, pending_bytes, \
                 encode(name_hash, 'hex') AS name_hash, \
                 kind, key_generation, encode(content_hash, 'hex') AS content_hash, based_on, revision_id, \
@@ -1006,7 +1006,8 @@ pub(super) async fn insert_file(
              metadata_revision, storage_path, encrypted_size_bytes, original_key_generation, \
              name_hash, content_hash, content_revision_id, \
              blob_suite, revision_content_envelope) \
-         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1,decode($10, 'hex'),decode($11, 'hex'),$12,$13,$14)",
+         VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,$7,$8,$9,1,decode($10, 'hex'), \
+                 decode($11, 'hex'),$12,$13,kutup_unb64($14))",
     )
     .bind(file.file_id)
     .bind(file.collection_id)

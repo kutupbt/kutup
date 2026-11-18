@@ -828,7 +828,7 @@ pub async fn register_finish(
     // current one.
     let updated = sqlx::query(
         "UPDATE accounts SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
-                          master_key_envelope = $6
+                          master_key_envelope = kutup_unb64($6)
          WHERE id = $1 AND key_binding = $2::uuid
            AND (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
            AND (NOT $7 OR opaque_server_key_id IS DISTINCT FROM $5)",

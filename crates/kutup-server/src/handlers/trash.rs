@@ -48,8 +48,9 @@ pub async fn list(State(state): State<AppState>, user: AuthAccount) -> AppResult
         OffsetDateTime,
     );
     let folders: Vec<FolderTuple> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.owner_key_envelope,
-                  c.key_epoch, c.name_revision, c.epoch_statement, encode(c.epoch_statement_hash, 'hex'), c.color,
+        r#"SELECT c.id, c.owner_account_id, kutup_b64(c.name_envelope),
+                  kutup_b64(c.owner_key_envelope), c.key_epoch, c.name_revision,
+                  kutup_b64(c.epoch_statement), encode(c.epoch_statement_hash, 'hex'), c.color,
                   (SELECT p.id FROM drive_collections p
                     WHERE p.id = c.parent_collection_id AND p.deleted_at IS NULL),
                   (SELECT COUNT(*) FROM drive_files f WHERE f.trash_root_id = c.id),
@@ -83,10 +84,12 @@ pub async fn list(State(state): State<AppState>, user: AuthAccount) -> AppResult
         thumb_lg_generation: Option<i32>,
     }
     let files: Vec<TrashedFile> = sqlx::query_as(
-        r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
+        r#"SELECT f.id, f.collection_id, kutup_b64(f.metadata_envelope) AS metadata_envelope,
+                  kutup_b64(f.file_key_envelope) AS file_key_envelope,
                   f.key_epoch, f.key_generation, f.metadata_revision,
-                  c.owner_account_id, c.owner_key_envelope, c.key_epoch AS collection_key_epoch,
-                  c.epoch_statement,
+                  c.owner_account_id, kutup_b64(c.owner_key_envelope) AS owner_key_envelope,
+                  c.key_epoch AS collection_key_epoch,
+                  kutup_b64(c.epoch_statement) AS epoch_statement,
                   encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash, f.deleted_at,
                   sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                   sm.key_generation AS thumb_sm_generation,
@@ -262,7 +265,7 @@ pub async fn restore(
                 .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
             )?;
             sqlx::query(
-                "UPDATE drive_files SET metadata_envelope = $2, metadata_revision = $3 WHERE id = $1",
+                "UPDATE drive_files SET metadata_envelope = kutup_unb64($2), metadata_revision = $3 WHERE id = $1",
             )
             .bind(root_id)
             .bind(envelope)
@@ -355,7 +358,7 @@ pub async fn restore(
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
         )?;
         sqlx::query(
-            "UPDATE drive_collections SET name_envelope = $2, name_revision = $3 WHERE id = $1",
+            "UPDATE drive_collections SET name_envelope = kutup_unb64($2), name_revision = $3 WHERE id = $1",
         )
         .bind(root_id)
         .bind(envelope)

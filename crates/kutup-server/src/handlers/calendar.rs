@@ -310,7 +310,7 @@ pub async fn create(
     // The owner's own copy: from the caller's account, as it is now, to
     // itself, for this calendar's first key, signed by its account key.
     let (incarnation, signing): (String, String) = sqlx::query_as(
-        "SELECT encode(account_incarnation_id, 'hex'), drive_signing_public_key FROM accounts WHERE id = $1",
+        "SELECT encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key) FROM accounts WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)

@@ -175,7 +175,7 @@ async fn store_capped(
     let entry = &verified.entry;
     let mut tx = pool.begin().await?;
     let kept: Option<(Value, String)> = sqlx::query_as(
-        "SELECT chain, authority_public_key FROM remote_account_renames
+        "SELECT chain, kutup_b64(authority_public_key) FROM remote_account_renames
           WHERE domain = $1 AND incarnation_id = decode($2, 'hex') FOR UPDATE",
     )
     .bind(domain)
@@ -217,7 +217,7 @@ async fn store_capped(
                 "INSERT INTO remote_account_renames
                      (domain, incarnation_id, authority_public_key, sequence, head_digest,
                       current_address, state, chain, addresses)
-                 VALUES ($1, decode($2, 'hex'), $3, $4, $5, $6, $7, $8, $9)
+                 VALUES ($1, decode($2, 'hex'), kutup_unb64($3), $4, $5, $6, $7, $8, $9)
                  ON CONFLICT DO NOTHING",
             )
             .bind(domain)
@@ -336,7 +336,8 @@ async fn kept(
 ) -> AppResult<Vec<(ChainEntry, f64)>> {
     type Row = (String, String, String, String, Value, f64);
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT encode(incarnation_id, 'hex'), authority_public_key, current_address, state, chain,
+        "SELECT encode(incarnation_id, 'hex'), kutup_b64(authority_public_key), current_address,
+                state, chain,
                 EXTRACT(EPOCH FROM now() - updated_at)::float8
            FROM remote_account_renames
           WHERE domain = $1 AND addresses @> ARRAY[$2]
@@ -860,7 +861,7 @@ async fn deliver_one(
         return settle(false, Some("federation_off"), json!({})).await;
     }
     let rows: Vec<(Value, String, String)> = sqlx::query_as(
-        "SELECT statement, authority_public_key, current FROM account_renames
+        "SELECT statement, kutup_b64(authority_public_key), current FROM account_renames
           WHERE incarnation_id = decode($1, 'hex') ORDER BY sequence",
     )
     .bind(&incarnation)

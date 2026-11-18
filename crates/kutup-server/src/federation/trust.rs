@@ -194,7 +194,7 @@ impl FederationTrustStore {
         validate_server_name(domain).map_err(anyhow::Error::msg)?;
         type PeerRow = (String, String);
         let row: Option<PeerRow> = sqlx::query_as(
-            "SELECT encode(current_document_hash, 'hex'), current_public_key
+            "SELECT encode(current_document_hash, 'hex'), kutup_b64(current_public_key)
              FROM federation_peer_identities WHERE domain = $1",
         )
         .bind(domain)
@@ -361,7 +361,7 @@ impl FederationTrustStore {
             "UPDATE federation_peer_identities
              SET trust_state = 'verified', current_sequence = $2,
                  current_document_hash = decode($3, 'hex'), current_key_id = decode($4, 'hex'),
-                 current_public_key = $5, verified_at = $6,
+                 current_public_key = kutup_unb64($5), verified_at = $6,
                  quarantine_reason = NULL, pending_document = NULL,
                  pending_identity_chain = NULL, pending_document_hash = NULL,
                  last_seen_at = $6, updated_at = $6
@@ -472,7 +472,7 @@ async fn observe_existing(
     sqlx::query(
         "UPDATE federation_peer_identities
          SET current_sequence = $2, current_document_hash = decode($3, 'hex'),
-             current_key_id = decode($4, 'hex'), current_public_key = $5,
+             current_key_id = decode($4, 'hex'), current_public_key = kutup_unb64($5),
              last_seen_at = $6, updated_at = $6
          WHERE domain = $1",
     )
@@ -601,7 +601,7 @@ async fn insert_peer(
         "INSERT INTO federation_peer_identities
          (domain, trust_state, current_sequence, current_document_hash,
           current_key_id, current_public_key, first_seen_at, last_seen_at, updated_at)
-         VALUES ($1, $2, $3, decode($4, 'hex'), decode($5, 'hex'), $6, $7, $7, $7)",
+         VALUES ($1, $2, $3, decode($4, 'hex'), decode($5, 'hex'), kutup_unb64($6), $7, $7, $7)",
     )
     .bind(domain)
     .bind(trust.as_str())

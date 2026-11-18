@@ -65,7 +65,8 @@ pub fn revision_headers(
 
 pub async fn current_content(pool: &PgPool, file_id: Uuid) -> sqlx::Result<Option<CurrentContent>> {
     let version: Option<(Uuid, String, i64, Option<String>)> = sqlx::query_as(
-        "SELECT id, storage_path, size_bytes, revision_content_envelope FROM drive_file_versions
+        "SELECT id, storage_path, size_bytes, kutup_b64(revision_content_envelope)
+         FROM drive_file_versions
          WHERE file_id = $1 AND kind = 'file'
          ORDER BY created_at DESC LIMIT 1",
     )
@@ -92,7 +93,8 @@ pub async fn original_content(
     file_id: Uuid,
 ) -> sqlx::Result<Option<CurrentContent>> {
     let original: Option<(String, i64, Uuid, Option<String>)> = sqlx::query_as(
-        "SELECT storage_path, encrypted_size_bytes, content_revision_id, revision_content_envelope
+        "SELECT storage_path, encrypted_size_bytes, content_revision_id,
+                kutup_b64(revision_content_envelope)
          FROM drive_files
          WHERE id = $1 AND deleted_at IS NULL AND NOT original_pruned",
     )

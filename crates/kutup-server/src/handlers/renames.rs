@@ -205,7 +205,8 @@ pub async fn rename(
     let mut tx = state.pool.begin().await?;
     type Account = (String, String, String, bool, bool);
     let (username, incarnation, authority, first_login, break_glass): Account = sqlx::query_as(
-        "SELECT COALESCE(username, ''), encode(account_incarnation_id, 'hex'), account_authority_public_key,
+        "SELECT COALESCE(username, ''), encode(account_incarnation_id, 'hex'),
+                kutup_b64(account_authority_public_key),
                 is_first_login, is_break_glass
            FROM accounts WHERE id = $1 AND is_active FOR UPDATE",
     )
@@ -409,7 +410,7 @@ pub async fn rename(
         "INSERT INTO account_renames
              (incarnation_id, sequence, account_id, authority_public_key, previous, current,
               counted, statement, digest)
-         VALUES (decode($1, 'hex'), $2, $3, $4, $5, $6, $7, $8, decode($9, 'hex'))",
+         VALUES (decode($1, 'hex'), $2, $3, kutup_unb64($4), $5, $6, $7, $8, decode($9, 'hex'))",
     )
     .bind(&incarnation)
     .bind(statement.sequence as i32)

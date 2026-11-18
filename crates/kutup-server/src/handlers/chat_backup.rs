@@ -136,7 +136,7 @@ pub async fn provision(
     let mut transaction = state.pool.begin().await?;
     let user_row: (String, String, String, String) = sqlx::query_as(
         "SELECT COALESCE(key_binding::text, ''),encode(account_incarnation_id,'hex'),
-                account_authority_public_key,encode(account_authority_key_id,'hex') FROM accounts WHERE id=$1 FOR UPDATE",
+                kutup_b64(account_authority_public_key),encode(account_authority_key_id,'hex') FROM accounts WHERE id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_one(&mut *transaction)
@@ -193,7 +193,7 @@ pub async fn provision(
 
     if let Some((stored_backup_id, root_envelope, stored_authorization_digest)) =
         sqlx::query_as::<_, (Uuid, String, String)>(
-            "SELECT backup_incarnation_id,root_envelope,encode(signer_authorization_digest,'hex')
+            "SELECT backup_incarnation_id,kutup_b64(root_envelope),encode(signer_authorization_digest,'hex')
              FROM chat_backups WHERE account_id=$1",
         )
         .bind(user_id)
@@ -213,7 +213,7 @@ pub async fn provision(
             "INSERT INTO chat_backups
              (account_id,backup_incarnation_id,suite,protection_domain,root_envelope,
               signer_authorization,signer_authorization_digest)
-             VALUES ($1,$2,$3,$4,$5,$6,decode($7,'hex'))",
+             VALUES ($1,$2,$3,$4,kutup_unb64($5),$6,decode($7,'hex'))",
         )
         .bind(user_id)
         .bind(backup_incarnation_id)
@@ -346,7 +346,7 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
         Option<OffsetDateTime>,
     );
     let backup: Option<BackupRow> = sqlx::query_as(
-        "SELECT root_envelope,signer_authorization,current_manifest,current_cursor,
+        "SELECT kutup_b64(root_envelope),signer_authorization,current_manifest,current_cursor,
                 latest_protected_at FROM chat_backups WHERE account_id=$1",
     )
     .bind(user_id)

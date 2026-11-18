@@ -465,7 +465,7 @@ async fn deliver(
                 "INSERT INTO chat_mailbox
                     (recipient_account_id, recipient_device_id, sealed_sender, sender_device_id,
                      envelope_type, suite, content, send_id, shared_payload_id)
-                 VALUES ($1, $2, true, 0, $3, $4, $5, $6, $7)",
+                 VALUES ($1, $2, true, 0, $3, $4, kutup_unb64($5), $6, $7)",
             )
             .bind(recipient.account_uuid)
             .bind(device_id)

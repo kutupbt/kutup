@@ -118,7 +118,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
 pub(crate) const VERSION_SELECT: &str = r#"SELECT id, storage_path, seq_at_snapshot,
        doc_key_id, author_account_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
        remote_author_server, remote_author_account_id, parent_version_id,
-       revision_content_envelope
+       kutup_b64(revision_content_envelope)
 FROM drive_file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -187,7 +187,8 @@ pub async fn download(
     }
 
     let row: Option<(String, i64, i64, i64, Option<String>)> = sqlx::query_as(
-        "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot, revision_content_envelope
+        "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot,
+                kutup_b64(revision_content_envelope)
          FROM drive_file_versions WHERE id = $1 AND file_id = $2",
     )
     .bind(vid)
@@ -623,7 +624,7 @@ pub(crate) async fn store_version(
     // Its metadata is the file's next revision (the row is locked above).
     {
         let (current, current_envelope): (i64, Option<String>) = sqlx::query_as(
-            "SELECT metadata_revision, metadata_envelope FROM drive_files WHERE id = $1",
+            "SELECT metadata_revision, kutup_b64(metadata_envelope) FROM drive_files WHERE id = $1",
         )
         .bind(fid)
         .fetch_one(&mut *tx)
@@ -670,11 +671,11 @@ pub(crate) async fn store_version(
                                       remote_author_account_id, parent_version_id, created_at,
                                       blob_suite, revision_content_envelope)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp(),
-                   $15, $16)
+                   $15, kutup_unb64($16))
            RETURNING id, storage_path, seq_at_snapshot, doc_key_id,
                      author_account_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
                      remote_author_server, remote_author_account_id, parent_version_id,
-                     revision_content_envelope"#,
+                     kutup_b64(revision_content_envelope)"#,
     )
     .bind(version_id)
     .bind(fid)
@@ -700,7 +701,7 @@ pub(crate) async fn store_version(
     // records the new one (docs/plans/drive-unique-names.md).
     sqlx::query(
         "UPDATE drive_files SET updated_at = NOW(), content_hash = NULL,
-                          metadata_envelope = $2, metadata_revision = $3
+                          metadata_envelope = kutup_unb64($2), metadata_revision = $3
          WHERE id = $1",
     )
     .bind(fid)

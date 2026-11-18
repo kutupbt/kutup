@@ -326,7 +326,7 @@ mod tests {
             "INSERT INTO federation_peer_identities
                  (domain, trust_state, current_sequence, current_document_hash, current_key_id,
                   current_public_key, first_seen_at, last_seen_at)
-             VALUES ($1, 'tofu', 1, decode($2, 'hex'), decode($2, 'hex'), $3, now(), now())",
+             VALUES ($1, 'tofu', 1, decode($2, 'hex'), decode($2, 'hex'), kutup_unb64($3), now(), now())",
         )
         .bind(&peer)
         .bind("ab".repeat(32))

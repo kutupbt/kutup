@@ -211,7 +211,7 @@ pub async fn items(
         added_at: OffsetDateTime,
     }
     let rows: Vec<Item> = sqlx::query_as(
-        "SELECT file_id, file_key_envelope, key_generation, album_epoch, added_by_account_id, added_at
+        "SELECT file_id, kutup_b64(file_key_envelope) AS file_key_envelope, key_generation, album_epoch, added_by_account_id, added_at
          FROM photos_album_items WHERE album_id = $1",
     )
     .bind(id)
@@ -305,7 +305,7 @@ pub async fn keys(
     let user_id = trusted_uuid(&user.account_id)?;
     let (id, _) = owned_album(&state, user_id, &album).await?;
     let rows: Vec<(Uuid, String, i32, i32)> = sqlx::query_as(
-        "SELECT file_id, file_key_envelope, key_generation, album_epoch FROM photos_album_items WHERE album_id = $1",
+        "SELECT file_id, kutup_b64(file_key_envelope), key_generation, album_epoch FROM photos_album_items WHERE album_id = $1",
     )
     .bind(id)
     .fetch_all(&state.pool)
@@ -410,7 +410,7 @@ pub async fn add_items(
         )?;
         sqlx::query(
             "INSERT INTO photos_album_items (album_id, file_id, file_key_envelope, key_generation, album_epoch, added_by_account_id)
-             VALUES ($1, $2, $3, $4, $5, $6)
+             VALUES ($1, $2, kutup_unb64($3), $4, $5, $6)
              ON CONFLICT (album_id, file_id) DO UPDATE SET
                  file_key_envelope = EXCLUDED.file_key_envelope,
                  key_generation = EXCLUDED.key_generation,

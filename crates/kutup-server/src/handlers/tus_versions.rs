@@ -458,7 +458,7 @@ async fn record(
                                       key_generation, parent_version_id, created_at,
                                       blob_suite, revision_content_envelope)
            VALUES ($1, $2, $3, $8, $9, $4, $5, false, 'file', $6, $7, clock_timestamp(),
-                   $10, $11)"#,
+                   $10, kutup_unb64($11))"#,
     )
     .bind(landing.revision_id)
     .bind(landing.file_id)
@@ -480,7 +480,7 @@ async fn record(
     )
     .await?;
     sqlx::query(
-        "UPDATE drive_files SET metadata_envelope = $2, metadata_revision = $3, content_hash = decode($4, 'hex'),
+        "UPDATE drive_files SET metadata_envelope = kutup_unb64($2), metadata_revision = $3, content_hash = decode($4, 'hex'),
                           updated_at = NOW()
          WHERE id = $1",
     )

@@ -196,7 +196,8 @@ pub async fn rotate(
 
     let updated = sqlx::query(
         "UPDATE accounts SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
-                          master_key_envelope = $6, recovery_key_envelope = $7,
+                          master_key_envelope = kutup_unb64($6),
+                          recovery_key_envelope = kutup_unb64($7),
                           recovery_key_verifier = $8, master_key_generation = $9
           WHERE id = $1 AND key_binding = $2::uuid AND master_key_generation = $10 AND is_active",
     )

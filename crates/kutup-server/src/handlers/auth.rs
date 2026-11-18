@@ -775,7 +775,9 @@ pub async fn register(
             opaque_record, opaque_suite, opaque_server_key_id,
             recovery_key_verifier, storage_quota_bytes, drive_key_binding,
             key_binding, id, identity_suite, drive_key_binding_epoch
-        ) VALUES ($2,$3,$4,$5,$6,decode($7, 'hex'),decode($8, 'hex'),$9,$10,$11,$12,$13,$14,$15,$1::uuid,$16,2,1)
+        ) VALUES ($2,kutup_unb64($3),kutup_unb64($4),kutup_unb64($5),kutup_unb64($6),
+                  decode($7, 'hex'),decode($8, 'hex'),kutup_unb64($9),$10,$11,$12,$13,$14,
+                  kutup_unb64($15),$1::uuid,$16,2,1)
         RETURNING id"#,
     )
     .bind(&req.key_binding)
@@ -866,7 +868,7 @@ pub(crate) async fn signed_in_answer(
         bool,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT master_key_envelope, public_key,
+        r#"SELECT kutup_b64(master_key_envelope), kutup_b64(public_key),
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes,
                   (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), is_first_login,
                   COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding::text, ''),
@@ -1080,7 +1082,7 @@ pub(crate) async fn issue_after_second_step(
 ) -> AppResult<Response> {
     type Row = (String, String, bool, i64, i64, String, bool, String, String);
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT master_key_envelope, public_key,
+        r#"SELECT kutup_b64(master_key_envelope), kutup_b64(public_key),
                   is_admin, storage_quota_bytes, storage_used_bytes,
                   COALESCE(username, ''), (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), COALESCE(color, ''),
                   COALESCE(key_binding::text, '')
@@ -1214,7 +1216,7 @@ pub async fn recover_grant(
     // setup) in between replaces the verifier, and leaves no grant behind.
     let mut tx = state.pool.begin().await?;
     let still: Option<String> = sqlx::query_scalar(&format!(
-        "SELECT recovery_key_envelope FROM accounts
+        "SELECT kutup_b64(recovery_key_envelope) FROM accounts
          WHERE id = $1 AND {} AND recovery_key_verifier = $2
          FOR SHARE",
         crate::account_closing::SIGNS_IN
@@ -1346,7 +1348,8 @@ pub async fn get_me(State(state): State<AppState>, user: AuthAccount) -> AppResu
         String,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, COALESCE(key_binding::text, ''), COALESCE(username, ''), public_key, totp_enabled,
+        r#"SELECT id, COALESCE(key_binding::text, ''), COALESCE(username, ''), kutup_b64(public_key),
+                  totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
                   is_admin, COALESCE(color, ''), version_retention_days, public_sharing,
                   federation
@@ -2042,12 +2045,14 @@ pub async fn complete_setup(
     let res = sqlx::query(
         r#"UPDATE accounts SET
               opaque_record = $1, opaque_suite = $9, opaque_server_key_id = $10,
-              master_key_envelope = $2, recovery_key_envelope = $3,
-              public_key = $4,
-              account_authority_public_key = $5, account_authority_key_id = decode($6, 'hex'),
-              account_incarnation_id = decode($7, 'hex'), drive_signing_public_key = $8,
+              master_key_envelope = kutup_unb64($2), recovery_key_envelope = kutup_unb64($3),
+              public_key = kutup_unb64($4),
+              account_authority_public_key = kutup_unb64($5),
+              account_authority_key_id = decode($6, 'hex'),
+              account_incarnation_id = decode($7, 'hex'),
+              drive_signing_public_key = kutup_unb64($8),
               recovery_key_verifier = $11,
-              drive_key_binding = $13,
+              drive_key_binding = kutup_unb64($13),
               key_binding = $14::uuid,
               identity_suite = 2, drive_key_binding_epoch = 1,
               is_first_login = false, updated_at = NOW()

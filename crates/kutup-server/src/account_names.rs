@@ -53,7 +53,8 @@ pub async fn chains(
                      AND lower(split_part(previous, '@', 2)) = lower($2))
                  OR (kutup_fold(split_part(current, '@', 1)) = kutup_fold($1)
                      AND lower(split_part(current, '@', 2)) = lower($2)))
-         SELECT encode(r.incarnation_id, 'hex'), r.authority_public_key, r.sequence, r.current,
+         SELECT encode(r.incarnation_id, 'hex'), kutup_b64(r.authority_public_key), r.sequence,
+                r.current,
                 to_char(max(r.accepted_at) OVER (PARTITION BY r.incarnation_id),
                         'YYYY-MM-DD\"T\"HH24:MI:SS.US') AS latest,
                 r.statement,

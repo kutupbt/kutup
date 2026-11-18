@@ -44,8 +44,9 @@ pub struct EpochLink {
 /// A folder's complete key history, oldest first.
 pub(crate) async fn epoch_chain(pool: &PgPool, collection_id: Uuid) -> AppResult<Vec<EpochLink>> {
     Ok(sqlx::query_as(
-        "SELECT epoch, epoch_statement,
-                encode(epoch_statement_hash, 'hex') AS epoch_statement_hash, previous_key_envelope
+        "SELECT epoch, kutup_b64(epoch_statement) AS epoch_statement,
+                encode(epoch_statement_hash, 'hex') AS epoch_statement_hash,
+                kutup_b64(previous_key_envelope) AS previous_key_envelope
          FROM drive_collection_key_epoch_history WHERE collection_id = $1 ORDER BY epoch",
     )
     .bind(collection_id)
@@ -241,8 +242,8 @@ pub async fn access(
         OffsetDateTime,
     );
     let members: Vec<MemberRow> = sqlx::query_as(
-        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), u.public_key, u.identity_suite,
-                u.drive_signing_public_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
+        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), kutup_b64(u.public_key),
+                u.identity_suite, kutup_b64(u.drive_signing_public_key), cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
          FROM drive_collection_shares cs JOIN accounts u ON u.id = cs.recipient_account_id
          WHERE cs.collection_id = $1 ORDER BY cs.created_at",
     )
@@ -258,7 +259,7 @@ pub async fn access(
         Option<String>,
     );
     let links: Vec<LinkRow> = sqlx::query_as(
-        "SELECT id, token, owner_link_key_envelope, expires_at, created_at,
+        "SELECT id, token, kutup_b64(owner_link_key_envelope), expires_at, created_at,
                 kutup_target_blocked(share_type, target_id)
            FROM drive_public_shares
           WHERE target_id = $1 AND share_type = 'collection' AND owner_removed_at IS NULL
@@ -280,7 +281,8 @@ pub async fn access(
     );
     let federated: Vec<FederatedRow> = sqlx::query_as(
         "SELECT id, recipient_username, recipient_server, recipient_account_id,
-                named_share_envelope, can_upload, can_delete, upload_quota_bytes, created_at
+                kutup_b64(named_share_envelope), can_upload, can_delete, upload_quota_bytes,
+                created_at
          FROM drive_federated_outgoing_shares WHERE collection_id = $1 ORDER BY created_at",
     )
     .bind(collection_id)
@@ -506,7 +508,7 @@ async fn rotate_album_items(
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
         )?;
         sqlx::query(
-            "UPDATE photos_album_items SET file_key_envelope = $3, album_epoch = $4 WHERE album_id = $1 AND file_id = $2",
+            "UPDATE photos_album_items SET file_key_envelope = kutup_unb64($3), album_epoch = $4 WHERE album_id = $1 AND file_id = $2",
         )
         .bind(collection_id)
         .bind(item.file_id)
@@ -556,8 +558,8 @@ pub async fn rotate(
 
     // The owner's identity, which signs the chain and every share.
     let (incarnation, signing_key, authority_key): (String, String, String) = sqlx::query_as(
-        "SELECT encode(account_incarnation_id, 'hex'), drive_signing_public_key,
-                    account_authority_public_key FROM accounts WHERE id = $1",
+        "SELECT encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key),
+                    kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&mut *tx)
@@ -627,7 +629,7 @@ pub async fn rotate(
     .fetch_all(&mut *tx)
     .await?;
     let federated: Vec<(Uuid, Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, recipient_account_id, recipient_server, named_share_envelope
+        "SELECT id, recipient_account_id, recipient_server, kutup_b64(named_share_envelope)
          FROM drive_federated_outgoing_shares WHERE collection_id = $1",
     )
     .bind(collection_id)
@@ -725,8 +727,9 @@ pub async fn rotate(
 
     // Apply it all.
     sqlx::query(
-        "UPDATE drive_collections SET key_epoch = $2, owner_key_envelope = $3, name_envelope = $4,
-                name_revision = $5, epoch_statement = $6, epoch_statement_hash = decode($7, 'hex'),
+        "UPDATE drive_collections SET key_epoch = $2, owner_key_envelope = kutup_unb64($3),
+                name_envelope = kutup_unb64($4),
+                name_revision = $5, epoch_statement = kutup_unb64($6), epoch_statement_hash = decode($7, 'hex'),
                 updated_at = NOW()
          WHERE id = $1",
     )
@@ -743,7 +746,7 @@ pub async fn rotate(
         "INSERT INTO drive_collection_key_epoch_history
             (collection_id, epoch, owner_key_envelope, epoch_statement, epoch_statement_hash,
              previous_key_envelope)
-         VALUES ($1, $2, $3, $4, decode($5, 'hex'), $6)",
+         VALUES ($1, $2, kutup_unb64($3), kutup_unb64($4), decode($5, 'hex'), kutup_unb64($6))",
     )
     .bind(collection_id)
     .bind(next)
@@ -755,7 +758,7 @@ pub async fn rotate(
     .await?;
     for member in &req.members {
         sqlx::query(
-            "UPDATE drive_collection_shares SET named_share_envelope = $3
+            "UPDATE drive_collection_shares SET named_share_envelope = kutup_unb64($3)
              WHERE collection_id = $1 AND recipient_account_id = $2",
         )
         .bind(collection_id)
@@ -773,7 +776,7 @@ pub async fn rotate(
     .await?;
     for link in &req.public_links {
         sqlx::query(
-            "UPDATE drive_public_shares SET collection_key_envelope = $2, collection_key_epoch = $3
+            "UPDATE drive_public_shares SET collection_key_envelope = kutup_unb64($2), collection_key_epoch = $3
              WHERE id = $1",
         )
         .bind(link.id)
@@ -810,7 +813,7 @@ pub async fn rotate(
             .map(|envelope| hex::encode(envelope.recipient_incarnation_id))
             .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
         sqlx::query(
-            "UPDATE drive_federated_outgoing_shares SET named_share_envelope = $2,
+            "UPDATE drive_federated_outgoing_shares SET named_share_envelope = kutup_unb64($2),
                                                    recipient_incarnation_id = decode($3, 'hex')
              WHERE id = $1",
         )
@@ -937,7 +940,7 @@ pub async fn rekey(
     sqlx::query(
         "INSERT INTO drive_file_key_history (file_id, generation, previous_key_envelope,
                                        previous_metadata_envelope, previous_metadata_revision)
-         SELECT $1, $2, $3, metadata_envelope, metadata_revision FROM drive_files WHERE id = $1",
+         SELECT $1, $2, kutup_unb64($3), metadata_envelope, metadata_revision FROM drive_files WHERE id = $1",
     )
     .bind(file_id)
     .bind(next)
@@ -945,8 +948,8 @@ pub async fn rekey(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE drive_files SET key_epoch = $2, key_generation = $3, file_key_envelope = $4,
-                metadata_envelope = $5
+        "UPDATE drive_files SET key_epoch = $2, key_generation = $3, file_key_envelope = kutup_unb64($4),
+                metadata_envelope = kutup_unb64($5)
          WHERE id = $1",
     )
     .bind(file_id)

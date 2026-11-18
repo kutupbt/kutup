@@ -390,7 +390,7 @@ pub struct FileKeyHistoryEntry {
 pub const CONTENT_KEY_GENERATION_SQL: &str = "COALESCE((SELECT v.key_generation FROM drive_file_versions v WHERE v.file_id = f.id AND v.kind = 'file' ORDER BY v.created_at DESC LIMIT 1), f.original_key_generation)";
 
 /// The `key_history` column for a query over `files f`.
-pub const FILE_KEY_HISTORY_SQL: &str = "COALESCE((SELECT json_agg(json_build_object('generation', h.generation, 'previousKeyEnvelope', h.previous_key_envelope) ORDER BY h.generation) FROM drive_file_key_history h WHERE h.file_id = f.id), '[]'::json)";
+pub const FILE_KEY_HISTORY_SQL: &str = "COALESCE((SELECT json_agg(json_build_object('generation', h.generation, 'previousKeyEnvelope', kutup_b64(h.previous_key_envelope)) ORDER BY h.generation) FROM drive_file_key_history h WHERE h.file_id = f.id), '[]'::json)";
 
 #[derive(Debug, Default, Serialize, ToSchema)]
 pub struct FileThumbnails {

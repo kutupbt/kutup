@@ -143,7 +143,8 @@ pub(crate) async fn account_identity(
     user_id: Uuid,
 ) -> AppResult<Option<(String, i64)>> {
     Ok(sqlx::query_as(
-        "SELECT identity_key, manifest_version FROM chat_account_identities WHERE account_id = $1",
+        "SELECT kutup_b64(identity_key), manifest_version FROM chat_account_identities
+         WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_optional(&mut **tx)
@@ -293,8 +294,8 @@ pub async fn check_keys(
         .ok_or_else(|| AppError::bad_request("digest must be lowercase hex of 32 bytes"))?;
     let (identity_key, spk_id, spk, lrk_id, lrk): (String, i64, String, i64, String) =
         sqlx::query_as(
-            "SELECT identity_key, signed_pre_key_id, signed_pre_key,
-                    last_resort_kyber_pre_key_id, last_resort_kyber_pre_key
+            "SELECT kutup_b64(identity_key), signed_pre_key_id, kutup_b64(signed_pre_key),
+                    last_resort_kyber_pre_key_id, kutup_b64(last_resort_kyber_pre_key)
                FROM account_devices WHERE account_id = $1 AND device_id = $2",
         )
         .bind(user_id)
@@ -507,10 +508,11 @@ pub async fn distribute_identity(
     .await?;
     for keys in &request.devices {
         sqlx::query(
-            "UPDATE account_devices SET identity_key = $3, registration_id = $4,
-                 signed_pre_key_id = $5, signed_pre_key = $6, signed_pre_key_signature = $7,
-                 last_resort_kyber_pre_key_id = $8, last_resort_kyber_pre_key = $9,
-                 last_resort_kyber_pre_key_signature = $10
+            "UPDATE account_devices SET identity_key = kutup_unb64($3), registration_id = $4,
+                 signed_pre_key_id = $5, signed_pre_key = kutup_unb64($6),
+                 signed_pre_key_signature = kutup_unb64($7),
+                 last_resort_kyber_pre_key_id = $8, last_resort_kyber_pre_key = kutup_unb64($9),
+                 last_resort_kyber_pre_key_signature = kutup_unb64($10)
              WHERE account_id = $1 AND device_id = $2",
         )
         .bind(user_id)
@@ -544,7 +546,7 @@ pub async fn distribute_identity(
         sqlx::query(
             "INSERT INTO chat_mailbox (recipient_account_id, recipient_device_id, sender_server,
                  sender_account_id, sender_device_id, envelope_type, suite, content, send_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+             VALUES ($1,$2,$3,$4,$5,$6,$7,kutup_unb64($8),$9)",
         )
         .bind(user_id)
         .bind(message.device_id as i32)

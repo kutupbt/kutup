@@ -3,5 +3,5 @@
 # Each needs a reason: the row is already found by a key, so no index is lost.
 #
 # account_devices.rs: the device row is found by (account_id, device_id); this
-# only checks it against its manifest entry (a 32-byte key: one base64 line).
-src/account_devices.rs|= encode(d.frame_key, 'base64')
+# only checks it against its manifest entry (a 32-byte key).
+src/account_devices.rs|= kutup_b64(d.frame_key)

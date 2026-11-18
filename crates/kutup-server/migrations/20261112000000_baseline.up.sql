@@ -98,6 +98,42 @@ $$;
 
 
 --
+-- Name: kutup_b64(bytea); Type: FUNCTION; Schema: public; Owner: -
+--
+
+-- Bytes out as standard padded base64 on one line (encode() breaks lines
+-- every 76 characters): the API's form of a bytea column (w7-schema.md §2).
+CREATE FUNCTION public.kutup_b64(value bytea) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    AS $$ SELECT translate(encode(value, 'base64'), E'\n', '') $$;
+
+
+--
+-- Name: kutup_unb64(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+-- Standard padded base64 in, bytes out; anything else (whitespace, the URL
+-- alphabet, missing padding, non-zero trailing bits) is refused with
+-- SQLSTATE 22023, which the server answers as a client error.
+CREATE FUNCTION public.kutup_unb64(value text) RETURNS bytea
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+    AS $$
+DECLARE
+  bytes bytea;
+BEGIN
+  IF value !~ '^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$' THEN
+    RAISE EXCEPTION 'kutup_unb64: not canonical base64' USING ERRCODE = '22023';
+  END IF;
+  bytes := decode(value, 'base64');
+  IF public.kutup_b64(bytes) <> value THEN
+    RAISE EXCEPTION 'kutup_unb64: not canonical base64' USING ERRCODE = '22023';
+  END IF;
+  RETURN bytes;
+END
+$$;
+
+
+--
 -- Name: kutup_fold(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -411,7 +447,7 @@ CREATE TABLE public.account_renames (
     incarnation_id bytea NOT NULL,
     sequence integer NOT NULL,
     account_id uuid,
-    authority_public_key text NOT NULL,
+    authority_public_key bytea NOT NULL,
     previous text NOT NULL,
     current text NOT NULL,
     counted boolean NOT NULL,
@@ -522,7 +558,7 @@ ALTER SEQUENCE public.admin_audit_log_id_seq OWNED BY public.admin_audit_log.id;
 CREATE TABLE public.photos_album_items (
     album_id uuid NOT NULL,
     file_id uuid NOT NULL,
-    file_key_envelope text NOT NULL,
+    file_key_envelope bytea NOT NULL,
     key_generation integer NOT NULL,
     album_epoch integer NOT NULL,
     added_by_account_id uuid,
@@ -785,7 +821,7 @@ CREATE TABLE public.calendars (
 
 CREATE TABLE public.chat_account_identities (
     account_id uuid NOT NULL,
-    identity_key text NOT NULL,
+    identity_key bytea NOT NULL,
     manifest_version bigint NOT NULL,
     changed_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_account_identities_manifest_version_check CHECK ((manifest_version >= 1))
@@ -1004,7 +1040,7 @@ CREATE TABLE public.chat_backups (
     backup_incarnation_id uuid NOT NULL,
     suite smallint NOT NULL,
     protection_domain smallint NOT NULL,
-    root_envelope text NOT NULL,
+    root_envelope bytea NOT NULL,
     signer_authorization jsonb NOT NULL,
     signer_authorization_digest bytea NOT NULL,
     current_cursor bigint DEFAULT 0 NOT NULL,
@@ -1283,7 +1319,7 @@ CREATE TABLE public.chat_mailbox (
     sender_device_id integer NOT NULL,
     envelope_type smallint NOT NULL,
     suite smallint NOT NULL,
-    content text NOT NULL,
+    content bytea NOT NULL,
     server_ts timestamp with time zone DEFAULT now() NOT NULL,
     sealed_sender boolean DEFAULT false NOT NULL,
     send_id text,
@@ -1464,8 +1500,8 @@ CREATE TABLE public.chat_one_time_kyber_pre_keys (
     account_id uuid NOT NULL,
     device_id integer NOT NULL,
     key_id bigint NOT NULL,
-    public_key text NOT NULL,
-    signature text NOT NULL,
+    public_key bytea NOT NULL,
+    signature bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -1478,7 +1514,7 @@ CREATE TABLE public.chat_one_time_pre_keys (
     account_id uuid NOT NULL,
     device_id integer NOT NULL,
     key_id bigint NOT NULL,
-    public_key text NOT NULL,
+    public_key bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -1493,13 +1529,13 @@ CREATE TABLE public.chat_profiles (
     profile_version bytea NOT NULL,
     revision bigint NOT NULL,
     source_device_id integer NOT NULL,
-    name_ciphertext text NOT NULL,
-    avatar_ciphertext text,
-    wrapped_key text NOT NULL,
+    name_ciphertext bytea NOT NULL,
+    avatar_ciphertext bytea,
+    wrapped_key bytea NOT NULL,
     access_key_verifier bytea NOT NULL,
     is_current boolean DEFAULT true NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    about_ciphertext text,
+    about_ciphertext bytea,
     CONSTRAINT chat_profiles_access_key_verifier_check CHECK ((octet_length(access_key_verifier) = 32)),
     CONSTRAINT chat_profiles_revision_check CHECK ((revision > 0)),
     CONSTRAINT chat_profiles_source_device_id_check CHECK ((((source_device_id >= 1) AND (source_device_id <= 127)) OR (source_device_id = 128))),
@@ -1585,11 +1621,11 @@ CREATE TABLE public.chat_zk_server_keys (
 CREATE TABLE public.drive_collection_key_epoch_history (
     collection_id uuid NOT NULL,
     epoch integer NOT NULL,
-    owner_key_envelope text NOT NULL,
-    epoch_statement text NOT NULL,
+    owner_key_envelope bytea NOT NULL,
+    epoch_statement bytea NOT NULL,
     epoch_statement_hash bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    previous_key_envelope text,
+    previous_key_envelope bytea,
     CONSTRAINT drive_collection_key_epoch_history_epoch_check CHECK ((epoch > 0)),
     CONSTRAINT drive_collection_key_epoch_history_previous_key CHECK (((epoch = 1) = (previous_key_envelope IS NULL))),
     CONSTRAINT drive_collection_key_epoch_history_epoch_statement_hash_bytes CHECK ((octet_length(epoch_statement_hash) = 32))
@@ -1605,12 +1641,12 @@ CREATE TABLE public.drive_collection_shares (
     collection_id uuid NOT NULL,
     sharer_account_id uuid NOT NULL,
     recipient_account_id uuid NOT NULL,
-    named_share_envelope text NOT NULL,
+    named_share_envelope bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
     can_delete boolean DEFAULT false NOT NULL,
     upload_quota_bytes bigint,
-    CONSTRAINT drive_collection_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096))
+    CONSTRAINT drive_collection_shares_named_share_envelope_check CHECK ((octet_length(named_share_envelope) <= 3072))
 );
 
 
@@ -1621,11 +1657,11 @@ CREATE TABLE public.drive_collection_shares (
 CREATE TABLE public.drive_collections (
     id uuid NOT NULL,
     owner_account_id uuid NOT NULL,
-    name_envelope text NOT NULL,
-    owner_key_envelope text NOT NULL,
+    name_envelope bytea NOT NULL,
+    owner_key_envelope bytea NOT NULL,
     key_epoch integer NOT NULL,
     name_revision bigint NOT NULL,
-    epoch_statement text NOT NULL,
+    epoch_statement bytea NOT NULL,
     epoch_statement_hash bytea NOT NULL,
     parent_collection_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1742,13 +1778,13 @@ CREATE TABLE public.account_devices (
     device_id integer NOT NULL,
     suite smallint,
     registration_id bigint,
-    identity_key text,
+    identity_key bytea,
     signed_pre_key_id bigint,
-    signed_pre_key text,
-    signed_pre_key_signature text,
+    signed_pre_key bytea,
+    signed_pre_key_signature bytea,
     last_resort_kyber_pre_key_id bigint,
-    last_resort_kyber_pre_key text,
-    last_resort_kyber_pre_key_signature text,
+    last_resort_kyber_pre_key bytea,
+    last_resort_kyber_pre_key_signature bytea,
     name text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     last_seen_at timestamp with time zone,
@@ -1813,14 +1849,14 @@ CREATE TABLE public.drive_federation_mutations (
 CREATE TABLE public.drive_profile_keys (
     account_id uuid NOT NULL,
     direction text NOT NULL,
-    envelope text NOT NULL,
+    envelope bytea NOT NULL,
     profile_version bytea NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     peer_incarnation_id bytea NOT NULL,
     peer_server text NOT NULL,
     peer_account_id uuid NOT NULL,
     CONSTRAINT drive_profile_keys_direction_check CHECK ((direction = ANY (ARRAY['sent'::text, 'received'::text]))),
-    CONSTRAINT drive_profile_keys_envelope_check CHECK ((length(envelope) <= 4096)),
+    CONSTRAINT drive_profile_keys_envelope_check CHECK ((octet_length(envelope) <= 3072)),
     CONSTRAINT drive_profile_keys_peer_server_check CHECK (((peer_server = lower(peer_server)) AND ((length(peer_server) >= 3) AND (length(peer_server) <= 253)))),
     CONSTRAINT drive_profile_keys_peer_incarnation_id_bytes CHECK ((octet_length(peer_incarnation_id) = 32)),
     CONSTRAINT drive_profile_keys_profile_version_bytes CHECK ((octet_length(profile_version) = 32))
@@ -1841,7 +1877,7 @@ CREATE TABLE public.drive_federated_incoming_file_shares (
     owner_account_id uuid NOT NULL,
     owner_account text NOT NULL,
     owner_incarnation_id bytea NOT NULL,
-    owner_signing_public_key text NOT NULL,
+    owner_signing_public_key bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT drive_federated_incoming_file_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
     CONSTRAINT drive_federated_incoming_file_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
@@ -1862,17 +1898,17 @@ CREATE TABLE public.drive_federated_incoming_shares (
     remote_capability text NOT NULL,
     capability_hash bytea NOT NULL,
     remote_collection_id uuid NOT NULL,
-    named_share_envelope text NOT NULL,
-    name_envelope text NOT NULL,
+    named_share_envelope bytea NOT NULL,
+    name_envelope bytea NOT NULL,
     key_epoch integer NOT NULL,
     name_revision bigint NOT NULL,
-    epoch_statement text NOT NULL,
+    epoch_statement bytea NOT NULL,
     epoch_statement_hash bytea NOT NULL,
     owner_account_id uuid NOT NULL,
     owner_account text NOT NULL,
     owner_incarnation_id bytea NOT NULL,
-    owner_signing_public_key text NOT NULL,
-    owner_authority_public_key text NOT NULL,
+    owner_signing_public_key bytea NOT NULL,
+    owner_authority_public_key bytea NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
     can_delete boolean DEFAULT false NOT NULL,
     upload_quota_bytes bigint,
@@ -1881,7 +1917,7 @@ CREATE TABLE public.drive_federated_incoming_shares (
     CONSTRAINT drive_federated_incoming_shares_collection_kind_check CHECK ((collection_kind = ANY (ARRAY['folder'::text, 'album'::text]))),
     CONSTRAINT drive_federated_incoming_shares_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_federated_incoming_shares_name_revision_check CHECK ((name_revision > 0)),
-    CONSTRAINT drive_federated_incoming_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
+    CONSTRAINT drive_federated_incoming_shares_named_share_envelope_check CHECK ((octet_length(named_share_envelope) <= 3072)),
     CONSTRAINT drive_federated_incoming_shares_remote_capability_check CHECK (((length(remote_capability) >= 32) AND (length(remote_capability) <= 256))),
     CONSTRAINT drive_federated_incoming_shares_remote_capability_check1 CHECK ((remote_capability ~ '^[A-Za-z0-9._~-]+$'::text)),
     CONSTRAINT drive_federated_incoming_shares_owner_server_check CHECK ((owner_server = lower(owner_server))),
@@ -1905,7 +1941,7 @@ CREATE TABLE public.drive_federated_outgoing_file_shares (
     recipient_username text NOT NULL,
     recipient_server text NOT NULL,
     recipient_incarnation_id bytea NOT NULL,
-    share_envelope text NOT NULL,
+    share_envelope bytea NOT NULL,
     key_generation integer NOT NULL,
     capability_hash bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -1915,9 +1951,9 @@ CREATE TABLE public.drive_federated_outgoing_file_shares (
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
     CONSTRAINT drive_federated_outgoing_file_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
-    CONSTRAINT drive_federated_outgoing_file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096)),
+    CONSTRAINT drive_federated_outgoing_file_shares_share_envelope_check CHECK ((octet_length(share_envelope) <= 3072)),
     CONSTRAINT drive_federated_outgoing_file_shares_capability_hash_bytes CHECK ((octet_length(capability_hash) = 32)),
-    CONSTRAINT drive_federated_outgoing_file_shares_recipient_incarnation_id_bytes CHECK ((octet_length(recipient_incarnation_id) = 32))
+    CONSTRAINT drive_fed_outgoing_file_shares_recipient_incarnation_id_bytes CHECK ((octet_length(recipient_incarnation_id) = 32))
 );
 
 
@@ -1931,7 +1967,7 @@ CREATE TABLE public.drive_federated_outgoing_shares (
     sharer_account_id uuid NOT NULL,
     recipient_username text NOT NULL,
     recipient_server text NOT NULL,
-    named_share_envelope text NOT NULL,
+    named_share_envelope bytea NOT NULL,
     capability_hash bytea NOT NULL,
     can_upload boolean DEFAULT false NOT NULL,
     can_delete boolean DEFAULT false NOT NULL,
@@ -1939,7 +1975,7 @@ CREATE TABLE public.drive_federated_outgoing_shares (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     recipient_incarnation_id bytea NOT NULL,
     recipient_account_id uuid NOT NULL,
-    CONSTRAINT drive_federated_outgoing_shares_named_share_envelope_check CHECK ((length(named_share_envelope) <= 4096)),
+    CONSTRAINT drive_federated_outgoing_shares_named_share_envelope_check CHECK ((octet_length(named_share_envelope) <= 3072)),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check CHECK ((recipient_server = lower(recipient_server))),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check1 CHECK (((length(recipient_server) >= 3) AND (length(recipient_server) <= 253))),
     CONSTRAINT drive_federated_outgoing_shares_recipient_server_check2 CHECK ((recipient_server ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
@@ -2113,7 +2149,7 @@ CREATE TABLE public.federation_peer_identities (
     current_sequence bigint NOT NULL,
     current_document_hash bytea NOT NULL,
     current_key_id bytea NOT NULL,
-    current_public_key text NOT NULL,
+    current_public_key bytea NOT NULL,
     first_seen_at timestamp with time zone NOT NULL,
     last_seen_at timestamp with time zone NOT NULL,
     verified_at timestamp with time zone,
@@ -2127,7 +2163,7 @@ CREATE TABLE public.federation_peer_identities (
     discovery_expires_at timestamp with time zone,
     last_discovery_error text,
     CONSTRAINT federation_peer_identities_capabilities_check CHECK ((jsonb_typeof(capabilities) = 'array'::text)),
-    CONSTRAINT federation_peer_identities_current_public_key_check CHECK ((current_public_key ~ '^[A-Za-z0-9+/]{43}=$'::text)),
+    CONSTRAINT federation_peer_identities_current_public_key_check CHECK ((octet_length(current_public_key) = 32)),
     CONSTRAINT federation_peer_identities_current_sequence_check CHECK ((current_sequence >= 0)),
     CONSTRAINT federation_peer_identities_domain_check CHECK ((domain = lower(domain))),
     CONSTRAINT federation_peer_identities_domain_check1 CHECK (((length(domain) >= 3) AND (length(domain) <= 253))),
@@ -2251,9 +2287,9 @@ CREATE TABLE public.drive_file_assets (
 CREATE TABLE public.drive_file_key_history (
     file_id uuid NOT NULL,
     generation integer NOT NULL,
-    previous_key_envelope text NOT NULL,
+    previous_key_envelope bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    previous_metadata_envelope text,
+    previous_metadata_envelope bytea,
     previous_metadata_revision bigint,
     CONSTRAINT drive_file_key_history_generation_check CHECK ((generation > 1))
 );
@@ -2282,13 +2318,13 @@ CREATE TABLE public.drive_file_shares (
     file_id uuid NOT NULL,
     sharer_account_id uuid NOT NULL,
     recipient_account_id uuid NOT NULL,
-    share_envelope text NOT NULL,
+    share_envelope bytea NOT NULL,
     key_generation integer NOT NULL,
     can_edit boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT drive_file_shares_check CHECK ((sharer_account_id <> recipient_account_id)),
     CONSTRAINT drive_file_shares_key_generation_check CHECK ((key_generation > 0)),
-    CONSTRAINT drive_file_shares_share_envelope_check CHECK ((length(share_envelope) <= 4096))
+    CONSTRAINT drive_file_shares_share_envelope_check CHECK ((octet_length(share_envelope) <= 3072))
 );
 
 
@@ -2351,7 +2387,7 @@ CREATE TABLE public.drive_file_versions (
     remote_author_server text,
     remote_author_account_id uuid,
     blob_suite smallint DEFAULT 2 NOT NULL,
-    revision_content_envelope text,
+    revision_content_envelope bytea,
     CONSTRAINT drive_file_versions_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'yjs'::text]))),
     CONSTRAINT drive_file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL))),
     CONSTRAINT drive_file_versions_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
@@ -2366,8 +2402,8 @@ CREATE TABLE public.drive_files (
     id uuid NOT NULL,
     collection_id uuid NOT NULL,
     uploader_account_id uuid NOT NULL,
-    metadata_envelope text NOT NULL,
-    file_key_envelope text NOT NULL,
+    metadata_envelope bytea NOT NULL,
+    file_key_envelope bytea NOT NULL,
     key_epoch integer NOT NULL,
     metadata_revision bigint DEFAULT 1 NOT NULL,
     storage_path text NOT NULL,
@@ -2389,7 +2425,7 @@ CREATE TABLE public.drive_files (
     content_hash bytea,
     content_revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
     blob_suite smallint DEFAULT 2 NOT NULL,
-    revision_content_envelope text,
+    revision_content_envelope bytea,
     CONSTRAINT drive_files_collab_log_floor_check CHECK ((collab_log_floor >= 0)),
     CONSTRAINT drive_files_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_files_key_generation CHECK ((key_generation > 0)),
@@ -2674,7 +2710,7 @@ CREATE TABLE public.mail_filter_runs (
 CREATE TABLE public.mail_filters (
     id uuid NOT NULL,
     account_id uuid NOT NULL,
-    name_sealed text NOT NULL,
+    name_sealed bytea NOT NULL,
     enabled boolean DEFAULT true NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
     match text NOT NULL,
@@ -2685,7 +2721,7 @@ CREATE TABLE public.mail_filters (
     CONSTRAINT mail_filters_actions_check CHECK ((jsonb_typeof(actions) = 'object'::text)),
     CONSTRAINT mail_filters_conditions_check CHECK ((jsonb_typeof(conditions) = 'array'::text)),
     CONSTRAINT mail_filters_match_check CHECK ((match = ANY (ARRAY['all'::text, 'any'::text]))),
-    CONSTRAINT mail_filters_name_sealed_check CHECK (((length(name_sealed) >= 1) AND (length(name_sealed) <= 1000))),
+    CONSTRAINT mail_filters_name_sealed_check CHECK (((octet_length(name_sealed) >= 1) AND (octet_length(name_sealed) <= 750))),
     CONSTRAINT mail_filters_source_check CHECK ((source = ANY (ARRAY['manual'::text, 'sender'::text])))
 );
 
@@ -2698,7 +2734,7 @@ CREATE TABLE public.mail_folders (
     id uuid NOT NULL,
     account_id uuid NOT NULL,
     parent_id uuid,
-    name_sealed text,
+    name_sealed bytea,
     color text NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
     expanded boolean DEFAULT true NOT NULL,
@@ -2706,7 +2742,7 @@ CREATE TABLE public.mail_folders (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_folders_check CHECK (((parent_id IS NULL) OR (parent_id <> id))),
     CONSTRAINT mail_folders_color_check CHECK ((color ~ '^#[0-9a-f]{6}$'::text)),
-    CONSTRAINT mail_folders_name_sealed_check CHECK (((length(name_sealed) >= 1) AND (length(name_sealed) <= 1000)))
+    CONSTRAINT mail_folders_name_sealed_check CHECK (((octet_length(name_sealed) >= 1) AND (octet_length(name_sealed) <= 750)))
 );
 
 
@@ -3001,12 +3037,12 @@ CREATE TABLE public.mail_key_lists (
 CREATE TABLE public.mail_labels (
     id uuid NOT NULL,
     account_id uuid NOT NULL,
-    name_sealed text NOT NULL,
+    name_sealed bytea NOT NULL,
     color text NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_labels_color_check CHECK ((color ~ '^#[0-9a-f]{6}$'::text)),
-    CONSTRAINT mail_labels_name_sealed_check CHECK (((length(name_sealed) >= 1) AND (length(name_sealed) <= 1000)))
+    CONSTRAINT mail_labels_name_sealed_check CHECK (((octet_length(name_sealed) >= 1) AND (octet_length(name_sealed) <= 750)))
 );
 
 
@@ -3464,12 +3500,12 @@ CREATE TABLE public.drive_public_shares (
     share_type text NOT NULL,
     target_id uuid NOT NULL,
     token text NOT NULL,
-    collection_key_envelope text NOT NULL,
+    collection_key_envelope bytea NOT NULL,
     collection_key_epoch integer NOT NULL,
     owner_account_id uuid NOT NULL,
     expires_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    owner_link_key_envelope text NOT NULL,
+    owner_link_key_envelope bytea NOT NULL,
     removed_at timestamp with time zone,
     blocked_at timestamp with time zone,
     blocked_reason text,
@@ -3543,7 +3579,7 @@ CREATE TABLE public.remote_account_manifests (
 CREATE TABLE public.remote_account_renames (
     domain text NOT NULL,
     incarnation_id bytea NOT NULL,
-    authority_public_key text NOT NULL,
+    authority_public_key bytea NOT NULL,
     sequence integer NOT NULL,
     head_digest bytea NOT NULL,
     current_address text NOT NULL,
@@ -3587,8 +3623,8 @@ CREATE TABLE public.retired_account_ids (
 CREATE TABLE public.chat_sealed_sender_certificates (
     certificate_id bigint NOT NULL,
     root_id bytea NOT NULL,
-    root_public_key text NOT NULL,
-    certificate text NOT NULL,
+    root_public_key bytea NOT NULL,
+    certificate bytea NOT NULL,
     online_private_key bytea,
     published_at bigint NOT NULL,
     activates_at bigint NOT NULL,
@@ -3697,8 +3733,8 @@ CREATE TABLE public.drive_uploads (
     file_id uuid NOT NULL,
     total_bytes bigint NOT NULL,
     received_bytes bigint DEFAULT 0 NOT NULL,
-    metadata_envelope text,
-    file_key_envelope text,
+    metadata_envelope bytea,
+    file_key_envelope bytea,
     key_epoch integer NOT NULL,
     metadata_revision bigint,
     storage_path text NOT NULL,
@@ -3810,13 +3846,13 @@ CREATE TABLE public.account_ui_preferences (
 
 CREATE TABLE public.accounts (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    master_key_envelope text NOT NULL,
-    recovery_key_envelope text NOT NULL,
-    public_key text NOT NULL,
-    account_authority_public_key text NOT NULL,
+    master_key_envelope bytea NOT NULL,
+    recovery_key_envelope bytea NOT NULL,
+    public_key bytea NOT NULL,
+    account_authority_public_key bytea NOT NULL,
     account_authority_key_id bytea NOT NULL,
     account_incarnation_id bytea NOT NULL,
-    drive_signing_public_key text NOT NULL,
+    drive_signing_public_key bytea NOT NULL,
     totp_enabled boolean DEFAULT false NOT NULL,
     storage_quota_bytes bigint DEFAULT '10737418240'::bigint NOT NULL,
     storage_used_bytes bigint DEFAULT 0 NOT NULL,
@@ -3828,7 +3864,7 @@ CREATE TABLE public.accounts (
     recovery_key_verifier text,
     color text,
     version_retention_days integer DEFAULT 30 NOT NULL,
-    drive_key_binding text,
+    drive_key_binding bytea,
     key_binding uuid,
     opaque_record bytea,
     opaque_suite smallint,
@@ -5059,7 +5095,7 @@ ALTER TABLE ONLY public.drive_file_versions
 --
 
 ALTER TABLE public.drive_file_versions
-    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
+    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (octet_length(revision_content_envelope) = 356))) NOT VALID;
 
 
 --
@@ -5083,7 +5119,7 @@ ALTER TABLE ONLY public.drive_files
 --
 
 ALTER TABLE public.drive_files
-    ADD CONSTRAINT drive_files_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (length(revision_content_envelope) = 476))) NOT VALID;
+    ADD CONSTRAINT drive_files_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (octet_length(revision_content_envelope) = 356))) NOT VALID;
 
 
 --
