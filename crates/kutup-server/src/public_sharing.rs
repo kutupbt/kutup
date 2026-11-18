@@ -195,7 +195,7 @@ mod tests {
         ] {
             assert_eq!(PublicSharing::parse(value.as_str()), Some(value));
         }
-        assert_eq!(PublicSharing::parse("signedIn"), None);
+        assert_eq!(PublicSharing::parse("signed_in"), None);
     }
 
     #[test]
