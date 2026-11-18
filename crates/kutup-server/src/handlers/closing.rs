@@ -2,7 +2,7 @@
 //!
 //! - `POST /api/user/close`: the owner, after a reauth (grant `close`), asks
 //!   for the account to be deleted. It is `closing` for
-//!   `account_closing_days`; every sign-in ends.
+//!   `account.closing_days`; every sign-in ends.
 //! - A sign-in that passes every step of a closing account gets no session
 //!   but a grant (`keep`, no session); `POST /api/auth/keep` with it keeps
 //!   the account and answers as the sign-in would have.

@@ -125,7 +125,7 @@ pub struct StorageService {
     versioned_reads: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Where deletes wait before they reach the store (`None`: they go at
     /// once). The server defers them for at least the site setting
-    /// `storage_deleted_blob_retention_seconds`, so a database dump restored
+    /// `server.storage.deleted_blob_retention_seconds`, so a database dump restored
     /// from before a delete never names a purged blob
     /// (docs/plans/restore-drill-and-alerting.md, gap 5; `crate::blob_purge`).
     deferred: Option<sqlx::PgPool>,

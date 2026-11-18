@@ -480,7 +480,7 @@ identity and the caller's authenticated device id.
 link-token lifetime (10 minutes) and outstanding tokens per account (3); the
 provisioning envelope size (64 KiB), provisioning sockets per address a
 minute and relays per account a minute; distributions per account a day; the
-`deviceMessages` size per device; the device cap (`chat_max_active_devices`).
+`deviceMessages` size per device; the device cap (`chat.max_active_devices`).
 
 **Server tests:**
 - unit: prekey signature checks (good, bad, wrong key); credentials

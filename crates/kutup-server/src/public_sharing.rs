@@ -22,7 +22,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use crate::error::{AppError, AppResult};
 
 /// The site setting that holds the switch.
-pub const SETTING: &str = "public_sharing";
+pub const SETTING: &str = "drive.public_sharing";
 
 /// Who may open public links on this server.
 #[derive(

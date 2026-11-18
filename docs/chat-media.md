@@ -291,7 +291,7 @@ and the head replace them.
 Clients decrypt the scope and build a disposable in-memory projection; they
 do not persist decrypted conversation or attachment metadata. The number of
 entities an account keeps is a site setting
-(`account_records_chat_attachments`).
+(`chat.records.attachments`).
 
 ## 9. Client behavior
 

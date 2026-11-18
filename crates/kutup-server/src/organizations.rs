@@ -226,7 +226,7 @@ mod tests {
         );
         sqlx::query(
             "INSERT INTO organization_entitlements (organization_id, key, value, source)
-             VALUES ($1, 'mail_domains.per_organization', 2, 'admin')",
+             VALUES ($1, 'mail.domains.per_organization', 2, 'admin')",
         )
         .bind(organization)
         .execute(&pool)

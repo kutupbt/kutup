@@ -3,7 +3,7 @@
 //! itself.
 //!
 //! - An account asked to be deleted (by its owner, after a reauth, or by an
-//!   admin) is `closing` until `closes_at` (`account_closing_days` after the
+//!   admin) is `closing` until `closes_at` (`account.closing_days` after the
 //!   ask). Its sign-ins end; a sign-in that passes every step is offered to
 //!   keep it instead of a session.
 //! - Then [`run_due`] deletes it: everything it holds, bytes included, its

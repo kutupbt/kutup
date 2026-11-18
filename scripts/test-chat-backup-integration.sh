@@ -66,7 +66,7 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 \
 # within seconds.
 compose exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --quiet -v ON_ERROR_STOP=1 --command "INSERT INTO site_settings (key, value) VALUES
-    ('storage_deleted_blob_retention_seconds', '0'), ('storage_deleted_blob_sweep_seconds', '1')
+    ('server.storage.deleted_blob_retention_seconds', '0'), ('server.storage.deleted_blob_sweep_seconds', '1')
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
 
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \

@@ -34,11 +34,9 @@ pub struct ChatMaintenancePolicy {
 
 /// Spawns the lifetime background jobs (version cleanup, quota reconcile, uploads sweeper,
 /// trash retention). Each runs once immediately, then on its interval.
-/// `trash_retention_days == 0` disables the trash sweeper.
 pub fn spawn_all(
     pool: PgPool,
     storage: StorageService,
-    trash_retention_days: i64,
     chat: ChatMaintenancePolicy,
     chat_hub: ChatHub,
 ) {
@@ -95,18 +93,30 @@ pub fn spawn_all(
             beat(&p2, "quota.reconcile").await;
         }
     });
-    if trash_retention_days > 0 {
-        let (p3, s3) = (pool.clone(), storage.clone());
-        register("drive.trash_sweep", TRASH_SWEEP_INTERVAL);
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(TRASH_SWEEP_INTERVAL);
-            loop {
-                tick.tick().await;
-                trash_sweep_once(&p3, &s3, trash_retention_days).await;
-                beat(&p3, "drive.trash_sweep").await;
+    // The trash's retention is read on every pass (`drive.trash_retention_days`),
+    // so an administrator's change applies at the next; 0 keeps the trash.
+    let (p3, s3) = (pool.clone(), storage.clone());
+    register("drive.trash_sweep", TRASH_SWEEP_INTERVAL);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(TRASH_SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            match crate::site_settings::DRIVE_TRASH_RETENTION_DAYS
+                .load(&p3)
+                .await
+            {
+                Ok(0) => {}
+                Ok(days) => {
+                    trash_sweep_once(&p3, &s3, days).await;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "trash sweep: reading its retention failed");
+                    continue;
+                }
             }
-        });
-    }
+            beat(&p3, "drive.trash_sweep").await;
+        }
+    });
     let chat_pool = pool.clone();
     register("chat.maintenance", CHAT_SWEEP_INTERVAL);
     tokio::spawn(async move {
@@ -716,7 +726,7 @@ async fn take_stale_upload(
 const INCOMPLETE_MULTIPART_PER_SWEEP: usize = 1000;
 
 /// Aborts the store's multipart uploads that were started longer ago than
-/// `storage_incomplete_multipart_max_age_seconds` (a day by default) and that
+/// `server.storage.incomplete_multipart_max_age_seconds` (a day by default) and that
 /// no upload row (`drive_uploads`, `chat_media_uploads`) names: the parts an abort
 /// left behind when it failed after its row was removed (a cancel, the
 /// stale-upload sweep above). A bucket lifecycle rule for incomplete

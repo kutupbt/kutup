@@ -209,7 +209,7 @@ Specific codes, where an app does something particular (a test in
 | `domainNotVerified` | 409 | The address's custom domain doesn't take mail now (sending from it, a new address or a catch-all on it) |
 | `notYourAddress` | 404 | `fromAddress` names no active address of the caller's |
 | `mimeMismatch` | 400 | `POST /api/mail/send`: the readable `mime` isn't the same message (another From than the sender's address, another Message-ID, or a Bcc header) |
-| `checkTimedOut` | 503 | `GET /api/mail/domains/{id}?refresh=1`: the domain's whole DNS check ran past its time (`mail_domains.check_timeout_seconds`); nothing changed |
+| `checkTimedOut` | 503 | `GET /api/mail/domains/{id}?refresh=1`: the domain's whole DNS check ran past its time (`mail.domains.check_timeout_seconds`); nothing changed |
 | `domainBlocked` | 409 | `POST /api/mail/domains`: an administrator deactivated this name; nobody may add it until they lift the block |
 | `forwardingUnavailable` | 409 | This server has no `MAIL_FORWARDING_KEYS`: no forwarding can be set up |
 | `forwardingState` | 409 | A forwarding action from the wrong state (pause an active one, accept a pending one, …) |
@@ -1251,7 +1251,7 @@ receiving nothing.
 ### POST /api/user/close
 
 Ask for this account to be deleted (docs/plans/server-personal-data.md, A5).
-It is `closing` for `account_closing_days` (default 14), then deleted with
+It is `closing` for `account.closing_days` (default 14), then deleted with
 everything in it; every sign-in, this one included, ends now. A sign-in before
 then is offered to keep it (`POST /api/auth/keep`). Recorded as
 `accountClosing`.
@@ -2383,8 +2383,8 @@ under it) or `publicSuffix`; `409` `domainLimit`, `domainDailyLimit`,
 
 The domain; `refresh=1` checks its DNS now, uncached (Proton's "Refresh
 status"), at most 30 times an hour per account (`429`), and at most
-`mail_domains.refreshes_at_once` across the server at a time (`429`). A
-check that runs past `mail_domains.check_timeout_seconds` changes nothing
+`mail.domains.refreshes_at_once` across the server at a time (`429`). A
+check that runs past `mail.domains.check_timeout_seconds` changes nothing
 (`503` `checkTimedOut`). A check that finds the domain changed since it was
 read (another check, an administrator) returns it as it is.
 
@@ -2397,7 +2397,7 @@ mail; nothing is published for them).
 
 `{ "addressId": "<an active address on the domain>" | null }` → `204`. Unknown
 names on the domain then reach it, at most the owner's
-`mail_domains.catch_all_per_day` a day (500 at first; `452 4.2.2` after),
+`mail.domains.catch_all_per_day` a day (500 at first; `452 4.2.2` after),
 counted once per stored message across every backend; caught mail is never
 forwarded. `403` when catch-alls are off, `409`
 while the domain isn't verified.
@@ -2419,8 +2419,8 @@ reset the address starts a new chain instead. Sending from it: `POST
 
 ### GET /api/admin/mail/domains · PUT /api/admin/mail/domains/settings
 
-Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail_domains.mode":
-"everyone"|"approve"|"off", "mail_domains.per_account", …addresses_per_account,
+Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail.domains.mode":
+"everyone"|"approve"|"off", "mail.domains.per_organization", …addresses_per_account,
 …on_server, …adds_per_day, …pending_days, …catch_all, …catch_all_per_day,
 …grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "ranges": {
 "<key>": { "min", "max" } } (each numeric setting's range, what the page offers), "spf", "dkimKeys": [{ "selector",
@@ -3470,7 +3470,7 @@ file or a pruned original.
 
 ### DELETE /api/files/:id
 
-Move a file to the trash (soft delete). The file disappears from every normal endpoint but keeps counting against quota; restore or purge it via the Trash endpoints. Permanent deletion happens from the trash — explicitly, or automatically after `TRASH_RETENTION_DAYS` (default 30).
+Move a file to the trash (soft delete). The file disappears from every normal endpoint but keeps counting against quota; restore or purge it via the Trash endpoints. Permanent deletion happens from the trash — explicitly, or automatically after the site setting `drive.trash_retention_days` (default 30; Administration → Server settings → Drive).
 
 **Auth:** Bearer JWT (collection owner, or the uploader holding a `canDelete` share)
 
@@ -3832,7 +3832,7 @@ under a folder the caller does not own.
 
 ## Trash
 
-Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated Drive deletes (`DELETE /api/fed/drive/files/:fileId`) remain permanent — there is no cross-server trash.
+Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than the site setting `drive.trash_retention_days` (`driveTrashRetentionDays`, default 30; `0` keeps the trash until it is emptied). Federated Drive deletes (`DELETE /api/fed/drive/files/:fileId`) remain permanent — there is no cross-server trash.
 
 ### GET /api/trash
 
@@ -5580,7 +5580,7 @@ keyed hashes (docs/plans/server-personal-data.md, A7).
 ### POST /api/admin/users/:id/close
 
 Close the account: every sign-in ends, and it is deleted after
-`account_closing_days` (a Privacy and retention setting, default 14) unless it
+`account.closing_days` (a Privacy and retention setting, default 14) unless it
 is kept, by its owner at sign-in or here (`PUT` with `isActive: true`).
 Recorded as `account.close`.
 
@@ -5787,7 +5787,7 @@ Every rate limit the server keeps (docs/plans/admin-rate-limits.md):
 {
   "limits": [
     {
-      "key": "login",
+      "key": "account.rate.login",
       "section": "accounts",
       "per": "address",
       "unit": "events",
@@ -5809,8 +5809,11 @@ Every rate limit the server keeps (docs/plans/admin-rate-limits.md):
 `firstFrom` is `default`, `environment` or `testStack`. `PUT` takes
 `{ "value": 20 }`, or `{ "value": null }` to go back to the first value, and
 answers the limit as it is now. A value outside `min`–`max` is `400`, an
-unknown key `404`. It applies at once on this backend and within 30 seconds
-on the others; each change writes a `settings.setRateLimit` audit entry.
+unknown key `404`. A limit's key is `<app>.rate.<name>` (`account`, `drive`,
+`chat`, `mail`, `calendar`, `pass` or `server`), the same key it is stored
+under in `site_settings` and, for one account, in `account_entitlements`.
+It applies at once on this backend and within 30 seconds on the others; each
+change writes a `settings.setRateLimit` audit entry.
 
 ### GET /api/admin/users/{id}/limits · PUT /api/admin/users/{id}/limits/{key}
 
@@ -5821,17 +5824,17 @@ one (docs/plans/settings-registry.md):
 
 ```json
 {
-  "settings": [{ "key": "drive_upload_max_bytes", "field": "driveUploadMaxBytes",
+  "settings": [{ "key": "drive.upload_max_bytes", "field": "driveUploadMaxBytes",
     "section": "drive", "unit": "bytes", "value": 1073741824, "source": "account",
     "siteValue": 10737418240, "min": 1048576, "max": 4398046511104 }],
-  "rateLimits": [{ "key": "rate_limit.feedback", "limit": "feedback",
+  "rateLimits": [{ "key": "account.rate.feedback", "limit": "account.rate.feedback",
     "section": "administration", "unit": "events", "windowSeconds": 3600,
     "value": 10, "source": "default", "siteValue": 10, "min": 1, "max": 1000 }]
 }
 ```
 
 `source` says where `value` comes from: `account`, `site` or `default`.
-`PUT` takes a setting's key or `rate_limit.<key>`, and gives the account its
+`PUT` takes a setting's or a rate limit's key, and gives the account its
 own value (`{ "value": 3 }`) or takes it back (`null`); it answers the entry
 as it is now. A value outside the range is `400` (never clamped), and so is a
 setting or rate limit that doesn't limit one account; an unknown key is
@@ -5845,7 +5848,8 @@ growth: nothing is removed. Each change writes an `account.setEntitlement` or
 
 Every whole-number setting, as Server settings builds its fields from it:
 `{ "settings": [{ "key", "field", "section", "unit", "default", "min", "max",
-"perAccount", "value", "set" }] }`. `field` is its name in
+"perAccount", "value", "set" }] }`. `key` is the setting's key in
+`site_settings` (`<namespace>.<name>`, docs/settings-model.md), `field` its name in
 `/api/admin/settings`, `section` one of `chatMulti`, `calendar`,
 `chatLinking`, `twoFactor` and `drive`, and `perAccount` whether one account
 may have its own value.
@@ -5875,6 +5879,7 @@ Return current global server settings.
   "chatGroupAvatarPendingSeconds": 86400,
   "passVaultMaxBytes": 67108864,
   "driveVersionRetentionChoices": [7, 30, 90, 180, 365, 3650],
+  "driveTrashRetentionDays": 30,
   "calendarsPerAccount": 25,
   "calendarEventsPerCalendar": 25000,
   "calendarSyncBatch": 10,

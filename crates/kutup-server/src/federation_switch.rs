@@ -10,7 +10,7 @@
 //!   can't be reached. Nothing is deleted.
 //! - The switch is the account's entitlement `server.federation` (1 on,
 //!   0 off). A new account gets one from the site setting
-//!   `federation_default` (`on`) as it is made, so a later change of the
+//!   `server.federation_default` (`on`) as it is made, so a later change of the
 //!   default leaves existing accounts as they are; an account without one
 //!   follows the default.
 //! - Turning it on asks the `federationAbroad` consent when a document for it
@@ -32,7 +32,7 @@ use crate::middleware::AuthUser;
 use crate::AppState;
 
 /// The site setting a new account's switch starts from (`on`, `off`).
-pub const DEFAULT_SETTING: &str = "federation_default";
+pub const DEFAULT_SETTING: &str = "server.federation_default";
 
 /// The consent purpose turning it on asks for.
 pub const PURPOSE: &str = "federationAbroad";

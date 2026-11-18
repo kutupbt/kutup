@@ -907,7 +907,7 @@ restored. It prints how long `pg_restore` took.
 
 The account data keys and the destruction log (the schema `account_keys`)
 are dumped apart, under `database-backups-keys/` (`--list-keys`), and kept
-only `key_backup_keep_days` (default 7). `--restore` always takes the
+only `server.retention.key_backup_days` (default 7). `--restore` always takes the
 NEWEST key dump, whichever database dump it restores (a fourth argument
 names another). Keys of accounts deleted since are in it no more, so their
 sealed fields stay unreadable; at start the server deletes those accounts
@@ -978,7 +978,7 @@ restored queue stays held. A drill by hand should do the same.
    before the backend starts, set a long wait for deleted blobs:
    ```sh
    docker compose exec -T postgres psql -U kutup -d kutup -c \
-     "INSERT INTO site_settings (key, value) VALUES ('storage_deleted_blob_retention_seconds', '7776000')
+     "INSERT INTO site_settings (key, value) VALUES ('server.storage.deleted_blob_retention_seconds', '7776000')
       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
    ```
    Then start the stack (`docker compose up -d --wait`); put the setting back

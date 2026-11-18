@@ -255,10 +255,10 @@ apps"), not as a half head manager here.
   writing client chooses, 43-character base64url; `RecordScope::random_id`,
   `randomRecordId` on the web). Purposes 13 and 14 are no longer chained, and
   their object is the record id (32 bytes; the ledger's was 48).
-- **Counts** are site settings: `account_records_photos_library` (default 1:
+- **Counts** are site settings: `photos.records.library` (default 1:
   a first write that raced another device's is refused by the head and redone
   on the record that landed; a client that ever finds two merges them and
-  deletes the second) and `account_records_chat_attachments` (default
+  deletes the second) and `chat.records.attachments` (default
   100,000).
 - **The ledger keeps each entity's newest revision only** (decision 1).
 - **Gone:** `photos_library`, `chat_attachment_ledger_{entities,history,

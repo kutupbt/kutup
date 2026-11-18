@@ -1456,8 +1456,8 @@ title.
   and is no oracle (the asker proves the pseudonym);
 - the link-join budgets (built, after review: per relay server and group,
   and per relay server, the site settings
-  `chat_group_link_joins_per_relay_group_per_min` and
-  `chat_group_link_joins_per_relay_per_min` under Administration → Server
+  `chat.group_link_joins_per_relay_group_per_min` and
+  `chat.group_link_joins_per_relay_per_min` under Administration → Server
   settings, first 120 and 1200 from `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_*`) are
   charged on `JoinFromLink` and `RequestToJoin` only, once the link's
   password holds and before the rest of the change is checked, so junk

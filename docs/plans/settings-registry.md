@@ -31,8 +31,9 @@ for.** `NumericSetting` gains three fields:
 
 **2. One table of per-account values.** `account_entitlements (account_id,
 key, value, source, updated_at)` holds both registries (docs/plans/w7-schema.md
-§5; admin writes are `source = 'admin'`). Rate limits are keyed
-`rate_limit.<key>`, as `site_settings` already names them. The rows of
+§5; admin writes are `source = 'admin'`). Rate limits are keyed by their
+own key (`<app>.rate.<name>`, docs/plans/w7-schema.md §7), as `site_settings`
+names them. The rows of
 `user_rate_limit_overrides` move into it, and that table goes. The rate-limit
 snapshot reads the new table.
 

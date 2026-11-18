@@ -690,7 +690,7 @@ pub async fn delete_user(
 }
 
 /// `POST /api/admin/users/{id}/close` — closes the account: deleted after
-/// `account_closing_days`, unless kept (by its owner at sign-in, or here with
+/// `account.closing_days`, unless kept (by its owner at sign-in, or here with
 /// `isActive: true`) (docs/plans/server-personal-data.md, A5).
 #[utoipa::path(
     post,

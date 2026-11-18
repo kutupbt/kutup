@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 mod common;
 use common::*;
 
-const LIMIT: &str = "rename_checks";
+const LIMIT: &str = "account.rate.rename_checks";
 
 struct Admin<'a> {
     c: &'a Client,
@@ -160,9 +160,7 @@ fn administrators_set_rate_limits() {
     let own_id = me(&c, &base, &own.token)["id"].as_str().unwrap().to_owned();
     let account_put = |key: &str, value: Value| {
         let r = bearer(
-            c.put(format!(
-                "{base}/api/admin/users/{own_id}/limits/rate_limit.{key}"
-            )),
+            c.put(format!("{base}/api/admin/users/{own_id}/limits/{key}")),
             &admin.token,
         )
         .json(&json!({ "value": value }))
@@ -173,9 +171,7 @@ fn administrators_set_rate_limits() {
     };
     // An account can't set its own, even more generous, value.
     let r = bearer(
-        c.put(format!(
-            "{base}/api/admin/users/{own_id}/limits/rate_limit.{LIMIT}"
-        )),
+        c.put(format!("{base}/api/admin/users/{own_id}/limits/{LIMIT}")),
         &own.token,
     )
     .json(&json!({ "value": 3000 }))
@@ -199,11 +195,16 @@ fn administrators_set_rate_limits() {
     .json()
     .unwrap();
     let limits = listed["rateLimits"].as_array().unwrap();
-    assert!(limits.iter().all(|limit| limit["limit"] != "reports"));
+    assert!(limits
+        .iter()
+        .all(|limit| limit["limit"] != "drive.rate.reports"));
     assert!(limits
         .iter()
         .any(|limit| limit["limit"] == LIMIT && limit["source"] == "account"));
-    assert_eq!(account_put("reports", json!(5)).0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        account_put("drive.rate.reports", json!(5)).0,
+        StatusCode::BAD_REQUEST
+    );
     assert_eq!(account_put(LIMIT, json!(0)).0, StatusCode::BAD_REQUEST);
     let (status, taken_back) = account_put(LIMIT, Value::Null);
     assert_eq!(status, StatusCode::OK);

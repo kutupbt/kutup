@@ -9,7 +9,7 @@ is recorded and shown to administrators.
 
 ## 1. Registration mode
 
-A single site setting, `registration_mode`, replaces `registration_enabled`:
+A single site setting, `account.registration_mode`, replaces `registration_enabled`:
 
 | Mode | Who can register | A code |
 |---|---|---|

@@ -95,6 +95,35 @@ is a follow-up, not a bug in a single app.
 There is no user-chosen session lifetime: sessions last a fixed 30 days and
 each can be revoked from the account's sessions page.
 
+## Site settings and their keys
+
+What administrators set for the whole server (Administration → Server
+settings, Rate limits, Mail domains) is a site setting (`site_settings`), and
+an account's or organization's own value of one is an entitlement
+(`account_entitlements`, `organization_entitlements`) under the same key.
+Every key is `<namespace>.<name>`; the namespace is the app the setting
+belongs to (`drive`, `mail`, `chat`, `pass`, `calendar`, `photos`), `account`
+for sign-in and the account itself, or `server` for the server's own
+operation. For example:
+
+- `drive.upload_max_bytes`, `chat.link_token_seconds`, `account.closing_days`;
+- the periods kept for privacy, `server.retention.*`
+  (`server.retention.security_event_days`);
+- each account-records count under its app (`pass.records.secrets`,
+  `chat.records.contacts`);
+- rate limits, `<app>.rate.<name>` (`account.rate.login`,
+  `chat.rate.group_relay`);
+- custom domains, `mail.domains.*`.
+
+Settings are read by key, so a stored row this server does not know (a newer
+server's, or a fork's under its own namespace) is kept and ignored. The admin
+API names the whole-number settings by `field` (`driveUploadMaxBytes`); the
+registry listing, `PUT /api/admin/users/{id}/limits/{key}` and the
+mail-domain settings use the keys. The full list of keys is the registry
+(`crates/kutup-server/src/site_settings.rs`,
+`crates/kutup-server/src/ratelimit/registry.rs`,
+`crates/kutup-server/src/mail/domains/settings.rs`).
+
 ## Adding a setting
 
 Decide with the rule above before choosing storage, and say which side it is

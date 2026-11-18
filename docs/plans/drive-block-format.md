@@ -1085,7 +1085,7 @@ Each slice is a PR.
      are never fetched or opened.
    - Incomplete multipart uploads whose abort failed after their row went:
      the upload sweep aborts those no row names once older than
-     `storage_incomplete_multipart_max_age_seconds` (a day by default;
+     `server.storage.incomplete_multipart_max_age_seconds` (a day by default;
      docs/self-hosting.md has the matching bucket rule).
 4. **Download and streaming.** Built (2026-11-12, §4).
    - The block reader Worker and `fetchDecrypt` on blocks.

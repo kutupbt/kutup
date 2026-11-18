@@ -50,9 +50,6 @@ pub struct Config {
     /// SeaweedFS master endpoint probed for real capacity + usage (admin dashboard). Empty
     /// disables the probe (the admin UI then falls back to `storage_total_bytes`).
     pub seaweedfs_master_url: String,
-    /// Days a trashed file/folder is kept before the sweeper purges it permanently.
-    /// From `TRASH_RETENTION_DAYS`; 0 disables the automatic purge.
-    pub trash_retention_days: i64,
     /// Unacked chat ciphertext retention. `0` disables expiry.
     pub chat_mailbox_retention_days: i64,
     /// Send-id idempotency-record retention. `0` disables expiry.
@@ -177,7 +174,7 @@ pub struct Config {
     /// apps show direct chats only; groups made earlier stay stored,
     /// unreachable.
     pub chat_groups: bool,
-    /// The first value of the `chat_group_max_members` site setting, the
+    /// The first value of the `chat.group_max_members` site setting, the
     /// most members (and open invitations) a group hosted here may have
     /// (`CHAT_GROUP_MAX_MEMBERS`, 1 to 256, default 256;
     /// docs/plans/pairwise-groups.md §7). Administrators change it after.
@@ -592,7 +589,6 @@ impl Config {
             seaweedfs_master_url: env
                 .raw("SEAWEEDFS_MASTER_URL")
                 .unwrap_or_else(|| "http://seaweedfs-master:9333".to_string()),
-            trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
             chat_mailbox_retention_days,
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
@@ -1250,7 +1246,7 @@ mod env_tests {
     fn every_bad_value_is_reported_not_defaulted() {
         let found = errors(&[
             ("APP_ENV", "prod"),
-            ("TRASH_RETENTION_DAYS", "thirty"),
+            ("CHAT_SEND_RETENTION_DAYS", "thirty"),
             ("CHAT_GROUPS", "maybe"),
             ("MAIL_OUTSIDE_SENDING", "yes"),
             ("MAIL_DEFAULT_DELAY_SEND_SECONDS", "7"),
@@ -1260,7 +1256,7 @@ mod env_tests {
         ]);
         for name in [
             "APP_ENV",
-            "TRASH_RETENTION_DAYS",
+            "CHAT_SEND_RETENTION_DAYS",
             "CHAT_GROUPS",
             "MAIL_OUTSIDE_SENDING",
             "MAIL_DEFAULT_DELAY_SEND_SECONDS",

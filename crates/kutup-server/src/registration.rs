@@ -17,7 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::AppState;
 
 /// The site setting that holds the mode.
-pub const MODE_SETTING: &str = "registration_mode";
+pub const MODE_SETTING: &str = "account.registration_mode";
 
 /// Who may register.
 #[derive(

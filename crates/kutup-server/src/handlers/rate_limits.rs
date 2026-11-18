@@ -157,21 +157,21 @@ pub async fn update(
         }
     }
     let previous = ratelimit::value(spec.limit);
-    let setting = format!("{}{}", ratelimit::SETTING_PREFIX, spec.key);
+    let setting = spec.key;
     match request.value {
         Some(value) => {
             sqlx::query(
                 "INSERT INTO site_settings (key, value) VALUES ($1, $2) \
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             )
-            .bind(&setting)
+            .bind(setting)
             .bind(value.to_string())
             .execute(&state.pool)
             .await?;
         }
         None => {
             sqlx::query("DELETE FROM site_settings WHERE key = $1")
-                .bind(&setting)
+                .bind(setting)
                 .execute(&state.pool)
                 .await?;
         }

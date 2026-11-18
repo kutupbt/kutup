@@ -25,7 +25,7 @@ const settings = {
 }
 const registry = [
   {
-    key: 'drive_stream_cache_blocks',
+    key: 'drive.stream_cache_blocks',
     field: 'driveStreamCacheBlocks',
     section: 'drive',
     unit: 'count',

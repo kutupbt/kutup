@@ -392,7 +392,7 @@ defaults:
   console (Mail → Domains) until an administrator approves it. Until then it
   is `pending`, and nothing flows.
 - **Outside sending:** custom domains also follow Mail's outside-sending rule
-  (`mail_outside_sending`, admins only today). An account that may not send
+  (`mail.outside_sending`, admins only today). An account that may not send
   outside may still hold a domain and receive on it. Its sends from that
   domain are refused like any outside send (`403 outsideSendingOff`).
 - **The per-user override** sets an account's domain count, address count
@@ -494,7 +494,7 @@ Built (2026-10-22): Mail → Settings → Domain names (the list, Proton's
 seven-tab wizard with its texts, the catch-all and delete modals, the warn
 and stopped banners) and Administration → Mail domains (domains with owners,
 approve, deactivate, the blocked names, the records to publish, every
-`mail_domains.*` setting, and per-user limits on the user page). A lost
+`mail.domains.*` setting, and per-user limits on the user page). A lost
 domain's transfer notice is the inbox notice (`mail::notice`). Addresses on
 a domain are made in Identity and addresses. The browser spec runs on the
 mail gate's stack with CoreDNS: `scripts/test-mail-domains-browser.sh`

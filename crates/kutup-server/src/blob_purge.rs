@@ -3,7 +3,7 @@
 //!
 //! Every delete the server makes is queued in `storage_pending_deletions`
 //! (`StorageService::with_deferred_deletes`); this job removes the ones
-//! queued at least `storage_deleted_blob_retention_seconds` ago. A database
+//! queued at least `server.storage.deleted_blob_retention_seconds` ago. A database
 //! dump taken before a delete is restored with its blobs still there, as long
 //! as the dump is younger than that wait: set it to the backup interval plus
 //! a margin.
@@ -31,7 +31,7 @@ pub struct PurgeResult {
     pub failed: u64,
 }
 
-/// Runs [`purge_due`] every `storage_deleted_blob_sweep_seconds`, with the
+/// Runs [`purge_due`] every `server.storage.deleted_blob_sweep_seconds`, with the
 /// interval and the wait read again as it goes, so a change applies without
 /// a restart.
 /// `storage` must be the immediate store ([`StorageService::immediate`]).

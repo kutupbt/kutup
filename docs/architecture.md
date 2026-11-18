@@ -515,7 +515,7 @@ Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backen
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
 - Each account has one storage pool: its quota is its entitlement
   `account.storage_quota_bytes` (`account_entitlements`), else the site's
-  `default_storage_quota_bytes` (10 GiB until set), against
+  `account.default_storage_quota_bytes` (10 GiB until set), against
   `accounts.storage_used_bytes`.
   Drive, Photos, Office, Maps and Chat (delivery media, history segments and
   bases, protected history media) all charge it. Every write locks the user row

@@ -9,8 +9,12 @@
 //! value outside the setting's range is passed over. Usage counters
 //! (`accounts.storage_used_bytes`) are not entitlements.
 //!
-//! Besides the registry's settings and the per-account rate limits
-//! (`rate_limit.<key>`), the keys are:
+//! Keys are setting keys, `<namespace>.<name>` (docs/plans/w7-schema.md §7):
+//! a row whose key this server doesn't know (a newer server's, a fork's) is
+//! kept and ignored. Besides the registry's settings, the per-account rate
+//! limits (`<app>.rate.<name>`) and `mail.domains.addresses_per_account`
+//! (organizations: `mail.domains.per_organization`, `mail.domains.catch_all`),
+//! the keys are:
 //! - [`STORAGE_QUOTA`]: the account's storage pool (`crate::storage_pool`);
 //! - [`PUBLIC_SHARING`]: whether it may share by public link, 0 or 1
 //!   (`crate::public_sharing`);
@@ -23,7 +27,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// An account's storage quota, in bytes; without it the site's
-/// `default_storage_quota_bytes` applies.
+/// `account.default_storage_quota_bytes` applies.
 pub const STORAGE_QUOTA: &str = "account.storage_quota_bytes";
 
 /// Whether an account may make and serve public links (1) or not (0);
@@ -31,7 +35,7 @@ pub const STORAGE_QUOTA: &str = "account.storage_quota_bytes";
 pub const PUBLIC_SHARING: &str = "drive.public_sharing";
 
 /// Whether an account talks to other servers (1) or not (0); without it,
-/// the site's `federation_default`.
+/// the site's `server.federation_default`.
 pub const FEDERATION: &str = "server.federation";
 
 /// Where an entitlement came from.

@@ -18,9 +18,7 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::rate_limits::{entry, RateLimitUnit};
 use crate::middleware::AdminUser;
 use crate::ratelimit::{self, Section, Spec};
-use crate::site_settings::{
-    self, NumericSetting, SettingSection, SettingUnit, ValueSource, RATE_LIMIT_PREFIX,
-};
+use crate::site_settings::{self, NumericSetting, SettingSection, SettingUnit, ValueSource};
 use crate::AppState;
 
 /// One whole-number setting, as Server settings shows it.
@@ -113,9 +111,9 @@ pub struct AccountSettingEntry {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRateLimitEntry {
-    /// `rate_limit.<key>` (what `PUT …/limits/{key}` takes).
-    pub key: String,
-    /// The limit's own key, as Rate limits lists it.
+    /// The limit's key (what `PUT …/limits/{key}` takes).
+    pub key: &'static str,
+    /// The limit's key, as Rate limits lists it (the same as `key`).
     pub limit: &'static str,
     pub section: Section,
     pub unit: RateLimitUnit,
@@ -180,7 +178,7 @@ fn rate_limit_entry(
     let shown = entry(spec, site);
     let own = ratelimit::account_override(spec.limit, &account.to_string());
     AccountRateLimitEntry {
-        key: format!("{RATE_LIMIT_PREFIX}{}", spec.key),
+        key: spec.key,
         limit: spec.key,
         section: spec.section,
         unit: shown.unit,
@@ -256,11 +254,7 @@ enum Target {
 }
 
 fn target(key: &str) -> AppResult<Target> {
-    if let Some(limit) = key.strip_prefix(RATE_LIMIT_PREFIX) {
-        let spec = ratelimit::SPECS
-            .iter()
-            .find(|spec| spec.key == limit)
-            .ok_or_else(|| AppError::not_found("no such limit"))?;
+    if let Some(spec) = ratelimit::SPECS.iter().find(|spec| spec.key == key) {
         if !spec.overridable() {
             return Err(AppError::bad_request(format!(
                 "{} is not counted per account",
@@ -292,7 +286,7 @@ pub enum AccountLimitEntry {
 
 /// `PUT /api/admin/users/{id}/limits/{key}` — gives the account its own
 /// value of a setting or rate limit that limits one account (`key`: a
-/// setting's key, or `rate_limit.<key>`), or (`null`) takes it back. A value
+/// setting's or a rate limit's key), or (`null`) takes it back. A value
 /// outside the range is refused, never clamped. Lowering it below what the
 /// account already uses only stops new growth. Audited as `account.setEntitlement`
 /// or `account.setRateLimit`.
@@ -303,7 +297,7 @@ pub enum AccountLimitEntry {
     security(("BearerAuth" = [])),
     params(
         ("id" = Uuid, Path, description = "The account"),
-        ("key" = String, Path, description = "A setting's key, or rate_limit.<key>"),
+        ("key" = String, Path, description = "A setting's or a rate limit's key"),
     ),
     request_body = UpdateLimitRequest,
     responses(
@@ -337,10 +331,7 @@ pub async fn update(
                     )));
                 }
             }
-            (
-                format!("{RATE_LIMIT_PREFIX}{}", spec.key),
-                AdminAction::AccountSetRateLimit,
-            )
+            (spec.key.to_owned(), AdminAction::AccountSetRateLimit)
         }
     };
     let previous = own_values(&state, id).await?.get(&stored_key).copied();

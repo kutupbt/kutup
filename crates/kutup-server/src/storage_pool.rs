@@ -25,7 +25,7 @@ pub const DEFAULT_QUOTA_BYTES: i64 = 10 * 1024 * 1024 * 1024;
 /// The `site_settings` key of the quota every account has unless it has its
 /// own (the entitlement `crate::entitlements::STORAGE_QUOTA`). A change
 /// applies to every account without its own at once.
-pub const DEFAULT_QUOTA_SETTING: &str = "default_storage_quota_bytes";
+pub const DEFAULT_QUOTA_SETTING: &str = "account.default_storage_quota_bytes";
 
 /// The quota from an account's own value and the site's, as stored: the
 /// account's, else the site's, else 10 GiB; a value not above zero is passed

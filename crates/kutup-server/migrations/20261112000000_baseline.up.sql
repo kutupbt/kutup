@@ -71,7 +71,7 @@ CREATE FUNCTION public.kutup_account_federates(account uuid) RETURNS boolean
        AND COALESCE(
              (SELECT value = 1 FROM account_entitlements
                WHERE account_id = account AND key = 'server.federation'),
-             (SELECT value <> 'off' FROM site_settings WHERE key = 'federation_default'),
+             (SELECT value <> 'off' FROM site_settings WHERE key = 'server.federation_default'),
              true)
 $$;
 

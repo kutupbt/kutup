@@ -448,9 +448,9 @@ pub struct DomainOverridesView {
     pub organization: Option<OrganizationRef>,
 }
 
-const DOMAINS_KEY: &str = "mail_domains.per_organization";
-const CATCH_ALL_KEY: &str = "mail_domains.catch_all";
-const ADDRESSES_KEY: &str = "mail_domains.addresses_per_account";
+const DOMAINS_KEY: &str = "mail.domains.per_organization";
+const CATCH_ALL_KEY: &str = "mail.domains.catch_all";
+const ADDRESSES_KEY: &str = "mail.domains.addresses_per_account";
 
 /// The account's organization (enabled or invited member) with its role.
 async fn organization_of(

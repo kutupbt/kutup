@@ -155,7 +155,7 @@ goes beyond Signal parity.
 ## Slices
 
 1. (done) **Map foundation:**
-   - admin settings in `site_settings.maps` (providers, own tile server,
+   - admin settings in `site_settings` key `server.maps` (providers, own tile server,
      relay mode, cache size, maps off) on the account app's admin **Maps**
      page;
    - each person's choice in `user_map_preferences` (migration 055) on the

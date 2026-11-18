@@ -1,10 +1,24 @@
+//! Site settings (`site_settings`, key → text value) and the registry of the
+//! whole-number ones. Every key is `<namespace>.<name>`, the namespace one of
+//! [`NAMESPACES`] (docs/plans/w7-schema.md §7); rate limits are
+//! `<app>.rate.<name>` (`crate::ratelimit::registry`). Settings are read by
+//! key, so a stored row this server doesn't know (a newer server's, or a
+//! fork's, under any namespace) is kept and ignored, never an error.
+
 use sqlx::PgPool;
 
 use crate::config::OutsideSending;
 
+/// The namespaces a setting key starts with: the apps, the account, and the
+/// server itself (checked by the tests over every key this server has).
+#[cfg(test)]
+pub const NAMESPACES: [&str; 8] = [
+    "drive", "mail", "chat", "pass", "calendar", "photos", "account", "server",
+];
+
 /// Who may send mail outside Kutup (`off`, `admins`, `on`), set under
 /// Administration → Mail sending; `MAIL_OUTSIDE_SENDING` only seeds it.
-pub const MAIL_OUTSIDE_SENDING: &str = "mail_outside_sending";
+pub const MAIL_OUTSIDE_SENDING: &str = "mail.outside_sending";
 
 /// Writes `initial` (from `MAIL_OUTSIDE_SENDING`) as the outside-sending
 /// policy when none is stored yet: an existing deployment keeps what it had,
@@ -39,8 +53,8 @@ pub async fn mail_outside_sending(
     )
 }
 
-pub const CHAT_MAILBOX_RETENTION_DAYS: &str = "chat_mailbox_retention_days";
-pub const CHAT_MEDIA_DELIVERY_RETENTION_DAYS: &str = "chat_media_delivery_retention_days";
+pub const CHAT_MAILBOX_RETENTION_DAYS: &str = "chat.mailbox_retention_days";
+pub const CHAT_MEDIA_DELIVERY_RETENTION_DAYS: &str = "chat.media_delivery_retention_days";
 pub const MAX_CHAT_DELIVERY_RETENTION_DAYS: i64 = 3650;
 
 pub fn validate_chat_delivery_retention_days(value: i64) -> Result<i64, &'static str> {
@@ -74,8 +88,8 @@ pub async fn chat_delivery_retention_days(
 /// anyone may take it, and how long its old address still receives
 /// (docs/plans/username-renames.md, "Names over time"); administrators set
 /// both, `NAME_HOLD_DAYS` and `OLD_ADDRESS_RECEIVE_DAYS` only seed them.
-pub const NAME_HOLD_DAYS: &str = "name_hold_days";
-pub const OLD_ADDRESS_RECEIVE_DAYS: &str = "old_address_receive_days";
+pub const NAME_HOLD_DAYS: &str = "account.name_hold_days";
+pub const OLD_ADDRESS_RECEIVE_DAYS: &str = "account.old_address_receive_days";
 
 /// Holds of 30 days to 10 years; receiving from 0 days to the hold.
 pub fn validate_name_holds(hold: i64, receive: i64) -> Result<(i64, i64), &'static str> {
@@ -113,8 +127,8 @@ pub async fn name_holds(
 /// all, set under Administration → Server settings; the
 /// `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_*` variables only seed them.
 pub const CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP: &str =
-    "chat_group_link_joins_per_relay_group_per_min";
-pub const CHAT_GROUP_LINK_JOINS_PER_RELAY: &str = "chat_group_link_joins_per_relay_per_min";
+    "chat.group_link_joins_per_relay_group_per_min";
+pub const CHAT_GROUP_LINK_JOINS_PER_RELAY: &str = "chat.group_link_joins_per_relay_per_min";
 pub const MAX_LINK_JOINS_PER_MIN: i64 = 1_000_000;
 
 pub fn validate_chat_group_link_joins(value: i64) -> Result<i64, &'static str> {
@@ -151,7 +165,7 @@ pub async fn chat_group_link_joins(pool: &PgPool) -> Result<(i64, i64), sqlx::Er
 /// vault brought in from KeePassXC or a backup), set under Administration →
 /// Server settings. The browser opens a vault whole, so this bounds what an
 /// upload makes it hold; a vault's own saves are never refused by it.
-pub const PASS_VAULT_MAX_BYTES: &str = "pass_vault_max_bytes";
+pub const PASS_VAULT_MAX_BYTES: &str = "pass.vault_max_bytes";
 pub const PASS_VAULT_MAX_BYTES_DEFAULT: i64 = 64 * 1024 * 1024;
 
 /// 1 MiB to 1 GiB.
@@ -239,9 +253,9 @@ pub async fn version_retention_choices<'e, E: sqlx::PgExecutor<'e>>(
 /// avatars may take per group (the current blob and a pending upload), and
 /// how long an upload waits for a change to name it, set under
 /// Administration → Server settings.
-pub const CHAT_GROUP_AVATAR_MAX_BYTES: &str = "chat_group_avatar_max_bytes";
-pub const CHAT_GROUP_AVATAR_STORAGE_BYTES: &str = "chat_group_avatar_storage_per_group_bytes";
-pub const CHAT_GROUP_AVATAR_PENDING_SECONDS: &str = "chat_group_avatar_pending_seconds";
+pub const CHAT_GROUP_AVATAR_MAX_BYTES: &str = "chat.group_avatar_max_bytes";
+pub const CHAT_GROUP_AVATAR_STORAGE_BYTES: &str = "chat.group_avatar_storage_per_group_bytes";
+pub const CHAT_GROUP_AVATAR_PENDING_SECONDS: &str = "chat.group_avatar_pending_seconds";
 
 /// A home's avatar limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,10 +363,6 @@ pub struct NumericSetting {
     pub per_account: bool,
 }
 
-/// The `account_entitlements` key prefix of an account's own rate limits
-/// (`rate_limit.<key>`, as `site_settings` names the site's).
-pub const RATE_LIMIT_PREFIX: &str = "rate_limit.";
-
 impl NumericSetting {
     pub fn validate(&self, value: i64) -> Result<i64, String> {
         if (self.min..=self.max).contains(&value) {
@@ -456,7 +466,7 @@ pub enum ValueSource {
 /// request's size before its per-recipient headers, how many accounts one
 /// request names, and the bytes one address may send a minute.
 pub const CHAT_MULTI_MAX_MESSAGE_BYTES: NumericSetting = NumericSetting {
-    key: "chat_multi_max_message_bytes",
+    key: "chat.multi_max_message_bytes",
     field: "chatMultiMaxMessageBytes",
     default: 96 * 1024,
     min: 4 * 1024,
@@ -465,7 +475,7 @@ pub const CHAT_MULTI_MAX_MESSAGE_BYTES: NumericSetting = NumericSetting {
     per_account: false,
 };
 pub const CHAT_MULTI_BASE_BYTES: NumericSetting = NumericSetting {
-    key: "chat_multi_base_bytes",
+    key: "chat.multi_base_bytes",
     field: "chatMultiBaseBytes",
     default: 256 * 1024,
     min: 4 * 1024,
@@ -474,7 +484,7 @@ pub const CHAT_MULTI_BASE_BYTES: NumericSetting = NumericSetting {
     per_account: false,
 };
 pub const CHAT_MULTI_MAX_RECIPIENTS: NumericSetting = NumericSetting {
-    key: "chat_multi_max_recipients",
+    key: "chat.multi_max_recipients",
     field: "chatMultiMaxRecipients",
     default: 256,
     min: 1,
@@ -483,7 +493,7 @@ pub const CHAT_MULTI_MAX_RECIPIENTS: NumericSetting = NumericSetting {
     per_account: false,
 };
 pub const CHAT_MULTI_IP_BYTES_PER_MIN: NumericSetting = NumericSetting {
-    key: "chat_multi_ip_bytes_per_min",
+    key: "chat.multi_ip_bytes_per_min",
     field: "chatMultiIpBytesPerMin",
     default: 32 * 1024 * 1024,
     min: 1024 * 1024,
@@ -496,7 +506,7 @@ pub const CHAT_MULTI_IP_BYTES_PER_MIN: NumericSetting = NumericSetting {
 /// sender (the real limit; one over it gets its copy pairwise), and the
 /// requests one token may make a minute (weak: it caps replays of one send).
 pub const CHAT_MULTI_PER_RECIPIENT_PER_MIN: NumericSetting = NumericSetting {
-    key: "chat_multi_per_recipient_per_min",
+    key: "chat.multi_per_recipient_per_min",
     field: "chatMultiPerRecipientPerMin",
     default: 1_200,
     min: 1,
@@ -505,7 +515,7 @@ pub const CHAT_MULTI_PER_RECIPIENT_PER_MIN: NumericSetting = NumericSetting {
     per_account: false,
 };
 pub const CHAT_MULTI_PER_TOKEN_PER_MIN: NumericSetting = NumericSetting {
-    key: "chat_multi_per_token_per_min",
+    key: "chat.multi_per_token_per_min",
     field: "chatMultiPerTokenPerMin",
     default: 60,
     min: 1,
@@ -516,7 +526,7 @@ pub const CHAT_MULTI_PER_TOKEN_PER_MIN: NumericSetting = NumericSetting {
 /// Endorsements one account may fetch a day from this server (§3.2; a
 /// client needs one a day).
 pub const CHAT_GROUP_SEND_ENDORSEMENTS_PER_DAY: NumericSetting = NumericSetting {
-    key: "chat_group_send_endorsements_per_day",
+    key: "chat.group_send_endorsements_per_day",
     field: "chatGroupSendEndorsementsPerDay",
     default: 48,
     min: 1,
@@ -527,7 +537,7 @@ pub const CHAT_GROUP_SEND_ENDORSEMENTS_PER_DAY: NumericSetting = NumericSetting 
 /// Blobs one member may upload to one group a day, on the group's home
 /// (§3.3; one a day, with room for retries).
 pub const CHAT_GROUP_ENDORSEMENT_UPLOADS_PER_DAY: NumericSetting = NumericSetting {
-    key: "chat_group_endorsement_uploads_per_day",
+    key: "chat.group_endorsement_uploads_per_day",
     field: "chatGroupEndorsementUploadsPerDay",
     default: 8,
     min: 1,
@@ -538,7 +548,7 @@ pub const CHAT_GROUP_ENDORSEMENT_UPLOADS_PER_DAY: NumericSetting = NumericSettin
 /// The most blobs one endorsement read answers (§3.3); a page must fit one
 /// sealed group answer, so at most 200.
 pub const CHAT_GROUP_ENDORSEMENT_PAGE_SIZE: NumericSetting = NumericSetting {
-    key: "chat_group_endorsement_page_size",
+    key: "chat.group_endorsement_page_size",
     field: "chatGroupEndorsementPageSize",
     default: 100,
     min: 1,
@@ -550,7 +560,7 @@ pub const CHAT_GROUP_ENDORSEMENT_PAGE_SIZE: NumericSetting = NumericSetting {
 /// minute, all its users together: requests and bytes (never counted per
 /// stored recipient).
 pub const CHAT_MULTI_ORIGIN_REQUESTS_PER_MIN: NumericSetting = NumericSetting {
-    key: "chat_multi_origin_requests_per_min",
+    key: "chat.multi_origin_requests_per_min",
     field: "chatMultiOriginRequestsPerMin",
     default: 6_000,
     min: 1,
@@ -559,7 +569,7 @@ pub const CHAT_MULTI_ORIGIN_REQUESTS_PER_MIN: NumericSetting = NumericSetting {
     per_account: false,
 };
 pub const CHAT_MULTI_ORIGIN_BYTES_PER_MIN: NumericSetting = NumericSetting {
-    key: "chat_multi_origin_bytes_per_min",
+    key: "chat.multi_origin_bytes_per_min",
     field: "chatMultiOriginBytesPerMin",
     default: 512 * 1024 * 1024,
     min: 1024 * 1024,
@@ -574,7 +584,7 @@ pub const CHAT_MULTI_ORIGIN_BYTES_PER_MIN: NumericSetting = NumericSetting {
 /// up to ten distributions per member); `CHAT_GROUP_MAX_MEMBERS` only seeds
 /// it.
 pub const CHAT_GROUP_MAX_MEMBERS: NumericSetting = NumericSetting {
-    key: "chat_group_max_members",
+    key: "chat.group_max_members",
     field: "chatGroupMaxMembers",
     default: 256,
     min: 1,
@@ -618,7 +628,7 @@ pub const CHAT_MULTI_SETTINGS: [NumericSetting; 12] = [
 /// events one calendar holds, and the changes one events sync carries
 /// (Proton's 25, its practical event cap, and its batch of 10).
 pub const CALENDARS_PER_ACCOUNT: NumericSetting = NumericSetting {
-    key: "calendars_per_account",
+    key: "calendar.calendars_per_account",
     field: "calendarsPerAccount",
     default: 25,
     min: 1,
@@ -627,7 +637,7 @@ pub const CALENDARS_PER_ACCOUNT: NumericSetting = NumericSetting {
     per_account: true,
 };
 pub const CALENDAR_EVENTS_PER_CALENDAR: NumericSetting = NumericSetting {
-    key: "calendar_events_per_calendar",
+    key: "calendar.events_per_calendar",
     field: "calendarEventsPerCalendar",
     default: 25_000,
     min: 1,
@@ -636,7 +646,7 @@ pub const CALENDAR_EVENTS_PER_CALENDAR: NumericSetting = NumericSetting {
     per_account: false,
 };
 pub const CALENDAR_SYNC_BATCH: NumericSetting = NumericSetting {
-    key: "calendar_sync_batch",
+    key: "calendar.sync_batch",
     field: "calendarSyncBatch",
     default: 10,
     min: 1,
@@ -647,7 +657,7 @@ pub const CALENDAR_SYNC_BATCH: NumericSetting = NumericSetting {
 /// The largest COUNT a repeating event takes (Proton's 49; the format's
 /// 499 is for invitations, E4).
 pub const CALENDAR_MAX_COUNT: NumericSetting = NumericSetting {
-    key: "calendar_max_count",
+    key: "calendar.max_count",
     field: "calendarMaxCount",
     default: 49,
     min: 1,
@@ -658,7 +668,7 @@ pub const CALENDAR_MAX_COUNT: NumericSetting = NumericSetting {
 /// Reminders a member's list for one event takes, and for a calendar's
 /// defaults (Proton's 10 and 5).
 pub const CALENDAR_REMINDERS_PER_EVENT: NumericSetting = NumericSetting {
-    key: "calendar_reminders_per_event",
+    key: "calendar.reminders_per_event",
     field: "calendarRemindersPerEvent",
     default: 10,
     min: 1,
@@ -667,7 +677,7 @@ pub const CALENDAR_REMINDERS_PER_EVENT: NumericSetting = NumericSetting {
     per_account: false,
 };
 pub const CALENDAR_DEFAULT_REMINDERS: NumericSetting = NumericSetting {
-    key: "calendar_default_reminders",
+    key: "calendar.default_reminders",
     field: "calendarDefaultReminders",
     default: 5,
     min: 1,
@@ -678,7 +688,7 @@ pub const CALENDAR_DEFAULT_REMINDERS: NumericSetting = NumericSetting {
 /// How late a reminder may still fire, in seconds (Proton's web: a minute);
 /// later ones are skipped.
 pub const CALENDAR_REMINDER_LATENESS_SECONDS: NumericSetting = NumericSetting {
-    key: "calendar_reminder_lateness_seconds",
+    key: "calendar.reminder_lateness_seconds",
     field: "calendarReminderLatenessSeconds",
     default: 60,
     min: 10,
@@ -688,7 +698,7 @@ pub const CALENDAR_REMINDER_LATENESS_SECONDS: NumericSetting = NumericSetting {
 };
 /// How often the reminder job looks for due alarms, in seconds.
 pub const CALENDAR_ALARM_TICK_SECONDS: NumericSetting = NumericSetting {
-    key: "calendar_alarm_tick_seconds",
+    key: "calendar.alarm_tick_seconds",
     field: "calendarAlarmTickSeconds",
     default: 20,
     min: 5,
@@ -698,7 +708,7 @@ pub const CALENDAR_ALARM_TICK_SECONDS: NumericSetting = NumericSetting {
 };
 /// Due alarms the job takes at once (it takes batches until none is due).
 pub const CALENDAR_ALARM_BATCH: NumericSetting = NumericSetting {
-    key: "calendar_alarm_batch",
+    key: "calendar.alarm_batch",
     field: "calendarAlarmBatch",
     default: 200,
     min: 10,
@@ -709,7 +719,7 @@ pub const CALENDAR_ALARM_BATCH: NumericSetting = NumericSetting {
 /// Of one batch, the most one account's alarms take: one account's many
 /// never make everyone else's late.
 pub const CALENDAR_ALARM_BATCH_PER_ACCOUNT: NumericSetting = NumericSetting {
-    key: "calendar_alarm_batch_per_account",
+    key: "calendar.alarm_batch_per_account",
     field: "calendarAlarmBatchPerAccount",
     default: 20,
     min: 1,
@@ -719,7 +729,7 @@ pub const CALENDAR_ALARM_BATCH_PER_ACCOUNT: NumericSetting = NumericSetting {
 };
 /// Reminder pushes and emails the job sends at the same time.
 pub const CALENDAR_ALARM_SENDS: NumericSetting = NumericSetting {
-    key: "calendar_alarm_sends",
+    key: "calendar.alarm_sends",
     field: "calendarAlarmSends",
     default: 16,
     min: 1,
@@ -730,7 +740,7 @@ pub const CALENDAR_ALARM_SENDS: NumericSetting = NumericSetting {
 /// The most alarms an account keeps (an event's reminders past it fire
 /// nothing until others are gone).
 pub const CALENDAR_ALARMS_PER_ACCOUNT: NumericSetting = NumericSetting {
-    key: "calendar_alarms_per_account",
+    key: "calendar.alarms_per_account",
     field: "calendarAlarmsPerAccount",
     default: 10_000,
     min: 100,
@@ -741,7 +751,7 @@ pub const CALENDAR_ALARMS_PER_ACCOUNT: NumericSetting = NumericSetting {
 /// Browsers one account keeps taking reminder pushes (a new one past it
 /// ends the longest-held).
 pub const CALENDAR_PUSH_SUBSCRIPTIONS_PER_ACCOUNT: NumericSetting = NumericSetting {
-    key: "calendar_push_subscriptions_per_account",
+    key: "calendar.push_subscriptions_per_account",
     field: "calendarPushSubscriptionsPerAccount",
     default: 10,
     min: 1,
@@ -752,7 +762,7 @@ pub const CALENDAR_PUSH_SUBSCRIPTIONS_PER_ACCOUNT: NumericSetting = NumericSetti
 /// Events whose alarms the job recomputes at once after a member's
 /// defaults or zone change.
 pub const CALENDAR_RECOMPUTE_BATCH: NumericSetting = NumericSetting {
-    key: "calendar_recompute_batch",
+    key: "calendar.recompute_batch",
     field: "calendarRecomputeBatch",
     default: 500,
     min: 10,
@@ -762,7 +772,7 @@ pub const CALENDAR_RECOMPUTE_BATCH: NumericSetting = NumericSetting {
 };
 /// Alarms one page of `/api/calendar/alarms` answers.
 pub const CALENDAR_ALARMS_PAGE: NumericSetting = NumericSetting {
-    key: "calendar_alarms_page",
+    key: "calendar.alarms_page",
     field: "calendarAlarmsPage",
     default: 100,
     min: 10,
@@ -773,7 +783,7 @@ pub const CALENDAR_ALARMS_PAGE: NumericSetting = NumericSetting {
 /// The widest window one events query asks, in days, and the events one
 /// page answers.
 pub const CALENDAR_WINDOW_DAYS: NumericSetting = NumericSetting {
-    key: "calendar_window_days",
+    key: "calendar.window_days",
     field: "calendarWindowDays",
     default: 400,
     min: 1,
@@ -782,7 +792,7 @@ pub const CALENDAR_WINDOW_DAYS: NumericSetting = NumericSetting {
     per_account: false,
 };
 pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
-    key: "calendar_events_page",
+    key: "calendar.events_page",
     field: "calendarEventsPage",
     default: 1000,
     min: 10,
@@ -813,7 +823,7 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 17] = [
 /// How long a Chat link token, and the provisioning socket of the device
 /// it links, stay usable (docs/plans/account-identity-key.md).
 pub const CHAT_LINK_TOKEN_SECONDS: NumericSetting = NumericSetting {
-    key: "chat_link_token_seconds",
+    key: "chat.link_token_seconds",
     field: "chatLinkTokenSeconds",
     default: 600,
     min: 60,
@@ -823,7 +833,7 @@ pub const CHAT_LINK_TOKEN_SECONDS: NumericSetting = NumericSetting {
 };
 /// Link tokens one account may hold unused at once.
 pub const CHAT_LINK_TOKENS_PER_ACCOUNT: NumericSetting = NumericSetting {
-    key: "chat_link_tokens_per_account",
+    key: "chat.link_tokens_per_account",
     field: "chatLinkTokensPerAccount",
     default: 3,
     min: 1,
@@ -834,7 +844,7 @@ pub const CHAT_LINK_TOKENS_PER_ACCOUNT: NumericSetting = NumericSetting {
 /// The largest provisioning message body relayed, in bytes (at most the
 /// format's own, `MAX_PROVISION_BODY_BYTES`).
 pub const CHAT_PROVISION_BODY_BYTES: NumericSetting = NumericSetting {
-    key: "chat_provision_body_bytes",
+    key: "chat.provision_body_bytes",
     field: "chatProvisionBodyBytes",
     default: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
     min: 4 * 1024,
@@ -844,7 +854,7 @@ pub const CHAT_PROVISION_BODY_BYTES: NumericSetting = NumericSetting {
 };
 /// Chat installations one account may have (Chat V1's hard cap is 10).
 pub const CHAT_MAX_ACTIVE_DEVICES: NumericSetting = NumericSetting {
-    key: "chat_max_active_devices",
+    key: "chat.max_active_devices",
     field: "chatMaxActiveDevices",
     default: 10,
     min: 1,
@@ -854,7 +864,7 @@ pub const CHAT_MAX_ACTIVE_DEVICES: NumericSetting = NumericSetting {
 };
 /// How long a provisioning socket's ticket stays usable, in seconds.
 pub const CHAT_PROVISIONING_TICKET_SECONDS: NumericSetting = NumericSetting {
-    key: "chat_provisioning_ticket_seconds",
+    key: "chat.provisioning_ticket_seconds",
     field: "chatProvisioningTicketSeconds",
     default: 60,
     min: 10,
@@ -864,7 +874,7 @@ pub const CHAT_PROVISIONING_TICKET_SECONDS: NumericSetting = NumericSetting {
 };
 /// Provisioning sockets one account may hold open at once.
 pub const CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT: NumericSetting = NumericSetting {
-    key: "chat_provisioning_sockets_per_account",
+    key: "chat.provisioning_sockets_per_account",
     field: "chatProvisioningSocketsPerAccount",
     default: 3,
     min: 1,
@@ -875,7 +885,7 @@ pub const CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT: NumericSetting = NumericSetting
 /// The largest sync one identity distribution carries to one device, in
 /// bytes (its ciphertext).
 pub const CHAT_DISTRIBUTION_MESSAGE_BYTES: NumericSetting = NumericSetting {
-    key: "chat_distribution_message_bytes",
+    key: "chat.distribution_message_bytes",
     field: "chatDistributionMessageBytes",
     default: 64 * 1024,
     min: 1024,
@@ -888,7 +898,7 @@ pub const CHAT_DISTRIBUTION_MESSAGE_BYTES: NumericSetting = NumericSetting {
 /// browser holds several (Chat, Office, Drive), so the default leaves room
 /// for a few browsers and the CLI.
 pub const DEVICES_PER_ACCOUNT: NumericSetting = NumericSetting {
-    key: "devices_per_account",
+    key: "account.devices_per_account",
     field: "devicesPerAccount",
     default: 32,
     min: 1,
@@ -901,7 +911,7 @@ pub const DEVICES_PER_ACCOUNT: NumericSetting = NumericSetting {
 /// registers, then lists itself (docs/plans/one-device-list.md §8). Its
 /// frames and messages are refused until it is listed either way.
 pub const DEVICE_LISTING_GRACE_SECONDS: NumericSetting = NumericSetting {
-    key: "device_listing_grace_seconds",
+    key: "account.device_listing_grace_seconds",
     field: "deviceListingGraceSeconds",
     default: 600,
     min: 60,
@@ -914,7 +924,7 @@ pub const DEVICE_LISTING_GRACE_SECONDS: NumericSetting = NumericSetting {
 /// how long a device removed there may still have its frames taken here
 /// (docs/plans/one-device-list.md §8).
 pub const REMOTE_MANIFEST_MAX_AGE_SECONDS: NumericSetting = NumericSetting {
-    key: "remote_manifest_max_age_seconds",
+    key: "server.remote_manifest_max_age_seconds",
     field: "remoteManifestMaxAgeSeconds",
     default: 300,
     min: 60,
@@ -941,7 +951,7 @@ pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 7] = [
 /// Two-factor sign-in (docs/plans/security-keys.md, D2): how many recovery
 /// codes are made at once (Proton's 16).
 pub const TWO_FACTOR_RECOVERY_CODES: NumericSetting = NumericSetting {
-    key: "two_factor_recovery_codes",
+    key: "account.two_factor_recovery_codes",
     field: "twoFactorRecoveryCodes",
     default: 16,
     min: 4,
@@ -952,7 +962,7 @@ pub const TWO_FACTOR_RECOVERY_CODES: NumericSetting = NumericSetting {
 /// Security keys one account may add (docs/plans/security-keys.md, D3;
 /// Proton allows 4): room for a backup key per device.
 pub const SECURITY_KEYS_PER_ACCOUNT: NumericSetting = NumericSetting {
-    key: "security_keys_per_account",
+    key: "account.security_keys_per_account",
     field: "securityKeysPerAccount",
     default: 10,
     min: 1,
@@ -963,7 +973,7 @@ pub const SECURITY_KEYS_PER_ACCOUNT: NumericSetting = NumericSetting {
 /// How long a security key prompt (adding a key, or signing in with one)
 /// stays open, in seconds.
 pub const WEBAUTHN_CEREMONY_SECONDS: NumericSetting = NumericSetting {
-    key: "webauthn_ceremony_seconds",
+    key: "account.webauthn_ceremony_seconds",
     field: "webauthnCeremonySeconds",
     default: 300,
     min: 60,
@@ -976,7 +986,7 @@ pub const WEBAUTHN_CEREMONY_SECONDS: NumericSetting = NumericSetting {
 /// copy after this long, so its sealed fields are unreadable in every backup.
 /// `scripts/backup-postgres.sh` reads it.
 pub const KEY_BACKUP_KEEP_DAYS: NumericSetting = NumericSetting {
-    key: "key_backup_keep_days",
+    key: "server.retention.key_backup_days",
     field: "keyBackupKeepDays",
     default: 7,
     min: 1,
@@ -988,7 +998,7 @@ pub const KEY_BACKUP_KEEP_DAYS: NumericSetting = NumericSetting {
 /// at most; docs/plans/server-personal-data.md, A8). The account's security
 /// page says it.
 pub const SECURITY_EVENT_RETENTION_DAYS: NumericSetting = NumericSetting {
-    key: "security_event_retention_days",
+    key: "server.retention.security_event_days",
     field: "securityEventRetentionDays",
     default: 365,
     min: 30,
@@ -998,7 +1008,7 @@ pub const SECURITY_EVENT_RETENTION_DAYS: NumericSetting = NumericSetting {
 };
 /// How long the admin log is kept, in days.
 pub const ADMIN_AUDIT_RETENTION_DAYS: NumericSetting = NumericSetting {
-    key: "admin_audit_retention_days",
+    key: "server.retention.admin_audit_days",
     field: "adminAuditRetentionDays",
     default: 730,
     min: 90,
@@ -1009,7 +1019,7 @@ pub const ADMIN_AUDIT_RETENTION_DAYS: NumericSetting = NumericSetting {
 /// How long a session that ended (signed out, ended elsewhere, or expired)
 /// is kept, with its sealed browser, in days (A10).
 pub const SESSION_RECORD_GRACE_DAYS: NumericSetting = NumericSetting {
-    key: "session_record_grace_days",
+    key: "server.retention.session_record_days",
     field: "sessionRecordGraceDays",
     default: 30,
     min: 1,
@@ -1020,7 +1030,7 @@ pub const SESSION_RECORD_GRACE_DAYS: NumericSetting = NumericSetting {
 /// How long an account asked to be deleted waits, closing, before it is
 /// deleted, in days (A5). Its owner can keep it until then.
 pub const ACCOUNT_CLOSING_DAYS: NumericSetting = NumericSetting {
-    key: "account_closing_days",
+    key: "account.closing_days",
     field: "accountClosingDays",
     default: 14,
     min: 1,
@@ -1031,7 +1041,7 @@ pub const ACCOUNT_CLOSING_DAYS: NumericSetting = NumericSetting {
 /// How long the destruction log keeps a row, in days (A7): longer than any
 /// backup is kept, so a restore can replay it.
 pub const DESTRUCTION_EVENT_RETENTION_DAYS: NumericSetting = NumericSetting {
-    key: "destruction_event_retention_days",
+    key: "server.retention.destruction_event_days",
     field: "destructionEventRetentionDays",
     default: 1095,
     min: 365,
@@ -1043,7 +1053,7 @@ pub const DESTRUCTION_EVENT_RETENTION_DAYS: NumericSetting = NumericSetting {
 /// that repeats (a wrong password) can't push out the rare ones (a password
 /// change, a recovery).
 pub const SECURITY_EVENTS_KEPT_PER_KIND: NumericSetting = NumericSetting {
-    key: "security_events_kept_per_kind",
+    key: "server.retention.security_events_per_kind",
     field: "securityEventsKeptPerKind",
     default: 100,
     min: 10,
@@ -1054,7 +1064,7 @@ pub const SECURITY_EVENTS_KEPT_PER_KIND: NumericSetting = NumericSetting {
 /// A failed sign-in (or an admin's view) within this many seconds of the same
 /// kind's last one is counted into it instead of a row of its own (A8).
 pub const SECURITY_EVENT_FOLD_SECONDS: NumericSetting = NumericSetting {
-    key: "security_event_fold_seconds",
+    key: "server.security_event_fold_seconds",
     field: "securityEventFoldSeconds",
     default: 600,
     min: 60,
@@ -1066,7 +1076,7 @@ pub const SECURITY_EVENT_FOLD_SECONDS: NumericSetting = NumericSetting {
 /// outcome with it, before it goes (A2: what names correspondents goes when
 /// it has done its job).
 pub const MAIL_OUTBOX_KEEP_SECONDS: NumericSetting = NumericSetting {
-    key: "mail_outbox_keep_seconds",
+    key: "server.retention.mail_outbox_seconds",
     field: "mailOutboxKeepSeconds",
     default: 86400,
     min: 600,
@@ -1101,7 +1111,7 @@ const TIB: i64 = 1024 * GIB;
 /// The largest file one upload stores, in ciphertext bytes. A block-format
 /// object has at most 2^20 blocks of 4 MiB, so 4 TiB is the ceiling.
 pub const DRIVE_UPLOAD_MAX_BYTES: NumericSetting = NumericSetting {
-    key: "drive_upload_max_bytes",
+    key: "drive.upload_max_bytes",
     field: "driveUploadMaxBytes",
     default: 10 * GIB,
     min: MIB,
@@ -1112,7 +1122,7 @@ pub const DRIVE_UPLOAD_MAX_BYTES: NumericSetting = NumericSetting {
 /// The largest saved version (an editor's snapshot or a new upload of a
 /// file), in ciphertext bytes.
 pub const DRIVE_VERSION_MAX_BYTES: NumericSetting = NumericSetting {
-    key: "drive_version_max_bytes",
+    key: "drive.version_max_bytes",
     field: "driveVersionMaxBytes",
     default: 2 * GIB,
     min: MIB,
@@ -1123,7 +1133,7 @@ pub const DRIVE_VERSION_MAX_BYTES: NumericSetting = NumericSetting {
 /// The largest file a player streams rather than downloads first; 0 never
 /// streams. Above the upload limit it changes nothing.
 pub const DRIVE_STREAM_MAX_BYTES: NumericSetting = NumericSetting {
-    key: "drive_stream_max_bytes",
+    key: "drive.stream_max_bytes",
     field: "driveStreamMaxBytes",
     default: 10 * GIB,
     min: 0,
@@ -1134,7 +1144,7 @@ pub const DRIVE_STREAM_MAX_BYTES: NumericSetting = NumericSetting {
 /// Verified blocks one stream keeps (2 on iOS, where the client takes one
 /// fewer).
 pub const DRIVE_STREAM_CACHE_BLOCKS: NumericSetting = NumericSetting {
-    key: "drive_stream_cache_blocks",
+    key: "drive.stream_cache_blocks",
     field: "driveStreamCacheBlocks",
     default: 3,
     min: 1,
@@ -1144,7 +1154,7 @@ pub const DRIVE_STREAM_CACHE_BLOCKS: NumericSetting = NumericSetting {
 };
 /// Blocks a stream reads ahead of the one playing.
 pub const DRIVE_STREAM_READAHEAD_BLOCKS: NumericSetting = NumericSetting {
-    key: "drive_stream_readahead_blocks",
+    key: "drive.stream_readahead_blocks",
     field: "driveStreamReadaheadBlocks",
     default: 1,
     min: 0,
@@ -1154,7 +1164,7 @@ pub const DRIVE_STREAM_READAHEAD_BLOCKS: NumericSetting = NumericSetting {
 };
 /// Streams one tab plays at once.
 pub const DRIVE_STREAM_MAX_CONCURRENT: NumericSetting = NumericSetting {
-    key: "drive_stream_max_concurrent",
+    key: "drive.stream_max_concurrent",
     field: "driveStreamMaxConcurrent",
     default: 3,
     min: 1,
@@ -1166,7 +1176,7 @@ pub const DRIVE_STREAM_MAX_CONCURRENT: NumericSetting = NumericSetting {
 /// size. At least one sealed block (4 MiB and its 40 bytes), which a reader
 /// fetches in one request; the default holds one with room to spare.
 pub const DRIVE_STREAM_RESPONSE_MAX_BYTES: NumericSetting = NumericSetting {
-    key: "drive_stream_response_max_bytes",
+    key: "drive.stream_response_max_bytes",
     field: "driveStreamResponseMaxBytes",
     default: 5 * MIB,
     min: 4 * MIB + 512 * KIB,
@@ -1177,7 +1187,7 @@ pub const DRIVE_STREAM_RESPONSE_MAX_BYTES: NumericSetting = NumericSetting {
 /// Without a service worker, the largest file a player loads whole into
 /// memory instead.
 pub const DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES: NumericSetting = NumericSetting {
-    key: "drive_stream_blob_fallback_max_bytes",
+    key: "drive.stream_blob_fallback_max_bytes",
     field: "driveStreamBlobFallbackMaxBytes",
     default: GIB,
     min: 0,
@@ -1189,7 +1199,7 @@ pub const DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES: NumericSetting = NumericSetting 
 /// the sweep aborts it, freeing its parts (an abort that failed after its
 /// row was removed leaves one behind).
 pub const STORAGE_INCOMPLETE_MULTIPART_MAX_AGE_SECONDS: NumericSetting = NumericSetting {
-    key: "storage_incomplete_multipart_max_age_seconds",
+    key: "server.storage.incomplete_multipart_max_age_seconds",
     field: "storageIncompleteMultipartMaxAgeSeconds",
     default: 24 * 3600,
     min: 3600,
@@ -1197,7 +1207,19 @@ pub const STORAGE_INCOMPLETE_MULTIPART_MAX_AGE_SECONDS: NumericSetting = Numeric
     unit: SettingUnit::Seconds,
     per_account: false,
 };
-pub const DRIVE_SETTINGS: [NumericSetting; 9] = [
+/// How long an item stays in the trash before the hourly sweep deletes it
+/// for good, in days; 0 keeps the trash until its owner empties it.
+pub const DRIVE_TRASH_RETENTION_DAYS: NumericSetting = NumericSetting {
+    key: "drive.trash_retention_days",
+    field: "driveTrashRetentionDays",
+    default: 30,
+    min: 0,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+pub const DRIVE_SETTINGS: [NumericSetting; 10] = [
+    DRIVE_TRASH_RETENTION_DAYS,
     DRIVE_UPLOAD_MAX_BYTES,
     DRIVE_VERSION_MAX_BYTES,
     DRIVE_STREAM_MAX_BYTES,
@@ -1212,7 +1234,7 @@ pub const DRIVE_SETTINGS: [NumericSetting; 9] = [
 /// The federation outbox's backoff (docs/plans/federation-outbox.md): the
 /// first wait after a failed try, in seconds, doubling each time.
 pub const FEDERATION_RETRY_BASE_SECONDS: NumericSetting = NumericSetting {
-    key: "federation_retry_base_seconds",
+    key: "server.federation_retry_base_seconds",
     field: "federationRetryBaseSeconds",
     default: 2,
     min: 1,
@@ -1222,7 +1244,7 @@ pub const FEDERATION_RETRY_BASE_SECONDS: NumericSetting = NumericSetting {
 };
 /// The longest wait between tries of one delivery, in seconds.
 pub const FEDERATION_RETRY_MAX_SECONDS: NumericSetting = NumericSetting {
-    key: "federation_retry_max_seconds",
+    key: "server.federation_retry_max_seconds",
     field: "federationRetryMaxSeconds",
     default: 300,
     min: 10,
@@ -1234,7 +1256,7 @@ pub const FEDERATION_RETRY_MAX_SECONDS: NumericSetting = NumericSetting {
 /// server) before it is tried again, in seconds; order per destination is
 /// kept meanwhile.
 pub const FEDERATION_PEER_UPGRADE_SECONDS: NumericSetting = NumericSetting {
-    key: "federation_peer_upgrade_seconds",
+    key: "server.federation_peer_upgrade_seconds",
     field: "federationPeerUpgradeSeconds",
     default: 3600,
     min: 60,
@@ -1245,7 +1267,7 @@ pub const FEDERATION_PEER_UPGRADE_SECONDS: NumericSetting = NumericSetting {
 /// How often the federation worker looks for deliveries that are due, in
 /// seconds.
 pub const FEDERATION_WORKER_SECONDS: NumericSetting = NumericSetting {
-    key: "federation_worker_seconds",
+    key: "server.federation_worker_seconds",
     field: "federationWorkerSeconds",
     default: 5,
     min: 1,
@@ -1255,7 +1277,7 @@ pub const FEDERATION_WORKER_SECONDS: NumericSetting = NumericSetting {
 };
 /// The destinations the worker tries per kind on each look: one head each.
 pub const FEDERATION_HEADS_PER_TICK: NumericSetting = NumericSetting {
-    key: "federation_heads_per_tick",
+    key: "server.federation_heads_per_tick",
     field: "federationHeadsPerTick",
     default: 100,
     min: 1,
@@ -1267,7 +1289,7 @@ pub const FEDERATION_HEADS_PER_TICK: NumericSetting = NumericSetting {
 /// days. Each stream's high-water mark stays, so a replay older than this is
 /// still known as answered.
 pub const FEDERATION_RECORD_DAYS: NumericSetting = NumericSetting {
-    key: "federation_record_days",
+    key: "server.federation_record_days",
     field: "federationRecordDays",
     default: 30,
     min: 1,
@@ -1278,7 +1300,7 @@ pub const FEDERATION_RECORD_DAYS: NumericSetting = NumericSetting {
 /// How long a rename announce is tried before it is given up, in days (the
 /// peer then learns of the rename at its next lookup).
 pub const FEDERATION_ANNOUNCE_DAYS: NumericSetting = NumericSetting {
-    key: "federation_announce_days",
+    key: "server.federation_announce_days",
     field: "federationAnnounceDays",
     default: 7,
     min: 1,
@@ -1289,7 +1311,7 @@ pub const FEDERATION_ANNOUNCE_DAYS: NumericSetting = NumericSetting {
 /// Renames are announced to the peers this server has been in touch with in
 /// this many days.
 pub const FEDERATION_ANNOUNCE_PEER_DAYS: NumericSetting = NumericSetting {
-    key: "federation_announce_peer_days",
+    key: "server.federation_announce_peer_days",
     field: "federationAnnouncePeerDays",
     default: 90,
     min: 1,
@@ -1303,7 +1325,7 @@ pub const FEDERATION_ANNOUNCE_PEER_DAYS: NumericSetting = NumericSetting {
 /// are given at most `federationRecordDays` of it: a repeat must still find
 /// the origin's record of its operation.
 pub const CHAT_ATTACHMENT_SEND_LIFETIME_SECONDS: NumericSetting = NumericSetting {
-    key: "chat_attachment_send_lifetime_seconds",
+    key: "chat.attachment_send_lifetime_seconds",
     field: "chatAttachmentSendLifetimeSeconds",
     default: 86_400,
     min: 600,
@@ -1316,7 +1338,7 @@ pub const CHAT_ATTACHMENT_SEND_LIFETIME_SECONDS: NumericSetting = NumericSetting
 /// to `kutup_crypto::mail_key::MAX_LIST_KEYS`, so raising this needs no
 /// client update (docs/plans/format-evolution.md, mail key list row).
 pub const MAIL_KEYS_PER_ADDRESS: NumericSetting = NumericSetting {
-    key: "mail_keys_per_address",
+    key: "mail.keys_per_address",
     field: "mailKeysPerAddress",
     default: kutup_crypto::mail_key::MAX_KEYS_PER_ADDRESS as i64,
     min: 2,
@@ -1330,7 +1352,7 @@ pub const MAIL_SETTINGS: [NumericSetting; 1] = [MAIL_KEYS_PER_ADDRESS];
 /// records one account keeps in a scope, per scope (a single-record scope
 /// has none), and how the store pages and forgets.
 pub const ACCOUNT_RECORDS_PASS_SECRETS: NumericSetting = NumericSetting {
-    key: "account_records_pass_secrets",
+    key: "pass.records.secrets",
     field: "accountRecordsPassSecrets",
     default: 1000,
     min: 1,
@@ -1339,7 +1361,7 @@ pub const ACCOUNT_RECORDS_PASS_SECRETS: NumericSetting = NumericSetting {
     per_account: true,
 };
 pub const ACCOUNT_RECORDS_CHAT_GROUPS: NumericSetting = NumericSetting {
-    key: "account_records_chat_groups",
+    key: "chat.records.groups",
     field: "accountRecordsChatGroups",
     default: 1024,
     min: 1,
@@ -1348,7 +1370,7 @@ pub const ACCOUNT_RECORDS_CHAT_GROUPS: NumericSetting = NumericSetting {
     per_account: true,
 };
 pub const ACCOUNT_RECORDS_CHAT_CONTACTS: NumericSetting = NumericSetting {
-    key: "account_records_chat_contacts",
+    key: "chat.records.contacts",
     field: "accountRecordsChatContacts",
     default: 10_000,
     min: 1,
@@ -1359,7 +1381,7 @@ pub const ACCOUNT_RECORDS_CHAT_CONTACTS: NumericSetting = NumericSetting {
 /// The library is one record: a device's first write that raced another's
 /// is refused by the head and redone on the record that landed.
 pub const ACCOUNT_RECORDS_PHOTOS_LIBRARY: NumericSetting = NumericSetting {
-    key: "account_records_photos_library",
+    key: "photos.records.library",
     field: "accountRecordsPhotosLibrary",
     default: 1,
     min: 1,
@@ -1369,7 +1391,7 @@ pub const ACCOUNT_RECORDS_PHOTOS_LIBRARY: NumericSetting = NumericSetting {
 };
 /// One per attachment the account sent or received (its newest state).
 pub const ACCOUNT_RECORDS_CHAT_ATTACHMENTS: NumericSetting = NumericSetting {
-    key: "account_records_chat_attachments",
+    key: "chat.records.attachments",
     field: "accountRecordsChatAttachments",
     default: 100_000,
     min: 1,
@@ -1378,7 +1400,7 @@ pub const ACCOUNT_RECORDS_CHAT_ATTACHMENTS: NumericSetting = NumericSetting {
     per_account: true,
 };
 pub const ACCOUNT_RECORDS_CONTACT_GROUPS: NumericSetting = NumericSetting {
-    key: "account_records_contact_groups",
+    key: "mail.records.contact_groups",
     field: "accountRecordsContactGroups",
     default: 200,
     min: 1,
@@ -1388,7 +1410,7 @@ pub const ACCOUNT_RECORDS_CONTACT_GROUPS: NumericSetting = NumericSetting {
 };
 /// One record per calendar the account belongs to.
 pub const ACCOUNT_RECORDS_CALENDAR_SETTINGS: NumericSetting = NumericSetting {
-    key: "account_records_calendar_settings",
+    key: "calendar.records.settings",
     field: "accountRecordsCalendarSettings",
     default: 500,
     min: 1,
@@ -1399,7 +1421,7 @@ pub const ACCOUNT_RECORDS_CALENDAR_SETTINGS: NumericSetting = NumericSetting {
 /// The meetings an account's list keeps; a device adding one past it
 /// removes the oldest in the same batch.
 pub const ACCOUNT_RECORDS_JOINED_MEETINGS: NumericSetting = NumericSetting {
-    key: "account_records_joined_meetings",
+    key: "chat.records.joined_meetings",
     field: "accountRecordsJoinedMeetings",
     default: 100,
     min: 1,
@@ -1409,7 +1431,7 @@ pub const ACCOUNT_RECORDS_JOINED_MEETINGS: NumericSetting = NumericSetting {
 };
 /// The most puts and deletes one batch carries.
 pub const ACCOUNT_RECORDS_BATCH_ITEMS: NumericSetting = NumericSetting {
-    key: "account_records_batch_items",
+    key: "account.records.batch_items",
     field: "accountRecordsBatchItems",
     default: 256,
     min: 1,
@@ -1419,7 +1441,7 @@ pub const ACCOUNT_RECORDS_BATCH_ITEMS: NumericSetting = NumericSetting {
 };
 /// The most changes one page of a scope's feed carries.
 pub const ACCOUNT_RECORDS_PAGE: NumericSetting = NumericSetting {
-    key: "account_records_page",
+    key: "account.records.page",
     field: "accountRecordsPage",
     default: 500,
     min: 10,
@@ -1430,7 +1452,7 @@ pub const ACCOUNT_RECORDS_PAGE: NumericSetting = NumericSetting {
 /// How long a deleted record's tombstone is kept: a device that last synced
 /// longer ago than this reads its scopes again from the start.
 pub const ACCOUNT_RECORDS_TOMBSTONE_DAYS: NumericSetting = NumericSetting {
-    key: "account_records_tombstone_days",
+    key: "account.records.tombstone_days",
     field: "accountRecordsTombstoneDays",
     default: 90,
     min: 1,
@@ -1470,7 +1492,7 @@ pub const FEDERATION_SETTINGS: [NumericSetting; 9] = [
 /// restored from before a delete never names a purged blob. The first value
 /// is two days, for nightly backups.
 pub const STORAGE_DELETED_BLOB_RETENTION_SECONDS: NumericSetting = NumericSetting {
-    key: "storage_deleted_blob_retention_seconds",
+    key: "server.storage.deleted_blob_retention_seconds",
     field: "storageDeletedBlobRetentionSeconds",
     default: 2 * 86_400,
     min: 0,
@@ -1480,7 +1502,7 @@ pub const STORAGE_DELETED_BLOB_RETENTION_SECONDS: NumericSetting = NumericSettin
 };
 /// How often deleted blobs past their wait are purged, in seconds.
 pub const STORAGE_DELETED_BLOB_SWEEP_SECONDS: NumericSetting = NumericSetting {
-    key: "storage_deleted_blob_sweep_seconds",
+    key: "server.storage.deleted_blob_sweep_seconds",
     field: "storageDeletedBlobSweepSeconds",
     default: 300,
     min: 1,
@@ -1492,7 +1514,7 @@ pub const STORAGE_DELETED_BLOB_SWEEP_SECONDS: NumericSetting = NumericSetting {
 /// be before `/api/health/ready` reports it, in seconds; 0 leaves backups
 /// out of the check. Two days: two nightly runs.
 pub const HEALTH_BACKUP_MAX_AGE_SECONDS: NumericSetting = NumericSetting {
-    key: "health_backup_max_age_seconds",
+    key: "server.health.backup_max_age_seconds",
     field: "healthBackupMaxAgeSeconds",
     default: 2 * 86_400,
     min: 0,
@@ -1503,7 +1525,7 @@ pub const HEALTH_BACKUP_MAX_AGE_SECONDS: NumericSetting = NumericSetting {
 /// What a background job gets beyond twice its interval before
 /// `/api/health/ready` reports it late, in seconds.
 pub const HEALTH_JOB_GRACE_SECONDS: NumericSetting = NumericSetting {
-    key: "health_job_grace_seconds",
+    key: "server.health.job_grace_seconds",
     field: "healthJobGraceSeconds",
     default: 600,
     min: 0,
@@ -1514,7 +1536,7 @@ pub const HEALTH_JOB_GRACE_SECONDS: NumericSetting = NumericSetting {
 /// How long each `/api/health/ready` probe of the object store and the mail
 /// server may take, in seconds.
 pub const HEALTH_PROBE_TIMEOUT_SECONDS: NumericSetting = NumericSetting {
-    key: "health_probe_timeout_seconds",
+    key: "server.health.probe_timeout_seconds",
     field: "healthProbeTimeoutSeconds",
     default: 5,
     min: 1,
@@ -1747,6 +1769,80 @@ mod tests {
         const { assert!(!DRIVE_STREAM_RESPONSE_MAX_BYTES.per_account) };
     }
 
+    /// Every key, the registry's and the others, is `<namespace>.<name>`.
+    #[test]
+    fn every_key_is_namespaced() {
+        let others = [
+            MAIL_OUTSIDE_SENDING,
+            CHAT_MAILBOX_RETENTION_DAYS,
+            CHAT_MEDIA_DELIVERY_RETENTION_DAYS,
+            NAME_HOLD_DAYS,
+            OLD_ADDRESS_RECEIVE_DAYS,
+            CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP,
+            CHAT_GROUP_LINK_JOINS_PER_RELAY,
+            PASS_VAULT_MAX_BYTES,
+            DRIVE_VERSION_RETENTION_CHOICES,
+            CHAT_GROUP_AVATAR_MAX_BYTES,
+            CHAT_GROUP_AVATAR_STORAGE_BYTES,
+            CHAT_GROUP_AVATAR_PENDING_SECONDS,
+            crate::registration::MODE_SETTING,
+            crate::public_sharing::SETTING,
+            crate::federation_switch::DEFAULT_SETTING,
+            crate::storage_pool::DEFAULT_QUOTA_SETTING,
+            crate::entitlements::STORAGE_QUOTA,
+            crate::entitlements::PUBLIC_SHARING,
+            crate::entitlements::FEDERATION,
+            crate::mail::domains::settings::MODE_KEY,
+            crate::mail::domains::sweep::UNTAGGED_FINGERPRINT,
+            crate::mail::domains::sweep::UNTAGGED_CHANGED_AT,
+        ];
+        let keys = numeric_settings()
+            .map(|setting| setting.key)
+            .chain(crate::ratelimit::SPECS.iter().map(|spec| spec.key))
+            .chain(
+                crate::mail::domains::settings::KEYS
+                    .iter()
+                    .map(|(key, _, _)| *key),
+            )
+            .chain(others);
+        for key in keys {
+            let (namespace, name) = key.split_once('.').unwrap_or_default();
+            assert!(NAMESPACES.contains(&namespace), "{key}");
+            assert!(
+                !name.is_empty()
+                    && name.bytes().all(|b| b.is_ascii_lowercase()
+                        || b.is_ascii_digit()
+                        || b == b'_'
+                        || b == b'.'),
+                "{key}"
+            );
+        }
+    }
+
+    /// A stored row this server doesn't know, under any namespace (a newer
+    /// server's, the enterprise fork's), is kept and ignored: a setting's
+    /// value comes from its own key only.
+    #[test]
+    fn unknown_keys_are_ignored() {
+        let stored: std::collections::HashMap<String, String> = [
+            ("enterprise.billing_plan", "gold"),
+            ("drive.not_yet_known", "7"),
+            ("drive.upload_max_bytes", "8388608"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+        let setting = DRIVE_UPLOAD_MAX_BYTES;
+        assert_eq!(
+            setting.source(None, stored.get(setting.key).cloned()),
+            (8 * MIB, ValueSource::Site)
+        );
+        let mail = crate::mail::domains::settings::Settings::from_stored(&stored);
+        assert_eq!(mail, crate::mail::domains::settings::Settings::default());
+        // Rate limits read only their own keys (`key = ANY(…)`), so no
+        // unknown row reaches them.
+    }
+
     /// A setting that limits one account is read for the account
     /// (`load_for`), or with `load_site` where no account is in hand, never
     /// with `.load(`.
@@ -1754,16 +1850,25 @@ mod tests {
     fn per_account_settings_are_read_for_the_account() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let source = std::fs::read_to_string(root.join("site_settings.rs")).unwrap();
+        // Each per-account setting's constant: the `pub const NAME:
+        // NumericSetting` its `key: "…"` line belongs to.
         let names: Vec<String> = numeric_settings()
             .filter(|setting| setting.per_account)
-            .map(|setting| setting.key.to_uppercase())
+            .map(|setting| {
+                let at = source
+                    .find(&format!("key: \"{}\",", setting.key))
+                    .unwrap_or_else(|| panic!("{} is declared here", setting.key));
+                let head = &source[..at];
+                let start = head.rfind("pub const ").expect("its constant") + "pub const ".len();
+                let name = &head[start..];
+                assert!(
+                    name.contains(": NumericSetting"),
+                    "{} is a NumericSetting constant",
+                    setting.key
+                );
+                name[..name.find(':').unwrap()].to_owned()
+            })
             .collect();
-        for name in &names {
-            assert!(
-                source.contains(&format!("pub const {name}: NumericSetting")),
-                "{name} is the constant's name"
-            );
-        }
         let mut found = Vec::new();
         let mut stack = vec![root.clone()];
         while let Some(dir) = stack.pop() {

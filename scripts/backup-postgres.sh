@@ -16,7 +16,7 @@
 # The database holds every account, key envelope and object reference; the
 # object store holds only ciphertext. The account data keys (the schema
 # account_keys, docs/plans/server-personal-data.md, A2) are dumped apart, under
-# "<prefix>-keys", and kept only `key_backup_keep_days` (a site setting,
+# "<prefix>-keys", and kept only `server.retention.key_backup_days` (a site setting,
 # default 7): a deleted account's key is then in no copy, so what was sealed
 # under it can't be read from any backup. The schema also holds the
 # destruction log (A7). A restore takes the keys and the log from the newest
@@ -151,7 +151,7 @@ echo "backup: stored $key_prefix/$key_name"
 record_run database "$name" "$size"
 
 prune 'kutup-' '.dump.age'
-key_keep_days="$(psql_in -tAc "SELECT value FROM site_settings WHERE key = 'key_backup_keep_days'" | tr -d '[:space:]')"
+key_keep_days="$(psql_in -tAc "SELECT value FROM site_settings WHERE key = 'server.retention.key_backup_days'" | tr -d '[:space:]')"
 case "$key_keep_days" in
   ''|*[!0-9]*) key_keep_days=7 ;;
 esac

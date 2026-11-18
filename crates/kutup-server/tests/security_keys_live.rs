@@ -701,7 +701,7 @@ fn a_lowered_key_limit_keeps_the_keys() {
 
     let r = bearer(
         s.c.put(format!(
-            "{}/api/admin/users/{id}/limits/security_keys_per_account",
+            "{}/api/admin/users/{id}/limits/account.security_keys_per_account",
             s.base
         )),
         &admin_token,

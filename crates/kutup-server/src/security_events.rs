@@ -314,7 +314,7 @@ async fn insert(
 
 /// A repeatable event for `user_id` (a failed sign-in, an admin view):
 /// counted into the same kind's last event when that is younger than the fold
-/// window (`security_event_fold_seconds`), else recorded as a new one.
+/// window (`server.security_event_fold_seconds`), else recorded as a new one.
 pub async fn record_folded(pool: &sqlx::PgPool, user_id: Uuid, kind: Kind) -> AppResult<()> {
     let fold_seconds = crate::site_settings::SECURITY_EVENT_FOLD_SECONDS
         .load(pool)

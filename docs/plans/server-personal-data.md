@@ -85,7 +85,7 @@ each copy.
 - **Deleted blobs wait before they leave the object store.** A blob deleted
   for any reason (a file emptied from the trash, an account's data at its
   deletion) is queued in `storage_pending_deletions` and purged only after
-  the site setting `storage_deleted_blob_retention_seconds` (default 2 days,
+  the site setting `server.storage.deleted_blob_retention_seconds` (default 2 days,
   docs/plans/restore-drill-and-alerting.md), so a database dump restored
   from before the delete never names a purged blob. For those 2 days a
   deleted account's ciphertext is still in the object store, unreadable
@@ -121,7 +121,7 @@ each copy.
   `state_changed_at`.
 - **`closing`:** the account was asked to be deleted, by its owner or an
   admin, and is waiting out a grace period: a site setting
-  `account_closing_days`, default 14. In that time the account can't sign in
+  `account.closing_days`, default 14. In that time the account can't sign in
   except to cancel. Then a background job deletes it.
 - **"Deleted" is not a row** (decision 1). A deleted account's row goes: the
   purge that runs today, then the account data key is destroyed, then a
@@ -176,7 +176,7 @@ keeps them; reports on them are operator tooling.
   only before `closes_at` (or under a hold): after it the job may be deleting
   the account, and a keep would leave it active and emptied. The
   closing job (`crate::account_closing`, every five minutes, 20 at a time)
-  deletes accounts past `closes_at` (`account_closing_days`, default 14).
+  deletes accounts past `closes_at` (`account.closing_days`, default 14).
 - Deletion (`account_closing::destroy`, for the job and an admin's delete):
   the purges, names held, account id retired, the row deleted (its data key
   cascades), and the destruction event, in one transaction that checks the
@@ -290,8 +290,8 @@ keeps them; reports on them are operator tooling.
   can't name an admin-log id or move its sequence, a security event's count
   only grows by one (a trigger), and payloads hold integers only.
 - The security log keeps, per account, the newest of each kind
-  (`security_events_kept_per_kind`, default 100), so repeated failures can't
-  push out a password change; the fold window is `security_event_fold_seconds`
+  (`server.retention.security_events_per_kind`, default 100), so repeated failures can't
+  push out a password change; the fold window is `server.security_event_fold_seconds`
   (600). A wrong password is recorded off the answer's path, so a real account
   doesn't answer later than a name that is none.
 - The test stacks (live backup gate, isolated e2e) run as the app role; the
@@ -315,7 +315,7 @@ keeps them; reports on them are operator tooling.
 - **Feedback** sends the same parsed family, not `navigator.userAgent`.
 - **Retention, as site settings:**
   - ended sessions (revoked or expired): deleted after
-    `session_record_grace_days`, default 30;
+    `server.retention.session_record_days`, default 30;
   - security events: deleted per A8.
 
   Both through the retention job, with destruction events.
@@ -331,7 +331,7 @@ keeps them; reports on them are operator tooling.
 - The family is sealed as `client_sealed` on `auth_sessions` and as
   `clientSealed` in each `account_security_events` row's payload. An event opens its session's family
   and re-seals it for itself, so it outlives the session.
-- Ended sessions go after `session_record_grace_days` (default 30), unless a
+- Ended sessions go after `server.retention.session_record_days` (default 30), unless a
   session forked from one still lives.
 - Feedback sends the family the browser parses ("Firefox on Linux"), not
   `navigator.userAgent`.
@@ -348,7 +348,7 @@ keeps them; reports on them are operator tooling.
   follows the site's), shown as `on`/`off`, which an admin sets
   per account. While `off`, the account can't create public links, and its
   existing ones answer `410 sharing_off`.
-- **Site-wide:** a site setting `public_sharing`: `on`, `off`, or
+- **Site-wide:** a site setting `drive.public_sharing`: `on`, `off`, or
   `signedIn` (only someone signed in to this server can open a public link).
   - Applies at creation and when a link is served.
   - The Drive and Photos share dialogs say why sharing is off.
@@ -362,7 +362,7 @@ keeps them; reports on them are operator tooling.
   `410 link_removed`, `410 sharing_off` (with `scope`: `site` or
   `account`), `403 sign_in_required`. Making a link answers `403
   sharing_off` while either switch is off; `signedIn` still makes links.
-- The site switch is the site setting `public_sharing` (default `on`), set in
+- The site switch is the site setting `drive.public_sharing` (default `on`), set in
   Server settings → Accounts and shown in the public settings. The account
   switch is the entitlement `drive.public_sharing`, on the admin's user page and in
   `/user/me`.
@@ -417,7 +417,7 @@ keeps them; reports on them are operator tooling.
   the purpose's kind.
 - The federation switch (the entitlement `server.federation`, 1 or 0, written
   as an account is made from the site setting
-  `federation_default`): off, the account is no account to other servers by
+  `server.federation_default`): off, the account is no account to other servers by
   the same code path an unknown one takes (`kutup_account_federates` in each
   peer-facing query: Chat lookups, deliveries, the sealed store, multi-sends,
   media offers; Drive account lookups, rename chains, profile keys, and
@@ -489,7 +489,7 @@ keeps them; reports on them are operator tooling.
 
 - After review (2026-11-14): a held send's outcome (undo send, scheduled
   mail), which names its recipients, is sealed under the account's data key
-  (`mail_outbox.result_sealed`) and the row goes `mail_outbox_keep_seconds`
+  (`mail_outbox.result_sealed`) and the row goes `server.retention.mail_outbox_seconds`
   (a site setting, a day by default) after it finished; a failure is logged
   by its status and code only. The addresses an auto-reply answered are kept
   as keyed hashes under the account's key (`Lookup::MailAutoReplySender`,

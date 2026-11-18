@@ -468,7 +468,6 @@ async fn main() -> anyhow::Result<()> {
         jobs::spawn_all(
             pool.clone(),
             storage.clone(),
-            config.trash_retention_days,
             jobs::ChatMaintenancePolicy {
                 mailbox_retention_days: config.chat_mailbox_retention_days,
                 media_delivery_retention_days: config.chat_media_delivery_retention_days,
