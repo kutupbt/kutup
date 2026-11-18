@@ -33,12 +33,12 @@ test('uploads a 20 MiB file via the tus endpoint and lands it in Drive', async (
   const multipart: string[] = []
   page.on('request', (request) => {
     const { pathname } = new URL(request.url())
-    if (request.method() === 'POST' && /^\/api\/uploads\/?$/.test(pathname)) tusPosts.push(pathname)
+    if (request.method() === 'POST' && /^\/api\/v1\/drive\/uploads\/?$/.test(pathname)) tusPosts.push(pathname)
     if (request.method() === 'POST' && pathname === '/api/v1/drive/files') multipart.push(pathname)
   })
   page.on('response', (response) => {
     const { pathname } = new URL(response.url())
-    if (response.request().method() === 'PATCH' && /^\/api\/uploads\/[^/]+$/.test(pathname) && response.ok()) {
+    if (response.request().method() === 'PATCH' && /^\/api\/v1\/drive\/uploads\/[^/]+$/.test(pathname) && response.ok()) {
       tusPatches.push(pathname)
     }
   })

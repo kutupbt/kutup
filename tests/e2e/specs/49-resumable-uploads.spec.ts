@@ -96,7 +96,7 @@ test('an upload interrupted by a reload goes on and arrives byte for byte', asyn
   slow = false
   const patches: string[] = []
   page.on('request', (r) => {
-    if (r.method() === 'PATCH' && /\/api\/uploads\//.test(r.url())) patches.push(r.url())
+    if (r.method() === 'PATCH' && /\/api\/v1\/drive\/uploads\//.test(r.url())) patches.push(r.url())
   })
   await resumeFromPanel(page, name, path)
   await expect(item(page, name)).toBeVisible({ timeout: 120_000 })
@@ -223,7 +223,7 @@ test('discarding an interrupted upload frees it on the server, and another file 
   await expect(panel.getByText(name, { exact: true })).toBeVisible({ timeout: 60_000 })
 
   // Let go: the server's part goes too, and it is not offered again.
-  const deleted = page.waitForResponse((r) => r.request().method() === 'DELETE' && /\/api\/uploads\//.test(r.url()))
+  const deleted = page.waitForResponse((r) => r.request().method() === 'DELETE' && /\/api\/v1\/drive\/uploads\//.test(r.url()))
   await panel.getByRole('button', { name: `Discard ${name}` }).click()
   expect((await deleted).status()).toBe(204)
   await expect(panel).toHaveCount(0)
@@ -317,7 +317,7 @@ test('a folder upload interrupted by a reload: the file under way goes on, the o
   const slow = await slowUploads(context)
   const patches: string[] = []
   page.on('response', (r) => {
-    if (r.request().method() === 'PATCH' && /\/api\/uploads\//.test(r.url()) && r.ok()) patches.push(r.url())
+    if (r.request().method() === 'PATCH' && /\/api\/v1\/drive\/uploads\//.test(r.url()) && r.ok()) patches.push(r.url())
   })
   await page.getByRole('button', { name: 'New' }).first().click()
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('menuitem', { name: 'Upload folder' }).click()])

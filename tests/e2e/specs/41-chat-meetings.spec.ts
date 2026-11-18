@@ -88,7 +88,7 @@ test('someone without an account joins a scheduled meeting through its link', as
   await join(guest, 'Guest Gül', true)
   // The fragment never left the browser, and no sign-in was asked for.
   expect(requests.some((sent) => sent.includes(url.split('#')[1]))).toBe(false)
-  expect(requests.some((sent) => /\/login|\/api\/auth\/forks/.test(sent))).toBe(false)
+  expect(requests.some((sent) => /\/login|\/api\/v1\/auth\/forks/.test(sent))).toBe(false)
 
   // The owner joins from the list.
   const popup = ownerContext.waitForEvent('page')

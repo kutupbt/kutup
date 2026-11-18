@@ -23,11 +23,11 @@ import {
 } from '../fixtures/chat'
 
 /** An identified (not sealed) Direct send: POST /api/v1/chat/accounts/<id>/messages. */
-const IDENTIFIED_SEND = /^\/api\/chat\/accounts\/[0-9a-f-]{36}\/messages$/
+const IDENTIFIED_SEND = /^\/api\/v1\/chat\/accounts\/[0-9a-f-]{36}\/messages$/
 /** A sealed send: POST /api/v1/chat/anonymous/accounts/<id>/messages. */
-const ANONYMOUS_SEND = /^\/api\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/messages$/
+const ANONYMOUS_SEND = /^\/api\/v1\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/messages$/
 /** A sealed bundle fetch or send: POST /api/v1/chat/anonymous/accounts/<id>/{keys,messages}. */
-const ANONYMOUS_KEYS_OR_SEND = /^\/api\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/(keys|messages)$/
+const ANONYMOUS_KEYS_OR_SEND = /^\/api\/v1\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/(keys|messages)$/
 
 const PASSWORD = 'Deneme123*FederatedSecurityPassword'
 const pageErrors = new WeakMap<Page, string[]>()

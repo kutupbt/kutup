@@ -49,7 +49,7 @@ test('a profile saved in Account opens there and in the Drive of the person shar
   await aliceDrive.getByRole('button', { name: 'Share', exact: true }).click()
   const dialog = aliceDrive.getByRole('dialog')
   await dialog.getByLabel('Kutup address').fill(bob.address)
-  const shared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
+  const shared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/v1\/drive\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   expect((await shared).status()).toBe(204)
   const given = profileKeySent(aliceDrive)

@@ -36,7 +36,7 @@ test('a note shared by link opens on Office, read-only, saying who shared it', a
   await noteLive(drive)
   await typeAtEnd(drive, 'Hello from a public note')
   // Saved as the note's state, which the link serves.
-  const saved = drive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/versions$/.test(new URL(r.url()).pathname))
+  const saved = drive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/v1\/drive\/files\/[^/]+\/versions$/.test(new URL(r.url()).pathname))
   await drive.keyboard.press('Control+s')
   expect((await saved).ok()).toBe(true)
 

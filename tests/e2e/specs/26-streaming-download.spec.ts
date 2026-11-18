@@ -25,7 +25,7 @@ test('a 12 MB upload downloads back byte for byte', async ({ browser }) => {
   for (let i = 0; i < FILE_BYTES; i++) original[i] = (i * 31 + 7) & 0xff
   let chunks = 0
   page.on('response', (response) => {
-    if (response.request().method() === 'PATCH' && /^\/api\/uploads\/[^/]+$/.test(new URL(response.url()).pathname) && response.ok()) chunks += 1
+    if (response.request().method() === 'PATCH' && /^\/api\/v1\/drive\/uploads\/[^/]+$/.test(new URL(response.url()).pathname) && response.ok()) chunks += 1
   })
   await page.getByRole('button', { name: 'New' }).first().click()
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('menuitem', { name: 'Upload files' }).click()])

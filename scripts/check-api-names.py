@@ -28,6 +28,8 @@ EXTENSIONS = ('.rs', '.ts', '.tsx', '.js', '.mjs')
 # unversioned prefixes. The bare prefixes themselves are fine (`"/api/"`,
 # `"/api/fed/"` in prefix checks).
 # A path rewritten twice (`/api/v1/v…`) is as wrong as an unversioned one.
+# The same in a regular expression's escaped form (`\/api\/files\/…`).
+ESCAPED = re.compile(r"\\/api\\/(?!v1|fed\\/v2|health|csp|/)")
 DOUBLE = re.compile(r"/api/v1/v[0-9\"'`]")
 OLD_PATH = re.compile(r"""["'`]/api/(?!v1/|v1["'`]|v["'`]|fed/v2/|fed/["'`]|fed/v["'`]|health|csp-report|["'`])""")
 OLD_FED = re.compile(r"""/api/fed/(?!v2/|v\{|v[0-9]|v["'`]|["'`])""")
@@ -70,6 +72,8 @@ for top in CODE_DIRS:
                     found = []
                     if OLD_PATH.search(line) and not any(a in line for a in PATH_ALLOWED_LINES):
                         found.append('an unversioned API path')
+                    if ESCAPED.search(line):
+                        found.append('an unversioned API path in a pattern')
                     if DOUBLE.search(line):
                         found.append('a path versioned twice')
                     if OLD_FED.search(line) and not any(a in line for a in PATH_ALLOWED_LINES):
