@@ -156,19 +156,23 @@ Identity rotation, everything above and:
 
 - **Self-statements bind the account id alone**, 16 bytes: the manifest and
   identity binding, safety numbers, the profile envelope, the Drive key
-  binding, group pseudonym bindings. Statements between two people (named
+  binding, group pseudonym bindings, and the username rename chain
+  (`account/rename/v2`: incarnation, account id, sequence, previous and
+  current name, built in W7 group 4). Statements between two people (named
   shares, profile-key shares) bind the two account ids and the two
   incarnations.
 - **`AccountRef` stays as the routing address** `(server, account id)`: in
   JSON, in federation requests, as the key of local stores, pins and the
   libsignal address name. These are lookups, not signed bytes; a server
   rename is then a re-keying of local rows.
-- **Collisions.** Account ids are minted by each server, so a hostile server
-  can mint one equal to a victim's. This gains nothing cryptographically:
-  every statement is checked under the authority pinned for the routing
-  address, and the incarnation (the authority's hash) is still bound. The
-  rule that makes it safe: a client never looks anything up by account id
-  alone.
+- **Collisions and mirrors.** Account ids are minted by each server, so a
+  hostile server B can mint a victim's id X and serve the victim's whole
+  public identity as `(B, X)`: it verifies and the safety number is the same.
+  B reads nothing (it has no private key), but a first-time contact can bind
+  it. The pin rule `AuthorityElsewhere` (a pinned authority seen at another
+  address is refused) is the load-bearing guard; a client that never met the
+  victim cannot tell, as with any first contact. A client never looks
+  anything up by account id alone.
 - **Group ids** bind the home's identity-document hash and sequence, which
   already identify the home by its key; drop the name from the digest.
 - **Pins** stay keyed by `(server, account id)` and hold the authority. Two
