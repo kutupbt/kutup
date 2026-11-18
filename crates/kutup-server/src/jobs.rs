@@ -680,6 +680,9 @@ fn reconcile_sums(user: &str) -> String {
    + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE account_id = {user}), 0))::bigint AS mail_bytes,
     (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_account_id = {user}), 0)
    + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e JOIN calendars c ON c.id = e.calendar_id
+                WHERE c.owner_account_id = {user}), 0)
+   + COALESCE((SELECT SUM(se.bytes) FROM calendar_shared_events se
+                 JOIN calendars c ON c.id = se.home_calendar_id
                 WHERE c.owner_account_id = {user}), 0))::bigint AS calendar_bytes"#
     )
 }

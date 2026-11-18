@@ -145,7 +145,10 @@ pub async fn usage(
     let (calendar_bytes, calendar_count): (i64, i64) = sqlx::query_as(
         "SELECT (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_account_id = $1), 0)
                + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e
-                             JOIN calendars c ON c.id = e.calendar_id WHERE c.owner_account_id = $1), 0))::bigint,
+                             JOIN calendars c ON c.id = e.calendar_id WHERE c.owner_account_id = $1), 0)
+               + COALESCE((SELECT SUM(se.bytes) FROM calendar_shared_events se
+                             JOIN calendars c ON c.id = se.home_calendar_id
+                            WHERE c.owner_account_id = $1), 0))::bigint,
                 (SELECT COUNT(*) FROM calendar_events e JOIN calendars c ON c.id = e.calendar_id
                   WHERE c.owner_account_id = $1)",
     )
