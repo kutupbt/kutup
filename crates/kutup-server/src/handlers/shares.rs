@@ -142,7 +142,7 @@ pub async fn create_public_share(
         r#"INSERT INTO drive_public_shares (id, share_type, target_id, token,
                                       collection_key_envelope, collection_key_epoch,
                                       owner_account_id, expires_at, owner_link_key_envelope)
-           VALUES ($9,$1,$2,$3,$4,$5,$6,$7,$8)
+           VALUES ($9,$1,$2,$3,kutup_unb64($4),$5,$6,$7,kutup_unb64($8))
            RETURNING id"#,
     )
     .bind(&req.share_type)
@@ -257,8 +257,8 @@ pub async fn get_public_share(
     );
     let row: Option<ShareRow> = sqlx::query_as(
         r#"SELECT p.id, p.share_type, p.target_id,
-                  p.collection_key_envelope, p.collection_key_epoch, p.owner_account_id, p.expires_at,
-                  u.account_authority_public_key, u.username
+                  kutup_b64(p.collection_key_envelope), p.collection_key_epoch, p.owner_account_id,
+                  p.expires_at, kutup_b64(u.account_authority_public_key), u.username
            FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id WHERE p.token = $1"#,
     )
     .bind(&token)
@@ -294,7 +294,7 @@ pub async fn get_public_share(
     };
     let (collection_kind, name_envelope, name_revision) = if share_type == "collection" {
         let row: Option<(String, String, i64)> = sqlx::query_as(
-            "SELECT kind, name_envelope, name_revision FROM drive_collections WHERE id = $1",
+            "SELECT kind, kutup_b64(name_envelope), name_revision FROM drive_collections WHERE id = $1",
         )
         .bind(target_id)
         .fetch_optional(&state.pool)
@@ -441,7 +441,8 @@ async fn public_files(state: &AppState, filter: &str, id: Uuid) -> AppResult<Vec
         sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
     );
     let rows: Vec<PubFileTuple> = sqlx::query_as(&format!(
-        r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
+        r#"SELECT f.id, f.collection_id, kutup_b64(f.metadata_envelope),
+                  kutup_b64(f.file_key_envelope),
                   f.key_epoch, f.key_generation, f.metadata_revision, f.encrypted_size_bytes,
                   f.created_at, f.original_key_generation, {}, {}
            FROM drive_files f WHERE {} AND f.deleted_at IS NULL
@@ -591,7 +592,8 @@ pub async fn public_share_state(
         .map(|value| Uuid::parse_str(value).map_err(|_| AppError::bad_request("invalid revision")))
         .transpose()?;
     let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
-        "SELECT id, storage_path, key_generation, revision_content_envelope FROM drive_file_versions
+        "SELECT id, storage_path, key_generation, kutup_b64(revision_content_envelope)
+         FROM drive_file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0 AND ($2::uuid IS NULL OR id = $2)
          ORDER BY created_at DESC LIMIT 1",
     )
@@ -745,7 +747,8 @@ pub async fn public_album_items(
         thumb_lg_generation: Option<i32>,
     }
     let items: Vec<Item> = sqlx::query_as(
-        "SELECT i.file_id, i.file_key_envelope, i.key_generation, i.album_epoch,
+        "SELECT i.file_id, kutup_b64(i.file_key_envelope) AS file_key_envelope,
+                i.key_generation, i.album_epoch,
                 sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                 sm.key_generation AS thumb_sm_generation, lg.key_generation AS thumb_lg_generation
          FROM photos_album_items i

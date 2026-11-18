@@ -325,7 +325,7 @@ fn upload_rows_are_a_file_or_a_version() {
                 "INSERT INTO drive_uploads (account_id, collection_id, file_id, total_bytes,
                     file_key_envelope, key_epoch, storage_path, s3_upload_id,
                     name_hash, kind, key_generation)
-                 VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, $2, 1,
+                 VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, kutup_unb64($2), 1,
                     gen_random_uuid()::text, 's', decode($1, 'hex'), $3, $4)",
             )
             .bind(name_hash)
@@ -338,12 +338,12 @@ fn upload_rows_are_a_file_or_a_version() {
     let hash = "cd".repeat(32);
     for (kind, name_hash, key_envelope, generation) in [
         ("version", Some(hash.as_str()), None, Some(1)),
-        ("version", None, Some("k"), Some(1)),
+        ("version", None, Some("AA=="), Some(1)),
         ("version", None, None, None),
-        ("file", None, Some("k"), None),
+        ("file", None, Some("AA=="), None),
         ("file", Some(hash.as_str()), None, None),
-        ("file", Some(hash.as_str()), Some("k"), Some(1)),
-        ("draft", Some(hash.as_str()), Some("k"), None),
+        ("file", Some(hash.as_str()), Some("AA=="), Some(1)),
+        ("draft", Some(hash.as_str()), Some("AA=="), None),
     ] {
         let error = insert(kind, name_hash, key_envelope, generation).unwrap_err();
         assert!(

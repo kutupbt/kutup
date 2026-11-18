@@ -427,10 +427,12 @@ async fn values(
         }
         Scope::MailNames => {
             let rows: Vec<(String, String)> = sqlx::query_as(
-                "SELECT 'folder:' || id, name_sealed FROM mail_folders
+                "SELECT 'folder:' || id, kutup_b64(name_sealed) FROM mail_folders
                   WHERE account_id = $1 AND name_sealed IS NOT NULL
-                 UNION ALL SELECT 'label:' || id, name_sealed FROM mail_labels WHERE account_id = $1
-                 UNION ALL SELECT 'filter:' || id, name_sealed FROM mail_filters WHERE account_id = $1",
+                 UNION ALL SELECT 'label:' || id, kutup_b64(name_sealed) FROM mail_labels
+                  WHERE account_id = $1
+                 UNION ALL SELECT 'filter:' || id, kutup_b64(name_sealed) FROM mail_filters
+                  WHERE account_id = $1",
             )
             .bind(user_id)
             .fetch_all(&mut *conn)

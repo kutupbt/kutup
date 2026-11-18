@@ -153,7 +153,7 @@ pub async fn move_file(
     crate::drive_names::lock_place(&mut tx, place).await?;
     crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(file_id)).await?;
     sqlx::query(
-        "UPDATE drive_files SET collection_id = $2, key_epoch = $3, file_key_envelope = $4,
+        "UPDATE drive_files SET collection_id = $2, key_epoch = $3, file_key_envelope = kutup_unb64($4),
                           name_hash = decode($5, 'hex'), content_hash = decode($6, 'hex')
          WHERE id = $1",
     )

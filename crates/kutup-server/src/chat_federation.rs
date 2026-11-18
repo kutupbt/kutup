@@ -3026,7 +3026,7 @@ pub async fn deliver_messages(
             "INSERT INTO chat_mailbox
                 (recipient_account_id, recipient_device_id, sender_server, sender_account_id,
                  sender_device_id, envelope_type, suite, content, send_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,kutup_unb64($8),$9)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
@@ -3557,7 +3557,8 @@ mod sealed_live_tests {
                  last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                  last_resort_kyber_pre_key_signature, credential_salt, credential_hash,
                  kind, session_id)
-             VALUES ($1, 1, 1, 77, 'k', 1, 'k', 's', 1, 'k', 's',
+             VALUES ($1, 1, 1, 77, '\\x00'::bytea, 1, '\\x00'::bytea, '\\x00'::bytea, 1,
+                     '\\x00'::bytea, '\\x00'::bytea,
                      decode(repeat('00', 16), 'hex'), decode(repeat('00', 32), 'hex'),
                      'chat', gen_random_uuid())",
         )

@@ -106,7 +106,7 @@ pub async fn list(
 ) -> AppResult<Json<Vec<MailFilter>>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<FilterRow> = sqlx::query_as(
-        "SELECT id, name_sealed, enabled, position, match, conditions, actions, source
+        "SELECT id, kutup_b64(name_sealed), enabled, position, match, conditions, actions, source
            FROM mail_filters WHERE account_id = $1 ORDER BY position, created_at",
     )
     .bind(user_id)
@@ -214,7 +214,7 @@ pub async fn create(
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let inserted = sqlx::query(
         "INSERT INTO mail_filters (id, account_id, name_sealed, enabled, position, match, conditions, actions, source)
-         SELECT $1, $2, $3, $4, COALESCE(MAX(position) + 1, 0), $5, $6, $7, $8
+         SELECT $1, $2, kutup_unb64($3), $4, COALESCE(MAX(position) + 1, 0), $5, $6, $7, $8
            FROM mail_filters WHERE account_id = $2
          ON CONFLICT (id) DO NOTHING",
     )
@@ -279,7 +279,7 @@ pub async fn update(
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such filter"))?;
     let current: Option<(serde_json::Value, serde_json::Value, String)> = sqlx::query_as(
-        "SELECT conditions, actions, name_sealed FROM mail_filters WHERE account_id = $1 AND id = $2",
+        "SELECT conditions, actions, kutup_b64(name_sealed) FROM mail_filters WHERE account_id = $1 AND id = $2",
     )
     .bind(user_id)
     .bind(id)
@@ -311,12 +311,12 @@ pub async fn update(
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let updated = sqlx::query(
         "UPDATE mail_filters SET
-             name_sealed = COALESCE($3, name_sealed),
+             name_sealed = COALESCE(kutup_unb64($3), name_sealed),
              enabled = COALESCE($4, enabled),
              match = COALESCE($5, match),
              conditions = $6,
              actions = $7
-          WHERE account_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = $8)",
+          WHERE account_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = kutup_unb64($8))",
     )
     .bind(user_id)
     .bind(id)
@@ -335,7 +335,7 @@ pub async fn update(
     if updated.rows_affected() == 0 {
         drop(tx);
         let now: Option<String> = sqlx::query_scalar(
-            "SELECT name_sealed FROM mail_filters WHERE account_id = $1 AND id = $2",
+            "SELECT kutup_b64(name_sealed) FROM mail_filters WHERE account_id = $1 AND id = $2",
         )
         .bind(user_id)
         .bind(id)

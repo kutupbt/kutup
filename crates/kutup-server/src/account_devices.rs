@@ -464,7 +464,7 @@ pub(crate) async fn frame_device(
           WHERE d.account_id = $1 AND d.device_id = $2 AND d.expired_at IS NULL
             AND d.frame_key IS NOT NULL
             AND (listed ->> 'deviceId')::int = d.device_id
-            AND listed ->> 'frameKey' = encode(d.frame_key, 'base64')
+            AND listed ->> 'frameKey' = kutup_b64(d.frame_key)
             AND EXISTS (SELECT 1 FROM auth_sessions s
                          WHERE s.id = d.session_id AND s.revoked_at IS NULL
                            AND s.expires_at > now())",

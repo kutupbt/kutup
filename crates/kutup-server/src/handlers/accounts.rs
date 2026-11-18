@@ -51,8 +51,9 @@ pub(crate) async fn local_identity(
         i32,
     );
     let row: Option<Row> = sqlx::query_as(
-        "SELECT username, public_key, encode(account_incarnation_id, 'hex'), drive_signing_public_key,
-                account_authority_public_key, drive_key_binding, identity_suite,
+        "SELECT username, kutup_b64(public_key), encode(account_incarnation_id, 'hex'),
+                kutup_b64(drive_signing_public_key),
+                kutup_b64(account_authority_public_key), kutup_b64(drive_key_binding), identity_suite,
                 drive_key_binding_epoch
            FROM accounts WHERE id = $1 AND is_active AND NOT is_first_login AND username IS NOT NULL
             -- To another server, an account that doesn't talk to other

@@ -235,7 +235,7 @@ struct Party {
 
 async fn party(pool: &PgPool, user_id: Uuid, domain: &str) -> AppResult<Party> {
     let row: Option<(Option<String>, String, Option<String>)> = sqlx::query_as(
-        "SELECT username, encode(account_incarnation_id, 'hex'), drive_signing_public_key
+        "SELECT username, encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key)
          FROM accounts WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
@@ -395,7 +395,7 @@ pub async fn share_file(
     sqlx::query(
         "INSERT INTO drive_file_shares (file_id, sharer_account_id, recipient_account_id, share_envelope,
                                   key_generation, can_edit)
-         VALUES ($1, $2, $3, $4, $5, $6)
+         VALUES ($1, $2, $3, kutup_unb64($4), $5, $6)
          ON CONFLICT (file_id, recipient_account_id) DO UPDATE SET
              sharer_account_id = EXCLUDED.sharer_account_id,
              share_envelope = EXCLUDED.share_envelope,
@@ -463,8 +463,8 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), u.public_key, u.identity_suite,
-                u.drive_signing_public_key, fs.can_edit, fs.key_generation, fs.created_at
+        "SELECT u.id, u.username, encode(u.account_incarnation_id, 'hex'), kutup_b64(u.public_key),
+                u.identity_suite, kutup_b64(u.drive_signing_public_key), fs.can_edit, fs.key_generation, fs.created_at
          FROM drive_file_shares fs JOIN accounts u ON u.id = fs.recipient_account_id
          WHERE fs.file_id = $1 ORDER BY fs.created_at",
     )
@@ -573,7 +573,8 @@ async fn file_links(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FileLink>> {
         Option<String>,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, token, owner_link_key_envelope, collection_key_epoch, expires_at, created_at,
+        "SELECT id, token, kutup_b64(owner_link_key_envelope), collection_key_epoch, expires_at,
+                created_at,
                 kutup_target_blocked(share_type, target_id)
          FROM drive_public_shares WHERE share_type = 'file' AND target_id = $1
            AND owner_removed_at IS NULL
@@ -688,7 +689,7 @@ async fn store_federated_envelopes(
             &recipient,
         )?;
         sqlx::query(
-            "UPDATE drive_federated_outgoing_file_shares SET share_envelope = $2, key_generation = $3 WHERE id = $1",
+            "UPDATE drive_federated_outgoing_file_shares SET share_envelope = kutup_unb64($2), key_generation = $3 WHERE id = $1",
         )
         .bind(member.id)
         .bind(&member.share_envelope)
@@ -716,7 +717,7 @@ async fn store_link_envelopes(
     for link in links {
         validate_envelope(&link.key_envelope, context)?;
         let updated = sqlx::query(
-            "UPDATE drive_public_shares SET collection_key_envelope = $3, collection_key_epoch = $4
+            "UPDATE drive_public_shares SET collection_key_envelope = kutup_unb64($3), collection_key_epoch = $4
              WHERE id = $1 AND share_type = 'file' AND target_id = $2",
         )
         .bind(link.id)
@@ -752,7 +753,7 @@ async fn store_envelopes(
             &recipient,
         )?;
         let updated = sqlx::query(
-            "UPDATE drive_file_shares SET share_envelope = $3, key_generation = $4,
+            "UPDATE drive_file_shares SET share_envelope = kutup_unb64($3), key_generation = $4,
                     sharer_account_id = (SELECT c.owner_account_id FROM drive_files f
                                       JOIN drive_collections c ON c.id = f.collection_id WHERE f.id = $1)
              WHERE file_id = $1 AND recipient_account_id = $2",
@@ -898,7 +899,7 @@ pub async fn rotate(
     sqlx::query(
         "INSERT INTO drive_file_key_history (file_id, generation, previous_key_envelope,
                                        previous_metadata_envelope, previous_metadata_revision)
-         SELECT $1, $2, $3, metadata_envelope, metadata_revision FROM drive_files WHERE id = $1",
+         SELECT $1, $2, kutup_unb64($3), metadata_envelope, metadata_revision FROM drive_files WHERE id = $1",
     )
     .bind(file_id)
     .bind(next)
@@ -906,8 +907,8 @@ pub async fn rotate(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE drive_files SET key_epoch = $2, key_generation = $3, file_key_envelope = $4,
-                metadata_envelope = $5
+        "UPDATE drive_files SET key_epoch = $2, key_generation = $3, file_key_envelope = kutup_unb64($4),
+                metadata_envelope = kutup_unb64($5)
          WHERE id = $1",
     )
     .bind(file_id)
@@ -1017,16 +1018,17 @@ pub async fn shared_with_me(
         editors_can_share: bool,
     }
     let shares: Vec<Row> = sqlx::query_as(
-        "SELECT fs.file_id, fs.share_envelope, fs.can_edit, fs.key_generation,
+        "SELECT fs.file_id, kutup_b64(fs.share_envelope) AS share_envelope, fs.can_edit,
+                fs.key_generation,
                 f.key_epoch = c.key_epoch AS folder_key_current, fs.created_at AS shared_at,
                 c.owner_account_id, o.username AS owner_username,
                 encode(o.account_incarnation_id, 'hex') AS owner_incarnation_id,
-                o.drive_signing_public_key AS owner_signing_public_key,
-                h.previous_metadata_envelope AS metadata_envelope,
+                kutup_b64(o.drive_signing_public_key) AS owner_signing_public_key,
+                kutup_b64(h.previous_metadata_envelope) AS metadata_envelope,
                 h.previous_metadata_revision AS metadata_revision,
                 fs.sharer_account_id, s.username AS sharer_username,
                 encode(s.account_incarnation_id, 'hex') AS sharer_incarnation_id,
-                s.drive_signing_public_key AS sharer_signing_public_key,
+                kutup_b64(s.drive_signing_public_key) AS sharer_signing_public_key,
                 f.editors_can_share
          FROM drive_file_shares fs
          JOIN drive_files f ON f.id = fs.file_id

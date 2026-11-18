@@ -343,7 +343,8 @@ pub async fn upload(
                               storage_path, encrypted_size_bytes, original_key_generation,
                               name_hash, content_hash, content_revision_id,
                               blob_suite, revision_content_envelope)
-           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,decode($9, 'hex'),decode($10, 'hex'),$11,$12,$13)"#,
+           VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,1,$7,$8,1,decode($9, 'hex'),
+                   decode($10, 'hex'),$11,$12,kutup_unb64($13))"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -612,7 +613,7 @@ pub async fn update_metadata(
         crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(file_id)).await?;
     }
     sqlx::query(
-        "UPDATE drive_files SET metadata_envelope = $1, metadata_revision = $2,
+        "UPDATE drive_files SET metadata_envelope = kutup_unb64($1), metadata_revision = $2,
                           name_hash = CASE WHEN $5 THEN decode($4, 'hex') ELSE name_hash END, updated_at = NOW()
          WHERE id = $3",
     )
@@ -779,7 +780,8 @@ pub(crate) async fn file_rows(
     let rows: Vec<Row> = sqlx::query_as(&format!(
         r#"SELECT f.id, f.collection_id, f.uploader_account_id,
                   encode(f.name_hash, 'hex') AS name_hash, encode(f.content_hash, 'hex') AS content_hash,
-                  f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.key_generation,
+                  kutup_b64(f.metadata_envelope) AS metadata_envelope,
+                  kutup_b64(f.file_key_envelope) AS file_key_envelope, f.key_epoch, f.key_generation,
                   f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
                   f.original_key_generation,
                   {} AS key_history, {} AS content_key_generation,

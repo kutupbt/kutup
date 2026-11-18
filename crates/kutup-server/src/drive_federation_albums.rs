@@ -94,8 +94,10 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
             return Err(AppError::not_found("not an album"));
         }
         let files: Vec<FederatedDriveFile> = sqlx::query_as(&format!(
-            "SELECT f.id, f.collection_id, f.uploader_account_id, f.metadata_envelope,
-                f.file_key_envelope, f.key_epoch, f.key_generation, f.metadata_revision,
+            "SELECT f.id, f.collection_id, f.uploader_account_id,
+                kutup_b64(f.metadata_envelope) AS metadata_envelope,
+                kutup_b64(f.file_key_envelope) AS file_key_envelope, f.key_epoch,
+                f.key_generation, f.metadata_revision,
                 f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_generation,
                 {} AS key_history, {} AS content_key_generation
              FROM drive_files f
@@ -120,7 +122,8 @@ pub async fn album_items(State(state): State<AppState>, headers: HeaderMap) -> A
             thumb_lg_generation: Option<i32>,
         }
         let items: Vec<Item> = sqlx::query_as(
-            "SELECT i.file_id, i.file_key_envelope, i.key_generation, i.album_epoch,
+            "SELECT i.file_id, kutup_b64(i.file_key_envelope) AS file_key_envelope,
+                    i.key_generation, i.album_epoch,
                     sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                     sm.key_generation AS thumb_sm_generation, lg.key_generation AS thumb_lg_generation
              FROM photos_album_items i

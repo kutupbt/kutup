@@ -298,11 +298,12 @@ pub(crate) async fn begin_list_change(
     let address_id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
     let data = decode(&key_list.data, "keyList.data")?;
     let signature = decode(&key_list.signature, "keyList.signature")?;
-    let authority: String =
-        sqlx::query_scalar("SELECT account_authority_public_key FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let authority: String = sqlx::query_scalar(
+        "SELECT kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let authority: [u8; 32] = STANDARD
         .decode(&authority)
         .ok()
@@ -620,7 +621,7 @@ pub(crate) async fn first_key(
     let info = mail_key::inspect_address_public_key(&public_key, &address)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let (authority, binding): (String, String) = sqlx::query_as(
-        "SELECT account_authority_public_key, COALESCE(key_binding::text, '') FROM accounts WHERE id = $1",
+        "SELECT kutup_b64(account_authority_public_key), COALESCE(key_binding::text, '') FROM accounts WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut *conn)
@@ -910,7 +911,7 @@ pub(crate) async fn lookup_address(
         return Ok(None);
     };
     let (account_id, authority): (Uuid, String) = sqlx::query_as(
-        "SELECT u.id, u.account_authority_public_key FROM mail_addresses a JOIN accounts u ON u.id = a.account_id
+        "SELECT u.id, kutup_b64(u.account_authority_public_key) FROM mail_addresses a JOIN accounts u ON u.id = a.account_id
           WHERE a.id = $1",
     )
     .bind(address_id)

@@ -592,7 +592,8 @@ pub async fn create_federated_share(
     }
 
     let sender: (String, String) = sqlx::query_as(
-        "SELECT encode(account_incarnation_id, 'hex'), drive_signing_public_key FROM accounts WHERE id = $1",
+        "SELECT encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key)
+         FROM accounts WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&state.pool)
@@ -627,7 +628,7 @@ pub async fn create_federated_share(
              recipient_server, named_share_envelope, capability_hash,
              can_upload, can_delete, upload_quota_bytes, recipient_incarnation_id,
              recipient_account_id)
-         VALUES ($1,$2,$3,$4,$5,decode($6, 'hex'),$7,$8,$9,decode($10, 'hex'),$11)",
+         VALUES ($1,$2,$3,$4,kutup_unb64($5),decode($6, 'hex'),$7,$8,$9,decode($10, 'hex'),$11)",
     )
     .bind(collection_id)
     .bind(owner)
@@ -703,9 +704,9 @@ pub async fn get_user(
             i32,
         );
         let identity: Option<Row> = sqlx::query_as(
-            "SELECT id, username, public_key, encode(account_incarnation_id, 'hex'), drive_signing_public_key,
-                    account_authority_public_key, drive_key_binding, identity_suite,
-                    drive_key_binding_epoch
+            "SELECT id, username, kutup_b64(public_key), encode(account_incarnation_id, 'hex'),
+                    kutup_b64(drive_signing_public_key), kutup_b64(account_authority_public_key),
+                    kutup_b64(drive_key_binding), identity_suite, drive_key_binding_epoch
              FROM accounts WHERE id = kutup_current_account($1) AND is_active = true
               AND kutup_account_federates(id)",
         )
@@ -809,8 +810,9 @@ pub async fn accept_incoming_share(
              owner_account_id, owner_account, owner_incarnation_id,
              owner_signing_public_key, owner_authority_public_key,
              can_upload, can_delete, upload_quota_bytes, collection_kind)
-         VALUES ($1,$2,$3,decode($4, 'hex'),$5,$6,$7,$8,$9,$10,decode($11, 'hex'),$12,$13,
-                 decode($14, 'hex'),$15,$16,$17,$18,$19,$20)
+         VALUES ($1,$2,$3,decode($4, 'hex'),$5,kutup_unb64($6),kutup_unb64($7),$8,$9,
+                 kutup_unb64($10),decode($11, 'hex'),$12,$13,
+                 decode($14, 'hex'),kutup_unb64($15),kutup_unb64($16),$17,$18,$19,$20)
          ON CONFLICT (account_id, owner_server, capability_hash) DO UPDATE SET
              remote_collection_id = EXCLUDED.remote_collection_id,
              named_share_envelope = EXCLUDED.named_share_envelope,
@@ -1006,7 +1008,8 @@ pub async fn refresh_incoming_share(
     type Stored = (String, String, Uuid, i32, String, Uuid, String);
     let stored: Stored = sqlx::query_as(
         "SELECT owner_server, remote_capability, remote_collection_id, key_epoch,
-                encode(epoch_statement_hash, 'hex'), owner_account_id, owner_authority_public_key
+                encode(epoch_statement_hash, 'hex'), owner_account_id,
+                kutup_b64(owner_authority_public_key)
          FROM drive_federated_incoming_shares WHERE id = $1 AND account_id = $2",
     )
     .bind(share_uuid)
@@ -1103,18 +1106,24 @@ pub async fn refresh_incoming_share(
     }
     let refreshed: IncomingDriveShare = sqlx::query_as(
         "UPDATE drive_federated_incoming_shares SET
-            named_share_envelope = $3, name_envelope = $4, key_epoch = $5, name_revision = $6,
-            epoch_statement = $7, epoch_statement_hash = decode($8, 'hex'), owner_account = $9,
-            owner_incarnation_id = decode($10, 'hex'), owner_signing_public_key = $11,
+            named_share_envelope = kutup_unb64($3), name_envelope = kutup_unb64($4),
+            key_epoch = $5, name_revision = $6,
+            epoch_statement = kutup_unb64($7), epoch_statement_hash = decode($8, 'hex'),
+            owner_account = $9,
+            owner_incarnation_id = decode($10, 'hex'),
+            owner_signing_public_key = kutup_unb64($11),
             can_upload = $12, can_delete = $13, upload_quota_bytes = $14
          WHERE id = $1 AND account_id = $2
-         RETURNING id, owner_server, remote_collection_id, named_share_envelope,
-                   name_envelope, key_epoch, name_revision, epoch_statement,
+         RETURNING id, owner_server, remote_collection_id,
+                   kutup_b64(named_share_envelope) AS named_share_envelope,
+                   kutup_b64(name_envelope) AS name_envelope, key_epoch, name_revision,
+                   kutup_b64(epoch_statement) AS epoch_statement,
                    encode(epoch_statement_hash, 'hex') AS epoch_statement_hash,
                    owner_account_id, owner_account,
                    encode(owner_incarnation_id, 'hex') AS owner_incarnation_id,
-                   owner_signing_public_key,
-                   owner_authority_public_key, can_upload, can_delete,
+                   kutup_b64(owner_signing_public_key) AS owner_signing_public_key,
+                   kutup_b64(owner_authority_public_key) AS owner_authority_public_key,
+                   can_upload, can_delete,
                    upload_quota_bytes, collection_kind, created_at",
     )
     .bind(share_uuid)
@@ -1201,13 +1210,16 @@ pub async fn list_incoming_shares(
         Some(_) => return Err(AppError::bad_request("unknown kind")),
     };
     let rows: Vec<IncomingDriveShare> = sqlx::query_as(
-        "SELECT id, owner_server, remote_collection_id, named_share_envelope,
-                  name_envelope, key_epoch, name_revision, epoch_statement,
+        "SELECT id, owner_server, remote_collection_id,
+                  kutup_b64(named_share_envelope) AS named_share_envelope,
+                  kutup_b64(name_envelope) AS name_envelope, key_epoch, name_revision,
+                  kutup_b64(epoch_statement) AS epoch_statement,
                   encode(epoch_statement_hash, 'hex') AS epoch_statement_hash,
                   owner_account_id, owner_account,
                   encode(owner_incarnation_id, 'hex') AS owner_incarnation_id,
-                  owner_signing_public_key,
-                  owner_authority_public_key, can_upload, can_delete,
+                  kutup_b64(owner_signing_public_key) AS owner_signing_public_key,
+                  kutup_b64(owner_authority_public_key) AS owner_authority_public_key,
+                  can_upload, can_delete,
                   upload_quota_bytes, collection_kind, created_at
            FROM drive_federated_incoming_shares
            WHERE account_id = $1 AND collection_kind = $2 ORDER BY created_at ASC",
@@ -1538,11 +1550,12 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
             String,
         );
         let collection: Option<InviteRow> = sqlx::query_as(
-            "SELECT c.id, c.name_envelope, c.key_epoch, c.name_revision,
-                    c.epoch_statement, encode(c.epoch_statement_hash, 'hex'), c.owner_account_id,
-                    s.named_share_envelope, mailbox_owner.username,
-                    encode(mailbox_owner.account_incarnation_id, 'hex'), mailbox_owner.drive_signing_public_key,
-                    mailbox_owner.account_authority_public_key, c.kind
+            "SELECT c.id, kutup_b64(c.name_envelope), c.key_epoch, c.name_revision,
+                    kutup_b64(c.epoch_statement), encode(c.epoch_statement_hash, 'hex'),
+                    c.owner_account_id, kutup_b64(s.named_share_envelope), mailbox_owner.username,
+                    encode(mailbox_owner.account_incarnation_id, 'hex'),
+                    kutup_b64(mailbox_owner.drive_signing_public_key),
+                    kutup_b64(mailbox_owner.account_authority_public_key), c.kind
          FROM drive_collections c
          JOIN drive_federated_outgoing_shares s ON s.collection_id = c.id
          JOIN accounts mailbox_owner ON mailbox_owner.id = c.owner_account_id
@@ -1630,8 +1643,10 @@ pub async fn list_files(State(state): State<AppState>, headers: HeaderMap) -> Ap
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
         let files: Vec<FederatedDriveFile> = sqlx::query_as(&format!(
-            "SELECT f.id, f.collection_id, f.uploader_account_id, f.metadata_envelope,
-                f.file_key_envelope, f.key_epoch, f.key_generation, f.metadata_revision,
+            "SELECT f.id, f.collection_id, f.uploader_account_id,
+                kutup_b64(f.metadata_envelope) AS metadata_envelope,
+                kutup_b64(f.file_key_envelope) AS file_key_envelope, f.key_epoch,
+                f.key_generation, f.metadata_revision,
                 f.encrypted_size_bytes, f.created_at, f.updated_at, f.original_key_generation,
                 {} AS key_history, {} AS content_key_generation
          FROM drive_files f WHERE f.collection_id = $1 AND f.deleted_at IS NULL
@@ -2012,7 +2027,8 @@ pub async fn upload_file(
                  storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id,
                  original_key_generation, name_hash, content_revision_id,
                  blob_suite, revision_content_envelope)
-             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,decode($10, 'hex'),$11,1,decode($12, 'hex'),$13,$14,$15)",
+             VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,$7,$8,$9,decode($10, 'hex'),$11,1,
+                     decode($12, 'hex'),$13,$14,kutup_unb64($15))",
             )
             .bind(file_id)
             .bind(share.collection_id)

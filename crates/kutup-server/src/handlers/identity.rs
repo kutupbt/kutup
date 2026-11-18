@@ -118,8 +118,9 @@ pub async fn drive_identities(
         i32,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, username, account_authority_public_key, public_key, drive_signing_public_key,
-                drive_key_binding, identity_suite, drive_key_binding_epoch
+        "SELECT id, username, kutup_b64(account_authority_public_key), kutup_b64(public_key),
+                kutup_b64(drive_signing_public_key),
+                kutup_b64(drive_key_binding), identity_suite, drive_key_binding_epoch
            FROM accounts
           WHERE id IN (SELECT kutup_current_account(name) FROM unnest($1::text[]) AS name)
             AND is_active AND NOT is_first_login",

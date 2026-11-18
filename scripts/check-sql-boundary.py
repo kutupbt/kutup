@@ -6,7 +6,8 @@ Bytes are stored as bytea and converted at the SQL boundary: a query reads
 `kutup_unb64($n)`. A comparison must convert the parameter, never the column
 (`col = decode($1, 'hex')`): `encode(col, 'hex') = $1` makes every lookup a
 sequential scan. This check refuses a comparison with an encoded column in
-the server's SQL (its Rust string literals).
+the server's SQL (its Rust string literals), and encode(..., 'base64'), whose
+output Postgres breaks into lines.
 
   scripts/check-sql-boundary.py
 """
@@ -23,6 +24,9 @@ COMPARED = re.compile(
     r"|(?:(?:=|<>|!=)\s*" + ENCODED + r")",
     re.IGNORECASE,
 )
+# Postgres breaks encode(..., 'base64') into 76-character lines: bytes go out
+# through kutup_b64 instead.
+RAW_BASE64 = re.compile(r"encode\((?:[^()]|\([^()]*\))*,\s*'base64'\s*\)", re.IGNORECASE)
 
 
 def literals(src):
@@ -78,6 +82,9 @@ def main():
             path = os.path.join(root, name)
             src = open(path).read()
             for start, end in literals(src):
+                for m in RAW_BASE64.finditer(src[start:end]):
+                    line = src[: start + m.start()].count("\n") + 1
+                    found.append(f"{os.path.relpath(path)}:{line}: {m.group(0)[:80]} (use kutup_b64)")
                 for m in COMPARED.finditer(src[start:end]):
                     if (os.path.relpath(path, ROOT), m.group(0)) in allow:
                         continue

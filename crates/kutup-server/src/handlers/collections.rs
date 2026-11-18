@@ -126,8 +126,9 @@ pub(crate) async fn collection_rows(
         Option<i32>,
     );
     let own: Vec<OwnRow> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.owner_key_envelope,
-                  c.key_epoch, c.name_revision, c.epoch_statement,
+        r#"SELECT c.id, c.owner_account_id, kutup_b64(c.name_envelope) AS name_envelope,
+                  kutup_b64(c.owner_key_envelope) AS owner_key_envelope,
+                  c.key_epoch, c.name_revision, kutup_b64(c.epoch_statement) AS epoch_statement,
                   encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
                   c.parent_collection_id, c.color, c.created_at,
                   GREATEST(c.updated_at,
@@ -194,10 +195,11 @@ pub(crate) async fn collection_rows(
         .collect();
 
     let shared: Vec<SharedCollectionDbRow> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.key_epoch,
-                  c.name_revision, c.epoch_statement,
+        r#"SELECT c.id, c.owner_account_id, kutup_b64(c.name_envelope) AS name_envelope, c.key_epoch,
+                  c.name_revision, kutup_b64(c.epoch_statement) AS epoch_statement,
                   encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
-                  c.parent_collection_id, c.color, cs.named_share_envelope,
+                  c.parent_collection_id, c.color,
+                  kutup_b64(cs.named_share_envelope) AS named_share_envelope,
                   cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
                   c.created_at, GREATEST(c.updated_at,
                            COALESCE((SELECT MAX(f.updated_at) FROM drive_files f
@@ -206,8 +208,8 @@ pub(crate) async fn collection_rows(
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
                   mailbox_owner.username AS owner_username,
                   encode(mailbox_owner.account_incarnation_id, 'hex') AS owner_incarnation_id,
-                  mailbox_owner.drive_signing_public_key AS owner_signing_public_key,
-                  mailbox_owner.account_authority_public_key AS owner_authority_public_key,
+                  kutup_b64(mailbox_owner.drive_signing_public_key) AS owner_signing_public_key,
+                  kutup_b64(mailbox_owner.account_authority_public_key) AS owner_authority_public_key,
                   encode(c.name_hash, 'hex') AS name_hash
            FROM drive_collections c
            JOIN drive_collection_shares cs ON cs.collection_id = c.id
@@ -311,11 +313,12 @@ pub(crate) async fn create_owned_collection(
         return Err(AppError::bad_request("an album is not inside a folder"));
     }
 
-    let authority_public_key: String =
-        sqlx::query_scalar("SELECT account_authority_public_key FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let authority_public_key: String = sqlx::query_scalar(
+        "SELECT kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let authority_public_key = decode_public_key(&authority_public_key)?;
     let id_string = id.to_string();
     let owner_string = user_id.to_string();
@@ -385,7 +388,8 @@ pub(crate) async fn create_owned_collection(
               (id, owner_account_id, name_envelope, owner_key_envelope, key_epoch,
                name_revision, epoch_statement, epoch_statement_hash, parent_collection_id, kind,
                name_hash, name_hash_generation)
-           VALUES ($1,$2,$3,$4,1,1,$5,decode($6, 'hex'),$7,$8,decode($9, 'hex'),$10)"#,
+           VALUES ($1,$2,kutup_unb64($3),kutup_unb64($4),1,1,kutup_unb64($5),decode($6, 'hex'),
+                   $7,$8,decode($9, 'hex'),$10)"#,
     )
     .bind(id)
     .bind(user_id)
@@ -403,7 +407,7 @@ pub(crate) async fn create_owned_collection(
     sqlx::query(
         r#"INSERT INTO drive_collection_key_epoch_history
               (collection_id, epoch, owner_key_envelope, epoch_statement, epoch_statement_hash)
-           VALUES ($1,1,$2,$3,decode($4, 'hex'))"#,
+           VALUES ($1,1,kutup_unb64($2),kutup_unb64($3),decode($4, 'hex'))"#,
     )
     .bind(id)
     .bind(&req.owner_key_envelope)
@@ -454,8 +458,9 @@ pub async fn get_collection(
         Option<i32>,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.owner_key_envelope,
-                  c.key_epoch, c.name_revision, c.epoch_statement,
+        r#"SELECT c.id, c.owner_account_id, kutup_b64(c.name_envelope) AS name_envelope,
+                  kutup_b64(c.owner_key_envelope) AS owner_key_envelope,
+                  c.key_epoch, c.name_revision, kutup_b64(c.epoch_statement) AS epoch_statement,
                   encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
                   c.parent_collection_id, c.color, c.created_at,
                   GREATEST(c.updated_at,
@@ -523,11 +528,11 @@ pub async fn get_collection(
     // owner-only Go GetCollection 404'd here, which left shared-file open broken; serving the
     // share view matches ListCollections + the frontend's FileEditorPage.
     let shared: Option<SharedCollectionDbRow> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_account_id, c.name_envelope, c.key_epoch, c.name_revision,
-                  c.epoch_statement,
+        r#"SELECT c.id, c.owner_account_id, kutup_b64(c.name_envelope) AS name_envelope, c.key_epoch,
+                  c.name_revision, kutup_b64(c.epoch_statement) AS epoch_statement,
                   encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
                   c.parent_collection_id, c.color,
-                  cs.named_share_envelope, cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
+                  kutup_b64(cs.named_share_envelope) AS named_share_envelope, cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
                   c.created_at, GREATEST(c.updated_at,
                            COALESCE((SELECT MAX(f.updated_at) FROM drive_files f
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
@@ -535,8 +540,8 @@ pub async fn get_collection(
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
                   mailbox_owner.username AS owner_username,
                   encode(mailbox_owner.account_incarnation_id, 'hex') AS owner_incarnation_id,
-                  mailbox_owner.drive_signing_public_key AS owner_signing_public_key,
-                  mailbox_owner.account_authority_public_key AS owner_authority_public_key,
+                  kutup_b64(mailbox_owner.drive_signing_public_key) AS owner_signing_public_key,
+                  kutup_b64(mailbox_owner.account_authority_public_key) AS owner_authority_public_key,
                   encode(c.name_hash, 'hex') AS name_hash
            FROM drive_collections c
            JOIN drive_collection_shares cs ON cs.collection_id = c.id
@@ -651,7 +656,7 @@ pub async fn update_collection(
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     let res = sqlx::query(
-        r#"UPDATE drive_collections SET name_envelope = $1, name_revision = $2, name_hash = decode($6, 'hex'),
+        r#"UPDATE drive_collections SET name_envelope = kutup_unb64($1), name_revision = $2, name_hash = decode($6, 'hex'),
                   name_hash_generation = $7, updated_at = NOW()
            WHERE id = $3 AND owner_account_id = $4 AND name_revision = $5 AND deleted_at IS NULL"#,
     )
@@ -815,14 +820,16 @@ pub async fn share_collection(
 
     type IdentityRow = (Option<String>, String, String, String);
     let sender: IdentityRow = sqlx::query_as(
-        "SELECT username, encode(account_incarnation_id, 'hex'), drive_signing_public_key, public_key
+        "SELECT username, encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key),
+                kutup_b64(public_key)
          FROM accounts WHERE id = $1",
     )
     .bind(sharer_id)
     .fetch_one(&state.pool)
     .await?;
     let recipient: IdentityRow = sqlx::query_as(
-        "SELECT username, encode(account_incarnation_id, 'hex'), drive_signing_public_key, public_key
+        "SELECT username, encode(account_incarnation_id, 'hex'), kutup_b64(drive_signing_public_key),
+                kutup_b64(public_key)
          FROM accounts WHERE id = $1 AND is_active = true",
     )
     .bind(recipient_id)
@@ -851,9 +858,9 @@ pub async fn share_collection(
     sqlx::query(
         r#"INSERT INTO drive_collection_shares (collection_id, sharer_account_id, recipient_account_id,
                                           named_share_envelope, can_upload, can_delete, upload_quota_bytes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           VALUES ($1,$2,$3,kutup_unb64($4),$5,$6,$7)
            ON CONFLICT (collection_id, recipient_account_id)
-           DO UPDATE SET named_share_envelope = $4, can_upload = $5, can_delete = $6, upload_quota_bytes = $7"#,
+           DO UPDATE SET named_share_envelope = EXCLUDED.named_share_envelope, can_upload = $5, can_delete = $6, upload_quota_bytes = $7"#,
     )
     .bind(coll_id)
     .bind(sharer_id)

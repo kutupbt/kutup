@@ -607,7 +607,8 @@ pub async fn register_device(
                last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                last_resort_kyber_pre_key_signature, name, credential_salt, credential_hash,
                kind, session_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'chat',$15)"#,
+           VALUES ($1,$2,$3,$4,kutup_unb64($5),$6,kutup_unb64($7),kutup_unb64($8),$9,
+                   kutup_unb64($10),kutup_unb64($11),$12,$13,$14,'chat',$15)"#,
     )
     .bind(user_id)
     .bind(device_id)
@@ -707,9 +708,9 @@ pub(crate) async fn store_manifest(
     let manifest_hash = manifest.manifest_hash().map_err(AppError::bad_request)?;
     // The common serialization point for every device-set change.
     let account: (String, String, String, String, String) = sqlx::query_as(
-        "SELECT public_key, account_authority_public_key,
+        "SELECT kutup_b64(public_key), kutup_b64(account_authority_public_key),
                 encode(account_authority_key_id, 'hex'), encode(account_incarnation_id, 'hex'),
-                drive_signing_public_key
+                kutup_b64(drive_signing_public_key)
          FROM accounts WHERE id = $1 FOR UPDATE",
     )
     .bind(user_id)
@@ -814,7 +815,7 @@ pub(crate) async fn store_manifest(
             }
             sqlx::query(
                 "INSERT INTO chat_account_identities (account_id, identity_key, manifest_version)
-                 VALUES ($1, $2, $3)
+                 VALUES ($1, kutup_unb64($2), $3)
                  ON CONFLICT (account_id) DO UPDATE SET identity_key = EXCLUDED.identity_key,
                      manifest_version = EXCLUDED.manifest_version, changed_at = now()",
             )
@@ -1275,7 +1276,8 @@ pub async fn put_profile(
              (account_id, suite, profile_version, revision, source_device_id, name_ciphertext,
               avatar_ciphertext, wrapped_key, access_key_verifier, is_current,
               about_ciphertext)
-         VALUES ($1,$2,decode($3,'hex'),$4,$5,$6,$7,$8,$9,true,$10)
+         VALUES ($1,$2,decode($3,'hex'),$4,$5,kutup_unb64($6),kutup_unb64($7),kutup_unb64($8),
+                 $9,true,kutup_unb64($10))
          ON CONFLICT (account_id, profile_version) DO UPDATE SET
              suite = EXCLUDED.suite,
              revision = EXCLUDED.revision,
@@ -1419,7 +1421,8 @@ pub(crate) async fn load_public_profile(
 ) -> AppResult<Option<ChatProfileResponse>> {
     let row: Option<PublicProfileRow> = sqlx::query_as(
         "SELECT p.suite, encode(p.profile_version, 'hex'), p.revision, p.source_device_id,
-                p.name_ciphertext, p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
+                kutup_b64(p.name_ciphertext), kutup_b64(p.avatar_ciphertext),
+                kutup_b64(p.about_ciphertext), p.access_key_verifier
          FROM chat_profiles p
          JOIN accounts u ON u.id = p.account_id
          WHERE u.id = $1 AND u.is_active = true AND p.profile_version = decode($2, 'hex')",
@@ -1477,7 +1480,8 @@ async fn load_own_profile_in(
     let suffix = if lock { " FOR UPDATE" } else { "" };
     let sql = format!(
         "SELECT p.suite, encode(p.profile_version, 'hex'), p.revision, p.source_device_id,
-                p.name_ciphertext, p.avatar_ciphertext, p.about_ciphertext, p.wrapped_key,
+                kutup_b64(p.name_ciphertext), kutup_b64(p.avatar_ciphertext),
+                kutup_b64(p.about_ciphertext), kutup_b64(p.wrapped_key),
                 p.access_key_verifier, c.capability_hash
          FROM chat_profiles p
          JOIN chat_delivery_capabilities c ON c.account_id = p.account_id
@@ -1550,7 +1554,7 @@ async fn insert_ec_pool(
     for k in keys {
         sqlx::query(
             "INSERT INTO chat_one_time_pre_keys (account_id, device_id, key_id, public_key)
-             VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+             VALUES ($1,$2,$3,kutup_unb64($4)) ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
         .bind(device_id)
@@ -1572,7 +1576,7 @@ async fn insert_kem_pool(
         sqlx::query(
             "INSERT INTO chat_one_time_kyber_pre_keys
                  (account_id, device_id, key_id, public_key, signature)
-             VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
+             VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5)) ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
         .bind(device_id)
@@ -1841,8 +1845,8 @@ pub async fn replenish_keys(
 
     if let Some(spk) = &req.signed_pre_key {
         sqlx::query(
-            "UPDATE account_devices SET signed_pre_key_id = $3, signed_pre_key = $4,
-                 signed_pre_key_signature = $5
+            "UPDATE account_devices SET signed_pre_key_id = $3, signed_pre_key = kutup_unb64($4),
+                 signed_pre_key_signature = kutup_unb64($5)
              WHERE account_id = $1 AND device_id = $2",
         )
         .bind(user_id)
@@ -1856,7 +1860,8 @@ pub async fn replenish_keys(
     if let Some(lrk) = &req.last_resort_kyber_pre_key {
         sqlx::query(
             "UPDATE account_devices SET last_resort_kyber_pre_key_id = $3,
-                 last_resort_kyber_pre_key = $4, last_resort_kyber_pre_key_signature = $5
+                 last_resort_kyber_pre_key = kutup_unb64($4),
+                 last_resort_kyber_pre_key_signature = kutup_unb64($5)
              WHERE account_id = $1 AND device_id = $2",
         )
         .bind(user_id)
@@ -2157,9 +2162,10 @@ pub(crate) async fn load_user_bundles(
     let mut devices: Vec<(i32, i16, i64, i64, String, String, i64, String, String)> =
         sqlx::query_as(
             "SELECT device_id, suite, registration_id,
-                    signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
-                    last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
-                    last_resort_kyber_pre_key_signature
+                    signed_pre_key_id, kutup_b64(signed_pre_key),
+                    kutup_b64(signed_pre_key_signature),
+                    last_resort_kyber_pre_key_id, kutup_b64(last_resort_kyber_pre_key),
+                    kutup_b64(last_resort_kyber_pre_key_signature)
              FROM account_devices
              WHERE account_id = $1 AND expired_at IS NULL AND suite IS NOT NULL
                AND device_id = ANY($2)
@@ -2198,7 +2204,7 @@ pub(crate) async fn load_user_bundles(
                      SELECT ctid FROM chat_one_time_pre_keys
                      WHERE account_id = $1 AND device_id = $2
                      ORDER BY key_id LIMIT 1 FOR UPDATE SKIP LOCKED)
-                 RETURNING key_id, public_key",
+                 RETURNING key_id, kutup_b64(public_key)",
             )
             .bind(target_id)
             .bind(device_id)
@@ -2216,7 +2222,7 @@ pub(crate) async fn load_user_bundles(
                      SELECT ctid FROM chat_one_time_kyber_pre_keys
                      WHERE account_id = $1 AND device_id = $2
                      ORDER BY key_id LIMIT 1 FOR UPDATE SKIP LOCKED)
-                 RETURNING key_id, public_key, signature",
+                 RETURNING key_id, kutup_b64(public_key), kutup_b64(signature)",
             )
             .bind(target_id)
             .bind(device_id)
@@ -2801,7 +2807,7 @@ pub(crate) async fn store_sealed_messages(
             "INSERT INTO chat_mailbox
                 (recipient_account_id, recipient_device_id, sealed_sender,
                  sender_device_id, envelope_type, suite, content, send_id)
-             VALUES ($1,$2,true,0,$3,$4,$5,$6)
+             VALUES ($1,$2,true,0,$3,$4,kutup_unb64($5),$6)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
@@ -3020,7 +3026,7 @@ async fn deliver_messages(
         let (id, cursor, ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox (recipient_account_id, recipient_device_id, sender_server,
                  sender_account_id, sender_device_id, envelope_type, suite, content, send_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,kutup_unb64($8),$9)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
@@ -3195,7 +3201,8 @@ pub async fn drain_mailbox(
         // A shared payload's size only: the payloads themselves are read
         // for the rows that fit the page's bytes (below).
         "SELECT m.id, m.cursor, m.sender_server, m.sender_account_id, m.sealed_sender,
-                m.sender_device_id, m.envelope_type, m.suite, m.content, m.server_ts, m.send_id,
+                m.sender_device_id, m.envelope_type, m.suite, kutup_b64(m.content), m.server_ts,
+                m.send_id,
                 m.shared_payload_id, octet_length(p.payload)
              FROM chat_mailbox m
              LEFT JOIN chat_shared_payloads p ON p.id = m.shared_payload_id

@@ -528,11 +528,12 @@ pub async fn create_address(
     // a rollback to the devices that saw the old chain. Only a chain the
     // account's current authority signed continues; after an account reset
     // the address starts a new one.
-    let authority: String =
-        sqlx::query_scalar("SELECT account_authority_public_key FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let authority: String = sqlx::query_scalar(
+        "SELECT kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
     let freed: Option<(Uuid, Vec<u8>, Vec<u8>)> = sqlx::query_as(
         "SELECT a.id, l.data, l.signature FROM mail_addresses a
            JOIN LATERAL (SELECT data, signature FROM mail_key_lists

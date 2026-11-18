@@ -1824,7 +1824,7 @@ mod tests {
             "INSERT INTO chat_backups
              (account_id,backup_incarnation_id,suite,protection_domain,root_envelope,
               signer_authorization,signer_authorization_digest)
-             VALUES ($1,$2,1,1,'retention-envelope','{}',decode(repeat('00', 32), 'hex'))",
+             VALUES ($1,$2,1,1,'\\x00'::bytea,'{}',decode(repeat('00', 32), 'hex'))",
         )
         .bind(user_id)
         .bind(backup_incarnation)

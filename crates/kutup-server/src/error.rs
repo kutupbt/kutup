@@ -157,6 +157,13 @@ impl From<anyhow::Error> for AppError {
 
 impl From<sqlx::Error> for AppError {
     fn from(err: sqlx::Error) -> Self {
+        // kutup_unb64 refused a client's bytes: not canonical base64
+        // (docs/plans/w7-schema.md §2).
+        if let sqlx::Error::Database(db) = &err {
+            if db.code().as_deref() == Some("22023") && db.message().starts_with("kutup_unb64:") {
+                return AppError::bad_request("a byte field is not canonical base64");
+            }
+        }
         AppError::internal(format!("database error: {err}"))
     }
 }

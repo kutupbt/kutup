@@ -98,14 +98,14 @@ type FolderRow = (Uuid, Option<Uuid>, Option<String>, String, i32, bool, bool);
 pub async fn places(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailPlaces>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let folders: Vec<FolderRow> = sqlx::query_as(
-        "SELECT id, parent_id, name_sealed, color, position, expanded, notify
+        "SELECT id, parent_id, kutup_b64(name_sealed), color, position, expanded, notify
            FROM mail_folders WHERE account_id = $1 ORDER BY position, created_at",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
     let labels: Vec<(Uuid, String, String, i32)> = sqlx::query_as(
-        "SELECT id, name_sealed, color, position FROM mail_labels
+        "SELECT id, kutup_b64(name_sealed), color, position FROM mail_labels
           WHERE account_id = $1 ORDER BY position, created_at",
     )
     .bind(user_id)
@@ -258,7 +258,7 @@ pub async fn create_folder(
     .await?;
     let inserted = sqlx::query(
         "INSERT INTO mail_folders (id, account_id, parent_id, name_sealed, color, position)
-         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
+         VALUES ($1, $2, $3, kutup_unb64($4), $5, $6) ON CONFLICT (id) DO NOTHING",
     )
     .bind(id)
     .bind(user_id)
@@ -339,7 +339,7 @@ pub async fn update_folder(
     if let Some(name) = &request.name {
         let new = check_sealed(&state, user_id, MailNameKind::Folder, &id, name).await?;
         let stored: Option<String> = sqlx::query_scalar(
-            "SELECT name_sealed FROM mail_folders WHERE account_id = $1 AND id = $2",
+            "SELECT kutup_b64(name_sealed) FROM mail_folders WHERE account_id = $1 AND id = $2",
         )
         .bind(user_id)
         .bind(id)
@@ -378,7 +378,7 @@ pub async fn update_folder(
     };
     sqlx::query(
         "UPDATE mail_folders SET
-             name_sealed = COALESCE($3, name_sealed),
+             name_sealed = COALESCE(kutup_unb64($3), name_sealed),
              color = COALESCE($4, color),
              parent_id = CASE WHEN $5 THEN $6 ELSE parent_id END,
              position = COALESCE($7, position),
@@ -573,7 +573,7 @@ pub async fn create_label(
     }
     let inserted = sqlx::query(
         "INSERT INTO mail_labels (id, account_id, name_sealed, color, position)
-         SELECT $1, $2, $3, $4, COALESCE(MAX(position) + 1, 0) FROM mail_labels WHERE account_id = $2
+         SELECT $1, $2, kutup_unb64($3), $4, COALESCE(MAX(position) + 1, 0) FROM mail_labels WHERE account_id = $2
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(id)
@@ -629,12 +629,13 @@ pub async fn update_label(
     let head = NextHead::parse_for(request.head.as_deref(), request.name.is_some())?;
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
-    let stored: Option<String> =
-        sqlx::query_scalar("SELECT name_sealed FROM mail_labels WHERE account_id = $1 AND id = $2")
-            .bind(user_id)
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT kutup_b64(name_sealed) FROM mail_labels WHERE account_id = $1 AND id = $2",
+    )
+    .bind(user_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let stored = stored.ok_or_else(|| AppError::not_found("no such label"))?;
     if let Some(name) = &request.name {
         let new = check_sealed(&state, user_id, MailNameKind::Label, &id, name).await?;
@@ -642,9 +643,9 @@ pub async fn update_label(
     }
     // Written only over the name the rename started from.
     let updated = sqlx::query(
-        "UPDATE mail_labels SET name_sealed = COALESCE($3, name_sealed),
+        "UPDATE mail_labels SET name_sealed = COALESCE(kutup_unb64($3), name_sealed),
              color = COALESCE($4, color), position = COALESCE($5, position)
-          WHERE account_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = $6)",
+          WHERE account_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = kutup_unb64($6))",
     )
     .bind(user_id)
     .bind(id)
@@ -658,7 +659,7 @@ pub async fn update_label(
     if updated == 0 {
         drop(tx);
         let now: Option<String> = sqlx::query_scalar(
-            "SELECT name_sealed FROM mail_labels WHERE account_id = $1 AND id = $2",
+            "SELECT kutup_b64(name_sealed) FROM mail_labels WHERE account_id = $1 AND id = $2",
         )
         .bind(user_id)
         .bind(id)

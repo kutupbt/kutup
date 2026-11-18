@@ -120,7 +120,8 @@ pub async fn commit(
     let mut tx = state.pool.begin().await?;
     // The upload row first: the lock order its last part takes (`tus::patch`).
     let row: Option<Uploaded> = sqlx::query_as(
-        "SELECT id, account_id, kind, collection_id, total_bytes, file_key_envelope, key_epoch,
+        "SELECT id, account_id, kind, collection_id, total_bytes,
+                kutup_b64(file_key_envelope) AS file_key_envelope, key_epoch,
                 storage_path, s3_upload_id, encode(name_hash, 'hex') AS name_hash, key_generation,
                 encode(content_hash, 'hex') AS content_hash, based_on,
                 uploaded_at IS NOT NULL AS uploaded

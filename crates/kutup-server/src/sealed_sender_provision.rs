@@ -196,7 +196,9 @@ pub(crate) async fn maintain(
     .execute(&mut *tx)
     .await?;
     let mut rows: Vec<GeneratedCertificate> = sqlx::query_as(
-        "SELECT certificate_id, encode(root_id, 'hex') AS root_id, root_public_key, certificate, online_private_key,
+        "SELECT certificate_id, encode(root_id, 'hex') AS root_id,
+                kutup_b64(root_public_key) AS root_public_key, kutup_b64(certificate) AS certificate,
+                online_private_key,
                 published_at, activates_at, expires_at
          FROM chat_sealed_sender_certificates ORDER BY activates_at, certificate_id",
     )
@@ -231,7 +233,7 @@ pub(crate) async fn maintain(
             "INSERT INTO chat_sealed_sender_certificates
                 (certificate_id, root_id, root_public_key, certificate, online_private_key,
                  published_at, activates_at, expires_at)
-             VALUES ($1, decode($2, 'hex'), $3, $4, $5, $6, $7, $8)",
+             VALUES ($1, decode($2, 'hex'), kutup_unb64($3), kutup_unb64($4), $5, $6, $7, $8)",
         )
         .bind(created.certificate_id)
         .bind(&created.root_id)

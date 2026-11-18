@@ -105,7 +105,7 @@ impl Checked {
 /// The caller's key binding (which contact summaries bind) and authority key.
 async fn binding_of(state: &AppState, user_id: Uuid) -> AppResult<(String, [u8; 32])> {
     let (binding, authority): (Option<String>, String) = sqlx::query_as(
-        "SELECT key_binding::text, account_authority_public_key FROM accounts WHERE id = $1",
+        "SELECT key_binding::text, kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
