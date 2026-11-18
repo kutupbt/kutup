@@ -345,8 +345,11 @@ pub async fn api_fallback(req: Request) -> Response {
             return AppError::not_found("not found").into_response();
         }
     }
+    // Only an old client's path is too old: a peer's under `/api/fed/`, or
+    // a federation route long gone (`/api/fed-proxy`), is just absent.
     let unversioned = path.starts_with("/api/")
         && !path.starts_with("/api/fed/")
+        && !path.starts_with("/api/fed-")
         && !exempt(path)
         && path != "/api/";
     if unversioned {
@@ -369,6 +372,7 @@ pub async fn api_fallback(req: Request) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn versions_parse_and_order() {
@@ -430,6 +434,16 @@ mod tests {
         let (status, body) = answer("/api/fed/v3/chat/messages").await;
         assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
         assert_eq!(body["code"], "federationVersionUnsupported");
+        let (status, body) = answer("/api/fed-proxy/incoming").await;
+        assert_eq!(
+            (status, &body["code"]),
+            (StatusCode::NOT_FOUND, &json!("notFound"))
+        );
+        let (status, body) = answer("/api/fed/users").await;
+        assert_eq!(
+            (status, &body["code"]),
+            (StatusCode::NOT_FOUND, &json!("notFound"))
+        );
     }
 
     #[test]

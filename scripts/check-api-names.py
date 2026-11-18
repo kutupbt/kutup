@@ -51,7 +51,7 @@ STORAGE_ALLOWED = {
 }
 # Paths a test calls to see them refused: a client from before versions,
 # and the federation routes long gone.
-PATH_ALLOWED_LINES = ('{base}/api/user/me', '"/api/fed-proxy/incoming"', 'answer("/api/')
+PATH_ALLOWED_LINES = ('{base}/api/user/me', '"/api/fed-proxy/incoming"', 'answer("/api/', '"/api/fed-")')
 
 problems = []
 for top in CODE_DIRS:
@@ -72,7 +72,7 @@ for top in CODE_DIRS:
                         found.append('an unversioned API path')
                     if DOUBLE.search(line):
                         found.append('a path versioned twice')
-                    if OLD_FED.search(line):
+                    if OLD_FED.search(line) and not any(a in line for a in PATH_ALLOWED_LINES):
                         found.append('a federation path outside /api/fed/v2')
                     if WIRE.search(line):
                         found.append('a user-named wire field')
