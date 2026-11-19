@@ -5,6 +5,9 @@
 // Every app's page also loads its scripts as files, never inline, and has no
 // inline style: the apps' Content-Security-Policy allows no inline script and
 // no <style> without the page's nonce (docs/content-security-policy.md).
+// And no app loads anything from esm.sh, Excalidraw's default font host: the
+// apps' policy refuses it, and every whiteboard opened would tell a CDN
+// (frontend/packages/config/vite.ts, excalidrawFonts).
 // Run after `pnpm -C frontend build`.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -60,6 +63,12 @@ for (const app of readdirSync(apps)) {
       found = true
     }
   }
+  for (const file of files(dist)) {
+    if (/\.(m?js|html)$/.test(file) && readFileSync(file, 'utf8').includes('esm.sh')) {
+      console.error(`${app}: ${file.slice(apps.length)} loads from esm.sh`)
+      found = true
+    }
+  }
   if (app === 'chat') continue
   try {
     statSync(dist)
@@ -77,4 +86,4 @@ for (const app of readdirSync(apps)) {
   }
 }
 if (found) process.exit(1)
-console.log(`no Chat runtime in the ${checked} apps that aren't Chat; no inline script or style in the ${pages} app pages`)
+console.log(`no Chat runtime in the ${checked} apps that aren't Chat; no inline script or style in the ${pages} app pages; nothing from esm.sh`)

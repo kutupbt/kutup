@@ -66,6 +66,12 @@ Items below are organized by **whether they block v1** vs. whether they can ship
     e2e suites under `E2E_CSP_STRICT=1`, fix what they show (Excalidraw's
     font subsetting first), then enforce (`KUTUP_CSP_ENFORCE=1`, later the
     default) and drop the old policy.
+    - **Mail composer:** show remote images through the image proxy (blob:),
+      or hold them until Load images, before enforcing the strict CSP on mail.
+      Today the composer loads a pasted `<img src="https://…">` directly
+      (allowed by the enforced policy, reported by the strict one; the full
+      test's spec 109). It is the sender's own pasted content or draft, not a
+      recipient leak: replies and forwards quote the original as plain text.
 
 ### Shipped in the clean-slate release (2d26c64eb60d, live 2026-10-17)
 

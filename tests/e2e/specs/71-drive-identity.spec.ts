@@ -130,7 +130,10 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   // The pins are an account record (docs/plans/account-records.md).
   const verified = bobPage.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/account/records'))
   await bobPage.getByRole('button', { name: 'Verify exact match' }).click()
-  expect((await verified).status()).toBe(204)
+  // `200 { "seq" }` (docs/api.md, POST /api/v1/account/records).
+  const stored = await verified
+  expect(stored.status()).toBe(200)
+  expect(typeof (await stored.json()).seq).toBe('number')
   await bobPage.keyboard.press('Escape')
   await bobPage.goto(appUrl('drive', '/shared'))
   await expect(bobPage.getByTestId('identity-verified').first()).toBeVisible({ timeout: 60_000 })
