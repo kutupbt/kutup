@@ -29,7 +29,9 @@ const PASSWORD = 'Deneme123*StreamLongVideoPassword'
 const DURATION_S = 2 * 60 * 60
 const SEEK_TO_S = 90 * 60
 const BLOCK = 4 * 1024 * 1024
-const SOURCE = ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=size=320x180:rate=4:duration=${DURATION_S}`]
+// Noise on the card, so the encoder spends its bitrate: libvpx (ffmpeg 7.1)
+// made 62 MB of a still card at 320 kbit/s, under the 50-block floor.
+const SOURCE = ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc=size=320x180:rate=4:duration=${DURATION_S},noise=alls=40:allf=t`]
 
 /** The test video for a browser: what it plays, and how ffmpeg makes it. */
 interface LongVideo {
@@ -68,7 +70,7 @@ function hasEncoder(encoder: string): boolean {
   }
 }
 
-/** Two hours of a moving test card at 4 fps. */
+/** Two hours of a moving, noisy test card at 4 fps. */
 function longVideo(spec: LongVideo): Buffer {
   const dir = mkdtempSync(join(tmpdir(), 'kutup-192-'))
   try {
