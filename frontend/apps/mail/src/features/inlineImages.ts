@@ -1,18 +1,34 @@
 import Image from '@tiptap/extension-image'
 
-/** TipTap's image, keeping which inline part it shows (`data-cid`). */
+/**
+ * TipTap's image, keeping which inline part it shows (`data-cid`). A saved
+ * draft's text points at its parts (`cid:`): such an image opens with no
+ * address, since a browser can't load `cid:` (and the Content-Security-Policy
+ * refuses it), until the draft's parts give it this browser's URL.
+ */
 export const InlineImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
+      src: {
+        default: null,
+        parseHTML: (element) => {
+          const src = element.getAttribute('src')
+          return src?.startsWith('cid:') ? null : src
+        },
+      },
       cid: {
         default: null,
-        parseHTML: (element) => element.getAttribute('data-cid'),
+        parseHTML: (element) => element.getAttribute('data-cid') ?? contentIdOf(element.getAttribute('src')),
         renderHTML: (attributes: { cid?: string | null }) => (attributes.cid ? { 'data-cid': attributes.cid } : {}),
       },
     }
   },
 }).configure({ inline: true, allowBase64: false })
+
+function contentIdOf(src: string | null): string | null {
+  return src?.startsWith('cid:') ? src.slice('cid:'.length) : null
+}
 
 /** The editor's HTML as sent: each inline image points at its part (`cid:`), not at this browser's blob. */
 export function withContentIds(html: string): string {

@@ -569,12 +569,12 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
         )
         setAttachments(loaded)
         // The draft's images show again: each cid: in the text gets this browser's URL.
-        const shown = new Map(loaded.filter((a) => a.cid).map((a) => [`cid:${a.cid}`, a]))
+        const shown = new Map(loaded.filter((a) => a.cid).map((a) => [a.cid!, a]))
         const editor = editorRef.current
         if (editor && shown.size) {
           const tr = editor.state.tr
           editor.state.doc.descendants((node, pos) => {
-            const found = node.type.name === 'image' ? shown.get(String(node.attrs.src)) : undefined
+            const found = node.type.name === 'image' ? shown.get(String(node.attrs.cid)) : undefined
             if (found) tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: found.url, cid: found.cid })
           })
           editor.view.dispatch(tr)
