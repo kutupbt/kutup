@@ -28,6 +28,10 @@ services:
       # Groups are off by default (until the pairwise design); the group
       # specs (36, 38, 48) still run here. Spec 39 covers them off.
       CHAT_GROUPS: "true"
+      # Groups need the server's identity, and in production mode that needs
+      # a canonical HTTPS SERVER_URL with a dotted host; without one the
+      # server only warns and runs with groups off.
+      SERVER_URL: ${SERVER_URL:-https://account.localhost:${KUTUP_HTTPS_PORT:-38443}}
       RATE_LIMIT_LOGIN_PER_MIN: 1000
       # Outside sending on at first, for spec 58's pause notice (no Stalwart
       # here); spec 59 turns it off and back on in Administration → Mail sending.
