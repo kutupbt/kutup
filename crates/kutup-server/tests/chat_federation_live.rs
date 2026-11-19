@@ -1025,8 +1025,8 @@ fn bob_device(id: u32) -> ChatDevice {
 }
 
 /// The id of Bob's second Chat device, as the server gave it when the setup
-/// phase linked it (the lowest id no row holds, which depends on whether an
-/// earlier unlisted row still waits out its listing grace).
+/// phase linked it (the account's next id, after the one the interrupted
+/// registration took).
 fn bob_second_device() -> u32 {
     recall("bobSecondDevice")
         .as_u64()

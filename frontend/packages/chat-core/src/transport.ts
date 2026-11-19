@@ -150,11 +150,15 @@ export class ApiChatTransport implements ChatTransportPort {
       .then((response) => response.data)
   }
 
-  /** The `session` hash this device's manifest entry carries: its sign-in, as the server works it out. */
-  async fetchDeviceSession(): Promise<string> {
+  /**
+   * The `session` hash this device's manifest entry carries (its sign-in, as
+   * the server works it out) and the account's device counter, which a
+   * re-registration's id follows.
+   */
+  async fetchDeviceSession(): Promise<{ session: string; nextDeviceId: number }> {
     return api
-      .get<{ session: string }>('/account/devices/session')
-      .then((response) => response.data.session)
+      .get<{ session: string; nextDeviceId: number }>('/account/devices/session')
+      .then((response) => response.data)
   }
 
   async fetchManifest(account: string): Promise<unknown | null> {

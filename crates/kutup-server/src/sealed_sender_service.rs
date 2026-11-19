@@ -202,6 +202,17 @@ impl SealedSenderService {
         self.current().policy.clone()
     }
 
+    /// How long a sender certificate issued now may still be taken: its
+    /// lifetime and the clock skew allowed. A removed device's id is held
+    /// that long before another device takes it
+    /// ([`crate::account_devices::take_device_id`]), so a certificate of the
+    /// removed device never names the id's next holder.
+    pub(crate) fn certificate_reach_seconds(&self) -> i64 {
+        let policy = &self.current().policy;
+        i64::from(policy.sender_certificate_lifetime_seconds)
+            + i64::from(policy.maximum_clock_skew_seconds)
+    }
+
     fn current(&self) -> Arc<ActiveSealedSender> {
         Arc::clone(
             &self

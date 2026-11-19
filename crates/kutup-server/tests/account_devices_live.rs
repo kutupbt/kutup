@@ -93,6 +93,16 @@ impl Live {
                 .execute(&self.pool),
             )
             .unwrap();
+        // As the server's registration does: the account's counter moves
+        // past the id.
+        self.runtime
+            .block_on(
+                sqlx::query("UPDATE accounts SET next_device_id = $2 WHERE id = $1")
+                    .bind(user_id)
+                    .bind(kutup_chat_proto::device_id_after(device_id) as i16)
+                    .execute(&self.pool),
+            )
+            .unwrap();
         let entry = AccountManifestDeviceV3::editing(
             device_id,
             DeviceKind::Editor,
@@ -231,36 +241,47 @@ fn a_reregistration_carries_the_other_devices_over() {
         user_id,
     );
 
-    let reregistration =
-        |ada: &ChatAccount, others: &[AccountManifestDeviceV3], session: Option<String>| {
-            let device = ChatDevice {
-                id: 1,
-                registration_id: 4321,
-                credential: [0x44; 32],
-            };
-            let mut manifest = ada.next_manifest(&[&device]);
-            if let Some(session) = session {
-                manifest.devices[0].session = session;
-            }
-            manifest.devices.extend(others.iter().cloned());
-            manifest.devices.sort_by_key(|device| device.device_id);
-            ada.sign(&mut manifest);
-            let body = ada.registration(
-                device.registration_id,
-                &device.credential,
-                DeviceRegistrationV1::Reregistration {
-                    manifest: Box::new(manifest.clone()),
-                },
-            );
-            (
-                code(ada.post_registration(&live.c, &live.base, &body)),
-                manifest,
-            )
+    // `seed` makes the device: the same seed again is the same device's
+    // retry, which the server answers with the id it already holds.
+    let reregistration = |ada: &ChatAccount,
+                          others: &[AccountManifestDeviceV3],
+                          session: Option<String>,
+                          seed: u8| {
+        // The account's next id the entries it keeps leave free.
+        let counter = ada.fetch_session(&live.c, &live.base);
+        let kept: Vec<u32> = others.iter().map(|device| device.device_id).collect();
+        let device = ChatDevice {
+            id: kutup_chat_proto::next_device_id(counter, &kept).unwrap(),
+            registration_id: 4300 + u32::from(seed),
+            credential: [seed; 32],
         };
+        let mut manifest = ada.next_manifest(&[&device]);
+        if let Some(session) = session {
+            manifest.devices[0].session = session;
+        }
+        manifest.devices.extend(others.iter().cloned());
+        manifest.devices.sort_by_key(|device| device.device_id);
+        ada.sign(&mut manifest);
+        let body = ada.registration(
+            device.registration_id,
+            &device.credential,
+            DeviceRegistrationV1::Reregistration {
+                manifest: Box::new(manifest.clone()),
+            },
+        );
+        (
+            code(ada.post_registration(&live.c, &live.base, &body)),
+            manifest,
+        )
+    };
 
     // Another sign-in named for this device.
-    let ((status, answer), _) =
-        reregistration(&ada, std::slice::from_ref(&editor), Some("00".repeat(32)));
+    let ((status, answer), _) = reregistration(
+        &ada,
+        std::slice::from_ref(&editor),
+        Some("00".repeat(32)),
+        0x44,
+    );
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
     assert_eq!(answer["code"], "devicesMismatch");
     // A changed entry, or one the head doesn't list.
@@ -275,18 +296,51 @@ fn a_reregistration_carries_the_other_devices_over() {
     let mut added = editor.clone();
     added.device_id = 3;
     for others in [vec![changed], vec![editor.clone(), added]] {
-        let ((status, answer), _) = reregistration(&ada, &others, None);
+        let ((status, answer), _) = reregistration(&ada, &others, None, 0x44);
         assert_eq!(status, StatusCode::CONFLICT, "{answer}");
         assert_eq!(answer["code"], "devicesMismatch");
     }
     // The head's editor carried over, though its row idled out.
-    let ((status, answer), manifest) = reregistration(&ada, std::slice::from_ref(&editor), None);
+    let ((status, answer), manifest) =
+        reregistration(&ada, std::slice::from_ref(&editor), None, 0x44);
     assert_eq!(status, StatusCode::OK, "{answer}");
-    assert_eq!(answer["deviceId"], 1);
+    // The account's next id (1 the first Chat device, 2 the editor), not
+    // the freed 1.
+    assert_eq!(answer["deviceId"], 3);
     ada.head = Some(manifest);
-    // And a later one may leave it out.
-    let ((status, answer), _) = reregistration(&ada, &[], None);
+    // And a later one, another device's, may leave it out: the next id.
+    let ((status, answer), _) = reregistration(&ada, &[], None, 0x45);
     assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["deviceId"], 4);
+}
+
+/// A re-registration lists itself under the account's next id: a manifest
+/// naming another free id (the lowest, as before the counter) is refused.
+#[test]
+fn a_reregistration_takes_the_accounts_next_id() {
+    let Some(live) = live() else { return };
+    let mut ada = live.account();
+    let first = ada.reregister(&live.c, &live.base);
+    assert_eq!(first.id, 1);
+    let device = ChatDevice {
+        id: 1,
+        registration_id: 4321,
+        credential: [0x45; 32],
+    };
+    let manifest = ada.next_manifest(&[&device]);
+    let body = ada.registration(
+        device.registration_id,
+        &device.credential,
+        DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(manifest),
+        },
+    );
+    let (status, answer) = code(ada.post_registration(&live.c, &live.base, &body));
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(answer["code"], "devicesMismatch");
+    assert_eq!(ada.fetch_session(&live.c, &live.base), 2);
+    let again = ada.reregister(&live.c, &live.base);
+    assert_eq!(again.id, 2);
 }
 
 /// The account's cap over every kind: at link time, and on a manifest that
@@ -387,11 +441,12 @@ fn stale_unlisted_rows_hold_no_place_under_the_cap() {
         )
     };
     // Three of three by rows, but only the listed Chat device counts: the
-    // stale rows go and the new device takes the lowest free id.
+    // stale rows go and the new device takes the account's next id, not one
+    // they freed.
     set_cap(Some(3));
     let (status, answer) = register(0x21);
     assert_eq!(status, StatusCode::OK, "{answer}");
-    assert_eq!(answer["deviceId"], 2);
+    assert_eq!(answer["deviceId"], 4);
     let ids: Vec<i32> = live
         .runtime
         .block_on(
@@ -402,7 +457,7 @@ fn stale_unlisted_rows_hold_no_place_under_the_cap() {
             .fetch_all(&live.pool),
         )
         .unwrap();
-    assert_eq!(ids, vec![1, 2], "the stale rows are gone");
+    assert_eq!(ids, vec![1, 4], "the stale rows are gone");
     // Rows within their grace count: two fresh unlisted rows fill it.
     let (status, answer) = register(0x22);
     assert_eq!(status, StatusCode::OK, "{answer}");
@@ -474,4 +529,103 @@ fn a_sign_in_alone_only_removes_devices() {
         )
         .unwrap();
     assert_eq!(rows, 0);
+}
+
+/// `POST /api/v1/account/devices` of an editor with `byte` as its keys.
+fn register_editor(live: &Live, account: &ChatAccount, byte: u8) -> (StatusCode, Value) {
+    let frame_key = SigningKey::from_seed(Suite::V1, &[byte; 32])
+        .verifying_key()
+        .to_array::<32>();
+    code(
+        live.c
+            .post(format!("{}/api/v1/account/devices", live.base))
+            .bearer_auth(&account.token)
+            .json(&json!({
+                "kind": "editor",
+                "name": "live-test editor",
+                "frameKey": STANDARD.encode(frame_key),
+                "credential": URL_SAFE_NO_PAD.encode([byte; 32]),
+            }))
+            .send()
+            .unwrap(),
+    )
+}
+
+/// A removed device's id doesn't go to the next device while another is
+/// free (docs/plans/one-device-list.md, "Device ids"): the account's
+/// counter moves on; past 127 it wraps to the lowest free id at or after 1.
+#[test]
+fn a_removed_devices_id_comes_back_last() {
+    let Some(live) = live() else { return };
+    let mut ada = live.account();
+    let first = ada.reregister(&live.c, &live.base);
+    let user_id = Uuid::parse_str(&ada.account.account_id).unwrap();
+    let (status, answer) = register_editor(&live, &ada, 0x31);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["deviceId"], 2);
+    // Listed, then removed by the next manifest.
+    let listed = AccountManifestDeviceV3::editing(
+        2,
+        DeviceKind::Editor,
+        STANDARD.encode(
+            SigningKey::from_seed(Suite::V1, &[0x31; 32])
+                .verifying_key()
+                .to_array::<32>(),
+        ),
+        ada.session.clone(),
+    );
+    let manifest = manifest_with(&ada, &[listed]);
+    let (status, answer) = publish(&live, &mut ada, &first.header(), &manifest);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let manifest = manifest_with(&ada, &[]);
+    let (status, answer) = publish(&live, &mut ada, &first.header(), &manifest);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    // The next device takes 3, not the freed 2.
+    let (status, answer) = register_editor(&live, &ada, 0x32);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["deviceId"], 3);
+
+    // At the top of the id space: 127, then the lowest free id from 1 (1
+    // and 3 are held; 2's hold, a sender certificate's reach, is over).
+    live.sql(
+        "UPDATE accounts SET next_device_id = 127 WHERE id = $1",
+        user_id,
+    );
+    live.sql(
+        "UPDATE account_device_releases SET released_at = now() - interval '2 days'
+          WHERE account_id = $1",
+        user_id,
+    );
+    let (status, answer) = register_editor(&live, &ada, 0x33);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["deviceId"], 127);
+    let (status, answer) = register_editor(&live, &ada, 0x34);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["deviceId"], 2);
+    assert_eq!(ada.fetch_session(&live.c, &live.base), 3);
+}
+
+/// Registrations at once each take their own id: the account's lock
+/// serializes the counter.
+#[test]
+fn concurrent_registrations_take_distinct_ids() {
+    let Some(live) = live() else { return };
+    let mut ada = live.account();
+    ada.reregister(&live.c, &live.base);
+    let ids: Vec<u64> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8u8)
+            .map(|n| {
+                let (live, ada) = (&live, &ada);
+                scope.spawn(move || {
+                    let (status, answer) = register_editor(live, ada, 0x40 + n);
+                    assert_eq!(status, StatusCode::OK, "{answer}");
+                    answer["deviceId"].as_u64().unwrap()
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, (2..=9).collect::<Vec<u64>>(), "{ids:?}");
 }

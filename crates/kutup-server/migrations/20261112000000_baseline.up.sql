@@ -315,6 +315,26 @@ $$;
 
 
 --
+-- Name: kutup_account_device_released(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.kutup_account_device_released() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    -- When a device id came free (docs/plans/one-device-list.md, "Device id
+    -- reuse"): the next device doesn't take it while a sender certificate of
+    -- its earlier holder may still be taken. Not for an account going away.
+    INSERT INTO account_device_releases (account_id, device_id)
+    SELECT OLD.account_id, OLD.device_id
+     WHERE EXISTS (SELECT 1 FROM accounts WHERE id = OLD.account_id)
+    ON CONFLICT (account_id, device_id) DO UPDATE SET released_at = now();
+    RETURN NULL;
+END
+$$;
+
+
+--
 -- Name: mail_messages_tombstone(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1941,6 +1961,18 @@ CREATE TABLE public.account_device_tickets (
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT account_device_tickets_token_hash_check CHECK ((length(token_hash) = 64))
+);
+
+
+--
+-- Name: account_device_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.account_device_releases (
+    account_id uuid NOT NULL,
+    device_id integer NOT NULL,
+    released_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT account_device_releases_device_id_check CHECK (((device_id >= 1) AND (device_id <= 127)))
 );
 
 
@@ -4056,6 +4088,7 @@ CREATE TABLE public.accounts (
     deletion_attempts integer DEFAULT 0 NOT NULL,
     deletion_next_try_at timestamp with time zone,
     master_key_generation integer NOT NULL,
+    next_device_id smallint DEFAULT 1 NOT NULL,
     CONSTRAINT accounts_closing CHECK ((((state = 'closing'::text) = (closing_by IS NOT NULL)) AND ((state = 'closing'::text) = (closes_at IS NOT NULL)))),
     CONSTRAINT accounts_closing_by_check CHECK ((closing_by = ANY (ARRAY['user'::text, 'admin'::text, 'restore'::text]))),
     CONSTRAINT accounts_color_format CHECK (((color IS NULL) OR (color ~ '^#[0-9a-fA-F]{6}$'::text))),
@@ -4067,6 +4100,7 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_legal_hold CHECK ((((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)) AND ((legal_hold_reference IS NOT NULL) OR (legal_hold_by_account_id IS NULL)))),
     CONSTRAINT accounts_legal_hold_reference_check CHECK (((char_length(legal_hold_reference) >= 1) AND (char_length(legal_hold_reference) <= 200))),
     CONSTRAINT accounts_master_key_generation_check CHECK ((master_key_generation > 0)),
+    CONSTRAINT accounts_next_device_id_check CHECK (((next_device_id >= 1) AND (next_device_id <= 127))),
     CONSTRAINT accounts_opaque_check CHECK ((((opaque_record IS NULL) = (opaque_suite IS NULL)) AND ((opaque_record IS NULL) = (opaque_server_key_id IS NULL)))),
     CONSTRAINT accounts_opaque_record_check CHECK (((octet_length(opaque_record) >= 1) AND (octet_length(opaque_record) <= 1024))),
     CONSTRAINT accounts_opaque_server_key_id_check CHECK ((opaque_server_key_id > 0)),
@@ -5003,6 +5037,14 @@ ALTER TABLE ONLY public.contacts
 
 ALTER TABLE ONLY public.account_device_tickets
     ADD CONSTRAINT account_device_tickets_pkey PRIMARY KEY (token_hash);
+
+
+--
+-- Name: account_device_releases account_device_releases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_device_releases
+    ADD CONSTRAINT account_device_releases_pkey PRIMARY KEY (account_id, device_id);
 
 
 --
@@ -7391,6 +7433,13 @@ CREATE TRIGGER mail_message_labels_changed AFTER INSERT OR DELETE ON public.mail
 
 
 --
+-- Name: account_devices account_devices_released; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER account_devices_released AFTER DELETE ON public.account_devices FOR EACH ROW EXECUTE FUNCTION public.kutup_account_device_released();
+
+
+--
 -- Name: mail_messages mail_messages_deleted; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -8074,6 +8123,14 @@ ALTER TABLE ONLY public.chat_link_tokens
 
 
 --
+-- Name: chat_link_tokens chat_link_tokens_issued_by_device_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chat_link_tokens
+    ADD CONSTRAINT chat_link_tokens_issued_by_device_fkey FOREIGN KEY (account_id, issued_by_device) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
+
+
+--
 -- Name: chat_mailbox chat_mailbox_recipient_account_id_recipient_device_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8311,6 +8368,14 @@ ALTER TABLE ONLY public.contacts
 
 ALTER TABLE ONLY public.account_device_tickets
     ADD CONSTRAINT account_device_tickets_account_id_device_id_fkey FOREIGN KEY (account_id, device_id) REFERENCES public.account_devices(account_id, device_id) ON DELETE CASCADE;
+
+
+--
+-- Name: account_device_releases account_device_releases_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_device_releases
+    ADD CONSTRAINT account_device_releases_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 
 --

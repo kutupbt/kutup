@@ -80,18 +80,31 @@ pub const PROVISIONING_ADDRESS_LEN: usize = 16;
 /// A one-time link token (Signal's provisioning code).
 pub const LINK_TOKEN_LEN: usize = 32;
 pub const PROVISIONING_VERSION: u16 = 1;
-/// The device a re-registration takes: every other row is dropped in the same
-/// transaction, so it is the lowest free id (Signal's primary device id).
-pub const REREGISTRATION_DEVICE_ID: u32 = 1;
-
-/// The id a re-registering Chat device takes: the lowest the account's other
-/// (non-Chat) devices leave free, [`REREGISTRATION_DEVICE_ID`] while it has
-/// none.
-pub fn reregistration_device_id(others: &[u32]) -> u32 {
-    (REREGISTRATION_DEVICE_ID..)
-        .find(|id| !others.contains(id))
-        .expect("an unbounded range")
+/// The id a new device of an account takes (docs/plans/one-device-list.md,
+/// "Device ids"): the first id at or after the account's counter `next`
+/// (`accounts.next_device_id`, which the server hands out at
+/// `GET /api/v1/account/devices/session`) that `taken` doesn't hold, wrapping
+/// from [`MAX_DEVICE_ID`] to 1; `None` when every id is taken. Ids are
+/// libsignal's 1..=127, so they are reused, as Signal reuses them; the
+/// counter only makes a freed id the last to come back, after every other
+/// free id has had its turn. A counter outside 1..=127 counts from 1.
+pub fn next_device_id(next: u32, taken: &[u32]) -> Option<u32> {
+    let start = if (1..=MAX_DEVICE_ID).contains(&next) {
+        next
+    } else {
+        1
+    };
+    (start..=MAX_DEVICE_ID)
+        .chain(1..start)
+        .find(|id| !taken.contains(id))
 }
+
+/// The counter's value after `id` is taken: `id + 1`, wrapping from
+/// [`MAX_DEVICE_ID`] to 1.
+pub fn device_id_after(id: u32) -> u32 {
+    id % MAX_DEVICE_ID + 1
+}
+
 /// A serialized libsignal `SignedPreKeyRecord` or `KyberPreKeyRecord` inside a
 /// sync (a Kyber1024 record is about 4.8 KiB).
 pub const MAX_PREKEY_RECORD_BYTES: usize = 16 * 1024;
@@ -431,6 +444,20 @@ pub struct RegisterDeviceResponseV1 {
     pub device_id: u32,
     /// What its manifest entry lists as `session`.
     pub session: String,
+}
+
+/// `GET /api/v1/account/devices/session`: what a device of this sign-in
+/// needs before it signs its own manifest entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceSessionResponseV1 {
+    /// Lowercase hex: [`device_session_hash`] of the caller's root sign-in,
+    /// the `session` its entry lists.
+    pub session: String,
+    /// The account's device counter (1..=127): a re-registration lists
+    /// itself under [`next_device_id`] of it and the entries it keeps.
+    pub next_device_id: u32,
 }
 
 /// One device of the account, as `GET /api/devices` lists it.
@@ -1762,8 +1789,9 @@ pub enum DeviceRegistrationV1 {
     /// Chat device of the account is dropped (Signal's `reclaimAccount`); the
     /// account's first Chat device registers this way too. The gate is the
     /// account authority. `manifest` is the account's next V3 manifest,
-    /// listing this device as its one Chat device, as
-    /// [`reregistration_device_id`] of the others, with the request's
+    /// listing this device as its one Chat device, under an id none of the
+    /// others hold (the server requires [`next_device_id`] of its counter
+    /// and the others, under the account's lock), with the request's
     /// identity and registration id, and the head's other (non-Chat) entries
     /// unchanged; it continues the chain
     /// ([`AccountManifestV3::verify_successor`]): sequence 1 with no
@@ -1848,10 +1876,12 @@ impl RegisterChatDeviceRequestV2 {
                     .filter(|device| device.chat.is_none())
                     .map(|device| device.device_id)
                     .collect();
+                // Which id is the server's to say (its counter); the format
+                // only needs one no other entry holds.
                 match chat.as_slice() {
                     [device]
                         if device.kind == DeviceKind::Chat
-                            && device.device_id == reregistration_device_id(&others)
+                            && !others.contains(&device.device_id)
                             && device.chat
                                 == Some(ChatDeviceKeysV3 {
                                     direct_chat_suite: self.suite,

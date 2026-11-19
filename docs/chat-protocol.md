@@ -107,7 +107,12 @@ An account may have 1-10 active Chat devices. The site setting
 `chatMaxActiveDevices` may lower that limit but cannot exceed ten. Its
 devices of every kind (Chat, editing apps, the CLI) share one id space
 (1-127) and are at most `devicesPerAccount` (default 32); see
-[`plans/one-device-list.md`](plans/one-device-list.md).
+[`plans/one-device-list.md`](plans/one-device-list.md). A new device takes the
+first free id at or after the account's counter (`accounts.next_device_id`),
+wrapping from 127 to 1, so a removed device's id comes back only after every
+other free id has had its turn. Ids are reused, as in Signal; what a peer
+keeps under an id is bound to the device's registration id (a new holder is
+`staleDevices`), and the server's rows under it go with the device.
 
 ### 4.1 One identity per account, and web installations
 

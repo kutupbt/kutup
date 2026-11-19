@@ -428,8 +428,11 @@ impl ChatTransport for MockServer {
         Ok(self.respond(username, devices, manifest, Some(current)))
     }
 
-    async fn fetch_device_session(&self) -> Result<String> {
-        Ok(DEVICE_SESSION.into())
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+        Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+            session: DEVICE_SESSION.into(),
+            next_device_id: 1,
+        })
     }
 
     async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV3>> {
