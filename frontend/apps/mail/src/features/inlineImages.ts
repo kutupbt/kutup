@@ -3,6 +3,9 @@ import { DOMSerializer } from '@tiptap/pm/model'
 import type { Editor } from '@tiptap/react'
 import { fetchMailImage } from '@kutup/mail-core/api'
 
+/** Where a remote image keeps its address in the editor's own markup. */
+const REMOTE_SRC = 'data-remote-src'
+
 /**
  * TipTap's image, keeping which inline part it shows (`data-cid`). A saved
  * draft's text points at its parts (`cid:`): such an image opens with no
@@ -23,9 +26,14 @@ export const InlineImage = Image.extend({
       src: {
         default: null,
         parseHTML: (element) => {
-          const src = element.getAttribute('src')
+          const src = element.getAttribute('src') ?? element.getAttribute(REMOTE_SRC)
           return src?.startsWith('cid:') ? null : src
         },
+        // A remote address never becomes an element's src, wherever the
+        // editor renders (ProseMirror draws a node without its node view
+        // too): editorHtml() gives it back its src in the HTML that is sent.
+        renderHTML: (attributes: { src?: string | null }) =>
+          !attributes.src ? {} : isRemote(attributes.src) ? { [REMOTE_SRC]: attributes.src } : { src: attributes.src },
       },
       cid: {
         default: null,
@@ -33,6 +41,9 @@ export const InlineImage = Image.extend({
         renderHTML: (attributes: { cid?: string | null }) => (attributes.cid ? { 'data-cid': attributes.cid } : {}),
       },
     }
+  },
+  parseHTML() {
+    return [{ tag: 'img[src]:not([src^="data:"])' }, { tag: `img[${REMOTE_SRC}]` }]
   },
   addNodeView() {
     return ({ node }) => {
@@ -64,7 +75,7 @@ export const InlineImage = Image.extend({
           dom.setAttribute('src', src)
           return
         }
-        dom.setAttribute('data-remote-src', src)
+        dom.setAttribute(REMOTE_SRC, src)
         void fetchMailImage(src).then((result) => {
           if (shown !== src || result.kind !== 'image') return
           proxied = URL.createObjectURL(result.blob)
@@ -76,7 +87,7 @@ export const InlineImage = Image.extend({
         dom,
         update: (updated) => {
           if (updated.type !== node.type) return false
-          if (updated.attrs.src !== shown) dom.removeAttribute('data-remote-src')
+          if (updated.attrs.src !== shown) dom.removeAttribute(REMOTE_SRC)
           render(updated.attrs)
           return true
         },
@@ -98,8 +109,8 @@ function contentIdOf(src: string | null): string | null {
 }
 
 /**
- * The editor's HTML, as `editor.getHTML()` gives it, but made in an inert
- * document. TipTap builds that HTML from elements of the page's own document,
+ * The editor's HTML, as `editor.getHTML()` gives it but with each remote
+ * image's address back in its src, made in an inert document. TipTap builds that HTML from elements of the page's own document,
  * and an image element there starts loading its address at once, even
  * outside the page: a remote image would be fetched from its server and a
  * `cid:` one refused by the Content-Security-Policy.
@@ -109,6 +120,10 @@ export function editorHtml(editor: Editor): string {
   const fragment = DOMSerializer.fromSchema(editor.schema).serializeFragment(editor.state.doc.content, { document: inert })
   const container = inert.createElement('div')
   container.appendChild(fragment)
+  container.querySelectorAll(`img[${REMOTE_SRC}]`).forEach((img) => {
+    img.setAttribute('src', img.getAttribute(REMOTE_SRC) ?? '')
+    img.removeAttribute(REMOTE_SRC)
+  })
   return container.innerHTML
 }
 
