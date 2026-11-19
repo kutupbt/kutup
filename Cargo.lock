@@ -3703,6 +3703,7 @@ name = "kutup-search"
 version = "0.1.0"
 dependencies = [
  "ciborium",
+ "js-sys",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

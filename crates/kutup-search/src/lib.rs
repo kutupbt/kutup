@@ -26,7 +26,9 @@ pub use index::{
 
 use std::collections::BTreeSet;
 
+#[cfg(not(all(feature = "browser", target_arch = "wasm32")))]
 use unicode_normalization::char::is_combining_mark;
+#[cfg(not(all(feature = "browser", target_arch = "wasm32")))]
 use unicode_normalization::UnicodeNormalization;
 
 /// Longer words are cut to this many characters (a query word is too).
@@ -42,13 +44,35 @@ pub fn fold(text: &str) -> String {
             other => other,
         })
         .collect();
-    turkish
-        .nfkd()
-        .filter(|c| !is_combining_mark(*c))
+    // ASCII has nothing to decompose and no marks: lowercasing is all.
+    if turkish.is_ascii() {
+        return turkish.to_ascii_lowercase();
+    }
+    let lower: String = without_marks(&turkish)
+        .chars()
         .flat_map(char::to_lowercase)
-        .nfkd()
-        .filter(|c| !is_combining_mark(*c))
-        .collect()
+        .collect();
+    without_marks(&lower)
+}
+
+/// Compatibility decomposition (NFKD) with every combining mark
+/// (General_Category Mark) dropped.
+#[cfg(not(all(feature = "browser", target_arch = "wasm32")))]
+fn without_marks(text: &str) -> String {
+    text.nfkd().filter(|c| !is_combining_mark(*c)).collect()
+}
+
+/// The browser's own: `normalize('NFKD')`, then `\p{M}` removed. The fold
+/// vectors (tests/vectors/fold.json) hold both to the same results.
+#[cfg(all(feature = "browser", target_arch = "wasm32"))]
+fn without_marks(text: &str) -> String {
+    // A RegExp is a JS object, not Sync; the worker is single-threaded, so
+    // one per thread.
+    thread_local! {
+        static MARKS: js_sys::RegExp = js_sys::RegExp::new("\\p{M}", "gu");
+    }
+    let normalized = js_sys::JsString::from(text).normalize("NFKD");
+    MARKS.with(|marks| String::from(normalized.replace_by_pattern(marks, "")))
 }
 
 /// Whether `text` holds every word of `query`, each as the start of a word

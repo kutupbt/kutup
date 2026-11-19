@@ -7,6 +7,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# The browser build: kutup_search folds through the browser's normalization.
+browser = ["kutup-search/browser"]
+
 [dependencies]
 # The patched copy of the `keepass` crate (vendor/keepass/KUTUP.md).
 keepass = { path = "vendor/keepass", features = ["save_kdbx4", "totp"] }

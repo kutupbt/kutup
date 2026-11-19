@@ -189,4 +189,11 @@ assert.throws(() => byHash.keepKey(masterKey, vectors.binding, vectors.fileId, 1
   assert.ok(Buffer.from(v.exportKeePassXml()).toString('utf8').includes(SECRET))
   assert.equal(pass.Vault.open(v.save(), 'p', null, null).view().entries.find((e) => e.id === id).passkey.hasPrivateKey, true)
 }
+// The browser's fold (String.prototype.normalize, the `browser` feature of
+// kutup-search) gives what the native one gives (crates/kutup-search/tests/vectors/fold.json).
+{
+  const vectors = JSON.parse(await readFile(`${root}/crates/kutup-search/tests/vectors/fold.json`, 'utf8'))
+  assert.ok(vectors.cases.length >= 20)
+  for (const { text, folded } of vectors.cases) assert.equal(pass.searchFold(text), folded, `fold(${JSON.stringify(text)})`)
+}
 console.log('pass WASM checks passed')

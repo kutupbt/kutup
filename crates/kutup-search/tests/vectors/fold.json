@@ -1,0 +1,84 @@
+{
+  "cases": [
+    {
+      "text": "İSTANBUL istanbul Istanbul ıIiİ",
+      "folded": "istanbul istanbul istanbul iiii"
+    },
+    {
+      "text": "ÇAĞRI çağrı Şeker ŞEKER Öğün ÖĞÜN Ümit ümit Gıda GIDA",
+      "folded": "cagri cagri seker seker ogun ogun umit umit gida gida"
+    },
+    {
+      "text": "Crème brûlée, Ångström, São Paulo, Smørrebrød, Łódź, Dvořák",
+      "folded": "creme brulee, angstrom, sao paulo, smørrebrød, łodz, dvorak"
+    },
+    {
+      "text": "ﬁne ﬂow ﬀ ﬃ ﬄ ﬅ Æsir œuvre Straße STRASSE",
+      "folded": "fine flow ff ffi ffl st æsir œuvre straße strasse"
+    },
+    {
+      "text": "ＡＢＣ１２３ ａｂｃ　ｘｙｚ ｶﾀｶﾅ",
+      "folded": "abc123 abc xyz カタカナ"
+    },
+    {
+      "text": "x² H₂O ½ ¾ ™ ℃ ㎏ № Ⅻ ⅻ ①",
+      "folded": "x2 h2o 1⁄2 3⁄4 tm °c kg no xii xii 1"
+    },
+    {
+      "text": "ΆΈΉΊΌΎΏ Σίσυφος ΣΊΣΥΦΟΣ άλφα",
+      "folded": "αεηιουω σισυφος σισυφοσ αλφα"
+    },
+    {
+      "text": "Йй Ёё Ўў Ї ї",
+      "folded": "ии ее уу і і"
+    },
+    {
+      "text": "Tiếng Việt Hà Nội Đà Nẵng",
+      "folded": "tieng viet ha noi đa nang"
+    },
+    {
+      "text": "한국어 가나다",
+      "folded": "한국어 가나다"
+    },
+    {
+      "text": "مَرْحَبًا بِكُمْ",
+      "folded": "مرحبا بكم"
+    },
+    {
+      "text": "שָׁלוֹם",
+      "folded": "שלום"
+    },
+    {
+      "text": "हिन्दी नमस्ते",
+      "folded": "हनद नमसत"
+    },
+    {
+      "text": "é ä́ Z̴̵̶a̷l̸g̹o",
+      "folded": "e a zalgo"
+    },
+    {
+      "text": "👩🏽‍💻 🇹🇷 ❤️ 1️⃣",
+      "folded": "👩🏽‍💻 🇹🇷 ❤ 1"
+    },
+    {
+      "text": "ǅ ǈ ǋ ǲ ſ ẞ ﬆ",
+      "folded": "dz lj nj dz s ß st"
+    },
+    {
+      "text": "ÀÉÎÕÜ àéîõü Ññ Çç",
+      "folded": "aeiou aeiou nn cc"
+    },
+    {
+      "text": "Ⓐⓑ ℌ ℍ 𝔄𝔅 𝐀𝐁 ㈜ ㍿",
+      "folded": "ab h h ab ab (주) 株式会社"
+    },
+    {
+      "text": "",
+      "folded": ""
+    },
+    {
+      "text": "plain ascii TEXT 123 !@#",
+      "folded": "plain ascii text 123 !@#"
+    }
+  ]
+}

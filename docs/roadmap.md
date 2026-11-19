@@ -1047,10 +1047,15 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   and `status` (noticing another agent in the shell) are built.
 - **Pass WASM size.** The search fold (`kutup_search::fold`, NFKD tables)
   added about 86 KB gzipped and the JSON/ZIP importers about 46 KB; the
-  budget was raised to 830000 (2026-11-17). Follow-up: in the WASM build,
-  fold through the browser's own `String.prototype.normalize('NFKD')` (an
-  imported JS function), keeping `kutup_search::fold` for native and the CLI:
-  the same results, about 80 KB less. With the bundle split after the wipe.
+  budget was raised to 830000 (2026-11-17). Done (2026-11-19): the WASM
+  build folds through the browser's own `String.prototype.normalize('NFKD')`
+  (`kutup-search`'s `browser` feature, through `js_sys`), native and the CLI
+  keep the Rust tables, and `crates/kutup-search/tests/vectors/fold.json`
+  holds both to the same results (a Rust test and `scripts/test-pass-wasm.mjs`).
+  Pass went from 826,605 to 761,665 bytes gzipped. Next lever: `url` pulls
+  `idna` and ICU's normalizer data into the Pass WASM (the vendored `keepass`
+  crate and `kutup-pass` parse URLs); a host-only parser there would save
+  more.
 - **Later**: native apps, per [`mobile-build.md`](mobile-build.md); sharing
   single items between users (research 19 §5).
 

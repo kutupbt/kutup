@@ -27,6 +27,13 @@ fn open_error(error: kutup_pass::kdbx::KdbxError) -> JsValue {
 /// What a file is, from its header alone: `{ kind: "supported", version:
 /// "4.1", upgrade }`, `{ kind: "unsupported", version }` or `{ kind:
 /// "notKeePass" }`.
+/// Text folded as the vault's search folds it, for the check that the
+/// browser's fold matches the native one (scripts/test-pass-wasm.mjs).
+#[wasm_bindgen(js_name = searchFold)]
+pub fn search_fold(text: &str) -> String {
+    kutup_pass::search::fold(text)
+}
+
 #[wasm_bindgen(js_name = probeVault)]
 pub fn probe_vault(contents: &[u8]) -> Result<JsValue, JsValue> {
     #[derive(Serialize)]

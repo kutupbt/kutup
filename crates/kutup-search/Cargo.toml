@@ -13,5 +13,15 @@ ciborium = "0.2"
 unicode-normalization.workspace = true
 thiserror.workspace = true
 
+[features]
+# In a browser build (wasm32), fold through the browser's own Unicode
+# normalization (String.prototype.normalize) instead of compiling the NFKD
+# tables in: about 80 KB less for the Pass WASM. Native builds keep the
+# tables whatever the feature says.
+browser = ["dep:js-sys"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { version = "0.3", optional = true }
+
 [dev-dependencies]
 serde_json.workspace = true

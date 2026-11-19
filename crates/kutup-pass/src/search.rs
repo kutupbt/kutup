@@ -21,6 +21,12 @@ use keepass::Database;
 
 use crate::view::{group_in_recycle_bin, STANDARD_FIELDS};
 
+/// Text folded as searches fold it (`kutup_search::fold`; in the browser
+/// build through the browser's own normalization).
+pub fn fold(text: &str) -> String {
+    kutup_search::fold(text)
+}
+
 /// Where a word looks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
