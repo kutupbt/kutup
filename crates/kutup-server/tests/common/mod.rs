@@ -1511,8 +1511,14 @@ pub fn set_password(
     request.send().unwrap().status()
 }
 
-/// The authenticator app's code now for `secret` (the setup's base32).
+/// An authenticator app's code for `secret` (the setup's base32) the server
+/// takes now: one from a step not used yet ([`fresh_totp_step`]).
 pub fn totp_now(secret: &str) -> String {
+    totp_at(secret, fresh_totp_step(secret))
+}
+
+/// The code for `secret` at time step `step` (30 s each).
+pub fn totp_at(secret: &str, step: u64) -> String {
     totp_rs::TOTP::new(
         totp_rs::Algorithm::SHA1,
         6,
@@ -1525,8 +1531,34 @@ pub fn totp_now(secret: &str) -> String {
         String::new(),
     )
     .unwrap()
-    .generate_current()
-    .unwrap()
+    .generate(step * 30)
+}
+
+/// The current time step.
+pub fn totp_step_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        / 30
+}
+
+/// A step `secret` has had no code from in this process: the server takes
+/// each code once (`accounts.totp_last_step`), within one step either side
+/// of now (`account.totp_skew_steps` at its default), so the next unused
+/// step up to now + 1, waiting for the clock once both are used.
+pub fn fresh_totp_step(secret: &str) -> u64 {
+    static LAST: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    let mut last = LAST.get_or_init(Default::default).lock().unwrap();
+    loop {
+        let now = totp_step_now();
+        let step = last.get(secret).map_or(now, |&used| now.max(used + 1));
+        if step <= now + 1 {
+            last.insert(secret.to_owned(), step);
+            return step;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
 }
 
 /// Metadata sealed for `file` at revision `revision` (key generation 1); the

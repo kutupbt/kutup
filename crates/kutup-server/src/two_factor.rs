@@ -157,7 +157,7 @@ pub(crate) async fn turn_off(
     let was_on = factors_locked(tx, user_id).await?.on();
     sqlx::query(
         "UPDATE accounts SET totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL,
-                          security_keys_require_uv = false
+                          totp_last_step = NULL, security_keys_require_uv = false
          WHERE id = $1",
     )
     .bind(user_id)

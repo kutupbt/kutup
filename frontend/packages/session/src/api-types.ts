@@ -341,6 +341,8 @@ export interface AdminSettings {
   chatLinkTokenSeconds: number
   /** How many two-factor recovery codes are made at once. */
   twoFactorRecoveryCodes: number
+  /** Authenticator code steps taken either side of now (site_settings::TOTP_SKEW_STEPS). */
+  totpSkewSteps: number
   securityKeysPerAccount: number
   webauthnCeremonySeconds: number
   chatLinkTokensPerAccount: number

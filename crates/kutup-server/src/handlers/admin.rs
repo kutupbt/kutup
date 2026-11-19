@@ -2835,7 +2835,7 @@ pub async fn wipe_user(
                key_binding = $1::uuid, opaque_record = $3, opaque_suite = $4,
                opaque_server_key_id = $5,
                totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL,
-               keys_set_up_at = NULL, updated_at = NOW()
+               totp_last_step = NULL, keys_set_up_at = NULL, updated_at = NOW()
            WHERE id = $2"#,
     )
     .bind(&key_binding)

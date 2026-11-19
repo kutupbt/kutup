@@ -68,7 +68,9 @@ for storage.
     `calendarPushSubscriptionsPerAccount`;
   - `chatLinkTokensPerAccount`, `chatMaxActiveDevices` and
     `chatProvisioningSocketsPerAccount`;
-  - `twoFactorRecoveryCodes`.
+  - `twoFactorRecoveryCodes`;
+  - `totpSkewSteps` (`account.totp_skew_steps`, W7 group 5d): how many
+    30-second steps either side of now an authenticator code is taken.
 
   Settings that limit a request, a page, a batch or the server stay
   site-only.

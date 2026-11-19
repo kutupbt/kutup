@@ -960,6 +960,18 @@ pub const TWO_FACTOR_RECOVERY_CODES: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: true,
 };
+/// The authenticator app's codes taken either side of now, in 30-second
+/// steps (RFC 6238 §5.2's allowed drift): 1 takes the previous and the next
+/// step's code too. Each code still signs in once (`accounts.totp_last_step`).
+pub const TOTP_SKEW_STEPS: NumericSetting = NumericSetting {
+    key: "account.totp_skew_steps",
+    field: "totpSkewSteps",
+    default: 1,
+    min: 0,
+    max: 2,
+    unit: SettingUnit::Count,
+    per_account: true,
+};
 /// Security keys one account may add (docs/plans/security-keys.md, D3;
 /// Proton allows 4): room for a backup key per device.
 pub const SECURITY_KEYS_PER_ACCOUNT: NumericSetting = NumericSetting {
@@ -1135,8 +1147,9 @@ pub const KNOWN_CLIENT_DAYS: NumericSetting = NumericSetting {
 };
 pub const SESSION_SETTINGS: [NumericSetting; 2] = [SESSION_TTL_DAYS, KNOWN_CLIENT_DAYS];
 
-pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [
+pub const TWO_FACTOR_SETTINGS: [NumericSetting; 4] = [
     TWO_FACTOR_RECOVERY_CODES,
+    TOTP_SKEW_STEPS,
     SECURITY_KEYS_PER_ACCOUNT,
     WEBAUTHN_CEREMONY_SECONDS,
 ];
