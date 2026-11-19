@@ -340,14 +340,13 @@ pub(crate) async fn note_recipient(
     Ok(())
 }
 
-/// A Drive HPKE public key of identity `suite`: X-Wing's 1216 bytes in suite
-/// 2, an X25519 key in suite 1 (until its account upgrades).
+/// A Drive X-Wing public key (1216 bytes) of identity suite 2, the only
+/// suite (suite 1's X25519 keys are gone).
 pub(crate) fn canonical_drive_xwing_key(value: &str, suite: i16) -> AppResult<Vec<u8>> {
-    let len = match suite {
-        2 => kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN,
-        1 => kutup_chat_proto::legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN,
-        _ => return Err(AppError::bad_request("unknown account identity suite")),
-    };
+    if suite != kutup_crypto::identity::IDENTITY_SUITE as i16 {
+        return Err(AppError::bad_request("unknown account identity suite"));
+    }
+    let len = kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN;
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| AppError::bad_request("invalid Drive identity key"))?;

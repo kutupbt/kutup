@@ -872,7 +872,7 @@ impl AccountManifestV3 {
         out.extend_from_slice(&decode_canonical_base64_exact(
             "drive.xwingPublicKey",
             &self.drive.xwing_public_key,
-            self.drive.suite.hpke_public_key_len(),
+            self.drive.suite.xwing_public_key_len(),
         )?);
         out.extend_from_slice(&decode_canonical_base64_exact(
             "drive.shareSigningPublicKey",

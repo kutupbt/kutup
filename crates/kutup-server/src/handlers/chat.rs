@@ -651,31 +651,6 @@ pub async fn register_device(
     .into_response())
 }
 
-/// Whether a manifest's Drive keys may follow the stored ones: unchanged, or
-/// raised once from a suite-1 (X25519) key to X-Wing with the same signing
-/// key (docs/plans/pq-shares.md). The new key is the account's registered
-/// one (checked by the caller), so it is the upgraded key; the caller also
-/// requires the next sequence, linked to the stored manifest.
-fn drive_keys_follow(
-    current: &kutup_chat_proto::AccountManifestDriveKeysV1,
-    next: &kutup_chat_proto::AccountManifestDriveKeysV1,
-) -> bool {
-    use kutup_chat_proto::{legacy_suite1_for_upgrade, AccountIdentitySuiteId};
-    if current == next {
-        return true;
-    }
-    let current_is_suite_1 = current.suite == AccountIdentitySuiteId::X25519Ed25519V1
-        && STANDARD
-            .decode(&current.xwing_public_key)
-            .map(|key| key.len())
-            == Ok(legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN);
-    current_is_suite_1
-        && next.suite == AccountIdentitySuiteId::XWingEd25519V2
-        && STANDARD.decode(&next.xwing_public_key).map(|key| key.len())
-            == Ok(kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN)
-        && next.share_signing_public_key == current.share_signing_public_key
-}
-
 /// Whether a manifest may set the account's identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum IdentityChange {
@@ -761,12 +736,12 @@ pub(crate) async fn store_manifest(
         }
     };
     // The one chain check every side uses (kutup-chat-proto), and the Drive
-    // keys change only by the one-way suite upgrade.
+    // keys never change inside one incarnation.
     manifest
         .verify_successor(head.as_ref())
         .map_err(AppError::conflict)?;
     if let Some(head) = &head {
-        if !drive_keys_follow(&head.drive, &manifest.drive) {
+        if head.drive != manifest.drive {
             return Err(AppError::conflict(
                 "stable account identity cannot change inside one incarnation",
             ));
@@ -3491,44 +3466,6 @@ async fn handle_connection(state: AppState, socket: WebSocket, user_id: Uuid, de
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The Drive keys in a manifest change only by the one-way rise from a
-    /// suite-1 (32-byte X25519) key to X-Wing, signing key unchanged.
-    #[test]
-    fn manifest_drive_keys_only_rise_from_suite_1_to_x_wing() {
-        use kutup_chat_proto::{AccountIdentitySuiteId, AccountManifestDriveKeysV1};
-        let keys = |suite, key_len: usize, signing: u8| AccountManifestDriveKeysV1 {
-            suite,
-            xwing_public_key: STANDARD.encode(vec![7u8; key_len]),
-            share_signing_public_key: STANDARD.encode([signing; 32]),
-        };
-        let old = keys(AccountIdentitySuiteId::X25519Ed25519V1, 32, 1);
-        let new = keys(AccountIdentitySuiteId::XWingEd25519V2, 1216, 1);
-        assert!(drive_keys_follow(&old, &old));
-        assert!(drive_keys_follow(&new, &new));
-        assert!(drive_keys_follow(&old, &new), "the rise");
-        assert!(!drive_keys_follow(&new, &old), "never back");
-        let other = AccountManifestDriveKeysV1 {
-            xwing_public_key: STANDARD.encode(vec![8u8; 1216]),
-            ..new.clone()
-        };
-        assert!(!drive_keys_follow(&new, &other), "no second change");
-        assert!(
-            !drive_keys_follow(&old, &keys(AccountIdentitySuiteId::XWingEd25519V2, 1216, 2)),
-            "the signing key stays"
-        );
-        assert!(
-            !drive_keys_follow(
-                &keys(AccountIdentitySuiteId::X25519Ed25519V1, 1216, 1),
-                &new
-            ),
-            "only from a real suite-1 key"
-        );
-        assert!(
-            !drive_keys_follow(&old, &keys(AccountIdentitySuiteId::XWingEd25519V2, 32, 1)),
-            "only to a real X-Wing key"
-        );
-    }
 
     /// Only a queued send reads as pending; a send that wasn't queued gets
     /// its own answer, or fails the whole request.
