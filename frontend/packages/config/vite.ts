@@ -102,7 +102,19 @@ const EXCALIDRAW_ASSETS = 'excalidraw-assets'
  * does not allow. An app whose bundle holds Excalidraw gets the fonts in its
  * own `excalidraw-assets/fonts/`, and @kutup/editors points Excalidraw there
  * before it loads (packages/editors/src/whiteboard/assets.ts).
+ *
+ * Excalidraw also lists esm.sh after that path in every font's `src`
+ * (`ASSETS_FALLBACK_URL`), and Chrome checks every URL of a FontFace's
+ * `src` against font-src as the face is made: each whiteboard opened
+ * reported a violation per font, and a font our origin failed to serve
+ * would have gone to the CDN. The fallback is rewritten to this origin's
+ * own path; the build fails if esm.sh is left in Excalidraw, as when an
+ * upgrade changes the code (scripts/check-app-bundles.mjs checks the
+ * built apps too).
  */
+const EXCALIDRAW_FALLBACK = '`https://esm.sh/${M.PKG_NAME?`${M.PKG_NAME}@${M.PKG_VERSION}`:"@excalidraw/excalidraw"}/dist/prod/`'
+const EXCALIDRAW_OWN_FALLBACK = `\`\${typeof window<"u"?window.location.origin:""}/${EXCALIDRAW_ASSETS}/\``
+
 function excalidrawFonts(): Plugin {
   const fonts = () => {
     const index = createRequire(path.join(FRONTEND, 'packages/editors/package.json')).resolve('@excalidraw/excalidraw')
@@ -113,6 +125,14 @@ function excalidrawFonts(): Plugin {
   let used = false
   return {
     name: 'kutup-excalidraw-fonts',
+    transform(code, id) {
+      if (!/\/@excalidraw\/excalidraw\/dist\/(prod|dev)\/[^/]+\.js$/.test(id.split('?')[0]) || !code.includes('esm.sh')) return null
+      const out = code.split(EXCALIDRAW_FALLBACK).join(EXCALIDRAW_OWN_FALLBACK)
+      if (out.includes('esm.sh')) {
+        throw new Error(`kutup-excalidraw-fonts: ${path.basename(id)} still loads from esm.sh (Excalidraw upgraded?): update EXCALIDRAW_FALLBACK in frontend/packages/config/vite.ts`)
+      }
+      return { code: out, map: null }
+    },
     configResolved(config) {
       outDir = path.resolve(config.root, config.build.outDir)
     },
