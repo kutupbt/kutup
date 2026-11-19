@@ -1,4 +1,6 @@
 import Image from '@tiptap/extension-image'
+import { DOMSerializer } from '@tiptap/pm/model'
+import type { Editor } from '@tiptap/react'
 import { fetchMailImage } from '@kutup/mail-core/api'
 
 /**
@@ -93,6 +95,21 @@ function isRemote(src: string): boolean {
 
 function contentIdOf(src: string | null): string | null {
   return src?.startsWith('cid:') ? src.slice('cid:'.length) : null
+}
+
+/**
+ * The editor's HTML, as `editor.getHTML()` gives it, but made in an inert
+ * document. TipTap builds that HTML from elements of the page's own document,
+ * and an image element there starts loading its address at once, even
+ * outside the page: a remote image would be fetched from its server and a
+ * `cid:` one refused by the Content-Security-Policy.
+ */
+export function editorHtml(editor: Editor): string {
+  const inert = document.implementation.createHTMLDocument('')
+  const fragment = DOMSerializer.fromSchema(editor.schema).serializeFragment(editor.state.doc.content, { document: inert })
+  const container = inert.createElement('div')
+  container.appendChild(fragment)
+  return container.innerHTML
 }
 
 /** The editor's HTML as sent: each inline image points at its part (`cid:`), not at this browser's blob. */
