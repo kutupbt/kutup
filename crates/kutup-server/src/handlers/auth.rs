@@ -1007,17 +1007,39 @@ pub async fn login_two_fa(
 
     let account = Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     let had_secret = totp_secret.is_some();
-    let totp_secret = match totp_secret {
-        Some(sealed) => open_totp_secret(&state, account, &sealed).await?,
+    let opened = match &totp_secret {
+        Some(sealed) => open_totp_secret(&state, account, sealed).await?,
         None => None,
     };
     // A secret the account has but nobody can read: only a recovery code (or
     // a security key) signs in.
-    let lost = had_secret && totp_secret.is_none();
-    let valid = totp_secret
-        .as_deref()
-        .map(|s| totp::validate_totp(s, &req.code))
-        .unwrap_or(false);
+    let lost = had_secret && opened.is_none();
+    // The code's step, recorded (committed) before the session is issued:
+    // one code signs in once (RFC 6238 §5.2), and a reused one is answered
+    // as a wrong one. Recorded first, then the password checked still the
+    // one proved, in one transaction: the step's row lock makes a second
+    // request with the code wait and then find it recorded, and a changed
+    // password rolls the step back (the code isn't spent). A session that
+    // fails to issue after the commit leaves the code spent; the next step's
+    // code signs in.
+    let valid = match (opened.as_deref(), totp_secret.as_deref()) {
+        (Some(secret), Some(sealed)) => {
+            let skew = totp::skew_for(&state.pool, account).await?;
+            match totp::matched_step(secret, &req.code, skew) {
+                Some(step) => {
+                    let mut tx = state.pool.begin().await?;
+                    let recorded = totp::record_step(&mut *tx, account, sealed, step).await?;
+                    if recorded && credential_held(&mut tx, account, &epoch).await?.is_none() {
+                        return Err(pre_auth_invalid());
+                    }
+                    tx.commit().await?;
+                    recorded
+                }
+                None => false,
+            }
+        }
+        _ => false,
+    };
     // A recovery code takes the second factor's place once
     // (docs/plans/security-keys.md, D2); spent with the sign-in it allows.
     let valid = valid || {
@@ -1653,15 +1675,18 @@ pub async fn verify_totp(
             .with_details(serde_json::json!({ "code": "authenticatorLost" })));
     };
 
-    if !totp::validate_totp(&secret, &req.code) {
+    let user_id = parse_uuid(&user.user_id)?;
+    let skew = totp::skew_for(&state.pool, user_id).await?;
+    // The code's step becomes the account's last once the secret is turned
+    // on, with it: the code that turned it on doesn't sign in too.
+    let Some(step) = totp::matched_step(&secret, &req.code, skew) else {
         return Err(AppError::bad_request("invalid code"));
-    }
+    };
 
     // The password proved again, for this session: used with the change.
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
-    let user_id = parse_uuid(&user.user_id)?;
     // Already on with a security key: the app joins it once a key (or a
     // recovery code) is proved too, and the recovery codes the account has
     // stay (none are shown).
@@ -1675,11 +1700,12 @@ pub async fn verify_totp(
     .await?;
     let enabled = sqlx::query(
         "UPDATE accounts SET totp_secret_sealed = totp_pending_secret_sealed,
-                             totp_pending_secret_sealed = NULL
+                             totp_pending_secret_sealed = NULL, totp_last_step = $3
           WHERE id = $1 AND totp_pending_secret_sealed = $2",
     )
     .bind(user_id)
     .bind(&sealed)
+    .bind(step)
     .execute(&mut *tx)
     .await?;
     // A new setup or a turn-off landed since the secret was read.
@@ -1849,15 +1875,27 @@ pub(crate) async fn prove_second_factor(
             .bind(user_id)
             .fetch_one(&mut **tx)
             .await?;
+    if code.is_empty() {
+        return Ok(SecondFactor::Wrong);
+    }
     // A destroyed secret checks no code; a recovery code still does.
-    let secret = match sealed {
-        Some(sealed) => open_totp_secret(state, user_id, &sealed).await?,
+    let secret = match &sealed {
+        Some(sealed) => open_totp_secret(state, user_id, sealed).await?,
         None => None,
     };
-    if code.is_empty()
-        || !(secret.is_some_and(|secret| totp::validate_totp(&secret, code))
-            || crate::two_factor::spend(tx, &state.pool, user_id, code).await?)
-    {
+    // The code's step is recorded in `tx`, with the change it allows: one
+    // code proves once (RFC 6238 §5.2); a reused one is a wrong one.
+    let app = match (secret, &sealed) {
+        (Some(secret), Some(sealed)) => {
+            let skew = totp::skew_for(&mut **tx, user_id).await?;
+            match totp::matched_step(&secret, code, skew) {
+                Some(step) => totp::record_step(&mut **tx, user_id, sealed, step).await?,
+                None => false,
+            }
+        }
+        _ => false,
+    };
+    if !(app || crate::two_factor::spend(tx, &state.pool, user_id, code).await?) {
         return Ok(SecondFactor::Wrong);
     }
     Ok(SecondFactor::Proved)
@@ -1980,7 +2018,8 @@ pub async fn disable_totp(
     // codes): only the authenticator app goes.
     let kind = if factors.keys > 0 {
         sqlx::query(
-            "UPDATE accounts SET totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL
+            "UPDATE accounts SET totp_secret_sealed = NULL, totp_pending_secret_sealed = NULL,
+                                 totp_last_step = NULL
               WHERE id = $1",
         )
         .bind(user_id)

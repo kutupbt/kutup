@@ -196,6 +196,23 @@ still work" holds from the first release.
 
 - `securityKeysPerAccount`: 10 at first (Proton allows 4). A higher default
   costs nothing and suits people with a backup key per device.
+- Authenticator codes are taken once (RFC 6238 §5.2; W7 group 5d):
+  `crate::totp::matched_step` compares the code against each step within
+  `account.totp_skew_steps` of now (1 at first, 0–2, per account too) and
+  returns the step it matched; `crate::totp::record_step` takes it only above
+  `accounts.totp_last_step` (`UPDATE … WHERE totp_last_step IS NULL OR
+  totp_last_step < $step`, and still the secret that matched), so of two
+  requests with one code one passes. Sign-in records the step and then
+  checks the password still the one proved, in one transaction committed
+  before the session is issued (a changed password rolls the step back;
+  a session that fails to issue after it leaves the code spent).
+  Every signed-in check (`prove_second_factor`: turning the app off, new
+  recovery codes, adding or removing a key, "Require PIN" off) records it in
+  the transaction of the change it allows; turning the app on records the
+  code's step in the update that makes the pending secret the account's.
+  The step goes (`NULL`) with the secret (turned off, an administrator's
+  reset, the recovery phrase), and a check refuses a step without a secret.
+  A reused code is a wrong code: the same answer and attempt count.
 - The attempt budget: the existing `totp_attempts` and `totp_block_minutes`,
   renamed to the second factor's.
 - `webauthnCeremonySeconds`: 300.

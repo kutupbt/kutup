@@ -601,6 +601,18 @@ Complete login when 2FA is enabled. Locked after 5 failed attempts.
 codes (`POST /api/user/2fa/verify`), which works once: case, spaces and the
 dash are ignored, and I/L read as 1, O as 0.
 
+An authenticator code is taken once (RFC 6238 §5.2): it is checked against
+the 30-second steps within `totpSkewSteps` of now (the
+`account.totp_skew_steps` setting, 1 at first, 0–2, site-wide and per
+account), and only a step later than the last one the account's code was
+taken at passes. The code that turned the app on, a code that already
+signed in, renewed recovery codes or turned something off, and the loser
+of two requests racing with one code are all answered as a wrong code
+(`401 invalidCredentials`, counted against the same attempt budget). The
+same holds wherever the authenticator's code is asked for
+(`/api/user/2fa`, `/api/user/2fa/recovery-codes`, the security-key and
+"Require PIN" changes): there a reused code is `400` like a wrong one.
+
 **Auth:** None (uses `preAuthToken` from the sign-in's answer) · **Header:** `X-Kutup-Client` as for `/api/auth/login/start`
 
 **Request body:**
@@ -1078,6 +1090,9 @@ the response's `recoveryCodes` is empty (the account's codes stay).
   "grant": "kg1_…"
 }
 ```
+
+The code's time step becomes the account's last taken one as the app is
+turned on, so the same code then signs in nowhere (see `login/2fa`).
 
 **Response:** `{ "message": "TOTP enabled", "recoveryCodes": ["xxxxx-xxxxx", …] }`:
 the account's recovery codes, shown once (Crockford base32, 10 characters;

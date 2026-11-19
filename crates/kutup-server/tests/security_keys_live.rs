@@ -476,9 +476,9 @@ fn adding_a_factor_while_two_step_is_on_takes_one() {
     .json()
     .unwrap();
     let secret = setup["secret"].as_str().unwrap().to_owned();
-    let verify = |extra: Value| {
+    let verify = |extra: Value, code: String| {
         let mut body = extra;
-        body["code"] = json!(totp_now(&secret));
+        body["code"] = json!(code);
         body["grant"] = json!(reauth_grant(&s.c, &s.base, &user, "totp"));
         status_and_body(
             bearer(
@@ -490,10 +490,11 @@ fn adding_a_factor_while_two_step_is_on_takes_one() {
             .unwrap(),
         )
     };
-    let (status, body) = verify(json!({}));
+    // (Refused before its code is taken: the code now will do.)
+    let (status, body) = verify(json!({}), totp_at(&secret, totp_step_now()));
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["code"], "secondFactorRequired");
-    let (status, body) = verify(json!({ "recoveryCode": codes[1] }));
+    let (status, body) = verify(json!({ "recoveryCode": codes[1] }), totp_now(&secret));
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["recoveryCodes"], json!([]));
 

@@ -923,6 +923,40 @@ the empty set on `enterprise`, then one migration (a table, and a read of
 `public`, recorded there, the core's chain untouched, the pool's search path
 unchanged. Documented in docs/self-hosting.md ("A fork's own tables").
 
+## 15. Added in group 5d: TOTP replay protection
+
+A security fix: `validate_totp` used totp-rs `check_current` with skew 1, so
+one code was accepted again for about 90 s. Now, as RFC 6238 §5.2 says:
+- **Schema:** `accounts.totp_last_step bigint NULL`, the time step of the
+  last authenticator code the account's secret took. CHECK
+  `accounts_totp_last_step`: NULL, or `>= 0` with `totp_secret_sealed` set,
+  so a step never outlives its secret: every path that clears the secret
+  (turning the app off, `two_factor::turn_off` for the recovery phrase and
+  the administrator's force-off, the administrator's account reset) sets it
+  NULL in the same UPDATE, and the pending → active move sets it to the
+  enabling code's step.
+- **Matching:** `totp::matched_step` compares the code (constant time,
+  every candidate) with each step `now − skew ..= now + skew` and returns
+  the latest that matched; `totp::record_step` takes it with `UPDATE
+  accounts SET totp_last_step = $step WHERE id = $1 AND totp_secret_sealed =
+  $sealed AND (totp_last_step IS NULL OR totp_last_step < $step)`; zero rows
+  is a reused code (or a secret changed meanwhile), answered exactly as a
+  wrong code (same error, message and attempt count).
+- **Setting:** `account.totp_skew_steps` (`totpSkewSteps`), 1 at first,
+  0–2, per account, in the Two-factor section; read per check with
+  `load_for`.
+- **Ordering per path:** sign-in (`login/2fa`) records the step, then checks
+  the password is still the one proved, in one transaction committed before
+  the session is issued; `prove_second_factor` (turning the app off, new
+  recovery codes, security-key add/remove, "Require PIN" off) records it in
+  the transaction of the change it allows; `2fa/verify` writes it in the
+  UPDATE that makes the pending secret active.
+- Tests: `totp::tests` (step matching; live: once, racing, next step,
+  another secret, reset on turn-off, per-account skew),
+  `opaque_live::an_authenticator_code_is_taken_once` (the enabling code,
+  a reused code and two racing sign-ins); the live test helpers' `totp_now`
+  hands out each step once.
+
 ## Not in W7
 
 - The API version and "client too old", API field and path renames, the

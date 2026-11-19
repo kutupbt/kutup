@@ -516,37 +516,25 @@ fn two_step_sign_in_changes_take_the_password() {
         .unwrap()
         .json()
         .unwrap();
-    let code = || {
-        totp_rs::TOTP::new(
-            totp_rs::Algorithm::SHA1,
-            6,
-            1,
-            30,
-            totp_rs::Secret::Encoded(setup["secret"].as_str().unwrap().to_owned())
-                .to_bytes()
-                .unwrap(),
-            None,
-            String::new(),
-        )
-        .unwrap()
-        .generate_current()
-        .unwrap()
-    };
-    let verify = |grant: &str| {
+    let secret = setup["secret"].as_str().unwrap().to_owned();
+    // The code now, for requests refused before it is taken (a code is taken
+    // once: `totp_now` gives the ones that are).
+    let code = || totp_at(&secret, totp_step_now());
+    let verify = |grant: &str, code: &str| {
         bearer(c.post(format!("{base}/api/user/2fa/verify")), &user.token)
-            .json(&json!({ "code": code(), "grant": grant }))
+            .json(&json!({ "code": code, "grant": grant }))
             .send()
             .unwrap()
             .status()
     };
     // A code alone, or a grant for something else, turns nothing on.
-    assert_eq!(verify(""), StatusCode::FORBIDDEN);
+    assert_eq!(verify("", &code()), StatusCode::FORBIDDEN);
     assert_eq!(
-        verify(&reauth_grant(&c, &base, &user, "pass")),
+        verify(&reauth_grant(&c, &base, &user, "pass"), &code()),
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        verify(&reauth_grant(&c, &base, &user, "totp")),
+        verify(&reauth_grant(&c, &base, &user, "totp"), &totp_now(&secret)),
         StatusCode::OK
     );
     // While it is on, its secret stays.
@@ -600,16 +588,16 @@ fn two_step_sign_in_changes_take_the_password() {
         second_step(&pre_auth, &code()),
         (StatusCode::UNAUTHORIZED, json!("preAuthInvalid"))
     );
-    let disable = |grant: &str| {
+    let disable = |grant: &str, code: &str| {
         bearer(c.delete(format!("{base}/api/user/2fa")), &user.token)
-            .json(&json!({ "code": code(), "grant": grant }))
+            .json(&json!({ "code": code, "grant": grant }))
             .send()
             .unwrap()
             .status()
     };
-    assert_eq!(disable(""), StatusCode::FORBIDDEN);
+    assert_eq!(disable("", &code()), StatusCode::FORBIDDEN);
     assert_eq!(
-        disable(&reauth_grant(&c, &base, &user, "totp")),
+        disable(&reauth_grant(&c, &base, &user, "totp"), &totp_now(&secret)),
         StatusCode::OK
     );
     purge_accounts(&c, &base, &[&user]);
@@ -776,7 +764,7 @@ fn recovery_codes_take_the_second_factors_place_once() {
         .unwrap()
     };
     assert_eq!(
-        renew("", &totp_now(&secret)).status(),
+        renew("", &totp_at(&secret, totp_step_now())).status(),
         StatusCode::FORBIDDEN
     );
     assert_eq!(
@@ -818,7 +806,11 @@ fn recovery_codes_take_the_second_factors_place_once() {
     );
     // While it is off there is nothing to renew.
     assert_eq!(
-        renew(&reauth_grant(&c, &base, &user, "totp"), &totp_now(&secret)).status(),
+        renew(
+            &reauth_grant(&c, &base, &user, "totp"),
+            &totp_at(&secret, totp_step_now())
+        )
+        .status(),
         StatusCode::CONFLICT
     );
 
@@ -836,6 +828,74 @@ fn recovery_codes_take_the_second_factors_place_once() {
     ] {
         assert!(kinds.iter().any(|k| k == kind), "{kind} in {kinds:?}");
     }
+    purge_accounts(&c, &base, &[&user]);
+}
+
+/// An authenticator code is taken once (RFC 6238 §5.2,
+/// `accounts.totp_last_step`): the code that turned the app on doesn't sign
+/// in, a code that signed in doesn't again, and of two sign-ins racing with
+/// one code exactly one passes. Each refusal is a wrong code's; the next
+/// step's code signs in.
+#[test]
+fn an_authenticator_code_is_taken_once() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let setup: Value = bearer(c.post(format!("{base}/api/user/2fa/setup")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let secret = setup["secret"].as_str().unwrap().to_owned();
+    let enabling = totp_now(&secret);
+    let r = bearer(c.post(format!("{base}/api/user/2fa/verify")), &user.token)
+        .json(&json!({ "code": enabling, "grant": reauth_grant(&c, &base, &user, "totp") }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let refused = (StatusCode::UNAUTHORIZED, json!("invalidCredentials"));
+    assert_eq!(second_step(&c, &base, &user, &enabling), refused);
+
+    let code = totp_now(&secret);
+    assert_eq!(second_step(&c, &base, &user, &code).0, StatusCode::OK);
+    assert_eq!(second_step(&c, &base, &user, &code), refused);
+
+    // Two sign-ins with one code at once.
+    let code = totp_now(&secret);
+    let tokens: Vec<String> = (0..2)
+        .map(|_| {
+            sign_in(&c, &base, &user.username, &user.password)["preAuthToken"]
+                .as_str()
+                .expect("the second step")
+                .to_owned()
+        })
+        .collect();
+    let outcomes: Vec<StatusCode> = std::thread::scope(|scope| {
+        let racing: Vec<_> = tokens
+            .iter()
+            .map(|token| {
+                let (c, base, code) = (&c, &base, &code);
+                scope.spawn(move || {
+                    c.post(format!("{base}/api/auth/login/2fa"))
+                        .header("x-kutup-client", "cli")
+                        .json(&json!({ "preAuthToken": token, "code": code }))
+                        .send()
+                        .unwrap()
+                        .status()
+                })
+            })
+            .collect();
+        racing.into_iter().map(|t| t.join().unwrap()).collect()
+    });
+    assert_eq!(
+        outcomes.iter().filter(|s| **s == StatusCode::OK).count(),
+        1,
+        "{outcomes:?}"
+    );
+    assert!(outcomes.contains(&StatusCode::UNAUTHORIZED), "{outcomes:?}");
     purge_accounts(&c, &base, &[&user]);
 }
 
@@ -889,7 +949,7 @@ fn the_recovery_phrase_turns_two_step_sign_in_off() {
 /// A code other than the authenticator's now (one step on; it is accepted
 /// in no window).
 fn wrong_code(secret: &str) -> String {
-    let now: u32 = totp_now(secret).parse().unwrap();
+    let now: u32 = totp_at(secret, totp_step_now()).parse().unwrap();
     format!("{:06}", (now + 500_000) % 1_000_000)
 }
 
@@ -918,7 +978,10 @@ fn wrong_second_factor_codes_spend_the_grant_and_block_the_account() {
     let grant = reauth_grant(&c, &base, &user, "totp");
     assert_eq!(renew(&grant, &wrong_code(&secret)), StatusCode::BAD_REQUEST);
     // The grant went with the wrong code.
-    assert_eq!(renew(&grant, &totp_now(&secret)), StatusCode::FORBIDDEN);
+    assert_eq!(
+        renew(&grant, &totp_at(&secret, totp_step_now())),
+        StatusCode::FORBIDDEN
+    );
     for _ in 0..3 {
         assert_eq!(
             renew(
@@ -937,12 +1000,15 @@ fn wrong_second_factor_codes_spend_the_grant_and_block_the_account() {
     );
     // Blocked: the right code too, to renew or to turn it off.
     assert_eq!(
-        renew(&reauth_grant(&c, &base, &user, "totp"), &totp_now(&secret)),
+        renew(
+            &reauth_grant(&c, &base, &user, "totp"),
+            &totp_at(&secret, totp_step_now())
+        ),
         StatusCode::TOO_MANY_REQUESTS
     );
     let off = bearer(c.delete(format!("{base}/api/user/2fa")), &user.token)
         .json(
-            &json!({ "code": totp_now(&secret), "grant": reauth_grant(&c, &base, &user, "totp") }),
+            &json!({ "code": totp_at(&secret, totp_step_now()), "grant": reauth_grant(&c, &base, &user, "totp") }),
         )
         .send()
         .unwrap();

@@ -1094,7 +1094,7 @@
         "chatDistributionMessageBytesHint": "Yeni bir Sohbet kimliğinin tutulan her cihaza gönderdiği en büyük ileti."
       },
       "twoFactor": "İki adımlı oturum açma",
-      "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları ve güvenlik anahtarları.",
+      "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları, güvenlik anahtarları ve doğrulayıcı kodları.",
       "federation": "Federasyon",
       "federationHint": "Bir sunucu yanıt vermediğinde diğer Kutup sunucularına teslimatların yeniden nasıl deneneceği.",
       "privacy": "Gizlilik ve saklama",
@@ -1102,6 +1102,8 @@
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Hesap başına kurtarma kodu",
         "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu.",
+        "totpSkewSteps": "Doğrulayıcı kod kayması (adım)",
+        "totpSkewStepsHint": "Doğrulayıcı uygulama kodunun şu andan kaç 30 saniyelik adım önce veya sonra hâlâ kabul edildiği (0–2). Her kod yine yalnızca bir kez kabul edilir.",
         "securityKeysPerAccount": "Hesap başına güvenlik anahtarı",
         "securityKeysPerAccountHint": "Bir hesabın ekleyebileceği en fazla güvenlik anahtarı sayısı.",
         "webauthnCeremonySeconds": "Güvenlik anahtarı istemi (saniye)",

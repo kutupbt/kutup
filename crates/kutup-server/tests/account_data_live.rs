@@ -145,7 +145,7 @@ fn the_authenticator_secret_is_sealed_under_the_accounts_data_key() {
     let lost = c
         .post(format!("{base}/api/auth/login/2fa"))
         .header("x-kutup-client", "cli")
-        .json(&json!({ "preAuthToken": token, "code": totp_now(&secret) }))
+        .json(&json!({ "preAuthToken": token, "code": totp_at(&secret, totp_step_now()) }))
         .send()
         .unwrap();
     assert_eq!(lost.status(), StatusCode::UNAUTHORIZED);

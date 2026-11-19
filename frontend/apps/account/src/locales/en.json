@@ -1094,7 +1094,7 @@
         "chatDistributionMessageBytesHint": "The largest message a new Chat identity sends each kept device."
       },
       "twoFactor": "Two-factor sign-in",
-      "twoFactorHint": "Recovery codes and security keys for accounts with two-factor authentication.",
+      "twoFactorHint": "Recovery codes, security keys and authenticator codes for accounts with two-factor authentication.",
       "federation": "Federation",
       "federationHint": "How deliveries to other Kutup servers are tried again when a server doesn't answer.",
       "privacy": "Privacy and retention",
@@ -1102,6 +1102,8 @@
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Recovery codes per account",
         "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes.",
+        "totpSkewSteps": "Authenticator code drift (steps)",
+        "totpSkewStepsHint": "How many 30-second steps before or after now an authenticator code is still taken (0–2). Each code is taken once either way.",
         "securityKeysPerAccount": "Security keys per account",
         "securityKeysPerAccountHint": "How many security keys one account may add.",
         "webauthnCeremonySeconds": "Security key prompt (seconds)",
