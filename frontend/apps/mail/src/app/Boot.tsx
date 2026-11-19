@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { bootChildApp } from '@kutup/session/childBoot'
@@ -30,7 +30,10 @@ export function Boot({ children }: { children: ReactNode }) {
       .then((result) => {
         if (result.kind === 'redirecting') return
         if (result.next) void navigate.current(result.next, { replace: true })
-        setState({ kind: 'ready' })
+        // The router moves in a transition: the app shows in the same one,
+        // or it renders the hand-off's /login first and its routes redirect
+        // away from where the sign-in was asked for.
+        startTransition(() => setState({ kind: 'ready' }))
       })
       .catch((error: unknown) =>
         setState({ kind: 'error', keysChanged: error instanceof KeyBindingMismatchError }),
