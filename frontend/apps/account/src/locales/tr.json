@@ -91,7 +91,7 @@
     "kinds": {
       "terms": "Hizmet Koşulları",
       "privacyNotice": "Aydınlatma Metni",
-      "federationAbroad": "diğer sunucularla iletişim rıza metni",
+      "federation": "diğer sunucularla veri paylaşımı rıza metni",
       "marketing": "haber ve teklif rıza metni"
     }
   },
@@ -209,7 +209,7 @@
         "hint": "Kapalıyken başka bir sunucudaki hiç kimse size ulaşamaz, siz de onlara ulaşamazsınız. Onlarla sohbetleriniz ve paylaşımlarınız sessizce kalır: başka bir sunucuda barındırılan gruplar ve aramalar da siz yeniden açana kadar sizin için sessizleşir (üyeliğiniz sürer). Kapalıyken oralarda size gönderilen mesajlar daha sonra iletilmez. Hiçbir şey silinmez.",
         "turnOn": "Aç",
         "turnOff": "Kapat",
-        "consentTitle": "Diğer sunucularla iletişim kurulsun mu?",
+        "consentTitle": "Diğer sunucularla veri paylaşılsın mı?",
         "agree": "Sohbet ve Drive'ımın diğer Kutup sunucularındaki kişilere ulaşmasını kabul ediyorum."
       },
       "title": "Gizlilik",
@@ -221,9 +221,9 @@
       "withdrawnAt": "{{date}} tarihinde geri alındı",
       "failed": "Seçiminiz kaydedilemedi. Yeniden deneyin.",
       "purposes": {
-        "federationAbroad": {
-          "title": "Diğer sunucularla iletişim",
-          "description": "Sohbet ve Drive'ınızın, başka ülkelerde olabilecek diğer Kutup sunucularındaki kişilere ulaşmasına izin verin. Geri alırsanız bu durur."
+        "federation": {
+          "title": "Diğer sunucularla veri paylaşımı",
+          "description": "Sohbet ve Drive'ınızın diğer Kutup sunucularıyla veri paylaşmasına izin verin; böylece hesabı orada olan kişilere ulaşabilirsiniz. Geri alırsanız bu durur."
         },
         "marketing": {
           "title": "Haberler ve teklifler",
@@ -415,6 +415,7 @@
       "description": "Hesabınızın açık olduğu her yer. Bir girişi buradan sonlandırmak hemen etkili olur.",
       "thisDevice": "Bu cihaz",
       "cli": "Komut satırı",
+      "mailBridge": "Posta köprüsü",
       "browserOn": "{{os}} üzerinde {{browser}}",
       "unknownBrowser": "Bilinmeyen tarayıcı",
       "unknownApp": "Bilinmeyen uygulama",
@@ -663,7 +664,7 @@
       "publishTitle": "Sürüm yayımla",
       "publishHint": "Yayımlanan bir sürüm hiç değiştirilmez: yenisini yayımlayın. Zorunlu yeni bir sürüm herkese bir sonraki oturum açışında gösterilir.",
       "kind": "Tür",
-      "kindHint": "terms, privacyNotice, bir rıza amacı (federationAbroad, marketing) ya da kendi türünüz.",
+      "kindHint": "terms, privacyNotice, bir rıza amacı (federation, marketing) ya da kendi türünüz.",
       "version": "Sürüm",
       "language": "Dil",
       "languageHint": "en, tr ya da pt-BR gibi bir kod.",
@@ -1018,6 +1019,8 @@
         "on": "Evet",
         "off": "Hayır"
       },
+      "federationConsentRequired": "Diğer sunucularla veri paylaşmadan önce rıza iste",
+      "federationConsentRequiredHint": "Yasanın gerektirdiği yerde: açmak için herkesin Ayarlar → Gizlilik'te, Yasal belgeler'de bunun için yayımladığınız metin (federation türü) altında rıza vermesi gerekir. Yeni hesaplar o zaman kapalı başlar.",
       "publicSharingHint": "“Bağlantıya sahip herkes” ile paylaşılan bağlantıları kimlerin açabileceği. Yalnızca oturum açanlar seçeneği bir deneme sunucusunun bağlantılarını kendi hesaplarıyla sınırlar.",
       "publicSharingMode": {
         "on": "Bağlantıya sahip herkes",
@@ -1155,7 +1158,17 @@
         "accountClosingDays": "Kapatılan hesabı silmeden önce bekle (gün)",
         "accountClosingDaysHint": "Silinmesi istenen hesap bu süre boyunca kapanıyor durumundadır; bu süre içinde oturum açılırsa hesap tutulur.",
         "destructionEventRetentionDays": "İmha günlüğünü sakla (gün)",
-        "destructionEventRetentionDaysHint": "Neyin, ne zaman, kim tarafından silindiği; kimsenin adını vermeden. Her yedekten uzun tutun: geri yükleme bu günlüğü yeniden uygular."
+        "destructionEventRetentionDaysHint": "Neyin, ne zaman, kim tarafından silindiği; kimsenin adını vermeden. Her yedekten uzun tutun: geri yükleme bu günlüğü yeniden uygular.",
+        "chatSendRetentionDays": "Chat gönderim kayıtlarını sakla (gün)",
+        "chatSendRetentionDaysHint": "Gönderilen her mesajın kimliği; yeniden denenen bir gönderimin bir kez ulaşmasını sağlar. 0 onları saklar."
+      },
+      "sessions": "Oturumlar",
+      "sessionsHint": "Bir girişin ne kadar sürdüğü ve bir cihazın ne kadar tanındığı.",
+      "sessionsLimits": {
+        "sessionTtlDays": "Kullanılmayan giriş süresi (gün)",
+        "sessionTtlDaysHint": "Bu kadar süre kullanılmayan oturum sona erer; her kullanım sonunu ileri taşır. Değişiklik her oturuma bir sonraki kullanımında uygulanır.",
+        "knownClientDays": "Bir cihazı hatırla (gün)",
+        "knownClientDaysHint": "Birinin oturum açtığı tarayıcı ya da program, bu süre boyunca bilinmeyen cihazlardan girişlere konan sınırlara tabi olmaz."
       },
       "mail": "Posta anahtarları",
       "mailHint": "Bir e-posta adresinin kaç şifreleme anahtarı tutabileceği.",
@@ -2000,7 +2013,8 @@
         "web-mail": "Posta",
         "web-pass": "Kasa",
         "web-calendar": "Takvim",
-        "cli": "Komut satırı (kutup)"
+        "cli": "Komut satırı (kutup)",
+        "mail-bridge": "Posta köprüsü"
       }
     }
   },

@@ -398,14 +398,18 @@ keeps them; reports on them are operator tooling.
   - Append-only. The current state per purpose is the latest row.
   - `GET/PUT /api/v1/account/consents`; Settings → Privacy lists each purpose with
     its document version and lets the person withdraw it.
-  - **Purposes from day one:** `federationAbroad` and `marketing`. There is
+  - **Purposes from day one:** `federation` (named `federationAbroad` until
+    W7 §13 made it neutral: "share data with other servers") and
+    `marketing`. There is
     no purpose for storing the account abroad: that rests on the operator's
     contracts with its providers, not on the user.
   - **A per-account federation switch** (decision 4): federation is
     site-level today, so the account gets a "talk to other servers" switch
-    (its default a site setting). Turning it on asks for the
-    `federationAbroad` consent when a document for the purpose is published;
-    withdrawing the consent turns it off. Built in L6.
+    (its default a site setting). Turning it on asks for the `federation`
+    consent where the site setting `server.federation_consent_required` is
+    on (off in the core; a jurisdiction that needs it turns it on, and a new
+    account then starts off); withdrawing the consent turns it off. Built in
+    L6; the setting since W7 §13 (before, a published text was what asked).
   - `marketing` is recorded only: there are no marketing messages.
 
 **As built (L6):**
@@ -435,7 +439,7 @@ keeps them; reports on them are operator tooling.
   server (the relay, its key and call tokens answer `403 federationOff`; the
   account stays a member and the group is quiet for it until the switch is
   on again; the Privacy page says so). An administrator's switch needs the
-  user's own consent when a `federationAbroad` text is published, and is
+  user's own consent where the site asks for the `federation` consent, and is
   in the admin log. Queued plain chat sends and media offers of an off
   account never leave: each holds a transport sequence the peer must see,
   so the origin sends a signed withdrawal in its place
@@ -520,7 +524,8 @@ L2 and L4 also a backup-restore test of the replay.
    the destruction log on restore.
 3. Two database roles, with a single-role fallback that warns at start, in
    `check-config` and in the admin console. kutup.dev runs two roles.
-4. A per-account federation switch, where `federationAbroad` is asked.
+4. A per-account federation switch, where the `federation` consent is asked
+   (where the site asks for it).
 5. Mail metadata is sealed before the wipe (L7).
 6. Defaults, all site settings (per account where a setting limits one
    account): closing 14 days, key-dump retention 7 days, ended sessions

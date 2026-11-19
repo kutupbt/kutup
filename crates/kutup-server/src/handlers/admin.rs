@@ -295,7 +295,7 @@ pub async fn create_user(
     }
     let own_quota = (req.storage_quota_bytes > 0).then_some(req.storage_quota_bytes);
 
-    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
+    let federation_default = crate::federation_switch::new_account_state(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     // One account per folded name (docs/plans/username-renames.md). The
     // break-glass account itself is made by `bootstrap_admin`, not here.
@@ -551,10 +551,9 @@ pub async fn update_user(
         }
     }
     if let Some(federation) = req.federation.as_deref() {
-        // An administrator's switch. The consent is the user's to give: with
-        // a `federationAbroad` text published, on needs the user's own
-        // consent already given (`409 consentRequired`; a transfer abroad
-        // rests on it), and records none.
+        // An administrator's switch. The consent is the user's to give:
+        // where the site asks for the `federation` consent, on needs the
+        // user's own already given (`409 consentRequired`), and records none.
         if !["on", "off"].contains(&federation) {
             return Err(AppError::bad_request("federation must be on or off"));
         }
@@ -1179,6 +1178,8 @@ pub async fn get_settings(
     let registration_mode = crate::registration::mode(&state).await?;
     let public_sharing = crate::public_sharing::site(&state.pool).await?;
     let federation_default = crate::federation_switch::site_default(&state.pool).await?;
+    let federation_consent_required =
+        crate::federation_switch::consent_required(&state.pool).await?;
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -1208,6 +1209,7 @@ pub async fn get_settings(
         "registrationMode": registration_mode,
         "publicSharing": public_sharing,
         "federationDefault": federation_default,
+        "federationConsentRequired": federation_consent_required,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
@@ -1234,6 +1236,7 @@ pub struct UpdateSettingsRequest {
     registration_mode: Option<crate::registration::RegistrationMode>,
     public_sharing: Option<crate::public_sharing::PublicSharing>,
     federation_default: Option<bool>,
+    federation_consent_required: Option<bool>,
     default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
@@ -1283,6 +1286,7 @@ pub async fn update_settings(
     if req.registration_mode.is_none()
         && req.public_sharing.is_none()
         && req.federation_default.is_none()
+        && req.federation_consent_required.is_none()
         && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
@@ -1412,6 +1416,9 @@ pub async fn update_settings(
     if let Some(on) = req.federation_default {
         crate::federation_switch::set_site_default(&mut transaction, on).await?;
     }
+    if let Some(required) = req.federation_consent_required {
+        crate::federation_switch::set_consent_required(&mut transaction, required).await?;
+    }
     for (key, value) in [
         (
             crate::storage_pool::DEFAULT_QUOTA_SETTING,
@@ -1511,6 +1518,7 @@ pub async fn update_settings(
             "registrationMode": req.registration_mode,
             "publicSharing": req.public_sharing,
             "federationDefault": req.federation_default,
+            "federationConsentRequired": req.federation_consent_required,
             "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,

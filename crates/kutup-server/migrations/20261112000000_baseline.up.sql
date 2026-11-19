@@ -49,7 +49,7 @@ COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
 --
 
 CREATE DOMAIN public.client_type AS text
-	CONSTRAINT client_type_check CHECK ((VALUE = ANY (ARRAY['web-account'::text, 'web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text, 'cli'::text])));
+	CONSTRAINT client_type_check CHECK ((VALUE = ANY (ARRAY['web-account'::text, 'web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text, 'cli'::text, 'mail-bridge'::text])));
 
 
 --
@@ -655,7 +655,7 @@ CREATE TABLE public.auth_session_forks (
     payload bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT auth_session_forks_child_client_type_check CHECK (((child_client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text]))),
+    CONSTRAINT auth_session_forks_child_client_type_check CHECK (((child_client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text, 'mail-bridge'::text]))),
     CONSTRAINT auth_session_forks_payload_check CHECK (((octet_length(payload) >= 1) AND (octet_length(payload) <= 16384))),
     CONSTRAINT auth_session_forks_selector_hash_check CHECK ((octet_length(selector_hash) = 32))
 );
@@ -679,7 +679,7 @@ CREATE TABLE public.auth_sessions (
     expires_at timestamp with time zone NOT NULL,
     revoked_at timestamp with time zone,
     client_sealed bytea,
-    CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL) OR ((client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text])))),
+    CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL) OR ((client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text, 'mail-bridge'::text])))),
     CONSTRAINT auth_sessions_client_sealed_check CHECK (((client_sealed IS NULL) OR ((octet_length(client_sealed) >= 47) AND (octet_length(client_sealed) <= 512)))),
     CONSTRAINT auth_sessions_local_key_check CHECK ((octet_length(local_key) = 32)),
     CONSTRAINT auth_sessions_previous_refresh_token_hash_check CHECK ((octet_length(previous_refresh_token_hash) = 32)),
@@ -1872,7 +1872,7 @@ CREATE TABLE public.consents (
     at timestamp with time zone DEFAULT now() NOT NULL,
     channel text NOT NULL,
     CONSTRAINT consents_channel_check CHECK ((channel = ANY (ARRAY['settings'::text, 'signup'::text, 'admin'::text]))),
-    CONSTRAINT consents_purpose_check CHECK ((purpose = ANY (ARRAY['federationAbroad'::text, 'marketing'::text])))
+    CONSTRAINT consents_purpose_check CHECK ((purpose = ANY (ARRAY['federation'::text, 'marketing'::text])))
 );
 
 
@@ -4002,7 +4002,7 @@ CREATE TABLE public.account_ui_preferences (
     theme text,
     language text,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT account_ui_preferences_language_check CHECK ((language = ANY (ARRAY['en'::text, 'tr'::text]))),
+    CONSTRAINT account_ui_preferences_language_check CHECK ((language ~ '^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$'::text)),
     CONSTRAINT account_ui_preferences_theme_check CHECK ((theme = ANY (ARRAY['light'::text, 'dark'::text, 'system'::text])))
 );
 

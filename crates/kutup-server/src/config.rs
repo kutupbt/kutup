@@ -10,6 +10,11 @@ pub struct Config {
     /// security and admin logs are append-only for the server. `None`: one
     /// role does everything, and those logs are not append-only.
     pub database_owner_url: Option<String>,
+    /// A fork's own migrations (`ENTERPRISE_MIGRATIONS`, a directory; off
+    /// unless set): run after the core's, against the schema `enterprise`,
+    /// with their own migrations table (docs/self-hosting.md, "A fork's own
+    /// tables"). The core's baseline holds only core tables.
+    pub enterprise_migrations: Option<std::path::PathBuf>,
     pub jwt_secret: String,
     /// The keys the OPAQUE server setups are sealed under
     /// (`OPAQUE_SETUP_KEYS`, docs/plans/opaque.md §5). Never logged.
@@ -52,8 +57,6 @@ pub struct Config {
     pub seaweedfs_master_url: String,
     /// Unacked chat ciphertext retention. `0` disables expiry.
     pub chat_mailbox_retention_days: i64,
-    /// Send-id idempotency-record retention. `0` disables expiry.
-    pub chat_send_retention_days: i64,
     /// Chat devices with no authenticated activity for this many days are
     /// expired with their prekeys/mailbox. `0` disables expiry.
     pub chat_device_expiry_days: i64,
@@ -301,7 +304,7 @@ impl AppOrigins {
             ClientType::WebMail => Some(&self.mail),
             ClientType::WebPass => Some(&self.pass),
             ClientType::WebCalendar => Some(&self.calendar),
-            ClientType::Cli => None,
+            ClientType::Cli | ClientType::MailBridge => None,
         }
     }
 }
@@ -410,12 +413,26 @@ pub fn resolve_app_origins(
     Ok(origins)
 }
 
+/// The environment variables that became site settings (docs/plans/w7-schema.md
+/// §13), each with the setting that replaced it. One still set is ignored,
+/// with a warning at start naming the setting to use instead.
+pub(crate) const MOVED_TO_SETTINGS: &[(&str, &str)] = &[
+    ("TRASH_RETENTION_DAYS", "drive.trash_retention_days"),
+    ("CHAT_SEND_RETENTION_DAYS", "chat.send_retention_days"),
+];
+
 impl Config {
     /// Loads config from the environment, panicking on missing required vars or
     /// a too-short JWT secret (mirrors the Go `Load`).
     pub fn load() -> Config {
         let env = Env::process();
         let cfg = Self::from_env(&env);
+        for (name, setting) in env.moved_to_settings() {
+            tracing::warn!(
+                "{name} is set but no longer read: it is the site setting {setting} \
+                 (Administration → Server settings)"
+            );
+        }
         if let Err(errors) = env.finish() {
             eprintln!("kutup-server: the configuration is not valid:");
             for error in errors {
@@ -543,6 +560,18 @@ impl Config {
         let mut cfg = Config {
             database_url: must_env("DATABASE_URL"),
             database_owner_url: env.set("DATABASE_OWNER_URL").filter(|url| !url.is_empty()),
+            enterprise_migrations: env.set("ENTERPRISE_MIGRATIONS").and_then(|path| {
+                let path = std::path::PathBuf::from(path.trim());
+                if path.is_dir() {
+                    Some(path)
+                } else {
+                    env.error(format!(
+                        "ENTERPRISE_MIGRATIONS must name a directory, not {}",
+                        path.display()
+                    ));
+                    None
+                }
+            }),
             jwt_secret: must_env("JWT_SECRET"),
             opaque_setup_keys: {
                 let value = env.opaque_setup_keys();
@@ -590,7 +619,6 @@ impl Config {
                 .raw("SEAWEEDFS_MASTER_URL")
                 .unwrap_or_else(|| "http://seaweedfs-master:9333".to_string()),
             chat_mailbox_retention_days,
-            chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
             chat_media_max_plaintext_bytes: chat_media_max_plaintext_bytes as u64,
             chat_media_delivery_retention_days,
@@ -961,6 +989,16 @@ impl Env {
         (!unknown.is_empty()).then_some(unknown)
     }
 
+    /// Each variable of [`MOVED_TO_SETTINGS`] that is set, with its setting.
+    /// Not a read: `.env.example` no longer lists them.
+    pub(crate) fn moved_to_settings(&self) -> Vec<(&'static str, &'static str)> {
+        MOVED_TO_SETTINGS
+            .iter()
+            .filter(|(name, _)| (self.lookup)(name).is_some())
+            .copied()
+            .collect()
+    }
+
     /// Every problem found, or `Ok` when there was none.
     pub(crate) fn finish(&self) -> Result<(), Vec<String>> {
         let errors = self.errors.take();
@@ -1246,7 +1284,7 @@ mod env_tests {
     fn every_bad_value_is_reported_not_defaulted() {
         let found = errors(&[
             ("APP_ENV", "prod"),
-            ("CHAT_SEND_RETENTION_DAYS", "thirty"),
+            ("CHAT_DEVICE_EXPIRY_DAYS", "thirty"),
             ("CHAT_GROUPS", "maybe"),
             ("MAIL_OUTSIDE_SENDING", "yes"),
             ("MAIL_DEFAULT_DELAY_SEND_SECONDS", "7"),
@@ -1256,7 +1294,7 @@ mod env_tests {
         ]);
         for name in [
             "APP_ENV",
-            "CHAT_SEND_RETENTION_DAYS",
+            "CHAT_DEVICE_EXPIRY_DAYS",
             "CHAT_GROUPS",
             "MAIL_OUTSIDE_SENDING",
             "MAIL_DEFAULT_DELAY_SEND_SECONDS",
@@ -1269,6 +1307,29 @@ mod env_tests {
                 "{name} not reported: {found:?}"
             );
         }
+    }
+
+    /// A variable that became a setting is named with its setting when set,
+    /// and each setting is one the server has.
+    #[test]
+    fn variables_moved_to_settings_are_named_when_set() {
+        let env = Env::from_pairs(&[("TRASH_RETENTION_DAYS", "30"), ("PORT", "1")]);
+        assert_eq!(
+            env.moved_to_settings(),
+            vec![("TRASH_RETENTION_DAYS", "drive.trash_retention_days")]
+        );
+        assert!(Env::from_pairs(&[]).moved_to_settings().is_empty());
+        for (_, setting) in MOVED_TO_SETTINGS {
+            assert!(
+                crate::site_settings::numeric_settings().any(|s| s.key == *setting),
+                "{setting} is no setting"
+            );
+        }
+        // Setting one is no error: the server starts, ignoring it.
+        assert_eq!(
+            errors(&[("CHAT_SEND_RETENTION_DAYS", "30")]),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -1416,7 +1477,9 @@ mod env_example {
     /// Read by the server, but not from `.env` under Compose: it builds or
     /// fixes them itself (DATABASE_URL from POSTGRES_*, the cache directory,
     /// the port and mail's addresses inside its network, OPAQUE_SETUP_KEYS in
-    /// place of the file) or only test stacks set them.
+    /// place of the file), a fork's image sets them (ENTERPRISE_MIGRATIONS: a
+    /// blank one passed from `.env` would turn its migrations off) or only test
+    /// stacks set them.
     const NOT_FROM_ENV_FILE: &[&str] = &[
         "DATABASE_URL",
         "MAPS_CACHE_DIR",
@@ -1425,6 +1488,7 @@ mod env_example {
         "MAIL_SUBMISSION_ADDR",
         "OPAQUE_SETUP_KEYS_FILE",
         "MAIL_TEST_KEY_ORIGIN",
+        "ENTERPRISE_MIGRATIONS",
     ];
 
     /// The compose files a self-hoster combines (docs/self-hosting.md).
@@ -1539,6 +1603,21 @@ mod env_example {
             unread.is_empty(),
             "in .env.example but read by nothing (or add it to OUTSIDE_THE_SERVER): {unread:?}"
         );
+    }
+
+    /// A variable that became a setting is read by nothing and isn't offered
+    /// in `.env.example`.
+    #[test]
+    fn variables_moved_to_settings_are_gone() {
+        let reads = server_reads();
+        let listed = listed();
+        for (name, _) in MOVED_TO_SETTINGS {
+            assert!(!reads.contains(*name), "{name} is still read");
+            assert!(
+                !listed.iter().any(|l| l == name),
+                "{name} is in .env.example"
+            );
+        }
     }
 
     #[test]

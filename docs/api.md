@@ -261,7 +261,7 @@ Specific codes, where an app does something particular (a test in
 | `sharingOff` | 403/410 | Public links are off, for the whole server or the link owner's account: `403` when making one (with `scope`: `site` or `account`), `410` when opening one (no scope: a link's holder isn't told whose switch it was) |
 | `targetBlocked` | 409 | Making a public link to what an operator blocked links to (`reason`) |
 | `federationOff` | 403 | This account doesn't talk to other servers (Settings → Privacy): a request that would reach one is refused |
-| `consentRequired` | 409 | Turning on talking to other servers needs the `federationAbroad` consent: a text for it is published (`purpose` names it) |
+| `consentRequired` | 409 | Turning on talking to other servers needs the `federation` consent: the site asks for it (`federationConsentRequired`; `purpose` names it) |
 | `acknowledgementsRequired` | 400 | Sign-up without confirming the current version of every required document (`kinds` names those missing); see `GET /api/v1/legal/documents` |
 | `documentNotCurrent` | 400 | A document named that is not the current version (an acknowledgement, or the text a consent is given under) |
 | `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
@@ -315,6 +315,7 @@ client type, sent by the client in the `X-Kutup-Client` header:
 | `web-account` | the account web app (`account.<domain>`) | password (`/login/start` and `/login/finish`, `/login/2fa`, `/complete-setup`, `/register`) | HttpOnly cookie on that origin |
 | `web-drive`, `web-chat` | the Drive and Chat web apps | **forked** from a `web-account` session (`/api/v1/auth/forks`) | HttpOnly cookie on their own origin |
 | `cli` | the `kutup` CLI | password | JSON body |
+| `mail-bridge` | the Mail bridge (IMAP and SMTP for desktop mail apps, on the person's computer) | password | JSON body |
 
 Access tokens are 15-minute JWTs carrying the session id (`sid`); every
 authenticated request (and each collab / chat WebSocket upgrade) checks that
@@ -522,7 +523,9 @@ the start is the attempt. A right finish gives it back.
   `kutup.known` cookie (set at a session's finish and by
   `POST /api/v1/auth/forks/consume`, `Path=/api/v1/auth`: no route outside sign-in
   sees it; the same answers clear one a browser may hold at `Path=/api`) and
-  is not held by that cap.
+  is not held by that cap. It stays good for the site setting
+  `account.known_client_days` (`knownClientDays`, 1–400, default 90), read
+  at each attempt.
 - **Unknown names:** both apply to them too, keyed by the canonical name, so a
   `429` does not reveal whether the account exists.
 - **Codes:** a `429` from the lockout or the ceiling carries `code:
@@ -538,8 +541,8 @@ either, the oldest is dropped. A sign-in waits at most two minutes for its
 finish.
 
 **Auth:** None (`purpose: "reauth"`: Bearer JWT, and the name must be the
-caller's account) · **Header:** `X-Kutup-Client: web-account` or `cli` for a
-session (`400` otherwise)
+caller's account) · **Header:** `X-Kutup-Client: web-account`, `cli` or
+`mail-bridge` for a session (`400` otherwise)
 
 **Request body:**
 ```json
@@ -604,7 +607,7 @@ generation the envelope holds (its authenticated header names it too), and
 docs/plans/mk-rotation-exercise.md): the client opens the chain down to
 generation 1 and opens every record under the key of the generation its header
 names. Only a session answer carries them; nothing before the password is
-proved does. For `web-account` the refresh token is an HttpOnly, host-only cookie named `kutup.refresh` (`Path=/api/v1/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
+proved does. For `web-account` the refresh token is an HttpOnly, host-only cookie named `kutup.refresh` (`Path=/api/v1/auth/refresh`, `SameSite=Lax`, a sliding `Max-Age` of the session's lifetime, `Secure` outside development) and is **not** in the JSON body. For `cli` and `mail-bridge` (the Mail bridge, a program that signs in on its own, as the CLI does) it is returned as `"refreshToken"` in the body and no cookie is set. A session lasts unused for the site setting `account.session_ttl_days` (`sessionTtlDays`, 1–365, default 30); each refresh moves its end that far ahead.
 
 When the account's record is under a setup that is no longer the server's
 current one (`OPAQUE_SETUP_KEYS` rotated), the session also carries
@@ -1331,16 +1334,20 @@ exact text shown). Nothing published means nothing is asked.
   `POST /api/v1/account/legal/acknowledge` `{ documentIds }` confirms them (`204`;
   `400 documentNotCurrent`).
 - `GET /api/v1/account/consents`: `{ consents: [{ purpose, given, documentId, at }],
-  documents }`, each purpose's latest state and its current text.
+  documents, federationConsentRequired }`, each purpose's latest state, its
+  current text, and whether turning federation on asks for its consent.
   `PUT /api/v1/account/consents` `{ purpose, given, documentId? }` (`purpose`:
-  `federationAbroad` or `marketing`): giving one names the current document of
+  `federation` or `marketing`): giving one names the current document of
   the purpose's kind when one is published (`400 documentNotCurrent`). Each
   change is a new row; the records are append-only for the server.
 - `PUT /api/v1/account/federation` `{ on, documentId? }`: whether this account's
   Chat and Drive talk to other Kutup servers (`federation` in `/user/me`).
-  Turning it on, when a `federationAbroad` text is published, gives that
-  consent under `documentId` (or needs it given before: `409
-  consentRequired`); withdrawing the consent turns it off. While off, the
+  Where the site asks for the `federation` consent (the site setting
+  `server.federation_consent_required`, `federationConsentRequired` in
+  `/api/v1/admin/settings`; off unless set), turning it on gives that consent,
+  under `documentId` when a `federation` text is published, or needs it given
+  before (`409 consentRequired`; an administrator's switch gives none), and a
+  new account starts off; withdrawing the consent turns it off. While off, the
   account's requests that would reach another server are `403
   federationOff`, and to other servers it is no account (each of their
   lookups, deliveries and share reads answers as for an unknown one); its
@@ -5922,6 +5929,10 @@ Return current global server settings.
   "passVaultMaxBytes": 67108864,
   "driveVersionRetentionChoices": [7, 30, 90, 180, 365, 3650],
   "driveTrashRetentionDays": 30,
+  "federationConsentRequired": false,
+  "chatSendRetentionDays": 30,
+  "sessionTtlDays": 30,
+  "knownClientDays": 90,
   "calendarsPerAccount": 25,
   "calendarEventsPerCalendar": 25000,
   "calendarSyncBatch": 10,
@@ -5942,6 +5953,16 @@ Return current global server settings.
   "healthProbeTimeoutSeconds": 5
 }
 ```
+
+`federationConsentRequired` (site setting
+`server.federation_consent_required`, off at first): whether turning
+federation on asks each person's `federation` consent (`PUT /api/v1/account/federation`);
+new accounts then start off. `chatSendRetentionDays` (section `privacy`,
+0–3650, 0 keeps them) is how long a Chat send record is kept. The `sessions`
+section: `sessionTtlDays` (1–365) is how long a session lasts unused, and
+`knownClientDays` (1–400) how long a client that signed in stays known to
+the account's sign-in limits; both also take one account's own value
+(`PUT /api/v1/admin/accounts/{id}/entitlements/{key}`), which wins over the site's.
 
 The backup and health settings (section `backups`;
 docs/plans/restore-drill-and-alerting.md): `storageDeletedBlobRetentionSeconds`

@@ -36,7 +36,7 @@ backoff and states, and three have their own receiver tables.
 | A mismatch | doesn't use up the sequence: **the destination's queue blocks** until the client resends | uses it up | (none) | (none) |
 | Sending | the client's request, else a 5 s worker: one head per destination | an advisory-locked flush, batched (64 items, 4 MiB), from the client and the 5 s worker | the client's request, else a 5 s worker: **one row per tick for the whole server** | a 30 s announcer, 8 at once |
 | Backoff | 2^n s, at most 300 s, with jitter | 2^n s, at most 300 s, no jitter | 5·2^n s, at most 900 s | 30·2^n s, at most 6 h; dropped after 7 days |
-| Kept | delivered rows: `CHAT_SEND_RETENTION_DAYS` (env) | for ever, both sides (the receiver can't prune: its `last` is `MAX(sequence)`) | for ever, both sides | until delivered |
+| Kept | delivered rows: `chat.send_retention_days` (site setting) | for ever, both sides (the receiver can't prune: its `last` is `MAX(sequence)`) | for ever, both sides | until delivered |
 | Admin | counts and wake | none | none | none |
 
 Two defects come from the split:

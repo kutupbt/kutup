@@ -346,6 +346,7 @@ pub enum SettingSection {
     Backups,
     Mail,
     AccountRecords,
+    Sessions,
 }
 
 /// A whole-number setting administrators set: its key, its field in
@@ -1084,7 +1085,18 @@ pub const MAIL_OUTBOX_KEEP_SECONDS: NumericSetting = NumericSetting {
     unit: SettingUnit::Seconds,
     per_account: false,
 };
-pub const PRIVACY_SETTINGS: [NumericSetting; 9] = [
+/// How long a Chat send record (the send id that makes a retried send land
+/// once) is kept, in days; 0 keeps them.
+pub const CHAT_SEND_RETENTION_DAYS: NumericSetting = NumericSetting {
+    key: "chat.send_retention_days",
+    field: "chatSendRetentionDays",
+    default: 30,
+    min: 0,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+pub const PRIVACY_SETTINGS: [NumericSetting; 10] = [
     KEY_BACKUP_KEEP_DAYS,
     SECURITY_EVENT_RETENTION_DAYS,
     SECURITY_EVENTS_KEPT_PER_KIND,
@@ -1094,7 +1106,34 @@ pub const PRIVACY_SETTINGS: [NumericSetting; 9] = [
     ACCOUNT_CLOSING_DAYS,
     DESTRUCTION_EVENT_RETENTION_DAYS,
     MAIL_OUTBOX_KEEP_SECONDS,
+    CHAT_SEND_RETENTION_DAYS,
 ];
+
+/// How long a sign-in lasts without being used, in days: each refresh of
+/// its token moves its end this far ahead (the web apps' refresh cookie
+/// lasts as long). A change applies to each session at its next refresh.
+pub const SESSION_TTL_DAYS: NumericSetting = NumericSetting {
+    key: "account.session_ttl_days",
+    field: "sessionTtlDays",
+    default: 30,
+    min: 1,
+    max: 365,
+    unit: SettingUnit::Days,
+    per_account: true,
+};
+/// How long a browser or program an account signed in from stays known to
+/// it without signing in again, in days (`crate::auth_check`: a known client
+/// isn't held to the account's unknown-client sign-in limits).
+pub const KNOWN_CLIENT_DAYS: NumericSetting = NumericSetting {
+    key: "account.known_client_days",
+    field: "knownClientDays",
+    default: 90,
+    min: 1,
+    max: 400,
+    unit: SettingUnit::Days,
+    per_account: true,
+};
+pub const SESSION_SETTINGS: [NumericSetting; 2] = [SESSION_TTL_DAYS, KNOWN_CLIENT_DAYS];
 
 pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [
     TWO_FACTOR_RECOVERY_CODES,
@@ -1580,6 +1619,7 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
             SettingSection::AccountRecords,
             &ACCOUNT_RECORDS_SETTINGS,
         ))
+        .chain(section(SettingSection::Sessions, &SESSION_SETTINGS))
 }
 
 /// The multi-recipient limits now.

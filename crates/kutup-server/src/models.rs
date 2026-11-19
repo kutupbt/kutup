@@ -96,6 +96,10 @@ pub struct AdminSettingsResponse {
     pub public_sharing: crate::public_sharing::PublicSharing,
     /// Whether a new account talks to other servers.
     pub federation_default: bool,
+    /// Whether turning federation on asks for the `federation` consent
+    /// (`server.federation_consent_required`, off unless set); a new account
+    /// then starts off.
+    pub federation_consent_required: bool,
     /// The storage quota new accounts get. Existing accounts keep theirs.
     pub default_storage_quota_bytes: i64,
     /// Retention for unread Chat mailbox ciphertext. Zero disables expiry.
@@ -551,6 +555,8 @@ pub struct UpdateAdminSettingsRequest {
     pub public_sharing: Option<crate::public_sharing::PublicSharing>,
     /// Whether a new account talks to other servers.
     pub federation_default: Option<bool>,
+    /// Whether turning federation on asks for the `federation` consent.
+    pub federation_consent_required: Option<bool>,
     pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,
