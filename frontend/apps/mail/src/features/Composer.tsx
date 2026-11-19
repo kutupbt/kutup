@@ -574,7 +574,8 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
         if (editor && shown.size) {
           const tr = editor.state.tr
           editor.state.doc.descendants((node, pos) => {
-            const found = node.type.name === 'image' ? shown.get(String(node.attrs.src)) : undefined
+            // By its part (an image read from a draft keeps no cid: src).
+            const found = node.type.name === 'image' ? shown.get(node.attrs.cid ? `cid:${String(node.attrs.cid)}` : String(node.attrs.src)) : undefined
             if (found) tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: found.url, cid: found.cid })
           })
           editor.view.dispatch(tr)

@@ -1,13 +1,31 @@
 import Image from '@tiptap/extension-image'
 
-/** TipTap's image, keeping which inline part it shows (`data-cid`). */
+const CID = /^cid:/i
+
+/**
+ * TipTap's image, keeping which inline part it shows (`data-cid`). A draft's
+ * HTML names its parts as `cid:`, which no page may load (img-src): such an
+ * image is read as its part's id with no `src`, and gets this browser's
+ * blob: URL once the part is fetched (Composer), so `cid:` never reaches
+ * the page.
+ */
 export const InlineImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
+      src: {
+        default: null,
+        parseHTML: (element) => {
+          const src = element.getAttribute('src')
+          return src && CID.test(src) ? null : src
+        },
+      },
       cid: {
         default: null,
-        parseHTML: (element) => element.getAttribute('data-cid'),
+        parseHTML: (element) => {
+          const src = element.getAttribute('src')
+          return element.getAttribute('data-cid') ?? (src && CID.test(src) ? src.slice(4) : null)
+        },
         renderHTML: (attributes: { cid?: string | null }) => (attributes.cid ? { 'data-cid': attributes.cid } : {}),
       },
     }
