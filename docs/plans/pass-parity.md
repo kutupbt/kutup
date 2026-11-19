@@ -118,7 +118,7 @@ but offers no way to see or change it.
 | Icons: KeePass's built-in set | 69 standard icons | ✅ | as for groups; a non-default one shows instead of the website's icon |
 | Foreground and background colour | Advanced → Colours | ✅ | the editor's Colours; the list shows the text colour on the title and the background as a bar at the row's edge |
 | Auto-type sequences, window associations | Auto-Type tab | ❌ | kept, not shown (see auto-type below) |
-| Several URLs | Browser integration, `KP2A_URL_n` | 🟡 | extra URLs are ordinary custom fields (the CSV import makes `KP2A_URL_n`); only `URL` gets an open button |
+| Several URLs | Browser integration, `KP2A_URL_n` | 🟡 | extra URLs are custom fields named `KP2A_URL`, `KP2A_URL_n` (the CSV import makes them), and each gets an open button beside its copy, as `URL` does (http and https only); no "Additional URLs" editor list, and no browser integration (Kutup has no extension) |
 | URL schemes (`cmd://`, `ssh://`, `{S:…}` in URLs) | `Entry URL Handling` | 🟡 | `http(s)` opens in a new tab; other schemes are shown, not opened (deliberately: a web page cannot run commands) |
 | URL override | Properties | ❌ | kept |
 | References `{REF:P@I:…}` | `Reference.adoc` "Entry Cross-Reference" | ✅ | `crates/kutup-pass/src/resolve.rs` (KeePassXC's rules and test cases): fields T/U/P/A/N/I found by T/U/P/A/N/I/O, ten levels deep; shown and copied resolved, marked "from another entry"; made by Clone |

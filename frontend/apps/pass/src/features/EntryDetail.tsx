@@ -19,6 +19,7 @@ import { IconDialog } from './IconDialog'
 import { AttachmentsSection } from './AttachmentsSection'
 import { iconSources } from '../lib/icons'
 import { copySecret } from '../lib/copySecret'
+import { isAdditionalUrl, openableUrl } from '../lib/urls'
 
 function Row({ label, children, actions }: { label: string; children: ReactNode; actions?: ReactNode }) {
   return (
@@ -165,7 +166,7 @@ export function EntryDetail({
     .filter((f) => !(STANDARD_FIELDS as readonly string[]).includes(f.key) && f.key !== 'otp')
     .map((f) => ({ ...f, value: shown(f.key) }))
   const groups = view.groups.filter((g) => !g.inRecycleBin)
-  const safeUrl = /^https?:\/\//i.test(url) ? url : null
+  const safeUrl = openableUrl(url)
   const picture = entry.customIcon ? (iconSources(view).get(entry.customIcon) ?? null) : null
   /** Applies `op`; whether it was. */
   const run = (op: Parameters<VaultSession['apply']>[0], done?: string): Promise<boolean> =>
@@ -302,9 +303,19 @@ export function EntryDetail({
                 key={f.key}
                 label={labelOf(f.key, f.key)}
                 actions={
-                  <Button variant="ghost" size="icon" onClick={() => void copyText(f.value).then(() => toast.success(t('detail.copied', { what: f.key })))} aria-label={t('detail.copy', { what: f.key })}>
-                    <Copy />
-                  </Button>
+                  <>
+                    {/* Keepass2Android's extra URLs (KP2A_URL_n) open as the URL does. */}
+                    {isAdditionalUrl(f.key) && openableUrl(f.value) ? (
+                      <Button variant="ghost" size="icon" asChild>
+                        <a href={openableUrl(f.value)!} target="_blank" rel="noopener noreferrer" aria-label={t('detail.openNamedUrl', { name: f.key })}>
+                          <ExternalLink />
+                        </a>
+                      </Button>
+                    ) : null}
+                    <Button variant="ghost" size="icon" onClick={() => void copyText(f.value).then(() => toast.success(t('detail.copied', { what: f.key })))} aria-label={t('detail.copy', { what: f.key })}>
+                      <Copy />
+                    </Button>
+                  </>
                 }
               >
                 <span className="break-all">{f.value}</span>

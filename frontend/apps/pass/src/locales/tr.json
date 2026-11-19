@@ -246,6 +246,7 @@
     "otpRemaining_one": "{{count}} saniye",
     "otpRemaining_other": "{{count}} saniye",
     "openUrl": "Siteyi aç",
+    "openNamedUrl": "{{name}} aç",
     "attachments": "Ekler",
     "attach": "Dosya ekle",
     "noAttachments": "Ek yok.",

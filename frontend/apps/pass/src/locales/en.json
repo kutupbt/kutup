@@ -246,6 +246,7 @@
     "otpRemaining_one": "{{count}} second",
     "otpRemaining_other": "{{count}} seconds",
     "openUrl": "Open the site",
+    "openNamedUrl": "Open {{name}}",
     "attachments": "Attachments",
     "attach": "Attach file",
     "noAttachments": "No attachments.",
