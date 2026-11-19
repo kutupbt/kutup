@@ -282,7 +282,7 @@ mod tests {
             &key,
             &parties,
             alice.drive_signing_key(),
-            &bob.drive_hpke_public_key(),
+            &bob.drive_xwing_public_key(),
         )
         .unwrap();
         let encoded = envelope.encode_b64().unwrap();
@@ -291,7 +291,7 @@ mod tests {
         let alice_signing = alice.drive_signing_key().verifying_key().to_array::<32>();
         assert_eq!(
             decoded
-                .open(&parties, &alice_signing, bob.drive_hpke_private_key())
+                .open(&parties, &alice_signing, bob.drive_xwing_private_key())
                 .unwrap(),
             key
         );
@@ -302,7 +302,7 @@ mod tests {
         ))
         .unwrap();
         assert!(decoded
-            .open(&parties, &alice_signing, carol.drive_hpke_private_key())
+            .open(&parties, &alice_signing, carol.drive_xwing_private_key())
             .is_err());
         let bob_signing = bob.drive_signing_key().verifying_key().to_array::<32>();
         assert!(decoded.verify(&parties, &bob_signing).is_err());
@@ -328,7 +328,7 @@ mod tests {
                 ..parties
             },
             alice.drive_signing_key(),
-            &bob.drive_hpke_public_key(),
+            &bob.drive_xwing_public_key(),
         )
         .is_err());
 

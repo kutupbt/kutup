@@ -993,7 +993,7 @@ impl AccountManifestV3 {
             identity_binding: None,
             drive: AccountManifestDriveKeysV1 {
                 suite: crate::AccountIdentitySuiteId::XWingEd25519V2,
-                hpke_public_key: b64(&keys.drive_hpke_public_key()),
+                hpke_public_key: b64(&keys.drive_xwing_public_key()),
                 share_signing_public_key: b64(&keys.drive_signing_public_key()),
             },
             devices,

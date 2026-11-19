@@ -1436,7 +1436,7 @@ as `GET /api/v1/accounts/by-id`; on this server `accountId` is the user id):
   "server": "example.com",
   "accountId": "<uuid>",
   "account": "bob@example.com",
-  "driveHpkePublicKey": "<canonical base64, 32 bytes>",
+  "driveXwingPublicKey": "<canonical base64, 32 bytes>",
   "accountIncarnationId": "<lowercase SHA-256 hex>",
   "driveSigningPublicKey": "<canonical base64, 32 bytes>",
   "accountAuthorityPublicKey": "<canonical base64, 32 bytes>",
@@ -1476,7 +1476,7 @@ hyphenated UUID or a server that is not a canonical name; `404` when no
 active, set-up account has it.
 
 **Response:** `{ "username", "server", "accountId", "account",
-"driveHpkePublicKey", "accountIncarnationId", "driveSigningPublicKey",
+"driveXwingPublicKey", "accountIncarnationId", "driveSigningPublicKey",
 "accountAuthorityPublicKey", "driveKeyBinding" }`. No rename chain: a client
 showing the address verifies it with `GET /api/v1/accounts/by-address/:address/renames`.
 
@@ -1485,7 +1485,7 @@ showing the address verifies it with `GET /api/v1/accounts/by-address/:address/r
 The Drive identities of up to 100 accounts on this server at once, by exact
 address: what a page that shows many people checks them with, in one request.
 Body: `{ "accounts": ["alice@example.org", …] }`. Answers an array of
-`{ account, accountAuthorityPublicKey, driveHpkePublicKey,
+`{ account, accountAuthorityPublicKey, driveXwingPublicKey,
 driveSigningPublicKey, driveKeyBinding? }` for the accounts found (unknown,
 disabled and not yet set-up accounts are left out); `400` for more than 100.
 

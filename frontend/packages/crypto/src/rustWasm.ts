@@ -121,8 +121,8 @@ export interface CryptoWasmModule {
     authorityPublicKey: string
     authorityKeyId: string
     incarnationId: string
-    driveHpkePublicKey: string
-    driveHpkePrivateKey: string
+    driveXwingPublicKey: string
+    driveXwingPrivateKey: string
     driveSigningPublicKey: string
   }
   signDriveKeyBinding(identityRoot: IdentityRoot, account: { server: string; accountId: string }, bindingEpoch: number): string
@@ -188,7 +188,7 @@ export interface CryptoWasmModule {
   verifyDriveKeyBinding(
     account: { server: string; accountId: string },
     authorityPublicKeyBase64: string,
-    driveHpkePublicKeyBase64: string,
+    driveXwingPublicKeyBase64: string,
     driveSigningPublicKeyBase64: string,
     bindingBase64: string,
     bindingEpoch: number,

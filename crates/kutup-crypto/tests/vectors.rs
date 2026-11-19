@@ -158,10 +158,10 @@ struct AccountIdentityVec {
     authority_key_id: String,
     #[serde(rename = "incarnationId")]
     incarnation_id: String,
-    #[serde(rename = "driveHpkePublicKey")]
-    drive_hpke_public_key: String,
-    #[serde(rename = "driveHpkePrivateKey")]
-    drive_hpke_private_key: String,
+    #[serde(rename = "driveXwingPublicKey")]
+    drive_xwing_public_key: String,
+    #[serde(rename = "driveXwingPrivateKey")]
+    drive_xwing_private_key: String,
     #[serde(rename = "driveSigningPublicKey")]
     drive_signing_public_key: String,
 }
@@ -323,12 +323,12 @@ fn account_identity_vector() {
     assert_eq!(identity.authority_key_id(), vector.authority_key_id);
     assert_eq!(identity.incarnation_id(), vector.incarnation_id);
     assert_eq!(
-        identity.drive_hpke_public_key().as_slice(),
-        b64(&vector.drive_hpke_public_key)
+        identity.drive_xwing_public_key().as_slice(),
+        b64(&vector.drive_xwing_public_key)
     );
     assert_eq!(
-        identity.drive_hpke_private_key().as_slice(),
-        b64(&vector.drive_hpke_private_key)
+        identity.drive_xwing_private_key().as_slice(),
+        b64(&vector.drive_xwing_private_key)
     );
     assert_eq!(
         identity.drive_signing_public_key().as_slice(),

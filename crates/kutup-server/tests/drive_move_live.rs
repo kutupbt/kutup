@@ -280,7 +280,7 @@ fn drive_move_contract() {
         owner.identity.drive_signing_key(),
         &editor.person,
         &editor.identity.incarnation_id(),
-        &editor.identity.drive_hpke_public_key(),
+        &editor.identity.drive_xwing_public_key(),
     )
     .unwrap()
     .encode_b64()

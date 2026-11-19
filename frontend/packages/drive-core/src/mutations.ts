@@ -231,7 +231,7 @@ export function useShareFolder() {
     if (found.server === me.accountRef.server) {
       const local = found
       const namedShareEnvelope = await seal(
-        local.driveHpkePublicKey,
+        local.driveXwingPublicKey,
         { server: local.server, accountId: local.accountId },
         local.accountIncarnationId,
       )
@@ -242,7 +242,7 @@ export function useShareFolder() {
     // An account on another Kutup server.
     const remote = found
     const namedShareEnvelope = await seal(
-      remote.driveHpkePublicKey,
+      remote.driveXwingPublicKey,
       { server: remote.server, accountId: remote.accountId },
       remote.accountIncarnationId,
     )

@@ -617,7 +617,7 @@ pub fn seal_own_passphrase(
         &CalendarMember {
             account: owner,
             incarnation_id: &incarnation_id,
-            hpke_public_key: &owner_identity.drive_hpke_public_key(),
+            hpke_public_key: &owner_identity.drive_xwing_public_key(),
         },
     )
 }
@@ -642,7 +642,7 @@ pub fn open_passphrase(
         owner.signing_public_key,
         member,
         &member_identity.incarnation_id(),
-        member_identity.drive_hpke_private_key(),
+        member_identity.drive_xwing_private_key(),
     )?);
     Passphrase::from_bytes(&bytes)
 }
@@ -1214,7 +1214,7 @@ mod tests {
             &CalendarMember {
                 account: &bob,
                 incarnation_id: &bob_incarnation,
-                hpke_public_key: &bob_keys.drive_hpke_public_key(),
+                hpke_public_key: &bob_keys.drive_xwing_public_key(),
             },
         )
         .unwrap();

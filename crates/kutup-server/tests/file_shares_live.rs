@@ -38,7 +38,7 @@ fn file_share(owner: &User, file_id: &str, key: &[u8; 32], generation: u32, to: 
         owner.identity.drive_signing_key(),
         &to.person,
         &to.identity.incarnation_id(),
-        &to.identity.drive_hpke_public_key(),
+        &to.identity.drive_xwing_public_key(),
     )
     .unwrap()
     .encode_b64()
@@ -149,7 +149,7 @@ fn file_share_contract() {
             &alice.identity.drive_signing_public_key(),
             &bob.person,
             &bob.identity.incarnation_id(),
-            bob.identity.drive_hpke_private_key(),
+            bob.identity.drive_xwing_private_key(),
         )
         .unwrap();
     assert_eq!(opened, file.key);
@@ -424,7 +424,7 @@ fn stale_file_shares_wait_for_the_owner() {
         alice.identity.drive_signing_key(),
         &editor.person,
         &editor.identity.incarnation_id(),
-        &editor.identity.drive_hpke_public_key(),
+        &editor.identity.drive_xwing_public_key(),
     )
     .unwrap()
     .encode_b64()
@@ -622,7 +622,7 @@ fn editors_share_and_rename_when_allowed() {
             &carol.identity.drive_signing_public_key(),
             &dave.person,
             &dave.identity.incarnation_id(),
-            dave.identity.drive_hpke_private_key(),
+            dave.identity.drive_xwing_private_key(),
         )
         .unwrap();
     assert_eq!(opened, file.key);

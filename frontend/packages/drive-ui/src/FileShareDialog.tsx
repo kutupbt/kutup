@@ -271,7 +271,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 detail={[person.profile ? m.account : null, owner ? null : permission, behind].filter(Boolean).join(' · ')}
                 control={
                   <>
-                    <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                    <VerifyPersonButton account={m.account} claimed={{ driveXwingPublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                     {owner ? (
                       <RoleMenu
                         name={person.name}

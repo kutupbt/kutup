@@ -132,7 +132,7 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         master_key_envelope,
         recovery_key_envelope,
         account_roots,
-        drive_xwing_public_key: b64.encode(account_identity.drive_hpke_public_key()),
+        drive_xwing_public_key: b64.encode(account_identity.drive_xwing_public_key()),
         account_authority_public_key: b64.encode(account_identity.authority_public_key()),
         account_authority_key_id: account_identity.authority_key_id(),
         account_incarnation_id: account_identity.incarnation_id(),

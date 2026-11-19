@@ -49,7 +49,7 @@ fn drive_key_bindings() {
         &alice.person,
         &key("accountAuthorityPublicKey"),
         found["driveKeyBindingEpoch"].as_u64().unwrap() as u32,
-        &base64_decode(found["driveHpkePublicKey"].as_str().unwrap())
+        &base64_decode(found["driveXwingPublicKey"].as_str().unwrap())
             .try_into()
             .unwrap(),
         &key("driveSigningPublicKey"),

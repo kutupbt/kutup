@@ -526,7 +526,7 @@ export interface AdminActivityResponse {
 export interface UserByAddressResponse {
   accountId: string
   account: string
-  driveHpkePublicKey: string
+  driveXwingPublicKey: string
   accountIncarnationId: string
   driveSigningPublicKey: string
 }

@@ -65,7 +65,7 @@ pub struct DriveIdentity {
     /// The address asked for, server-asserted: a lookup handle only.
     account: String,
     account_authority_public_key: String,
-    drive_hpke_public_key: String,
+    drive_xwing_public_key: String,
     drive_signing_public_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     drive_key_binding: Option<String>,
@@ -135,7 +135,7 @@ pub async fn drive_identities(
                 account_id: id.to_string(),
                 account: format!("{username}{suffix}"),
                 account_authority_public_key: authority,
-                drive_hpke_public_key: hpke,
+                drive_xwing_public_key: hpke,
                 drive_signing_public_key: signing,
                 drive_key_binding: binding,
                 identity_suite: suite,

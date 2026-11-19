@@ -184,7 +184,7 @@ pub fn published_with(client: &crate::api::Client, account: &str) -> Result<Publ
             .with_context(|| format!("the lookup for {account} gave no valid account id"))?,
         account: user.account,
         authority: user.account_authority_public_key,
-        hpke: user.drive_hpke_public_key,
+        hpke: user.drive_xwing_public_key,
         signing: user.drive_signing_public_key,
         binding: user.drive_key_binding,
         identity_suite: user.identity_suite,

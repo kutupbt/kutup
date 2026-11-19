@@ -487,7 +487,7 @@ pub struct AccountLookup {
     #[serde(default)]
     pub account: String,
     #[serde(default)]
-    pub drive_hpke_public_key: String,
+    pub drive_xwing_public_key: String,
     #[serde(default)]
     pub account_incarnation_id: String,
     #[serde(default)]

@@ -77,7 +77,7 @@ fn key_share(key: &GeneratedAddressKey, group: &str, member: &User) -> Value {
             &key.secret_key,
             group,
             &GroupShareMember { account: &member.person, incarnation_id: &incarnation },
-            &member.identity.drive_hpke_public_key(),
+            &member.identity.drive_xwing_public_key(),
         ).unwrap()),
     })
 }
@@ -91,7 +91,7 @@ fn signer_share(signer: &GroupSigningKey, group: &str, member: &User) -> Value {
             signer,
             group,
             &GroupShareMember { account: &member.person, incarnation_id: &incarnation },
-            &member.identity.drive_hpke_public_key(),
+            &member.identity.drive_xwing_public_key(),
         ).unwrap()),
     })
 }
@@ -321,7 +321,7 @@ fn group_key_lists_are_signed_by_the_groups_signers_only() {
         &id,
         &a.public_key,
         &bob.person,
-        bob.identity.drive_hpke_private_key(),
+        bob.identity.drive_xwing_private_key(),
     )
     .unwrap();
     assert_eq!(held.public_key, a.public_key);
@@ -619,7 +619,7 @@ fn a_reset_member_gets_the_keys_sealed_again() {
         &id,
         &k1.fingerprint,
         &bob.person,
-        bob.identity.drive_hpke_private_key(),
+        bob.identity.drive_xwing_private_key(),
     )
     .unwrap();
     assert_eq!(&*opened, &*k1.secret_key);

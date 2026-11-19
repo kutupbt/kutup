@@ -56,8 +56,8 @@ assert.deepEqual(
     authorityPublicKey: 'eYfen0GgcbJ7PEdEgpsPFRSB9Mi55ZfV+O7e6/P1Kfw=',
     authorityKeyId: '19c53cf8e1cf6790e78bd859ad391db080cc5b3fec885eb345e76b664ce694d3',
     incarnationId: '52d7989c9e0b29849cda0fad9f8fabcdd48b7512626889c3f2c79943777b6879',
-    driveHpkePublicKey: '+cBVrhuiBqGFRLgUvYAa/Lgir2BEK+ER/Cs/FghMcIQ6iwRalwqcQTVPjUW3vwtKTFh9agBnqjaN1ulXo5dITiy4o7PIZQyFJ6VifgiNjQc6Cni0bLPL66UDKpZQG8isTsPDFHdwyMgqOtM6hjZ0PZh0YjyxNMCkJ4EBl9weqFfLABDC25qeQ0ZdRabEtlLO6pWA0MVsDjm8gaWO3xxhjAwOx7K8RvuKm6KjAAvIuKw0SmSO20weDFNzxIyEF7QJKtKCjTwL1DAvu5kSv0l/6kld8Pd0x7xSn5ONg0Jq2JUSVAplohEE7onPSaKs2RIRFACSSCMxjQdMYCM42dk/2ux66bFnZEPKtgiaQyvCjec7wPatF2tFLJqu0JkIhoxFZhYf7ScGz+gmIVdCSKYkKIVVLTdaQ0VFRMVFVARabmu+y+FfjKwD7AyTiYCoh2wlHFwWlSKVUZgHpfBHyhABSKtK1zCfSIJy5PEza0Z3grPMvnVQAIsCsEctmmGuORU9LIB/VVeEIdG6HJhDK+R4ladkc9muK2U9nIACbSCU+pnNh2tVKwCG85Cv/6UdATMWIatk/sR6raJX3OCpQKRIssmK6Qi3NZEZeaUr1hy3tuyTi9BafmJpi9kxuviACQoOJpEUBQsCQgspcCtBCYXJ+0qKdHWmvAVfR6xGghiTBcacwAYDDzievtkc/zyjGUoAuhrMOkVINBWV6IMtPKsWLhhSxMeXFph+aNmzAGO6LUgomTuHYMcp5JxaX0q2DBUoj/lgiNcUR6gpBBB+WIgmiYQ1guVwqqZqd4cCPQMV8dCdqczExGxFIDEL1wAwgtka1DkmgyQm15bAr2WfJYA7+aKxQQUhxXtBxWsXWMobk2Rid+mLNQahfvgDrpA0c6mLTQc9OepiqCYZ4Xp6VOp2L3kFCiEwu/odX2SXzzKc2iohssAcfgBBizt/Z4W1hud0rAJ/QUC4E5htCbE2BQjGcvccf0aS2LDApsQGQWdYfjRyy8y9oZwS7vatZ1SImNur15U8BCS4WhHNw6uitIuvvWDD1CG9ceUOASMmUvzIapIczno6AMp0Zsk28xSXp/CfrGA0ZKs1YGhYq5KjarHBT2Kw5ONfB3bLkll1EAVcDCwm7Lu059utmuDO2CBUGoc3HzixZLhrZmKjwSNDLhO8Q1kqbMQsw/gZzCGoxAoZlOK/EueySvNeGzkbo1QBs5oWSoBfhUFNySmrLiQaDzBDmLIsxRKQibedu1nFXWEV0KlSZKsSZ3hns3okLpsJ+FhcXmBD/5ihInEtJkyHo6d8+Ganw0KkfHQURjxqHqy4Q+MvLyq/z4YdK5fIkoGir9pKp9yJwAgQnSGva5wI/Ei3ZPi+O2BjZgtXN3LFjIVP+5dofrMotdYx3GI8piTINnzLe6aggCgSBnRMp0NMMVmWslJHqRNQNJcdT2RtdFhxJ0qEd1o3vSZp3KYy3gKagpqOP/YdYfFZYhmvAYeABHcrQ5yVRIcSHZVv7+SXbqLLeZCFPYw+8+F+SmlRkjSNGVG8XUCK0v/Cdj4OriQKjLu5oVhE3gchf+XCbYJgXPLv1lJNyYidOLY+8Rlukf/Iw6XqdZwvEYf8y+83c3EFubqhEw==',
-    driveHpkePrivateKey: '3AcU81D8HUFAQ1oF/fBU9D0KS9NMVyS92HQhJvaGusg=',
+    driveXwingPublicKey: '+cBVrhuiBqGFRLgUvYAa/Lgir2BEK+ER/Cs/FghMcIQ6iwRalwqcQTVPjUW3vwtKTFh9agBnqjaN1ulXo5dITiy4o7PIZQyFJ6VifgiNjQc6Cni0bLPL66UDKpZQG8isTsPDFHdwyMgqOtM6hjZ0PZh0YjyxNMCkJ4EBl9weqFfLABDC25qeQ0ZdRabEtlLO6pWA0MVsDjm8gaWO3xxhjAwOx7K8RvuKm6KjAAvIuKw0SmSO20weDFNzxIyEF7QJKtKCjTwL1DAvu5kSv0l/6kld8Pd0x7xSn5ONg0Jq2JUSVAplohEE7onPSaKs2RIRFACSSCMxjQdMYCM42dk/2ux66bFnZEPKtgiaQyvCjec7wPatF2tFLJqu0JkIhoxFZhYf7ScGz+gmIVdCSKYkKIVVLTdaQ0VFRMVFVARabmu+y+FfjKwD7AyTiYCoh2wlHFwWlSKVUZgHpfBHyhABSKtK1zCfSIJy5PEza0Z3grPMvnVQAIsCsEctmmGuORU9LIB/VVeEIdG6HJhDK+R4ladkc9muK2U9nIACbSCU+pnNh2tVKwCG85Cv/6UdATMWIatk/sR6raJX3OCpQKRIssmK6Qi3NZEZeaUr1hy3tuyTi9BafmJpi9kxuviACQoOJpEUBQsCQgspcCtBCYXJ+0qKdHWmvAVfR6xGghiTBcacwAYDDzievtkc/zyjGUoAuhrMOkVINBWV6IMtPKsWLhhSxMeXFph+aNmzAGO6LUgomTuHYMcp5JxaX0q2DBUoj/lgiNcUR6gpBBB+WIgmiYQ1guVwqqZqd4cCPQMV8dCdqczExGxFIDEL1wAwgtka1DkmgyQm15bAr2WfJYA7+aKxQQUhxXtBxWsXWMobk2Rid+mLNQahfvgDrpA0c6mLTQc9OepiqCYZ4Xp6VOp2L3kFCiEwu/odX2SXzzKc2iohssAcfgBBizt/Z4W1hud0rAJ/QUC4E5htCbE2BQjGcvccf0aS2LDApsQGQWdYfjRyy8y9oZwS7vatZ1SImNur15U8BCS4WhHNw6uitIuvvWDD1CG9ceUOASMmUvzIapIczno6AMp0Zsk28xSXp/CfrGA0ZKs1YGhYq5KjarHBT2Kw5ONfB3bLkll1EAVcDCwm7Lu059utmuDO2CBUGoc3HzixZLhrZmKjwSNDLhO8Q1kqbMQsw/gZzCGoxAoZlOK/EueySvNeGzkbo1QBs5oWSoBfhUFNySmrLiQaDzBDmLIsxRKQibedu1nFXWEV0KlSZKsSZ3hns3okLpsJ+FhcXmBD/5ihInEtJkyHo6d8+Ganw0KkfHQURjxqHqy4Q+MvLyq/z4YdK5fIkoGir9pKp9yJwAgQnSGva5wI/Ei3ZPi+O2BjZgtXN3LFjIVP+5dofrMotdYx3GI8piTINnzLe6aggCgSBnRMp0NMMVmWslJHqRNQNJcdT2RtdFhxJ0qEd1o3vSZp3KYy3gKagpqOP/YdYfFZYhmvAYeABHcrQ5yVRIcSHZVv7+SXbqLLeZCFPYw+8+F+SmlRkjSNGVG8XUCK0v/Cdj4OriQKjLu5oVhE3gchf+XCbYJgXPLv1lJNyYidOLY+8Rlukf/Iw6XqdZwvEYf8y+83c3EFubqhEw==',
+    driveXwingPrivateKey: '3AcU81D8HUFAQ1oF/fBU9D0KS9NMVyS92HQhJvaGusg=',
     driveSigningPublicKey: 'q7EjHuex0qgzED93MUSVrAKqBU7mfJY48zjVt8xsp1c=',
   },
 )
@@ -359,7 +359,7 @@ const recipientIdentity = crypto.deriveAccountIdentityKeys(
 const namedShareEnvelope = crypto.sealNamedShareEnvelope(
   collectionKey,
   Buffer.alloc(32, 1).toString('base64'),
-  recipientIdentity.driveHpkePublicKey,
+  recipientIdentity.driveXwingPublicKey,
   '11111111-1111-4111-8111-111111111111',
   3,
   ALICE,
@@ -371,7 +371,7 @@ assert.equal(
   crypto.openNamedShareEnvelope(
     namedShareEnvelope,
     senderIdentity.driveSigningPublicKey,
-    recipientIdentity.driveHpkePrivateKey,
+    recipientIdentity.driveXwingPrivateKey,
     '11111111-1111-4111-8111-111111111111',
     3,
     ALICE,
@@ -385,7 +385,7 @@ assert.throws(
   () => crypto.openNamedShareEnvelope(
     namedShareEnvelope,
     senderIdentity.driveSigningPublicKey,
-    recipientIdentity.driveHpkePrivateKey,
+    recipientIdentity.driveXwingPrivateKey,
     '11111111-1111-4111-8111-111111111111',
     4,
     ALICE,
@@ -697,17 +697,17 @@ assert.equal(
   const reader = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 2).toString('base64'))
   const fileId = '22222222-2222-4222-8222-222222222222'
   const sealed = crypto.sealFileShareEnvelope(
-    Buffer.alloc(32, 0x66).toString('base64'), Buffer.alloc(32, 1).toString('base64'), reader.driveHpkePublicKey,
+    Buffer.alloc(32, 0x66).toString('base64'), Buffer.alloc(32, 1).toString('base64'), reader.driveXwingPublicKey,
     fileId, 2, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   )
   const open = (file, generation) => crypto.openFileShareEnvelope(
-    sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
+    sealed, owner.driveSigningPublicKey, reader.driveXwingPrivateKey,
     file, generation, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   )
   assert.equal(open(fileId, 2), Buffer.alloc(32, 0x66).toString('base64'))
   assert.throws(() => open(fileId, 3))
   assert.throws(() => crypto.openNamedShareEnvelope(
-    sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
+    sealed, owner.driveSigningPublicKey, reader.driveXwingPrivateKey,
     fileId, 2, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   ))
 }
@@ -943,10 +943,10 @@ const aliceAccount = { server: 'kutup.dev', accountId: '3f1c9a52-6b7e-4f0e-9d1a-
 const bobAccount = { server: 'kutup.dev', accountId: '8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b' }
 const aliceIdentity = crypto.deriveAccountIdentityKeys(mailVectors.masterKey)
 const bobIdentity = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 0x22).toString('base64'))
-const memberOf = (account, identity) => ({ account, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveHpkePublicKey })
+const memberOf = (account, identity) => ({ account, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveXwingPublicKey })
 const groupKey = crypto.generateMailGroupKey('hr@kutup.dev', groupId, 1_790_000_000, [memberOf(aliceAccount, aliceIdentity)])
 assert.equal(groupKey.shares.length, 1)
-const heldBy = (account, identity, share) => ({ account, hpkePrivateKey: identity.driveHpkePrivateKey, share, groupId, fingerprint: groupKey.fingerprint })
+const heldBy = (account, identity, share) => ({ account, hpkePrivateKey: identity.driveXwingPrivateKey, share, groupId, fingerprint: groupKey.fingerprint })
 const aliceHolds = heldBy(aliceAccount, aliceIdentity, groupKey.shares[0])
 const toGroup = crypto.encryptMailMessageAsGroup(aliceHolds, [groupKey.publicKey], new TextEncoder().encode('hr mail'))
 const groupMessage = new Uint8Array([...b64bytes(toGroup.keyPackets[0]), ...toGroup.dataPacket])
@@ -978,7 +978,7 @@ assert.equal(verifyChain(chainVectors.adminRestart).sequence, 1)
 const groupFirstList = { address: 'hr@kutup.dev', sequence: 1, issuedAt: '2026-10-16T12:00:00Z', keys: [{ fingerprint: groupKey.fingerprint, sha256Fingerprint: groupKey.sha256Fingerprint, primary: true, flags: 3 }] }
 const firstSigner = crypto.newMailGroupSigner(groupId, [memberOf(aliceAccount, aliceIdentity)], groupFirstList, undefined, undefined)
 assert.equal(firstSigner.handover, undefined)
-const aliceSigns = { account: aliceAccount, hpkePrivateKey: aliceIdentity.driveHpkePrivateKey, groupId, signer: firstSigner.publicKey, signingShare: firstSigner.shares[0] }
+const aliceSigns = { account: aliceAccount, hpkePrivateKey: aliceIdentity.driveXwingPrivateKey, groupId, signer: firstSigner.publicKey, signingShare: firstSigner.shares[0] }
 const groupSecondList = crypto.signMailGroupKeyList(aliceSigns, { ...groupFirstList, sequence: 2, previousHash: firstSigner.keyList.hash })
 const grown = crypto.verifyMailGroupKeyChain(groupId, firstSigner.publicKey, [firstSigner.keyList, groupSecondList], [])
 assert.equal(grown.sequence, 2)
@@ -988,7 +988,7 @@ const handedOver = crypto.newMailGroupSigner(groupId, [memberOf(bobAccount, bobI
 const third = crypto.verifyMailGroupKeyChain(groupId, firstSigner.publicKey, [firstSigner.keyList, groupSecondList, handedOver.keyList], [handedOver.handover])
 assert.deepEqual(third.signers, [firstSigner.publicKey, handedOver.publicKey])
 const bobSignerShare = crypto.reshareMailGroupSigner(aliceSigns, [memberOf(bobAccount, bobIdentity)])[0]
-crypto.signMailGroupKeyList({ ...aliceSigns, account: bobAccount, hpkePrivateKey: bobIdentity.driveHpkePrivateKey, signingShare: bobSignerShare }, groupFirstList)
+crypto.signMailGroupKeyList({ ...aliceSigns, account: bobAccount, hpkePrivateKey: bobIdentity.driveXwingPrivateKey, signingShare: bobSignerShare }, groupFirstList)
 assert.throws(() => crypto.signMailGroupKeyList({ ...aliceSigns, signingShare: bobSignerShare }, groupFirstList))
 const armoredPgp = crypto.encryptMailPgp(
   masterKeySet(mailVectors.masterKey), mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
@@ -1109,15 +1109,15 @@ const identityVectors = JSON.parse(
 const iv = identityVectors
 const ivAccount = crypto.parseAccountRef(iv.account)
 assert.equal(crypto.signDriveKeyBinding(iv.masterKey, ivAccount, 1), iv.driveKeyBinding)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), true)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), true)
 // The epoch is signed: the same binding at another epoch fails, and epochs start at 1.
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 2), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 2), false)
 assert.throws(() => crypto.signDriveKeyBinding(iv.masterKey, ivAccount, 0), /epoch/)
 // Another account, a swapped recipient key or signer, another authority: refused.
-assert.equal(crypto.verifyDriveKeyBinding({ ...ivAccount, accountId: '00000000-0000-4000-8000-000000000000' }, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
+assert.equal(crypto.verifyDriveKeyBinding({ ...ivAccount, accountId: '00000000-0000-4000-8000-000000000000' }, iv.authorityPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
 assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64', 1), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.driveSigningPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveXwingPublicKey, iv.driveSigningPublicKey, 'not base64', 1), false)
 // An address in place of an account is refused outright.
 assert.throws(() => crypto.signDriveKeyBinding(iv.masterKey, 'alice@kutup.dev', 1))
 assert.deepEqual(crypto.openIdentityPins(masterKeySet(iv.masterKey), iv.binding, iv.sealed), { value: iv.pins, revision: iv.revision })

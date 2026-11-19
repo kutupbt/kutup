@@ -380,7 +380,7 @@ function publish(
     server: address.split('@')[1],
     accountId: id,
     accountAuthorityPublicKey: authority,
-    driveHpkePublicKey: hpke,
+    driveXwingPublicKey: hpke,
     driveSigningPublicKey: signing,
     driveKeyBinding: bound ? `bound-by-${authority}` : undefined,
     identitySuite: suite,
@@ -425,7 +425,7 @@ describe('checkIdentity', () => {
     publish('bob@kutup.dev', 'B')
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveSigningPublicKey: 'B-sign' })).toEqual({ kind: 'ok', verified: false })
     expect(storedPins()).toMatchObject([{ id: 'acct-B', authorityPublicKey: 'B', addresses: ['bob@kutup.dev'] }])
-    expect(await checkIdentity(me, 'bob@kutup.dev', { driveHpkePublicKey: 'B-hpke' })).toEqual({ kind: 'ok', verified: false })
+    expect(await checkIdentity(me, 'bob@kutup.dev', { driveXwingPublicKey: 'B-hpke' })).toEqual({ kind: 'ok', verified: false })
     expect(server.puts).toBe(1)
   })
 
@@ -434,9 +434,9 @@ describe('checkIdentity', () => {
     // A share signed with a key that is not Bob's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveSigningPublicKey: 'EVIL-sign' })).toEqual({ kind: 'invalid' })
     // A recipient key that is not Bob's.
-    expect(await checkIdentity(me, 'bob@kutup.dev', { driveHpkePublicKey: 'EVIL-hpke' })).toEqual({ kind: 'invalid' })
+    expect(await checkIdentity(me, 'bob@kutup.dev', { driveXwingPublicKey: 'EVIL-hpke' })).toEqual({ kind: 'invalid' })
     // A binding by another authority than the one published.
-    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', server: 'kutup.dev', accountId: 'acct-E', accountAuthorityPublicKey: 'E', driveHpkePublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B', identitySuite: 2, driveKeyBindingEpoch: 1 })
+    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', server: 'kutup.dev', accountId: 'acct-E', accountAuthorityPublicKey: 'E', driveXwingPublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B', identitySuite: 2, driveKeyBindingEpoch: 1 })
     expect(await checkIdentity(me, 'eve@kutup.dev')).toEqual({ kind: 'invalid' })
     // An incarnation that is not this authority's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { incarnationId: 'inc-OTHER' })).toEqual({ kind: 'invalid' })
@@ -595,7 +595,7 @@ function answer(address: string, authority: string, label = address): AccountAns
     accountId: `acct-${authority}`,
     accountIncarnationId: `inc-${authority}`,
     accountAuthorityPublicKey: authority,
-    driveHpkePublicKey: `${authority}-hpke`,
+    driveXwingPublicKey: `${authority}-hpke`,
     driveSigningPublicKey: `${authority}-sign`,
     driveKeyBinding: `bound-by-${authority}`,
     identitySuite: 2,

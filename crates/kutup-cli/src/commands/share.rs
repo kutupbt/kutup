@@ -189,7 +189,7 @@ fn share_folder(
         &ctx,
         profile,
         &recipient.account,
-        &recipient.drive_hpke_public_key,
+        &recipient.drive_xwing_public_key,
         &recipient.account_incarnation_id,
         share_anyway,
     )?;
@@ -212,7 +212,7 @@ fn share_folder(
         &person,
         &recipient.account_incarnation_id,
         &b64()
-            .decode(&recipient.drive_hpke_public_key)
+            .decode(&recipient.drive_xwing_public_key)
             .context("decode recipient HPKE public key")?,
     )?;
 
@@ -293,7 +293,7 @@ fn share_federated(
         &ctx,
         profile,
         &remote.account,
-        &remote.drive_hpke_public_key,
+        &remote.drive_xwing_public_key,
         &remote.account_incarnation_id,
         share_anyway,
     )?;
@@ -320,7 +320,7 @@ fn share_federated(
         &person,
         &remote.account_incarnation_id,
         &b64()
-            .decode(&remote.drive_hpke_public_key)
+            .decode(&remote.drive_xwing_public_key)
             .context("decode remote HPKE public key")?,
     )?;
 

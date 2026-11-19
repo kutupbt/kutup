@@ -1372,5 +1372,11 @@ Where the build differs from the plan above:
   `off`, the authenticator app) for `totpEnabled`, `keysSetUp` for
   `isFirstLogin`, `driveXwingPublicKey` for the account's `publicKey`
   (sign-up and setup bodies, sign-in, `/account`). Access tokens carry no
-  role: the session row says what an account may do. The lookups that name
-  another account's Drive key keep `driveHpkePublicKey` for now.
+  role: the session row says what an account may do.
+- **The Drive key** has one name, `driveXwingPublicKey` (and
+  `driveXwingPrivateKey` in the WASM identity), in every lookup, the
+  federation's `AccountLookupResponse`, the bindings and the Rust code
+  (`drive_xwing_public_key`); no signed or hashed bytes carry the name, so
+  only the vectors' input keys changed. Chat's native store is schema 5
+  (its pins' column renamed). The manifest's `drive.hpkePublicKey` and the
+  members' `hpkePublicKey` keep their names.

@@ -818,7 +818,7 @@ fn registration_payload(
         "masterKeyEnvelope": master_key_envelope,
         "recoveryKeyEnvelope": recovery_key_envelope,
         "accountRoots": common::sealed_roots(&roots, &master_key, &binding),
-        "driveXwingPublicKey": b64(&identity.drive_hpke_public_key()),
+        "driveXwingPublicKey": b64(&identity.drive_xwing_public_key()),
         "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
         "accountAuthorityKeyId": identity.authority_key_id(),
         "accountIncarnationId": identity.incarnation_id(),
@@ -1509,8 +1509,8 @@ fn drive_round_trip(
     assert_eq!(remote_user["server"], "b.test");
     assert_eq!(remote_user["account"], "bobfed@b.test");
     assert_eq!(
-        remote_user["driveHpkePublicKey"],
-        b64(&bob_identity.drive_hpke_public_key())
+        remote_user["driveXwingPublicKey"],
+        b64(&bob_identity.drive_xwing_public_key())
     );
     assert_eq!(
         remote_user["driveSigningPublicKey"],
@@ -1552,7 +1552,7 @@ fn drive_round_trip(
         StatusCode::NOT_FOUND
     );
     let recipient_hpke = STANDARD
-        .decode(remote_user["driveHpkePublicKey"].as_str().unwrap())
+        .decode(remote_user["driveXwingPublicKey"].as_str().unwrap())
         .unwrap();
     let named_share = NamedShareEnvelopeV1::seal(
         &collection_key,
@@ -1634,7 +1634,7 @@ fn drive_round_trip(
                 &alice_identity.drive_signing_public_key(),
                 &bob_ref,
                 &bob_identity.incarnation_id(),
-                bob_identity.drive_hpke_private_key(),
+                bob_identity.drive_xwing_private_key(),
             )
             .unwrap(),
         collection_key
@@ -2032,7 +2032,7 @@ fn drive_round_trip(
             alice_identity.drive_signing_key(),
             &bob_ref,
             &bob_identity.incarnation_id(),
-            &bob_identity.drive_hpke_public_key(),
+            &bob_identity.drive_xwing_public_key(),
         )
         .unwrap()
         .encode_b64()
@@ -2119,7 +2119,7 @@ fn drive_round_trip(
                 &alice_identity.drive_signing_public_key(),
                 &bob_ref,
                 &bob_identity.incarnation_id(),
-                bob_identity.drive_hpke_private_key(),
+                bob_identity.drive_xwing_private_key(),
             )
             .unwrap();
     assert_eq!(opened.as_slice(), key2.as_slice());
@@ -2268,7 +2268,7 @@ fn drive_profile_key_exchange(
             key,
             parties,
             from.drive_signing_key(),
-            &to.drive_hpke_public_key(),
+            &to.drive_xwing_public_key(),
         )
         .unwrap()
         .encode_b64()
@@ -2327,7 +2327,7 @@ fn drive_profile_key_exchange(
             .open(
                 &alice_to_bob,
                 &alice.drive_signing_public_key(),
-                bob.drive_hpke_private_key()
+                bob.drive_xwing_private_key()
             )
             .unwrap(),
         alice_key
@@ -2351,7 +2351,7 @@ fn drive_profile_key_exchange(
             .open(
                 &bob_to_alice,
                 &bob.drive_signing_public_key(),
-                alice.drive_hpke_private_key()
+                alice.drive_xwing_private_key()
             )
             .unwrap(),
         bob_key
@@ -3787,7 +3787,7 @@ fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
         owner.identity.drive_signing_key(),
         &bob.person,
         &bob.identity.incarnation_id(),
-        &bob.identity.drive_hpke_public_key(),
+        &bob.identity.drive_xwing_public_key(),
     )
     .unwrap()
     .encode_b64()
@@ -3936,7 +3936,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
         "find Bob",
     );
     assert_eq!(found["accountId"], bob.person.account_id.as_str());
-    let bob_hpke = bob.identity.drive_hpke_public_key();
+    let bob_hpke = bob.identity.drive_xwing_public_key();
 
     // A folder and a file in it, each shared with Bob's account.
     let folder = common::create_folder(c, a, &owner);
@@ -4083,7 +4083,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
             &owner.identity.drive_signing_public_key(),
             &bob.person,
             &bob.identity.incarnation_id(),
-            bob.identity.drive_hpke_private_key(),
+            bob.identity.drive_xwing_private_key(),
         )
         .unwrap();
     assert_eq!(opened.as_slice(), folder.key);
@@ -4106,7 +4106,7 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
             &owner.identity.drive_signing_public_key(),
             &bob.person,
             &bob.identity.incarnation_id(),
-            bob.identity.drive_hpke_private_key(),
+            bob.identity.drive_xwing_private_key(),
         )
         .unwrap();
     assert_eq!(opened.as_slice(), sealed.key);

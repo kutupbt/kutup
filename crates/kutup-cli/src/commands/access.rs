@@ -255,7 +255,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
             remote.require_sealable()?;
             Ok(serde_json::json!({
                 "id": f.id,
-                "namedShareEnvelope": seal(&remote.drive_hpke_public_key, &person, &remote.account_incarnation_id)?,
+                "namedShareEnvelope": seal(&remote.drive_xwing_public_key, &person, &remote.account_incarnation_id)?,
             }))
         })
         .collect::<Result<Vec<_>>>()?;

@@ -38,8 +38,8 @@ struct AccountIdentityKeysView {
     authority_public_key: String,
     authority_key_id: String,
     incarnation_id: String,
-    drive_hpke_public_key: String,
-    drive_hpke_private_key: String,
+    drive_xwing_public_key: String,
+    drive_xwing_private_key: String,
     drive_signing_public_key: String,
 }
 
@@ -611,8 +611,8 @@ pub fn derive_account_identity_keys(identity_root_base64: &str) -> Result<JsValu
         authority_public_key: STANDARD.encode(identity.authority_public_key()),
         authority_key_id: identity.authority_key_id(),
         incarnation_id: identity.incarnation_id(),
-        drive_hpke_public_key: STANDARD.encode(identity.drive_hpke_public_key()),
-        drive_hpke_private_key: STANDARD.encode(identity.drive_hpke_private_key()),
+        drive_xwing_public_key: STANDARD.encode(identity.drive_xwing_public_key()),
+        drive_xwing_private_key: STANDARD.encode(identity.drive_xwing_private_key()),
         drive_signing_public_key: STANDARD.encode(identity.drive_signing_public_key()),
     })
     .map_err(|error| js_error(&format!("encode account identity: {error}")))
@@ -2655,7 +2655,7 @@ fn seal_shares(
     members
         .iter()
         .map(|member| {
-            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.hpke_public_key, "member HPKE public key")?;
             kutup_crypto::mail_key::seal_group_key_share(
                 group_secret,
                 group_id,
@@ -3358,7 +3358,7 @@ pub fn reshare_mail_group_signer(
     members
         .iter()
         .map(|member| {
-            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.hpke_public_key, "member HPKE public key")?;
             kutup_crypto::mail_group::seal_group_signing_share(
                 &signer,
                 &group_id,
@@ -3414,7 +3414,7 @@ pub fn new_mail_group_signer(
     let shares = members
         .iter()
         .map(|member| {
-            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.hpke_public_key, "member HPKE public key")?;
             seal_group_signing_share(
                 &signer,
                 group_id,
@@ -3470,7 +3470,7 @@ fn public_key_32(value: &str, what: &str) -> Result<[u8; 32], JsValue> {
 
 /// A Drive HPKE public key: X-Wing's 1216 bytes (identity suite 2,
 /// docs/plans/pq-shares.md).
-fn drive_hpke_key(
+fn drive_xwing_key(
     value: &str,
     what: &str,
 ) -> Result<[u8; kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN], JsValue> {
@@ -3514,7 +3514,7 @@ pub fn sign_drive_key_binding(
 pub fn verify_drive_key_binding(
     account: JsValue,
     authority_public_key_base64: &str,
-    drive_hpke_public_key_base64: &str,
+    drive_xwing_public_key_base64: &str,
     drive_signing_public_key_base64: &str,
     binding_base64: &str,
     binding_epoch: u32,
@@ -3525,7 +3525,7 @@ pub fn verify_drive_key_binding(
             &account_arg(account, "account account")?,
             &public_key_32(authority_public_key_base64, "authority key")?,
             binding_epoch,
-            &drive_hpke_key(drive_hpke_public_key_base64, "Drive HPKE key")?,
+            &drive_xwing_key(drive_xwing_public_key_base64, "Drive HPKE key")?,
             &public_key_32(drive_signing_public_key_base64, "Drive signing key")?,
             &signature,
         )

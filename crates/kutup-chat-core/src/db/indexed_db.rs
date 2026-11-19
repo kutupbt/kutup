@@ -1363,7 +1363,7 @@ mod tests {
                 incarnation_id: "incarnation".into(),
                 authority_key_id: "authority".into(),
                 self_authority_key: "key".into(),
-                drive_hpke_public_key: "drive".into(),
+                drive_xwing_public_key: "drive".into(),
                 drive_share_signing_public_key: "share".into(),
                 highest_sequence: u64::MAX,
                 manifest_hash: "hash".into(),

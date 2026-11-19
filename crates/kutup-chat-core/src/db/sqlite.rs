@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     applied_at INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (5, 0);
 CREATE TABLE IF NOT EXISTS local_identity (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     identity_key_pair BLOB    NOT NULL,
@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS manifest_trust (
     incarnation_id     TEXT    NOT NULL,
     authority_key_id   TEXT    NOT NULL,
     self_authority_key TEXT    NOT NULL,
-    drive_hpke_public_key TEXT NOT NULL,
+    drive_xwing_public_key TEXT NOT NULL,
     drive_share_signing_public_key TEXT NOT NULL,
     highest_sequence    INTEGER NOT NULL,
     manifest_hash      TEXT    NOT NULL,
@@ -268,11 +268,12 @@ impl SqliteChatDb {
         db(conn.pragma_update(None, "secure_delete", "ON"))?;
         db(conn.execute_batch(SCHEMA))?;
         // One schema version, created whole (4: the device credential and
-        // the account identity in manifest pins). A store from an older layout
+        // the account identity in manifest pins; 5: the pins' Drive key
+        // column is `drive_xwing_public_key`). A store from an older layout
         // (development builds only; no native app has shipped) is refused
         // rather than upgraded.
         let foreign: i64 = db(conn.query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 4",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 5",
             [],
             |row| row.get(0),
         ))?;
@@ -552,7 +553,7 @@ impl ChatDb for SqliteChatDb {
         db(conn
             .query_row(
                 "SELECT peer, account, incarnation_id, authority_key_id,
-                        self_authority_key, drive_hpke_public_key,
+                        self_authority_key, drive_xwing_public_key,
                         drive_share_signing_public_key, highest_sequence,
                         manifest_hash, trust_state, continuity_gap,
                         quarantine_reason, pending_reset_json, identity_key,
@@ -574,7 +575,7 @@ impl ChatDb for SqliteChatDb {
                         incarnation_id: row.get(2)?,
                         authority_key_id: row.get(3)?,
                         self_authority_key: row.get(4)?,
-                        drive_hpke_public_key: row.get(5)?,
+                        drive_xwing_public_key: row.get(5)?,
                         drive_share_signing_public_key: row.get(6)?,
                         highest_sequence: row.get::<_, i64>(7)? as u64,
                         manifest_hash: row.get(8)?,
@@ -1016,7 +1017,7 @@ impl ChatDb for SqliteChatDb {
             db(tx.execute(
                 "INSERT INTO manifest_trust
                      (peer, account, incarnation_id, authority_key_id,
-                      self_authority_key, drive_hpke_public_key,
+                      self_authority_key, drive_xwing_public_key,
                       drive_share_signing_public_key, highest_sequence,
                       manifest_hash, trust_state, continuity_gap,
                       quarantine_reason, pending_reset_json, identity_key,
@@ -1027,7 +1028,7 @@ impl ChatDb for SqliteChatDb {
                      incarnation_id = excluded.incarnation_id,
                      authority_key_id = excluded.authority_key_id,
                      self_authority_key = excluded.self_authority_key,
-                     drive_hpke_public_key = excluded.drive_hpke_public_key,
+                     drive_xwing_public_key = excluded.drive_xwing_public_key,
                      drive_share_signing_public_key = excluded.drive_share_signing_public_key,
                      highest_sequence = excluded.highest_sequence,
                      manifest_hash = excluded.manifest_hash,
@@ -1044,7 +1045,7 @@ impl ChatDb for SqliteChatDb {
                     trust.incarnation_id,
                     trust.authority_key_id,
                     trust.self_authority_key,
-                    trust.drive_hpke_public_key,
+                    trust.drive_xwing_public_key,
                     trust.drive_share_signing_public_key,
                     trust.highest_sequence as i64,
                     trust.manifest_hash,
@@ -1579,7 +1580,7 @@ mod tests {
                 incarnation_id: manifest.incarnation_id.clone(),
                 authority_key_id: manifest.authority_key_id.clone(),
                 self_authority_key: manifest.self_authority_key.clone(),
-                drive_hpke_public_key: manifest.drive.hpke_public_key.clone(),
+                drive_xwing_public_key: manifest.drive.hpke_public_key.clone(),
                 drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
                 highest_sequence: manifest.sequence,
                 manifest_hash: manifest.manifest_hash().unwrap(),
@@ -1675,7 +1676,7 @@ mod tests {
     /// The schema this build writes: 4 (the device credential, the account
     /// identity and its verified state in the pins, the kept identity sync).
     #[test]
-    fn a_new_store_is_schema_four() {
+    fn a_new_store_is_schema_five() {
         let db = SqliteChatDb::open_in_memory().unwrap();
         let versions: Vec<i64> = {
             let conn = db.conn.borrow();
@@ -1689,7 +1690,7 @@ mod tests {
                 .unwrap();
             rows
         };
-        assert_eq!(versions, vec![4]);
+        assert_eq!(versions, vec![5]);
     }
 
     /// A store with a bit of everything: transport state, pins, history,
@@ -1721,7 +1722,7 @@ mod tests {
                 incarnation_id: "i".into(),
                 authority_key_id: "a".into(),
                 self_authority_key: "k".into(),
-                drive_hpke_public_key: "d".into(),
+                drive_xwing_public_key: "d".into(),
                 drive_share_signing_public_key: "s".into(),
                 highest_sequence: 3,
                 manifest_hash: "h".into(),

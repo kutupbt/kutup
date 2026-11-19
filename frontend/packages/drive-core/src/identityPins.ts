@@ -81,7 +81,7 @@ export type IdentityStatus =
 
 /** The keys a share or a lookup put to this person; what is absent is not compared. */
 export interface ClaimedKeys {
-  driveHpkePublicKey?: string
+  driveXwingPublicKey?: string
   driveSigningPublicKey?: string
   incarnationId?: string
   authorityPublicKey?: string
@@ -95,7 +95,7 @@ export interface PublishedIdentity {
   server: string
   accountId: string
   accountAuthorityPublicKey: string
-  driveHpkePublicKey: string
+  driveXwingPublicKey: string
   driveSigningPublicKey: string
   driveKeyBinding?: string | null
   /**
@@ -118,7 +118,7 @@ async function keysBound(person: PublishedIdentity): Promise<boolean> {
   return verifyDriveKeyBinding(
     refOf(person),
     person.accountAuthorityPublicKey,
-    person.driveHpkePublicKey,
+    person.driveXwingPublicKey,
     person.driveSigningPublicKey,
     person.driveKeyBinding,
     person.driveKeyBindingEpoch!,
@@ -700,7 +700,7 @@ async function checkPublished(
   if (person.server !== account.slice(account.lastIndexOf('@') + 1).toLowerCase()) return { kind: 'invalid' }
   // The keys in use must be the ones the person's server publishes...
   if (
-    (claimed.driveHpkePublicKey && claimed.driveHpkePublicKey !== person.driveHpkePublicKey) ||
+    (claimed.driveXwingPublicKey && claimed.driveXwingPublicKey !== person.driveXwingPublicKey) ||
     (claimed.driveSigningPublicKey && claimed.driveSigningPublicKey !== person.driveSigningPublicKey) ||
     (claimed.authorityPublicKey && claimed.authorityPublicKey !== person.accountAuthorityPublicKey)
   ) {

@@ -68,7 +68,7 @@ pub struct AccountLookupResponse {
     pub account_id: String,
     /// `username@server`: the label shown.
     pub account: String,
-    pub drive_hpke_public_key: String,
+    pub drive_xwing_public_key: String,
     pub account_incarnation_id: String,
     pub drive_signing_public_key: String,
     pub account_authority_public_key: String,
@@ -298,7 +298,7 @@ pub(crate) fn remote_keys_consistent(remote: &AccountLookupResponse) -> bool {
         return false;
     };
     let authority: [u8; 32] = authority.try_into().expect("32 bytes, checked");
-    canonical_drive_hpke_key(&remote.drive_hpke_public_key, remote.identity_suite).is_ok()
+    canonical_drive_xwing_key(&remote.drive_xwing_public_key, remote.identity_suite).is_ok()
         && canonical_public_key(&remote.drive_signing_public_key).is_ok()
         && remote.account_incarnation_id
             == kutup_crypto::identity::incarnation_id_from_authority_public(&authority)
@@ -342,7 +342,7 @@ pub(crate) async fn note_recipient(
 
 /// A Drive HPKE public key of identity `suite`: X-Wing's 1216 bytes in suite
 /// 2, an X25519 key in suite 1 (until its account upgrades).
-pub(crate) fn canonical_drive_hpke_key(value: &str, suite: i16) -> AppResult<Vec<u8>> {
+pub(crate) fn canonical_drive_xwing_key(value: &str, suite: i16) -> AppResult<Vec<u8>> {
     let len = match suite {
         2 => kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN,
         1 => kutup_chat_proto::legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN,
@@ -728,7 +728,7 @@ pub(crate) async fn local_account_by_name(
         username: stored,
         server: federation.server_name().to_owned(),
         account_id: id.to_string(),
-        drive_hpke_public_key: hpke_key,
+        drive_xwing_public_key: hpke_key,
         account_incarnation_id: incarnation_id,
         drive_signing_public_key: signing_key,
         account_authority_public_key: authority_key,

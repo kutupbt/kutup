@@ -174,7 +174,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
                   <p className="truncate text-sm">{m.account}</p>
                   <p className="text-xs text-muted-foreground">{m.canUpload ? t('share.canAddShort') : t('share.viewOnly')}</p>
                 </div>
-                <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                <VerifyPersonButton account={m.account} claimed={{ driveXwingPublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                 <Button
                   variant="ghost"
                   size="icon"

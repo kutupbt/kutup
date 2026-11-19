@@ -66,7 +66,7 @@ beforeEach(() => {
   http.post.mockReset()
   // The federated recipient is still on identity suite 1 too.
   http.get.mockResolvedValue({
-    data: { server: 'other.example', accountId: 'acct-far', account: 'far@other.example', driveHpkePublicKey: 'key-far', accountIncarnationId: 'inc-far', identitySuite: 1 },
+    data: { server: 'other.example', accountId: 'acct-far', account: 'far@other.example', driveXwingPublicKey: 'key-far', accountIncarnationId: 'inc-far', identitySuite: 1 },
   })
   http.post.mockResolvedValue({ data: null })
 })

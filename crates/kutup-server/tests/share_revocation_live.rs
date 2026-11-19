@@ -42,7 +42,7 @@ fn named_share(owner: &User, folder_id: &str, key: &[u8; 32], epoch: u32, to: &U
         owner.identity.drive_signing_key(),
         &to.person,
         &to.identity.incarnation_id(),
-        &to.identity.drive_hpke_public_key(),
+        &to.identity.drive_xwing_public_key(),
     )
     .unwrap()
     .encode_b64()
@@ -237,7 +237,7 @@ fn share_revocation_contract() {
                 &owner.identity.drive_signing_public_key(),
                 &alice.person,
                 &alice.identity.incarnation_id(),
-                alice.identity.drive_hpke_private_key(),
+                alice.identity.drive_xwing_private_key(),
             )
             .unwrap();
     assert_eq!(opened.as_slice(), key2.as_slice());

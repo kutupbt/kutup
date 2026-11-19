@@ -172,7 +172,7 @@ interface MemberIdentity {
   server: string
   accountId: string
   accountIncarnationId: string
-  driveHpkePublicKey: string
+  driveXwingPublicKey: string
   driveSigningPublicKey: string
   accountAuthorityPublicKey: string
   driveKeyBinding?: string | null
@@ -218,7 +218,7 @@ async function memberKey(member: { accountId: string }, trust: MemberTrust): Pro
     (await verifyDriveKeyBinding(
       account,
       data.accountAuthorityPublicKey,
-      data.driveHpkePublicKey,
+      data.driveXwingPublicKey,
       data.driveSigningPublicKey,
       data.driveKeyBinding,
       data.driveKeyBindingEpoch!,
@@ -227,7 +227,7 @@ async function memberKey(member: { accountId: string }, trust: MemberTrust): Pro
     throw new MemberKeyUnproven(member.accountId)
   }
   await confirmRecipient(trust.me, `${data.username}@${data.server}`, data, trust.confirmed)
-  return { account, incarnationId: data.accountIncarnationId, hpkePublicKey: data.driveHpkePublicKey }
+  return { account, incarnationId: data.accountIncarnationId, hpkePublicKey: data.driveXwingPublicKey }
 }
 
 /** Who signs a shared mailbox's key lists: its owners and managers. */

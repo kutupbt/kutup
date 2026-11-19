@@ -141,7 +141,7 @@ export function AccessList({ folder }: { folder: Folder }) {
               detail={person.profile ? m.account : ''}
               control={
                 <>
-                  <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                  <VerifyPersonButton account={m.account} claimed={{ driveXwingPublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                   <RoleMenu
                     name={person.name}
                     canUpload={m.canUpload}

@@ -276,10 +276,10 @@ describe('a shared mailbox’s keys against the pin list', () => {
     const entry = { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete }
     const first = await newMailGroupSigner(
       groupId,
-      [{ account: manager, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveHpkePublicKey }],
+      [{ account: manager, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveXwingPublicKey }],
       { address: 'team@kutup.dev', sequence: 1, issuedAt: '2026-10-16T12:00:00Z', keys: [entry] },
     )
-    const holder: GroupSignerHolder = { account: manager, hpkePrivateKey: identity.driveHpkePrivateKey, groupId, signer: first.publicKey, signingShare: first.shares[0] }
+    const holder: GroupSignerHolder = { account: manager, hpkePrivateKey: identity.driveXwingPrivateKey, groupId, signer: first.publicKey, signingShare: first.shares[0] }
     const lists = [first.keyList]
     for (let sequence = 2; sequence <= count; sequence++) {
       lists.push(await signMailGroupKeyList(holder, { address: 'team@kutup.dev', sequence, previousHash: lists.at(-1)!.hash, issuedAt: '2026-10-16T12:00:00Z', keys: [entry] }))
@@ -324,7 +324,7 @@ describe('a shared mailbox’s keys against the pin list', () => {
     const identity = await deriveAccountIdentityKeys(asIdentityRoot(master))
     const next = await newMailGroupSigner(
       groupId,
-      [{ account: manager, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveHpkePublicKey }],
+      [{ account: manager, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveXwingPublicKey }],
       { address: 'team@kutup.dev', sequence: 3, previousHash: chain.lists[1].hash, issuedAt: '2026-10-16T12:00:00Z', keys: chain.keys.map(({ publicKey: _key, ...entry }) => entry) },
       { holder: chain.holder, previousListHash: chain.lists[1].hash },
     )
@@ -391,7 +391,7 @@ describe('a shared mailbox’s key lists', () => {
     const master = toBase64(randomBytes(32))
     const owner = await derive(asIdentityRoot(master))
     const account = { server: 'kutup.dev', accountId: crypto.randomUUID() }
-    const member = { account, incarnationId: owner.incarnationId, hpkePublicKey: owner.driveHpkePublicKey }
+    const member = { account, incarnationId: owner.incarnationId, hpkePublicKey: owner.driveXwingPublicKey }
     const k1 = await generateMailGroupKey(address, groupId, [member])
     const entry = (key: { fingerprint: string; sha256Fingerprint: string }, primary: boolean) => ({
       fingerprint: key.fingerprint,
@@ -400,7 +400,7 @@ describe('a shared mailbox’s key lists', () => {
       flags: primary ? MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete : MAIL_KEY_FLAGS.notCompromised,
     })
     const first = await newMailGroupSigner(groupId, [member], { address, sequence: 1, issuedAt: '2026-10-16T12:00:00Z', keys: [entry(k1, true)] })
-    const holder = { account, hpkePrivateKey: owner.driveHpkePrivateKey, groupId, signer: first.publicKey, signingShare: first.shares[0] }
+    const holder = { account, hpkePrivateKey: owner.driveXwingPrivateKey, groupId, signer: first.publicKey, signingShare: first.shares[0] }
     const k2 = await generateMailGroupKey(address, groupId, [member])
     const keysAfter = [entry(k1, false), entry(k2, true)].sort((a, b) => (a.fingerprint < b.fingerprint ? -1 : 1))
     const second = await signMailGroupKeyList(holder, { address, sequence: 2, previousHash: first.keyList.hash, issuedAt: '2026-10-16T12:00:00Z', keys: keysAfter })

@@ -505,7 +505,7 @@ fn sign_up_sent(
             "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &key_binding).unwrap(),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountRecordPurpose::RecoveryMasterKey),
             "accountRoots": sealed_roots(&roots, &master_key, &key_binding),
-            "driveXwingPublicKey": b64(&identity.drive_hpke_public_key()),
+            "driveXwingPublicKey": b64(&identity.drive_xwing_public_key()),
             "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
             "accountAuthorityKeyId": identity.authority_key_id(),
             "accountIncarnationId": identity.incarnation_id(),
@@ -688,7 +688,7 @@ pub fn share(c: &Client, base: &str, owner: &User, folder: &Folder, to: &User, c
         owner.identity.drive_signing_key(),
         &to.person,
         &to.identity.incarnation_id(),
-        &to.identity.drive_hpke_public_key(),
+        &to.identity.drive_xwing_public_key(),
     )
     .unwrap()
     .encode_b64()
@@ -1223,7 +1223,7 @@ fn setup_keys(
             "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &binding).unwrap(),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountRecordPurpose::RecoveryMasterKey),
             "accountRoots": sealed_roots(&roots, &master_key, &binding),
-            "driveXwingPublicKey": b64(&identity.drive_hpke_public_key()),
+            "driveXwingPublicKey": b64(&identity.drive_xwing_public_key()),
             "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
             "accountAuthorityKeyId": identity.authority_key_id(),
             "accountIncarnationId": identity.incarnation_id(),

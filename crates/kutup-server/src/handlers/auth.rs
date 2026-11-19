@@ -2633,7 +2633,7 @@ mod tests {
         )
         .unwrap();
         let mut request = RegisterRequest {
-            drive_xwing_public_key: STANDARD.encode(identity.drive_hpke_public_key()),
+            drive_xwing_public_key: STANDARD.encode(identity.drive_xwing_public_key()),
             account_authority_public_key: STANDARD.encode(identity.authority_public_key()),
             account_authority_key_id: identity.authority_key_id(),
             account_incarnation_id: identity.incarnation_id(),

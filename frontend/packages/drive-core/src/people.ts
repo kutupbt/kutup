@@ -49,7 +49,7 @@ interface RemoteUser {
   server: string
   accountId: string
   accountIncarnationId: string
-  driveHpkePublicKey: string
+  driveXwingPublicKey: string
   driveSigningPublicKey: string
   identitySuite?: number
 }
@@ -105,7 +105,7 @@ function keysOf(person: DrivePerson): Promise<Keys | null> {
       })
       .then((data) => ({
         incarnationId: data.accountIncarnationId,
-        hpkePublicKey: data.driveHpkePublicKey,
+        hpkePublicKey: data.driveXwingPublicKey,
         signingPublicKey: data.driveSigningPublicKey,
       }))
       .catch(() => {

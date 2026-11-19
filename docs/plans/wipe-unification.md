@@ -566,7 +566,7 @@ This matches both references:
 
 Four defects remain:
 1. **Derived and also stored.** The Drive X-Wing private key is derivable from
-   the MK and also stored as account-envelope purpose 3 (`DriveHpkePrivateKey`),
+   the MK and also stored as account-envelope purpose 3 (`DriveXwingPrivateKey`),
    with no check that the two agree. One of them should go.
 2. **No MK generation in records.** Rotating the MK is a roadmap item
    ([`account-identity-key.md`](account-identity-key.md), "Device removal": a lost device keeps the MK). Every MK-derived record

@@ -115,7 +115,7 @@ interface RemoteRecipient {
   server: string
   accountId: string
   account: string
-  driveHpkePublicKey: string
+  driveXwingPublicKey: string
   accountIncarnationId: string
   identitySuite?: number
 }
@@ -226,7 +226,7 @@ export async function rotateFolder(
       .map(async ({ share, remote }) => ({
         id: share.id,
         namedShareEnvelope: await seal(
-          sealableDriveKey(remote.account, remote.driveHpkePublicKey, remote.identitySuite),
+          sealableDriveKey(remote.account, remote.driveXwingPublicKey, remote.identitySuite),
           { server: remote.server, accountId: remote.accountId },
           remote.accountIncarnationId,
         ),

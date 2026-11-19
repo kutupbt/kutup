@@ -398,7 +398,7 @@ impl VerifiedDriveKey {
         account: &AccountRef,
         authority_public: &[u8; 32],
         epoch: u32,
-        drive_hpke_public: &[u8; PUBLIC_KEY_LEN],
+        drive_xwing_public: &[u8; PUBLIC_KEY_LEN],
         drive_signing_public: &[u8; 32],
         signature: &[u8],
     ) -> Result<Self> {
@@ -406,14 +406,14 @@ impl VerifiedDriveKey {
             account,
             authority_public,
             epoch,
-            drive_hpke_public,
+            drive_xwing_public,
             drive_signing_public,
             signature,
         )?;
         Ok(Self {
             account: account.clone(),
             authority: *authority_public,
-            hpke_public: *drive_hpke_public,
+            hpke_public: *drive_xwing_public,
         })
     }
 }

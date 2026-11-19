@@ -254,11 +254,11 @@ pub(crate) fn login_with_password(
     .context("open the account's roots")?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
         .context("derive the account's keys")?;
-    let public_key = b64.encode(identity.drive_hpke_public_key());
+    let public_key = b64.encode(identity.drive_xwing_public_key());
     if public_key != resp.drive_xwing_public_key {
         bail!("the server publishes another Drive key than this account's master key derives");
     }
-    let private_key = identity.drive_hpke_private_key().to_vec();
+    let private_key = identity.drive_xwing_private_key().to_vec();
 
     // Step 4: the server moved to a new setup: the same password registered
     // under it, now, while this side holds it (a failure only waits for the

@@ -114,7 +114,7 @@ remains a ciphertext relay.
    - `masterKey` under the key-encryption key with purpose `PasswordMasterKey`;
    - `masterKey` under the recovery entropy with purpose `RecoveryMasterKey`;
    - the Drive private key under the master key with purpose
-     `DriveHpkePrivateKey`.
+     `DriveXwingPrivateKey`.
    Each single envelope carries and authenticates its closed suite ID, typed
    purpose, the account's key binding (docs/plans/account-identity.md), 24-byte nonce and exact ciphertext
    length. Separate nonce columns and implicit account-wrap formats do not

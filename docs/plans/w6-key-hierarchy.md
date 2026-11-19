@@ -4,7 +4,7 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
 
 ## 1. Derived or stored, never both: the Drive X-Wing key
 
-- **Today:** the Drive X-Wing seed is derived from the master key (`identity.rs`, `AccountIdentityKeysV1::derive`) and also stored as account-envelope purpose 3 (`DriveHpkePrivateKey`, column `users.drive_private_key_envelope`).
+- **Today:** the Drive X-Wing seed is derived from the master key (`identity.rs`, `AccountIdentityKeysV1::derive`) and also stored as account-envelope purpose 3 (`DriveXwingPrivateKey`, column `users.drive_private_key_envelope`).
 - **Change:** it is only derived. Purpose 3 goes from the registry: the number stays reserved and is refused on parse.
 - **Server:** the column goes, along with the field in registration, sign-in, the identity-suite upgrade, admin reset and the account head.
 - **Clients:** web, CLI and tests derive the key from the master key after sign-in, as they already derive the authority.

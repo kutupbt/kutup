@@ -150,7 +150,7 @@ impl ChatAccount {
             authority: keys.authority_signing_key().clone(),
             drive: AccountManifestDriveKeysV1 {
                 suite: AccountIdentitySuiteId::XWingEd25519V2,
-                hpke_public_key: b64(&keys.drive_hpke_public_key()),
+                hpke_public_key: b64(&keys.drive_xwing_public_key()),
                 share_signing_public_key: b64(&keys.drive_signing_public_key()),
             },
             identity: IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng),

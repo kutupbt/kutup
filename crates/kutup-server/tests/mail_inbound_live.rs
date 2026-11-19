@@ -2319,7 +2319,7 @@ fn share_for(group_secret: &[u8], group_id: &str, member: &User) -> Value {
             group_secret,
             group_id,
             &mail_key::GroupShareMember { account: &member.person, incarnation_id: &incarnation },
-            &member.identity.drive_hpke_public_key(),
+            &member.identity.drive_xwing_public_key(),
         )
         .unwrap()),
     })
@@ -2400,7 +2400,7 @@ fn shared_mailboxes() {
                 &signer,
                 &id,
                 &mail_key::GroupShareMember { account: &alice_user.person, incarnation_id: &incarnation },
-                &alice_user.identity.drive_hpke_public_key(),
+                &alice_user.identity.drive_xwing_public_key(),
             ).unwrap()),
         }],
     });
@@ -2554,7 +2554,7 @@ fn shared_mailboxes() {
         &id,
         &first.fingerprint,
         &bob_user.person,
-        bob_user.identity.drive_hpke_private_key(),
+        bob_user.identity.drive_xwing_private_key(),
     )
     .unwrap();
     assert!(mail_key::decrypt(&bobs_key, &content(&bob_user, &row).bytes().unwrap(), None).is_ok());
@@ -2588,7 +2588,7 @@ fn shared_mailboxes() {
         &id,
         &first.fingerprint,
         &bob_user.person,
-        bob_user.identity.drive_hpke_private_key(),
+        bob_user.identity.drive_xwing_private_key(),
     )
     .unwrap();
     assert!(mail_key::decrypt(

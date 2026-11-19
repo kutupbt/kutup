@@ -22,9 +22,16 @@ CODE_DIRS = [
     'frontend/apps',
     'tests/e2e/specs',
     'tests/e2e/fixtures',
+    'crates/kutup-crypto/src',
+    'crates/kutup-crypto/tests',
+    'crates/kutup-crypto-wasm/src',
+    'crates/kutup-chat-core/src',
+    'crates/kutup-chat-core/tests',
+    'crates/kutup-chat-proto/src',
+    'crates/kutup-federation-proto/src',
 ]
 SKIP_DIRS = {'node_modules', 'dist', 'target'}
-EXTENSIONS = ('.rs', '.ts', '.tsx', '.js', '.mjs')
+EXTENSIONS = ('.rs', '.ts', '.tsx', '.js', '.mjs', '.json')
 
 # A path in a string literal: /api/ then anything but the versioned and
 # unversioned prefixes. The bare prefixes themselves are fine (`"/api/"`,
@@ -57,6 +64,10 @@ OLD_ACCOUNT = re.compile(
     r"""|(?:\.|\?\.)(isAdmin|totpEnabled|isFirstLogin|isProtected)\b"""
     r"""|\b(isAdmin|totpEnabled|isFirstLogin|isProtected|isActive)\??:\s"""
 )
+
+# The account's Drive key has one name, for its X-Wing key: in JSON, code
+# and vectors alike (`driveXwingPublicKey`, `drive_xwing_public_key`).
+OLD_DRIVE_KEY = re.compile(r"driveHpke(?:Public|Private)Key|drive_hpke_(?:public|private)|DriveHpke")
 
 # An error code in snake_case: built (`"code": "nameTaken"`, `{ code:
 # 'nameTaken' }`) or matched (`code === 'nameTaken'`, `code.as_deref() ==
@@ -107,11 +118,15 @@ for top in CODE_DIRS:
                         found.append('a federation path outside /api/fed/v2')
                     if WIRE.search(line):
                         found.append('a user-named wire field')
+                    if OLD_DRIVE_KEY.search(line):
+                        found.append("the Drive key's old name")
                     if OLD_ACCOUNT.search(line):
                         found.append('an account field the role model replaced')
                     if SNAKE_CODE.search(line):
                         found.append('a snake_case error code')
-                    if rel not in STORAGE_ALLOWED and OLD_STORAGE.search(line):
+                    # Browser storage names: the web apps' and the e2e specs' only (a
+                    # crate's test labels are bytes its vectors bind).
+                    if rel.startswith(('frontend/', 'tests/')) and rel not in STORAGE_ALLOWED and OLD_STORAGE.search(line):
                         found.append('an old storage name')
                     for what in found:
                         problems.append(f'{rel}:{number}: {what}: {stripped[:140]}')

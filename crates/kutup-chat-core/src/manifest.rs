@@ -234,7 +234,7 @@ impl AccountAuthority {
     pub fn drive_keys(&self) -> AccountManifestDriveKeysV1 {
         AccountManifestDriveKeysV1 {
             suite: AccountIdentitySuiteId::XWingEd25519V2,
-            hpke_public_key: STANDARD.encode(self.identity.drive_hpke_public_key()),
+            hpke_public_key: STANDARD.encode(self.identity.drive_xwing_public_key()),
             share_signing_public_key: STANDARD.encode(self.identity.drive_signing_public_key()),
         }
     }
@@ -473,10 +473,10 @@ fn verify_manifest_trust(
             let consecutive = manifest.sequence == prior.highest_sequence.saturating_add(1);
             let linked = consecutive
                 && manifest.previous_hash.as_deref() == Some(prior.manifest_hash.as_str());
-            let drive_key_ok = prior.drive_hpke_public_key == manifest.drive.hpke_public_key
+            let drive_key_ok = prior.drive_xwing_public_key == manifest.drive.hpke_public_key
                 || ((linked || !consecutive)
                     && legacy_suite1_for_upgrade::drive_key_rises(
-                        &prior.drive_hpke_public_key,
+                        &prior.drive_xwing_public_key,
                         manifest,
                     ));
             if prior.account != manifest.account.to_string()
@@ -520,7 +520,7 @@ fn verify_manifest_trust(
         incarnation_id: manifest.incarnation_id.clone(),
         authority_key_id: manifest.authority_key_id.clone(),
         self_authority_key: manifest.self_authority_key.clone(),
-        drive_hpke_public_key: manifest.drive.hpke_public_key.clone(),
+        drive_xwing_public_key: manifest.drive.hpke_public_key.clone(),
         drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
         highest_sequence: manifest.sequence,
         manifest_hash,
@@ -803,11 +803,11 @@ mod tests {
         // Pinned at sequence 4 with a suite-1 (32-byte X25519) Drive key.
         let first = sign(4, Some("22".repeat(32)));
         let mut pinned = verify_manifest_trust(peer, &first, None).unwrap();
-        pinned.drive_hpke_public_key = STANDARD.encode([7u8; 32]);
+        pinned.drive_xwing_public_key = STANDARD.encode([7u8; 32]);
         // The linked next manifest carries the X-Wing key: accepted.
         let next = sign(5, Some(pinned.manifest_hash.clone()));
         let risen = verify_manifest_trust(peer, &next, Some(&pinned)).unwrap();
-        assert_eq!(risen.drive_hpke_public_key, next.drive.hpke_public_key);
+        assert_eq!(risen.drive_xwing_public_key, next.drive.hpke_public_key);
         // Across a gap: a gap to recover, not a changed identity. The
         // history then has to show the rise in a linked step.
         let later = sign(6, Some("33".repeat(32)));
@@ -817,7 +817,7 @@ mod tests {
         // From an X-Wing pin, another key: refused (no second change, never
         // back to suite 1).
         let mut xwing_pin = risen.clone();
-        xwing_pin.drive_hpke_public_key = STANDARD.encode([9u8; 1216]);
+        xwing_pin.drive_xwing_public_key = STANDARD.encode([9u8; 1216]);
         let after = sign(6, Some(risen.manifest_hash.clone()));
         assert!(verify_manifest_trust(peer, &after, Some(&xwing_pin)).is_err());
         // Nor across a gap.

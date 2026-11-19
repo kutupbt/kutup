@@ -60,7 +60,7 @@ Instead:
   public key is derived from it. The old label goes, with no second key beside
   it.
 - **Private key at rest.** `users.drive_private_key_envelope`
-  (`AccountRecordPurpose::DriveHpkePrivateKey`, `Exact(32)`) keeps its shape
+  (`AccountRecordPurpose::DriveXwingPrivateKey`, `Exact(32)`) keeps its shape
   and now holds the seed. Sign-in and session forks carry 32 bytes as before.
 - **Public key.** `accounts.drive_xwing_public_key` holds the 1216-byte key, base64 at 1624
   characters. Nothing caps that column.
@@ -71,7 +71,7 @@ Instead:
 - **Chat account manifest** (`AccountManifestV1.drive`). This gets a new
   `AccountIdentitySuiteId::XWingEd25519V2` with a 1216-byte `hpkePublicKey`, and
   the server still requires it to equal `accounts.drive_xwing_public_key`. Clients pin it in
-  `manifest_trust.drive_hpke_public_key` (chat-core SQLite and IndexedDB).
+  `manifest_trust.drive_xwing_public_key` (chat-core SQLite and IndexedDB).
   - Rule: within one incarnation the key changes only through the one-way
     suite upgrade below (a higher suite, consecutive manifests, the same
     authority). An account never holds both keys at once.
@@ -168,7 +168,7 @@ manifest trust, and refuse a lower one as a rollback.
 ## Federation
 
 - **Keys crossing servers.** The 1216-byte key crosses servers in
-  `AccountLookupResponse.drive_hpke_public_key` (`/api/fed/v2/drive/users/…`,
+  `AccountLookupResponse.drive_xwing_public_key` (`/api/fed/v2/drive/users/…`,
   `/accounts/…`) and in the Chat manifests.
 - **Envelopes crossing servers.** Named, file and profile-key envelopes cross
   as opaque base64. Only their size limits move.

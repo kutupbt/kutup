@@ -344,7 +344,7 @@ function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, gene
   return sealFor(me, file.id, key, generation, {
     person: { server: to.server, accountId: to.accountId },
     accountIncarnationId: to.accountIncarnationId,
-    drivePublicKey: sealableDriveKey(to.account, to.driveHpkePublicKey, to.identitySuite),
+    drivePublicKey: sealableDriveKey(to.account, to.driveXwingPublicKey, to.identitySuite),
   })
 }
 
@@ -568,7 +568,7 @@ export function useShareFile() {
         const shareEnvelope = await sealFor(me, file.id, file.fileKey!, file.keyGeneration, {
           person: { server: recipient.server, accountId: recipient.accountId },
           accountIncarnationId: recipient.accountIncarnationId,
-          drivePublicKey: recipient.driveHpkePublicKey,
+          drivePublicKey: recipient.driveXwingPublicKey,
         })
         await api.post(`/drive/files/${file.id}/share`, { recipientAccountId: recipient.accountId, shareEnvelope, canEdit: input.canEdit })
         return { kind: 'local', account: recipient.account }

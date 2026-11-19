@@ -101,7 +101,7 @@ fn sign_up_takes_only_the_id_minted_for_it() {
             body["accountAuthorityPublicKey"] = json!(b64(&identity.authority_public_key()));
             body["accountAuthorityKeyId"] = json!(identity.authority_key_id());
             body["accountIncarnationId"] = json!(identity.incarnation_id());
-            body["driveXwingPublicKey"] = json!(b64(&identity.drive_hpke_public_key()));
+            body["driveXwingPublicKey"] = json!(b64(&identity.drive_xwing_public_key()));
             body["driveSigningPublicKey"] = json!(b64(&identity.drive_signing_public_key()));
             body["driveKeyBinding"] = json!(b64(&kutup_crypto::drive_key_binding::sign(
                 &identity, &other, 1
@@ -223,7 +223,7 @@ fn accounts_are_found_by_id_and_keep_it_through_a_rename() {
         &alice.person,
         &key("accountAuthorityPublicKey"),
         after["driveKeyBindingEpoch"].as_u64().unwrap() as u32,
-        &b64_decode(after["driveHpkePublicKey"].as_str().unwrap())
+        &b64_decode(after["driveXwingPublicKey"].as_str().unwrap())
             .try_into()
             .unwrap(),
         &key("driveSigningPublicKey"),
