@@ -46,6 +46,10 @@ services:
       RATE_LIMIT_CHAT_KEYS_IP_PER_MIN: 1000
       # Every page checks who shared what (docs/plans/drive-identity-pins.md).
       RATE_LIMIT_USER_LOOKUP_PER_MIN: 1000
+      # Recovery is 5 an hour per address; spec 156 and the CLI scripts run
+      # against this stack (docs/plans/wipe-final-test.md C9) share one.
+      # 500 is its ceiling (100 times the default, as a guessing guard).
+      RATE_LIMIT_RECOVERY_PER_HOUR: 500
       # The break-glass administrator for admin specs (fixtures/apps.ts,
       # signInAsAdmin); its first sign-in replaces this temporary password.
       ADMIN_ACCOUNT: admin:Bootstrap*Temporary123
