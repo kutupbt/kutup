@@ -493,18 +493,18 @@ fn check_own(message: &[u8], sender: &Sender) -> AppResult<()> {
     }
 }
 
-async fn put(state: &AppState, key: &str, bytes: Vec<u8>) -> AppResult<String> {
+async fn put(state: &AppState, key: &str, bytes: Vec<u8>) -> AppResult<()> {
     let size = bytes.len() as i64;
     state
         .storage
-        .put_object_versioned(key, ByteStream::from(bytes), size)
+        .upload(key, ByteStream::from(bytes), size)
         .await
         .map_err(|_| AppError::internal("storage"))
 }
 
-async fn remove_objects(state: &AppState, objects: &[(String, String)]) {
-    for (key, version) in objects {
-        if let Err(error) = state.storage.delete_stored(key, version).await {
+async fn remove_objects(state: &AppState, keys: &[String]) {
+    for key in keys {
+        if let Err(error) = state.storage.delete(key).await {
             tracing::warn!(error = %error, "mail: unrecorded object left for the sweep");
         }
     }
@@ -561,7 +561,7 @@ pub async fn create_draft(
     let id = Uuid::new_v4();
     let key = crate::mail::object_key(user_id, Uuid::new_v4());
     let size = body.len() as i64;
-    let version = put(&state, &key, body).await?;
+    put(&state, &key, body).await?;
     let stored = async {
         let mut tx = state.pool.begin().await?;
         let pool = crate::storage_pool::lock(&mut tx, user_id, Default::default()).await?;
@@ -580,7 +580,6 @@ pub async fn create_draft(
                 protection: "endToEnd",
                 seen: true,
                 object_key: &key,
-                object_version: &version,
                 size,
                 readable: &checked.readable,
                 bcc: &checked.bcc,
@@ -597,7 +596,7 @@ pub async fn create_draft(
     }
     .await;
     if let Err(error) = stored {
-        remove_objects(&state, &[(key, version)]).await;
+        remove_objects(&state, &[key]).await;
         return Err(error);
     }
     Ok(Json(row(&state, user_id, id).await?))
@@ -647,20 +646,19 @@ pub async fn update_draft(
     check_own(&body, &sender)?;
     let key = crate::mail::object_key(user_id, Uuid::new_v4());
     let size = body.len() as i64;
-    let version = put(&state, &key, body).await?;
+    put(&state, &key, body).await?;
     let replaced = async {
         let mut tx = state.pool.begin().await?;
         let pool = crate::storage_pool::lock(&mut tx, user_id, Default::default()).await?;
-        let old: Option<(String, String, i64)> = sqlx::query_as(
-            "SELECT object_key, object_version, size_bytes FROM mail_messages
+        let old: Option<(String, i64)> = sqlx::query_as(
+            "SELECT object_key, size_bytes FROM mail_messages
               WHERE id = $1 AND account_id = $2 AND folder = 'drafts' FOR UPDATE",
         )
         .bind(id)
         .bind(user_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let (old_key, old_version, old_size) =
-            old.ok_or_else(|| AppError::not_found("not found"))?;
+        let (old_key, old_size) = old.ok_or_else(|| AppError::not_found("not found"))?;
         if !pool.fits(size - old_size, 0) {
             return Err(quota_exceeded());
         }
@@ -674,16 +672,15 @@ pub async fn update_draft(
             &crate::mail::sealed::Headers::of(readable, &checked.bcc),
         )?;
         sqlx::query(
-            "UPDATE mail_messages SET object_key = $3, object_version = $4, size_bytes = $5,
-                    headers = $6, message_id_hash = $7, in_reply_to_hash = $8,
-                    references_hashes = $9, search_tokens = $10,
-                    attachment_count = $11, sent_at = now(), received_at = now()
+            "UPDATE mail_messages SET object_key = $3, size_bytes = $4,
+                    headers = $5, message_id_hash = $6, in_reply_to_hash = $7,
+                    references_hashes = $8, search_tokens = $9,
+                    attachment_count = $10, sent_at = now(), received_at = now()
               WHERE id = $1 AND account_id = $2",
         )
         .bind(id)
         .bind(user_id)
         .bind(&key)
-        .bind(&version)
         .bind(size)
         .bind(&sealed.headers)
         .bind(&sealed.message_id_hash)
@@ -700,13 +697,13 @@ pub async fn update_draft(
         )
         .await?;
         tx.commit().await?;
-        Ok((old_key, old_version))
+        Ok(old_key)
     }
     .await;
     match replaced {
         Ok(old) => remove_objects(&state, &[old]).await,
         Err(error) => {
-            remove_objects(&state, &[(key, version)]).await;
+            remove_objects(&state, &[key]).await;
             return Err(error);
         }
     }
@@ -779,7 +776,7 @@ pub async fn add_draft_attachment(
     let attachment = Uuid::new_v4();
     let key = format!("{}att-{attachment}", crate::mail::object_prefix(user_id));
     let size = part.len() as i64;
-    let version = put(&state, &key, part).await?;
+    put(&state, &key, part).await?;
     let stored = async {
         let mut tx = state.pool.begin().await?;
         let pool = crate::storage_pool::lock(&mut tx, user_id, Default::default()).await?;
@@ -817,7 +814,7 @@ pub async fn add_draft_attachment(
     }
     .await;
     if let Err(error) = stored {
-        remove_objects(&state, &[(key, version)]).await;
+        remove_objects(&state, &[key]).await;
         return Err(error);
     }
     Ok(Json(DraftAttachment {
@@ -939,7 +936,7 @@ pub async fn delete_draft_attachment(
     )
     .await?;
     tx.commit().await?;
-    remove_objects(&state, &[(key, String::new())]).await;
+    remove_objects(&state, &[key]).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -968,7 +965,6 @@ struct LocalCopy {
     address: String,
     recipient: crate::mail::Recipient,
     key: String,
-    version: String,
     size: i64,
     /// `endToEnd`, or `zeroAccess` for a copy sent readable.
     protection: &'static str,
@@ -1380,8 +1376,8 @@ pub(crate) async fn deliver(
     };
     let own_copy = [own_packet.as_slice(), data].concat();
     let own_size = own_copy.len() as i64;
-    let own_version = put(&state, &own_key, own_copy).await?;
-    let mut objects = vec![(own_key.clone(), own_version.clone())];
+    put(&state, &own_key, own_copy).await?;
+    let mut objects = vec![own_key.clone()];
     let mut copies = Vec::new();
     let mut statuses = Vec::new();
     for (address, recipient, packet) in local {
@@ -1411,19 +1407,15 @@ pub(crate) async fn deliver(
             }
         };
         let size = copy.len() as i64;
-        let version = match put(&state, &key, copy).await {
-            Ok(version) => version,
-            Err(error) => {
-                remove_objects(&state, &objects).await;
-                return Err(error);
-            }
-        };
-        objects.push((key.clone(), version.clone()));
+        if let Err(error) = put(&state, &key, copy).await {
+            remove_objects(&state, &objects).await;
+            return Err(error);
+        }
+        objects.push(key.clone());
         copies.push(LocalCopy {
             address,
             recipient,
             key,
-            version,
             size,
             protection,
         });
@@ -1434,8 +1426,8 @@ pub(crate) async fn deliver(
     let mut spam_refused = false;
     // Group objects: kept when recorded, removed when the send fails or a
     // group took nothing.
-    let mut group_objects: Vec<(String, String)> = Vec::new();
-    let mut unused_group_objects: Vec<(String, String)> = Vec::new();
+    let mut group_objects: Vec<String> = Vec::new();
+    let mut unused_group_objects: Vec<String> = Vec::new();
     let recorded: AppResult<Vec<SendRecipient>> = async {
         let mut tx = state.pool.begin().await?;
         // Lock every account in one order, so two sends cannot deadlock.
@@ -1477,7 +1469,6 @@ pub(crate) async fn deliver(
                 },
                 seen: true,
                 object_key: &own_key,
-                object_version: &own_version,
                 size: own_size,
                 readable,
                 bcc: &checked.bcc,
@@ -1491,7 +1482,7 @@ pub(crate) async fn deliver(
         .await?;
         let mut results = Vec::new();
         // Copies a recipient's block list dropped: their objects go after the commit.
-        let mut blocked: Vec<(String, String)> = Vec::new();
+        let mut blocked: Vec<String> = Vec::new();
         // Copies delivered: answered after the commit when their auto-reply is on.
         let mut delivered = Vec::new();
         // Copies delivered: forwarded after the commit (docs/plans/mail-forwarding.md),
@@ -1532,7 +1523,6 @@ pub(crate) async fn deliver(
                     protection: copy.protection,
                     seen: false,
                     object_key: &copy.key,
-                    object_version: &copy.version,
                     size: copy.size,
                     readable,
                     bcc: &[],
@@ -1555,7 +1545,6 @@ pub(crate) async fn deliver(
                         address_id: copy.recipient.address_id,
                         message_id: copy_id,
                         object_key: copy.key.clone(),
-                        object_version: copy.version.clone(),
                         readable: readable.clone(),
                         may_forward: true,
                         // Sent readable (the address forwards outside Kutup, or
@@ -1566,7 +1555,7 @@ pub(crate) async fn deliver(
                     });
                 }
             } else {
-                blocked.push((copy.key.clone(), copy.version.clone()));
+                blocked.push(copy.key.clone());
             }
             // A blocked sender is told nothing, as Proton does.
             results.push(SendRecipient {
@@ -1735,8 +1724,8 @@ pub(crate) async fn deliver(
         for arrived in forwards {
             crate::mail::forwarding::spawn_forward(&state, arrived);
         }
-        for (key, version) in &blocked {
-            if let Err(error) = state.storage.delete_stored(key, version).await {
+        for key in &blocked {
+            if let Err(error) = state.storage.delete(key).await {
                 tracing::warn!(error = %error, "mail: a blocked copy's object left for the sweep");
             }
         }
@@ -1765,14 +1754,14 @@ pub(crate) async fn deliver(
         }
     };
     // Copies a full account could not take.
-    let undelivered: Vec<(String, String)> = copies
+    let undelivered: Vec<String> = copies
         .iter()
         .filter(|copy| {
             results
                 .iter()
                 .any(|r| r.address == copy.address && r.status == "full")
         })
-        .map(|copy| (copy.key.clone(), copy.version.clone()))
+        .map(|copy| copy.key.clone())
         .collect();
     remove_objects(&state, &undelivered).await;
     if let Some(draft) = meta

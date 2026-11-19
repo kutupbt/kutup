@@ -919,17 +919,17 @@ pub async fn version_content(
         let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
         let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
         remote_access(&state, &authenticated, &headers, file_id).await?;
-        let row: Option<(String, i64)> = sqlx::query_as(
-            "SELECT storage_path, size_bytes FROM drive_file_versions WHERE id = $1 AND file_id = $2",
+        let row: Option<i64> = sqlx::query_scalar(
+            "SELECT size_bytes FROM drive_file_versions WHERE id = $1 AND file_id = $2",
         )
         .bind(vid)
         .bind(file_id)
         .fetch_optional(&state.pool)
         .await?;
-        let (path, size) = row.ok_or_else(|| AppError::not_found("not found"))?;
+        let size = row.ok_or_else(|| AppError::not_found("not found"))?;
         // Its sealed content record comes with the version list.
         let content = crate::file_content::CurrentContent {
-            path,
+            path: crate::file_content::revision_path(file_id, vid),
             size,
             version: Some(vid),
             revision: vid,

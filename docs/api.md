@@ -453,8 +453,8 @@ exact ciphertext length as AEAD associated data. The three purposes cannot be
 substituted for one another or relocated to another account.
 
 `accountRoots` are the account's stored roots (docs/plans/identity-root.md):
-one account record of each purpose 22–26 (the identity root, the Drive
-root, the group pseudonym root, the call-link root, the object-id key), each
+one account record of each root purpose (4 the identity root, 10 the Drive
+root, 19 the group pseudonym root, 20 the call-link root, 5 the object-id key), each
 at generation 1 (the record's object), sealed under the master key for the
 key binding (`400 accountRootsInvalid` otherwise). The account identity derives from the
 identity root, never from the master key, so a new master key leaves it
@@ -1598,7 +1598,7 @@ reauth, which `opaque/register/start` also takes.
   "recoveryKeyEnvelope": "<purpose 2, generation n+1, under a new phrase>",
   "recoveryProof": "<base64 32 bytes, the new phrase's>",
   "accountRoots": ["<the five roots, each at its newest generation, sealed at n+1>", "…"],
-  "masterKeyring": "<purpose 27, generation n+1, object n: the previous key>",
+  "masterKeyring": "<purpose 3, generation n+1, object n: the previous key>",
   "head": "<the next account head, sealed at n+1>"
 }
 ```
@@ -3188,7 +3188,7 @@ at most 200 (`400` otherwise). Returns what was saved.
 ### The Photos library record
 
 Your own marks on photos (favourites, archived, hidden) are one
-account-private record (`kutup-crypto` `photos_library`, purpose 13) in the
+account-private record (`kutup-crypto` `photos_library`, purpose 34) in the
 account-records store's `photosLibrary` scope (see "The account-records
 store"); the server never reads it.
 
@@ -6362,7 +6362,9 @@ bound to, the one the file's metadata commits to (`content.revisionId`,
 docs/plans/drive-block-format.md §2): readers open it only while that is
 the file's content; `source` — the version id it was drawn from, or
 `original` (default); a version of another file is refused. The size is charged to the
-uploader; replacing your own thumbnail charges only the difference.
+uploader; replacing your own thumbnail charges only the difference. Each
+upload is stored under a key of its own; the one it replaces is deleted once
+the new one is recorded.
 **Auth:** Bearer JWT and write access. **Response:** `204`; `400` invalid
 envelope or source; `404` unknown variant; `413` too large or over quota.
 
@@ -6445,7 +6447,7 @@ so a reader asks for that state and refuses another.
 
 The server measures the body and charges **that** size to the author's
 quota (a client's size claim is not read), stores it as an object of its own
-(`files/{id}/versions/{versionId}`), records the row, truncates
+(`files/{id}/revisions/{versionId}`), records the row, truncates
 `collab_update_log` up to `seqAtSnapshot` and sets the file's `updatedAt` (and
 so its folder's) — one transaction; the object is removed again if the
 commit fails. Under the relay's per-file lock, `seqAtSnapshot` is clamped

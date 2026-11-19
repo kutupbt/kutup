@@ -916,8 +916,8 @@ pub async fn remove_file_share(
 
 /// The latest saved Yjs state of `file_id`, as a response body.
 async fn saved_state(state: &AppState, file_id: Uuid) -> AppResult<FileStateResponse> {
-    let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
-        "SELECT id, storage_path, key_generation, kutup_b64(revision_content_envelope)
+    let latest: Option<(Uuid, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, key_generation, kutup_b64(revision_content_envelope)
          FROM drive_file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
          ORDER BY created_at DESC LIMIT 1",
@@ -925,9 +925,10 @@ async fn saved_state(state: &AppState, file_id: Uuid) -> AppResult<FileStateResp
     .bind(file_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((version_id, path, key_generation, revision_content_envelope)) = latest else {
+    let Some((version_id, key_generation, revision_content_envelope)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
+    let path = crate::file_content::revision_path(file_id, version_id);
     let (object, _) = state
         .storage
         .get_object(&path)

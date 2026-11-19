@@ -5,7 +5,8 @@ docs/plans/wipe-unification.md W3. It follows Signal's Storage Service: one
 generic store for the account's synced private state, with the account head as
 its manifest. Branch `wipe/account-records`, on #417. It will be rebased onto
 `wipe/integration` once that is green. Migrations from `20261111180000`;
-record purposes from 31.
+record purposes from 31. W7 renumbered every purpose by owner
+(docs/plans/w7-schema.md §11); the numbers below are the renumbered ones.
 
 ## 1. Today
 
@@ -120,22 +121,22 @@ Only `mail_messages` carries the change feed (`srv/change_feed.rs`).
 
 Moves onto `account_records`:
 - **Chat groups, Chat contacts, identity pins, Pass secrets:** the same
-  envelopes, purposes 11, 12, 10 and 6.
-- **The Photos library** (purpose 13), one record. Its private chain goes:
+  envelopes, purposes 15, 16, 11 and 27.
+- **The Photos library** (purpose 34), one record. Its private chain goes:
   the record stops being chained and its header revision is CAS'd under the
   head like any other. `previous_envelope_digest` leaves the format.
-- **The Chat attachment ledger** (purpose 14), one record per entity. The
+- **The Chat attachment ledger** (purpose 17), one record per entity. The
   history table, the private chain and the ledger's own cursor go; the change
   feed replaces them. The operation-id idempotency stays: a replayed batch is
   a no-op by revision.
-- **Joined meetings** (purpose 15, immutable). The cap of 100 becomes the
+- **Joined meetings** (purpose 18, immutable). The cap of 100 becomes the
   scope's maximum count; the oldest is deleted in the same batch.
-- **Contact groups:** a new purpose 31, `ContactGroup`, whose plaintext
+- **Contact groups:** a new purpose 32, `ContactGroup`, whose plaintext
   follows the format-evolution rule (`v`, optional `min`, kept `extra`) and
   holds the name and colour. It gets a revision and the head. The plaintext
   `contact_groups.name` goes. The server still needs group ids to check a
   summary's `groups`; it reads them from the record ids.
-- **A calendar's own settings:** a new purpose 32, `CalendarSettings`, one
+- **A calendar's own settings:** a new purpose 29, `CalendarSettings`, one
   record per calendar the account belongs to, keyed by the calendar id. It
   holds the colour, the display flag and the default reminders, under the
   format-evolution rule, and replaces the plaintext `revision` and those
@@ -159,7 +160,7 @@ Stays:
 Every moved scope is covered by the head, so the three private chains go
 (Photos, the ledger, and the ledger's local chain pins). The pins' rename
 anchors stay: they chain a peer's renames, not the account's state. Local
-chain pins (purpose 21) stay for anything left outside the head.
+chain pins (purpose 9) stay for anything left outside the head.
 
 ## 3. Slices (each its own commit, gated)
 
@@ -250,10 +251,10 @@ apps"), not as a half head manager here.
 
 ## Built: slice 6 (2026-11-16, `wipe/records-photos`)
 
-- **Scopes 5 `photosLibrary` and 6 `chatAttachments`**, purposes 13 and 14
+- **Scopes 5 `photosLibrary` and 6 `chatAttachments`**, purposes 34 and 17
   as before, both with a new id form `IdForm::Random` (32 random bytes the
   writing client chooses, 43-character base64url; `RecordScope::random_id`,
-  `randomRecordId` on the web). Purposes 13 and 14 are no longer chained, and
+  `randomRecordId` on the web). Purposes 34 and 17 are no longer chained, and
   their object is the record id (32 bytes; the ledger's was 48).
 - **Counts** are site settings: `photos.records.library` (default 1:
   a first write that raced another device's is refused by the head and redone
@@ -272,9 +273,9 @@ apps"), not as a half head manager here.
 
 ## As built: slice 7 (2026-11-16)
 
-- **Scopes** 7 `contactGroups` (purpose 31 `ContactGroup`, hashed ids), 8
-  `calendarSettings` (purpose 32 `CalendarSettings`, `hashed_object` of the
-  calendar id) and 9 `joinedMeetings` (purpose 15, random ids: slice 6's
+- **Scopes** 7 `contactGroups` (purpose 32 `ContactGroup`, hashed ids), 8
+  `calendarSettings` (purpose 29 `CalendarSettings`, `hashed_object` of the
+  calendar id) and 9 `joinedMeetings` (purpose 18, random ids: slice 6's
   `IdForm::Random`, 32 random bytes as 43-character base64url, drawn by the
   browser that recorded the stay). Their counts are the site settings
   `accountRecordsContactGroups` (200), `accountRecordsCalendarSettings` (500)
@@ -331,7 +332,7 @@ the whole scope (the ledger may hold 100,000 entities):
 - **Gone with the session:** sign-out clears every kept copy. The CLI
   stays full-read.
 
-This replaces the sealed blob first proposed (purpose 33 was never taken):
+This replaces the sealed blob first proposed (no purpose was ever taken for it):
 a blob of a full ledger (about 60 MB) would be resealed on every write.
 
 ### Built: one sync loop in chat-core (2026-11-17)

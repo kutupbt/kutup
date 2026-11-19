@@ -1114,7 +1114,7 @@ with the session repair and the visible record described in §6.
 
 The browser store is encrypted at rest (`kutup-chat-core/src/db/store_cipher.rs`,
 `docs/research/16-browser-storage-architecture.md`). A random 256-bit store key
-is kept as an account record (purpose 28, `ChatStoreKey`) under the account
+is kept as an account record (purpose 21, `ChatStoreKey`) under the account
 master key, its header naming the key's generation so it opens across a
 master-key rotation, bound to the account's key binding and, by its object (the
 SHA-256 of the name), to the database name;

@@ -57,7 +57,7 @@ pub struct VersionRow {
 
 pub(crate) type VersionTuple = (
     Uuid,
-    String,
+    Uuid,
     i64,
     i64,
     Uuid,
@@ -76,7 +76,7 @@ pub(crate) type VersionTuple = (
 pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     let (
         id,
-        path,
+        file_id,
         seq,
         dk,
         author,
@@ -99,7 +99,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     };
     VersionRow {
         id: id.to_string(),
-        storage_path: path,
+        storage_path: crate::file_content::revision_path(file_id, id),
         seq_at_snapshot: seq,
         doc_key_id: dk,
         author_account_id: author.to_string(),
@@ -115,7 +115,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     }
 }
 
-pub(crate) const VERSION_SELECT: &str = r#"SELECT id, storage_path, seq_at_snapshot,
+pub(crate) const VERSION_SELECT: &str = r#"SELECT id, file_id, seq_at_snapshot,
        doc_key_id, author_account_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
        remote_author_server, remote_author_account_id, parent_version_id,
        kutup_b64(revision_content_envelope)
@@ -186,8 +186,8 @@ pub async fn download(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let row: Option<(String, i64, i64, i64, Option<String>)> = sqlx::query_as(
-        "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot,
+    let row: Option<(i64, i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT size_bytes, doc_key_id, seq_at_snapshot,
                 kutup_b64(revision_content_envelope)
          FROM drive_file_versions WHERE id = $1 AND file_id = $2",
     )
@@ -195,9 +195,10 @@ pub async fn download(
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, size, doc_key_id, seq, revision_content)) = row else {
+    let Some((size, doc_key_id, seq, revision_content)) = row else {
         return Err(AppError::not_found("not found"));
     };
+    let path = crate::file_content::revision_path(fid, vid);
 
     let mut extra = crate::file_content::revision_headers(vid, revision_content.as_deref());
     extra.extend([
@@ -325,9 +326,9 @@ pub async fn delete(
         return delete_original(&state, user_id, fid).await;
     }
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
-    type Row = (String, Uuid, Uuid, bool);
+    type Row = (Uuid, Uuid, bool);
     let row: Option<Row> = sqlx::query_as(&format!(
-        "SELECT v.storage_path, v.author_account_id, c.owner_account_id,
+        "SELECT v.author_account_id, c.owner_account_id,
                 v.id = ({NEWEST_VERSION})
            FROM drive_file_versions v
            JOIN drive_files f ON f.id = v.file_id
@@ -338,9 +339,10 @@ pub async fn delete(
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, author, owner, newest)) = row else {
+    let Some((author, owner, newest)) = row else {
         return Err(AppError::not_found("not found"));
     };
+    let path = crate::file_content::revision_path(fid, vid);
     if user_id != author && user_id != owner {
         if can_access_file(&state.pool, user_id, fid).await? {
             return Err(AppError::forbidden(
@@ -366,9 +368,9 @@ pub async fn delete(
 /// charge and the object.
 async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResult<Response> {
     let mut tx = state.pool.begin().await?;
-    type Row = (String, i64, Uuid, Uuid, bool, bool);
+    type Row = (Uuid, i64, Uuid, Uuid, bool, bool);
     let row: Option<Row> = sqlx::query_as(
-        "SELECT f.storage_path, f.encrypted_size_bytes, f.uploader_account_id, c.owner_account_id,
+        "SELECT f.content_revision_id, f.encrypted_size_bytes, f.uploader_account_id, c.owner_account_id,
                 f.original_pruned,
                 EXISTS (SELECT 1 FROM drive_file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
            FROM drive_files f
@@ -379,9 +381,10 @@ async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResul
     .bind(fid)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((path, size, uploader, owner, pruned, replaced)) = row else {
+    let Some((revision, size, uploader, owner, pruned, replaced)) = row else {
         return Err(AppError::not_found("not found"));
     };
+    let path = crate::file_content::revision_path(fid, revision);
     if user_id != uploader && user_id != owner {
         if can_access_file(&state.pool, user_id, fid).await? {
             return Err(AppError::forbidden(
@@ -665,21 +668,20 @@ pub(crate) async fn store_version(
     // Stamped when stored, not when the transaction began: a save that waited
     // for the lock above is newer than the one it waited for.
     let created: VersionTuple = sqlx::query_as(
-        r#"INSERT INTO drive_file_versions (id, file_id, storage_path, seq_at_snapshot,
+        r#"INSERT INTO drive_file_versions (id, file_id, seq_at_snapshot,
                                       doc_key_id, author_account_id, size_bytes, label, keep_forever, kind,
                                       key_generation, remote_author_server,
                                       remote_author_account_id, parent_version_id, created_at,
                                       blob_suite, revision_content_envelope)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp(),
-                   $15, kutup_unb64($16))
-           RETURNING id, storage_path, seq_at_snapshot, doc_key_id,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $13, $12, clock_timestamp(),
+                   $14, kutup_unb64($15))
+           RETURNING id, file_id, seq_at_snapshot, doc_key_id,
                      author_account_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
                      remote_author_server, remote_author_account_id, parent_version_id,
                      kutup_b64(revision_content_envelope)"#,
     )
     .bind(version_id)
     .bind(fid)
-    .bind(&storage_path)
     .bind(seq_at_snapshot)
     .bind(doc_key_id)
     .bind(payer)

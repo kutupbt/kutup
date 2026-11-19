@@ -456,11 +456,11 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     let id = Uuid::new_v4();
     let key = object_key(recipient.account_id, id);
     let size = i64::try_from(ciphertext.len())?;
-    let version = state
+    state
         .storage
-        .put_object_versioned(&key, ByteStream::from(ciphertext), size)
+        .upload(&key, ByteStream::from(ciphertext), size)
         .await?;
-    let answer = match record(state, recipient, id, &key, &version, size, &readable).await {
+    let answer = match record(state, recipient, id, &key, size, &readable).await {
         Ok(Some(stored)) => {
             // On to the address's forwardings, after its own copy is kept.
             if forwarding::forwards(&state.pool, recipient.address_id).await {
@@ -470,7 +470,6 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                         address_id: recipient.address_id,
                         message_id: id,
                         object_key: key.clone(),
-                        object_version: version.clone(),
                         readable: readable.clone(),
                         may_forward: recipient.caught.is_none()
                             && forwarding::may_forward(&state.config.mail_forwarding_keys, raw),
@@ -511,7 +510,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     };
     // Nothing points at the object: remove it now rather than leave it to
     // the sweep.
-    if let Err(error) = state.storage.delete_stored(&key, &version).await {
+    if let Err(error) = state.storage.delete(&key).await {
         tracing::warn!(error = %error, "mail: unrecorded object left for the sweep");
     }
     answer
@@ -541,7 +540,6 @@ async fn record(
     recipient: &Recipient,
     id: Uuid,
     key: &str,
-    version: &str,
     size: i64,
     readable: &Readable,
 ) -> Result<Option<Reply>, Recorded> {
@@ -568,7 +566,6 @@ async fn record(
             },
             seen: false,
             object_key: key,
-            object_version: version,
             size,
             readable,
             bcc: &[],
@@ -602,7 +599,6 @@ pub(crate) struct NewMessage<'a> {
     pub protection: &'static str,
     pub seen: bool,
     pub object_key: &'a str,
-    pub object_version: &'a str,
     pub size: i64,
     pub readable: &'a Readable,
     pub bcc: &'a [headers::Mailbox],
@@ -700,13 +696,13 @@ pub(crate) async fn insert_message(
     let inserted: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO mail_messages
             (id, account_id, address_id, thread_id, direction, folder, seen, protection, object_key,
-             object_version, size_bytes, sent_at, headers, message_id_hash, in_reply_to_hash,
+             size_bytes, sent_at, headers, message_id_hash, in_reply_to_hash,
              references_hashes, search_tokens,
              attachment_count, external_recipients, group_id, key_packet, sent_by_account_id, unsubscribable,
              expires_at, notify_at, forwarded)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                 $18, $19, $20, $21, $22, $23, $24,
-                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END, $25)
+                 $18, $19, $20, $21, $22, $23,
+                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END, $24)
          ON CONFLICT (address_id, message_id_hash)
              WHERE direction = 'inbound' AND message_id_hash IS NOT NULL
          DO NOTHING
@@ -721,7 +717,6 @@ pub(crate) async fn insert_message(
     .bind(message.seen)
     .bind(message.protection)
     .bind(message.object_key)
-    .bind(message.object_version)
     .bind(message.size)
     .bind(sent_at)
     .bind(&sealed.headers)

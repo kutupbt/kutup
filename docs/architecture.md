@@ -615,13 +615,20 @@ Each browser tab session and each CLI session generates a fresh Ed25519 keypair.
 ### Versioning
 Two-tier:
 - **Live deltas** in Postgres `collab_update_log` (truncated on snapshot).
-- **Snapshots** as SeaweedFS S3 noncurrent versions, indexed in `drive_file_versions`.
+- **Snapshots** as objects of their own (`files/{id}/revisions/{versionId}`), indexed in `drive_file_versions`.
 
 Snapshots fire on idle 30s + ≥1 update, every 200 updates, or on explicit "Save version".
 
 Retention: 30 days OR last 50 versions, whichever yields more. Named/keep-forever versions are exempt forever.
 
 Versions are stored with one request (`POST /files/:fileId/versions`, multipart, charged by measured size, one object per version; `docs/plans/drive-versions-v2.md`) and are file-type-agnostic — notes (`kind = yjs`), office docs and whiteboards (`kind = file`) all use the same plumbing. Restore for blob-based editors (office, whiteboard) reposts the chosen old bytes as a new version then reloads the page; for Yjs editors the CRDT merges the restored state in-place.
+
+### Object storage
+Every key holds one revision of something and is never overwritten (W7, docs/plans/w7-schema.md §8), so the bucket needs no versioning and a store without it, or a plain directory, would do:
+- Drive: `files/{file}/revisions/{revisionId}` (the first upload and every version), `files/{file}/assets/{assetId}`, `files/{file}/thumbnails/{variant}/{objectId}` (a new key per upload; the row names the current one). No row stores a Drive key: `file_content::revision_path` and the thumbnail and asset path functions derive them from the ids.
+- Mail messages, attachments and held sends, Chat media and backups: a new key per object, named by its row.
+
+A replaced or removed object is deleted only after the change that drops its row commits. Every delete goes through `storage_pending_deletions` (`object` or `prefix`) and reaches the store after `server.storage.deleted_blob_retention_seconds` (`blob_purge`), so a restored database dump never names a purged blob. A write to a key calls off a delete of it still waiting.
 
 ### Federation, sharing
 A live-edited file is still a regular `drive_files` row with an encrypted blob; non-editing users download it as usual.

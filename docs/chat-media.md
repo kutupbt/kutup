@@ -259,7 +259,7 @@ W3 slice 6), kept at its newest revision only
 (`kutup_crypto::chat_attachment_ledger`):
 
 ```text
-header (KUTPAR1)  suite 1, purpose ChatAttachmentLedger (14), master-key
+header (KUTPAR1)  suite 1, purpose ChatAttachmentLedger (17), master-key
                   generation, the account's key binding,
                   object = the entity's record id (32 random bytes),
                   revision (non-zero),
@@ -275,7 +275,9 @@ length-prefixed encoding, not signed JSON. It binds version, conversation
 kind/reference, logical message UUID, attachment UUID, opaque
 storage-reference UUID, exact logical ciphertext bytes, state, media class,
 bounded display name, update time and an optional promoted Drive file UUID.
-States are `active`, `cleared`, `savedToDrive` and `expired`. The server
+Conversation kinds are `direct` (the peer's account reference), `group` (the
+pairwise group id, 32 bytes base64url without padding) and `noteToSelf` (the
+account's own reference). States are `active`, `cleared`, `savedToDrive` and `expired`. The server
 cannot classify or join an entry to a sender or conversation.
 
 Writes are batches of `POST /api/v1/account/records` with the next account head:

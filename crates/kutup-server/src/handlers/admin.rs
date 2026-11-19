@@ -938,15 +938,17 @@ pub(crate) async fn purge_chat_media(state: &AppState, target: Uuid) -> AppResul
 pub(crate) async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResult<()> {
     // Open uploads by the user anywhere, or by anyone into the user's
     // folders: their multipart parts would otherwise stay in the bucket.
-    let open_uploads: Vec<(Uuid, String, String, bool)> = sqlx::query_as(
-        "SELECT u.id, u.storage_path, u.s3_upload_id, u.uploaded_at IS NOT NULL FROM drive_uploads u
+    let open_uploads: Vec<(Uuid, Uuid, Uuid, String, bool)> = sqlx::query_as(
+        "SELECT u.id, u.file_id, u.revision_id, u.s3_upload_id, u.uploaded_at IS NOT NULL
+         FROM drive_uploads u
          WHERE u.account_id = $1
             OR u.collection_id IN (SELECT id FROM drive_collections WHERE owner_account_id = $1)",
     )
     .bind(target)
     .fetch_all(&state.pool)
     .await?;
-    for (id, path, upload_id, uploaded) in open_uploads {
+    for (id, file_id, revision, upload_id, uploaded) in open_uploads {
+        let path = crate::file_content::revision_path(file_id, revision);
         if let Err(error) =
             crate::drive_blob::drop_upload_bytes(&state.storage, &path, &upload_id, uploaded).await
         {

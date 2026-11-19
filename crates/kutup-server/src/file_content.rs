@@ -18,8 +18,9 @@ use crate::storage::StorageService;
 /// Where a revision of a file is stored (docs/plans/drive-block-format.md
 /// §3): the original upload and every version alike, under the file's own
 /// prefix beside its assets and thumbnails (`files/{id}/…`), whoever
-/// uploaded it and from wherever (a peer's upload too). Rows stored before
-/// keep the paths they name (`original`, `versions/{id}`).
+/// uploaded it and from wherever (a peer's upload too). The only place the
+/// key is made: no row stores it (`drive_files` by its `content_revision_id`,
+/// `drive_file_versions` and `drive_uploads` by their revision ids).
 pub fn revision_path(file_id: Uuid, revision: Uuid) -> String {
     format!("files/{file_id}/revisions/{revision}")
 }
@@ -64,8 +65,8 @@ pub fn revision_headers(
 }
 
 pub async fn current_content(pool: &PgPool, file_id: Uuid) -> sqlx::Result<Option<CurrentContent>> {
-    let version: Option<(Uuid, String, i64, Option<String>)> = sqlx::query_as(
-        "SELECT id, storage_path, size_bytes, kutup_b64(revision_content_envelope)
+    let version: Option<(Uuid, i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, size_bytes, kutup_b64(revision_content_envelope)
          FROM drive_file_versions
          WHERE file_id = $1 AND kind = 'file'
          ORDER BY created_at DESC LIMIT 1",
@@ -73,9 +74,9 @@ pub async fn current_content(pool: &PgPool, file_id: Uuid) -> sqlx::Result<Optio
     .bind(file_id)
     .fetch_optional(pool)
     .await?;
-    if let Some((id, path, size, revision_content_envelope)) = version {
+    if let Some((id, size, revision_content_envelope)) = version {
         return Ok(Some(CurrentContent {
-            path,
+            path: revision_path(file_id, id),
             size,
             version: Some(id),
             revision: id,
@@ -92,8 +93,8 @@ pub async fn original_content(
     pool: &PgPool,
     file_id: Uuid,
 ) -> sqlx::Result<Option<CurrentContent>> {
-    let original: Option<(String, i64, Uuid, Option<String>)> = sqlx::query_as(
-        "SELECT storage_path, encrypted_size_bytes, content_revision_id,
+    let original: Option<(i64, Uuid, Option<String>)> = sqlx::query_as(
+        "SELECT encrypted_size_bytes, content_revision_id,
                 kutup_b64(revision_content_envelope)
          FROM drive_files
          WHERE id = $1 AND deleted_at IS NULL AND NOT original_pruned",
@@ -102,8 +103,8 @@ pub async fn original_content(
     .fetch_optional(pool)
     .await?;
     Ok(original.map(
-        |(path, size, revision, revision_content_envelope)| CurrentContent {
-            path,
+        |(size, revision, revision_content_envelope)| CurrentContent {
+            path: revision_path(file_id, revision),
             size,
             version: None,
             revision,

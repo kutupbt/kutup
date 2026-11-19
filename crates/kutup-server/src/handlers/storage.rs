@@ -145,7 +145,10 @@ pub async fn usage(
     let (calendar_bytes, calendar_count): (i64, i64) = sqlx::query_as(
         "SELECT (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_account_id = $1), 0)
                + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e
-                             JOIN calendars c ON c.id = e.calendar_id WHERE c.owner_account_id = $1), 0))::bigint,
+                             JOIN calendars c ON c.id = e.calendar_id WHERE c.owner_account_id = $1), 0)
+               + COALESCE((SELECT SUM(se.bytes) FROM calendar_shared_events se
+                             JOIN calendars c ON c.id = se.home_calendar_id
+                            WHERE c.owner_account_id = $1), 0))::bigint,
                 (SELECT COUNT(*) FROM calendar_events e JOIN calendars c ON c.id = e.calendar_id
                   WHERE c.owner_account_id = $1)",
     )
@@ -283,8 +286,8 @@ pub async fn prune_versions(
             "olderThanDays must be between 0 and 36500",
         ));
     }
-    let rows: Vec<(uuid::Uuid, String, i64)> = sqlx::query_as(&format!(
-        "SELECT v.id, v.storage_path, v.size_bytes
+    let rows: Vec<(uuid::Uuid, uuid::Uuid, i64)> = sqlx::query_as(&format!(
+        "SELECT v.id, v.file_id, v.size_bytes
            FROM drive_file_versions v
           WHERE v.author_account_id = $1
             AND v.created_at <= now() - make_interval(days => $2)
@@ -302,7 +305,8 @@ pub async fn prune_versions(
     .await?;
     let more = rows.len() as i64 > PRUNE_BATCH;
     let (mut deleted_count, mut freed_bytes) = (0, 0);
-    for (id, path, size) in rows.into_iter().take(PRUNE_BATCH as usize) {
+    for (id, file_id, size) in rows.into_iter().take(PRUNE_BATCH as usize) {
+        let path = crate::file_content::revision_path(file_id, id);
         match crate::jobs::remove_version(&state.pool, &state.storage, id, &path).await {
             Ok(true) => {
                 deleted_count += 1;

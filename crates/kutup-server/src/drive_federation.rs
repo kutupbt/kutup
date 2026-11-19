@@ -2023,11 +2023,11 @@ pub async fn upload_file(
                 "INSERT INTO drive_files
                 (id, collection_id, uploader_account_id, metadata_envelope,
                  file_key_envelope, key_epoch, key_generation, metadata_revision,
-                 storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id,
+                 encrypted_size_bytes, ciphertext_sha256, fed_share_id,
                  original_key_generation, name_hash, content_revision_id,
                  blob_suite, revision_content_envelope)
-             VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,$7,$8,$9,decode($10, 'hex'),$11,1,
-                     decode($12, 'hex'),$13,$14,kutup_unb64($15))",
+             VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,$7,$8,decode($9, 'hex'),$10,1,
+                     decode($11, 'hex'),$12,$13,kutup_unb64($14))",
             )
             .bind(file_id)
             .bind(share.collection_id)
@@ -2036,7 +2036,6 @@ pub async fn upload_file(
             .bind(&parsed.file_key_envelope)
             .bind(share.key_epoch)
             .bind(1_i64)
-            .bind(&storage_path)
             .bind(parsed.size)
             .bind(&parsed.digest)
             .bind(share.id)
@@ -2517,8 +2516,8 @@ pub fn spawn_digest_backfill(state: AppState) {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             tick.tick().await;
-            let rows: Result<Vec<(Uuid, String)>, sqlx::Error> = sqlx::query_as(
-                "SELECT id, storage_path FROM drive_files
+            let rows: Result<Vec<(Uuid, Uuid)>, sqlx::Error> = sqlx::query_as(
+                "SELECT id, content_revision_id FROM drive_files
                  WHERE ciphertext_sha256 IS NULL AND deleted_at IS NULL AND NOT original_pruned
                  ORDER BY created_at, id LIMIT 10",
             )
@@ -2526,7 +2525,8 @@ pub fn spawn_digest_backfill(state: AppState) {
             .await;
             match rows {
                 Ok(rows) => {
-                    for (file_id, storage_path) in rows {
+                    for (file_id, revision) in rows {
+                        let storage_path = crate::file_content::revision_path(file_id, revision);
                         if let Err(error) =
                             ensure_ciphertext_digest(&state, file_id, &storage_path).await
                         {

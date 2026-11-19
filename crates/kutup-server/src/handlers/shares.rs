@@ -591,8 +591,8 @@ pub async fn public_share_state(
         .as_deref()
         .map(|value| Uuid::parse_str(value).map_err(|_| AppError::bad_request("invalid revision")))
         .transpose()?;
-    let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
-        "SELECT id, storage_path, key_generation, kutup_b64(revision_content_envelope)
+    let latest: Option<(Uuid, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, key_generation, kutup_b64(revision_content_envelope)
          FROM drive_file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0 AND ($2::uuid IS NULL OR id = $2)
          ORDER BY created_at DESC LIMIT 1",
@@ -601,9 +601,10 @@ pub async fn public_share_state(
     .bind(revision)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((version_id, path, key_generation, revision_content)) = latest else {
+    let Some((version_id, key_generation, revision_content)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
+    let path = crate::file_content::revision_path(fid, version_id);
     let (body, size) = state
         .storage
         .get_object(&path)

@@ -1,8 +1,11 @@
 //! File thumbnails (docs/plans/drive-thumbnails.md): a client-made preview
-//! of a file, sealed under the file key. The server stores the envelope at
-//! `files/{fileId}/thumbnails/{variant}`, checks its public header (purpose,
-//! file, variant, the content revision it shows, key generation) without any
-//! key, and charges its size to the uploader. An upload replaces the previous one of that variant.
+//! of a file, sealed under the file key. The server stores each upload under
+//! a key of its own, `files/{fileId}/thumbnails/{variant}/{objectId}` (the
+//! row names the current one), checks its public header (purpose, file,
+//! variant, the content revision it shows, key generation) without any key,
+//! and charges its size to the uploader. An upload replaces the previous one
+//! of that variant: the row moves to the new object at its commit, and the
+//! old object is deleted after it, so no key is ever written twice.
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -18,8 +21,32 @@ use crate::handlers::{can_access_file, octet_stream_response, trusted_uuid};
 use crate::middleware::AuthAccount;
 use crate::AppState;
 
-pub(crate) fn thumbnail_storage_path(file_id: Uuid, variant: ThumbnailVariant) -> String {
-    format!("files/{file_id}/thumbnails/{}", variant.as_str())
+/// Where one thumbnail upload is stored; `object_id` is the row's.
+pub(crate) fn thumbnail_storage_path(
+    file_id: Uuid,
+    variant: ThumbnailVariant,
+    object_id: Uuid,
+) -> String {
+    format!(
+        "files/{file_id}/thumbnails/{}/{object_id}",
+        variant.as_str()
+    )
+}
+
+/// The current thumbnail object of a variant, as its row names it.
+pub(crate) async fn current_object(
+    pool: &sqlx::PgPool,
+    file_id: Uuid,
+    variant: ThumbnailVariant,
+) -> sqlx::Result<Option<String>> {
+    let object: Option<Uuid> = sqlx::query_scalar(
+        "SELECT object_id FROM drive_file_thumbnails WHERE file_id = $1 AND variant = $2",
+    )
+    .bind(file_id)
+    .bind(variant.as_str())
+    .fetch_optional(pool)
+    .await?;
+    Ok(object.map(|object| thumbnail_storage_path(file_id, variant, object)))
 }
 
 fn parse_variant(value: &str) -> AppResult<ThumbnailVariant> {
@@ -137,8 +164,8 @@ pub async fn upload(
         .bind(format!("file-thumbnail:{fid}:{}", variant.as_str()))
         .execute(&mut *tx)
         .await?;
-    let previous: Option<(i64, Uuid, String)> = sqlx::query_as(
-        "SELECT size_bytes, uploader_account_id, s3_version_id FROM drive_file_thumbnails
+    let previous: Option<(i64, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT size_bytes, uploader_account_id, object_id FROM drive_file_thumbnails
          WHERE file_id = $1 AND variant = $2 FOR UPDATE",
     )
     .bind(fid)
@@ -172,12 +199,14 @@ pub async fn upload(
         .await?;
     }
 
-    // Stored before commit, with the row lock held: a failed PUT rolls the
-    // whole change back.
-    let path = thumbnail_storage_path(fid, variant);
-    let version_id = state
+    // Stored before commit, with the row lock held, under a key of its own:
+    // a failed PUT rolls the whole change back, and the current object is
+    // never touched until the row has moved off it.
+    let object_id = Uuid::new_v4();
+    let path = thumbnail_storage_path(fid, variant, object_id);
+    state
         .storage
-        .put_object_versioned(
+        .upload(
             &path,
             aws_sdk_s3::primitives::ByteStream::from(body.to_vec()),
             size,
@@ -185,12 +214,12 @@ pub async fn upload(
         .await
         .map_err(|_| AppError::internal("storage error"))?;
     sqlx::query(
-        r#"INSERT INTO drive_file_thumbnails (file_id, variant, size_bytes, s3_version_id, source_version, uploader_account_id, key_generation, updated_at)
+        r#"INSERT INTO drive_file_thumbnails (file_id, variant, size_bytes, object_id, source_version, uploader_account_id, key_generation, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
            ON CONFLICT (file_id, variant) DO UPDATE SET
              size_bytes = EXCLUDED.size_bytes,
              key_generation = EXCLUDED.key_generation,
-             s3_version_id = EXCLUDED.s3_version_id,
+             object_id = EXCLUDED.object_id,
              source_version = EXCLUDED.source_version,
              uploader_account_id = EXCLUDED.uploader_account_id,
              updated_at = NOW()"#,
@@ -198,27 +227,23 @@ pub async fn upload(
     .bind(fid)
     .bind(variant.as_str())
     .bind(size)
-    .bind(&version_id)
+    .bind(object_id)
     .bind(source_version)
     .bind(user_id)
     .bind(key_generation)
     .execute(&mut *tx)
     .await?;
     if tx.commit().await.is_err() {
-        if !version_id.is_empty() {
-            let _ = state
-                .storage
-                .delete_object_version(&path, &version_id)
-                .await;
-        }
+        let _ = state.storage.delete(&path).await;
         return Err(AppError::internal("commit"));
     }
-    // The superseded object, exactly, where the bucket is versioned
-    // (overwriting alone would keep it there until the lifecycle expired it);
-    // on an unversioned bucket the overwrite replaced it already.
-    if let Some((_, _, old)) = previous.filter(|(_, _, old)| !old.is_empty() && *old != version_id)
-    {
-        let _ = state.storage.delete_object_version(&path, &old).await;
+    // The superseded object, now that no row names it (queued, as every
+    // delete is; a failure leaves it to the orphan sweep).
+    if let Some((_, _, old)) = previous {
+        let _ = state
+            .storage
+            .delete(&thumbnail_storage_path(fid, variant, old))
+            .await;
     }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -283,19 +308,12 @@ pub(crate) async fn serve_thumbnail(
 }
 
 async fn serve(state: &AppState, fid: Uuid, variant: ThumbnailVariant) -> AppResult<Response> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM drive_file_thumbnails WHERE file_id = $1 AND variant = $2)",
-    )
-    .bind(fid)
-    .bind(variant.as_str())
-    .fetch_one(&state.pool)
-    .await?;
-    if !exists {
+    let Some(path) = current_object(&state.pool, fid, variant).await? else {
         return Err(AppError::not_found("not found"));
-    }
+    };
     let (body, size) = state
         .storage
-        .get_object(&thumbnail_storage_path(fid, variant))
+        .get_object(&path)
         .await
         .map_err(|_| AppError::not_found("not found"))?;
     // Clients address a thumbnail with ?v={updatedAt}, so a URL never
@@ -332,9 +350,9 @@ pub async fn delete(
         return Err(AppError::forbidden("forbidden"));
     }
     let mut tx = state.pool.begin().await?;
-    let removed: Vec<(String, i64, Uuid, String)> = sqlx::query_as(
+    let removed: Vec<(String, i64, Uuid, Uuid)> = sqlx::query_as(
         "DELETE FROM drive_file_thumbnails WHERE file_id = $1
-         RETURNING variant, size_bytes, uploader_account_id, s3_version_id",
+         RETURNING variant, size_bytes, uploader_account_id, object_id",
     )
     .bind(fid)
     .fetch_all(&mut *tx)
@@ -348,12 +366,14 @@ pub async fn delete(
         .await?;
     }
     tx.commit().await?;
-    for (variant, _, _, version_id) in removed {
+    for (variant, _, _, object_id) in removed {
         let Ok(variant) = ThumbnailVariant::try_from(variant.as_str()) else {
             continue;
         };
-        let path = thumbnail_storage_path(fid, variant);
-        let _ = state.storage.delete_stored(&path, &version_id).await;
+        let _ = state
+            .storage
+            .delete(&thumbnail_storage_path(fid, variant, object_id))
+            .await;
     }
     Ok(StatusCode::NO_CONTENT.into_response())
 }

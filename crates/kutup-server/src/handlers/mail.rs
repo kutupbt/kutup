@@ -1817,22 +1817,22 @@ pub(crate) async fn delete_for_good(
     .await?;
     // A distribution-list copy only drops the member's row: the shared data
     // packet is the group's, released once nobody holds it.
-    let deleted: Vec<(String, String, i64, bool)> = sqlx::query_as(
+    let deleted: Vec<(String, i64, bool)> = sqlx::query_as(
         "DELETE FROM mail_messages WHERE mailbox_owner = $1 AND id = ANY($2) AND folder = ANY($3)
-         RETURNING object_key, object_version, size_bytes, key_packet IS NOT NULL",
+         RETURNING object_key, size_bytes, key_packet IS NOT NULL",
     )
     .bind(owner)
     .bind(ids)
     .bind(folders)
     .fetch_all(&mut *tx)
     .await?;
-    let list_copies = deleted.iter().filter(|(_, _, _, shared)| *shared).count();
-    let messages: Vec<(String, String, i64)> = deleted
+    let list_copies = deleted.iter().filter(|(_, _, shared)| *shared).count();
+    let messages: Vec<(String, i64)> = deleted
         .iter()
-        .filter(|(_, _, _, shared)| !*shared)
-        .map(|(key, version, size, _)| (key.clone(), version.clone(), *size))
+        .filter(|(_, _, shared)| !*shared)
+        .map(|(key, size, _)| (key.clone(), *size))
         .collect();
-    let freed: i64 = messages.iter().map(|(_, _, size)| size).sum::<i64>()
+    let freed: i64 = messages.iter().map(|(_, size)| size).sum::<i64>()
         + attachments.iter().map(|(_, size)| size).sum::<i64>();
     let payer = match mailbox {
         Mailbox::Own(_) => crate::storage_pool::Payer::Account(owner),
@@ -1841,12 +1841,8 @@ pub(crate) async fn delete_for_good(
     crate::storage_pool::charge(&mut *tx, payer, -freed).await?;
     tx.commit().await?;
     // The rows are gone; a failed object delete leaves work for the sweep.
-    for (key, version) in messages
-        .iter()
-        .map(|(key, version, _)| (key.as_str(), version.as_str()))
-        .chain(attachments.iter().map(|(key, _)| (key.as_str(), "")))
-    {
-        if let Err(error) = state.storage.delete_stored(key, version).await {
+    for (key, _) in messages.iter().chain(&attachments) {
+        if let Err(error) = state.storage.delete(key).await {
             tracing::warn!(error = %error, "mail: deleted message object left for the sweep");
         }
     }

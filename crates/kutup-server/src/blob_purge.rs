@@ -97,8 +97,8 @@ pub async fn purge_due(
     let mut failed: Vec<i64> = Vec::new();
     loop {
         let mut tx = pool.begin().await?;
-        let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-            "SELECT id, kind, key, version_id FROM storage_pending_deletions
+        let rows: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT id, kind, key FROM storage_pending_deletions
              WHERE queued_at <= $1 AND NOT (id = ANY($2))
              ORDER BY queued_at, id
              LIMIT $3
@@ -114,13 +114,9 @@ pub async fn purge_due(
             return Ok(result);
         }
         let mut done: Vec<i64> = Vec::with_capacity(rows.len());
-        for (id, kind, key, version_id) in rows {
+        for (id, kind, key) in rows {
             let outcome = match PendingKind::parse(&kind) {
                 Some(PendingKind::Object) => storage.delete(&key).await,
-                Some(PendingKind::Stored) => storage.delete_stored(&key, &version_id).await,
-                Some(PendingKind::Version) => {
-                    storage.delete_object_version(&key, &version_id).await
-                }
                 Some(PendingKind::Prefix) => storage.delete_prefix(&key).await,
                 None => Err(anyhow::anyhow!("unknown kind {kind}")),
             };

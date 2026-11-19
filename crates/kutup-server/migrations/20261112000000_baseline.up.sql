@@ -477,7 +477,7 @@ CREATE TABLE public.account_roots (
     envelope bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT account_roots_object_check CHECK ((octet_length(object) = 4)),
-    CONSTRAINT account_roots_purpose_check CHECK (((purpose >= 22) AND (purpose <= 27)))
+    CONSTRAINT account_roots_purpose_check CHECK (((purpose)::integer = ANY (ARRAY[3, 4, 5, 10, 19, 20])))
 );
 
 
@@ -709,19 +709,180 @@ CREATE TABLE public.calendar_event_reminders (
 CREATE TABLE public.calendar_events (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     calendar_id uuid NOT NULL,
-    uid text NOT NULL,
-    author_address_id uuid,
-    author_account_id uuid,
+    shared_event_id uuid NOT NULL,
     shared_key_packet bytea NOT NULL,
     calendar_key_packet bytea NOT NULL,
-    shared_signed text NOT NULL,
-    shared_signed_signature text NOT NULL,
-    shared_encrypted bytea NOT NULL,
-    shared_encrypted_signature text NOT NULL,
     calendar_signed text NOT NULL,
     calendar_signed_signature text NOT NULL,
     calendar_encrypted bytea,
     calendar_encrypted_signature text,
+    revision bigint DEFAULT 1 NOT NULL,
+    bytes bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    modified_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_events_bytes_check CHECK ((bytes >= 0)),
+    CONSTRAINT calendar_events_calendar_encrypted_check CHECK (((octet_length(calendar_encrypted) >= 1) AND (octet_length(calendar_encrypted) <= 262144))),
+    CONSTRAINT calendar_events_calendar_encrypted_signature_check CHECK (((octet_length(calendar_encrypted_signature) >= 1) AND (octet_length(calendar_encrypted_signature) <= 4096))),
+    CONSTRAINT calendar_events_calendar_key_packet_check CHECK (((octet_length(calendar_key_packet) >= 1) AND (octet_length(calendar_key_packet) <= 1024))),
+    CONSTRAINT calendar_events_calendar_signed_check CHECK (((octet_length(calendar_signed) >= 1) AND (octet_length(calendar_signed) <= 65536))),
+    CONSTRAINT calendar_events_calendar_signed_signature_check CHECK (((octet_length(calendar_signed_signature) >= 1) AND (octet_length(calendar_signed_signature) <= 4096))),
+    CONSTRAINT calendar_events_check CHECK (((calendar_encrypted IS NULL) = (calendar_encrypted_signature IS NULL))),
+    CONSTRAINT calendar_events_revision_check CHECK ((revision >= 1)),
+    CONSTRAINT calendar_events_shared_key_packet_check CHECK (((octet_length(shared_key_packet) >= 1) AND (octet_length(shared_key_packet) <= 1024)))
+);
+
+
+--
+-- Name: calendar_event_attendees; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_event_attendees (
+    shared_event_id uuid NOT NULL,
+    token bytea NOT NULL,
+    optional boolean DEFAULT false NOT NULL,
+    answer bytea,
+    answer_updated_at timestamp with time zone,
+    CONSTRAINT calendar_event_attendees_answer_check CHECK (((octet_length(answer) >= 1) AND (octet_length(answer) <= 4096))),
+    CONSTRAINT calendar_event_attendees_check CHECK (((answer IS NULL) = (answer_updated_at IS NULL))),
+    CONSTRAINT calendar_event_attendees_token_check CHECK ((octet_length(token) = 32))
+);
+
+
+--
+-- Name: calendar_event_invitees; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_event_invitees (
+    shared_event_id uuid NOT NULL,
+    invitee_account_id uuid NOT NULL,
+    invitee_address_id uuid NOT NULL,
+    key_packet bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_event_invitees_key_packet_check CHECK (((octet_length(key_packet) >= 1) AND (octet_length(key_packet) <= 1024)))
+);
+
+
+--
+-- Name: calendar_invitations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_invitations (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    calendar_id uuid NOT NULL,
+    invitee_account_id uuid NOT NULL,
+    invitee_incarnation_id bytea NOT NULL,
+    invited_by_account_id uuid NOT NULL,
+    permissions integer NOT NULL,
+    state text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT calendar_invitations_check CHECK ((expires_at > created_at)),
+    CONSTRAINT calendar_invitations_invitee_incarnation_id_check CHECK ((octet_length(invitee_incarnation_id) = 32)),
+    CONSTRAINT calendar_invitations_permissions_check CHECK (((permissions >= 0) AND (permissions <= 255))),
+    CONSTRAINT calendar_invitations_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'declined'::text])))
+);
+
+
+--
+-- Name: calendar_keys; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_keys (
+    calendar_id uuid NOT NULL,
+    key_generation integer NOT NULL,
+    public_key bytea NOT NULL,
+    fingerprint text NOT NULL,
+    locked_secret_key bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_keys_fingerprint_check CHECK ((fingerprint ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'::text)),
+    CONSTRAINT calendar_keys_key_generation_check CHECK ((key_generation >= 1)),
+    CONSTRAINT calendar_keys_locked_secret_key_check CHECK (((octet_length(locked_secret_key) >= 1) AND (octet_length(locked_secret_key) <= 8192))),
+    CONSTRAINT calendar_keys_public_key_check CHECK (((octet_length(public_key) >= 1) AND (octet_length(public_key) <= 8192)))
+);
+
+
+--
+-- Name: calendar_link_passphrases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_link_passphrases (
+    link_id uuid NOT NULL,
+    calendar_id uuid NOT NULL,
+    key_generation integer NOT NULL,
+    passphrase bytea NOT NULL,
+    CONSTRAINT calendar_link_passphrases_passphrase_check CHECK (((octet_length(passphrase) >= 1) AND (octet_length(passphrase) <= 256)))
+);
+
+
+--
+-- Name: calendar_links; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_links (
+    id uuid NOT NULL,
+    calendar_id uuid NOT NULL,
+    kind text NOT NULL,
+    secret_key_generation integer,
+    secret bytea,
+    purpose_key_packet bytea,
+    purpose_data_packet bytea,
+    purpose_signature text,
+    created_by_account_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_links_check CHECK (((kind = 'busy'::text) = (secret IS NULL))),
+    CONSTRAINT calendar_links_check1 CHECK (((secret IS NULL) = (secret_key_generation IS NULL))),
+    CONSTRAINT calendar_links_check2 CHECK ((((purpose_key_packet IS NULL) = (purpose_data_packet IS NULL)) AND ((purpose_data_packet IS NULL) = (purpose_signature IS NULL)))),
+    CONSTRAINT calendar_links_kind_check CHECK ((kind = ANY (ARRAY['full'::text, 'query'::text, 'busy'::text]))),
+    CONSTRAINT calendar_links_purpose_data_packet_check CHECK (((octet_length(purpose_data_packet) >= 1) AND (octet_length(purpose_data_packet) <= 4096))),
+    CONSTRAINT calendar_links_purpose_key_packet_check CHECK (((octet_length(purpose_key_packet) >= 1) AND (octet_length(purpose_key_packet) <= 1024))),
+    CONSTRAINT calendar_links_purpose_signature_check CHECK (((octet_length(purpose_signature) >= 1) AND (octet_length(purpose_signature) <= 4096))),
+    CONSTRAINT calendar_links_secret_check CHECK (((octet_length(secret) >= 1) AND (octet_length(secret) <= 256)))
+);
+
+
+--
+-- Name: calendar_member_shares; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_member_shares (
+    calendar_id uuid NOT NULL,
+    account_id uuid NOT NULL,
+    key_generation integer NOT NULL,
+    share bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_member_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 2048)))
+);
+
+
+--
+-- Name: calendar_member_tombstones; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_member_tombstones (
+    calendar_id uuid NOT NULL,
+    account_id uuid NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT calendar_member_tombstones_reason_check CHECK ((reason = ANY (ARRAY['removed'::text, 'left'::text, 'deleted'::text])))
+);
+
+
+--
+-- Name: calendar_shared_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.calendar_shared_events (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    home_calendar_id uuid NOT NULL,
+    uid text NOT NULL,
+    author_address_id uuid,
+    author_account_id uuid,
+    shared_signed text NOT NULL,
+    shared_signed_signature text NOT NULL,
+    shared_encrypted bytea NOT NULL,
+    shared_encrypted_signature text NOT NULL,
+    attendees_encrypted bytea,
+    attendees_encrypted_signature text,
     start_utc timestamp with time zone NOT NULL,
     end_utc timestamp with time zone NOT NULL,
     start_tz text,
@@ -735,22 +896,18 @@ CREATE TABLE public.calendar_events (
     bytes bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     modified_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT calendar_events_bytes_check CHECK ((bytes >= 0)),
-    CONSTRAINT calendar_events_calendar_encrypted_check CHECK (((octet_length(calendar_encrypted) >= 1) AND (octet_length(calendar_encrypted) <= 262144))),
-    CONSTRAINT calendar_events_calendar_encrypted_signature_check CHECK (((octet_length(calendar_encrypted_signature) >= 1) AND (octet_length(calendar_encrypted_signature) <= 4096))),
-    CONSTRAINT calendar_events_calendar_key_packet_check CHECK (((octet_length(calendar_key_packet) >= 1) AND (octet_length(calendar_key_packet) <= 1024))),
-    CONSTRAINT calendar_events_calendar_signed_check CHECK (((octet_length(calendar_signed) >= 1) AND (octet_length(calendar_signed) <= 65536))),
-    CONSTRAINT calendar_events_calendar_signed_signature_check CHECK (((octet_length(calendar_signed_signature) >= 1) AND (octet_length(calendar_signed_signature) <= 4096))),
-    CONSTRAINT calendar_events_check CHECK ((end_utc >= start_utc)),
-    CONSTRAINT calendar_events_check1 CHECK (((calendar_encrypted IS NULL) = (calendar_encrypted_signature IS NULL))),
-    CONSTRAINT calendar_events_revision_check CHECK ((revision >= 1)),
-    CONSTRAINT calendar_events_sequence_check CHECK ((sequence >= 0)),
-    CONSTRAINT calendar_events_shared_encrypted_check CHECK (((octet_length(shared_encrypted) >= 1) AND (octet_length(shared_encrypted) <= 262144))),
-    CONSTRAINT calendar_events_shared_encrypted_signature_check CHECK (((octet_length(shared_encrypted_signature) >= 1) AND (octet_length(shared_encrypted_signature) <= 4096))),
-    CONSTRAINT calendar_events_shared_key_packet_check CHECK (((octet_length(shared_key_packet) >= 1) AND (octet_length(shared_key_packet) <= 1024))),
-    CONSTRAINT calendar_events_shared_signed_check CHECK (((octet_length(shared_signed) >= 1) AND (octet_length(shared_signed) <= 65536))),
-    CONSTRAINT calendar_events_shared_signed_signature_check CHECK (((octet_length(shared_signed_signature) >= 1) AND (octet_length(shared_signed_signature) <= 4096))),
-    CONSTRAINT calendar_events_uid_check CHECK (((char_length(uid) >= 1) AND (char_length(uid) <= 255)))
+    CONSTRAINT calendar_shared_events_attendees_encrypted_check CHECK (((octet_length(attendees_encrypted) >= 1) AND (octet_length(attendees_encrypted) <= 262144))),
+    CONSTRAINT calendar_shared_events_attendees_encrypted_signature_check CHECK (((octet_length(attendees_encrypted_signature) >= 1) AND (octet_length(attendees_encrypted_signature) <= 4096))),
+    CONSTRAINT calendar_shared_events_bytes_check CHECK ((bytes >= 0)),
+    CONSTRAINT calendar_shared_events_check CHECK ((end_utc >= start_utc)),
+    CONSTRAINT calendar_shared_events_check1 CHECK (((attendees_encrypted IS NULL) = (attendees_encrypted_signature IS NULL))),
+    CONSTRAINT calendar_shared_events_revision_check CHECK ((revision >= 1)),
+    CONSTRAINT calendar_shared_events_sequence_check CHECK ((sequence >= 0)),
+    CONSTRAINT calendar_shared_events_shared_encrypted_check CHECK (((octet_length(shared_encrypted) >= 1) AND (octet_length(shared_encrypted) <= 262144))),
+    CONSTRAINT calendar_shared_events_shared_encrypted_signature_check CHECK (((octet_length(shared_encrypted_signature) >= 1) AND (octet_length(shared_encrypted_signature) <= 4096))),
+    CONSTRAINT calendar_shared_events_shared_signed_check CHECK (((octet_length(shared_signed) >= 1) AND (octet_length(shared_signed) <= 65536))),
+    CONSTRAINT calendar_shared_events_shared_signed_signature_check CHECK (((octet_length(shared_signed_signature) >= 1) AND (octet_length(shared_signed_signature) <= 4096))),
+    CONSTRAINT calendar_shared_events_uid_check CHECK (((char_length(uid) >= 1) AND (char_length(uid) <= 255)))
 );
 
 
@@ -765,10 +922,9 @@ CREATE TABLE public.calendar_members (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     default_reminders_timed jsonb DEFAULT '[{"type": "device", "trigger": "-PT15M"}, {"type": "email", "trigger": "-PT15M"}]'::jsonb NOT NULL,
     default_reminders_all_day jsonb DEFAULT '[{"type": "device", "trigger": "-PT15H"}, {"type": "email", "trigger": "-PT15H"}]'::jsonb NOT NULL,
-    passphrase_share bytea NOT NULL,
+    share_busy boolean DEFAULT false NOT NULL,
     CONSTRAINT calendar_members_default_reminders_all_day_check CHECK ((jsonb_typeof(default_reminders_all_day) = 'array'::text)),
     CONSTRAINT calendar_members_default_reminders_timed_check CHECK ((jsonb_typeof(default_reminders_timed) = 'array'::text)),
-    CONSTRAINT calendar_members_passphrase_share_check CHECK (((octet_length(passphrase_share) >= 1) AND (octet_length(passphrase_share) <= 2048))),
     CONSTRAINT calendar_members_permissions_check CHECK (((permissions >= 0) AND (permissions <= 255)))
 );
 
@@ -810,9 +966,6 @@ CREATE TABLE public.calendars (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     owner_account_id uuid NOT NULL,
     suite smallint DEFAULT 1 NOT NULL,
-    public_key bytea NOT NULL,
-    fingerprint text NOT NULL,
-    locked_secret_key bytea NOT NULL,
     metadata_key_packet bytea NOT NULL,
     metadata_data_packet bytea NOT NULL,
     metadata_signature text NOT NULL,
@@ -821,13 +974,10 @@ CREATE TABLE public.calendars (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     key_generation integer NOT NULL,
     CONSTRAINT calendars_bytes_check CHECK ((bytes >= 0)),
-    CONSTRAINT calendars_fingerprint_check CHECK ((fingerprint ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'::text)),
     CONSTRAINT calendars_key_generation_check CHECK ((key_generation >= 1)),
-    CONSTRAINT calendars_locked_secret_key_check CHECK (((octet_length(locked_secret_key) >= 1) AND (octet_length(locked_secret_key) <= 8192))),
     CONSTRAINT calendars_metadata_data_packet_check CHECK (((octet_length(metadata_data_packet) >= 1) AND (octet_length(metadata_data_packet) <= 4096))),
     CONSTRAINT calendars_metadata_key_packet_check CHECK (((octet_length(metadata_key_packet) >= 1) AND (octet_length(metadata_key_packet) <= 1024))),
     CONSTRAINT calendars_metadata_signature_check CHECK (((octet_length(metadata_signature) >= 1) AND (octet_length(metadata_signature) <= 4096))),
-    CONSTRAINT calendars_public_key_check CHECK (((octet_length(public_key) >= 1) AND (octet_length(public_key) <= 8192))),
     CONSTRAINT calendars_suite_check CHECK ((suite = 1))
 );
 
@@ -2347,7 +2497,7 @@ CREATE TABLE public.drive_file_thumbnails (
     file_id uuid NOT NULL,
     variant text NOT NULL,
     size_bytes bigint NOT NULL,
-    s3_version_id text DEFAULT ''::text NOT NULL,
+    object_id uuid NOT NULL,
     source_version uuid,
     uploader_account_id uuid NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2383,7 +2533,6 @@ CREATE TABLE public.collab_update_log (
 CREATE TABLE public.drive_file_versions (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     file_id uuid NOT NULL,
-    storage_path text NOT NULL,
     seq_at_snapshot bigint NOT NULL,
     doc_key_id bigint NOT NULL,
     author_account_id uuid NOT NULL,
@@ -2398,7 +2547,7 @@ CREATE TABLE public.drive_file_versions (
     remote_author_server text,
     remote_author_account_id uuid,
     blob_suite smallint DEFAULT 2 NOT NULL,
-    revision_content_envelope bytea,
+    revision_content_envelope bytea NOT NULL,
     CONSTRAINT drive_file_versions_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'yjs'::text]))),
     CONSTRAINT drive_file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL))),
     CONSTRAINT drive_file_versions_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
@@ -2417,7 +2566,6 @@ CREATE TABLE public.drive_files (
     file_key_envelope bytea NOT NULL,
     key_epoch integer NOT NULL,
     metadata_revision bigint DEFAULT 1 NOT NULL,
-    storage_path text NOT NULL,
     encrypted_size_bytes bigint DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -2436,7 +2584,7 @@ CREATE TABLE public.drive_files (
     content_hash bytea,
     content_revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
     blob_suite smallint DEFAULT 2 NOT NULL,
-    revision_content_envelope bytea,
+    revision_content_envelope bytea NOT NULL,
     CONSTRAINT drive_files_collab_log_floor_check CHECK ((collab_log_floor >= 0)),
     CONSTRAINT drive_files_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_files_key_generation CHECK ((key_generation > 0)),
@@ -2926,7 +3074,6 @@ CREATE TABLE public.mail_group_members (
 
 CREATE TABLE public.mail_group_objects (
     object_key text NOT NULL,
-    object_version text DEFAULT ''::text NOT NULL,
     group_id uuid NOT NULL,
     size_bytes bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -3095,7 +3242,6 @@ CREATE TABLE public.mail_messages (
     starred boolean DEFAULT false NOT NULL,
     protection text NOT NULL,
     object_key text NOT NULL,
-    object_version text DEFAULT ''::text NOT NULL,
     size_bytes bigint NOT NULL,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
     sent_at timestamp with time zone,
@@ -3148,7 +3294,6 @@ CREATE TABLE public.mail_outbox (
     is_admin boolean NOT NULL,
     deliver_at timestamp with time zone NOT NULL,
     parts_key text NOT NULL,
-    parts_version text NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
@@ -3686,12 +3831,11 @@ CREATE TABLE public.storage_pending_deletions (
     id bigint NOT NULL,
     kind text NOT NULL,
     key text NOT NULL,
-    version_id text DEFAULT ''::text NOT NULL,
     queued_at timestamp with time zone DEFAULT now() NOT NULL,
     attempts integer DEFAULT 0 NOT NULL,
     last_error text,
     CONSTRAINT storage_pending_deletions_key_check CHECK ((key <> ''::text)),
-    CONSTRAINT storage_pending_deletions_kind_check CHECK ((kind = ANY (ARRAY['object'::text, 'stored'::text, 'version'::text, 'prefix'::text])))
+    CONSTRAINT storage_pending_deletions_kind_check CHECK ((kind = ANY (ARRAY['object'::text, 'prefix'::text])))
 );
 
 
@@ -3737,11 +3881,8 @@ CREATE TABLE public.drive_uploads (
     file_id uuid NOT NULL,
     total_bytes bigint NOT NULL,
     received_bytes bigint DEFAULT 0 NOT NULL,
-    metadata_envelope bytea,
     file_key_envelope bytea,
     key_epoch integer NOT NULL,
-    metadata_revision bigint,
-    storage_path text NOT NULL,
     s3_upload_id text NOT NULL,
     s3_part_etags jsonb DEFAULT '[]'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -3758,7 +3899,6 @@ CREATE TABLE public.drive_uploads (
     CONSTRAINT drive_uploads_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_uploads_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'version'::text]))),
     CONSTRAINT drive_uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (octet_length(content_hash) = 32))))),
-    CONSTRAINT drive_uploads_metadata_revision_check CHECK ((metadata_revision > 0)),
     CONSTRAINT drive_uploads_uploaded_check CHECK (((uploaded_at IS NULL) OR ((blob_suite = 2) AND (received_bytes = total_bytes)))),
     CONSTRAINT drive_uploads_content_hash_bytes CHECK ((octet_length(content_hash) = 32)),
     CONSTRAINT drive_uploads_name_hash_bytes CHECK ((octet_length(name_hash) = 32))
@@ -4197,19 +4337,115 @@ ALTER TABLE ONLY public.calendar_account_settings
 
 
 --
--- Name: calendars calendars_fingerprint_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.calendars
-    ADD CONSTRAINT calendars_fingerprint_key UNIQUE (fingerprint);
-
-
---
 -- Name: calendars calendars_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendars
     ADD CONSTRAINT calendars_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: calendar_event_attendees calendar_event_attendees_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_attendees
+    ADD CONSTRAINT calendar_event_attendees_pkey PRIMARY KEY (shared_event_id, token);
+
+
+--
+-- Name: calendar_event_invitees calendar_event_invitees_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_invitees
+    ADD CONSTRAINT calendar_event_invitees_pkey PRIMARY KEY (shared_event_id, invitee_account_id);
+
+
+--
+-- Name: calendar_events calendar_events_calendar_id_shared_event_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_events
+    ADD CONSTRAINT calendar_events_calendar_id_shared_event_id_key UNIQUE (calendar_id, shared_event_id);
+
+
+--
+-- Name: calendar_invitations calendar_invitations_calendar_id_invitee_account_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_calendar_id_invitee_account_id_key UNIQUE (calendar_id, invitee_account_id);
+
+
+--
+-- Name: calendar_invitations calendar_invitations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: calendar_keys calendar_keys_fingerprint_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_keys
+    ADD CONSTRAINT calendar_keys_fingerprint_key UNIQUE (fingerprint);
+
+
+--
+-- Name: calendar_keys calendar_keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_keys
+    ADD CONSTRAINT calendar_keys_pkey PRIMARY KEY (calendar_id, key_generation);
+
+
+--
+-- Name: calendar_link_passphrases calendar_link_passphrases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_link_passphrases
+    ADD CONSTRAINT calendar_link_passphrases_pkey PRIMARY KEY (link_id, key_generation);
+
+
+--
+-- Name: calendar_links calendar_links_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_links
+    ADD CONSTRAINT calendar_links_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: calendar_member_shares calendar_member_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_shares
+    ADD CONSTRAINT calendar_member_shares_pkey PRIMARY KEY (calendar_id, account_id, key_generation);
+
+
+--
+-- Name: calendar_member_tombstones calendar_member_tombstones_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_tombstones
+    ADD CONSTRAINT calendar_member_tombstones_pkey PRIMARY KEY (calendar_id, account_id);
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_uid_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_uid_key UNIQUE NULLS NOT DISTINCT (home_calendar_id, uid, recurrence_id);
 
 
 --
@@ -5097,7 +5333,7 @@ ALTER TABLE ONLY public.drive_file_versions
 --
 
 ALTER TABLE public.drive_file_versions
-    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (octet_length(revision_content_envelope) = 356))) NOT VALID;
+    ADD CONSTRAINT drive_file_versions_revision_content_check CHECK ((octet_length(revision_content_envelope) = 356));
 
 
 --
@@ -5121,7 +5357,7 @@ ALTER TABLE ONLY public.drive_files
 --
 
 ALTER TABLE public.drive_files
-    ADD CONSTRAINT drive_files_revision_content_check CHECK (((revision_content_envelope IS NOT NULL) AND (octet_length(revision_content_envelope) = 356))) NOT VALID;
+    ADD CONSTRAINT drive_files_revision_content_check CHECK ((octet_length(revision_content_envelope) = 356));
 
 
 --
@@ -5781,11 +6017,11 @@ ALTER TABLE ONLY public.site_settings
 
 
 --
--- Name: storage_pending_deletions storage_pending_deletions_kind_key_version_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: storage_pending_deletions storage_pending_deletions_kind_key_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.storage_pending_deletions
-    ADD CONSTRAINT storage_pending_deletions_kind_key_version_id_key UNIQUE (kind, key, version_id);
+    ADD CONSTRAINT storage_pending_deletions_kind_key_key UNIQUE (kind, key);
 
 
 --
@@ -5818,14 +6054,6 @@ ALTER TABLE public.drive_uploads
 
 ALTER TABLE ONLY public.drive_uploads
     ADD CONSTRAINT drive_uploads_file_id_key UNIQUE (file_id);
-
-
---
--- Name: drive_uploads drive_uploads_metadata_at_commit; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.drive_uploads
-    ADD CONSTRAINT drive_uploads_metadata_at_commit CHECK (((metadata_envelope IS NULL) AND (metadata_revision IS NULL))) NOT VALID;
 
 
 --
@@ -6070,31 +6298,73 @@ CREATE INDEX calendar_event_reminders_user ON public.calendar_event_reminders US
 
 
 --
--- Name: calendar_events_author_address; Type: INDEX; Schema: public; Owner: -
+-- Name: calendar_events_shared_event; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_events_author_address ON public.calendar_events USING btree (author_address_id);
-
-
---
--- Name: calendar_events_author_user; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX calendar_events_author_user ON public.calendar_events USING btree (author_account_id);
+CREATE INDEX calendar_events_shared_event ON public.calendar_events USING btree (shared_event_id);
 
 
 --
--- Name: calendar_events_uid; Type: INDEX; Schema: public; Owner: -
+-- Name: calendar_event_invitees_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX calendar_events_uid ON public.calendar_events USING btree (calendar_id, uid, COALESCE(recurrence_id, '-infinity'::timestamp with time zone));
+CREATE INDEX calendar_event_invitees_account ON public.calendar_event_invitees USING btree (invitee_account_id);
 
 
 --
--- Name: calendar_events_window; Type: INDEX; Schema: public; Owner: -
+-- Name: calendar_invitations_pending; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_events_window ON public.calendar_events USING btree (calendar_id, start_utc, range_end_utc);
+CREATE INDEX calendar_invitations_pending ON public.calendar_invitations USING btree (invitee_account_id) WHERE (state = 'pending'::text);
+
+
+--
+-- Name: calendar_links_calendar; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_links_calendar ON public.calendar_links USING btree (calendar_id);
+
+
+--
+-- Name: calendar_member_shares_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_member_shares_account ON public.calendar_member_shares USING btree (account_id);
+
+
+--
+-- Name: calendar_member_tombstones_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_member_tombstones_account ON public.calendar_member_tombstones USING btree (account_id);
+
+
+--
+-- Name: calendar_shared_events_author_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_shared_events_author_account ON public.calendar_shared_events USING btree (author_account_id);
+
+
+--
+-- Name: calendar_shared_events_author_address; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_shared_events_author_address ON public.calendar_shared_events USING btree (author_address_id);
+
+
+--
+-- Name: calendar_shared_events_uid; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_shared_events_uid ON public.calendar_shared_events USING btree (uid);
+
+
+--
+-- Name: calendar_shared_events_window; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX calendar_shared_events_window ON public.calendar_shared_events USING btree (start_utc, range_end_utc);
 
 
 --
@@ -7398,27 +7668,163 @@ ALTER TABLE ONLY public.calendar_event_reminders
 
 
 --
--- Name: calendar_events calendar_events_author_address_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.calendar_events
-    ADD CONSTRAINT calendar_events_author_address_id_fkey FOREIGN KEY (author_address_id) REFERENCES public.mail_addresses(id) ON DELETE SET NULL;
-
-
---
--- Name: calendar_events calendar_events_author_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.calendar_events
-    ADD CONSTRAINT calendar_events_author_account_id_fkey FOREIGN KEY (author_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
-
-
---
 -- Name: calendar_events calendar_events_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.calendar_events
     ADD CONSTRAINT calendar_events_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_event_attendees calendar_event_attendees_shared_event_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_attendees
+    ADD CONSTRAINT calendar_event_attendees_shared_event_id_fkey FOREIGN KEY (shared_event_id) REFERENCES public.calendar_shared_events(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_event_invitees calendar_event_invitees_invitee_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_invitees
+    ADD CONSTRAINT calendar_event_invitees_invitee_account_id_fkey FOREIGN KEY (invitee_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_event_invitees calendar_event_invitees_invitee_address_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_invitees
+    ADD CONSTRAINT calendar_event_invitees_invitee_address_id_fkey FOREIGN KEY (invitee_address_id) REFERENCES public.mail_addresses(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_event_invitees calendar_event_invitees_shared_event_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_event_invitees
+    ADD CONSTRAINT calendar_event_invitees_shared_event_id_fkey FOREIGN KEY (shared_event_id) REFERENCES public.calendar_shared_events(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_events calendar_events_shared_event_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_events
+    ADD CONSTRAINT calendar_events_shared_event_id_fkey FOREIGN KEY (shared_event_id) REFERENCES public.calendar_shared_events(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_invitations calendar_invitations_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_invitations calendar_invitations_invited_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_invited_by_account_id_fkey FOREIGN KEY (invited_by_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_invitations calendar_invitations_invitee_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_invitations
+    ADD CONSTRAINT calendar_invitations_invitee_account_id_fkey FOREIGN KEY (invitee_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_keys calendar_keys_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_keys
+    ADD CONSTRAINT calendar_keys_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_link_passphrases calendar_link_passphrases_calendar_id_key_generation_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_link_passphrases
+    ADD CONSTRAINT calendar_link_passphrases_calendar_id_key_generation_fkey FOREIGN KEY (calendar_id, key_generation) REFERENCES public.calendar_keys(calendar_id, key_generation) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_link_passphrases calendar_link_passphrases_link_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_link_passphrases
+    ADD CONSTRAINT calendar_link_passphrases_link_id_fkey FOREIGN KEY (link_id) REFERENCES public.calendar_links(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_links calendar_links_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_links
+    ADD CONSTRAINT calendar_links_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_links calendar_links_created_by_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_links
+    ADD CONSTRAINT calendar_links_created_by_account_id_fkey FOREIGN KEY (created_by_account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_member_shares calendar_member_shares_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_shares
+    ADD CONSTRAINT calendar_member_shares_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_member_shares calendar_member_shares_calendar_id_key_generation_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_shares
+    ADD CONSTRAINT calendar_member_shares_calendar_id_key_generation_fkey FOREIGN KEY (calendar_id, key_generation) REFERENCES public.calendar_keys(calendar_id, key_generation) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_member_tombstones calendar_member_tombstones_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_member_tombstones
+    ADD CONSTRAINT calendar_member_tombstones_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_author_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_author_account_id_fkey FOREIGN KEY (author_account_id) REFERENCES public.accounts(id) ON DELETE SET NULL;
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_author_address_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_author_address_id_fkey FOREIGN KEY (author_address_id) REFERENCES public.mail_addresses(id) ON DELETE SET NULL;
+
+
+--
+-- Name: calendar_shared_events calendar_shared_events_home_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.calendar_shared_events
+    ADD CONSTRAINT calendar_shared_events_home_calendar_id_fkey FOREIGN KEY (home_calendar_id) REFERENCES public.calendars(id) ON DELETE CASCADE;
 
 
 --
@@ -9133,6 +9539,60 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 --
 -- Data for Name: calendar_event_reminders; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_event_attendees; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_event_invitees; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_invitations; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_keys; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_link_passphrases; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_links; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_member_shares; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_member_tombstones; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: calendar_shared_events; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 

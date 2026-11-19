@@ -343,11 +343,11 @@ pub async fn upload(
         r#"INSERT INTO drive_files (id, collection_id, uploader_account_id,
                               metadata_envelope, file_key_envelope,
                               key_epoch, key_generation, metadata_revision,
-                              storage_path, encrypted_size_bytes, original_key_generation,
+                              encrypted_size_bytes, original_key_generation,
                               name_hash, content_hash, content_revision_id,
                               blob_suite, revision_content_envelope)
-           VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,1,$7,$8,1,decode($9, 'hex'),
-                   decode($10, 'hex'),$11,$12,kutup_unb64($13))"#,
+           VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,1,$7,1,decode($8, 'hex'),
+                   decode($9, 'hex'),$10,$11,kutup_unb64($12))"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -355,7 +355,6 @@ pub async fn upload(
     .bind(&metadata_envelope)
     .bind(&file_key_envelope)
     .bind(key_epoch)
-    .bind(&storage_path)
     .bind(file_size)
     .bind(&name_hash)
     .bind(&content_hash)

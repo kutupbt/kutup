@@ -66,6 +66,15 @@ pub fn checked_first(values: &[String], binding: &str) -> AppResult<Vec<Root>> {
     Ok(roots)
 }
 
+/// The roots' purposes as stored (`account_roots.purpose`), for `= ANY($n)`:
+/// the keyring shares the table but is not a root.
+pub fn purpose_codes() -> Vec<i16> {
+    PURPOSES
+        .iter()
+        .map(|purpose| purpose.as_u16() as i16)
+        .collect()
+}
+
 /// Stores `roots` for `user_id` (its first: an account that has none).
 pub async fn store(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -128,10 +137,11 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let rows: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose BETWEEN 22 AND 26
+        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose = ANY($2)
           ORDER BY purpose, object DESC",
     )
     .bind(user_id)
+    .bind(purpose_codes())
     .fetch_all(executor)
     .await?;
     Ok(rows
@@ -140,7 +150,7 @@ where
         .collect())
 }
 
-/// The account's master-key keyring (purpose 27, canonical base64): each
+/// The account's master-key keyring (canonical base64): each
 /// previous master key sealed under the one after it, newest first
 /// (docs/plans/mk-rotation-exercise.md). Empty before a first rotation.
 pub async fn load_keyring<'e, E>(executor: E, user_id: Uuid) -> AppResult<Vec<String>>
@@ -148,10 +158,11 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let rows: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose = 27
+        "SELECT envelope FROM account_roots WHERE account_id = $1 AND purpose = $2
           ORDER BY object DESC",
     )
     .bind(user_id)
+    .bind(AccountRecordPurpose::MasterKeyKeyring.as_u16() as i16)
     .fetch_all(executor)
     .await?;
     Ok(rows
