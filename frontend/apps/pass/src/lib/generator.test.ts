@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_OPTIONS, entropyBits, generatePassword, randomBelow, randomVaultKey, strengthOf } from './generator'
+import { characterSets, DEFAULT_OPTIONS, entropyBits, generatePassword, randomBelow, randomVaultKey, strengthOf } from './generator'
 
 describe('the password generator', () => {
   it('makes passwords of the length asked, with every chosen kind', () => {
@@ -17,6 +17,24 @@ describe('the password generator', () => {
     const p = generatePassword({ ...DEFAULT_OPTIONS, length: 200, symbols: false, avoidLookAlikes: true })
     expect(p).not.toMatch(/[0O1lI|]/)
     expect(p).toMatch(/^[a-zA-Z0-9]+$/)
+  })
+
+  it("adds KeePassXC's finer groups, each its own set", () => {
+    const only = { ...DEFAULT_OPTIONS, lower: false, upper: false, digits: false, symbols: false }
+    expect(characterSets({ ...only, braces: true })).toEqual([[...'()[]{}']])
+    expect(characterSets({ ...only, quotes: true, dashes: true })).toEqual([[...'"\''], [...'-/\\_|']])
+    // Look-alikes leave | out, as KeePassXC's Dashes does.
+    expect(characterSets({ ...only, dashes: true, avoidLookAlikes: true })).toEqual([[...'-/\\_']])
+    const extended = characterSets({ ...only, extended: true })[0]
+    expect(extended).toHaveLength(94)
+    expect(extended).toContain('é')
+    expect(extended).not.toContain('\u00a0')
+    expect(extended).not.toContain('\u00ad')
+    for (let i = 0; i < 20; i++) {
+      const password = generatePassword({ ...only, braces: true, math: true, length: 12 })
+      expect(password).toMatch(/[()[\]{}]/)
+      expect(password).toMatch(/[!*+<=>?]/)
+    }
   })
 
   it('refuses no kinds at all', () => {

@@ -9,7 +9,7 @@ import { Label } from '@kutup/ui/components/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { Tabs, TabsList, TabsTrigger } from '@kutup/ui/components/tabs'
 import { copySecret } from '../lib/copySecret'
-import { characterSets, entropyBits, generatePassword, MAX_LENGTH, MIN_LENGTH } from '../lib/generator'
+import { characterSets, entropyBits, EXTRA_GROUPS, generatePassword, groupCharacters, MAX_LENGTH, MIN_LENGTH } from '../lib/generator'
 import { generatePassphrase, loadWordlist, MAX_WORDS, MIN_WORDS, passphraseBits, type WordCase } from '../lib/passphrase'
 import { loadGeneratorSettings, saveGeneratorSettings, type GeneratorMode, type GeneratorSettings } from '../lib/generatorSettings'
 import { useStrength } from '../lib/strength'
@@ -125,6 +125,21 @@ export function GeneratorPanel({ onUse }: { onUse?: (value: string) => void }) {
               </div>
             ))}
           </div>
+          {/* KeePassXC's finer groups (its Advanced view). */}
+          <details className="text-sm" open={EXTRA_GROUPS.some((name) => password[name])}>
+            <summary className="cursor-pointer text-xs text-muted-foreground">{t('generator.moreGroups')}</summary>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {EXTRA_GROUPS.map((name) => (
+                <div key={name} className="flex items-center gap-2">
+                  <Checkbox id={`${id}-${name}`} checked={password[name]} onCheckedChange={(v) => setSettings({ ...settings, password: { ...password, [name]: v === true } })} />
+                  <Label htmlFor={`${id}-${name}`} className="text-sm font-normal">
+                    {t(`generator.groups.${name}`)}
+                    {name === 'extended' ? null : <code className="ml-1 text-xs text-muted-foreground">{[...groupCharacters(name)].join(' ')}</code>}
+                  </Label>
+                </div>
+              ))}
+            </div>
+          </details>
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
               <Label htmlFor={`${id}-custom`} className="text-xs">

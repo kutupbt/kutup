@@ -295,6 +295,16 @@
     "deletedAll": "Eski sürümler silindi"
   },
   "generator": {
+    "moreGroups": "Daha fazla karakter grubu",
+    "groups": {
+      "braces": "Parantezler",
+      "punctuation": "Noktalama",
+      "quotes": "Tırnaklar",
+      "dashes": "Tireler ve eğik çizgiler",
+      "math": "Matematik",
+      "logograms": "Logogramlar",
+      "extended": "Genişletilmiş ASCII (é ß ¿ …)"
+    },
     "open": "Parola üret",
     "again": "Başka üret",
     "length_one": "Uzunluk: {{count}} karakter",

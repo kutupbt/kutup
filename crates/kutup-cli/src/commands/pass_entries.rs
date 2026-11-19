@@ -53,6 +53,27 @@ pub struct GenerateOpts {
     pub no_digits: bool,
     #[arg(long)]
     pub no_symbols: bool,
+    /// KeePassXC's finer groups, each its own set: ( ) [ ] { }.
+    #[arg(long)]
+    pub braces: bool,
+    /// . , : ;
+    #[arg(long)]
+    pub punctuation: bool,
+    /// " '
+    #[arg(long)]
+    pub quotes: bool,
+    /// - / \ _ |
+    #[arg(long)]
+    pub dashes: bool,
+    /// ! * + < = > ?
+    #[arg(long)]
+    pub math: bool,
+    /// # $ % & @ ^ ` ~
+    #[arg(long)]
+    pub logograms: bool,
+    /// Extended ASCII (Latin-1 letters and signs), as keepassxc-cli's -e.
+    #[arg(long, short = 'e')]
+    pub extended: bool,
     /// Leave out 0/O, 1/l/I and the like.
     #[arg(long)]
     pub avoid_look_alikes: bool,
@@ -92,6 +113,13 @@ impl GenerateOpts {
             upper: !self.no_upper,
             digits: !self.no_digits,
             symbols: !self.no_symbols,
+            braces: self.braces,
+            punctuation: self.punctuation,
+            quotes: self.quotes,
+            dashes: self.dashes,
+            math: self.math,
+            logograms: self.logograms,
+            extended: self.extended,
             avoid_look_alikes: self.avoid_look_alikes,
             custom: self.custom.clone(),
             exclude: self.exclude.clone(),
@@ -968,6 +996,13 @@ mod tests {
             no_upper: true,
             no_digits: true,
             no_symbols: true,
+            braces: false,
+            punctuation: false,
+            quotes: false,
+            dashes: false,
+            math: false,
+            logograms: false,
+            extended: false,
             avoid_look_alikes: false,
             custom: String::new(),
             exclude: "aeiou".into(),

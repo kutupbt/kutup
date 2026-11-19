@@ -22,22 +22,22 @@ said) · 🟡 partial (what is missing is said) · ❌ missing. "Kept" means
 Kutup reads and saves the data unchanged (other KeePass apps still see it)
 but offers no way to see or change it.
 
-**Summary** (rows per area, 2026-10-21):
+**Summary** (rows per area, counted from the rows below, 2026-11-19):
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| The database (vault) | 31 | 1 | 8 |
+| The database (vault) | 30 | 1 | 9 |
 | Groups (folders) | 9 | 1 | 2 |
-| Entries | 16 | 4 | 2 |
-| Bulk actions and the entry list | 11 | 1 | 3 |
-| Search | 4 | 2 | 1 |
-| Password generator | 6 | 1 | 0 |
-| One-time codes, passkeys, SSH, desktop integration | 9 | 1 | 8 |
+| Entries | 17 | 3 | 2 |
+| Bulk actions and the entry list | 12 | 0 | 3 |
+| Search | 5 | 1 | 1 |
+| Password generator | 7 | 0 | 0 |
+| One-time codes, passkeys, SSH, desktop integration | 10 | 0 | 8 |
 | Health report | 4 | 0 | 3 |
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 7 | 0 | 2 |
-| Platforms | 3 | 5 | 2 |
-| **All** | **105** | **17** | **33** |
+| Platforms | 4 | 5 | 1 |
+| **All** | **110** | **12** | **33** |
 
 ## The database (vault)
 
@@ -175,7 +175,7 @@ read-only vault has no selection and no dragging.
 | Character sets (lower, upper, digits, symbols) | `PasswordGenerator.adoc` | ✅ | `lib/generator.ts`, `features/GeneratorPanel.tsx`: `@kutup/crypto/random` without modulo bias (a lint rule refuses `Math.random` in the Pass app), one of each chosen set |
 | Exclude look-alikes | "Exclude look-alike characters" | ✅ | |
 | Length | 1–999 | ✅ | 4–128 (KeePassXC's own UI caps at 128 too) |
-| Extended ASCII, math, braces, quotes, dashes groups; custom "also include" and "exclude" characters | advanced options | 🟡 | "Also use" (any characters, their own set, at least one used) and "Never use"; no separate extended groups |
+| Extended ASCII, math, braces, quotes, dashes groups; custom "also include" and "exclude" characters | advanced options | ✅ | "More character groups" in the generator: KeePassXC's Braces, Punctuation, Quotes, Dashes and slashes, Math, Logograms and Extended ASCII (U+00A1–U+00FF without the no-break space and soft hyphen), each its own set (at least one of each used; look-alikes leave `\|` out of Dashes); "Also use" and "Never use"; the CLI's `generate` has the same groups (`--braces` … `--extended`/`-e`) |
 | Passphrases (word lists, separator, case, word count) | "Generating Passphrases", EFF lists | ✅ | `lib/passphrase.ts`: the EFF large list (7,776 words, CC BY 3.0, credited in the generator), served from Kutup's own origin and fetched on first use; 3–20 words, separator, lowercase / capitalised / mixed, an added number or symbol |
 | Entropy display | bits and a quality bar (zxcvbn) | ✅ | bits for what is generated, and zxcvbn's weak / fair / strong (lazily loaded, `lib/strength.ts`) for any password |
 | Standalone generator (toolbar, copy without an entry) | Tools → Password Generator | ✅ | `pass.<domain>/generator` in the sidebar, Copy, its options kept per device; the entry editor's popover is the same panel |

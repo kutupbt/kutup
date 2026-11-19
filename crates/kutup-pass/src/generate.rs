@@ -17,6 +17,22 @@ const LOWER: &str = "abcdefghijklmnopqrstuvwxyz";
 const UPPER: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const DIGITS: &str = "0123456789";
 const SYMBOLS: &str = "!#$%&*+-.:;=?@^_~";
+// KeePassXC's finer groups (core/PasswordGenerator.cpp), as the website's.
+const BRACES: &str = "()[]{}";
+const PUNCTUATION: &str = ".,:;";
+const QUOTES: &str = "\"'";
+const DASHES: &str = "-/\\_|";
+const MATH: &str = "!*+<=>?";
+const LOGOGRAMS: &str = "#$%&@^`~";
+
+/// Extended ASCII as KeePassXC draws it: U+00A1–U+00AC and U+00AE–U+00FF
+/// (no controls, no-break space or soft hyphen).
+fn extended() -> String {
+    (0xa1u32..=0xac)
+        .chain(0xae..=0xff)
+        .filter_map(char::from_u32)
+        .collect()
+}
 const LOOK_ALIKES: &str = "0O1lI|";
 
 pub const MIN_LENGTH: usize = 4;
@@ -31,6 +47,14 @@ pub struct PasswordSpec {
     pub upper: bool,
     pub digits: bool,
     pub symbols: bool,
+    /// KeePassXC's finer groups, each its own set.
+    pub braces: bool,
+    pub punctuation: bool,
+    pub quotes: bool,
+    pub dashes: bool,
+    pub math: bool,
+    pub logograms: bool,
+    pub extended: bool,
     pub avoid_look_alikes: bool,
     /// More characters, as their own set.
     pub custom: String,
@@ -46,6 +70,13 @@ impl Default for PasswordSpec {
             upper: true,
             digits: true,
             symbols: true,
+            braces: false,
+            punctuation: false,
+            quotes: false,
+            dashes: false,
+            math: false,
+            logograms: false,
+            extended: false,
             avoid_look_alikes: false,
             custom: String::new(),
             exclude: String::new(),
@@ -92,11 +123,19 @@ pub fn character_sets(spec: &PasswordSpec) -> Vec<Vec<char>> {
             && !(spec.avoid_look_alikes && LOOK_ALIKES.contains(*c))
             && !c.is_whitespace()
     };
+    let extended = extended();
     let chosen = [
         (spec.lower, LOWER),
         (spec.upper, UPPER),
         (spec.digits, DIGITS),
         (spec.symbols, SYMBOLS),
+        (spec.braces, BRACES),
+        (spec.punctuation, PUNCTUATION),
+        (spec.quotes, QUOTES),
+        (spec.dashes, DASHES),
+        (spec.math, MATH),
+        (spec.logograms, LOGOGRAMS),
+        (spec.extended, extended.as_str()),
     ];
     let mut seen = std::collections::HashSet::new();
     let mut sets = Vec::new();
@@ -230,6 +269,51 @@ mod tests {
             ..PasswordSpec::default()
         };
         assert_eq!(password(&none), None);
+    }
+
+    #[test]
+    fn keepassxcs_finer_groups_are_their_own_sets() {
+        let only = PasswordSpec {
+            lower: false,
+            upper: false,
+            digits: false,
+            symbols: false,
+            ..PasswordSpec::default()
+        };
+        let sets = character_sets(&PasswordSpec {
+            braces: true,
+            quotes: true,
+            ..only.clone()
+        });
+        assert_eq!(
+            sets,
+            vec!["()[]{}".chars().collect::<Vec<_>>(), vec!['"', '\'']]
+        );
+        // Look-alikes leave | out of the dashes, as KeePassXC's.
+        let dashes = character_sets(&PasswordSpec {
+            dashes: true,
+            avoid_look_alikes: true,
+            ..only.clone()
+        });
+        assert_eq!(dashes, vec![vec!['-', '/', '\\', '_']]);
+        let extended = character_sets(&PasswordSpec {
+            extended: true,
+            ..only.clone()
+        });
+        assert_eq!(extended[0].len(), 94);
+        assert!(extended[0].contains(&'é'));
+        assert!(!extended[0].contains(&'\u{a0}') && !extended[0].contains(&'\u{ad}'));
+        let spec = PasswordSpec {
+            braces: true,
+            math: true,
+            length: 12,
+            ..only
+        };
+        for _ in 0..30 {
+            let p = password(&spec).unwrap();
+            assert!(p.contains(['(', ')', '[', ']', '{', '}']));
+            assert!(p.contains(['!', '*', '+', '<', '=', '>', '?']));
+        }
     }
 
     #[test]

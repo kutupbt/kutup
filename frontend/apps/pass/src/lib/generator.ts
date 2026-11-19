@@ -8,6 +8,18 @@ export interface GeneratorOptions {
   upper: boolean
   digits: boolean
   symbols: boolean
+  /**
+   * KeePassXC's finer groups ("Advanced"), each its own set: ( ) [ ] { },
+   * . , : ;, " ', - / \ _ |, ! * + < = > ?, # $ % & @ ^ ` ~, and
+   * extended ASCII (Latin-1 letters and signs).
+   */
+  braces: boolean
+  punctuation: boolean
+  quotes: boolean
+  dashes: boolean
+  math: boolean
+  logograms: boolean
+  extended: boolean
   /** Leaves out 0/O, 1/l/I and the like. */
   avoidLookAlikes: boolean
   /** More characters to draw from, as their own set (at least one of them). */
@@ -26,6 +38,13 @@ export const DEFAULT_OPTIONS: GeneratorOptions = {
   upper: true,
   digits: true,
   symbols: true,
+  braces: false,
+  punctuation: false,
+  quotes: false,
+  dashes: false,
+  math: false,
+  logograms: false,
+  extended: false,
   avoidLookAlikes: false,
   custom: '',
   exclude: '',
@@ -36,7 +55,24 @@ const SETS = {
   upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
   digits: '0123456789',
   symbols: '!#$%&*+-.:;=?@^_~',
+  // KeePassXC's groups (core/PasswordGenerator.cpp), in its order.
+  braces: '()[]{}',
+  punctuation: '.,:;',
+  quotes: '"\'',
+  dashes: '-/\\_|',
+  math: '!*+<=>?',
+  logograms: '#$%&@^`~',
+  // U+00A1–U+00AC and U+00AE–U+00FF: no controls, no-break space or soft hyphen.
+  extended: String.fromCodePoint(...Array.from({ length: 12 }, (_, i) => 0xa1 + i), ...Array.from({ length: 0x52 }, (_, i) => 0xae + i)),
 } as const
+
+/** KeePassXC's finer groups, as the panel lists them. */
+export const EXTRA_GROUPS = ['braces', 'punctuation', 'quotes', 'dashes', 'math', 'logograms', 'extended'] as const
+
+/** The characters of a group, for its label. */
+export function groupCharacters(name: (typeof EXTRA_GROUPS)[number]): string {
+  return SETS[name]
+}
 const LOOK_ALIKES = new Set('0O1lI|'.split(''))
 
 /** A uniformly random integer in [0, n). */

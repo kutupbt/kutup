@@ -295,6 +295,16 @@
     "deletedAll": "Earlier versions deleted"
   },
   "generator": {
+    "moreGroups": "More character groups",
+    "groups": {
+      "braces": "Braces",
+      "punctuation": "Punctuation",
+      "quotes": "Quotes",
+      "dashes": "Dashes and slashes",
+      "math": "Math",
+      "logograms": "Logograms",
+      "extended": "Extended ASCII (é ß ¿ …)"
+    },
     "open": "Generate a password",
     "again": "Generate another",
     "length_one": "Length: {{count}} character",
