@@ -20,6 +20,7 @@ pub mod kdbx;
 pub mod kept;
 pub mod merge;
 pub mod otp;
+pub mod passkey;
 mod refs;
 pub mod resolve;
 pub mod search;

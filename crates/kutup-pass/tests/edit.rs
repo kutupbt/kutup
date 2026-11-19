@@ -2089,3 +2089,105 @@ fn custom_data_is_listed_by_key() {
     assert!(kutup_pass::view::custom_data(&db, "not-a-uuid").is_none());
     assert!(kutup_pass::view::custom_data(&db, &uuid::Uuid::new_v4().to_string()).is_none());
 }
+
+/// KeePassXC's passkey fields: the view shows a summary and never the
+/// private key (nor in history, nor through a placeholder), and an edit made
+/// from the view keeps it.
+#[test]
+fn a_passkeys_private_key_never_reaches_the_view() {
+    const PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgSECRET\n-----END PRIVATE KEY-----";
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let field = |key: &str, value: &str, protected: bool| FieldView {
+        key: key.into(),
+        value: value.into(),
+        protected,
+    };
+    let id = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: root,
+            entry: EntryInput {
+                fields: vec![
+                    field("Title", "GitHub", false),
+                    field("UserName", "ayse", false),
+                    field("Notes", "{S:KPEX_PASSKEY_PRIVATE_KEY_PEM}", false),
+                    field("KPEX_PASSKEY_RELYING_PARTY", "github.com", false),
+                    field("KPEX_PASSKEY_USERNAME", "ayse", false),
+                    field("KPEX_PASSKEY_CREDENTIAL_ID", "Y3JlZA", false),
+                    field("KPEX_PASSKEY_USER_HANDLE", "dXNlcg", false),
+                    field("KPEX_PASSKEY_PRIVATE_KEY_PEM", PEM, true),
+                ],
+                ..EntryInput::default()
+            },
+        },
+        1,
+    )
+    .id
+    .unwrap();
+    let shown = |db: &kutup_pass::keepass::Database| {
+        let v = view::view(db);
+        let e = entry(&v, &id).clone();
+        (serde_json::to_string(&v).unwrap(), e)
+    };
+    let (json, e) = shown(&db);
+    assert!(!json.contains("SECRET") && !json.contains("BEGIN PRIVATE KEY"));
+    assert!(e.fields.iter().all(|f| !f.key.starts_with("KPEX_PASSKEY")));
+    let passkey = e.passkey.clone().unwrap();
+    assert_eq!(passkey.relying_party, "github.com");
+    assert_eq!(passkey.username, "ayse");
+    assert_eq!(passkey.credential_id, "Y3JlZA");
+    assert!(passkey.has_private_key);
+
+    // A placeholder naming the key resolves to nothing.
+    let stored = &db.entries[&eid(&id)];
+    let context = kutup_pass::resolve::Context {
+        local: at(2),
+        utc: at(2),
+        unix_seconds: 0,
+    };
+    assert_eq!(
+        kutup_pass::resolve::resolve(&db, stored, "{S:KPEX_PASSKEY_PRIVATE_KEY_PEM}", &context),
+        ""
+    );
+    assert_eq!(
+        kutup_pass::resolve::resolve(&db, stored, "{S:KPEX_PASSKEY_RELYING_PARTY}", &context),
+        "github.com"
+    );
+
+    // An edit from what the page has (the view's fields) keeps the passkey.
+    let mut fields = e.fields.clone();
+    fields.iter_mut().find(|f| f.key == "Title").unwrap().value = "GitHub (work)".into();
+    run(
+        &mut db,
+        Op::UpdateEntry {
+            id: id.clone(),
+            entry: EntryInput {
+                fields,
+                ..EntryInput::default()
+            },
+        },
+        3,
+    );
+    let stored = &db.entries[&eid(&id)];
+    assert_eq!(stored.fields["KPEX_PASSKEY_PRIVATE_KEY_PEM"].get(), PEM);
+    assert!(stored.fields["KPEX_PASSKEY_PRIVATE_KEY_PEM"].is_protected());
+    assert_eq!(
+        stored.fields["KPEX_PASSKEY_RELYING_PARTY"].get(),
+        "github.com"
+    );
+
+    // Its history (the state before the edit) doesn't show it either.
+    let history = serde_json::to_string(&view::history(&db, stored)).unwrap();
+    assert!(!history.contains("SECRET"));
+    let (json, _) = shown(&db);
+    assert!(!json.contains("SECRET"));
+
+    // The vault itself keeps it, through a save and a reopen.
+    let key = VaultKey::new().with_password("p");
+    let reopened = open(&save(&db, &key).unwrap(), &key).unwrap();
+    assert_eq!(
+        reopened.entries[&eid(&id)].fields["KPEX_PASSKEY_PRIVATE_KEY_PEM"].get(),
+        PEM
+    );
+}

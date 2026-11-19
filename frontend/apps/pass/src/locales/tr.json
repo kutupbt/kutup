@@ -731,5 +731,15 @@
     "value": "Değer",
     "binary": "İkili, {{size}}",
     "failed": "Özel veriler okunamadı."
+  },
+  "passkey": {
+    "title": "Geçiş anahtarı",
+    "site": "Site",
+    "username": "Kullanıcı adı",
+    "credentialId": "Kimlik bilgisi kimliği",
+    "copy": "{{what}} kopyala",
+    "copied": "{{what}} kopyalandı",
+    "keptHint": "Özel anahtarı kasada kalır ve hiç gösterilmez. Onunla oturum açmak için KeePassXC gibi KeePass geçiş anahtarlarını kullanan bir uygulama gerekir.",
+    "noKeyHint": "Bu geçiş anahtarının özel anahtarı yok, bu yüzden oturum açamaz."
   }
 }

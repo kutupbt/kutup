@@ -149,6 +149,8 @@ pub struct EntryView {
     /// side, its history the other, until someone reviews it.
     pub review: Vec<String>,
     pub in_recycle_bin: bool,
+    /// Its passkey (KeePassXC's), without the private key.
+    pub passkey: Option<crate::passkey::PasskeyView>,
 }
 
 /// A time as the views write it.
@@ -259,6 +261,9 @@ pub fn fields(entry: &Entry) -> Vec<FieldView> {
         .fields
         .iter()
         .filter(|(key, _)| !STANDARD_FIELDS.contains(&key.as_str()))
+        // A passkey is shown by its own card, never its fields: the private
+        // key must not reach the page (crate::passkey).
+        .filter(|(key, _)| !crate::passkey::is_passkey_field(key))
         .map(|(key, value)| FieldView {
             key: key.clone(),
             value: value.get().clone(),
@@ -316,6 +321,7 @@ fn entry_view(db: &Database, entry: &Entry, history_count: usize) -> EntryView {
         history_count,
         review: review_fields(entry),
         in_recycle_bin: group_in_recycle_bin(db, entry.parent),
+        passkey: crate::passkey::passkey(entry),
     }
 }
 

@@ -272,7 +272,7 @@ impl Vault {
         let mut out: Vec<Resolved> = entry
             .fields
             .iter()
-            .filter(|(_, v)| v.get().contains('{'))
+            .filter(|(key, v)| v.get().contains('{') && !kutup_pass::passkey::is_passkey_field(key))
             .filter_map(|(key, v)| {
                 let value = kutup_pass::resolve::resolve(&self.db, entry, v.get(), &context);
                 (value != *v.get()).then(|| Resolved {

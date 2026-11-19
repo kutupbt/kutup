@@ -166,4 +166,27 @@ assert.ok(pass.Vault.open(rekeyed, null, Buffer.from(keptKey.passwordHash, 'base
 // hash when chosen; a generated one needs the password itself.
 assert.ok(byHash.keepKey(masterKey, vectors.binding, vectors.fileId, 1, false))
 assert.throws(() => byHash.keepKey(masterKey, vectors.binding, vectors.fileId, 1, true))
+// A passkey's private key never crosses into the page: not in the view,
+// its history, resolved fields, search results or custom data; an edit
+// from the view keeps it; only the export (the whole vault) holds it.
+{
+  const SECRET = 'MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgPASSKEYSECRET'
+  const pem = `-----BEGIN PRIVATE KEY-----\n${SECRET}\n-----END PRIVATE KEY-----`
+  const v = pass.Vault.create('Passkeys', 'p', null, minute(0))
+  const top = v.view().rootGroupId
+  const id = v.apply({ op: 'createEntry', groupId: top, entry: { fields: [
+    ...fields([['Title', 'GitHub'], ['UserName', 'ayse'], ['Notes', '{S:KPEX_PASSKEY_PRIVATE_KEY_PEM}'], ['KPEX_PASSKEY_RELYING_PARTY', 'github.com'], ['KPEX_PASSKEY_USERNAME', 'ayse']]),
+    { key: 'KPEX_PASSKEY_PRIVATE_KEY_PEM', value: pem, protected: true },
+  ] } }, minute(1)).id
+  const crossing = () => JSON.stringify([v.view(), v.history(id), v.resolvedFields(id, minute(2), 0), v.search('PASSKEYSECRET', [], minute(2)), v.search('attr:KPEX', [], minute(2)), v.customData(id)])
+  assert.ok(!crossing().includes(SECRET))
+  const entry = v.view().entries.find((e) => e.id === id)
+  assert.equal(entry.passkey.relyingParty, 'github.com')
+  assert.equal(entry.passkey.hasPrivateKey, true)
+  assert.ok(entry.fields.every((f) => !f.key.startsWith('KPEX_PASSKEY')))
+  v.apply({ op: 'updateEntry', id, entry: { fields: entry.fields.map((f) => (f.key === 'Title' ? { ...f, value: 'GitHub (work)' } : f)) } }, minute(3))
+  assert.ok(!crossing().includes(SECRET))
+  assert.ok(Buffer.from(v.exportKeePassXml()).toString('utf8').includes(SECRET))
+  assert.equal(pass.Vault.open(v.save(), 'p', null, null).view().entries.find((e) => e.id === id).passkey.hasPrivateKey, true)
+}
 console.log('pass WASM checks passed')

@@ -1193,6 +1193,13 @@ fn fill_entry(db: &Database, entry: &mut Entry, input: &EntryInput) -> Result<()
         };
         fields.insert(key, value);
     }
+    // The passkey fields the view never shows (crate::passkey) stay as they
+    // were unless the input names them.
+    for (key, value) in &entry.fields {
+        if crate::passkey::is_passkey_field(key) && !fields.contains_key(key) {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
     // KeePass entries always have the standard fields.
     for key in STANDARD_FIELDS {
         fields.entry(key.to_owned()).or_insert_with(|| {

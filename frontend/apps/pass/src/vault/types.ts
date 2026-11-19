@@ -27,6 +27,15 @@ export interface AutoTypeView {
   associations: { window: string; sequence: string }[]
 }
 
+/** An entry's passkey as the page sees it (kutup_pass::passkey::PasskeyView): never the private key. */
+export interface PasskeyView {
+  relyingParty: string
+  username: string
+  credentialId: string
+  userHandle: string
+  hasPrivateKey: boolean
+}
+
 export interface EntryView {
   id: string
   groupId: string
@@ -52,6 +61,8 @@ export interface EntryView {
   /** Fields a merge found changed on two devices: one value here, the other in history. */
   review: string[]
   inRecycleBin: boolean
+  /** Its passkey (KeePassXC's KPEX_PASSKEY_* fields), without the private key, which never reaches the page. */
+  passkey?: PasskeyView | null
 }
 
 /** A field shown resolved (references and placeholders). */

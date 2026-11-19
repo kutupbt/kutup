@@ -731,5 +731,15 @@
     "value": "Value",
     "binary": "Binary, {{size}}",
     "failed": "The custom data couldn't be read."
+  },
+  "passkey": {
+    "title": "Passkey",
+    "site": "Site",
+    "username": "User name",
+    "credentialId": "Credential ID",
+    "copy": "Copy the {{what}}",
+    "copied": "{{what}} copied",
+    "keptHint": "Its private key stays in the vault and is never shown. Signing in with it takes an app that uses KeePass passkeys, such as KeePassXC.",
+    "noKeyHint": "This passkey has no private key, so it can’t sign in."
   }
 }

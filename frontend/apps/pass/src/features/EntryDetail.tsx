@@ -17,6 +17,7 @@ import { TotpQrDialog } from './TotpQrDialog'
 import { SiteIcon } from './SiteIcon'
 import { IconDialog } from './IconDialog'
 import { AttachmentsSection } from './AttachmentsSection'
+import { PasskeyCard } from './PasskeyCard'
 import { PropertiesSection } from './PropertiesSection'
 import { iconSources } from '../lib/icons'
 import { copySecret } from '../lib/copySecret'
@@ -329,6 +330,7 @@ export function EntryDetail({
             </Row>
           ) : null}
         </dl>
+        {entry.passkey ? <PasskeyCard passkey={entry.passkey} /> : null}
         <AttachmentsSection entry={entry} session={session} canEdit={canEdit} run={run} />
         <PropertiesSection session={session} id={entry.id} created={entry.created} modified={entry.modified} accessed={entry.accessed} />
         <footer className="mt-6 space-y-1 text-xs text-muted-foreground">

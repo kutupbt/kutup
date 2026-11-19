@@ -106,6 +106,11 @@ fn one(db: &Database, entry: &Entry, placeholder: &str, depth: u32, context: &Co
         .strip_prefix("{S:")
         .and_then(|p| p.strip_suffix('}'))
     {
+        // The passkey's private key never resolves into another field
+        // (crate::passkey): the page would get it.
+        if key == crate::passkey::PRIVATE_KEY_PEM {
+            return String::new();
+        }
         return match entry.fields.get(key) {
             Some(value) => multiple(db, entry, value.get(), depth, context),
             None => String::new(),
