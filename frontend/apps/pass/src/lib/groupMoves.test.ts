@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GroupView } from '../vault/types'
-import { canDropGroup, deletedGroups, groupTargets, isWithin } from './groupMoves'
+import { canCopyGroup, canDropGroup, deletedGroups, groupTargets, isWithin } from './groupMoves'
 
 function g(id: string, parentId: string | null, inRecycleBin = false): GroupView {
   return {
@@ -64,6 +64,18 @@ describe('moving groups', () => {
     expect(canDropGroup(view, 'servers', 'work')).toBe(false)
     expect(canDropGroup(view, 'old', 'home')).toBe(false)
     expect(canDropGroup(view, 'root', 'home')).toBe(false)
+  })
+
+  it('copies onto any group outside the bin but itself and what it holds, its own parent too', () => {
+    expect(canCopyGroup(view, 'servers', 'work')).toBe(true)
+    expect(canCopyGroup(view, 'servers', 'home')).toBe(true)
+    expect(canCopyGroup(view, 'servers', 'servers')).toBe(false)
+    expect(canCopyGroup(view, 'work', 'prod')).toBe(false)
+    expect(canCopyGroup(view, 'servers', 'bin')).toBe(false)
+    expect(canCopyGroup(view, 'servers', 'old')).toBe(false)
+    expect(canCopyGroup(view, 'old', 'home')).toBe(false)
+    expect(canCopyGroup(view, 'root', 'home')).toBe(false)
+    expect(canCopyGroup(view, 'bin', 'home')).toBe(false)
   })
 
   it('lists the groups directly in the bin', () => {

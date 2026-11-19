@@ -125,7 +125,8 @@ export type Op =
   | { op: 'recycleEntries'; ids: string[] }
   | { op: 'restoreHistory'; id: string; index: number }
   /** Copies beside each entry (KeePassXC's Clone); returns the first copy's id. */
-  | { op: 'cloneEntries'; ids: string[]; titleSuffix: string | null; history: boolean; references?: boolean }
+  | { op: 'cloneEntries'; ids: string[]; groupId?: string; titleSuffix: string | null; history: boolean; references?: boolean }
+  | { op: 'copyGroup'; id: string; parentId: string }
   /** Deletes history items (indexes oldest first; null: all), remembered so a merge doesn't bring them back. */
   | { op: 'deleteHistory'; id: string; indexes: number[] | null }
   | { op: 'clearReview'; id: string }

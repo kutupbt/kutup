@@ -148,6 +148,7 @@
     "nameTaken": "Bu klasörde bu adda bir dosya zaten var."
   },
   "groups": {
+    "copied": "{{name}} kopyalandı: {{group}}",
     "label": "Gruplar",
     "all": "Tüm kayıtlar",
     "recycleBin": "Geri dönüşüm kutusu",
@@ -630,6 +631,8 @@
     "qrShow": "QR kodunu göster"
   },
   "bulk": {
+    "copied_other": "{{count}} kayıt kopyalandı: {{group}}",
+    "copied_one": "{{count}} kayıt kopyalandı: {{group}}",
     "toolbar": "Seçili kayıtlar",
     "selected_one": "{{count}} seçili",
     "selected_other": "{{count}} seçili",

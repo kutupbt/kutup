@@ -1586,6 +1586,7 @@ fn entries_are_cloned_beside_themselves() {
         &mut db,
         &Op::CloneEntries {
             ids: vec![bank.clone(), "nope".into()],
+            group_id: None,
             title_suffix: None,
             history: false,
             references: false,
@@ -1599,6 +1600,7 @@ fn entries_are_cloned_beside_themselves() {
         &mut db,
         Op::CloneEntries {
             ids: vec![bank.clone(), mail.clone()],
+            group_id: None,
             title_suffix: Some(" - Kopya".into()),
             history: true,
             references: false,
@@ -1633,6 +1635,7 @@ fn entries_are_cloned_beside_themselves() {
         &mut db,
         Op::CloneEntries {
             ids: vec![bank.clone()],
+            group_id: None,
             title_suffix: None,
             history: false,
             references: false,
@@ -1870,6 +1873,7 @@ fn a_clone_can_refer_to_its_original() {
         &mut db,
         Op::CloneEntries {
             ids: vec![bank.clone()],
+            group_id: None,
             title_suffix: None,
             history: false,
             references: true,
@@ -1904,4 +1908,145 @@ fn a_clone_can_refer_to_its_original() {
     );
     let e = &db.entries[&eid(&copy)];
     assert_eq!(resolve(&db, e, e.fields["Password"].get(), &context), "p2");
+}
+
+/// KeePassXC's Ctrl-drag: entries copied into another group, a group copied
+/// with all it holds (`CloneCopy`: new ids, times now, history kept).
+#[test]
+fn entries_and_groups_are_copied_into_another_group() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let servers = group(&mut db, &work, "Sunucular", 2);
+    let home = group(&mut db, &root, "Ev", 3);
+    let bank = add(&mut db, "Banka", 4);
+    run(
+        &mut db,
+        Op::UpdateEntry {
+            id: bank.clone(),
+            entry: input(&[("Title", "Banka"), ("Password", "p1")]),
+        },
+        5,
+    );
+    // An entry copied into another group: no suffix, its history, a new id.
+    let copy = run(
+        &mut db,
+        Op::CloneEntries {
+            ids: vec![bank.clone()],
+            group_id: Some(home.clone()),
+            title_suffix: None,
+            history: true,
+            references: false,
+        },
+        6,
+    )
+    .id
+    .unwrap();
+    let v = view::view(&db);
+    let copied = entry(&v, &copy);
+    assert_ne!(copy, bank);
+    assert_eq!(copied.group_id, home);
+    assert_eq!(entry(&v, &bank).group_id, root);
+    assert_eq!(
+        view::history(&db, &db.entries[&eid(&copy)]).len(),
+        view::history(&db, &db.entries[&eid(&bank)]).len()
+    );
+
+    // A group copied with what it holds, under another.
+    let server = run(
+        &mut db,
+        Op::CreateEntry {
+            group_id: servers.clone(),
+            entry: input(&[("Title", "db1"), ("Password", "s")]),
+        },
+        7,
+    )
+    .id
+    .unwrap();
+    let work_copy = run(
+        &mut db,
+        Op::CopyGroup {
+            id: work.clone(),
+            parent_id: home.clone(),
+        },
+        8,
+    )
+    .id
+    .unwrap();
+    let v = view::view(&db);
+    let copied_work = v.groups.iter().find(|g| g.id == work_copy).unwrap();
+    assert_eq!(copied_work.name, "İş");
+    assert_eq!(copied_work.parent_id.as_deref(), Some(home.as_str()));
+    let copied_servers = v
+        .groups
+        .iter()
+        .find(|g| g.parent_id.as_deref() == Some(work_copy.as_str()))
+        .unwrap();
+    assert_eq!(copied_servers.name, "Sunucular");
+    assert_ne!(copied_servers.id, servers);
+    let inside: Vec<_> = v
+        .entries
+        .iter()
+        .filter(|e| e.group_id == copied_servers.id)
+        .collect();
+    assert_eq!(inside.len(), 1);
+    assert_ne!(inside[0].id, server);
+    // The original is where it was, whole.
+    assert!(v
+        .entries
+        .iter()
+        .any(|e| e.id == server && e.group_id == servers));
+
+    // Never into itself or below it, never the top group.
+    for (id, parent) in [(&work, &work), (&work, &servers), (&root, &home)] {
+        assert!(apply(
+            &mut db,
+            &Op::CopyGroup {
+                id: id.clone(),
+                parent_id: parent.clone(),
+            },
+            at(9),
+        )
+        .is_err());
+    }
+
+    // The copy survives a save and a reopen.
+    let key = VaultKey::new().with_password("p");
+    let reopened = open(&save(&db, &key).unwrap(), &key).unwrap();
+    assert_eq!(reopened.groups.len(), db.groups.len());
+    assert_eq!(reopened.entries.len(), db.entries.len());
+}
+
+#[test]
+fn nothing_is_copied_into_or_out_of_the_recycle_bin() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let old = group(&mut db, &root, "Eski", 1);
+    let keep = group(&mut db, &root, "Kalan", 2);
+    let bank = add(&mut db, "Banka", 3);
+    run(&mut db, Op::RecycleGroup { id: old.clone() }, 4);
+    let bin = view::view(&db).recycle_bin_id.unwrap();
+    let into_bin = apply(
+        &mut db,
+        &Op::CloneEntries {
+            ids: vec![bank.clone()],
+            group_id: Some(bin.clone()),
+            title_suffix: None,
+            history: true,
+            references: false,
+        },
+        at(5),
+    );
+    assert!(into_bin.is_err());
+    for (id, parent) in [(&keep, &bin), (&old, &root), (&bin, &root)] {
+        assert!(apply(
+            &mut db,
+            &Op::CopyGroup {
+                id: id.clone(),
+                parent_id: parent.clone(),
+            },
+            at(5),
+        )
+        .is_err());
+    }
 }

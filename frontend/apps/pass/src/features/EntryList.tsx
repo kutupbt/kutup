@@ -118,7 +118,8 @@ export function EntryList({
   const dragStart = (event: DragEvent, id: string) => {
     const ids = selection.ids.has(id) ? selected : [id]
     event.dataTransfer.setData(DRAG_TYPE, JSON.stringify(ids))
-    event.dataTransfer.effectAllowed = 'move'
+    // Ctrl (⌥ on macOS) copies instead (entryDrop.ts).
+    event.dataTransfer.effectAllowed = 'copyMove'
   }
 
   return (

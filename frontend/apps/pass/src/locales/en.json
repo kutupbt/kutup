@@ -148,6 +148,7 @@
     "nameTaken": "A file with that name is already in this folder."
   },
   "groups": {
+    "copied": "{{name}} copied to {{group}}",
     "label": "Groups",
     "all": "All entries",
     "recycleBin": "Recycle bin",
@@ -630,6 +631,8 @@
     "qrShow": "Show the QR code"
   },
   "bulk": {
+    "copied_other": "{{count}} entries copied to {{group}}",
+    "copied_one": "{{count}} entry copied to {{group}}",
     "toolbar": "Selected entries",
     "selected_one": "{{count}} selected",
     "selected_other": "{{count}} selected",

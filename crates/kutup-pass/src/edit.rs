@@ -87,12 +87,16 @@ pub enum Op {
         ids: Vec<String>,
     },
     /// Makes history item `index` (oldest first) the entry's state again.
-    /// Copies entries into the group each is in, as KeePassXC's Clone: a new
-    /// id, the copy's times now, the title with `title_suffix` appended
-    /// when given (" - Clone", in the person's language), and the history
-    /// only when `history`. All or nothing; returns the first copy's id.
+    /// Copies entries, as KeePassXC's Clone: a new id, the copy's times
+    /// now, the title with `title_suffix` appended when given (" - Clone",
+    /// in the person's language), and the history only when `history`.
+    /// Into the group each is in, or into `group_id` (KeePassXC's
+    /// Ctrl-drag, never the recycle bin). All or nothing; returns the first
+    /// copy's id.
     CloneEntries {
         ids: Vec<String>,
+        #[serde(default)]
+        group_id: Option<String>,
         #[serde(default)]
         title_suffix: Option<String>,
         #[serde(default)]
@@ -175,6 +179,15 @@ pub enum Op {
     /// is off or the group is in it already (a drag never deletes for good).
     RecycleGroup {
         id: String,
+    },
+    /// Copies a group, with every group and entry inside it, under
+    /// `parent_id` (KeePassXC's Ctrl-drag, `CloneCopy`): new ids, the copies'
+    /// times now, entries with their history. Never the top group or the
+    /// recycle bin, nothing in the bin, and never into itself, what it holds
+    /// or the bin. Returns the copy's id.
+    CopyGroup {
+        id: String,
+        parent_id: String,
     },
     /// Moves a group (with what it holds) under another, never into the
     /// recycle bin (that is `DeleteGroup`) and never the bin itself. A group
@@ -598,6 +611,7 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
         }
         Op::CloneEntries {
             ids,
+            group_id: into,
             title_suffix,
             history,
             references,
@@ -607,9 +621,13 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
             if suffix.chars().count() > MAX_NAME_CHARS {
                 return Err(invalid("a title suffix is too long"));
             }
+            let into = into.as_deref().map(|g| group_id(db, g)).transpose()?;
+            if into.is_some_and(|g| group_in_recycle_bin(db, g)) {
+                return Err(invalid("nothing is copied into the recycle bin"));
+            }
             let mut first = None;
             for id in ids {
-                let copy = clone_entry(db, id, suffix, *history, now)?;
+                let copy = clone_entry(db, id, suffix, *history, into, now)?;
                 if *references {
                     let hex = id.uuid().simple().to_string();
                     if let Some(copy) = db.entries.get_mut(&copy) {
@@ -821,6 +839,24 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                 return Err(invalid("the group is in the recycle bin already"));
             }
             delete_group(db, id, now)
+        }
+        Op::CopyGroup { id, parent_id } => {
+            let id = group_id(db, id)?;
+            let parent = group_id(db, parent_id)?;
+            if id == db.root || Some(id) == recycle_bin(db) {
+                return Err(invalid("the top group and the recycle bin are not copied"));
+            }
+            if group_in_recycle_bin(db, id) || group_in_recycle_bin(db, parent) {
+                return Err(invalid("nothing is copied from or into the recycle bin"));
+            }
+            if group_within(db, parent, id) {
+                return Err(invalid("a group cannot be copied into itself"));
+            }
+            let copy = copy_group(db, id, parent, now)?;
+            Applied {
+                id: Some(copy.uuid().to_string()),
+                changed: true,
+            }
         }
         Op::MoveGroup { id, parent_id } => {
             let id = group_id(db, id)?;
@@ -1246,17 +1282,65 @@ fn create_entry(
     })
 }
 
-/// A copy of entry `id` beside it (`Op::CloneEntries`).
+/// Whether group `id` is `ancestor` or inside it.
+fn group_within(db: &Database, id: GroupId, ancestor: GroupId) -> bool {
+    let mut current = Some(id);
+    while let Some(group) = current {
+        if group == ancestor {
+            return true;
+        }
+        current = db.groups.get(&group).and_then(|g| g.parent);
+    }
+    false
+}
+
+/// A copy of group `id` and everything in it under `parent`
+/// (`Op::CopyGroup`); the caller has checked the two.
+fn copy_group(
+    db: &mut Database,
+    id: GroupId,
+    parent: GroupId,
+    now: NaiveDateTime,
+) -> Result<GroupId, EditError> {
+    let source = db.groups[&id].clone();
+    let copy_id = {
+        let mut parent = db.group_mut(parent).ok_or(EditError::NotFound("group"))?;
+        let mut group = parent.add_group();
+        group.name = source.name.clone();
+        group.notes = source.notes.clone();
+        group.tags = source.tags.clone();
+        group.icon = source.icon.clone();
+        group.custom_data = source.custom_data.clone();
+        group.is_expanded = source.is_expanded;
+        group.default_autotype_sequence = source.default_autotype_sequence.clone();
+        group.enable_autotype = source.enable_autotype;
+        group.enable_searching = source.enable_searching;
+        set_all_times(&mut group.times, now);
+        group.id
+    };
+    // In the source's order; the lists are taken first, so the copy (made
+    // outside the source) is never walked.
+    for entry in source.entries.iter().copied() {
+        clone_entry(db, entry, "", true, Some(copy_id), now)?;
+    }
+    for child in source.groups.iter().copied() {
+        copy_group(db, child, copy_id, now)?;
+    }
+    Ok(copy_id)
+}
+
+/// A copy of entry `id`, beside it or in group `into` (`Op::CloneEntries`).
 fn clone_entry(
     db: &mut Database,
     id: EntryId,
     suffix: &str,
     history: bool,
+    into: Option<GroupId>,
     now: NaiveDateTime,
 ) -> Result<EntryId, EditError> {
     let source = db.entries[&id].clone();
     let copy_id = EntryId::new();
-    db.group_mut(source.parent)
+    db.group_mut(into.unwrap_or(source.parent))
         .ok_or(EditError::NotFound("group"))?
         .add_entry_with_id(copy_id)
         .map_err(|_| invalid("the entry exists"))?;

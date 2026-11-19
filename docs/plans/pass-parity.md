@@ -149,7 +149,7 @@ read-only vault has no selection and no dragging.
 | Restore from the recycle bin | drag back | ✅ | one entry or several, each back to the group it was in (KDBX's previous parent group), or the top group when that one is gone or in the bin; or "Move to" another group |
 | Empty the recycle bin | Recycle bin → Empty | ✅ | |
 | Clone several | Clone | ✅ | the selection bar's Clone, one `cloneEntries` edit |
-| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | 🟡 | entries (one, or the selection) onto a group, or onto the recycle bin while it is on (`recycleEntries`, which refuses rather than delete for good); not groups into groups, no Ctrl to copy |
+| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | ✅ | entries (one, or the selection) and groups onto a group, or onto the recycle bin while it is on (`recycleEntries` / `recycleGroup`, which refuse rather than delete for good), never a group into itself; with Ctrl (or ⌥) held they are copied instead, as KeePassXC's `CloneCopy`: new ids, times now, history kept, no " - Clone" suffix, a group with all it holds (`copyGroup`), never into the bin |
 | Sort the list | click a column | ✅ | title, user name, URL, modified, created or expiry, up or down, per device (`lib/entryList.ts`); entries without the value last |
 | Choose columns (user name, URL, modified, expiry, attachments, TOTP…) | header menu | ✅ | "Show in the list": user name, URL, modified, expiry, attachments, one-time code, per device; rows keep the icon and title |
 | Move entries up and down (manual order) | Entries → Move up/down | ❌ | |

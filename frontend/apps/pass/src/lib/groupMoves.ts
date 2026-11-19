@@ -32,6 +32,19 @@ export function canDropGroup(view: Pick<VaultView, 'groups' | 'rootGroupId' | 'r
   return groupTargets(view, group).some((g) => g.id === target)
 }
 
+/**
+ * Whether a dragged group may be copied onto `target` (KeePassXC's
+ * Ctrl-drag): any group outside the bin that isn't the group itself or
+ * inside it, its own parent included. The top group, the bin and what is in
+ * the bin are never copied.
+ */
+export function canCopyGroup(view: Pick<VaultView, 'groups' | 'rootGroupId' | 'recycleBinId'>, groupId: string, target: string): boolean {
+  const group = view.groups.find((g) => g.id === groupId)
+  const into = view.groups.find((g) => g.id === target)
+  if (!group || !into || group.id === view.rootGroupId || group.id === view.recycleBinId || group.inRecycleBin) return false
+  return !into.inRecycleBin && into.id !== view.recycleBinId && !isWithin(view, into.id, group.id)
+}
+
 /** The groups the recycle bin view lists: those directly in the bin (what they hold comes back with them). */
 export function deletedGroups(view: Pick<VaultView, 'groups' | 'recycleBinId'>): GroupView[] {
   const bin = view.recycleBinId
