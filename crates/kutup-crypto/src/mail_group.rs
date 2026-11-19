@@ -68,7 +68,7 @@ pub fn seal_group_signing_share(
     key: &GroupSigningKey,
     group_id: &str,
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
+    member_xwing_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     seal_group_secret(
         SIGNING_SHARE_DOMAIN,
@@ -76,7 +76,7 @@ pub fn seal_group_signing_share(
         group_id,
         &key.public_key,
         member,
-        member_hpke_public_key,
+        member_xwing_public_key,
     )
 }
 

@@ -666,12 +666,12 @@ fn drive_keys_follow(
     }
     let current_is_suite_1 = current.suite == AccountIdentitySuiteId::X25519Ed25519V1
         && STANDARD
-            .decode(&current.hpke_public_key)
+            .decode(&current.xwing_public_key)
             .map(|key| key.len())
             == Ok(legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN);
     current_is_suite_1
         && next.suite == AccountIdentitySuiteId::XWingEd25519V2
-        && STANDARD.decode(&next.hpke_public_key).map(|key| key.len())
+        && STANDARD.decode(&next.xwing_public_key).map(|key| key.len())
             == Ok(kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN)
         && next.share_signing_public_key == current.share_signing_public_key
 }
@@ -730,7 +730,7 @@ pub(crate) async fn store_manifest(
             "manifest account does not match the authenticated account",
         ));
     }
-    if manifest.drive.hpke_public_key != drive_public_key
+    if manifest.drive.xwing_public_key != drive_public_key
         || manifest.drive.share_signing_public_key != drive_signing_public_key
         || manifest.self_authority_key != authority_public_key
         || manifest.authority_key_id != authority_key_id
@@ -3499,7 +3499,7 @@ mod tests {
         use kutup_chat_proto::{AccountIdentitySuiteId, AccountManifestDriveKeysV1};
         let keys = |suite, key_len: usize, signing: u8| AccountManifestDriveKeysV1 {
             suite,
-            hpke_public_key: STANDARD.encode(vec![7u8; key_len]),
+            xwing_public_key: STANDARD.encode(vec![7u8; key_len]),
             share_signing_public_key: STANDARD.encode([signing; 32]),
         };
         let old = keys(AccountIdentitySuiteId::X25519Ed25519V1, 32, 1);
@@ -3509,7 +3509,7 @@ mod tests {
         assert!(drive_keys_follow(&old, &new), "the rise");
         assert!(!drive_keys_follow(&new, &old), "never back");
         let other = AccountManifestDriveKeysV1 {
-            hpke_public_key: STANDARD.encode(vec![8u8; 1216]),
+            xwing_public_key: STANDARD.encode(vec![8u8; 1216]),
             ..new.clone()
         };
         assert!(!drive_keys_follow(&new, &other), "no second change");

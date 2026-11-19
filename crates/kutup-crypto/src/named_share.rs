@@ -99,10 +99,10 @@ macro_rules! share_envelope {
                 sender_signing_key: &SigningKey,
                 recipient: &AccountRef,
                 recipient_incarnation_id: &str,
-                recipient_hpke_public_key: &[u8],
+                recipient_xwing_public_key: &[u8],
             ) -> Result<Self> {
                 if object_key.len() != 32
-                    || recipient_hpke_public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN
+                    || recipient_xwing_public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN
                     || $number == 0
                 {
                     return Err(CryptoError::InvalidInput(
@@ -138,7 +138,7 @@ macro_rules! share_envelope {
                 let aad = envelope.aad_bytes()?;
                 let (encapsulated_key, ciphertext) = crate::primitives::hpke_seal(
                     Suite::V1,
-                    recipient_hpke_public_key,
+                    recipient_xwing_public_key,
                     $info,
                     &aad,
                     object_key,

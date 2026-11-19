@@ -227,7 +227,7 @@ async function memberKey(member: { accountId: string }, trust: MemberTrust): Pro
     throw new MemberKeyUnproven(member.accountId)
   }
   await confirmRecipient(trust.me, `${data.username}@${data.server}`, data, trust.confirmed)
-  return { account, incarnationId: data.accountIncarnationId, hpkePublicKey: data.driveXwingPublicKey }
+  return { account, incarnationId: data.accountIncarnationId, xwingPublicKey: data.driveXwingPublicKey }
 }
 
 /** Who signs a shared mailbox's key lists: its owners and managers. */

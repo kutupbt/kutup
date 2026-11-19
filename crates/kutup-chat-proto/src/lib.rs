@@ -293,7 +293,7 @@ pub struct AccountManifestDriveKeysV1 {
     pub suite: AccountIdentitySuiteId,
     /// Canonical padded base64 Drive HPKE public key: X-Wing's 1216 bytes in
     /// suite 2 (suite 1's raw X25519 key until its account upgrades).
-    pub hpke_public_key: String,
+    pub xwing_public_key: String,
     /// Canonical padded base64 raw Ed25519 public key used only to authenticate
     /// named Drive share envelopes.
     pub share_signing_public_key: String,

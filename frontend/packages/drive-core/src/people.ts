@@ -56,7 +56,7 @@ interface RemoteUser {
 
 interface Keys {
   incarnationId: string
-  hpkePublicKey: string
+  xwingPublicKey: string
   signingPublicKey: string
 }
 
@@ -85,7 +85,7 @@ function keysOf(person: DrivePerson): Promise<Keys | null> {
       person.identitySuite !== 1 && person.accountIncarnationId && person.drivePublicKey && person.driveSigningPublicKey
         ? {
             incarnationId: person.accountIncarnationId,
-            hpkePublicKey: person.drivePublicKey,
+            xwingPublicKey: person.drivePublicKey,
             signingPublicKey: person.driveSigningPublicKey,
           }
         : null,
@@ -105,7 +105,7 @@ function keysOf(person: DrivePerson): Promise<Keys | null> {
       })
       .then((data) => ({
         incarnationId: data.accountIncarnationId,
-        hpkePublicKey: data.driveXwingPublicKey,
+        xwingPublicKey: data.driveXwingPublicKey,
         signingPublicKey: data.driveSigningPublicKey,
       }))
       .catch(() => {
@@ -136,7 +136,7 @@ async function give(person: DrivePerson, keys: Keys, own: ProfileLookup, me: Dri
   const envelope = await sealProfileKeyEnvelope(
     fromBase64(own.key),
     me.roots.identityRoot,
-    keys.hpkePublicKey,
+    keys.xwingPublicKey,
     {
       sender: me.accountRef,
       senderIncarnationId: me.incarnationId,

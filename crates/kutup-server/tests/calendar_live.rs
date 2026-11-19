@@ -328,7 +328,7 @@ fn calendars_and_events() {
         &cal::CalendarMember {
             account: &eve.user.person,
             incarnation_id: &eve_incarnation,
-            hpke_public_key: &eve.user.identity.drive_xwing_public_key(),
+            xwing_public_key: &eve.user.identity.drive_xwing_public_key(),
         },
     )
     .unwrap();

@@ -1700,7 +1700,7 @@ pub fn file_key_at(
 pub fn seal_named_share_envelope(
     collection_key_base64: &str,
     sender_identity_root_base64: &str,
-    recipient_hpke_public_key_base64: &str,
+    recipient_xwing_public_key_base64: &str,
     collection_id: &str,
     epoch: u32,
     sender: JsValue,
@@ -1715,7 +1715,7 @@ pub fn seal_named_share_envelope(
         .try_into()
         .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
-        recipient_hpke_public_key_base64,
+        recipient_xwing_public_key_base64,
         "recipient HPKE public key",
     )?;
     let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
@@ -1782,7 +1782,7 @@ pub fn open_named_share_envelope(
 pub fn seal_file_share_envelope(
     file_key_base64: &str,
     sender_identity_root_base64: &str,
-    recipient_hpke_public_key_base64: &str,
+    recipient_xwing_public_key_base64: &str,
     file_id: &str,
     generation: u32,
     sender: JsValue,
@@ -1797,7 +1797,7 @@ pub fn seal_file_share_envelope(
         .try_into()
         .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
-        recipient_hpke_public_key_base64,
+        recipient_xwing_public_key_base64,
         "recipient HPKE public key",
     )?;
     let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
@@ -1863,7 +1863,7 @@ pub fn open_file_share_envelope(
 pub fn seal_profile_key_envelope(
     profile_key_base64: &str,
     sender_identity_root_base64: &str,
-    recipient_hpke_public_key_base64: &str,
+    recipient_xwing_public_key_base64: &str,
     sender: JsValue,
     sender_incarnation_id: &str,
     recipient: JsValue,
@@ -1875,7 +1875,7 @@ pub fn seal_profile_key_envelope(
             .try_into()
             .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
-        recipient_hpke_public_key_base64,
+        recipient_xwing_public_key_base64,
         "recipient HPKE public key",
     )?;
     let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
@@ -2622,7 +2622,7 @@ struct MailGroupKeyView {
 struct GroupMemberInput {
     account: kutup_crypto::account_ref::AccountRef,
     incarnation_id: String,
-    hpke_public_key: String,
+    xwing_public_key: String,
 }
 
 /// A group key as a member holds it: their share and what opens it.
@@ -2655,7 +2655,7 @@ fn seal_shares(
     members
         .iter()
         .map(|member| {
-            let key = drive_xwing_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.xwing_public_key, "member HPKE public key")?;
             kutup_crypto::mail_key::seal_group_key_share(
                 group_secret,
                 group_id,
@@ -3358,7 +3358,7 @@ pub fn reshare_mail_group_signer(
     members
         .iter()
         .map(|member| {
-            let key = drive_xwing_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.xwing_public_key, "member HPKE public key")?;
             kutup_crypto::mail_group::seal_group_signing_share(
                 &signer,
                 &group_id,
@@ -3414,7 +3414,7 @@ pub fn new_mail_group_signer(
     let shares = members
         .iter()
         .map(|member| {
-            let key = drive_xwing_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.xwing_public_key, "member HPKE public key")?;
             seal_group_signing_share(
                 &signer,
                 group_id,

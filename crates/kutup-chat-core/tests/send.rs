@@ -805,7 +805,7 @@ fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
         "2026-07-15T12:00:00Z",
     );
     before.drive.suite = kutup_chat_proto::AccountIdentitySuiteId::X25519Ed25519V1;
-    before.drive.hpke_public_key = base64::engine::general_purpose::STANDARD.encode([5u8; 32]);
+    before.drive.xwing_public_key = base64::engine::general_purpose::STANDARD.encode([5u8; 32]);
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
     before.signature = base64::engine::general_purpose::STANDARD.encode(
         identity

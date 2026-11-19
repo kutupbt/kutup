@@ -66,8 +66,15 @@ OLD_ACCOUNT = re.compile(
 )
 
 # The account's Drive key has one name, for its X-Wing key: in JSON, code
-# and vectors alike (`driveXwingPublicKey`, `drive_xwing_public_key`).
-OLD_DRIVE_KEY = re.compile(r"driveHpke(?:Public|Private)Key|drive_hpke_(?:public|private)|DriveHpke")
+# and vectors alike (`driveXwingPublicKey`, `drive_xwing_public_key`,
+# `xwingPublicKey` inside another record).
+OLD_DRIVE_KEY = re.compile(
+    r"driveHpke(?:Public|Private)Key|drive_hpke_(?:public|private)|DriveHpke"
+    # A person's X-Wing key inside a manifest, a member or a share:
+    # `xwingPublicKey` (the primitive `hpke_public_key(suite, seed)` stays).
+    r"|\bhpkePublicKey\b|[Rr]ecipient_?[Hh]pke_?[Pp]ublic|member_hpke_public"
+    r"|\.hpke_public_key\b(?!_len)|\bhpke_public_key:"
+)
 
 # An error code in snake_case: built (`"code": "nameTaken"`, `{ code:
 # 'nameTaken' }`) or matched (`code === 'nameTaken'`, `code.as_deref() ==

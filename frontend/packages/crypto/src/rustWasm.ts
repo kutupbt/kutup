@@ -47,7 +47,7 @@ export interface GroupKeyChainViewJs {
 export interface GroupKeyMember {
   account: { server: string; accountId: string }
   incarnationId: string
-  hpkePublicKey: string
+  xwingPublicKey: string
 }
 
 /** `kutup-crypto-wasm`'s `BlockEncryptor` (blocks.rs). */
@@ -736,7 +736,7 @@ export interface CryptoWasmModule {
   sealNamedShareEnvelope(
     collectionKeyBase64: string,
     identityRoot: IdentityRoot,
-    recipientHpkePublicKeyBase64: string,
+    recipientXwingPublicKeyBase64: string,
     collectionId: string,
     epoch: number,
     sender: { server: string; accountId: string },
@@ -758,7 +758,7 @@ export interface CryptoWasmModule {
   sealFileShareEnvelope(
     fileKeyBase64: string,
     identityRoot: IdentityRoot,
-    recipientHpkePublicKeyBase64: string,
+    recipientXwingPublicKeyBase64: string,
     fileId: string,
     generation: number,
     sender: { server: string; accountId: string },
@@ -816,7 +816,7 @@ export interface CryptoWasmModule {
   sealProfileKeyEnvelope(
     profileKeyBase64: string,
     identityRoot: IdentityRoot,
-    recipientHpkePublicKeyBase64: string,
+    recipientXwingPublicKeyBase64: string,
     sender: { server: string; accountId: string },
     senderIncarnationId: string,
     recipient: { server: string; accountId: string },

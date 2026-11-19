@@ -71,7 +71,7 @@ fn manifest(devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
         identity_binding: Some(b64(&[0x5b; 64])),
         drive: AccountManifestDriveKeysV1 {
             suite: AccountIdentitySuiteId::XWingEd25519V2,
-            hpke_public_key: b64(&[9; 1216]),
+            xwing_public_key: b64(&[9; 1216]),
             share_signing_public_key: b64(&drive_signing.verifying_key().to_bytes()),
         },
         devices,

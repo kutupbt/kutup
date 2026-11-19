@@ -561,7 +561,7 @@ pub fn decrypt_data_packet(
 pub struct CalendarMember<'a> {
     pub account: &'a AccountRef,
     pub incarnation_id: &'a str,
-    pub hpke_public_key: &'a [u8],
+    pub xwing_public_key: &'a [u8],
 }
 
 /// A calendar's owner as a member checks their share: their account, its
@@ -593,7 +593,7 @@ pub fn seal_passphrase(
         owner_identity.drive_signing_key(),
         member.account,
         member.incarnation_id,
-        member.hpke_public_key,
+        member.xwing_public_key,
     )
 }
 
@@ -617,7 +617,7 @@ pub fn seal_own_passphrase(
         &CalendarMember {
             account: owner,
             incarnation_id: &incarnation_id,
-            hpke_public_key: &owner_identity.drive_xwing_public_key(),
+            xwing_public_key: &owner_identity.drive_xwing_public_key(),
         },
     )
 }
@@ -1214,7 +1214,7 @@ mod tests {
             &CalendarMember {
                 account: &bob,
                 incarnation_id: &bob_incarnation,
-                hpke_public_key: &bob_keys.drive_xwing_public_key(),
+                xwing_public_key: &bob_keys.drive_xwing_public_key(),
             },
         )
         .unwrap();

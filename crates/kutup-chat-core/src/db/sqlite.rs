@@ -1580,7 +1580,7 @@ mod tests {
                 incarnation_id: manifest.incarnation_id.clone(),
                 authority_key_id: manifest.authority_key_id.clone(),
                 self_authority_key: manifest.self_authority_key.clone(),
-                drive_xwing_public_key: manifest.drive.hpke_public_key.clone(),
+                drive_xwing_public_key: manifest.drive.xwing_public_key.clone(),
                 drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
                 highest_sequence: manifest.sequence,
                 manifest_hash: manifest.manifest_hash().unwrap(),

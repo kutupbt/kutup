@@ -1376,7 +1376,13 @@ Where the build differs from the plan above:
 - **The Drive key** has one name, `driveXwingPublicKey` (and
   `driveXwingPrivateKey` in the WASM identity), in every lookup, the
   federation's `AccountLookupResponse`, the bindings and the Rust code
-  (`drive_xwing_public_key`); no signed or hashed bytes carry the name, so
-  only the vectors' input keys changed. Chat's native store is schema 5
-  (its pins' column renamed). The manifest's `drive.hpkePublicKey` and the
-  members' `hpkePublicKey` keep their names.
+  (`drive_xwing_public_key`). Where a person's key is named inside
+  something else it is `xwingPublicKey`: the Chat manifest's
+  `drive.xwingPublicKey`, calendar, mail-group and organization members,
+  named and profile-key shares. Every one is an X-Wing key (the accounts
+  table allows identity suite 2 only); the X25519 suite-1 upgrade code
+  that still reads a 32-byte key there is the wipe's to remove. No signed
+  or hashed bytes carry these names: the vectors' writers reproduce the
+  renamed files byte for byte. Chat's native store is schema 5 (its pins'
+  column renamed). The primitive `hpke_public_key(suite, seed)` keeps its
+  name: it is the HPKE function, not a field.

@@ -388,7 +388,7 @@ impl KeyCertificateV1 {
 pub struct VerifiedDriveKey {
     account: AccountRef,
     authority: [u8; 32],
-    hpke_public: [u8; PUBLIC_KEY_LEN],
+    xwing_public: [u8; PUBLIC_KEY_LEN],
 }
 
 impl VerifiedDriveKey {
@@ -413,7 +413,7 @@ impl VerifiedDriveKey {
         Ok(Self {
             account: account.clone(),
             authority: *authority_public,
-            hpke_public: *drive_xwing_public,
+            xwing_public: *drive_xwing_public,
         })
     }
 }
@@ -467,13 +467,13 @@ impl KeyShareV1 {
             &uuid_bytes(organization_id)?,
             &key_id,
             recipient,
-            &public_key_hash(&recipient_key.hpke_public),
+            &public_key_hash(&recipient_key.xwing_public),
             granter,
             &granter_keys.authority_key_id(),
         )?;
         let sealed = hpke_seal(
             Suite::V1,
-            &recipient_key.hpke_public,
+            &recipient_key.xwing_public,
             labels::ORG_KEY_SHARE_V1,
             &body,
             seed,

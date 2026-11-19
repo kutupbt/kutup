@@ -16,14 +16,14 @@ export interface NamedShareContextV1 {
 export async function sealNamedShareEnvelope(
   collectionKey: Uint8Array,
   senderIdentityRoot: IdentityRoot,
-  recipientHpkePublicKeyBase64: string,
+  recipientXwingPublicKeyBase64: string,
   context: NamedShareContextV1,
 ): Promise<string> {
   const module = await getCryptoWasm()
   return module.sealNamedShareEnvelope(
     toBase64(collectionKey),
     senderIdentityRoot,
-    recipientHpkePublicKeyBase64,
+    recipientXwingPublicKeyBase64,
     context.collectionId,
     context.epoch,
     context.sender,
@@ -66,14 +66,14 @@ export interface ProfileKeyPartiesV1 {
 export async function sealProfileKeyEnvelope(
   profileKey: Uint8Array,
   senderIdentityRoot: IdentityRoot,
-  recipientHpkePublicKeyBase64: string,
+  recipientXwingPublicKeyBase64: string,
   parties: ProfileKeyPartiesV1,
 ): Promise<string> {
   const module = await getCryptoWasm()
   return module.sealProfileKeyEnvelope(
     toBase64(profileKey),
     senderIdentityRoot,
-    recipientHpkePublicKeyBase64,
+    recipientXwingPublicKeyBase64,
     parties.sender,
     parties.senderIncarnationId,
     parties.recipient,
@@ -116,14 +116,14 @@ export interface FileShareContextV1 {
 export async function sealFileShareEnvelope(
   fileKey: Uint8Array,
   senderIdentityRoot: IdentityRoot,
-  recipientHpkePublicKeyBase64: string,
+  recipientXwingPublicKeyBase64: string,
   context: FileShareContextV1,
 ): Promise<string> {
   const module = await getCryptoWasm()
   return module.sealFileShareEnvelope(
     toBase64(fileKey),
     senderIdentityRoot,
-    recipientHpkePublicKeyBase64,
+    recipientXwingPublicKeyBase64,
     context.fileId,
     context.generation,
     context.sender,

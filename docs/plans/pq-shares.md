@@ -69,7 +69,7 @@ Instead:
   layout is otherwise unchanged: domain, AccountRef, incarnation, authority key,
   suite, HPKE key, signing key.
 - **Chat account manifest** (`AccountManifestV1.drive`). This gets a new
-  `AccountIdentitySuiteId::XWingEd25519V2` with a 1216-byte `hpkePublicKey`, and
+  `AccountIdentitySuiteId::XWingEd25519V2` with a 1216-byte `xwingPublicKey`, and
   the server still requires it to equal `accounts.drive_xwing_public_key`. Clients pin it in
   `manifest_trust.drive_xwing_public_key` (chat-core SQLite and IndexedDB).
   - Rule: within one incarnation the key changes only through the one-way

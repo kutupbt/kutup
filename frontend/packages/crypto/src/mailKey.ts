@@ -448,7 +448,7 @@ export interface GroupMailKey {
 export interface GroupKeyMember {
   account: AccountRef
   incarnationId: string
-  hpkePublicKey: string
+  xwingPublicKey: string
 }
 
 export interface GeneratedMailGroupKey {
@@ -470,7 +470,7 @@ function holder(key: GroupMailKey) {
 }
 
 function memberInputs(members: GroupKeyMember[]) {
-  return members.map((m) => ({ account: { server: m.account.server, accountId: m.account.accountId }, incarnationId: m.incarnationId, hpkePublicKey: m.hpkePublicKey }))
+  return members.map((m) => ({ account: { server: m.account.server, accountId: m.account.accountId }, incarnationId: m.incarnationId, xwingPublicKey: m.xwingPublicKey }))
 }
 
 /** Makes the shared mailbox `groupId`'s key, with a share for each member. */

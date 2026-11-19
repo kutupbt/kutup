@@ -34,14 +34,14 @@ pub const SUITE: u16 = crate::identity::IDENTITY_SUITE;
 /// the suite upgrade.
 pub const FIRST_DRIVE_KEY_BINDING_EPOCH: u32 = 1;
 
-type HpkePublic = [u8; crate::hpke_xwing::PUBLIC_KEY_LEN];
+type XwingPublic = [u8; crate::hpke_xwing::PUBLIC_KEY_LEN];
 
 /// The bytes the authority signs.
 pub fn binding_bytes(
     account: &AccountRef,
     authority_public: &[u8; 32],
     epoch: u32,
-    drive_xwing_public: &HpkePublic,
+    drive_xwing_public: &XwingPublic,
     drive_signing_public: &[u8; 32],
 ) -> Result<Vec<u8>> {
     if epoch == 0 {
@@ -89,7 +89,7 @@ pub fn verify(
     account: &AccountRef,
     authority_public: &[u8; 32],
     epoch: u32,
-    drive_xwing_public: &HpkePublic,
+    drive_xwing_public: &XwingPublic,
     drive_signing_public: &[u8; 32],
     signature: &[u8],
 ) -> Result<()> {

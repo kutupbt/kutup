@@ -945,7 +945,7 @@ const aliceAccount = { server: 'kutup.dev', accountId: '3f1c9a52-6b7e-4f0e-9d1a-
 const bobAccount = { server: 'kutup.dev', accountId: '8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b' }
 const aliceIdentity = crypto.deriveAccountIdentityKeys(mailVectors.masterKey)
 const bobIdentity = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 0x22).toString('base64'))
-const memberOf = (account, identity) => ({ account, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveXwingPublicKey })
+const memberOf = (account, identity) => ({ account, incarnationId: identity.incarnationId, xwingPublicKey: identity.driveXwingPublicKey })
 const groupKey = crypto.generateMailGroupKey('hr@kutup.dev', groupId, 1_790_000_000, [memberOf(aliceAccount, aliceIdentity)])
 assert.equal(groupKey.shares.length, 1)
 const heldBy = (account, identity, share) => ({ account, hpkePrivateKey: identity.driveXwingPrivateKey, share, groupId, fingerprint: groupKey.fingerprint })

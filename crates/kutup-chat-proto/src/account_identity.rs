@@ -870,8 +870,8 @@ impl AccountManifestV3 {
         }
         out.extend_from_slice(&u16::from(self.drive.suite).to_be_bytes());
         out.extend_from_slice(&decode_canonical_base64_exact(
-            "drive.hpkePublicKey",
-            &self.drive.hpke_public_key,
+            "drive.xwingPublicKey",
+            &self.drive.xwing_public_key,
             self.drive.suite.hpke_public_key_len(),
         )?);
         out.extend_from_slice(&decode_canonical_base64_exact(
@@ -993,7 +993,7 @@ impl AccountManifestV3 {
             identity_binding: None,
             drive: AccountManifestDriveKeysV1 {
                 suite: crate::AccountIdentitySuiteId::XWingEd25519V2,
-                hpke_public_key: b64(&keys.drive_xwing_public_key()),
+                xwing_public_key: b64(&keys.drive_xwing_public_key()),
                 share_signing_public_key: b64(&keys.drive_signing_public_key()),
             },
             devices,

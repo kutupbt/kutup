@@ -276,7 +276,7 @@ describe('a shared mailbox’s keys against the pin list', () => {
     const entry = { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete }
     const first = await newMailGroupSigner(
       groupId,
-      [{ account: manager, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveXwingPublicKey }],
+      [{ account: manager, incarnationId: identity.incarnationId, xwingPublicKey: identity.driveXwingPublicKey }],
       { address: 'team@kutup.dev', sequence: 1, issuedAt: '2026-10-16T12:00:00Z', keys: [entry] },
     )
     const holder: GroupSignerHolder = { account: manager, hpkePrivateKey: identity.driveXwingPrivateKey, groupId, signer: first.publicKey, signingShare: first.shares[0] }
@@ -324,7 +324,7 @@ describe('a shared mailbox’s keys against the pin list', () => {
     const identity = await deriveAccountIdentityKeys(asIdentityRoot(master))
     const next = await newMailGroupSigner(
       groupId,
-      [{ account: manager, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveXwingPublicKey }],
+      [{ account: manager, incarnationId: identity.incarnationId, xwingPublicKey: identity.driveXwingPublicKey }],
       { address: 'team@kutup.dev', sequence: 3, previousHash: chain.lists[1].hash, issuedAt: '2026-10-16T12:00:00Z', keys: chain.keys.map(({ publicKey: _key, ...entry }) => entry) },
       { holder: chain.holder, previousListHash: chain.lists[1].hash },
     )
@@ -391,7 +391,7 @@ describe('a shared mailbox’s key lists', () => {
     const master = toBase64(randomBytes(32))
     const owner = await derive(asIdentityRoot(master))
     const account = { server: 'kutup.dev', accountId: crypto.randomUUID() }
-    const member = { account, incarnationId: owner.incarnationId, hpkePublicKey: owner.driveXwingPublicKey }
+    const member = { account, incarnationId: owner.incarnationId, xwingPublicKey: owner.driveXwingPublicKey }
     const k1 = await generateMailGroupKey(address, groupId, [member])
     const entry = (key: { fingerprint: string; sha256Fingerprint: string }, primary: boolean) => ({
       fingerprint: key.fingerprint,
