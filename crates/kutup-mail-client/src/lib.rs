@@ -13,7 +13,11 @@
 //! - [`protection`]: how mail to one recipient is protected
 //!   (`mail-core/protection.ts`).
 //! - [`send`]: who gets which copy of a message (`sendDraft`).
+//! - [`open`]: a stored message opened, byte-exact (`storedMessage`).
+//! - [`meta`]: a send's readable fields, read from a message an app built.
 
 pub mod keys;
+pub mod meta;
+pub mod open;
 pub mod protection;
 pub mod send;
