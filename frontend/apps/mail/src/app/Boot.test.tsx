@@ -5,7 +5,7 @@ import '../features/testI18n'
 
 // A just-consumed fork names the deep link to open; the app must land
 // there, never on the inbox (full test: specs 174 and 175).
-const boot = vi.hoisted(() => ({ next: '/settings/filters' as string | undefined }))
+const boot = vi.hoisted((): { next: string | undefined } => ({ next: '/settings/filters' }))
 vi.mock('@kutup/session/childBoot', () => ({
   bootChildApp: () => Promise.resolve({ kind: 'ready', next: boot.next }),
 }))
