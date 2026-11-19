@@ -241,39 +241,47 @@ fn a_reregistration_carries_the_other_devices_over() {
         user_id,
     );
 
-    let reregistration =
-        |ada: &ChatAccount, others: &[AccountManifestDeviceV3], session: Option<String>| {
-            // The account's next id the entries it keeps leave free.
-            let counter = ada.fetch_session(&live.c, &live.base);
-            let kept: Vec<u32> = others.iter().map(|device| device.device_id).collect();
-            let device = ChatDevice {
-                id: kutup_chat_proto::next_device_id(counter, &kept).unwrap(),
-                registration_id: 4321,
-                credential: [0x44; 32],
-            };
-            let mut manifest = ada.next_manifest(&[&device]);
-            if let Some(session) = session {
-                manifest.devices[0].session = session;
-            }
-            manifest.devices.extend(others.iter().cloned());
-            manifest.devices.sort_by_key(|device| device.device_id);
-            ada.sign(&mut manifest);
-            let body = ada.registration(
-                device.registration_id,
-                &device.credential,
-                DeviceRegistrationV1::Reregistration {
-                    manifest: Box::new(manifest.clone()),
-                },
-            );
-            (
-                code(ada.post_registration(&live.c, &live.base, &body)),
-                manifest,
-            )
+    // `seed` makes the device: the same seed again is the same device's
+    // retry, which the server answers with the id it already holds.
+    let reregistration = |ada: &ChatAccount,
+                          others: &[AccountManifestDeviceV3],
+                          session: Option<String>,
+                          seed: u8| {
+        // The account's next id the entries it keeps leave free.
+        let counter = ada.fetch_session(&live.c, &live.base);
+        let kept: Vec<u32> = others.iter().map(|device| device.device_id).collect();
+        let device = ChatDevice {
+            id: kutup_chat_proto::next_device_id(counter, &kept).unwrap(),
+            registration_id: 4300 + u32::from(seed),
+            credential: [seed; 32],
         };
+        let mut manifest = ada.next_manifest(&[&device]);
+        if let Some(session) = session {
+            manifest.devices[0].session = session;
+        }
+        manifest.devices.extend(others.iter().cloned());
+        manifest.devices.sort_by_key(|device| device.device_id);
+        ada.sign(&mut manifest);
+        let body = ada.registration(
+            device.registration_id,
+            &device.credential,
+            DeviceRegistrationV1::Reregistration {
+                manifest: Box::new(manifest.clone()),
+            },
+        );
+        (
+            code(ada.post_registration(&live.c, &live.base, &body)),
+            manifest,
+        )
+    };
 
     // Another sign-in named for this device.
-    let ((status, answer), _) =
-        reregistration(&ada, std::slice::from_ref(&editor), Some("00".repeat(32)));
+    let ((status, answer), _) = reregistration(
+        &ada,
+        std::slice::from_ref(&editor),
+        Some("00".repeat(32)),
+        0x44,
+    );
     assert_eq!(status, StatusCode::CONFLICT, "{answer}");
     assert_eq!(answer["code"], "devicesMismatch");
     // A changed entry, or one the head doesn't list.
@@ -288,19 +296,20 @@ fn a_reregistration_carries_the_other_devices_over() {
     let mut added = editor.clone();
     added.device_id = 3;
     for others in [vec![changed], vec![editor.clone(), added]] {
-        let ((status, answer), _) = reregistration(&ada, &others, None);
+        let ((status, answer), _) = reregistration(&ada, &others, None, 0x44);
         assert_eq!(status, StatusCode::CONFLICT, "{answer}");
         assert_eq!(answer["code"], "devicesMismatch");
     }
     // The head's editor carried over, though its row idled out.
-    let ((status, answer), manifest) = reregistration(&ada, std::slice::from_ref(&editor), None);
+    let ((status, answer), manifest) =
+        reregistration(&ada, std::slice::from_ref(&editor), None, 0x44);
     assert_eq!(status, StatusCode::OK, "{answer}");
     // The account's next id (1 the first Chat device, 2 the editor), not
     // the freed 1.
     assert_eq!(answer["deviceId"], 3);
     ada.head = Some(manifest);
-    // And a later one may leave it out.
-    let ((status, answer), _) = reregistration(&ada, &[], None);
+    // And a later one, another device's, may leave it out: the next id.
+    let ((status, answer), _) = reregistration(&ada, &[], None, 0x45);
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(answer["deviceId"], 4);
 }
