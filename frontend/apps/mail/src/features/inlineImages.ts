@@ -1,10 +1,18 @@
 import Image from '@tiptap/extension-image'
+import { fetchMailImage } from '@kutup/mail-core/api'
 
 /**
  * TipTap's image, keeping which inline part it shows (`data-cid`). A saved
  * draft's text points at its parts (`cid:`): such an image opens with no
  * address, since a browser can't load `cid:` (and the Content-Security-Policy
  * refuses it), until the draft's parts give it this browser's URL.
+ *
+ * A remote image in the text (pasted, or quoted from a message) keeps its
+ * address in what is sent, but is shown through the Kutup image proxy, as the
+ * reader shows one: never loaded from its server by this browser, which
+ * would tell that server who is writing and when (and the policy allows no
+ * remote images). A tracker or an image the proxy can't get shows its
+ * description only.
  */
 export const InlineImage = Image.extend({
   addAttributes() {
@@ -24,7 +32,64 @@ export const InlineImage = Image.extend({
       },
     }
   },
+  addNodeView() {
+    return ({ node }) => {
+      const dom = document.createElement('img')
+      // The address this element stands for, and the proxy's copy of it.
+      let shown: string | null = null
+      let proxied: string | null = null
+      const release = () => {
+        if (proxied) URL.revokeObjectURL(proxied)
+        proxied = null
+      }
+      const render = (attrs: Record<string, unknown>) => {
+        for (const name of ['alt', 'title', 'width', 'height'] as const) {
+          const value = attrs[name]
+          if (typeof value === 'string' && value !== '') dom.setAttribute(name, value)
+          else if (typeof value === 'number') dom.setAttribute(name, String(value))
+          else dom.removeAttribute(name)
+        }
+        const cid = attrs.cid as string | null
+        if (cid) dom.setAttribute('data-cid', cid)
+        else dom.removeAttribute('data-cid')
+        const src = (attrs.src as string | null) ?? null
+        if (src === shown) return
+        shown = src
+        release()
+        dom.removeAttribute('src')
+        if (!src) return
+        if (!isRemote(src)) {
+          dom.setAttribute('src', src)
+          return
+        }
+        dom.setAttribute('data-remote-src', src)
+        void fetchMailImage(src).then((result) => {
+          if (shown !== src || result.kind !== 'image') return
+          proxied = URL.createObjectURL(result.blob)
+          dom.setAttribute('src', proxied)
+        })
+      }
+      render(node.attrs)
+      return {
+        dom,
+        update: (updated) => {
+          if (updated.type !== node.type) return false
+          if (updated.attrs.src !== shown) dom.removeAttribute('data-remote-src')
+          render(updated.attrs)
+          return true
+        },
+        destroy: () => {
+          shown = null
+          release()
+        },
+      }
+    }
+  },
 }).configure({ inline: true, allowBase64: false })
+
+function isRemote(src: string): boolean {
+  return /^https?:/i.test(src)
+}
 
 function contentIdOf(src: string | null): string | null {
   return src?.startsWith('cid:') ? src.slice('cid:'.length) : null
