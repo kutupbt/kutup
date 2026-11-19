@@ -14,7 +14,8 @@ async function setMode(page: Page, label: 'Open to anyone' | 'With a referral co
   await page.goto(appUrl('account', '/admin/settings'))
   await page.getByRole('combobox', { name: 'Registration' }).click()
   await page.getByRole('option', { name: label }).click()
-  await page.getByRole('button', { name: 'Save' }).click()
+  // The page has a Save per section; this one is the Accounts form's.
+  await page.locator('form').filter({ has: page.getByRole('combobox', { name: 'Registration' }) }).getByRole('button', { name: 'Save' }).click()
   await expect(page.getByText('Settings saved').first()).toBeVisible({ timeout: 30_000 })
 }
 
