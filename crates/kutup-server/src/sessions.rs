@@ -3,7 +3,7 @@
 //! Design: `docs/plans/multi-app-web-rewrite.md` ("Sessions and forking").
 //!
 //! - Every sign-in creates an `auth_sessions` row with a client type
-//!   (`web-account`, `web-drive`, `web-chat`, `web-maps`, `web-photos`, `web-office`, `web-contacts`, `web-mail`, `web-pass`, `cli`, …). Access tokens carry the
+//!   (`web-account`, `web-drive`, `web-chat`, `web-maps`, `web-photos`, `web-office`, `web-contacts`, `web-mail`, `web-pass`, `web-calendar`, `cli`, `mail-bridge`). Access tokens carry the
 //!   session id (`sid`) and every authenticated request checks the row is
 //!   live, so revocation is immediate.
 //! - Refresh tokens are opaque 32-byte secrets, stored as SHA-256 and rotated
@@ -24,8 +24,17 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
-/// Idle lifetime; every refresh slides it forward.
-pub const SESSION_TTL: Duration = Duration::days(30);
+/// `account`'s idle session lifetime (`account.session_ttl_days`: its own
+/// value, else the site's, else 30 days); every refresh slides it forward.
+/// Read at each sign-in, fork and refresh, so a change applies to each
+/// session at its next.
+pub async fn ttl<'e, E: sqlx::PgExecutor<'e>>(executor: E, account: Uuid) -> AppResult<Duration> {
+    Ok(Duration::days(
+        crate::site_settings::SESSION_TTL_DAYS
+            .load_for(executor, account)
+            .await?,
+    ))
+}
 /// How long a just-rotated refresh token still yields an access token.
 pub const REFRESH_GRACE: Duration = Duration::seconds(60);
 /// How long a fork hand-off waits for the child origin.
@@ -46,9 +55,30 @@ pub enum ClientType {
     WebPass,
     WebCalendar,
     Cli,
+    /// The Mail bridge (docs/plans/mail-parity.md): a program on the
+    /// person's computer serving IMAP and SMTP to desktop mail apps, signed
+    /// in on its own as the CLI is, so its sign-in is listed and ended apart.
+    MailBridge,
 }
 
 impl ClientType {
+    /// Every client type: the baseline's `client_type` domain holds exactly
+    /// these (checked by a test).
+    pub const ALL: [ClientType; 12] = [
+        Self::WebAccount,
+        Self::WebDrive,
+        Self::WebChat,
+        Self::WebMaps,
+        Self::WebPhotos,
+        Self::WebOffice,
+        Self::WebContacts,
+        Self::WebMail,
+        Self::WebPass,
+        Self::WebCalendar,
+        Self::Cli,
+        Self::MailBridge,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::WebAccount => "web-account",
@@ -62,6 +92,7 @@ impl ClientType {
             Self::WebPass => "web-pass",
             Self::WebCalendar => "web-calendar",
             Self::Cli => "cli",
+            Self::MailBridge => "mail-bridge",
         }
     }
 
@@ -78,6 +109,7 @@ impl ClientType {
             "web-pass" => Some(Self::WebPass),
             "web-calendar" => Some(Self::WebCalendar),
             "cli" => Some(Self::Cli),
+            "mail-bridge" => Some(Self::MailBridge),
             _ => None,
         }
     }
@@ -85,12 +117,12 @@ impl ClientType {
     /// Web clients hold the refresh token in an HttpOnly cookie on their own
     /// origin; everything else receives it in the response body.
     pub fn uses_cookie(self) -> bool {
-        !matches!(self, Self::Cli)
+        !matches!(self, Self::Cli | Self::MailBridge)
     }
 
     /// Clients that sign in with a password (the others are forked).
     pub fn signs_in_directly(self) -> bool {
-        matches!(self, Self::WebAccount | Self::Cli)
+        matches!(self, Self::WebAccount | Self::Cli | Self::MailBridge)
     }
 
     /// Clients the account app may fork a session for.
@@ -146,6 +178,8 @@ async fn sealed_client(
 pub struct IssuedSession {
     pub session_id: Uuid,
     pub refresh_token: String,
+    /// How long it lasts unused ([`ttl`]): the refresh cookie's lifetime.
+    pub ttl: Duration,
 }
 
 pub async fn create(
@@ -159,6 +193,7 @@ pub async fn create(
     let refresh_token = new_secret();
     let mut conn = pool.acquire().await?;
     let client_sealed = sealed_client(&mut conn, user_id, session_id, user_agent).await?;
+    let ttl = ttl(&mut *conn, user_id).await?;
     sqlx::query(
         "INSERT INTO auth_sessions
              (id, account_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
@@ -170,12 +205,13 @@ pub async fn create(
     .bind(parent)
     .bind(hash_secret(&refresh_token))
     .bind(client_sealed)
-    .bind(OffsetDateTime::now_utc() + SESSION_TTL)
+    .bind(OffsetDateTime::now_utc() + ttl)
     .execute(&mut *conn)
     .await?;
     Ok(IssuedSession {
         session_id,
         refresh_token,
+        ttl,
     })
 }
 
@@ -236,6 +272,8 @@ pub enum RefreshOutcome {
     Rotated {
         session: LiveSession,
         refresh_token: String,
+        /// How long it now lasts unused ([`ttl`]).
+        ttl: Duration,
     },
     /// The token was just rotated by a concurrent refresh; the new one is
     /// already on its way to this client (same cookie jar). Mint an access
@@ -294,6 +332,7 @@ pub async fn refresh(
             return Err(AppError::unauthorized("invalid refresh token"));
         }
         let next = new_secret();
+        let ttl = ttl(&mut *tx, user_id).await?;
         sqlx::query(
             "UPDATE auth_sessions
              SET previous_refresh_token_hash = refresh_token_hash,
@@ -304,7 +343,7 @@ pub async fn refresh(
         .bind(id)
         .bind(hash_secret(&next))
         .bind(now)
-        .bind(now + SESSION_TTL)
+        .bind(now + ttl)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -318,6 +357,7 @@ pub async fn refresh(
                 version: String::new(),
             },
             refresh_token: next,
+            ttl,
         });
     }
 
@@ -634,6 +674,7 @@ pub async fn consume_fork(
     let session_id = Uuid::new_v4();
     let refresh_token = new_secret();
     let client_sealed = sealed_client(&mut tx, user_id, session_id, user_agent).await?;
+    let ttl = ttl(&mut *tx, user_id).await?;
     sqlx::query(
         "INSERT INTO auth_sessions
              (id, account_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
@@ -645,7 +686,7 @@ pub async fn consume_fork(
     .bind(parent_id)
     .bind(hash_secret(&refresh_token))
     .bind(client_sealed)
-    .bind(OffsetDateTime::now_utc() + SESSION_TTL)
+    .bind(OffsetDateTime::now_utc() + ttl)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -653,6 +694,7 @@ pub async fn consume_fork(
         issued: IssuedSession {
             session_id,
             refresh_token,
+            ttl,
         },
         user_id,
         is_admin,
@@ -707,20 +749,66 @@ mod tests {
 
     #[test]
     fn client_types_round_trip_and_classify() {
-        for client in [
-            ClientType::WebAccount,
-            ClientType::WebDrive,
-            ClientType::WebChat,
-            ClientType::Cli,
-        ] {
+        for client in ClientType::ALL {
             assert_eq!(ClientType::parse(client.as_str()), Some(client));
+            // Every client either signs in or is forked, never both.
+            assert_ne!(client.signs_in_directly(), client.is_fork_child());
         }
         assert_eq!(ClientType::parse("android-drive"), None);
         assert!(ClientType::WebAccount.signs_in_directly());
         assert!(ClientType::Cli.signs_in_directly());
+        assert!(ClientType::MailBridge.signs_in_directly());
+        assert!(!ClientType::MailBridge.is_fork_child());
+        assert!(!ClientType::MailBridge.uses_cookie());
         assert!(!ClientType::WebDrive.signs_in_directly());
         assert!(ClientType::WebChat.is_fork_child());
         assert!(!ClientType::WebAccount.is_fork_child());
         assert!(!ClientType::Cli.uses_cookie());
+    }
+
+    /// The baseline's `client_type` domain holds every type and no other, and
+    /// the two fork checks name exactly the ones that sign in directly.
+    #[test]
+    fn the_schema_holds_every_client_type() {
+        let baseline = include_str!("../migrations/20261112000000_baseline.up.sql");
+        let quoted = |line: &str| -> Vec<String> {
+            let mut names: Vec<String> = line
+                .split('\'')
+                .skip(1)
+                .step_by(2)
+                .map(str::to_owned)
+                .collect();
+            names.sort();
+            names
+        };
+        let line = |name: &str| {
+            baseline
+                .lines()
+                .find(|line| line.contains(name))
+                .unwrap_or_else(|| panic!("no {name} in the baseline"))
+        };
+        let names = |filter: fn(&ClientType) -> bool| {
+            let mut names: Vec<String> = ClientType::ALL
+                .iter()
+                .filter(|c| filter(c))
+                .map(|c| c.as_str().to_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            quoted(line("CONSTRAINT client_type_check")),
+            names(|_| true)
+        );
+        for check in [
+            "CONSTRAINT auth_session_forks_child_client_type_check",
+            "CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL)",
+        ] {
+            assert_eq!(
+                quoted(line(check)),
+                names(|c| c.signs_in_directly()),
+                "{check}"
+            );
+        }
     }
 }

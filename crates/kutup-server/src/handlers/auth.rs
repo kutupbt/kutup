@@ -739,7 +739,7 @@ pub async fn register(
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
-    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
+    let federation_default = crate::federation_switch::new_account_state(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     // The account id this server minted for the sign-up (register/start),
     // never one in use or ever used.
@@ -1302,7 +1302,8 @@ pub async fn refresh(
         sessions::RefreshOutcome::Rotated {
             session,
             refresh_token,
-        } => (session, Some(refresh_token)),
+            ttl,
+        } => (session, Some((refresh_token, ttl))),
         sessions::RefreshOutcome::Grace { session } => (session, None),
     };
     let access = jwt::generate_access_token(
@@ -1318,13 +1319,15 @@ pub async fn refresh(
         refresh_token: if session.client.uses_cookie() {
             None
         } else {
-            next.clone()
+            next.as_ref().map(|(token, _)| token.clone())
         },
     };
     match (session.client.uses_cookie(), next) {
-        (true, Some(next)) => {
-            Ok(([(SET_COOKIE, refresh_cookie(&state, &next))], Json(body)).into_response())
-        }
+        (true, Some((next, ttl))) => Ok((
+            [(SET_COOKIE, refresh_cookie(&state, &next, ttl))],
+            Json(body),
+        )
+            .into_response()),
         _ => Ok(Json(body).into_response()),
     }
 }
@@ -2172,7 +2175,10 @@ pub async fn complete_setup(
     };
     if client.uses_cookie() {
         Ok((
-            [(SET_COOKIE, refresh_cookie(&state, &issued.refresh_token))],
+            [(
+                SET_COOKIE,
+                refresh_cookie(&state, &issued.refresh_token, issued.ttl),
+            )],
             Json(body),
         )
             .into_response())
@@ -2362,7 +2368,10 @@ async fn issue_tokens_and_respond(
     if client.uses_cookie() {
         Ok((
             AppendHeaders([
-                (SET_COOKIE, refresh_cookie(state, &issued.refresh_token)),
+                (
+                    SET_COOKIE,
+                    refresh_cookie(state, &issued.refresh_token, issued.ttl),
+                ),
                 (
                     SET_COOKIE,
                     auth_check::known_client_cookie(state, uid).await?,
@@ -2384,11 +2393,12 @@ pub(crate) const REFRESH_COOKIE: &str = "refresh_token";
 pub(crate) const CLIENT_HEADER: &str = "x-kutup-client";
 
 /// The refresh cookie: HttpOnly, host-only on the app's own origin (no `Domain`), sent
-/// only to `/api/auth/refresh`, 30-day sliding lifetime; `Secure` outside development.
-pub(crate) fn refresh_cookie(state: &AppState, value: &str) -> String {
+/// only to `/api/auth/refresh`, living as long as the session does unused (`ttl`,
+/// `account.session_ttl_days`); `Secure` outside development.
+pub(crate) fn refresh_cookie(state: &AppState, value: &str, ttl: time::Duration) -> String {
     let mut c = format!(
         "{REFRESH_COOKIE}={value}; Max-Age={}; Path=/api/auth/refresh; HttpOnly; SameSite=Lax",
-        sessions::SESSION_TTL.whole_seconds()
+        ttl.whole_seconds()
     );
     if state.config.app_env == "production" {
         c.push_str("; Secure");

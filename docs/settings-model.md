@@ -92,8 +92,9 @@ is a follow-up, not a bug in a single app.
    account should list them so a person can see where a searchable copy of
    their mail is kept.
 
-There is no user-chosen session lifetime: sessions last a fixed 30 days and
-each can be revoked from the account's sessions page.
+There is no user-chosen session lifetime: sessions last the site's
+`account.session_ttl_days` unused (30 days at first) and each can be revoked
+from the account's sessions page.
 
 ## Site settings and their keys
 

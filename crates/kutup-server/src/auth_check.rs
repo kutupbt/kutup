@@ -65,8 +65,16 @@ pub(crate) fn verify_hash(secret: impl AsRef<[u8]>, hash: &str) -> bool {
 /// each app's origin (set at sign-in and when an app takes its session from
 /// the account app), so reauth and the Pass PIN from any app see it.
 pub(crate) const KNOWN_CLIENT_COOKIE: &str = "kutup_known";
-/// How long a known client stays known without signing in again.
-const KNOWN_CLIENT_DAYS: i64 = 90;
+/// How long a client stays known to `account` without signing in again, in
+/// seconds: `account.known_client_days`, the account's own value, else the
+/// site's, else 90 days. Read with each attempt and each mark set, so a
+/// change applies at once (a shorter period also ends marks already given).
+async fn known_client_seconds(state: &AppState, account: Uuid) -> AppResult<i64> {
+    Ok(crate::site_settings::KNOWN_CLIENT_DAYS
+        .load_for(&state.pool, account)
+        .await?
+        * 86_400)
+}
 
 /// Who is asking: the client's rate-limit key (its IP, an IPv6 address by
 /// its /64), its known-client cookie if one came, and the account it is
@@ -75,6 +83,9 @@ pub(crate) struct Client {
     ip: String,
     cookie: Option<KnownClient>,
     key: [u8; 32],
+    /// How long the cookie's mark stays good, for its account
+    /// ([`known_client_seconds`]; 0 without a cookie).
+    known_for: i64,
     signed_in_as: Option<Uuid>,
 }
 
@@ -90,14 +101,21 @@ impl Client {
         headers: &HeaderMap,
         peer: SocketAddr,
     ) -> AppResult<Self> {
+        let cookie = crate::handlers::auth::cookie_value(headers, KNOWN_CLIENT_COOKIE)
+            .and_then(|value| KnownClient::parse(&value));
+        // A mark names one account: its period is that account's.
+        let known_for = match &cookie {
+            Some(cookie) => known_client_seconds(state, cookie.user_id).await?,
+            None => 0,
+        };
         Ok(Self {
             ip: crate::middleware::client_key(
                 crate::middleware::client_ip_from_headers(headers),
                 peer,
             ),
-            cookie: crate::handlers::auth::cookie_value(headers, KNOWN_CLIENT_COOKIE)
-                .and_then(|value| KnownClient::parse(&value)),
+            cookie,
             key: known_client_key(state).await?,
+            known_for,
             signed_in_as: None,
         })
     }
@@ -117,6 +135,7 @@ impl Client {
                         &self.key,
                         epoch,
                         time::OffsetDateTime::now_utc().unix_timestamp(),
+                        self.known_for,
                     )
             })
     }
@@ -281,9 +300,9 @@ impl KnownClient {
         })
     }
 
-    fn is_valid(&self, key: &[u8; 32], epoch: &[u8], now: i64) -> bool {
+    fn is_valid(&self, key: &[u8; 32], epoch: &[u8], now: i64, known_for: i64) -> bool {
         let fresh = match now.checked_sub(self.issued_at) {
-            Some(age) => (-60..KNOWN_CLIENT_DAYS * 86_400).contains(&age),
+            Some(age) => (-60..known_for).contains(&age),
             None => false,
         };
         fresh
@@ -331,7 +350,7 @@ pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppR
     );
     let mut cookie = format!(
         "{KNOWN_CLIENT_COOKIE}={value}; Max-Age={}; Path=/api/auth; HttpOnly; SameSite=Strict",
-        KNOWN_CLIENT_DAYS * 86_400
+        known_client_seconds(state, user_id).await?
     );
     if state.config.app_env == "production" {
         cookie.push_str("; Secure");
@@ -370,7 +389,7 @@ mod tests {
 
     fn opened(cookie: &str, epoch: &[u8], now: i64) -> Option<Uuid> {
         KnownClient::parse(cookie)
-            .filter(|c| c.is_valid(&KEY, epoch, now))
+            .filter(|c| c.is_valid(&KEY, epoch, now, 90 * 86_400))
             .map(|c| c.user_id)
     }
 
@@ -415,6 +434,7 @@ mod tests {
                 .unwrap()
             }),
             key: KEY,
+            known_for: 90 * 86_400,
             signed_in_as: None,
         }
     }

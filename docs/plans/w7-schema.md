@@ -310,7 +310,7 @@ updated_at)`, PK `(account_id, key)`; `source` is `admin` | `plan` |
   `account_setting_overrides`, `organization_setting_overrides` and the three
   account columns goes through it or the SQL below.
 - `source` also takes `account` (account table only): the account holder's
-  own federation switch (Settings → Privacy, the `federationAbroad` consent
+  own federation switch (Settings → Privacy, the `federation` consent
   withdrawn) is neither an administrator's, a plan's nor an organization's.
 - Quota: the key `account.storage_quota_bytes` (named finally now, like the
   two switches); `storage_pool::quota` resolves account > site
@@ -515,6 +515,9 @@ The full map. Registry settings (86, and one new):
 | `health_job_grace_seconds` | `server.health.job_grace_seconds` |
 | `health_probe_timeout_seconds` | `server.health.probe_timeout_seconds` |
 | `TRASH_RETENTION_DAYS (env)` | `drive.trash_retention_days` |
+| `CHAT_SEND_RETENTION_DAYS (env)` | `chat.send_retention_days` (group 5, §13) |
+| `SESSION_TTL` (30 days, constant) | `account.session_ttl_days` (group 5, §13) |
+| `KNOWN_CLIENT_DAYS` (90, constant) | `account.known_client_days` (group 5, §13) |
 
 Ad-hoc keys:
 
@@ -535,6 +538,7 @@ Ad-hoc keys:
 | `registration_mode` | `account.registration_mode` |
 | `public_sharing` | `drive.public_sharing` |
 | `federation_default` | `server.federation_default` |
+| (new, group 5, §13) | `server.federation_consent_required` |
 | `default_storage_quota_bytes` | `account.default_storage_quota_bytes` |
 | `maps` | `server.maps` |
 | `mail_domains_untagged_fingerprint` | `mail.untagged_domains_fingerprint` |
@@ -789,6 +793,15 @@ Bucket versioning becomes unnecessary, so a local-directory backend works.
     (`auth_session_forks.child_client_type`, and `auth_sessions` with a
     parent) say "not `web-account` or `cli`" over it, the clients that don't
     sign in directly, instead of repeating the nine web apps.
+  - Then (§13 pass) a 12th, `mail-bridge`: the approved Mail bridge, a
+    program on the person's computer, signs in on its own as the CLI does
+    (refresh token in the body, no cookie, not a fork child, so the fork
+    checks name it with `web-account` and `cli`), with the same session
+    lifetime and known-client handling; the session list and the security
+    log name it "Mail bridge" / "Posta köprüsü" with a mail icon. No rate
+    limit or crypto vector enumerates client types. `ClientType::ALL` lists
+    the 12, and `sessions::tests::the_schema_holds_every_client_type` checks
+    the domain and both fork checks against it.
 
 ## 11. Account-record purposes and scopes
 
@@ -844,6 +857,47 @@ settings. What remains:
   - the 90 known-client days → `account.known_client_days`.
 - **The UI languages** come from the shipped locales, not a list in
   `ui_preferences.rs`.
+- **As built (group 5):**
+  - The purpose is `federation` (DB CHECK, `legal::PURPOSES`,
+    `federation_switch::PURPOSE`, the Privacy page, the legal document
+    kinds, en/tr: "Sharing data with other servers"). Whether turning the
+    switch on asks for it is the site setting
+    `server.federation_consent_required` (`on`/`off`, off unless set; not
+    `server.federation.…`, as the entitlement `server.federation` is never a
+    prefix), `federationConsentRequired` in `/api/admin/settings` (Server
+    settings → Accounts) and in `GET /api/user/consents`. What forced it
+    before was a published `federationAbroad` text; now, with the setting on,
+    turning it on gives the consent (under the purpose's current text when
+    one is published, with no document when none is) or needs it given
+    before; an administrator's switch gives none; a new account starts off
+    (`federation_switch::new_account_state`). Off, nothing is asked, a text
+    published or not, and the Privacy page lists the purpose only to someone
+    who answered it. Withdrawing the consent turns federation off either way.
+  - `chat.send_retention_days` (`chatSendRetentionDays`, Privacy section,
+    0–3650, default 30, 0 keeps them) is read on every Chat maintenance pass;
+    `account.session_ttl_days` (`sessionTtlDays`, 1–365, default 30) at each
+    sign-in, fork and refresh (the refresh cookie's `Max-Age` follows);
+    `account.known_client_days` (`knownClientDays`, 1–400 (the browsers'
+    cookie ceiling), default 90) at each sign-in attempt and mark set, so a
+    shorter period also ends marks already given. The two account ones are a
+    new registry section `sessions` (Server settings → Sessions) and are
+    per account (`load_for`: the account's own value > the site's > the
+    default; the known-client period is the account the mark names), so an
+    administrator also sets them on a user's Limits page. The send retention
+    is site-only. `CHAT_SEND_RETENTION_DAYS` left config, the compose files and
+    `.env.example`.
+  - `config::MOVED_TO_SETTINGS` lists the variables that became settings
+    (`TRASH_RETENTION_DAYS`, `CHAT_SEND_RETENTION_DAYS`; no other variable
+    left `.env.example` on this branch): one still set logs a warning naming
+    its setting at start and is otherwise ignored (no error). Tests: named
+    when set, each setting exists, none is read or in `.env.example`.
+  - Languages: `ui_preferences::LANGUAGES` is checked, not generated (the
+    server image is built without the frontend): a unit test fails unless
+    every `frontend/{apps,packages}/**/locales` directory holds exactly one
+    `<language>.json` per entry and the i18n package's
+    `SUPPORTED_LANGUAGES` lists the same. The schema's
+    `account_ui_preferences` CHECK is now a language-tag pattern (as
+    `legal_documents.language`), so adding a language is no migration.
 
 ## 14. Enterprise data (smart 1)
 
@@ -852,6 +906,22 @@ tables, and a fork's tables live in their own Postgres schema (`enterprise`)
 with their own migrations table. The hook (a second sqlx migrator run on that
 schema) is small, so it is built: an optional `ENTERPRISE_MIGRATIONS` path,
 off by default, with one live test that migrates an empty extra set.
+
+**As built (group 5):** `ENTERPRISE_MIGRATIONS` (a directory in the fork's
+image; `check-config` refuses one that isn't a directory; not passed from
+`.env` by the compose files, as a blank value would override the image's).
+After the core's migrator, `db::migrate_enterprise` creates the schema
+`enterprise` if missing and runs `sqlx::migrate::Migrator::new(dir)` on a
+connection of its own whose search path is `enterprise` alone (closed after),
+so the fork's chain is `enterprise._sqlx_migrations` and its unqualified
+names land there; core tables are named `public.…`. It runs as the owner
+when there is one; `grant_app_role` grants the server's role the schema's
+tables and sequences when it exists, and counts tables it owns there too.
+Live test `db::tests::live_enterprise_migrations_run_in_their_own_schema`:
+the empty set on `enterprise`, then one migration (a table, and a read of
+`public.accounts` by its schema) twice in a throwaway schema: in that schema, not
+`public`, recorded there, the core's chain untouched, the pool's search path
+unchanged. Documented in docs/self-hosting.md ("A fork's own tables").
 
 ## Not in W7
 

@@ -8,7 +8,7 @@
 //! - **Acknowledgements:** the notice was shown and confirmed (not a
 //!   consent), at sign-up in the account's creating transaction, or when a
 //!   new required version is shown at a later sign-in. Append-only.
-//! - **Consents**, per purpose (`federationAbroad`, `marketing`), given or
+//! - **Consents**, per purpose (`federation`, `marketing`), given or
 //!   withdrawn; each change is a row and the latest is the state. A
 //!   purpose's text is the current document of the purpose's kind.
 //!
@@ -33,7 +33,7 @@ use crate::AppState;
 
 /// The purposes a consent is given for: the core's, worded neutrally; their
 /// texts are the operator's documents of the same kind.
-pub const PURPOSES: [&str; 2] = ["federationAbroad", "marketing"];
+pub const PURPOSES: [&str; 2] = [crate::federation_switch::PURPOSE, "marketing"];
 
 /// One published version of a document, in one language.
 #[derive(Debug, Clone, Serialize, ToSchema, sqlx::FromRow)]
@@ -316,6 +316,9 @@ pub struct ConsentsView {
     consents: Vec<Consent>,
     /// The current text of each purpose, when one is published.
     documents: Vec<Document>,
+    /// Whether turning federation on asks for the `federation` consent
+    /// (`server.federation_consent_required`).
+    federation_consent_required: bool,
 }
 
 /// `GET /api/user/consents`
@@ -336,6 +339,8 @@ pub async fn get_consents(State(state): State<AppState>, user: AuthUser) -> AppR
     Ok(Json(ConsentsView {
         consents: consents(&state.pool, user_id).await?,
         documents,
+        federation_consent_required: crate::federation_switch::consent_required(&state.pool)
+            .await?,
     })
     .into_response())
 }

@@ -13,14 +13,20 @@ use crate::middleware::AuthUser;
 use crate::AppState;
 
 const THEMES: [&str; 3] = ["light", "dark", "system"];
-const LANGUAGES: [&str; 2] = ["en", "tr"];
+/// The languages the web apps ship: exactly the locale files of every
+/// `frontend/**/locales` directory and the i18n package's
+/// `SUPPORTED_LANGUAGES` (a test fails when they drift; the server image is
+/// built without the frontend, so this list is checked, not generated). The
+/// schema takes any language tag, so adding one is no migration.
+pub const LANGUAGES: [&str; 2] = ["en", "tr"];
 
 #[derive(Debug, Default, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiPreferences {
     /// `light`, `dark` or `system`; null until the account chooses one.
     pub theme: Option<String>,
-    /// `en` or `tr`; null until the account chooses one.
+    /// One of the languages the apps ship ([`LANGUAGES`]); null until the
+    /// account chooses one.
     pub language: Option<String>,
 }
 
@@ -34,7 +40,10 @@ impl UiPreferences {
         }
         if let Some(language) = &self.language {
             if !LANGUAGES.contains(&language.as_str()) {
-                return Err(AppError::bad_request("language is en or tr"));
+                return Err(AppError::bad_request(format!(
+                    "language is one of {}",
+                    LANGUAGES.join(", ")
+                )));
             }
         }
         Ok(())
@@ -127,6 +136,58 @@ mod tests {
         assert!(prefs(Some("Dark"), None).validate().is_err());
         assert!(prefs(None, Some("de")).validate().is_err());
         assert!(prefs(None, Some("tr-TR")).validate().is_err());
+    }
+
+    /// The languages are the shipped locales: every `locales` directory of
+    /// the frontend holds one file per language and no other, and the i18n
+    /// package lists the same.
+    #[test]
+    fn the_languages_are_the_shipped_locales() {
+        let frontend = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../frontend"));
+        let mut expected: Vec<String> = LANGUAGES.iter().map(|l| format!("{l}.json")).collect();
+        expected.sort();
+        fn walk(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if !path.is_dir()
+                    || name == "node_modules"
+                    || name == "dist"
+                    || name.starts_with('.')
+                {
+                    continue;
+                }
+                if name == "locales" {
+                    found.push(path);
+                } else {
+                    walk(&path, found);
+                }
+            }
+        }
+        let mut dirs = Vec::new();
+        walk(&frontend.join("apps"), &mut dirs);
+        walk(&frontend.join("packages"), &mut dirs);
+        assert!(
+            dirs.len() > 1,
+            "no locales found under {}",
+            frontend.display()
+        );
+        for dir in dirs {
+            let mut files: Vec<String> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".json"))
+                .collect();
+            files.sort();
+            assert_eq!(files, expected, "{}", dir.display());
+        }
+        let i18n = std::fs::read_to_string(frontend.join("packages/i18n/src/index.ts")).unwrap();
+        let line = i18n
+            .lines()
+            .find(|line| line.starts_with("export const SUPPORTED_LANGUAGES"))
+            .expect("SUPPORTED_LANGUAGES");
+        let listed: Vec<&str> = line.split('\'').skip(1).step_by(2).collect();
+        assert_eq!(listed, LANGUAGES);
     }
 
     #[test]

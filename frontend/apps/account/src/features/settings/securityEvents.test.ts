@@ -84,6 +84,7 @@ describe('securityEventDevice', () => {
       values: { device: 'Linux' },
     })
     expect(securityEventDevice({ client: 'cli', browser: 'Kutup CLI', browserMajor: 0 })).toEqual({ key: 'settings.sessions.cli' })
+    expect(securityEventDevice({ client: 'mail-bridge' })).toEqual({ key: 'settings.sessions.mailBridge' })
     expect(securityEventDevice({ client: 'web-pass' })).toEqual({ key: 'settings.sessions.unknownBrowser' })
   })
 

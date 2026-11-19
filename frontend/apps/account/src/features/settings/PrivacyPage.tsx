@@ -17,7 +17,7 @@ import { documentName, oneEach, type LegalDocument } from '../auth/legal'
 import { meKey, useMe } from './api'
 
 /** The core's consent purposes (docs/plans/server-personal-data.md, A4). */
-const PURPOSES = ['federationAbroad', 'marketing'] as const
+const PURPOSES = ['federation', 'marketing'] as const
 type Purpose = (typeof PURPOSES)[number]
 
 interface Consent {
@@ -30,6 +30,8 @@ interface Consent {
 interface ConsentsView {
   consents: Consent[]
   documents: LegalDocument[]
+  /** Whether turning federation on asks for the `federation` consent (a site setting, off in the core). */
+  federationConsentRequired: boolean
 }
 
 const consentsKey = ['consents'] as const
@@ -37,7 +39,8 @@ const consentsKey = ['consents'] as const
 /**
  * Settings → Privacy: each consent, given or withdrawn at any time, with the
  * text it was asked under. A purpose with no document published is still
- * yours to set.
+ * yours to set. The `federation` consent is listed where the site asks for
+ * it, or once you answered it.
  */
 export function PrivacyPage() {
   const { t, i18n } = useTranslation()
@@ -68,8 +71,11 @@ export function PrivacyPage() {
     },
     onError: (error) => toast.error(apiErrorMessage(error, t('settings.privacy.failed'))),
   })
-  // Turning it on asks for the consent when its text is published.
+  // Turning it on asks for the consent where the site does.
   const [asking, setAsking] = useState(false)
+  const federationText = view.data
+    ? (oneEach(view.data.documents.filter((d) => d.kind === 'federation'), i18n.language)[0] as LegalDocument | undefined)
+    : undefined
 
   return (
     <PageBody width="prose">
@@ -95,9 +101,8 @@ export function PrivacyPage() {
                     federation.mutate({ on: false, documentId: null })
                     return
                   }
-                  const text = oneEach(view.data.documents.filter((d) => d.kind === 'federationAbroad'), i18n.language)[0]
-                  const given = view.data.consents.find((c) => c.purpose === 'federationAbroad')?.given ?? false
-                  if (text && !given) setAsking(true)
+                  const given = view.data.consents.find((c) => c.purpose === 'federation')?.given ?? false
+                  if (view.data.federationConsentRequired && !given) setAsking(true)
                   else federation.mutate({ on: true, documentId: null })
                 }}
               >
@@ -107,7 +112,7 @@ export function PrivacyPage() {
           </Card>
           {asking ? (
             <FederationConsent
-              text={oneEach(view.data.documents.filter((d) => d.kind === 'federationAbroad'), i18n.language)[0]}
+              text={federationText}
               pending={federation.isPending}
               onCancel={() => setAsking(false)}
               onAgree={(documentId) => federation.mutate({ on: true, documentId }, { onSuccess: () => setAsking(false) })}
@@ -118,7 +123,12 @@ export function PrivacyPage() {
       {view.data ? (
         <Section title={t('settings.privacy.consents')}>
           <Card className="divide-y divide-border p-0">
-            {PURPOSES.map((purpose) => {
+            {PURPOSES.filter(
+              (purpose) =>
+                purpose !== 'federation' ||
+                view.data.federationConsentRequired ||
+                view.data.consents.some((c) => c.purpose === purpose),
+            ).map((purpose) => {
               const state = view.data.consents.find((c) => c.purpose === purpose)
               const text = oneEach(view.data.documents.filter((d) => d.kind === purpose), i18n.language)[0] as LegalDocument | undefined
               const given = state?.given ?? false
@@ -162,17 +172,17 @@ export function PrivacyPage() {
   )
 }
 
-/** The consent to talk to other servers, asked when its text is published. */
+/** The consent to share data with other servers, asked where the site does; with its text when one is published. */
 function FederationConsent({
   text,
   pending,
   onCancel,
   onAgree,
 }: {
-  text: LegalDocument
+  text: LegalDocument | undefined
   pending: boolean
   onCancel: () => void
-  onAgree: (documentId: string) => void
+  onAgree: (documentId: string | null) => void
 }) {
   const { t } = useTranslation()
   const [agreed, setAgreed] = useState(false)
@@ -181,16 +191,18 @@ function FederationConsent({
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{t('settings.privacy.federation.consentTitle')}</DialogTitle>
-          <DialogDescription>{t('settings.privacy.purposes.federationAbroad.description')}</DialogDescription>
+          <DialogDescription>{t('settings.privacy.purposes.federation.description')}</DialogDescription>
         </DialogHeader>
-        <a
-          href={text.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-sm font-medium text-primary underline-offset-4 hover:underline"
-        >
-          {t('legal.readNamed', { name: documentName(t, text.kind), version: text.version })} <ExternalLink className="size-3" />
-        </a>
+        {text ? (
+          <a
+            href={text.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm font-medium text-primary underline-offset-4 hover:underline"
+          >
+            {t('legal.readNamed', { name: documentName(t, text.kind), version: text.version })} <ExternalLink className="size-3" />
+          </a>
+        ) : null}
         <label className="flex items-start gap-2 text-sm">
           <Checkbox className="mt-0.5" checked={agreed} onCheckedChange={(value) => setAgreed(value === true)} />
           <span>{t('settings.privacy.federation.agree')}</span>
@@ -199,7 +211,7 @@ function FederationConsent({
           <Button variant="outline" onClick={onCancel} disabled={pending}>
             {t('common.cancel')}
           </Button>
-          <Button loading={pending} disabled={!agreed} onClick={() => onAgree(text.id)}>
+          <Button loading={pending} disabled={!agreed} onClick={() => onAgree(text?.id ?? null)}>
             {t('settings.privacy.federation.turnOn')}
           </Button>
         </DialogFooter>

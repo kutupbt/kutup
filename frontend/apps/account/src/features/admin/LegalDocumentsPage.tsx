@@ -17,7 +17,7 @@ import { documentName } from '../auth/legal'
 import { useLegalDocuments, usePublishDocument } from './api'
 
 /** Kinds the pages know by name; any other lowercase kind works too. */
-const KNOWN_KINDS = ['terms', 'privacyNotice', 'federationAbroad', 'marketing']
+const KNOWN_KINDS = ['terms', 'privacyNotice', 'federation', 'marketing']
 const HEX64 = /^[0-9a-fA-F]{64}$/
 
 /**

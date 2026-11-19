@@ -26,8 +26,10 @@ that every limit is an administrators' setting, site-wide and per account.
 for.** `NumericSetting` gains three fields:
 - `section`, for the admin page;
 - `unit` (bytes, count or seconds), for showing the value;
-- `per_account`, following rate limits §4: only where the setting limits one
-  account.
+- `per_account`, following rate limits §4: where the setting limits one
+  account, or sets a policy for one (the user's standing rule: every limit
+  is editable site-wide and per user; `account.session_ttl_days` and
+  `account.known_client_days` take an account's own value too).
 
 **2. One table of per-account values.** `account_entitlements (account_id,
 key, value, source, updated_at)` holds both registries (docs/plans/w7-schema.md

@@ -519,8 +519,10 @@ See [`chat-backup.md`](chat-backup.md) for the lifecycle and
 for the trust boundary.
 
 The hourly job applies 30-day mailbox retention and 45-day ordinary
-delivery-media retention by default. Runtime admin settings can override both,
-and zero disables that policy. Delivery-media cleanup never deletes separately
+delivery-media retention by default, and drops send records (the ids that
+make a retried send land once) after 30 days (`chat.send_retention_days`,
+Server settings → Privacy and retention). Runtime admin settings can override
+each, and zero disables that policy. Delivery-media cleanup never deletes separately
 protected history media. Account deletion and administrator loss-recovery wipe
 purge all backup rows, object prefixes, staging/reconciliation state, and
 charged Chat bytes.
@@ -807,9 +809,14 @@ and withdraw consents in Settings → Privacy.
 Whether an account's Chat and Drive talk to other Kutup servers is its own
 switch (Settings → Privacy); new accounts start as **Server settings →
 Accounts → New accounts talk to other servers** says, and an administrator
-can set one account's. When you publish a `federationAbroad` text, turning
-it on asks for that consent, and withdrawing the consent turns it off. Mail
-is email, not federation: it isn't covered.
+can set one account's. Where your law asks for consent before sharing data
+with other servers, turn on **Server settings → Accounts → Ask for consent
+before sharing data with other servers** (`server.federation_consent_required`,
+off by default) and publish a `federation` text: turning the switch on then
+asks each person for that consent (under the text, when one is published),
+new accounts start off, an administrator can't turn it on for someone who
+hasn't given it, and withdrawing the consent turns it off. Mail is email,
+not federation: it isn't covered.
 
 ## Closing and deleting accounts
 
@@ -1055,6 +1062,22 @@ as `POSTGRES_USER` only for migrations, grants and pruning
 `DATABASE_URL` to the server's role and `DATABASE_OWNER_URL` to the owner's.
 The owner must own the tables: start with two roles on a fresh database, or
 move an existing database's objects to the owner first (`REASSIGN OWNED BY`).
+
+### A fork's own tables
+
+The core's schema (one baseline migration, in `public` and `account_keys`)
+holds only the core's tables. A fork that needs its own (a hosted edition's
+billing, say) keeps them in the Postgres schema `enterprise`, with its own
+migrations: set `ENTERPRISE_MIGRATIONS` to a directory of sqlx migrations
+(`<version>_<name>.up.sql` / `.down.sql`) in the fork's server image. After
+the core's migrations, the server creates the schema if it is missing and
+runs that directory there, recording it in `enterprise._sqlx_migrations`
+(the core's chain stays in `public._sqlx_migrations`), as the owner role
+when there is one; the server's role is granted the schema's tables at each
+start. In those migrations an unqualified name is the fork's: `enterprise` is
+the whole search path, so a core table is named with its schema
+(`REFERENCES public.accounts (id)`). The core never runs any (unset by
+default), and a core update never touches the schema.
 
 ## Updating
 

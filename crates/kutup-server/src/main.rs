@@ -230,6 +230,12 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
     db::migrate(owner_pool.as_ref().unwrap_or(&pool)).await?;
+    // A fork's own tables, after the core's, in their own schema
+    // (`ENTERPRISE_MIGRATIONS`; the core runs none).
+    if let Some(dir) = &config.enterprise_migrations {
+        db::migrate_enterprise(owner_pool.as_ref().unwrap_or(&pool), dir).await?;
+        tracing::info!(dir = %dir.display(), "enterprise migrations applied");
+    }
     tracing::info!("migrations applied");
     match &owner_pool {
         Some(owner) => db::grant_app_role(owner, &config.database_url).await?,
@@ -471,7 +477,6 @@ async fn main() -> anyhow::Result<()> {
             jobs::ChatMaintenancePolicy {
                 mailbox_retention_days: config.chat_mailbox_retention_days,
                 media_delivery_retention_days: config.chat_media_delivery_retention_days,
-                send_retention_days: config.chat_send_retention_days,
                 device_expiry_days: config.chat_device_expiry_days,
             },
             chat_hub.clone(),

@@ -311,7 +311,7 @@ pub async fn consume_fork(
         AppendHeaders([
             (
                 SET_COOKIE,
-                refresh_cookie(&state, &consumed.issued.refresh_token),
+                refresh_cookie(&state, &consumed.issued.refresh_token, consumed.issued.ttl),
             ),
             (
                 SET_COOKIE,

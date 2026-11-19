@@ -208,7 +208,7 @@ export interface SignedUpWith {
 }
 
 /** A whole-number setting's Server settings section (site_settings::SettingSection). */
-export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation' | 'privacy' | 'backups' | 'mail' | 'accountRecords'
+export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation' | 'privacy' | 'backups' | 'mail' | 'accountRecords' | 'sessions'
 /** What a whole-number setting counts. */
 export type SettingUnit = 'bytes' | 'count' | 'seconds' | 'days'
 /** Where a value in effect comes from. */
@@ -273,6 +273,8 @@ export interface AdminSettings {
   publicSharing: PublicSharing
   /** Whether a new account talks to other servers. */
   federationDefault: boolean
+  /** Whether turning federation on asks for the `federation` consent; new accounts then start off. */
+  federationConsentRequired: boolean
   /** The storage quota new accounts get; existing accounts keep theirs. */
   defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number

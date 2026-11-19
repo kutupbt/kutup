@@ -91,7 +91,7 @@
     "kinds": {
       "terms": "Terms of Service",
       "privacyNotice": "Privacy Notice",
-      "federationAbroad": "consent text for talking to other servers",
+      "federation": "consent text for sharing data with other servers",
       "marketing": "consent text for news and offers"
     }
   },
@@ -208,7 +208,7 @@
         "hint": "While off, nobody on another server can reach you, and you can't reach them. Your conversations and shares with them stay, quietly: groups and calls hosted on another server are quiet for you too (you stay a member) until you turn it back on. Messages sent to you there while it is off aren't delivered later. Nothing is deleted.",
         "turnOn": "Turn on",
         "turnOff": "Turn off",
-        "consentTitle": "Talk to other servers?",
+        "consentTitle": "Share data with other servers?",
         "agree": "I agree that my Chat and Drive may reach people on other Kutup servers."
       },
       "title": "Privacy",
@@ -220,9 +220,9 @@
       "withdrawnAt": "Withdrawn on {{date}}",
       "failed": "Your choice could not be saved. Try again.",
       "purposes": {
-        "federationAbroad": {
-          "title": "Talking to other servers",
-          "description": "Let your Chat and Drive reach people on other Kutup servers, which may be in other countries. Withdrawing it stops that."
+        "federation": {
+          "title": "Sharing data with other servers",
+          "description": "Let your Chat and Drive share data with other Kutup servers, so you can reach the people whose accounts are there. Withdrawing it stops that."
         },
         "marketing": {
           "title": "News and offers",
@@ -414,6 +414,7 @@
       "description": "Every place your account is signed in. Ending a sign-in there takes effect immediately.",
       "thisDevice": "This device",
       "cli": "Command line",
+      "mailBridge": "Mail bridge",
       "browserOn": "{{browser}} on {{os}}",
       "unknownBrowser": "Unknown browser",
       "unknownApp": "Unknown app",
@@ -662,7 +663,7 @@
       "publishTitle": "Publish a version",
       "publishHint": "A published version is never changed: publish a new one. A new required version is shown to everyone at their next sign-in.",
       "kind": "Kind",
-      "kindHint": "terms, privacyNotice, a consent purpose (federationAbroad, marketing), or your own.",
+      "kindHint": "terms, privacyNotice, a consent purpose (federation, marketing), or your own.",
       "version": "Version",
       "language": "Language",
       "languageHint": "A code such as en, tr or pt-BR.",
@@ -1012,6 +1013,8 @@
         "on": "Yes",
         "off": "No"
       },
+      "federationConsentRequired": "Ask for consent before sharing data with other servers",
+      "federationConsentRequiredHint": "Where the law asks for it: turning it on needs each person's consent in Settings → Privacy, under the text you publish for it (kind federation) in Legal documents. New accounts then start off.",
       "publicSharingHint": "Who may open links shared with “anyone with the link”. Signed-in only keeps a test server's links among its own accounts.",
       "publicSharingMode": {
         "on": "Anyone with the link",
@@ -1149,7 +1152,17 @@
         "accountClosingDays": "Wait before deleting a closed account (days)",
         "accountClosingDaysHint": "An account asked to be deleted is closing this long; signing in until then keeps it.",
         "destructionEventRetentionDays": "Keep the destruction log (days)",
-        "destructionEventRetentionDaysHint": "What was deleted, when and by whom, naming no one. Keep it longer than any backup: a restore replays it."
+        "destructionEventRetentionDaysHint": "What was deleted, when and by whom, naming no one. Keep it longer than any backup: a restore replays it.",
+        "chatSendRetentionDays": "Keep Chat send records (days)",
+        "chatSendRetentionDaysHint": "The id of each message sent, which makes a send tried again arrive once. 0 keeps them."
+      },
+      "sessions": "Sessions",
+      "sessionsHint": "How long a sign-in lasts, and how long a device stays known.",
+      "sessionsLimits": {
+        "sessionTtlDays": "Sign-in lasts unused (days)",
+        "sessionTtlDaysHint": "A session not used for this long ends; each use moves its end ahead. A change applies to each session at its next use.",
+        "knownClientDays": "Remember a device (days)",
+        "knownClientDaysHint": "A browser or program someone signed in from isn't held to the limits on sign-ins from unknown devices for this long."
       },
       "mail": "Mail keys",
       "mailHint": "How many encryption keys one email address may keep.",
