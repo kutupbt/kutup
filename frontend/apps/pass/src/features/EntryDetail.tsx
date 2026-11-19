@@ -17,6 +17,7 @@ import { TotpQrDialog } from './TotpQrDialog'
 import { SiteIcon } from './SiteIcon'
 import { IconDialog } from './IconDialog'
 import { AttachmentsSection } from './AttachmentsSection'
+import { PropertiesSection } from './PropertiesSection'
 import { iconSources } from '../lib/icons'
 import { copySecret } from '../lib/copySecret'
 import { isAdditionalUrl, openableUrl } from '../lib/urls'
@@ -329,6 +330,7 @@ export function EntryDetail({
           ) : null}
         </dl>
         <AttachmentsSection entry={entry} session={session} canEdit={canEdit} run={run} />
+        <PropertiesSection session={session} id={entry.id} created={entry.created} modified={entry.modified} accessed={entry.accessed} />
         <footer className="mt-6 space-y-1 text-xs text-muted-foreground">
           {entry.modified ? <p>{t('detail.modified', { when: formatInstant(entry.modified, i18n.language) })}</p> : null}
           {entry.created ? <p>{t('detail.created', { when: formatInstant(entry.created, i18n.language) })}</p> : null}

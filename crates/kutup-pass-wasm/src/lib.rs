@@ -291,6 +291,13 @@ impl Vault {
         to_js(&view::history(&self.db, self.entry(entry_id)?))
     }
 
+    /// An entry's or group's custom data (`[{ key, value, bytes, modified }]`,
+    /// by key), for its read-only Properties.
+    #[wasm_bindgen(js_name = customData)]
+    pub fn custom_data(&self, id: &str) -> Result<JsValue, JsValue> {
+        to_js(&view::custom_data(&self.db, id).ok_or_else(|| js_error("no such entry or group"))?)
+    }
+
     /// The contents of an entry's attachment.
     pub fn attachment(&self, entry_id: &str, name: &str) -> Result<Vec<u8>, JsValue> {
         view::attachment(&self.db, self.entry(entry_id)?, name)

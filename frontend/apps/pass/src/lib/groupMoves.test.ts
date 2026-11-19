@@ -15,6 +15,8 @@ function g(id: string, parentId: string | null, inRecycleBin = false): GroupView
     tags: [],
     expires: false,
     expiry: null,
+    created: null,
+    modified: null,
     isRecycleBin: id === 'bin',
     inRecycleBin,
   }

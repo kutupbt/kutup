@@ -8,6 +8,14 @@ export interface FieldView {
   protected: boolean
 }
 
+/** One custom data item (kutup_pass::view::CustomDataView): a binary value has `value` null. */
+export interface CustomDataView {
+  key: string
+  value: string | null
+  bytes: number
+  modified: string | null
+}
+
 export interface AttachmentView {
   name: string
   size: number
@@ -67,6 +75,8 @@ export interface GroupView {
   tags: string[]
   expires: boolean
   expiry: string | null
+  created: string | null
+  modified: string | null
   isRecycleBin: boolean
   inRecycleBin: boolean
 }

@@ -9,6 +9,7 @@ type Calls =
   | { call: 'view'; handle: number }
   | { call: 'apply'; handle: number; op: Op; now: number }
   | { call: 'history'; handle: number; entryId: string }
+  | { call: 'customData'; handle: number; target: string }
   | { call: 'resolvedFields'; handle: number; entryId: string; now: number; offsetMinutes: number }
   | { call: 'search'; handle: number; query: string; weakIds: string[]; now: number }
   | { call: 'attachment'; handle: number; entryId: string; name: string }

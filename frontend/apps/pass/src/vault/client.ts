@@ -3,7 +3,7 @@
 
 import type { MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import type { Call, Request, Response } from './protocol'
-import type { Applied, EntryView, ResolvedField, ImportFailure, ImportFormat, ImportPreview, KdfInput, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
+import type { Applied, CustomDataView, EntryView, ResolvedField, ImportFailure, ImportFormat, ImportPreview, KdfInput, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
 
 /** Why a vault didn't open, when the vault library says (its message's first word). */
 export type VaultFailure = 'wrongKey' | 'unsupported' | 'damaged' | 'keyFile' | 'emptyKey'
@@ -131,6 +131,11 @@ export class VaultHandle {
 
   history(entryId: string): Promise<EntryView[]> {
     return call({ call: 'history', handle: this.handle, entryId })
+  }
+
+  /** An entry's or group's custom data, by key (its read-only Properties). */
+  customData(id: string): Promise<CustomDataView[]> {
+    return call({ call: 'customData', handle: this.handle, target: id })
   }
 
   attachment(entryId: string, name: string): Promise<Uint8Array> {

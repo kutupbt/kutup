@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -17,6 +17,7 @@ export function GroupDialog({
   describeError,
   label,
   notes,
+  below,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -29,6 +30,8 @@ export function GroupDialog({
   /** A group's notes, edited beside its name (KeePass's group notes); absent for no notes field. */
   notes?: string
   onSubmit: (name: string, notes?: string) => Promise<void>
+  /** Shown under the fields (a group's Properties). */
+  below?: ReactNode
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState(initial)
@@ -66,6 +69,7 @@ export function GroupDialog({
           {notes !== undefined ? (
             <Field label={t('groups.notes')}>{(field) => <Textarea {...field} value={noteText} onChange={(e) => setNoteText(e.target.value)} rows={4} />}</Field>
           ) : null}
+          {below}
           {error ? <Alert variant="error">{error}</Alert> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>

@@ -125,7 +125,7 @@ but offers no way to see or change it.
 | Placeholders (`{USERNAME}`, `{DT_…}`, `{T-CONV:…}`) | `Reference.adoc` "Entry Placeholders" | 🟡 | the standard fields, `{UUID}`, `{TOTP}`, `{S:…}`, `{URL:…}` parts, `{DT_…}` and `{T-CONV:…}`; not `{T-REPLACE-RX:…}`, `{DB_DIR}` or auto-type keys (kept as typed) |
 | Clone an entry (with references, with history) | Entries → Clone (Ctrl+D) | ✅ | the entry's Clone button (`CloneDialog.tsx`): " - Clone" after the title (in the person's language), the history, the user name and password as references, each if asked; beside the entry, its attachments shared. No Ctrl+D (keyboard shortcuts are their own gap) |
 | "Exclude from reports" (quality check) | Properties → Exclude | ✅ | a switch in the entry editor; the report and `is:weak` leave such entries out |
-| Custom data, properties (UUID, times) | Properties tab | 🟡 | created and modified times shown; the rest kept |
+| Custom data, properties (UUID, times) | Properties tab | ✅ (read-only) | a Properties section on the entry (UUID as 32 hex digits with Copy, created, modified, accessed) and in the group's Edit dialog (UUID, created, modified), with the custom data by key, read when opened (a binary value shows its size); read-only, as approved: KeePassXC's Remove isn't offered |
 | Merge review marks | (none) | ✅ | beyond KeePassXC: entries changed on two devices are marked, compared against history and marked reviewed (`EntryDetail.tsx`, spec 77) |
 
 ## Bulk actions and the entry list

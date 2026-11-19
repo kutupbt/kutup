@@ -6,7 +6,7 @@
 
 use base64::Engine as _;
 use chrono::NaiveDateTime;
-use keepass::db::{CustomDataValue, Entry, Group, GroupId, Icon};
+use keepass::db::{CustomDataValue, Entry, EntryId, Group, GroupId, Icon};
 use keepass::Database;
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,9 @@ pub struct GroupView {
     pub tags: Vec<String>,
     pub expires: bool,
     pub expiry: Option<String>,
+    /// When it was made and last changed (its Properties).
+    pub created: Option<String>,
+    pub modified: Option<String>,
     pub is_recycle_bin: bool,
     /// The recycle bin or a group inside it.
     pub in_recycle_bin: bool,
@@ -330,6 +333,8 @@ fn group_view(db: &Database, group: &Group, depth: usize, bin: Option<GroupId>) 
         tags: group.tags.clone(),
         expires: group.times.expires.unwrap_or(false),
         expiry: group.times.expiry.map(format_time),
+        created: group.times.creation.map(format_time),
+        modified: group.times.last_modification.map(format_time),
         is_recycle_bin: Some(group.id) == bin,
         in_recycle_bin: group_in_recycle_bin(db, group.id),
     }
@@ -398,6 +403,47 @@ pub fn history(db: &Database, entry: &Entry) -> Vec<EntryView> {
         .flat_map(|history| &history.entries)
         .map(|item| entry_view(db, item, 0))
         .collect()
+}
+
+/// One custom data item of an entry or group, as KeePassXC's Properties
+/// tab lists it (read-only): a binary value shows as its size.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomDataView {
+    pub key: String,
+    /// The text, or `None` for a binary value (then `bytes` is its size).
+    pub value: Option<String>,
+    pub bytes: usize,
+    pub modified: Option<String>,
+}
+
+/// The custom data of the entry or group with id `id` (a UUID), by key;
+/// `None` when the vault has neither.
+pub fn custom_data(db: &Database, id: &str) -> Option<Vec<CustomDataView>> {
+    let uuid = uuid::Uuid::parse_str(id).ok()?;
+    let items = db
+        .entries
+        .get(&EntryId::from(uuid))
+        .map(|e| &e.custom_data)
+        .or_else(|| db.groups.get(&GroupId::from(uuid)).map(|g| &g.custom_data))?;
+    let mut list: Vec<CustomDataView> = items
+        .iter()
+        .map(|(key, item)| {
+            let (value, bytes) = match &item.value {
+                Some(CustomDataValue::String(text)) => (Some(text.clone()), text.len()),
+                Some(CustomDataValue::Binary(data)) => (None, data.len()),
+                None => (Some(String::new()), 0),
+            };
+            CustomDataView {
+                key: key.clone(),
+                value,
+                bytes,
+                modified: item.last_modification_time.map(format_time),
+            }
+        })
+        .collect();
+    list.sort_by(|a, b| a.key.cmp(&b.key));
+    Some(list)
 }
 
 /// The contents of an entry's attachment.

@@ -716,5 +716,20 @@
     "done": "Kasanın anahtarı değiştirildi",
     "submit": "Anahtarı değiştir",
     "pendingCopyPassword": "Kutup yanıt vermedi. Kasa yeni anahtarını korur ve bağlantı gelince onunla kaydedilir. Üretilen parola yalnızca bu sayfada: kapatmadan önce gösterip şimdi kopyalayın."
+  },
+  "properties": {
+    "title": "Özellikler",
+    "uuid": "UUID",
+    "copyUuid": "UUID’yi kopyala",
+    "uuidCopied": "UUID kopyalandı",
+    "created": "Oluşturulma",
+    "modified": "Değiştirilme",
+    "accessed": "Erişim",
+    "customData": "Özel veriler",
+    "noCustomData": "Özel veri yok.",
+    "key": "Anahtar",
+    "value": "Değer",
+    "binary": "İkili, {{size}}",
+    "failed": "Özel veriler okunamadı."
   }
 }

@@ -2050,3 +2050,42 @@ fn nothing_is_copied_into_or_out_of_the_recycle_bin() {
         .is_err());
     }
 }
+
+/// An entry's or group's custom data for its read-only Properties, by key;
+/// a binary value shows as its size.
+#[test]
+fn custom_data_is_listed_by_key() {
+    use kutup_pass::keepass::db::{CustomDataItem, CustomDataValue};
+    let mut db = kutup_pass::edit::new_vault(
+        "V",
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 1)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap(),
+    )
+    .unwrap();
+    let root = db.root;
+    db.groups.get_mut(&root).unwrap().custom_data.insert(
+        "z".into(),
+        CustomDataItem {
+            value: Some(CustomDataValue::Binary(vec![1, 2, 3])),
+            last_modification_time: None,
+        },
+    );
+    db.groups.get_mut(&root).unwrap().custom_data.insert(
+        "a".into(),
+        CustomDataItem {
+            value: Some(CustomDataValue::String("text".into())),
+            last_modification_time: None,
+        },
+    );
+    let list = kutup_pass::view::custom_data(&db, &root.uuid().to_string()).unwrap();
+    assert_eq!(
+        list.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+        ["a", "z"]
+    );
+    assert_eq!(list[0].value.as_deref(), Some("text"));
+    assert_eq!((list[1].value.as_deref(), list[1].bytes), (None, 3));
+    assert!(kutup_pass::view::custom_data(&db, "not-a-uuid").is_none());
+    assert!(kutup_pass::view::custom_data(&db, &uuid::Uuid::new_v4().to_string()).is_none());
+}

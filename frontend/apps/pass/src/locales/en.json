@@ -716,5 +716,20 @@
     "done": "The vault's key was changed",
     "submit": "Change key",
     "pendingCopyPassword": "Kutup didn't answer. The vault keeps its new key and is saved under it when the connection is back. The generated password is only on this page: show it and copy it now, before closing."
+  },
+  "properties": {
+    "title": "Properties",
+    "uuid": "UUID",
+    "copyUuid": "Copy the UUID",
+    "uuidCopied": "UUID copied",
+    "created": "Created",
+    "modified": "Modified",
+    "accessed": "Accessed",
+    "customData": "Custom data",
+    "noCustomData": "No custom data.",
+    "key": "Key",
+    "value": "Value",
+    "binary": "Binary, {{size}}",
+    "failed": "The custom data couldn't be read."
   }
 }

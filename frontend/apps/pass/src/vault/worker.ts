@@ -21,6 +21,7 @@ interface WasmVault {
   view(): unknown
   apply(op: unknown, nowMs: number): unknown
   history(entryId: string): unknown
+  customData(id: string): unknown
   resolvedFields(entryId: string, nowMs: number, offsetMinutes: number): unknown
   search(query: string, weakIds: string[], nowMs: number): unknown
   exportCsv(): string
@@ -96,6 +97,8 @@ async function run(request: Request): Promise<unknown> {
       return vault(request.handle).apply(request.op, request.now)
     case 'history':
       return vault(request.handle).history(request.entryId)
+    case 'customData':
+      return vault(request.handle).customData(request.target)
     case 'resolvedFields':
       return vault(request.handle).resolvedFields(request.entryId, request.now, request.offsetMinutes)
     case 'exportCsv':

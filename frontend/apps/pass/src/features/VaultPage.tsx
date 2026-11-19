@@ -43,6 +43,7 @@ import { EntryDetail } from './EntryDetail'
 import { EntryEditor } from './EntryEditor'
 import { EntryList } from './EntryList'
 import { useEntryDrop } from './entryDrop'
+import { PropertiesSection } from './PropertiesSection'
 import { GroupDialog } from './GroupDialog'
 import { ImportDialog } from './ImportDialog'
 import { SecurityPanel } from './SecurityPanel'
@@ -622,6 +623,9 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
         title={groupDialog?.kind === 'rename' ? t('groups.editTitle') : t('groups.newTitle')}
         initial={groupDialog?.kind === 'rename' ? groupDialog.group.name : ''}
         notes={groupDialog?.kind === 'rename' ? groupDialog.group.notes : undefined}
+        below={
+          groupDialog?.kind === 'rename' ? <PropertiesSection session={session} id={groupDialog.group.id} created={groupDialog.group.created} modified={groupDialog.group.modified} /> : undefined
+        }
         onSubmit={async (name, notes) => {
           if (groupDialog?.kind === 'rename') {
             await session.apply({ op: 'updateGroup', id: groupDialog.group.id, name, notes: notes ?? groupDialog.group.notes })
