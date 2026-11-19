@@ -134,8 +134,8 @@ After C1–C5, so nothing else is using Stack P (15 min):
    then `docker compose restart backend`.
 3. Reload each app tab. **Pass:**
    - the sign-in page shows "This server was reset; local data was removed";
-   - `indexedDB.databases()` lists only the anchors (`kutup-revisions-v2` and the manifest pins' names);
-   - no `kutup*` localStorage keys remain but the anchors and the look (`kutup.ui.*`, theme, language).
+   - `indexedDB.databases()` lists only the anchor `kutup.account.revisionsSeen`;
+   - no `kutup*` localStorage keys remain but the manifest pins (`kutup.account.manifestPins:<account>`) and the look (`kutup.ui.theme`, `kutup.ui.language`).
 4. A tab left open and idle: its next request reloads it (the header changed), with the same result.
 5. CLI: `kutup ls` exits 3 with "… was reset …". The profile keeps `manifest_pin`; the session and sync state are gone.
 6. `kutup-server reset-instance-id` on Stack P is refused ("account(s) exist").
