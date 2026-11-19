@@ -12,10 +12,22 @@ kutup-mail-client = { path = "../kutup-mail-client" }
 # The index: SQLCipher, as kutup-chat-core's native store builds it (the same
 # rusqlite and bundled SQLCipher, so one SQLite in the tree; deny.toml's
 # RUSTSEC-2026-0459 note covers both).
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"], optional = true }
+# IMAP: imap-next drives the protocol (framing, literals, IDLE,
+# AUTHENTICATE) over imap-codec; both pinned exactly, as imap-codec's 2.0 is
+# an alpha line (docs/plans/mail-bridge.md, "Dependencies"). MIT OR Apache-2.0.
+imap-next = { version = "=0.3.4", default-features = false }
+imap-codec = { version = "=2.0.0-alpha.10" }
 thiserror.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 zeroize.workspace = true
 hex.workspace = true
+
+[features]
+default = ["index"]
+# The SQLCipher index (and its vendored OpenSSL): off for the fuzz targets,
+# which need only the IMAP session.
+index = ["dep:rusqlite"]
 
 [dev-dependencies]
 tempfile.workspace = true

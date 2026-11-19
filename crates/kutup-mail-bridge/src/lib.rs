@@ -5,5 +5,10 @@
 //!
 //! - [`index`]: the mailboxes, UIDs and flags an app sees, in one SQLCipher
 //!   database under the bridge's local key.
+//! - [`imap`]: one IMAP session, sans I/O, answered from a backend.
 
+pub mod fuzzing;
+pub mod imap;
+#[cfg(feature = "index")]
 pub mod index;
+pub mod model;

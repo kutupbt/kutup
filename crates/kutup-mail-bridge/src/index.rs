@@ -72,23 +72,7 @@ pub struct Mailbox {
     pub uid_next: u32,
 }
 
-/// One message in a mailbox, by UID.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    pub uid: u32,
-    pub message_id: String,
-    pub size: u64,
-    pub received_at: i64,
-    pub flags: Flags,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Flags {
-    pub seen: bool,
-    pub flagged: bool,
-    pub answered: bool,
-    pub draft: bool,
-}
+pub use crate::model::{Entry, Flags};
 
 /// What the index knows of a message, as the server's list row gives it.
 #[derive(Debug, Clone, PartialEq, Eq)]
