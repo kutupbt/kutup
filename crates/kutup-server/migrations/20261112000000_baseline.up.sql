@@ -45,6 +45,46 @@ COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
 
 
 --
+-- Name: client_type; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.client_type AS text
+	CONSTRAINT client_type_check CHECK ((VALUE = ANY (ARRAY['web-account'::text, 'web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text, 'cli'::text])));
+
+
+--
+-- Name: drive_collection_kind; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.drive_collection_kind AS text
+	CONSTRAINT drive_collection_kind_check CHECK ((VALUE = ANY (ARRAY['folder'::text, 'album'::text])));
+
+
+--
+-- Name: federation_rule_action; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.federation_rule_action AS text
+	CONSTRAINT federation_rule_action_check CHECK ((VALUE = ANY (ARRAY['inherit'::text, 'allow'::text, 'block'::text])));
+
+
+--
+-- Name: match_mode; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.match_mode AS text
+	CONSTRAINT match_mode_check CHECK ((VALUE = ANY (ARRAY['all'::text, 'any'::text])));
+
+
+--
+-- Name: suspended_reason; Type: DOMAIN; Schema: public; Owner: -
+--
+
+CREATE DOMAIN public.suspended_reason AS text
+	CONSTRAINT suspended_reason_check CHECK ((VALUE = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text])));
+
+
+--
 -- Name: account_security_events_count_step(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -497,7 +537,7 @@ CREATE TABLE public.account_security_events (
     at timestamp with time zone DEFAULT now() NOT NULL,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     count integer DEFAULT 1 NOT NULL,
-    chain_version smallint DEFAULT 0 NOT NULL,
+    chain_version smallint NOT NULL,
     previous_hash bytea,
     row_hash bytea,
     CONSTRAINT account_security_events_actor_kind_check CHECK ((actor_kind = ANY (ARRAY['account'::text, 'admin'::text, 'job'::text, 'peer'::text]))),
@@ -537,7 +577,7 @@ CREATE TABLE public.admin_audit_log (
     at timestamp with time zone DEFAULT now() NOT NULL,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     count integer DEFAULT 1 NOT NULL,
-    chain_version smallint DEFAULT 1 NOT NULL,
+    chain_version smallint NOT NULL,
     previous_hash bytea,
     row_hash bytea,
     CONSTRAINT admin_audit_log_actor_check CHECK (((actor_kind = 'admin'::text) = (actor_account_id IS NOT NULL))),
@@ -611,11 +651,11 @@ CREATE TABLE public.auth_grants (
 CREATE TABLE public.auth_session_forks (
     selector_hash bytea NOT NULL,
     parent_session_id uuid NOT NULL,
-    child_client_type text NOT NULL,
+    child_client_type public.client_type NOT NULL,
     payload bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT auth_session_forks_child_client_type_check CHECK ((child_client_type = ANY (ARRAY['web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text]))),
+    CONSTRAINT auth_session_forks_child_client_type_check CHECK (((child_client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text]))),
     CONSTRAINT auth_session_forks_payload_check CHECK (((octet_length(payload) >= 1) AND (octet_length(payload) <= 16384))),
     CONSTRAINT auth_session_forks_selector_hash_check CHECK ((octet_length(selector_hash) = 32))
 );
@@ -628,7 +668,7 @@ CREATE TABLE public.auth_session_forks (
 CREATE TABLE public.auth_sessions (
     id uuid NOT NULL,
     account_id uuid NOT NULL,
-    client_type text NOT NULL,
+    client_type public.client_type NOT NULL,
     parent_session_id uuid,
     refresh_token_hash bytea NOT NULL,
     previous_refresh_token_hash bytea,
@@ -639,9 +679,8 @@ CREATE TABLE public.auth_sessions (
     expires_at timestamp with time zone NOT NULL,
     revoked_at timestamp with time zone,
     client_sealed bytea,
-    CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL) OR (client_type = ANY (ARRAY['web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text])))),
+    CONSTRAINT auth_sessions_check CHECK (((parent_session_id IS NULL) OR ((client_type)::text <> ALL (ARRAY['web-account'::text, 'cli'::text])))),
     CONSTRAINT auth_sessions_client_sealed_check CHECK (((client_sealed IS NULL) OR ((octet_length(client_sealed) >= 47) AND (octet_length(client_sealed) <= 512)))),
-    CONSTRAINT auth_sessions_client_type_check CHECK ((client_type = ANY (ARRAY['web-account'::text, 'web-drive'::text, 'web-chat'::text, 'web-maps'::text, 'web-photos'::text, 'web-office'::text, 'web-contacts'::text, 'web-mail'::text, 'web-pass'::text, 'web-calendar'::text, 'cli'::text, 'android-drive'::text, 'android-chat'::text, 'android-maps'::text, 'android-photos'::text, 'ios-drive'::text, 'ios-chat'::text, 'ios-maps'::text, 'ios-photos'::text]))),
     CONSTRAINT auth_sessions_local_key_check CHECK ((octet_length(local_key) = 32)),
     CONSTRAINT auth_sessions_previous_refresh_token_hash_check CHECK ((octet_length(previous_refresh_token_hash) = 32)),
     CONSTRAINT auth_sessions_refresh_token_hash_check CHECK ((octet_length(refresh_token_hash) = 32))
@@ -716,7 +755,7 @@ CREATE TABLE public.calendar_events (
     calendar_signed_signature text NOT NULL,
     calendar_encrypted bytea,
     calendar_encrypted_signature text,
-    revision bigint DEFAULT 1 NOT NULL,
+    revision bigint NOT NULL,
     bytes bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     modified_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -892,7 +931,7 @@ CREATE TABLE public.calendar_shared_events (
     recurrence_id timestamp with time zone,
     range_end_utc timestamp with time zone,
     sequence integer NOT NULL,
-    revision bigint DEFAULT 1 NOT NULL,
+    revision bigint NOT NULL,
     bytes bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     modified_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -965,7 +1004,7 @@ CREATE TABLE public.calendar_account_settings (
 CREATE TABLE public.calendars (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     owner_account_id uuid NOT NULL,
-    suite smallint DEFAULT 1 NOT NULL,
+    suite smallint NOT NULL,
     metadata_key_packet bytea NOT NULL,
     metadata_data_packet bytea NOT NULL,
     metadata_signature text NOT NULL,
@@ -992,22 +1031,6 @@ CREATE TABLE public.chat_account_identities (
     manifest_version bigint NOT NULL,
     changed_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_account_identities_manifest_version_check CHECK ((manifest_version >= 1))
-);
-
-
---
--- Name: chat_anonymous_rate_counters; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.chat_anonymous_rate_counters (
-    scope_type text NOT NULL,
-    scope_digest bytea NOT NULL,
-    window_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT chat_anonymous_rate_counters_count_check CHECK ((count >= 0)),
-    CONSTRAINT chat_anonymous_rate_counters_scope_digest_check CHECK ((octet_length(scope_digest) = 32)),
-    CONSTRAINT chat_anonymous_rate_counters_scope_type_check CHECK ((scope_type = ANY (ARRAY['capabilityBundle'::text, 'capabilityMinute'::text, 'capabilityDay'::text, 'recipient'::text, 'federationOrigin'::text, 'ipBytes'::text, 'originMultiRequests'::text, 'originMultiBytes'::text, 'groupSendIssue'::text, 'groupEndorsementUpload'::text, 'groupSendToken'::text, 'multiRecipient'::text])))
 );
 
 
@@ -1568,7 +1591,8 @@ CREATE TABLE public.chat_media_objects (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_media_objects_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
     CONSTRAINT chat_media_objects_retrieval_token_hash_check CHECK ((octet_length(retrieval_token_hash) = 32)),
-    CONSTRAINT chat_media_objects_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
+    CONSTRAINT chat_media_objects_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32)),
+    CONSTRAINT chat_media_objects_suite_check CHECK ((suite = 2))
 );
 
 
@@ -1589,22 +1613,6 @@ CREATE TABLE public.chat_media_origin_delivery_operations (
     CONSTRAINT chat_media_origin_delivery_operations_ciphertext_bytes_check CHECK ((ciphertext_bytes > 0)),
     CONSTRAINT chat_media_origin_delivery_operations_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32)),
     CONSTRAINT chat_media_origin_delivery_operations_offer_digest_bytes CHECK ((octet_length(offer_digest) = 32))
-);
-
-
---
--- Name: chat_media_rate_counters; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.chat_media_rate_counters (
-    scope_type text NOT NULL,
-    scope_digest bytea NOT NULL,
-    window_start timestamp with time zone NOT NULL,
-    count bigint NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT chat_media_rate_counters_count_check CHECK ((count >= 0)),
-    CONSTRAINT chat_media_rate_counters_scope_digest_check CHECK ((octet_length(scope_digest) = 32)),
-    CONSTRAINT chat_media_rate_counters_scope_type_check CHECK ((scope_type = ANY (ARRAY['capabilityMinute'::text, 'capabilityDay'::text, 'recipient'::text, 'federationOrigin'::text])))
 );
 
 
@@ -1643,6 +1651,7 @@ CREATE TABLE public.chat_media_uploads (
     CONSTRAINT chat_media_uploads_check CHECK ((received_bytes <= total_bytes)),
     CONSTRAINT chat_media_uploads_received_bytes_check CHECK ((received_bytes >= 0)),
     CONSTRAINT chat_media_uploads_retrieval_token_hash_check CHECK ((octet_length(retrieval_token_hash) = 32)),
+    CONSTRAINT chat_media_uploads_suite_check CHECK ((suite = 2)),
     CONSTRAINT chat_media_uploads_total_bytes_check CHECK ((total_bytes > 0))
 );
 
@@ -1836,13 +1845,12 @@ CREATE TABLE public.drive_collections (
     color text,
     deleted_at timestamp with time zone,
     trash_root_id uuid,
-    kind text DEFAULT 'folder'::text NOT NULL,
+    kind public.drive_collection_kind DEFAULT 'folder'::text NOT NULL,
     name_hash bytea,
     name_hash_generation integer,
     CONSTRAINT drive_collections_album_top_level CHECK (((kind = 'folder'::text) OR (parent_collection_id IS NULL))),
     CONSTRAINT drive_collections_folder_name_hash CHECK (((kind <> 'folder'::text) OR (name_hash IS NOT NULL))),
     CONSTRAINT drive_collections_key_epoch_check CHECK ((key_epoch > 0)),
-    CONSTRAINT drive_collections_kind_check CHECK ((kind = ANY (ARRAY['folder'::text, 'album'::text]))),
     CONSTRAINT drive_collections_name_hash_generation_check CHECK (((name_hash_generation IS NULL) OR ((name_hash_generation > 0) AND (kind = 'folder'::text)))),
     CONSTRAINT drive_collections_name_revision_check CHECK ((name_revision > 0)),
     CONSTRAINT drive_collections_epoch_statement_hash_bytes CHECK ((octet_length(epoch_statement_hash) = 32)),
@@ -1910,7 +1918,7 @@ CREATE TABLE public.contacts (
     summary text NOT NULL,
     signature bytea NOT NULL,
     card bytea NOT NULL,
-    revision bigint DEFAULT 1 NOT NULL,
+    revision bigint NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT contacts_card_check CHECK (((octet_length(card) >= 1) AND (octet_length(card) <= 600000))),
@@ -2078,8 +2086,7 @@ CREATE TABLE public.drive_federated_incoming_shares (
     can_delete boolean DEFAULT false NOT NULL,
     upload_quota_bytes bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    collection_kind text DEFAULT 'folder'::text NOT NULL,
-    CONSTRAINT drive_federated_incoming_shares_collection_kind_check CHECK ((collection_kind = ANY (ARRAY['folder'::text, 'album'::text]))),
+    collection_kind public.drive_collection_kind DEFAULT 'folder'::text NOT NULL,
     CONSTRAINT drive_federated_incoming_shares_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_federated_incoming_shares_name_revision_check CHECK ((name_revision > 0)),
     CONSTRAINT drive_federated_incoming_shares_named_share_envelope_check CHECK ((octet_length(named_share_envelope) <= 3072)),
@@ -2154,16 +2161,14 @@ CREATE TABLE public.drive_federated_outgoing_shares (
 CREATE TABLE public.federation_domain_rules (
     domain text NOT NULL,
     feature text NOT NULL,
-    inbound_action text DEFAULT 'inherit'::text NOT NULL,
-    outbound_action text DEFAULT 'inherit'::text NOT NULL,
+    inbound_action public.federation_rule_action DEFAULT 'inherit'::text NOT NULL,
+    outbound_action public.federation_rule_action DEFAULT 'inherit'::text NOT NULL,
     trust_requirement text DEFAULT 'inherit'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT federation_domain_rules_domain_check CHECK ((domain = lower(domain))),
     CONSTRAINT federation_domain_rules_domain_check1 CHECK (((length(domain) >= 3) AND (length(domain) <= 253))),
     CONSTRAINT federation_domain_rules_domain_check2 CHECK ((domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
-    CONSTRAINT federation_domain_rules_inbound_action_check CHECK ((inbound_action = ANY (ARRAY['inherit'::text, 'allow'::text, 'block'::text]))),
-    CONSTRAINT federation_domain_rules_outbound_action_check CHECK ((outbound_action = ANY (ARRAY['inherit'::text, 'allow'::text, 'block'::text]))),
     CONSTRAINT federation_domain_rules_trust_requirement_check CHECK ((trust_requirement = ANY (ARRAY['inherit'::text, 'tofu'::text, 'verified'::text])))
 );
 
@@ -2546,8 +2551,9 @@ CREATE TABLE public.drive_file_versions (
     parent_version_id uuid,
     remote_author_server text,
     remote_author_account_id uuid,
-    blob_suite smallint DEFAULT 2 NOT NULL,
+    blob_suite smallint NOT NULL,
     revision_content_envelope bytea NOT NULL,
+    CONSTRAINT drive_file_versions_blob_suite_check CHECK ((blob_suite = 2)),
     CONSTRAINT drive_file_versions_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'yjs'::text]))),
     CONSTRAINT drive_file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL))),
     CONSTRAINT drive_file_versions_ciphertext_sha256_bytes CHECK ((octet_length(ciphertext_sha256) = 32))
@@ -2565,11 +2571,11 @@ CREATE TABLE public.drive_files (
     metadata_envelope bytea NOT NULL,
     file_key_envelope bytea NOT NULL,
     key_epoch integer NOT NULL,
-    metadata_revision bigint DEFAULT 1 NOT NULL,
+    metadata_revision bigint NOT NULL,
     encrypted_size_bytes bigint DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    current_doc_key_id bigint DEFAULT 1 NOT NULL,
+    current_doc_key_id bigint NOT NULL,
     seed_committed boolean DEFAULT false NOT NULL,
     deleted_at timestamp with time zone,
     trash_root_id uuid,
@@ -2583,8 +2589,9 @@ CREATE TABLE public.drive_files (
     name_hash bytea NOT NULL,
     content_hash bytea,
     content_revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    blob_suite smallint DEFAULT 2 NOT NULL,
+    blob_suite smallint NOT NULL,
     revision_content_envelope bytea NOT NULL,
+    CONSTRAINT drive_files_blob_suite_check CHECK ((blob_suite = 2)),
     CONSTRAINT drive_files_collab_log_floor_check CHECK ((collab_log_floor >= 0)),
     CONSTRAINT drive_files_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_files_key_generation CHECK ((key_generation > 0)),
@@ -2872,14 +2879,13 @@ CREATE TABLE public.mail_filters (
     name_sealed bytea NOT NULL,
     enabled boolean DEFAULT true NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
-    match text NOT NULL,
+    match public.match_mode NOT NULL,
     conditions jsonb NOT NULL,
     actions jsonb NOT NULL,
     source text DEFAULT 'manual'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_filters_actions_check CHECK ((jsonb_typeof(actions) = 'object'::text)),
     CONSTRAINT mail_filters_conditions_check CHECK ((jsonb_typeof(conditions) = 'array'::text)),
-    CONSTRAINT mail_filters_match_check CHECK ((match = ANY (ARRAY['all'::text, 'any'::text]))),
     CONSTRAINT mail_filters_name_sealed_check CHECK (((octet_length(name_sealed) >= 1) AND (octet_length(name_sealed) <= 750))),
     CONSTRAINT mail_filters_source_check CHECK ((source = ANY (ARRAY['manual'::text, 'sender'::text])))
 );
@@ -2966,7 +2972,7 @@ CREATE TABLE public.mail_forwardings (
     forwardee_address_id uuid,
     kind text NOT NULL,
     state text NOT NULL,
-    match text DEFAULT 'all'::text NOT NULL,
+    match public.match_mode DEFAULT 'all'::text NOT NULL,
     conditions jsonb DEFAULT '[]'::jsonb NOT NULL,
     activation text,
     confirmation_hash bytea,
@@ -2995,7 +3001,6 @@ CREATE TABLE public.mail_forwardings (
     CONSTRAINT mail_forwardings_forwardee_email_check CHECK (((length(forwardee_email) >= 3) AND (length(forwardee_email) <= 320))),
     CONSTRAINT mail_forwardings_invites_today_check CHECK ((invites_today >= 0)),
     CONSTRAINT mail_forwardings_kind_check CHECK ((kind = ANY (ARRAY['endToEnd'::text, 'outside'::text]))),
-    CONSTRAINT mail_forwardings_match_check CHECK ((match = ANY (ARRAY['all'::text, 'any'::text]))),
     CONSTRAINT mail_forwardings_notice_check CHECK (((notice IS NULL) OR (notice = ANY (ARRAY['bounces'::text, 'budget'::text])))),
     CONSTRAINT mail_forwardings_sent_today_check CHECK ((sent_today >= 0)),
     CONSTRAINT mail_forwardings_skipped_check CHECK ((skipped >= 0)),
@@ -3667,6 +3672,21 @@ CREATE TABLE public.drive_public_shares (
 
 
 --
+-- Name: rate_counters; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.rate_counters (
+    scope text NOT NULL,
+    subject bytea NOT NULL,
+    window_start timestamp with time zone NOT NULL,
+    count bigint NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT rate_counters_count_check CHECK ((count >= 0)),
+    CONSTRAINT rate_counters_subject_check CHECK ((octet_length(subject) = 32))
+);
+
+
+--
 -- Name: registration_code_uses; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3881,8 +3901,9 @@ CREATE TABLE public.drive_uploads (
     content_hash bytea,
     based_on text,
     revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
-    blob_suite smallint DEFAULT 2 NOT NULL,
+    blob_suite smallint NOT NULL,
     uploaded_at timestamp with time zone,
+    CONSTRAINT drive_uploads_blob_suite_check CHECK ((blob_suite = 2)),
     CONSTRAINT drive_uploads_key_epoch_check CHECK ((key_epoch > 0)),
     CONSTRAINT drive_uploads_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'version'::text]))),
     CONSTRAINT drive_uploads_kind_fields CHECK ((((kind = 'file'::text) AND (name_hash IS NOT NULL) AND (file_key_envelope IS NOT NULL) AND (key_generation IS NULL) AND (content_hash IS NULL) AND (based_on IS NULL)) OR ((kind = 'version'::text) AND (name_hash IS NULL) AND (file_key_envelope IS NULL) AND (key_generation IS NOT NULL) AND (key_generation > 0) AND ((content_hash IS NULL) OR (octet_length(content_hash) = 32))))),
@@ -4001,13 +4022,13 @@ CREATE TABLE public.accounts (
     opaque_suite smallint,
     opaque_server_key_id smallint,
     identity_suite smallint NOT NULL,
-    drive_key_binding_epoch integer DEFAULT 1 NOT NULL,
+    drive_key_binding_epoch integer NOT NULL,
     security_keys_require_uv boolean DEFAULT false NOT NULL,
     totp_secret_sealed bytea,
     totp_pending_secret_sealed bytea,
     data_key_lost_at timestamp with time zone,
     state text DEFAULT 'active'::text NOT NULL,
-    suspended_reason text,
+    suspended_reason public.suspended_reason,
     state_changed_at timestamp with time zone DEFAULT now() NOT NULL,
     closing_by text,
     closes_at timestamp with time zone,
@@ -4015,12 +4036,12 @@ CREATE TABLE public.accounts (
     legal_hold_reference text,
     legal_hold_at timestamp with time zone,
     legal_hold_by_account_id uuid,
-    suspended_before_close text,
+    suspended_before_close public.suspended_reason,
     deleting_at timestamp with time zone,
     deleting_for text,
     deletion_attempts integer DEFAULT 0 NOT NULL,
     deletion_next_try_at timestamp with time zone,
-    master_key_generation integer DEFAULT 1 NOT NULL,
+    master_key_generation integer NOT NULL,
     CONSTRAINT accounts_closing CHECK ((((state = 'closing'::text) = (closing_by IS NOT NULL)) AND ((state = 'closing'::text) = (closes_at IS NOT NULL)))),
     CONSTRAINT accounts_closing_by_check CHECK ((closing_by = ANY (ARRAY['user'::text, 'admin'::text, 'restore'::text]))),
     CONSTRAINT accounts_color_format CHECK (((color IS NULL) OR (color ~ '^#[0-9a-fA-F]{6}$'::text))),
@@ -4040,9 +4061,7 @@ CREATE TABLE public.accounts (
     CONSTRAINT accounts_role_check CHECK ((role = ANY (ARRAY['member'::text, 'admin'::text, 'breakGlassAdmin'::text]))),
     CONSTRAINT accounts_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'closing'::text]))),
     CONSTRAINT accounts_suspended_before_close CHECK (((suspended_before_close IS NULL) OR (state = 'closing'::text))),
-    CONSTRAINT accounts_suspended_before_close_check CHECK ((suspended_before_close = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text]))),
     CONSTRAINT accounts_suspended_reason CHECK (((state = 'suspended'::text) = (suspended_reason IS NOT NULL))),
-    CONSTRAINT accounts_suspended_reason_check CHECK ((suspended_reason = ANY (ARRAY['admin'::text, 'operatorOrder'::text, 'security'::text]))),
     CONSTRAINT accounts_totp_secret_sealed_check CHECK (((totp_secret_sealed IS NULL) OR ((octet_length(totp_secret_sealed) >= 47) AND (octet_length(totp_secret_sealed) <= 200)))),
     CONSTRAINT accounts_totp_pending_secret_sealed_check CHECK (((totp_pending_secret_sealed IS NULL) OR ((octet_length(totp_pending_secret_sealed) >= 47) AND (octet_length(totp_pending_secret_sealed) <= 200)))),
     CONSTRAINT accounts_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
@@ -4444,14 +4463,6 @@ ALTER TABLE ONLY public.chat_account_identities
 
 
 --
--- Name: chat_anonymous_rate_counters chat_anonymous_rate_counters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.chat_anonymous_rate_counters
-    ADD CONSTRAINT chat_anonymous_rate_counters_pkey PRIMARY KEY (scope_type, scope_digest, window_start);
-
-
---
 -- Name: chat_anonymous_send_ids chat_anonymous_send_ids_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4772,27 +4783,11 @@ ALTER TABLE ONLY public.chat_media_objects
 
 
 --
--- Name: chat_media_objects chat_media_objects_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.chat_media_objects
-    ADD CONSTRAINT chat_media_objects_suite_check CHECK ((suite = 2)) NOT VALID;
-
-
---
 -- Name: chat_media_origin_delivery_operations chat_media_origin_delivery_operations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_origin_delivery_operations
     ADD CONSTRAINT chat_media_origin_delivery_operations_pkey PRIMARY KEY (origin_account_id, operation_id);
-
-
---
--- Name: chat_media_rate_counters chat_media_rate_counters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.chat_media_rate_counters
-    ADD CONSTRAINT chat_media_rate_counters_pkey PRIMARY KEY (scope_type, scope_digest, window_start);
 
 
 --
@@ -4833,14 +4828,6 @@ ALTER TABLE ONLY public.chat_media_uploads
 
 ALTER TABLE ONLY public.chat_media_uploads
     ADD CONSTRAINT chat_media_uploads_storage_path_key UNIQUE (storage_path);
-
-
---
--- Name: chat_media_uploads chat_media_uploads_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.chat_media_uploads
-    ADD CONSTRAINT chat_media_uploads_suite_check CHECK ((suite = 2)) NOT VALID;
 
 
 --
@@ -5300,14 +5287,6 @@ ALTER TABLE ONLY public.collab_update_log
 
 
 --
--- Name: drive_file_versions drive_file_versions_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.drive_file_versions
-    ADD CONSTRAINT drive_file_versions_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
-
-
---
 -- Name: drive_file_versions drive_file_versions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5321,14 +5300,6 @@ ALTER TABLE ONLY public.drive_file_versions
 
 ALTER TABLE public.drive_file_versions
     ADD CONSTRAINT drive_file_versions_revision_content_check CHECK ((octet_length(revision_content_envelope) = 356));
-
-
---
--- Name: drive_files drive_files_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.drive_files
-    ADD CONSTRAINT drive_files_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
 
 
 --
@@ -5900,6 +5871,14 @@ ALTER TABLE ONLY public.drive_public_shares
 
 
 --
+-- Name: rate_counters rate_counters_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rate_counters
+    ADD CONSTRAINT rate_counters_pkey PRIMARY KEY (scope, subject, window_start);
+
+
+--
 -- Name: registration_code_uses registration_code_uses_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6017,14 +5996,6 @@ ALTER TABLE ONLY public.storage_pending_deletions
 
 ALTER TABLE ONLY public.two_factor_recovery_codes
     ADD CONSTRAINT two_factor_recovery_codes_pkey PRIMARY KEY (account_id, code_mac);
-
-
---
--- Name: drive_uploads drive_uploads_blob_suite_check; Type: CHECK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.drive_uploads
-    ADD CONSTRAINT drive_uploads_blob_suite_check CHECK ((blob_suite = 2)) NOT VALID;
 
 
 --
@@ -6158,10 +6129,10 @@ CREATE UNIQUE INDEX account_names_one_current ON public.account_names USING btre
 
 
 --
--- Name: account_names_user; Type: INDEX; Schema: public; Owner: -
+-- Name: account_names_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_names_user ON public.account_names USING btree (account_id);
+CREATE INDEX account_names_account ON public.account_names USING btree (account_id);
 
 
 --
@@ -6200,10 +6171,10 @@ CREATE INDEX account_renames_previous ON public.account_renames USING btree (pre
 
 
 --
--- Name: account_renames_user; Type: INDEX; Schema: public; Owner: -
+-- Name: account_renames_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_renames_user ON public.account_renames USING btree (account_id, accepted_at DESC);
+CREATE INDEX account_renames_account ON public.account_renames USING btree (account_id, accepted_at DESC);
 
 
 --
@@ -6221,10 +6192,10 @@ CREATE INDEX auth_grants_expiry ON public.auth_grants USING btree (expires_at);
 
 
 --
--- Name: auth_grants_user; Type: INDEX; Schema: public; Owner: -
+-- Name: auth_grants_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX auth_grants_user ON public.auth_grants USING btree (account_id);
+CREATE INDEX auth_grants_account ON public.auth_grants USING btree (account_id);
 
 
 --
@@ -6270,10 +6241,10 @@ CREATE INDEX calendar_alarms_event ON public.calendar_alarms USING btree (event_
 
 
 --
--- Name: calendar_event_reminders_user; Type: INDEX; Schema: public; Owner: -
+-- Name: calendar_event_reminders_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_event_reminders_user ON public.calendar_event_reminders USING btree (account_id);
+CREATE INDEX calendar_event_reminders_account ON public.calendar_event_reminders USING btree (account_id);
 
 
 --
@@ -6347,10 +6318,10 @@ CREATE INDEX calendar_shared_events_window ON public.calendar_shared_events USIN
 
 
 --
--- Name: calendar_members_user; Type: INDEX; Schema: public; Owner: -
+-- Name: calendar_members_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX calendar_members_user ON public.calendar_members USING btree (account_id);
+CREATE INDEX calendar_members_account ON public.calendar_members USING btree (account_id);
 
 
 --
@@ -6358,13 +6329,6 @@ CREATE INDEX calendar_members_user ON public.calendar_members USING btree (accou
 --
 
 CREATE INDEX calendars_owner ON public.calendars USING btree (owner_account_id);
-
-
---
--- Name: chat_anonymous_rate_expiry_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX chat_anonymous_rate_expiry_idx ON public.chat_anonymous_rate_counters USING btree (expires_at);
 
 
 --
@@ -6438,10 +6402,10 @@ CREATE INDEX chat_group_nonces_expires_at ON public.chat_group_nonces USING btre
 
 
 --
--- Name: chat_link_tokens_user; Type: INDEX; Schema: public; Owner: -
+-- Name: chat_link_tokens_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX chat_link_tokens_user ON public.chat_link_tokens USING btree (account_id, expires_at);
+CREATE INDEX chat_link_tokens_account ON public.chat_link_tokens USING btree (account_id, expires_at);
 
 
 --
@@ -6760,17 +6724,10 @@ CREATE INDEX idx_chat_media_inbound_pending_recipient ON public.chat_media_feder
 
 
 --
--- Name: idx_chat_media_rate_expiry; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_chat_media_references_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_chat_media_rate_expiry ON public.chat_media_rate_counters USING btree (expires_at);
-
-
---
--- Name: idx_chat_media_references_user; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_chat_media_references_user ON public.chat_media_references USING btree (account_id);
+CREATE INDEX idx_chat_media_references_account ON public.chat_media_references USING btree (account_id);
 
 
 --
@@ -6781,10 +6738,10 @@ CREATE INDEX idx_chat_media_uploads_updated ON public.chat_media_uploads USING b
 
 
 --
--- Name: idx_chat_media_uploads_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_chat_media_uploads_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_chat_media_uploads_user ON public.chat_media_uploads USING btree (account_id);
+CREATE INDEX idx_chat_media_uploads_account ON public.chat_media_uploads USING btree (account_id);
 
 
 --
@@ -6872,10 +6829,10 @@ CREATE UNIQUE INDEX idx_mail_address_keys_one_primary ON public.mail_address_key
 
 
 --
--- Name: idx_mail_addresses_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_addresses_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_addresses_user ON public.mail_addresses USING btree (account_id);
+CREATE INDEX idx_mail_addresses_account ON public.mail_addresses USING btree (account_id);
 
 
 --
@@ -6900,24 +6857,24 @@ CREATE UNIQUE INDEX idx_mail_filter_runs_one ON public.mail_filter_runs USING bt
 
 
 --
--- Name: idx_mail_filters_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_filters_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_filters_user ON public.mail_filters USING btree (account_id, "position") WHERE enabled;
-
-
---
--- Name: idx_mail_folders_user; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_mail_folders_user ON public.mail_folders USING btree (account_id, parent_id, "position");
+CREATE INDEX idx_mail_filters_account ON public.mail_filters USING btree (account_id, "position") WHERE enabled;
 
 
 --
--- Name: idx_mail_group_key_shares_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_folders_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_group_key_shares_user ON public.mail_group_key_shares USING btree (account_id);
+CREATE INDEX idx_mail_folders_account ON public.mail_folders USING btree (account_id, parent_id, "position");
+
+
+--
+-- Name: idx_mail_group_key_shares_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_mail_group_key_shares_account ON public.mail_group_key_shares USING btree (account_id);
 
 
 --
@@ -6928,10 +6885,10 @@ CREATE UNIQUE INDEX idx_mail_group_keys_primary ON public.mail_group_keys USING 
 
 
 --
--- Name: idx_mail_group_members_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_group_members_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_group_members_user ON public.mail_group_members USING btree (account_id);
+CREATE INDEX idx_mail_group_members_account ON public.mail_group_members USING btree (account_id);
 
 
 --
@@ -6942,10 +6899,10 @@ CREATE INDEX idx_mail_group_objects_group ON public.mail_group_objects USING btr
 
 
 --
--- Name: idx_mail_labels_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_labels_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_labels_user ON public.mail_labels USING btree (account_id, "position");
+CREATE INDEX idx_mail_labels_account ON public.mail_labels USING btree (account_id, "position");
 
 
 --
@@ -7082,10 +7039,10 @@ CREATE INDEX idx_mail_messages_unwanted ON public.mail_messages USING btree (mai
 
 
 --
--- Name: idx_mail_sending_events_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mail_sending_events_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_mail_sending_events_user ON public.mail_sending_events USING btree (account_id, kind, created_at);
+CREATE INDEX idx_mail_sending_events_account ON public.mail_sending_events USING btree (account_id, kind, created_at);
 
 
 --
@@ -7201,17 +7158,17 @@ CREATE INDEX mail_forwardings_forwardee ON public.mail_forwardings USING btree (
 
 
 --
--- Name: mail_forwardings_user; Type: INDEX; Schema: public; Owner: -
+-- Name: mail_forwardings_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX mail_forwardings_user ON public.mail_forwardings USING btree (account_id);
+CREATE INDEX mail_forwardings_account ON public.mail_forwardings USING btree (account_id);
 
 
 --
--- Name: mail_group_signing_shares_user; Type: INDEX; Schema: public; Owner: -
+-- Name: mail_group_signing_shares_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX mail_group_signing_shares_user ON public.mail_group_signing_shares USING btree (account_id);
+CREATE INDEX mail_group_signing_shares_account ON public.mail_group_signing_shares USING btree (account_id);
 
 
 --
@@ -7285,10 +7242,10 @@ CREATE UNIQUE INDEX organization_members_one_per_account ON public.organization_
 
 
 --
--- Name: pass_pin_failures_user; Type: INDEX; Schema: public; Owner: -
+-- Name: pass_pin_failures_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX pass_pin_failures_user ON public.pass_pin_failures USING btree (account_id);
+CREATE INDEX pass_pin_failures_account ON public.pass_pin_failures USING btree (account_id);
 
 
 --
@@ -7310,6 +7267,13 @@ CREATE INDEX drive_public_link_reports_share ON public.drive_public_link_reports
 --
 
 CREATE INDEX drive_public_shares_file_target_idx ON public.drive_public_shares USING btree (target_id) WHERE (share_type = 'file'::text);
+
+
+--
+-- Name: rate_counters_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX rate_counters_expiry ON public.rate_counters USING btree (expires_at);
 
 
 --
@@ -7348,10 +7312,10 @@ CREATE UNIQUE INDEX drive_uploads_revision_id_key ON public.drive_uploads USING 
 
 
 --
--- Name: account_security_keys_user; Type: INDEX; Schema: public; Owner: -
+-- Name: account_security_keys_account; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX account_security_keys_user ON public.account_security_keys USING btree (account_id);
+CREATE INDEX account_security_keys_account ON public.account_security_keys USING btree (account_id);
 
 
 --
@@ -9601,12 +9565,6 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 
 --
--- Data for Name: chat_anonymous_rate_counters; Type: TABLE DATA; Schema: public; Owner: -
---
-
-
-
---
 -- Data for Name: chat_anonymous_send_ids; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -9794,12 +9752,6 @@ ALTER TABLE ONLY public.webauthn_ceremonies
 
 --
 -- Data for Name: chat_media_origin_delivery_operations; Type: TABLE DATA; Schema: public; Owner: -
---
-
-
-
---
--- Data for Name: chat_media_rate_counters; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -10385,6 +10337,12 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 --
 -- Data for Name: registration_codes; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: rate_counters; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 

@@ -773,10 +773,11 @@ pub async fn register(
             account_incarnation_id, drive_signing_public_key,
             opaque_record, opaque_suite, opaque_server_key_id,
             recovery_key_verifier, drive_key_binding,
-            key_binding, id, identity_suite, drive_key_binding_epoch, keys_set_up_at
+            key_binding, id, identity_suite, drive_key_binding_epoch, master_key_generation,
+            keys_set_up_at
         ) VALUES ($2,kutup_unb64($3),kutup_unb64($4),kutup_unb64($5),kutup_unb64($6),
                   decode($7, 'hex'),decode($8, 'hex'),kutup_unb64($9),$10,$11,$12,$13,
-                  kutup_unb64($14),$1::uuid,$15,2,1,now())
+                  kutup_unb64($14),$1::uuid,$15,2,1,1,now())
         RETURNING id"#,
     )
     .bind(&req.key_binding)

@@ -309,8 +309,8 @@ pub async fn create_user(
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
                username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
-               identity_suite
-           ) VALUES ($1,$2::uuid,$3,$4,$5,2)
+               identity_suite, drive_key_binding_epoch, master_key_generation
+           ) VALUES ($1,$2::uuid,$3,$4,$5,2,1,1)
            RETURNING id"#,
     )
     .bind(&req.username)
@@ -3239,7 +3239,7 @@ mod tests {
             .unwrap();
         let (reset, kept) = (Uuid::new_v4(), Uuid::new_v4());
         for user_id in [reset, kept] {
-            sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
                 .bind(user_id)
                 .bind(format!("reset{}", &user_id.simple().to_string()[..12]))
                 .execute(&pool)

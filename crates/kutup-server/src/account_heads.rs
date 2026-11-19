@@ -566,8 +566,9 @@ mod tests {
         let user_id = Uuid::new_v4();
         let incarnation = "cd".repeat(32);
         sqlx::query(
-            "INSERT INTO accounts (id, username, account_incarnation_id, identity_suite)
-             VALUES ($1, $2, decode($3, 'hex'), 2)",
+            "INSERT INTO accounts (id, username, account_incarnation_id, identity_suite,
+                 drive_key_binding_epoch, master_key_generation)
+             VALUES ($1, $2, decode($3, 'hex'), 2, 1, 1)",
         )
         .bind(user_id)
         .bind(format!("heads{}", &user_id.simple().to_string()[..12]))

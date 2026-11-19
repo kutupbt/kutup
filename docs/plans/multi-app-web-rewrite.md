@@ -76,8 +76,9 @@ rewrite; they go on `docs/roadmap.md` (no stub affordances).
 ### Data model
 
 - `sessions`: `id`, `user_id`, `client_type` (`<platform>-<app>`:
-  `web-account`, `web-drive`, `web-chat`, `cli`; reserved for later
-  `android-drive`, `android-chat`, `ios-drive`, `ios-chat`, `desktop-*`),
+  `web-account`, `web-drive`, `web-chat`, `cli`; the database's
+  `client_type` domain holds exactly the Rust `ClientType` values, and a
+  native app adds its own value when it is built),
   `parent_session_id`
   (null for directly authenticated sessions), `refresh_token_hash`
   (rotating, opaque 32 random bytes, SHA-256 at rest), `local_key`

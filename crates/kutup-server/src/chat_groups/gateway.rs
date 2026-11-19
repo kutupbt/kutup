@@ -532,7 +532,7 @@ async fn put_endorsement(
         .into();
     let used = crate::handlers::chat::anonymous_count(
         &mut tx,
-        "groupEndorsementUpload",
+        crate::ratelimit::counters::Scope::AnonymousGroupEndorsementUpload,
         &digest,
         1,
         86_400,

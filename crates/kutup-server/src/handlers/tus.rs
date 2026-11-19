@@ -996,9 +996,9 @@ pub(super) async fn insert_file(
              metadata_envelope, file_key_envelope, key_epoch, key_generation, \
              metadata_revision, encrypted_size_bytes, original_key_generation, \
              name_hash, content_hash, content_revision_id, \
-             blob_suite, revision_content_envelope) \
+             blob_suite, revision_content_envelope, current_doc_key_id) \
          VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,$7,$8,1,decode($9, 'hex'), \
-                 decode($10, 'hex'),$11,$12,kutup_unb64($13))",
+                 decode($10, 'hex'),$11,$12,kutup_unb64($13),1)",
     )
     .bind(file.file_id)
     .bind(file.collection_id)

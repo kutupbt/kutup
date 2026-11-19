@@ -324,9 +324,9 @@ fn upload_rows_are_a_file_or_a_version() {
             sqlx::query(
                 "INSERT INTO drive_uploads (account_id, collection_id, file_id, total_bytes,
                     file_key_envelope, key_epoch, s3_upload_id,
-                    name_hash, kind, key_generation)
+                    name_hash, kind, key_generation, blob_suite)
                  VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, kutup_unb64($2), 1,
-                    's', decode($1, 'hex'), $3, $4)",
+                    's', decode($1, 'hex'), $3, $4, 2)",
             )
             .bind(name_hash)
             .bind(key_envelope)

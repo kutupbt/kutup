@@ -449,7 +449,7 @@ mod tests {
             format!("old_a{tag}"),
         );
         for (id, name) in [(a, &name_a), (b, &name_b)] {
-            sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+            sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
                 .bind(id)
                 .bind(name)
                 .execute(&pool)
@@ -521,8 +521,9 @@ mod tests {
         let (current, held) = (format!("now{tag}"), format!("was{tag}"));
         let incarnation = "a".repeat(64);
         sqlx::query(
-            "INSERT INTO accounts (id, username, account_incarnation_id, identity_suite)
-             VALUES ($1, $2, decode($3, 'hex'), 2)",
+            "INSERT INTO accounts (id, username, account_incarnation_id, identity_suite,
+                 drive_key_binding_epoch, master_key_generation)
+             VALUES ($1, $2, decode($3, 'hex'), 2, 1, 1)",
         )
         .bind(user_id)
         .bind(&current)
@@ -605,7 +606,7 @@ mod tests {
             format!("old_{tag}"),
             format!("gone{tag}"),
         );
-        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
             .bind(user_id)
             .bind(&current)
             .execute(&pool)

@@ -298,8 +298,9 @@ async fn insert(
         .collect();
     sqlx::query(
         "INSERT INTO account_security_events
-             (id, kind, actor_kind, actor_account_id, subject_account_id, payload)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+             (id, kind, actor_kind, actor_account_id, subject_account_id, payload,
+              chain_version)
+         VALUES ($1, $2, $3, $4, $5, $6, 0)",
     )
     .bind(id)
     .bind(kind.as_str())

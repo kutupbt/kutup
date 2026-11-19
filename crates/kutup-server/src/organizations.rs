@@ -176,7 +176,9 @@ mod tests {
 
     async fn account(pool: &sqlx::PgPool, tag: &str, name: &str) -> Uuid {
         sqlx::query_scalar(
-            "INSERT INTO accounts (username, identity_suite) VALUES ($1, 2) RETURNING id",
+            "INSERT INTO accounts (username, identity_suite, drive_key_binding_epoch,
+                 master_key_generation)
+             VALUES ($1, 2, 1, 1) RETURNING id",
         )
         .bind(format!("{name}{}", &tag[..12]))
         .fetch_one(pool)

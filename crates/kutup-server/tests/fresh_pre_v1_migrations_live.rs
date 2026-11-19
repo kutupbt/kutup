@@ -255,7 +255,6 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
         "chat_media_federation_inbound_pending",
         "chat_media_federation_pull_grants",
         "chat_media_objects",
-        "chat_media_rate_counters",
         "chat_media_references",
         "chat_media_uploads",
         "chat_media_origin_delivery_operations",

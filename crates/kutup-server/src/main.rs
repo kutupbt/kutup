@@ -733,8 +733,8 @@ async fn bootstrap_admin(
     let res: Result<uuid::Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO accounts (
             username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
-            identity_suite, role
-        ) VALUES ($1,$2::uuid,$3,$4,$5,2,$6)
+            identity_suite, role, drive_key_binding_epoch, master_key_generation
+        ) VALUES ($1,$2::uuid,$3,$4,$5,2,$6,1,1)
         RETURNING id"#,
     )
     .bind(username)
