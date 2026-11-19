@@ -1,0 +1,19 @@
+[package]
+name = "kutup-mail-client"
+description = "Kutup Mail's client core: whose keys to trust, how each recipient is protected, and what a send carries (docs/plans/mail-bridge.md, B0)"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kutup-crypto = { path = "../kutup-crypto", features = ["mail"] }
+base64.workspace = true
+hex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+

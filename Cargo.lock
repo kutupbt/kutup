@@ -3640,6 +3640,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kutup-mail-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "kutup-crypto",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "kutup-mail-search-wasm"
 version = "0.1.0"
 dependencies = [
