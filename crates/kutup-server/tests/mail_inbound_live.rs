@@ -4814,6 +4814,10 @@ fn undo_send_holds_a_draft_then_sends_it() {
             .any(|m| m["id"] == id)
     };
     settings(json!({ "delaySendSeconds": 5 }));
+    // Made before anything is held: registering runs the client's key
+    // derivation, which in a debug build on a busy machine can outlast the
+    // 5 s hold, and the send would go before the cancel below.
+    let eve = register(&c, &base);
 
     // Held: the draft stays, cannot change, and Undo keeps it a draft.
     let (draft, message_id) = make_draft("Geri al");
@@ -4833,7 +4837,6 @@ fn undo_send_holds_a_draft_then_sends_it() {
     // A second send of the same draft while one waits is refused.
     assert_eq!(send(&draft, &message_id, "Geri al").status(), 409);
     // Someone else's: not found.
-    let eve = register(&c, &base);
     assert_eq!(status(&outbox, &eve.token).status(), 404);
     assert_eq!(cancel(&outbox), 204);
     assert_eq!(cancel(&outbox), 409, "taken back once");
