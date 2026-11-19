@@ -77,42 +77,29 @@ pub(crate) fn delivery_offer_digest(offer: &ChatMediaDeliveryOfferV1) -> AppResu
 
 pub(crate) async fn consume_media_rate(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    scope_type: &'static str,
+    scope: crate::ratelimit::counters::Scope,
     scope_digest: &[u8; 32],
     budget: crate::ratelimit::Limit,
 ) -> AppResult<()> {
+    use crate::ratelimit::counters::Scope;
     let (limit, window_seconds) = crate::ratelimit::budget(budget);
-    debug_assert!(matches!(
-        scope_type,
-        "capabilityMinute" | "capabilityDay" | "recipient" | "federationOrigin"
-    ));
-    let count: i64 = sqlx::query_scalar(
-        "INSERT INTO chat_media_rate_counters
-             (scope_type, scope_digest, window_start, count, expires_at)
-         VALUES (
-             $1, $2,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3),
-             1,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3)
-               + make_interval(secs => $3 * 2)
-         )
-         ON CONFLICT (scope_type, scope_digest, window_start)
-         DO UPDATE SET count = chat_media_rate_counters.count + 1
-         RETURNING count",
-    )
-    .bind(scope_type)
-    .bind(scope_digest.as_slice())
-    .bind(window_seconds)
-    .fetch_one(&mut **transaction)
-    .await?;
+    let metric = match scope {
+        Scope::MediaCapabilityMinute => "chat_media_capability_minute",
+        Scope::MediaCapabilityDay => "chat_media_capability_day",
+        Scope::MediaRecipient => "chat_media_recipient",
+        Scope::MediaFederationOrigin => "chat_media_federation_origin",
+        other => {
+            return Err(AppError::internal(format!(
+                "{} is not a Chat-media rate scope",
+                other.as_str()
+            )))
+        }
+    };
+    let count =
+        crate::ratelimit::counters::add(transaction, scope, scope_digest, 1, window_seconds)
+            .await?;
     if count > limit {
-        crate::telemetry::rate_limit_rejection(match scope_type {
-            "capabilityMinute" => "chat_media_capability_minute",
-            "capabilityDay" => "chat_media_capability_day",
-            "recipient" => "chat_media_recipient",
-            "federationOrigin" => "chat_media_federation_origin",
-            _ => "chat_media_unknown",
-        });
+        crate::telemetry::rate_limit_rejection(metric);
         return Err(AppError::too_many_requests(
             "Chat-media delivery rate limit exceeded",
         ));
@@ -865,14 +852,14 @@ pub async fn deliver_local(
     // digests and never metric labels containing identities.
     consume_media_rate(
         &mut transaction,
-        "capabilityMinute",
+        crate::ratelimit::counters::Scope::MediaCapabilityMinute,
         &presented_capability_hash,
         crate::ratelimit::Limit::MediaCapabilityMinute,
     )
     .await?;
     consume_media_rate(
         &mut transaction,
-        "capabilityDay",
+        crate::ratelimit::counters::Scope::MediaCapabilityDay,
         &presented_capability_hash,
         crate::ratelimit::Limit::MediaCapabilityDay,
     )
@@ -888,7 +875,7 @@ pub async fn deliver_local(
     .into();
     consume_media_rate(
         &mut transaction,
-        "recipient",
+        crate::ratelimit::counters::Scope::MediaRecipient,
         &recipient_rate_digest,
         crate::ratelimit::Limit::MediaRecipient,
     )

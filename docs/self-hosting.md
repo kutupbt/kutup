@@ -129,7 +129,9 @@ above 100 times their default. The limits counted per account can also be set fo
 its page under Administration. The windows are counted in each backend's
 memory: with several backends behind a balancer, a client spread over them
 can get up to that many times a limit (Kutup runs one backend per server).
-The sealed-sender budgets are counted in the database and shared.
+The sealed-sender, multi-recipient and Chat-media delivery budgets are
+counted in the database (`rate_counters`) and shared; a job deletes the
+windows that are over every 15 minutes.
 
 **Chat groups are off by default** (`CHAT_GROUPS=false`): Chat offers direct
 chats, calls and meeting links, but no group chats or group calls; the

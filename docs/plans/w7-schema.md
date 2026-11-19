@@ -715,6 +715,44 @@ Bucket versioning becomes unnecessary, so a local-directory backend works.
     `('on','off')`;
   - the suspended reasons;
   - the client types (§10).
+- **As built (group 5):**
+  - NOT VALID: five were left (groups before this one validated the
+    others): `chat_media_objects_suite_check`, `chat_media_uploads_suite_check`
+    (`suite = 2`), and `drive_files_`, `drive_file_versions_`,
+    `drive_uploads_blob_suite_check` (`blob_suite = 2`). All are ordinary
+    checks inside their `CREATE TABLE`; every writer already wrote 2 (Chat
+    media only parses suite 2, Drive binds `drive_blob::BLOCK_SUITE`). The
+    baseline has no `NOT VALID` left.
+  - Defaults dropped: `blob_suite` (was 2) on the three Drive tables;
+    `drive_files.metadata_revision` and `current_doc_key_id`,
+    `calendars.suite`, `accounts.drive_key_binding_epoch` and
+    `master_key_generation`, `admin_audit_log.chain_version` (1), and
+    `account_security_events.chain_version` (0, for the same reason); the
+    row revisions of `calendar_events`, `calendar_shared_events` and
+    `contacts` (1, like `metadata_revision`). Writers that relied on one now
+    name it: the three `drive_files` inserts (`current_doc_key_id` 1), the
+    calendar insert (`CALENDAR_SUITE` 1), the security-event insert
+    (`chain_version` 0) and every `accounts` insert, tests included (epoch 1,
+    generation 1). Defaults kept: counters' `count` 1, `organizations.state`,
+    `mail_group_keys.flags`.
+  - CHECK lists: each was already one constraint (grant purposes, the
+    account roots' purposes, server key purposes); event kinds have no
+    CHECK (§6, the Rust kind table). The only list repeated on one table was
+    the client types, folded below.
+  - Domains: `client_type` (§10), `drive_collection_kind` (`folder`,
+    `album`: `drive_collections.kind`,
+    `drive_federated_incoming_shares.collection_kind`),
+    `federation_rule_action` (`inherit`, `allow`, `block`:
+    `federation_domain_rules.inbound_action` / `outbound_action`; its
+    `trust_requirement` keeps its own list, `inherit`/`tofu`/`verified`),
+    `match_mode` (`all`, `any`: `mail_filters.match`,
+    `mail_forwardings.match`) and `suspended_reason` (`admin`,
+    `operatorOrder`, `security`: `accounts.suspended_reason` and
+    `suspended_before_close`). `('on','off')` is no longer in the schema
+    (the account switches became entitlements in group 4; Pass's
+    `site_icons` is `kutup`/`off`).
+  - The 19 indexes left ending in `_user` over `account_id` end in
+    `_account`.
 
 ## 10. Rate counters and client types
 
@@ -731,6 +769,26 @@ Bucket versioning becomes unnecessary, so a local-directory backend works.
 - **Client types:** one domain `client_type`, used by the three CHECKs. The 8
   `android-*` / `ios-*` values go: there is no Rust variant, and native apps
   come later with their own row.
+- **As built (group 5):**
+  - `rate_counters (scope text, subject bytea, window_start, count,
+    expires_at)`, PK (scope, subject, window_start), index on `expires_at`.
+    `crate::ratelimit::counters::Scope` is the list: the anonymous scopes are
+    `chat.anonymous.<kind>` (`capabilityBundle`, `capabilityMinute`,
+    `capabilityDay`, `recipient`, `federationOrigin`, `ipBytes`,
+    `originMultiRequests`, `originMultiBytes`, `groupSendIssue`,
+    `groupEndorsementUpload`, `groupSendToken`, `multiRecipient`), the media
+    ones `chat.media.<kind>` (`capabilityMinute`, `capabilityDay`,
+    `recipient`, `federationOrigin`). No subject was text: every one is a
+    32-byte digest (the capability's hash, or a labelled hash of the
+    recipient, origin, client address, token or account), so `subject` keeps
+    the `octet_length = 32` check.
+  - The sweeper is the job `server.rate_counters` (every 15 minutes, in
+    `jobs::spawn_all`, with a heartbeat): it deletes rows past `expires_at`
+    (two windows after the window's start).
+  - `client_type` holds the 11 `ClientType` values. The two fork checks
+    (`auth_session_forks.child_client_type`, and `auth_sessions` with a
+    parent) say "not `web-account` or `cli`" over it, the clients that don't
+    sign in directly, instead of repeating the nine web apps.
 
 ## 11. Account-record purposes and scopes
 

@@ -2025,9 +2025,9 @@ pub async fn upload_file(
                  file_key_envelope, key_epoch, key_generation, metadata_revision,
                  encrypted_size_bytes, ciphertext_sha256, fed_share_id,
                  original_key_generation, name_hash, content_revision_id,
-                 blob_suite, revision_content_envelope)
+                 blob_suite, revision_content_envelope, current_doc_key_id)
              VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,$7,$8,decode($9, 'hex'),$10,1,
-                     decode($11, 'hex'),$12,$13,kutup_unb64($14))",
+                     decode($11, 'hex'),$12,$13,kutup_unb64($14),1)",
             )
             .bind(file_id)
             .bind(share.collection_id)

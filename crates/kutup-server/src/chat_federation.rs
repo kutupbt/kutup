@@ -3116,7 +3116,7 @@ async fn charge_sealed_origin(
     .into();
     crate::handlers::chat::consume_anonymous_rate(
         tx,
-        "federationOrigin",
+        crate::ratelimit::counters::Scope::AnonymousFederationOrigin,
         &origin_digest,
         crate::ratelimit::Limit::SealedOrigin,
     )
@@ -3545,7 +3545,7 @@ mod sealed_live_tests {
     async fn recipient(pool: &sqlx::PgPool, capability: [u8; 16]) -> Uuid {
         let id = Uuid::new_v4();
         let name = format!("sb{}", &id.simple().to_string()[..12]);
-        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
             .bind(id)
             .bind(&name)
             .execute(pool)

@@ -869,14 +869,14 @@ async fn reserve_inbound_offer(
     };
     chat_media::consume_media_rate(
         &mut tx,
-        "capabilityMinute",
+        crate::ratelimit::counters::Scope::MediaCapabilityMinute,
         &capability_digest,
         crate::ratelimit::Limit::MediaCapabilityMinute,
     )
     .await?;
     chat_media::consume_media_rate(
         &mut tx,
-        "federationOrigin",
+        crate::ratelimit::counters::Scope::MediaFederationOrigin,
         &hash(
             Suite::V1,
             [

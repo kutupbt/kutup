@@ -146,6 +146,11 @@ struct ViewRow {
 
 /// A calendar as one member sees it: its newest key generation and the
 /// member's share of that generation's passphrase.
+/// A calendar row's key suite (`calendars.suite`): 1 is the current
+/// Ed25519/X25519 calendar key; a post-quantum key is a new value
+/// (docs/plans/calendar.md, M2).
+const CALENDAR_SUITE: i16 = 1;
+
 const VIEW: &str =
     "SELECT c.id, c.owner_account_id, k.public_key, k.fingerprint, k.locked_secret_key,
         c.key_generation, s.share AS passphrase_share,
@@ -363,13 +368,14 @@ pub async fn create(
     };
     let generation = cal::FIRST_KEY_GENERATION as i32;
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO calendars (id, owner_account_id, key_generation,
+        "INSERT INTO calendars (id, owner_account_id, suite, key_generation,
              metadata_key_packet, metadata_data_packet, metadata_signature, bytes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id",
     )
     .bind(input.id)
     .bind(user_id)
+    .bind(CALENDAR_SUITE)
     .bind(generation)
     .bind(&metadata.key_packet)
     .bind(&metadata.data_packet)

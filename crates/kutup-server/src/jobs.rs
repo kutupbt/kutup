@@ -22,6 +22,7 @@ const UPLOADS_STALE_AFTER_SECS: i64 = 24 * 3600;
 const TRASH_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const CHAT_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const GROUP_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const RATE_COUNTER_SWEEP_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// A group link's mailbox nobody has read for this long is abandoned.
 
 #[derive(Clone, Copy)]
@@ -80,6 +81,19 @@ pub fn spawn_all(
             }
             if ok {
                 beat(&nonces, "chat.group_sweeps").await;
+            }
+        }
+    });
+    // Database rate counters whose windows are over (crate::ratelimit::counters).
+    let counters = pool.clone();
+    register("server.rate_counters", RATE_COUNTER_SWEEP_INTERVAL);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(RATE_COUNTER_SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            match crate::ratelimit::counters::sweep(&counters).await {
+                Ok(_) => beat(&counters, "server.rate_counters").await,
+                Err(error) => tracing::warn!(%error, "rate counter sweep failed"),
             }
         }
     });
@@ -1618,7 +1632,7 @@ mod tests {
         // (counted), and a member holds a list copy with a key packet
         // (counted nowhere: its object is one of the group's above).
         let member = uuid::Uuid::new_v4();
-        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
             .bind(member)
             .bind(format!("member{}", &tag[..12]))
             .execute(&pool)
@@ -1726,7 +1740,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("live Direct mailbox fixture");
-        let cutoff = time::OffsetDateTime::now_utc();
+        // A cutoff long before any live row: the sweep is server-wide, so a
+        // cutoff of now would also take the rows parallel live tests are
+        // still reading. Only this test's row is moved before it.
+        let cutoff = time::macros::datetime!(2000-01-01 0:00 UTC);
         let set_time = |pool: sqlx::PgPool, at: time::OffsetDateTime| async move {
             sqlx::query("UPDATE chat_mailbox SET server_ts=$1 WHERE id=$2")
                 .bind(at)
@@ -1735,8 +1752,7 @@ mod tests {
                 .await
                 .unwrap();
         };
-        // The sweep is server-wide (other live tests leave mail behind):
-        // what matters is that a row at the cutoff stays and an older one goes.
+        // A row at the cutoff stays and an older one goes.
         let alive = |pool: sqlx::PgPool| async move {
             sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (SELECT 1 FROM chat_mailbox WHERE id = $1)",
@@ -1751,7 +1767,7 @@ mod tests {
         assert!(alive(pool.clone()).await);
         set_time(pool.clone(), cutoff - time::Duration::SECOND).await;
         let swept = sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
-        assert!(swept >= 1, "{swept}");
+        assert_eq!(swept, 1, "only this test's row is older than the cutoff");
         assert!(!alive(pool.clone()).await);
         pool.close().await;
     }

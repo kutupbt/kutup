@@ -249,7 +249,7 @@ mod tests {
 
     async fn account(pool: &PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
-        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
             .bind(user_id)
             .bind(format!("fed{}", &user_id.simple().to_string()[..12]))
             .execute(pool)

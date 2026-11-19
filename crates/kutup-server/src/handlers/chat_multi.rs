@@ -289,7 +289,16 @@ pub async fn send_multi(
     )
     .into();
     let bytes = i64::try_from(submission.payload.len()).unwrap_or(i64::MAX);
-    if charge(&state, "ipBytes", &address_digest, bytes, 60).await? > limits.ip_bytes_per_min {
+    if charge(
+        &state,
+        crate::ratelimit::counters::Scope::AnonymousIpBytes,
+        &address_digest,
+        bytes,
+        60,
+    )
+    .await?
+        > limits.ip_bytes_per_min
+    {
         crate::telemetry::rate_limit_rejection("anonymous_ip");
         return Err(AppError::too_many_requests(
             "anonymous delivery rate limit exceeded",
@@ -314,7 +323,7 @@ pub async fn send_multi(
 /// probe); the new count.
 async fn charge(
     state: &AppState,
-    scope: &str,
+    scope: crate::ratelimit::counters::Scope,
     digest: &[u8; 32],
     amount: i64,
     window_seconds: i64,
@@ -347,7 +356,16 @@ async fn deliver(
         .concat(),
     )
     .into();
-    if charge(state, "groupSendToken", &token_digest, 1, 60).await? > limits.per_token_per_min {
+    if charge(
+        state,
+        crate::ratelimit::counters::Scope::AnonymousGroupSendToken,
+        &token_digest,
+        1,
+        60,
+    )
+    .await?
+        > limits.per_token_per_min
+    {
         crate::telemetry::rate_limit_rejection("group_send_token");
         return Err(AppError::too_many_requests(
             "this group send token's budget is spent",
@@ -384,7 +402,16 @@ async fn deliver(
             .concat(),
         )
         .into();
-        if charge(state, "multiRecipient", &digest, 1, 60).await? > limits.per_recipient_per_min {
+        if charge(
+            state,
+            crate::ratelimit::counters::Scope::AnonymousMultiRecipient,
+            &digest,
+            1,
+            60,
+        )
+        .await?
+            > limits.per_recipient_per_min
+        {
             answer.rate_limited.push(recipient.account_id);
             continue;
         }
@@ -635,10 +662,17 @@ pub async fn deliver_federated(
         .concat(),
     )
     .into();
-    let requests = charge(&state, "originMultiRequests", &origin, 1, 60).await?;
+    let requests = charge(
+        &state,
+        crate::ratelimit::counters::Scope::AnonymousOriginMultiRequests,
+        &origin,
+        1,
+        60,
+    )
+    .await?;
     let bytes = charge(
         &state,
-        "originMultiBytes",
+        crate::ratelimit::counters::Scope::AnonymousOriginMultiBytes,
         &origin,
         i64::try_from(body.len()).unwrap_or(i64::MAX),
         60,

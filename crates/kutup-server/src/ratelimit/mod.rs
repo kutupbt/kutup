@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
+pub mod counters;
 mod registry;
 
 pub use registry::{Limit, Per, Section, Spec, Unit, SPECS};
@@ -224,8 +225,7 @@ pub fn value_for(limit: Limit, account: &str) -> u64 {
     value(limit)
 }
 
-/// A limit counted in the database (`chat_anonymous_rate_counters` and the
-/// like): `(its value, its window in seconds)`.
+/// A limit counted in the database ([`counters`]): `(its value, its window in seconds)`.
 pub fn budget(limit: Limit) -> (i64, i64) {
     let window = match limit.spec().unit {
         Unit::Events(window) => window,

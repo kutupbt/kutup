@@ -2023,47 +2023,30 @@ pub async fn get_anonymous_bundles(
 /// new count (shared by every backend, in the database).
 pub(crate) async fn anonymous_count(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    scope_type: &str,
+    scope: crate::ratelimit::counters::Scope,
     scope_digest: &[u8; 32],
     amount: i64,
     window_seconds: i64,
 ) -> AppResult<i64> {
-    Ok(sqlx::query_scalar(
-        "INSERT INTO chat_anonymous_rate_counters
-             (scope_type, scope_digest, window_start, count, expires_at)
-         VALUES (
-             $1, $2,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3),
-             $4,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3) + make_interval(secs => $3 * 2)
-         )
-         ON CONFLICT (scope_type, scope_digest, window_start)
-         DO UPDATE SET count = chat_anonymous_rate_counters.count + $4
-         RETURNING count",
-    )
-    .bind(scope_type)
-    .bind(scope_digest.as_slice())
-    .bind(window_seconds)
-    .bind(amount)
-    .fetch_one(&mut **tx)
-    .await?)
+    crate::ratelimit::counters::add(tx, scope, scope_digest, amount, window_seconds).await
 }
 
 pub(crate) async fn consume_anonymous_rate(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    scope_type: &str,
+    scope: crate::ratelimit::counters::Scope,
     scope_digest: &[u8; 32],
     budget: crate::ratelimit::Limit,
 ) -> AppResult<()> {
+    use crate::ratelimit::counters::Scope;
     let (limit, window_seconds) = crate::ratelimit::budget(budget);
-    let count = anonymous_count(tx, scope_type, scope_digest, 1, window_seconds).await?;
+    let count = anonymous_count(tx, scope, scope_digest, 1, window_seconds).await?;
     if count > limit {
-        let metric_scope = match scope_type {
-            "capabilityBundle" => "capability_bundle",
-            "capabilityMinute" => "capability_minute",
-            "capabilityDay" => "capability_day",
-            "recipient" => "recipient",
-            "federationOrigin" => "federation_origin",
+        let metric_scope = match scope {
+            Scope::AnonymousCapabilityBundle => "capability_bundle",
+            Scope::AnonymousCapabilityMinute => "capability_minute",
+            Scope::AnonymousCapabilityDay => "capability_day",
+            Scope::AnonymousRecipient => "recipient",
+            Scope::AnonymousFederationOrigin => "federation_origin",
             _ => "unknown",
         };
         crate::telemetry::rate_limit_rejection(metric_scope);
@@ -2114,7 +2097,7 @@ pub(crate) async fn load_user_bundles(
         }
         consume_anonymous_rate(
             &mut tx,
-            "capabilityBundle",
+            crate::ratelimit::counters::Scope::AnonymousCapabilityBundle,
             capability,
             crate::ratelimit::Limit::SealedCapabilityBundles,
         )
@@ -2464,7 +2447,7 @@ pub async fn send_sealed_batch(
         let mut tx = state.pool.begin().await?;
         let count = anonymous_count(
             &mut tx,
-            "ipBytes",
+            crate::ratelimit::counters::Scope::AnonymousIpBytes,
             &address_digest,
             i64::try_from(bytes).unwrap_or(i64::MAX),
             60,
@@ -2706,14 +2689,14 @@ pub(crate) async fn store_sealed_messages(
 
     consume_anonymous_rate(
         tx,
-        "capabilityMinute",
+        crate::ratelimit::counters::Scope::AnonymousCapabilityMinute,
         &presented_hash,
         crate::ratelimit::Limit::SealedCapabilityMinute,
     )
     .await?;
     consume_anonymous_rate(
         tx,
-        "capabilityDay",
+        crate::ratelimit::counters::Scope::AnonymousCapabilityDay,
         &presented_hash,
         crate::ratelimit::Limit::SealedCapabilityDay,
     )
@@ -2729,7 +2712,7 @@ pub(crate) async fn store_sealed_messages(
     .into();
     consume_anonymous_rate(
         tx,
-        "recipient",
+        crate::ratelimit::counters::Scope::AnonymousRecipient,
         &recipient_digest,
         crate::ratelimit::Limit::SealedRecipient,
     )
@@ -2746,7 +2729,7 @@ pub(crate) async fn store_sealed_messages(
         .into();
         consume_anonymous_rate(
             tx,
-            "federationOrigin",
+            crate::ratelimit::counters::Scope::AnonymousFederationOrigin,
             &origin_digest,
             crate::ratelimit::Limit::SealedOrigin,
         )

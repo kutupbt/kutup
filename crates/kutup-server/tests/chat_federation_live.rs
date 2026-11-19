@@ -3259,7 +3259,7 @@ fn queue_withdrawn_send(a_db: &str) {
     runtime.block_on(async {
         let user = uuid::Uuid::new_v4();
         let mut tx = pool.begin().await.unwrap();
-        sqlx::query("INSERT INTO accounts (id, username, identity_suite) VALUES ($1, $2, 2)")
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
             .bind(user)
             .bind(format!("withdrawn{}", &user.simple().to_string()[..10]))
             .execute(&mut *tx)

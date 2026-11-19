@@ -362,9 +362,14 @@ pub(crate) async fn endorsement(
     )
     .into();
     let mut tx = state.pool.begin().await?;
-    let used =
-        crate::handlers::chat::anonymous_count(&mut tx, "groupSendIssue", &digest, 1, 86_400)
-            .await?;
+    let used = crate::handlers::chat::anonymous_count(
+        &mut tx,
+        crate::ratelimit::counters::Scope::AnonymousGroupSendIssue,
+        &digest,
+        1,
+        86_400,
+    )
+    .await?;
     tx.commit().await?;
     if used > allowed {
         return Err(AppError::too_many_requests(
