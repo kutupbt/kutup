@@ -160,7 +160,8 @@ test.describe.serial('administration', () => {
       // The form fills in once the settings load.
       await expect(quota).not.toHaveValue('', { timeout: 15_000 })
       await quota.fill(gib)
-      await page.getByRole('button', { name: 'Save' }).click()
+      // The page has a Save per section; this one is the quota's form's.
+      await page.locator('form').filter({ has: quota }).getByRole('button', { name: 'Save' }).click()
       await expect(page.getByText('Settings saved').first()).toBeVisible({ timeout: 15_000 })
     }
     await save('3')
