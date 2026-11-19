@@ -15,7 +15,10 @@
 //! - [`send`]: who gets which copy of a message (`sendDraft`).
 //! - [`open`]: a stored message opened, byte-exact (`storedMessage`).
 //! - [`meta`]: a send's readable fields, read from a message an app built.
+//! - [`cache`]: the bridge's on-disk cache of opened messages, sealed block
+//!   by block.
 
+pub mod cache;
 pub mod keys;
 pub mod meta;
 pub mod open;

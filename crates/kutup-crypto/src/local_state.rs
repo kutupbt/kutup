@@ -16,6 +16,14 @@
 //!   master key derives ([`manifest_pins_key`]), so the list survives a new
 //!   sign-in on the same browser yet reveals nothing (who one edits with) to
 //!   anyone holding only the disk. Profile = `<client type>:<user id>`.
+//! - `MailBridgeCache` — one block of a message the desktop mail bridge keeps
+//!   decrypted on disk (docs/plans/mail-bridge.md, decision 7), under the
+//!   bridge's local key. Profile = `<account>:<message>:<block>/<blocks>`, so
+//!   every block has its own nonce and is bound to its message, its place and
+//!   the count: none can be moved, swapped or dropped (Gluon's cache reuses one
+//!   nonce for a file's blocks and binds no position).
+//! - `MailBridgeIndex` — one sealed row of the bridge's index (envelopes,
+//!   names). Profile = `<account>:<table>:<row>`.
 //!
 //! This is not a federated protocol format, but it still uses the project-wide
 //! XChaCha20-Poly1305 palette and authenticates its suite, purpose, profile and
@@ -81,6 +89,8 @@ pub enum LocalStatePurpose {
     SessionFork = 2,
     WebSession = 3,
     ManifestPins = 4,
+    MailBridgeCache = 5,
+    MailBridgeIndex = 6,
 }
 
 impl LocalStatePurpose {
@@ -98,6 +108,8 @@ impl TryFrom<u8> for LocalStatePurpose {
             2 => Ok(Self::SessionFork),
             3 => Ok(Self::WebSession),
             4 => Ok(Self::ManifestPins),
+            5 => Ok(Self::MailBridgeCache),
+            6 => Ok(Self::MailBridgeIndex),
             // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
             0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(
