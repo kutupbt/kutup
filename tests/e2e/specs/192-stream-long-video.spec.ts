@@ -157,9 +157,14 @@ test.describe('a long video streams by block', () => {
     const inPhotosPath = await playingPath(inPhotos, `Photos' viewer ${spec.name}`, { timeout: 10 * 60_000 })
     const beforeSeek = log.reads.length
     await seekAndPlay(inPhotos, SEEK_TO_S)
+    // The last block holds the WebM's cues (its index, at the end), which
+    // Chromium reads at the first seek: not counted with the media read there.
+    const lastBlock = Math.floor((video.size - 1) / BLOCK)
+    const mediaBlocks = (from: number) => [...log.blocksSince(from)].filter((block) => block < lastBlock)
     if (inPhotosPath === 'stream') {
-      // The block under 1:30:00 and the one read ahead, perhaps the next: a handful, not the file.
-      expect(log.blocksSince(beforeSeek).size).toBeLessThanOrEqual(4)
+      // The block under 1:30:00 and those read ahead (at 320 kbit/s a block
+      // is about 105 s): a handful, not the file.
+      expect(mediaBlocks(beforeSeek).length).toBeLessThanOrEqual(4)
       // From the first byte to here: the header, the manifest, the start, the index and the seek.
       expect(log.bytesSince(0)).toBeLessThan(12 * BLOCK)
       expect(log.bytesSince(0)).toBeLessThan(video.size / 4)
@@ -181,7 +186,7 @@ test.describe('a long video streams by block', () => {
     const beforeDriveSeek = log.reads.length
     await seekAndPlay(inDrive, SEEK_TO_S + 600)
     if (inDrivePath === 'stream') {
-      expect(log.blocksSince(beforeDriveSeek).size).toBeLessThanOrEqual(4)
+      expect(mediaBlocks(beforeDriveSeek).length).toBeLessThanOrEqual(4)
       expect(log.bytesSince(beforeDrive)).toBeLessThan(12 * BLOCK)
     }
     await context.close()
