@@ -22,8 +22,6 @@
 //!   every block has its own nonce and is bound to its message, its place and
 //!   the count: none can be moved, swapped or dropped (Gluon's cache reuses one
 //!   nonce for a file's blocks and binds no position).
-//! - `MailBridgeIndex` — one sealed row of the bridge's index (envelopes,
-//!   names). Profile = `<account>:<table>:<row>`.
 //!
 //! This is not a federated protocol format, but it still uses the project-wide
 //! XChaCha20-Poly1305 palette and authenticates its suite, purpose, profile and
@@ -90,7 +88,6 @@ pub enum LocalStatePurpose {
     WebSession = 3,
     ManifestPins = 4,
     MailBridgeCache = 5,
-    MailBridgeIndex = 6,
 }
 
 impl LocalStatePurpose {
@@ -109,7 +106,6 @@ impl TryFrom<u8> for LocalStatePurpose {
             3 => Ok(Self::WebSession),
             4 => Ok(Self::ManifestPins),
             5 => Ok(Self::MailBridgeCache),
-            6 => Ok(Self::MailBridgeIndex),
             // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
             0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
             _ => Err(CryptoError::NewerThanMe(format!(

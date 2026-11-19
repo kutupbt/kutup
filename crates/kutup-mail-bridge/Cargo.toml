@@ -1,0 +1,21 @@
+[package]
+name = "kutup-mail-bridge"
+description = "Kutup's desktop mail bridge: IMAP and SMTP on this machine, mail kept end-to-end encrypted (docs/plans/mail-bridge.md)"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kutup-mail-client = { path = "../kutup-mail-client" }
+# The index: SQLCipher, as kutup-chat-core's native store builds it (the same
+# rusqlite and bundled SQLCipher, so one SQLite in the tree; deny.toml's
+# RUSTSEC-2026-0459 note covers both).
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+thiserror.workspace = true
+zeroize.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

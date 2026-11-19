@@ -119,8 +119,7 @@ fn web_local_state_purpose(purpose: u8) -> Result<LocalStatePurpose, JsValue> {
         // `sealManifestPins`, never with a caller's key.
         LocalStatePurpose::CliSession
         | LocalStatePurpose::ManifestPins
-        | LocalStatePurpose::MailBridgeCache
-        | LocalStatePurpose::MailBridgeIndex => Err(js_error(
+        | LocalStatePurpose::MailBridgeCache => Err(js_error(
             "local-state purpose is not available to web clients",
         )),
     }
