@@ -98,6 +98,10 @@ chmod -R a+rX "$KUTUP_MAIL_KEYS_DIR"
 
 compose down --volumes --remove-orphans
 compose build backend stalwart-setup
+# Stalwart's setup mounts ./nginx/certs; made here, as the user, so Docker
+# doesn't create it as root (the browser gates write their certificates
+# there next).
+mkdir -p "$root_dir/nginx/certs"
 compose up --detach --wait \
   postgres seaweedfs-master seaweedfs-volume seaweedfs-filer seaweedfs-s3 seaweedfs-init \
   backend stalwart mail-sink mail-keys mail-dns
