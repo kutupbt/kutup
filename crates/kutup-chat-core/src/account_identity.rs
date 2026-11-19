@@ -294,7 +294,7 @@ impl Engine {
     /// Re-register: a new account identity, and the account's next manifest
     /// listing this device as its one Chat device, sent in the registration
     /// call; the account's other (non-Chat) devices stay listed, and this one
-    /// takes the lowest id they leave free (`reregistration_device_id`). The
+    /// takes the account's next id they leave free (`next_device_id`). The
     /// server drops every other Chat device of the account in the same
     /// transaction (Signal's `reclaimAccount`); peers see the safety number
     /// change once. Also how an account's first Chat device registers.
@@ -341,13 +341,19 @@ impl Engine {
             .filter(|device| device.chat.is_none())
             .cloned()
             .collect();
-        let device_id = kutup_chat_proto::reregistration_device_id(
+        // The account's next id the kept entries leave free; the server
+        // requires that one (another registration since moves the counter,
+        // and the call is refused: the device asks again).
+        let device_session = transport.fetch_device_session().await?;
+        let device_id = kutup_chat_proto::next_device_id(
+            device_session.next_device_id,
             &others
                 .iter()
                 .map(|device| device.device_id)
                 .collect::<Vec<_>>(),
-        );
-        let device_session = transport.fetch_device_session().await?;
+        )
+        .ok_or_else(|| ChatError::Invalid("every device id of the account is held".into()))?;
+        let device_session = device_session.session;
         let sign =
             |identity: &IdentityKeyPair, registration_id: u32| -> Result<AccountManifestV3> {
                 let mut devices = others.clone();
@@ -443,7 +449,7 @@ impl Engine {
             .clone();
         let device_id = transport.register_device(&request).await?;
         // A re-registration is answered with the id its manifest lists for
-        // this device: the lowest the account's other devices leave free.
+        // this device: the account's next id its other devices leave free.
         if let kutup_chat_proto::DeviceRegistrationV1::Reregistration { manifest } =
             &request.registration
         {
@@ -953,18 +959,16 @@ mod tests {
     }
 
     /// An account's first device re-registers: device 1 alone, the chain's
-    /// first manifest; a later re-registration continues the chain and
-    /// drops every other device.
+    /// first manifest; a later re-registration continues the chain, drops
+    /// every other device, and takes the account's next id (3), not a
+    /// freed one.
     #[test]
     fn re_registration_lists_device_one_alone_and_continues_the_chain() {
         let world = World::new();
         let mut alice = world.person(1);
         let first = head(&world, &alice.account);
         assert_eq!(first.devices.len(), 1);
-        assert_eq!(
-            first.devices[0].device_id,
-            kutup_chat_proto::REREGISTRATION_DEVICE_ID
-        );
+        assert_eq!(first.devices[0].device_id, 1);
         assert_eq!(
             first.identity_key,
             Some(alice.engine.session().account_identity_key())
@@ -988,10 +992,7 @@ mod tests {
         let reregistered = head(&world, &alice.account);
         reregistered.verify_successor(Some(&linked)).unwrap();
         assert_eq!(reregistered.devices.len(), 1);
-        assert_eq!(
-            reregistered.devices[0].device_id,
-            kutup_chat_proto::REREGISTRATION_DEVICE_ID
-        );
+        assert_eq!(reregistered.devices[0].device_id, 3);
         assert_ne!(reregistered.identity_key, linked.identity_key);
         assert_eq!(
             Some(fresh.session().account_identity_key()),

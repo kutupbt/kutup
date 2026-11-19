@@ -9,7 +9,7 @@ use axum::http::HeaderMap;
 use axum::Json;
 use kutup_chat_proto::{
     device_session_hash, AccountDeviceV1, AccountManifestV3, DeviceKind, DeviceTicketResponse,
-    RegisterDeviceRequestV1, RegisterDeviceResponseV1, MAX_ACCOUNT_MANIFEST_DEVICES,
+    RegisterDeviceRequestV1, RegisterDeviceResponseV1,
 };
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::primitives::{hash, Suite};
@@ -47,16 +47,13 @@ pub(crate) fn session_hash(root_session_id: Uuid) -> String {
     device_session_hash(root_session_id.as_bytes())
 }
 
-#[derive(Debug, Serialize, ToSchema)]
-pub struct DeviceSessionResponse {
-    /// Lowercase hex: [`kutup_chat_proto::device_session_hash`] of the
-    /// caller's root sign-in.
-    pub session: String,
-}
+/// `GET /api/v1/account/devices/session`'s answer.
+pub use kutup_chat_proto::DeviceSessionResponseV1 as DeviceSessionResponse;
 
 /// `GET /api/v1/account/devices/session` — the `session` hash a device of this sign-in
-/// lists in its manifest entry. A device asks before it signs its own entry
-/// (a re-registration, or adding itself after a link).
+/// lists in its manifest entry, and the account's device counter. A device
+/// asks before it signs its own entry (a re-registration, or adding itself
+/// after a link).
 #[utoipa::path(
     get,
     path = "/api/v1/account/devices/session",
@@ -72,9 +69,11 @@ pub async fn get_device_session(
     State(state): State<AppState>,
     auth: AuthAccount,
 ) -> AppResult<Json<DeviceSessionResponse>> {
+    let user_id = crate::handlers::trusted_uuid(&auth.account_id)?;
     let root = root_session_id(&state.pool, auth.session.session_id).await?;
     Ok(Json(DeviceSessionResponse {
         session: session_hash(root),
+        next_device_id: device_counter(&state.pool, user_id).await?,
     }))
 }
 
@@ -183,6 +182,126 @@ pub(crate) async fn check_device_cap<'e>(
     Ok(())
 }
 
+/// The account's next device id (docs/plans/one-device-list.md, "Device
+/// ids"): the first id at or after `accounts.next_device_id` that no row in
+/// `taken` holds and no head entry lists (its row gone, revoked or ended with
+/// its sign-in, until the next manifest drops it), wrapping from 127 to 1;
+/// the counter then moves past it. So an id comes back only after every
+/// other free id has had its turn, never at once as the lowest free id did;
+/// ids are libsignal's 1..=127, so reuse itself stays, as in Signal.
+///
+/// An id freed less than `hold_seconds` ago (`account_device_releases`, kept
+/// by a trigger on every deletion of a row) is passed over too while another
+/// is free: a sender certificate its earlier holder was issued names the id,
+/// and could otherwise be taken for the new holder's. When only such ids are
+/// free, the counter's choice among them is taken all the same: the device
+/// cap holds, never a lockout below it.
+///
+/// What the id's earlier holder left under it goes in the same transaction,
+/// as Signal's `AccountsManager.addDevice` clears the id's prekeys and
+/// messages: its send records (a deterministic `sendId` of the new holder's
+/// would otherwise be answered as a duplicate). Prekeys, mailbox, tickets,
+/// push subscriptions, multi-send ids and link tokens go with the row
+/// (`ON DELETE CASCADE`).
+///
+/// Run under the account's lock (`accounts … FOR UPDATE`), which serializes
+/// concurrent registrations: each reads the counter the last one left.
+/// `409 deviceLimit` when every id is held (the cap is below 127, so only
+/// with stale entries the next manifest drops).
+pub(crate) async fn take_device_id(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    taken: &[i32],
+    hold_seconds: i64,
+) -> AppResult<i32> {
+    let next: i16 =
+        sqlx::query_scalar("SELECT next_device_id FROM accounts WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    let mut held: Vec<u32> = taken.iter().map(|id| *id as u32).collect();
+    let entries: Vec<i32> = sqlx::query_scalar(
+        "SELECT (listed ->> 'deviceId')::int
+           FROM chat_device_manifests m, jsonb_array_elements(m.manifest -> 'devices') listed
+          WHERE m.account_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    held.extend(entries.into_iter().map(|id| id as u32));
+    let recent: Vec<i32> = sqlx::query_scalar(
+        "SELECT device_id FROM account_device_releases
+          WHERE account_id = $1 AND released_at > now() - ($2 * interval '1 second')",
+    )
+    .bind(user_id)
+    .bind(hold_seconds)
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut held_longer = held.clone();
+    held_longer.extend(recent.into_iter().map(|id| id as u32));
+    let id = kutup_chat_proto::next_device_id(next as u32, &held_longer)
+        .or_else(|| kutup_chat_proto::next_device_id(next as u32, &held))
+        .ok_or_else(device_limit)?;
+    claim_device_id(tx, user_id, id as i32).await?;
+    sqlx::query(
+        "DELETE FROM account_device_releases
+          WHERE account_id = $1 AND released_at <= now() - ($2 * interval '1 second')",
+    )
+    .bind(user_id)
+    .bind(hold_seconds)
+    .execute(&mut **tx)
+    .await?;
+    Ok(id as i32)
+}
+
+/// Moves the account's counter past `id` and clears what an earlier holder
+/// of `id` left that doesn't go with its row ([`take_device_id`]). A
+/// re-registration, whose manifest names the id, calls it directly.
+pub(crate) async fn claim_device_id(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    id: i32,
+) -> AppResult<()> {
+    sqlx::query("UPDATE accounts SET next_device_id = $2 WHERE id = $1")
+        .bind(user_id)
+        .bind(kutup_chat_proto::device_id_after(id as u32) as i16)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM chat_sends WHERE sender_account_id = $1 AND sender_device_id = $2")
+        .bind(user_id)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM account_device_releases WHERE account_id = $1 AND device_id = $2")
+        .bind(user_id)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// How long a freed device id is passed over ([`take_device_id`]): the reach
+/// of a sender certificate, when this server issues them.
+pub(crate) fn id_hold_seconds(state: &AppState) -> i64 {
+    state
+        .sealed_sender
+        .as_ref()
+        .map_or(0, |service| service.certificate_reach_seconds())
+}
+
+/// The account's device counter, for a re-registration to name the id the
+/// server will require ([`kutup_chat_proto::next_device_id`]).
+pub(crate) async fn device_counter<'e>(
+    executor: impl PgExecutor<'e>,
+    user_id: Uuid,
+) -> AppResult<u32> {
+    let next: i16 = sqlx::query_scalar("SELECT next_device_id FROM accounts WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(executor)
+        .await?;
+    Ok(next as u32)
+}
+
 /// `409 deviceLimit`: the account has as many devices as it may.
 pub(crate) fn device_limit() -> AppError {
     AppError::conflict("the account's device limit is reached")
@@ -199,7 +318,8 @@ fn devices_conflict() -> AppError {
 // ---------------------------------------------------------------------------
 
 /// `POST /api/v1/account/devices` — an editor or CLI device of the caller's account:
-/// a row under the caller's sign-in with the lowest id no row holds, within
+/// a row under the caller's sign-in with the account's next device id
+/// ([`take_device_id`]), within
 /// [`crate::site_settings::DEVICES_PER_ACCOUNT`]. The device then lists
 /// itself in the account's manifest (`POST /api/v1/chat/manifest`); until it
 /// does, its frames are refused, and a publication by another device after
@@ -271,9 +391,8 @@ pub async fn register_device(
     if live >= most {
         return Err(device_limit());
     }
-    let device_id = (1..=MAX_ACCOUNT_MANIFEST_DEVICES as i32)
-        .find(|id| !rows.iter().any(|(taken, ..)| taken == id))
-        .ok_or_else(device_limit)?;
+    let taken: Vec<i32> = rows.iter().map(|(id, ..)| *id).collect();
+    let device_id = take_device_id(&mut tx, user_id, &taken, id_hold_seconds(&state)).await?;
     let (salt, credential_hash) = chat_identity::new_credential(&credential);
     sqlx::query(
         "INSERT INTO account_devices (account_id, device_id, kind, session_id, frame_key, name,
@@ -562,4 +681,220 @@ pub(crate) fn close_device(state: &AppState, user_id: Uuid, device_id: i32) {
     state
         .hub
         .close_device(&user_id.to_string(), device_id as u32);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    /// A day, as a sender certificate's reach.
+    const HOLD: i64 = 24 * 60 * 60;
+
+    async fn pool() -> Option<sqlx::PgPool> {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return None;
+        };
+        Some(
+            PgPoolOptions::new()
+                .max_connections(10)
+                .connect(&url)
+                .await
+                .unwrap(),
+        )
+    }
+
+    async fn account(pool: &sqlx::PgPool) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch,
+                 master_key_generation)
+             VALUES ($1, $2, 2, 1, 1)",
+        )
+        .bind(id)
+        .bind(format!("dev{}", &id.simple().to_string()[..12]))
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    /// What a registration does: under the account's lock, the next id over
+    /// the account's rows, and its row.
+    async fn register(pool: &sqlx::PgPool, user_id: Uuid) -> AppResult<i32> {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SELECT id FROM accounts WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        let taken: Vec<i32> =
+            sqlx::query_scalar("SELECT device_id FROM account_devices WHERE account_id = $1")
+                .bind(user_id)
+                .fetch_all(&mut *tx)
+                .await?;
+        let id = take_device_id(&mut tx, user_id, &taken, HOLD).await?;
+        sqlx::query(
+            "INSERT INTO account_devices (account_id, device_id, kind, session_id, frame_key,
+                 credential_salt, credential_hash)
+             VALUES ($1, $2, 'editor', $3, $4, $5, $6)",
+        )
+        .bind(user_id)
+        .bind(id)
+        .bind(Uuid::new_v4())
+        .bind(&[id as u8; 32][..])
+        .bind(&[0u8; 16][..])
+        .bind(&[0u8; 32][..])
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    async fn remove(pool: &sqlx::PgPool, user_id: Uuid, id: i32) {
+        sqlx::query("DELETE FROM account_devices WHERE account_id = $1 AND device_id = $2")
+            .bind(user_id)
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// A removed device's id goes to no new device while another is free,
+    /// nor within its hold; what its holder left under the id (send records)
+    /// goes when it does.
+    #[tokio::test]
+    async fn live_a_removed_id_comes_back_last() {
+        let Some(pool) = pool().await else { return };
+        let user_id = account(&pool).await;
+        assert_eq!(register(&pool, user_id).await.unwrap(), 1);
+        assert_eq!(register(&pool, user_id).await.unwrap(), 2);
+        remove(&pool, user_id, 2).await;
+        assert_eq!(register(&pool, user_id).await.unwrap(), 3);
+        remove(&pool, user_id, 1).await;
+        assert_eq!(register(&pool, user_id).await.unwrap(), 4);
+
+        // An id the head manifest still lists, its row gone, is held too.
+        sqlx::query(
+            "INSERT INTO chat_device_manifests (account_id, version, manifest_hash,
+                 authority_key_id, manifest)
+             VALUES ($1, 1, decode(repeat('00', 32), 'hex'), decode(repeat('00', 32), 'hex'),
+                     '{\"devices\": [{\"deviceId\": 5}]}'::jsonb)",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(register(&pool, user_id).await.unwrap(), 6);
+
+        // Past 127 the counter wraps to the lowest free id from 1, passing
+        // over ids freed within the hold (1 and 2, a sender certificate of
+        // their earlier holders may still be taken).
+        sqlx::query("UPDATE accounts SET next_device_id = 127 WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(register(&pool, user_id).await.unwrap(), 127);
+        assert_eq!(register(&pool, user_id).await.unwrap(), 7);
+        // Once the hold is over, 1 comes back, and the send records its
+        // earlier holder left go with the claim.
+        sqlx::query(
+            "UPDATE account_device_releases SET released_at = now() - interval '2 days'
+              WHERE account_id = $1",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE accounts SET next_device_id = 1 WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO chat_sends (sender_account_id, sender_device_id, send_id)
+             VALUES ($1, 1, 'left-by-the-earlier-device-1')",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(register(&pool, user_id).await.unwrap(), 1);
+        let sends: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM chat_sends WHERE sender_account_id = $1 AND sender_device_id = 1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(sends, 0, "the earlier holder's send records went");
+        assert_eq!(device_counter(&pool, user_id).await.unwrap(), 2);
+        let releases: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM account_device_releases WHERE account_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(releases, 0, "releases past the hold are dropped");
+
+        // Only an id within its hold free: taken all the same (no lockout
+        // below the cap).
+        sqlx::query(
+            "INSERT INTO account_devices (account_id, device_id, kind, session_id, frame_key,
+                 credential_salt, credential_hash)
+             SELECT $1, n, 'editor', gen_random_uuid(), decode(repeat('00', 32), 'hex'),
+                    decode(repeat('00', 16), 'hex'), decode(repeat('00', 32), 'hex')
+               FROM generate_series(1, 127) n
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        remove(&pool, user_id, 40).await;
+        assert_eq!(register(&pool, user_id).await.unwrap(), 40);
+
+        // Every id held: refused (`deviceLimit`), never a held id.
+        let refused = register(&pool, user_id).await.unwrap_err();
+        assert_eq!(refused.status, axum::http::StatusCode::CONFLICT);
+
+        // An account going away takes its rows with it: its devices leave no
+        // releases behind (the trigger skips an account being deleted).
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let left: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM account_device_releases WHERE account_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    /// Registrations at once each take their own id, in order: the account's
+    /// lock serializes the counter.
+    #[tokio::test]
+    async fn live_concurrent_registrations_take_distinct_ids() {
+        let Some(pool) = pool().await else { return };
+        let user_id = account(&pool).await;
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let pool = pool.clone();
+                tokio::spawn(async move { register(&pool, user_id).await.unwrap() })
+            })
+            .collect();
+        let mut ids = Vec::new();
+        for task in tasks {
+            ids.push(task.await.unwrap());
+        }
+        ids.sort_unstable();
+        assert_eq!(ids, (1..=8).collect::<Vec<i32>>());
+        assert_eq!(device_counter(&pool, user_id).await.unwrap(), 9);
+    }
 }

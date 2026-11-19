@@ -131,16 +131,12 @@ impl ChatTransport for NativeTransport {
         .await
     }
 
-    async fn fetch_device_session(&self) -> CoreResult<String> {
-        #[derive(serde::Deserialize)]
-        struct DeviceSession {
-            session: String,
-        }
+    async fn fetch_device_session(&self) -> CoreResult<kutup_chat_proto::DeviceSessionResponseV1> {
         let response = self
             .request(ChatHttpMethod::Get, "/account/devices/session".into(), None)
             .await?;
         ensure_success(&response)?;
-        decode::<DeviceSession>(&response.body_json).map(|body| body.session)
+        decode(&response.body_json)
     }
 
     async fn fetch_manifest(&self, account: &str) -> CoreResult<Option<AccountManifestV3>> {

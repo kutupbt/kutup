@@ -371,9 +371,11 @@ pub(crate) fn canonical_profile_version(value: &str) -> bool {
     hex::decode(value).is_ok_and(|decoded| decoded.len() == 32 && hex::encode(decoded) == value)
 }
 
-/// `POST /api/v1/chat/devices` — register this client as a chat device. The server assigns
-/// the lowest free device id while enforcing the configured 1..=10 active
-/// device limit.
+/// `POST /api/v1/chat/devices` — register this client as a chat device. A link
+/// takes the account's next device id
+/// ([`crate::account_devices::take_device_id`]); a re-registration's manifest
+/// names it, and must name that one. The configured active-device limits
+/// hold.
 #[utoipa::path(
     post,
     path = "/api/v1/chat/devices",
@@ -500,6 +502,24 @@ pub async fn register_device(
                 return Err(AppError::conflict("this manifest is already the account's")
                     .with_details(json!({ "code": "manifestConflict" })));
             }
+            // The id is the account's counter's (Signal's addDevice under
+            // the account lock): the first the kept entries leave free at or
+            // after it, as `GET /api/v1/account/devices/session` told the
+            // device. Another registration since moves the counter: the
+            // device asks again.
+            let kept_ids: Vec<u32> = manifest
+                .devices
+                .iter()
+                .map(|device| device.device_id)
+                .filter(|id| *id != new_id)
+                .collect();
+            let counter = crate::account_devices::device_counter(&mut *tx, user_id).await?;
+            if kutup_chat_proto::next_device_id(counter, &kept_ids) != Some(new_id) {
+                return Err(AppError::conflict(
+                    "the manifest lists this device under another id than the account's next",
+                )
+                .with_details(json!({ "code": "devicesMismatch" })));
+            }
             crate::account_devices::check_listed_rows(
                 &mut tx,
                 user_id,
@@ -537,6 +557,7 @@ pub async fn register_device(
             .bind(&kept)
             .fetch_all(&mut *tx)
             .await?;
+            crate::account_devices::claim_device_id(&mut tx, user_id, new_id as i32).await?;
             (new_id as i32, Some((dropped, shared)))
         } else {
             // A link: the account's identity, and a token an existing device of
@@ -591,11 +612,16 @@ pub async fn register_device(
             if live.count() as i64 >= most {
                 return Err(crate::account_devices::device_limit());
             }
-            // The lowest id no row holds (an expired row keeps its id until
-            // the next manifest drops it).
-            let device_id = (1..=MAX_DEVICE_ID)
-                .find(|id| !rows.iter().any(|(taken, ..)| taken == id))
-                .ok_or_else(crate::account_devices::device_limit)?;
+            // The account's next id (an expired row keeps its id until the
+            // next manifest drops it, as does a head entry whose row is gone).
+            let taken: Vec<i32> = rows.iter().map(|(id, ..)| *id).collect();
+            let device_id = crate::account_devices::take_device_id(
+                &mut tx,
+                user_id,
+                &taken,
+                crate::account_devices::id_hold_seconds(&state),
+            )
+            .await?;
             (device_id, None)
         };
 

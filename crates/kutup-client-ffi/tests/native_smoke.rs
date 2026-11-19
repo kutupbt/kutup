@@ -109,7 +109,7 @@ impl ChatHttpClient for MockHttp {
             // entry names.
             (ChatHttpMethod::Get, "/account/devices/session") => Ok(ChatHttpResponse {
                 status: 200,
-                body_json: r#"{"session":"5f0c6c1e8a3b4d2e9f710b1c2d3e4f505f0c6c1e8a3b4d2e9f710b1c2d3e4f50"}"#.into(), instance_id: None, }),
+                body_json: r#"{"session":"5f0c6c1e8a3b4d2e9f710b1c2d3e4f505f0c6c1e8a3b4d2e9f710b1c2d3e4f50","nextDeviceId":1}"#.into(), instance_id: None, }),
             _ => Err(KutupChatError::Transport {
                 message: format!("unexpected request: {:?} {}", request.method, request.path),
             }),

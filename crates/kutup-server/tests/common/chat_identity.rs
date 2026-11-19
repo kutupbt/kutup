@@ -161,19 +161,21 @@ impl ChatAccount {
     }
 
     /// The server's `session` hash for the token is the one this account
-    /// lists.
-    pub fn fetch_session(&self, c: &Client, base: &str) {
+    /// lists; the account's device counter.
+    pub fn fetch_session(&self, c: &Client, base: &str) -> u32 {
         let r = c
             .get(format!("{base}/api/v1/account/devices/session"))
             .bearer_auth(&self.token)
             .send()
             .unwrap();
         assert_eq!(r.status(), StatusCode::OK, "device session");
+        let answer = r.json::<Value>().unwrap();
         assert_eq!(
-            r.json::<Value>().unwrap()["session"].as_str().unwrap(),
+            answer["session"].as_str().unwrap(),
             self.session,
             "the token's sign-in"
         );
+        answer["nextDeviceId"].as_u64().expect("the device counter") as u32
     }
 
     pub fn identity_key(&self) -> String {
@@ -292,8 +294,9 @@ impl ChatAccount {
             .unwrap()
     }
 
-    /// The account's first device, or a new identity for it: device 1 under
-    /// a manifest listing it alone; every other device is dropped.
+    /// The account's first device, or a new identity for it: the account's
+    /// next device id (1 on a new account) under a manifest listing it
+    /// alone; every other device is dropped.
     pub fn reregister(&mut self, c: &Client, base: &str) -> ChatDevice {
         let (registration_id, credential) = new_device_secrets();
         self.reregister_as(c, base, registration_id, credential)
@@ -307,12 +310,12 @@ impl ChatAccount {
         registration_id: u32,
         credential: [u8; 32],
     ) -> ChatDevice {
+        let counter = self.fetch_session(c, base);
         let device = ChatDevice {
-            id: kutup_chat_proto::REREGISTRATION_DEVICE_ID,
+            id: kutup_chat_proto::next_device_id(counter, &[]).unwrap(),
             registration_id,
             credential,
         };
-        self.fetch_session(c, base);
         let manifest = self.next_manifest(&[&device]);
         let body = self.registration(
             registration_id,

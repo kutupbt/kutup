@@ -94,8 +94,8 @@ export async function listAccountDevices(): Promise<AccountDevice[]> {
 }
 
 /**
- * Registers an editing device of this sign-in: its row, under the lowest
- * free id. It then lists itself ({@link publishNextManifest}); until then
+ * Registers an editing device of this sign-in: its row, under the account's
+ * next device id (a removed device's id comes back last). It then lists itself ({@link publishNextManifest}); until then
  * its frames are refused. `409 deviceLimit` at the cap.
  */
 export async function registerDevice(request: {

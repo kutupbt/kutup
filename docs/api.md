@@ -4260,11 +4260,20 @@ is 127).
 
 ### GET /api/v1/account/devices/session
 
-`{ "session": "<64 hex>" }`: what a device of the caller's sign-in lists as
-its manifest entry's `session`. It is SHA-256 over
+`{ "session": "<64 hex>", "nextDeviceId": 1..127 }`: what a device of the
+caller's sign-in lists as its manifest entry's `session`, and the account's
+device counter. `session` is SHA-256 over
 `kutup/account/device-session/v1\0` and the root sign-in's id: an app
 session's parent, or the session itself. A device asks before it signs its
 own entry.
+
+**Device ids.** A new device takes the first id at or after the account's
+counter that no row of the account and no entry of its head manifest holds,
+wrapping from 127 to 1; the counter then moves past it. Ids are libsignal's
+1-127, so they are reused (as Signal reuses them), but a removed device's id
+comes back only after every other free id has had its turn. Everything stored
+under an id goes with its device, or is bound to the device's instance
+(docs/plans/one-device-list.md, "Device id reuse").
 
 **Device credentials.** A device draws 32 random bytes at registration (its
 `credential`, unpadded base64url); the server keeps a salted hash. Every call
@@ -4289,7 +4298,7 @@ keys too: `400 badSignature`), optional `oneTimePreKeys[]` /
   (below). The identity is the account's (`409 identityMismatch`; `409
   noAccountIdentity` when it has none); the token is unused, unexpired and the
   account's (`403 linkToken`), consumed with the insert. The server assigns the
-  lowest device id no row of the account holds, within `chatMaxActiveDevices`
+  account's next device id (above), within `chatMaxActiveDevices`
   Chat devices (`409`) and `devicesPerAccount` devices of every kind (`409
   deviceLimit`). A device of the account then publishes the manifest that
   lists it.
@@ -4299,8 +4308,11 @@ keys too: `400 badSignature`), optional `oneTimePreKeys[]` /
   (`verifySuccessor`: sequence 1 with no manifest, else head + 1 linked by
   hash) and lists this device as its one Chat device, under this sign-in's
   `session`, with the head's other (non-Chat) entries unchanged (`409
-  devicesMismatch`); the device takes the lowest id those leave free (1 when
-  there are none). In one transaction the server drops every other Chat
+  devicesMismatch`); the device takes the account's next id those leave
+  free: the first at or after `nextDeviceId` (`GET
+  /api/v1/account/devices/session`), wrapping from 127 to 1 (`409
+  devicesMismatch` for another; a registration in between moves the
+  counter, and the device asks again). In one transaction the server drops every other Chat
   device of the account and every row the manifest doesn't list (prekeys,
   mailboxes, tickets and push subscriptions with them), inserts this one,
   records the identity and publishes the manifest. The gate is the account
@@ -6298,8 +6310,8 @@ registers with `POST /api/v1/chat/devices`).
 credential}`: the frame key (canonical base64 of an Ed25519 public key, not
 a small-order point) and the device's credential (unpadded base64url of 32
 random bytes; the server keeps a salted hash).
-**Response 200:** `{deviceId, session}`: the lowest id no row of the account
-holds, and the `session` hash its manifest entry lists. A retry with the
+**Response 200:** `{deviceId, session}`: the account's next device id (see
+"Device ids" under Chat), and the `session` hash its manifest entry lists. A retry with the
 same credential answers the row it made. The device then lists itself in the
 account's next manifest (`POST /api/v1/chat/manifest`, with its
 `X-Kutup-Device`); an account with no manifest yet gets its first, with no
@@ -6314,8 +6326,8 @@ name, session, thisSignIn, listed, expired, createdAt, lastSeenAt}]}`.
 `expired`: idle too long, dropped by the next manifest.
 
 ### GET /api/v1/account/devices/session
-`{session}`: the hash a device of the caller's sign-in lists in its manifest
-entry (Chat, above).
+`{session, nextDeviceId}`: the hash a device of the caller's sign-in lists in
+its manifest entry, and the account's device counter (Chat, above).
 
 ### POST /api/v1/account/devices/tickets
 A single-use WebSocket ticket for the device `X-Kutup-Device` names, of any

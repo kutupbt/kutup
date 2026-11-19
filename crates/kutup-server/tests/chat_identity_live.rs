@@ -438,7 +438,7 @@ fn a_manifest_without_its_identitys_binding_is_refused() {
     let mut ada = account(&c, &base);
     let (registration_id, credential) = (4242, [7u8; 32]);
     let device = ChatDevice {
-        id: kutup_chat_proto::REREGISTRATION_DEVICE_ID,
+        id: 1, // a new account's first device id
         registration_id,
         credential,
     };
@@ -492,10 +492,12 @@ fn a_reregistration_drops_every_other_device() {
     let mut ada = account(&c, &base);
     let first = ada.reregister(&c, &base);
     let second = ada.link(&c, &base, &first);
-    // Every device lost: a new device takes a new identity as device 1.
+    // Every device lost: a new device takes a new identity under the
+    // account's next id, not a freed one (docs/plans/one-device-list.md,
+    // "Device ids").
     ada.identity = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
     let again = ada.reregister(&c, &base);
-    assert_eq!(again.id, 1);
+    assert_eq!(again.id, 3);
     for gone in [&first, &second] {
         let r = gone
             .auth(c.post(format!("{base}/api/v1/chat/link-tokens")))
