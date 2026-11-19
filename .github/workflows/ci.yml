@@ -442,6 +442,143 @@ jobs:
           retention-days: 14
           path: tests/e2e/sanitized-results/**
 
+  workspace-browser:
+    name: Drive, Office and Chat browser specs
+    # Drive, Office (notes, whiteboards), single-server Chat and the account
+    # shell on their own stack, like the Mail browser specs: on master and on
+    # demand only. Groups stay off here (spec 39); 41/42 skip without the SFU
+    # and 114 without the CLI binary (tests/e2e/suites/*.txt).
+    if: github.event_name != 'pull_request'
+    needs:
+      - rust-workspace
+      - web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      KUTUP_E2E_SAFE_ARTIFACTS: "1"
+      KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+      POSTGRES_PASSWORD: workspace-browser-ci-postgres
+      JWT_SECRET: workspace-browser-ci-jwt-secret-at-least-32-bytes
+      OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
+      APP_ENV: test
+      # A test stack (APP_ENV=test): every per-address limit raised, as one
+      # browser batch registers and signs in far more than a person does.
+      RATE_LIMITS_RELAXED: "true"
+      # Test stacks register their own accounts.
+      REGISTRATION_MODE: "on"
+      # The Mail specs: the test administrator (tests/e2e/fixtures/apps.ts)
+      # and outside sending on for spec 58's pause notice; spec 59 turns it
+      # off in Administration and back on (tests/e2e/README.md).
+      ADMIN_ACCOUNT: "admin:Bootstrap*Temporary123"
+      MAIL_OUTSIDE_SENDING: "on"
+      # SQL against the stack's database, for the specs that need the stack's
+      # owner: 157 (a rolled-back account head) and 162 (an account from
+      # before X-Wing keys). tests/e2e/README.md.
+      E2E_PSQL: docker compose -f ${{ github.workspace }}/docker-compose.yml exec -T postgres psql -U kutup -d kutup -v ON_ERROR_STOP=1
+      # Sends go at once in the browser specs; spec 102 turns undo send on.
+      MAIL_DEFAULT_DELAY_SEND_SECONDS: "0"
+      # Mail forwarding's sealing key, a fixed test value (tests/mail/compose.yml).
+      MAIL_FORWARDING_KEYS: "1:Zm9yd2FyZGluZy10ZXN0LWtleS0wMTIzNDU2Nzg5YWI="
+      # One app per hostname; *.localhost resolves to this machine.
+      KUTUP_ACCOUNT_URL: https://account.localhost:38443
+      KUTUP_DRIVE_URL: https://drive.localhost:38443
+      KUTUP_CHAT_URL: https://chat.localhost:38443
+      KUTUP_OFFICE_URL: https://office.localhost:38443
+      KUTUP_EDITOR_URL: https://editor.localhost:38443
+      KUTUP_MAPS_URL: https://maps.localhost:38443
+      KUTUP_PHOTOS_URL: https://photos.localhost:38443
+      KUTUP_CONTACTS_URL: https://contacts.localhost:38443
+      KUTUP_MAIL_URL: https://mail.localhost:38443
+      KUTUP_PASS_URL: https://pass.localhost:38443
+      KUTUP_CALENDAR_URL: https://calendar.localhost:38443
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install browser test dependencies
+        run: npm ci --prefix tests/e2e
+      - name: Install Chromium
+        run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - name: Generate ephemeral browser-test TLS certificate
+        run: |
+          mkdir -p nginx/certs
+          openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+            -keyout nginx/certs/privkey.pem \
+            -out nginx/certs/fullchain.pem \
+            -subj /CN=localhost \
+            -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,DNS:contacts.localhost,DNS:mail.localhost,DNS:pass.localhost,DNS:calendar.localhost,IP:127.0.0.1
+      # GitHub's runner image ships ~25 GB of toolchains these jobs never use
+      # (.NET, Android, GHC, CodeQL); the stack images and their build cache
+      # now outgrow the space left, so drop those first.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      # The image builds keep Cargo's registry and target directories in
+      # BuildKit cache mounts, which a fresh runner starts without. Carry
+      # them between runs so only changed crates compile. Never fatal: a
+      # cache problem costs time, not the gate.
+      - name: Restore image build caches
+        id: image-build-cache
+        continue-on-error: true
+        uses: actions/cache@v6
+        with:
+          path: ci-docker-cache
+          key: image-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/kutup-chat-core/Cargo.lock', 'Dockerfile.server', 'frontend/Dockerfile') }}
+          restore-keys: |
+            image-build-${{ runner.os }}-
+      - name: Hand the caches to the image builder
+        continue-on-error: true
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: |
+            {
+              "ci-docker-cache/server-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-server-cargo-registry" },
+              "ci-docker-cache/server-target": { "target": "/build/target", "id": "kutup-server-release-target" },
+              "ci-docker-cache/browser-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-browser-cargo-registry" },
+              "ci-docker-cache/browser-git": { "target": "/usr/local/cargo/git", "id": "kutup-browser-cargo-git" },
+              "ci-docker-cache/browser-target": { "target": "/src/target", "id": "kutup-browser-root-target" },
+              "ci-docker-cache/browser-chat-target": { "target": "/src/crates/kutup-chat-core/target", "id": "kutup-browser-chat-target" }
+            }
+          skip-extraction: ${{ steps.image-build-cache.outputs.cache-hit }}
+      - name: Start the single-server stack
+        run: docker compose up --detach --build --wait
+      - name: Wait for the browser application route
+        run: |
+          curl --fail --silent --show-error --insecure \
+            --retry 60 --retry-delay 1 --retry-connrefused --retry-all-errors \
+            https://localhost:38443/api/auth/settings >/dev/null
+          curl --fail --silent --show-error --insecure \
+            --retry 60 --retry-delay 1 --retry-connrefused --retry-all-errors \
+            --resolve account.localhost:38443:127.0.0.1 \
+            https://account.localhost:38443/register >/dev/null
+      - name: Run the Drive browser specs
+        run: scripts/gate.sh browser drive
+      - name: Run the Office, notes and whiteboard browser specs
+        run: scripts/gate.sh browser office-docs
+      - name: Run the single-server Chat browser specs
+        run: scripts/gate.sh browser chat
+      - name: Run the account and shell browser specs
+        run: scripts/gate.sh browser account-misc
+      - name: Collect sanitized diagnostics
+        if: failure()
+        run: scripts/collect-chat-e2e-diagnostics.sh single
+      - name: Stop the single-server stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+      - name: Upload Drive, Office and Chat browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: workspace-browser-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: tests/e2e/sanitized-results/**
+
   mail-gate:
     name: Mail gate (Stalwart, SMTP, GnuPG)
     # A real Stalwart in front of the backend (scripts/test-mail-inbound.sh):

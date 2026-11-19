@@ -1,0 +1,12 @@
+# The rest of the account and the shell: first sign-in, the admin panel,
+# accessibility, WebSockets blocked, preferences, storage, sign-in links,
+# label colours, feedback.
+specs/01-first-login.spec.ts
+specs/28-admin-panel.spec.ts
+specs/35-polar-workspace-accessibility.spec.ts
+specs/44-websockets-blocked.spec.ts
+specs/51-ui-preferences.spec.ts
+specs/52-storage-usage.spec.ts
+specs/61-sign-in-link-csrf.spec.ts
+specs/73-mail-label-colour.spec.ts
+specs/75-feedback.spec.ts
