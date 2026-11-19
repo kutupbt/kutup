@@ -12,6 +12,8 @@
 //!   key lists (and the pin list) say (`mail-core/keys.ts`).
 //! - [`protection`]: how mail to one recipient is protected
 //!   (`mail-core/protection.ts`).
+//! - [`send`]: who gets which copy of a message (`sendDraft`).
 
 pub mod keys;
 pub mod protection;
+pub mod send;

@@ -27,8 +27,10 @@ pub enum KutupLookup {
     Keys { encryption_disabled: bool },
     /// Its owner disabled it.
     Disabled,
-    /// Not a Kutup address (no key), or a group's.
+    /// Not a Kutup address (no key).
     NotKutup,
+    /// A group's address (its members' keys are asked separately).
+    Group,
     /// The lookup failed (not: found nothing), or the keys were refused.
     Failed,
 }
@@ -155,7 +157,7 @@ pub fn protection_for(
             } => Protection::Kutup {
                 encryption_disabled: *encryption_disabled,
             },
-            KutupLookup::NotKutup | KutupLookup::Failed => Protection::Kutup {
+            KutupLookup::NotKutup | KutupLookup::Group | KutupLookup::Failed => Protection::Kutup {
                 encryption_disabled: false,
             },
         }));
@@ -178,7 +180,8 @@ pub fn protection_for(
         }
         KutupLookup::Disabled => return Ok(Step::Done(Protection::Disabled)),
         KutupLookup::Failed => return Err(KeyLookupFailed(lower)),
-        KutupLookup::NotKutup => {}
+        // Not a Kutup user's here: an outside address.
+        KutupLookup::NotKutup | KutupLookup::Group => {}
     }
     if pinned.and_then(|p| p.encrypt) == Some(false) {
         return Ok(Step::Done(Protection::None));
