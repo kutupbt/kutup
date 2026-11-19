@@ -5498,16 +5498,13 @@ struct ProfileLookup {
 /// What the account's own copy of its profile key is sealed for: the master
 /// key at `generation`, and the key binding.
 fn profile_owner(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     binding: &str,
 ) -> Result<chat_profile::ProfileOwnerKey, JsValue> {
-    let master_key: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
-        master_key
-            .try_into()
-            .map_err(|_| js_error("the account master key is 32 bytes"))?,
-    );
-    chat_profile::ProfileOwnerKey::new(&master_key, master_key_generation(generation)?, binding)
+    let master_keys = zeroize::Zeroizing::new(master_keys);
+    let keys = kutup_crypto::master_keys::MasterKeys::decode(&master_keys)
+        .map_err(|_| js_error("the account's master keys are malformed"))?;
+    chat_profile::ProfileOwnerKey::from_keys(&keys, binding)
         .map_err(|error| js_error(&error.to_string()))
 }
 
@@ -5535,18 +5532,17 @@ fn profile_lookup_of(key: &[u8]) -> Result<ProfileLookup, JsValue> {
     })
 }
 
-/// The account's own profile, opened from the master key.
+/// The account's own profile, opened with its master keys (`MasterKeys::encode`).
 #[wasm_bindgen(js_name = accountProfileOpen)]
 pub fn account_profile_open(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     current: JsValue,
     account: String,
     binding: String,
 ) -> Result<JsValue, JsValue> {
     let opened = chat_profile::open_own_profile(
         &sealed_profile(current)?,
-        &profile_owner(master_key, generation, &binding)?,
+        &profile_owner(master_keys, &binding)?,
         &profile_account(&account)?,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -5554,18 +5550,17 @@ pub fn account_profile_open(
 }
 
 /// The account's own profile key (to give to the people it shares files
-/// with), opened from the master key.
+/// with), opened with its master keys.
 #[wasm_bindgen(js_name = accountProfileKey)]
 pub fn account_profile_key(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     current: JsValue,
     account: String,
     binding: String,
 ) -> Result<JsValue, JsValue> {
     let opened = chat_profile::open_own_profile(
         &sealed_profile(current)?,
-        &profile_owner(master_key, generation, &binding)?,
+        &profile_owner(master_keys, &binding)?,
         &profile_account(&account)?,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -5600,12 +5595,11 @@ pub fn profile_open_peer(
     profile_output(&AccountProfileView::from(opened))
 }
 
-/// The account's next profile revision, sealed from the master key: the
-/// exact upload.
+/// The account's next profile revision, sealed under its current master
+/// key: the exact upload.
 #[wasm_bindgen(js_name = accountProfileSeal)]
 pub fn account_profile_seal(
-    master_key: Vec<u8>,
-    generation: u32,
+    master_keys: Vec<u8>,
     current: JsValue,
     update: JsValue,
     account: String,
@@ -5624,7 +5618,7 @@ pub fn account_profile_seal(
         .transpose()
         .map_err(|_| js_error("the avatar is standard base64"))?;
     let upload = chat_profile::seal_account_profile(
-        &profile_owner(master_key, generation, &binding)?,
+        &profile_owner(master_keys, &binding)?,
         current.as_ref(),
         &chat_profile::ProfileContents {
             display_name: update.display_name,

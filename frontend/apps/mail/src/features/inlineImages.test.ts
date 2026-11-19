@@ -1,7 +1,9 @@
 import { Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { describe, expect, it } from 'vitest'
-import { InlineImage, withContentIds } from './inlineImages'
+import { describe, expect, it, vi } from 'vitest'
+vi.mock('@kutup/mail-core/api', () => ({ fetchMailImage: () => Promise.resolve({ kind: 'blocked' }) }))
+
+import { editorHtml, InlineImage, withContentIds } from './inlineImages'
 
 // A draft's HTML names its inline images as `cid:`, which the page's
 // img-src refuses (full test, spec 106): the editor must never render one.
@@ -20,7 +22,7 @@ describe('inline images in the editor', () => {
     expect(attrs.cid).toBe('abc@kutup')
     expect(attrs.src).toBeNull()
     // Sent with its part's cid: again.
-    expect(withContentIds(editor.getHTML())).toContain('src="cid:abc@kutup"')
+    expect(withContentIds(editorHtml(editor))).toContain('src="cid:abc@kutup"')
     editor.destroy()
   })
 
@@ -28,7 +30,20 @@ describe('inline images in the editor', () => {
     const editor = new Editor({ extensions: [StarterKit, InlineImage], content: '<p></p>' })
     editor.commands.insertContent({ type: 'image', attrs: { src: 'blob:https://mail.example/1', cid: 'x@kutup' } })
     expect(editor.view.dom.querySelector('img:not(.ProseMirror-separator)')!.getAttribute('src')).toBe('blob:https://mail.example/1')
-    expect(withContentIds(editor.getHTML())).toContain('src="cid:x@kutup"')
+    expect(withContentIds(editorHtml(editor))).toContain('src="cid:x@kutup"')
+    editor.destroy()
+  })
+
+  it('never load a remote image from its server, and send its address', () => {
+    const editor = new Editor({
+      extensions: [StarterKit, InlineImage],
+      content: '<p><img src="https://tracker.example/p.gif" alt="logo"></p>',
+    })
+    const img = editor.view.dom.querySelector('img:not(.ProseMirror-separator)')!
+    expect(img.getAttribute('src')).toBeNull()
+    expect(img.getAttribute('data-remote-src')).toBe('https://tracker.example/p.gif')
+    expect(editorHtml(editor)).toContain('src="https://tracker.example/p.gif"')
+    expect(editorHtml(editor)).not.toContain('data-remote-src')
     editor.destroy()
   })
 })

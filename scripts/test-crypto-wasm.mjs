@@ -1613,35 +1613,36 @@ const c0Digest = (digest) => {
 // account opens and reseals its own, a peer opens it with the profile key.
 {
   const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/profile-v1.json`, 'utf8'))
-  const master = Buffer.from(v.masterKey, 'base64')
+  // As a page passes them: the master-key set (generation 1 alone).
+  const master = Buffer.from(masterKeySet(v.masterKey), 'base64')
   const upload = v.upload.request
-  const view = crypto.accountProfileOpen(master, 1, upload, v.account, v.binding)
+  const view = crypto.accountProfileOpen(master, upload, v.account, v.binding)
   assert.equal(view.displayName, v.upload.displayName)
   assert.equal(view.avatar, v.upload.avatar)
   assert.equal(view.avatarContentType, v.upload.avatarContentType)
   assert.equal(view.revision, String(v.upload.revision))
-  const lookup = crypto.accountProfileKey(master, 1, upload, v.account, v.binding)
+  const lookup = crypto.accountProfileKey(master, upload, v.account, v.binding)
   assert.equal(lookup.key, v.upload.profileKey)
   assert.deepEqual(crypto.profileLookup(lookup.key), lookup)
   assert.deepEqual(crypto.profileOpenPeer(v.account, upload, lookup.key), view)
-  // Generation 0 does not exist.
-  assert.throws(() => crypto.accountProfileOpen(master, 0, upload, v.account, v.binding))
+  // A bare key is not a master-key set.
+  assert.throws(() => crypto.accountProfileOpen(Buffer.from(v.masterKey, 'base64'), upload, v.account, v.binding))
   // Another account's name or another master key: refused.
   assert.throws(() => crypto.profileOpenPeer('aci:00000000-0000-4000-8000-000000000001@example.com', upload, lookup.key))
-  assert.throws(() => crypto.accountProfileOpen(Buffer.alloc(32, 8), 1, upload, v.account, v.binding))
+  assert.throws(() => crypto.accountProfileOpen(Buffer.from(masterKeySet(Buffer.alloc(32, 8).toString('base64')), 'base64'), upload, v.account, v.binding))
 
   // The next revision keeps the key and opens with the new contents.
-  const next = crypto.accountProfileSeal(master, 1, upload, { displayName: '  Ayşe ', about: 'Merhaba' }, v.account, v.binding)
+  const next = crypto.accountProfileSeal(master, upload, { displayName: '  Ayşe ', about: 'Merhaba' }, v.account, v.binding)
   assert.equal(next.revision, upload.revision + 1)
   assert.equal(next.version, upload.version)
-  const reopened = crypto.accountProfileOpen(master, 1, next, v.account, v.binding)
+  const reopened = crypto.accountProfileOpen(master, next, v.account, v.binding)
   assert.equal(reopened.displayName, 'Ayşe')
   assert.equal(reopened.about, 'Merhaba')
   assert.equal(reopened.avatar, undefined)
   // A first profile, and contents that fail validation.
-  const first = crypto.accountProfileSeal(master, 1, null, { displayName: 'Ali' }, v.account, v.binding)
+  const first = crypto.accountProfileSeal(master, null, { displayName: 'Ali' }, v.account, v.binding)
   assert.equal(first.revision, 1)
-  assert.throws(() => crypto.accountProfileSeal(master, 1, null, { displayName: '   ' }, v.account, v.binding))
+  assert.throws(() => crypto.accountProfileSeal(master, null, { displayName: '   ' }, v.account, v.binding))
   assert.throws(() => crypto.profileLookup('AA=='))
 }
 
