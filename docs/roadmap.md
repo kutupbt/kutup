@@ -1052,7 +1052,10 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   (`kutup-search`'s `browser` feature, through `js_sys`), native and the CLI
   keep the Rust tables, and `crates/kutup-search/tests/vectors/fold.json`
   holds both to the same results (a Rust test and `scripts/test-pass-wasm.mjs`).
-  Pass went from 826,605 to 761,665 bytes gzipped. Next lever: `url` pulls
+  Pass went from 826,605 to 761,665 bytes gzipped, and Mail's body search
+  (its index stays in one browser too) from 204,432 to 139,592. Only such
+  indexes may use it: `scripts/check-browser-fold.py` (the static gate) lists
+  the crates allowed; the server's keyed search tokens keep the Rust tables. Next lever: `url` pulls
   `idna` and ICU's normalizer data into the Pass WASM (the vendored `keepass`
   crate and `kutup-pass` parse URLs); a host-only parser there would save
   more.

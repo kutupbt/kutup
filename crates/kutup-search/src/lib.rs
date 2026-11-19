@@ -36,6 +36,12 @@ pub const MAX_WORD_CHARS: usize = 64;
 
 /// Folds text for searching: Turkish dotted and dotless I to i, accents
 /// removed (canonical decomposition, combining marks dropped), lowercase.
+///
+/// With the `browser` feature on wasm32 the decomposition is the browser's:
+/// use that build only for an index built and queried in the same browser,
+/// never for what another machine must fold the same way (the server's
+/// keyed search tokens, server-personal-data.md L7); see
+/// scripts/check-browser-fold.py.
 pub fn fold(text: &str) -> String {
     let turkish: String = text
         .chars()

@@ -18,6 +18,10 @@ thiserror.workspace = true
 # normalization (String.prototype.normalize) instead of compiling the NFKD
 # tables in: about 80 KB less for the Pass WASM. Native builds keep the
 # tables whatever the feature says.
+# ONLY for an index built and queried in the same browser: never for the
+# server's keyed search tokens or any hash, index or record another machine
+# folds again (the browser's Unicode version is its own). The crates that may
+# turn it on are listed in scripts/check-browser-fold.py (the static gate).
 browser = ["dep:js-sys"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
