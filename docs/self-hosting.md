@@ -963,11 +963,33 @@ server, and never point the drill at the live blob bucket.
 
 On a test machine with lane stacks, `scripts/restore-drill.sh` runs steps 1
 to 4 for you (an empty `kutup-drill-l<lane>` stack from the release images,
-the newest dump, a scratch copy of the blob bucket, the server started with
+the newest dump, step 3's long wait for deleted blobs, a scratch copy of the
+blob bucket made with rclone, the server started with
 `BACKGROUND_JOBS=false` and then with its jobs on, Stalwart's volume), then
 the readiness, `check-config` and migrations checks, and prints the timings
 and the data-loss window; `--help` lists what it needs, `--dry-run` prints
-every step, and `scripts/test-restore-drill.sh` tests it offline. The
+every step, and `scripts/test-restore-drill.sh` tests it offline.
+
+The restored apps live at the addresses the `.env` copy names
+(`KUTUP_BASE_DOMAIN` or `KUTUP_<APP>_URL`, and `SERVER_URL`). On a machine
+where those names don't lead to the drill (a test machine; the drill's lane
+ports are the lane's + 100), point them at the drill's own address, or the
+restored apps send the browser to the original server:
+
+```sh
+p=41543   # lane 3: the lane's HTTPS port + 100
+sets=(--set "SERVER_URL=https://account.localhost:$p")
+for app in account drive chat office editor maps photos contacts mail pass calendar; do
+  sets+=(--set "KUTUP_$(echo "$app" | tr a-z A-Z)_URL=https://$app.localhost:$p")
+done
+scripts/restore-drill.sh --env <offline .env copy> --identity kutup-backup.key \
+  --images <tag> --source-bucket <blob bucket or replica> --scratch-bucket <name>-drill \
+  --lane 3 --set S3_ACCESS_KEY=<scratch key> --set S3_SECRET_KEY=<its secret> "${sets[@]}"
+```
+
+Images built here with `scripts/publish-images.sh --no-push` serve as they
+are: Compose finds them locally and skips the pull. `--down` leaves the
+scratch bucket; empty it with its own key once the checks are done. The
 restored stack never delivers anything under the production identity: the
 server runs with `OUTBOUND_DELIVERY=false` (no federation requests, sent
 mail or push notifications) and Stalwart in its recovery mode, so its
@@ -976,8 +998,11 @@ restored queue stays held. A drill by hand should do the same.
 1. **Start an empty stack** from the release images
    ([Running published images](#running-published-images)), with `.env`
    from the offline copy. Set `S3_*` to a **copy** of the blob bucket (made
-   at the provider, or `aws s3 sync` from the replica): a purge job in the
-   restored stack must never delete production blobs. Start only
+   at the provider, or `rclone sync` from the replica): a purge job in the
+   restored stack must never delete production blobs. Not `aws s3 sync` on
+   Cloudflare R2: the AWS CLI reads tags before every multipart copy (each
+   object over 8 MiB) or sends a tagging directive on the others, and R2
+   implements neither (`NotImplemented`). Start only
    PostgreSQL: `docker compose up -d --wait postgres`.
 2. **Restore the newest database dump**, timing it:
    `scripts/backup-postgres.sh --list`, then
@@ -1000,9 +1025,14 @@ restored queue stays held. A drill by hand should do the same.
    - open a file uploaded before the dump, a large one included;
    - open one uploaded after the dump: expect a clean "missing" state, not a
      crash;
-   - Chat history comes back from the Chat backup in a new browser;
-   - Mail: old messages open; a new message sends and arrives (the DKIM key
-     came back);
+   - Chat history comes back from the Chat backup in a new browser: with no
+     other device to link from, Chat offers "Link this device"; choose "I
+     don't have my other devices", then Start over, and the conversations
+     come back;
+   - Mail: old messages open. A new message sends and arrives (the DKIM key
+     came back) only once delivery is on again: in a drill, sending is held
+     (`OUTBOUND_DELIVERY=false`, Stalwart in recovery mode), so check it on
+     the real restore (docs/plans/wipe-final-test.md §6.2);
    - a Pass vault opens;
    - a second server still federates with the restored one (its federation
      identity came back).
@@ -1010,8 +1040,11 @@ restored queue stays held. A drill by hand should do the same.
    - the migrations table matches the release
      (`SELECT max(version) FROM _sqlx_migrations`);
    - `docker compose run --rm --no-deps backend check-config` passes;
-   - `GET /api/health/ready` answers 200 (the backup check fails until a
-     backup runs from the restored stack; that is expected);
+   - `GET /api/health/ready` answers. In a drill it answers 503 with only
+     `backups` (no backup has run from the restored stack) and `mail`
+     (Stalwart in recovery mode) failing; every other check passes. A real
+     restore answers 200 once its first backup has run and Stalwart is out
+     of recovery mode;
    - with L4, the destruction replay runs, and accounts destroyed after the
      dump stay destroyed.
 7. **Write it down** in the entry below: the date, the time to restore, the
@@ -1023,7 +1056,7 @@ restored queue stays held. A drill by hand should do the same.
 
 | Date | Release | Dump restored | Time to restore | Data lost | Gaps found in this runbook |
 |---|---|---|---|---|---|
-| (not run yet) | | | | | |
+| 2026-11-20 (E1, staging) | a4de4d451eb2 (2026.1120.1) | `kutup-20261120T042227Z.dump.age` with its key dump, `stalwart-20261120T042246Z.tar.gz.age` | 58 s scripted, from an empty scratch bucket (dump fetched, checked and restored 18 s, 20 MB of blobs copied 2 s, Stalwart 8 s, server restarted with jobs on 12 s); the user and operator checks about 5 min more | 3 min: dumped 04:22:27Z, the staging server counted lost at 04:25:33Z; the one file uploaded after the dump (04:23:35Z) is gone, and Drive and the CLI report it as not found | The blob copy failed on R2 (`aws s3 sync`, see step 1: the script now uses rclone); the script skipped step 3 (it now sets the wait); the app addresses for a drill beside the original; Chat's "Start over" path in a new browser; readiness answers 503 in a drill, not 200; Mail's send check can't run in a drill. A file whose blob is missing from the copy shows "This file can't be opened … check your connection" after a 500 from the server, not a "missing" state (docs/roadmap.md, "Backup / restore CLI") |
 
 ## Database roles
 
