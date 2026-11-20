@@ -186,8 +186,10 @@ pages are unaffected.
 `POST /api/csp-report` ([`api.md`](api.md#post-apicsp-report)) takes
 `application/csp-report` and `application/reports+json`, with no account,
 at most 64 KiB, and at most 60 a minute per address
-(`RATE_LIMIT_CSP_REPORTS_PER_MIN`, also on the admin Rate limits page). The
-server logs each at warn level as `content security policy violation` with
+(`RATE_LIMIT_CSP_REPORTS_PER_MIN`, also on the admin Rate limits page). A
+body is read by its shape, not its content type: WebKit posts its
+`report-to` report as `application/csp-report`, one Reporting API object
+with no array around it. The server logs each at warn level as `content security policy violation` with
 only the app's host, the directive, the blocked resource's origin (or its
 kind: `inline`, `eval`, `data`, `blob`) and the disposition; never a path
 or a query, which can carry share tokens or file ids. Nothing is stored.
