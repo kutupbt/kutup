@@ -5,7 +5,7 @@ export type Layout = 'column' | 'row'
 /** The list's width in the column layout and its height in the row layout, in pixels. */
 export const DEFAULTS: Record<Layout, number> = { column: 416, row: 320 }
 export const LIMITS: Record<Layout, [number, number]> = { column: [280, 720], row: [160, 640] }
-const key = (layout: Layout) => `kutup.mail.listSize.${layout}`
+const key = (layout: Layout) => `kutup.mail.listSize:${layout}`
 
 function clamp(layout: Layout, size: number) {
   const [min, max] = LIMITS[layout]

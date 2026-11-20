@@ -1,5 +1,5 @@
 //! Permanent account ids (docs/plans/account-ids.md): a person is their
-//! server and their account id (`users.id`), never their name.
+//! server and their account id (`accounts.id`), never their name.
 
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::primitives::{mac, mac_verify, subkey, Suite};
@@ -45,11 +45,32 @@ pub async fn local_user<'e, E: sqlx::PgExecutor<'e>>(
     let id = Uuid::parse_str(&account.account_id)
         .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
     Ok(
-        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND state = 'active'")
             .bind(id)
             .fetch_optional(executor)
             .await?,
     )
+}
+
+/// [`local_user`] for another server's request: an account that doesn't talk
+/// to other servers (`crate::federation_switch`) is, to it, no account, found
+/// the same way an unknown one is not.
+pub async fn local_user_for_peer<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    local_server: &str,
+    account: &AccountRef,
+) -> AppResult<Option<Uuid>> {
+    if account.server != local_server {
+        return Ok(None);
+    }
+    let id = Uuid::parse_str(&account.account_id)
+        .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE id = $1 AND state = 'active' AND kutup_account_federates(id)",
+    )
+    .bind(id)
+    .fetch_optional(executor)
+    .await?)
 }
 
 /// A peer's answer naming an account: a bad gateway when it is not canonical.
@@ -62,7 +83,7 @@ pub fn from_peer(server: &str, account_id: &str) -> AppResult<AccountRef> {
     })
 }
 
-/// The key of the proofs `POST /api/auth/opaque/register/start` gives with a
+/// The key of the proofs `POST /api/v1/auth/opaque/register/start` gives with a
 /// minted account id, so that `register` takes back only an id this server
 /// minted for that key binding (stateless, like the registration answer).
 async fn proof_key(state: &crate::AppState) -> AppResult<[u8; 32]> {
@@ -118,7 +139,7 @@ pub async fn redeem(
     let key = proof_key(state).await?;
     mac_verify(Suite::V1, &key, &proof_parts(key_binding, &id), &tag).map_err(|_| invalid())?;
     let used: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)
              OR EXISTS (SELECT 1 FROM retired_account_ids WHERE id = $1)",
     )
     .bind(id)

@@ -1,8 +1,9 @@
 {
   "masterKey": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
-  "binding": "chat:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+  "binding": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+  "storeName": "chat:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
   "rng": "bytes 0, 1, 2, ... in order",
-  "wrappedStoreKey": "ASAhIiMkJSYnKCkqKywtLi8wMTIzNDU2N6gZgjls1UV0UtEhayqbS9jD5V8MEC3J2Cew87WAs/8XTBfZpq+EsyfZEDpbm2qHww==",
+  "wrappedStoreKey": "S1VUUEFSMQAAAQAVAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIDYs848lV+hgpw1yDtiu79qoop4ozaMjMMBmMDTGUhEuftcq11Pg9Z7POLxEf8P/116VbvkHefaba7bjasFREZsgISIjJCUmJygpKissLS4vMDEyMzQ1NjcAAAAweVcGHv2rQOQxqdRRGjK2CUyonZrt3sg9kZKYXX4QUravqbq0HmVq/fDkLiwQRofD",
   "record": {
     "store": "contacts",
     "key": "c2FjaTowYjZiNWUwYy00YzFlLTRiOGUtOWMyZC02YTFmM2U1ZDdjOWJAZXhhbXBsZS50ZXN0",

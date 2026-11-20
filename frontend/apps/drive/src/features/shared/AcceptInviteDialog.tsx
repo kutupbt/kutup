@@ -35,7 +35,7 @@ export function AcceptInviteDialog({ open, onClose }: { open: boolean; onClose: 
   }
 
   const error = accept.error
-    ? apiErrorCode(accept.error) === 'not_found'
+    ? apiErrorCode(accept.error) === 'notFound'
       ? t('shared.invite.notFound')
       : apiErrorCode(accept.error) === 'forbidden'
         ? t('shared.invite.notForYou')

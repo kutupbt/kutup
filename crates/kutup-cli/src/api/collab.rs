@@ -49,7 +49,7 @@ impl Client {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/files/{file_id}/collab/frames?after={after}"),
+                &format!("/drive/files/{file_id}/collab/frames?after={after}"),
             )
             .header(kutup_chat_proto::DEVICE_HEADER, device.header())
             .send()?;
@@ -63,7 +63,10 @@ impl Client {
             seq: i64,
         }
         let resp = self
-            .request(Method::POST, &format!("/files/{file_id}/collab/frames"))
+            .request(
+                Method::POST,
+                &format!("/drive/files/{file_id}/collab/frames"),
+            )
             .header(kutup_chat_proto::DEVICE_HEADER, device.header())
             .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
             .body(frame)
@@ -79,7 +82,7 @@ impl Client {
             committed: bool,
         }
         let resp = self
-            .request(Method::POST, &format!("/files/{file_id}/claim-seed"))
+            .request(Method::POST, &format!("/drive/files/{file_id}/claim-seed"))
             .send()?;
         Ok(super::decode_json::<Claimed>(resp)?.committed)
     }

@@ -53,12 +53,12 @@ pub async fn standing(state: &AppState, user_id: Uuid) -> AppResult<Standing> {
     ) = sqlx::query_as(
         "SELECT u.created_at, p.per_hour, p.per_day, p.paused_reason,
                 COALESCE((SELECT SUM(external_recipients) FROM mail_messages
-                           WHERE sender_account = u.id AND external_recipients > 0
+                           WHERE sender_account_id = u.id AND external_recipients > 0
                              AND received_at > now() - interval '1 hour'), 0)::bigint,
                 COALESCE((SELECT SUM(external_recipients) FROM mail_messages
-                           WHERE sender_account = u.id AND external_recipients > 0
+                           WHERE sender_account_id = u.id AND external_recipients > 0
                              AND received_at > now() - interval '1 day'), 0)::bigint
-           FROM users u LEFT JOIN mail_sending_policies p ON p.user_id = u.id
+           FROM accounts u LEFT JOIN mail_sending_policies p ON p.account_id = u.id
           WHERE u.id = $1",
     )
     .bind(user_id)
@@ -131,7 +131,7 @@ impl Event {
     fn kind(self) -> &'static str {
         match self {
             Event::Bounce => "bounce",
-            Event::SpamRefused => "spam_refused",
+            Event::SpamRefused => "spamRefused",
         }
     }
 }
@@ -142,7 +142,7 @@ pub async fn record(pool: &PgPool, user_id: Uuid, event: Event, count: u32) -> s
     let count = count.clamp(1, 100) as i32;
     let mut tx = pool.begin().await?;
     sqlx::query(
-        "INSERT INTO mail_sending_events (user_id, kind) SELECT $1, $2 FROM generate_series(1, $3)",
+        "INSERT INTO mail_sending_events (account_id, kind) SELECT $1, $2 FROM generate_series(1, $3)",
     )
     .bind(user_id)
     .bind(event.kind())
@@ -151,9 +151,9 @@ pub async fn record(pool: &PgPool, user_id: Uuid, event: Event, count: u32) -> s
     .await?;
     let (events, sent): (i64, i64) = sqlx::query_as(
         "SELECT (SELECT COUNT(*) FROM mail_sending_events
-                  WHERE user_id = $1 AND kind = $2 AND created_at > now() - interval '1 day'),
+                  WHERE account_id = $1 AND kind = $2 AND created_at > now() - interval '1 day'),
                 COALESCE((SELECT SUM(external_recipients) FROM mail_messages
-                           WHERE sender_account = $1 AND external_recipients > 0
+                           WHERE sender_account_id = $1 AND external_recipients > 0
                              AND received_at > now() - interval '1 day'), 0)::bigint",
     )
     .bind(user_id)
@@ -174,10 +174,10 @@ pub async fn record(pool: &PgPool, user_id: Uuid, event: Event, count: u32) -> s
     };
     if flag.is_some() || pause.is_some() {
         sqlx::query(
-            "INSERT INTO mail_sending_policies (user_id, flagged_at, flag_reason, paused_at, paused_reason)
+            "INSERT INTO mail_sending_policies (account_id, flagged_at, flag_reason, paused_at, paused_reason)
              VALUES ($1, CASE WHEN $2::text IS NULL THEN NULL ELSE now() END, $2,
                      CASE WHEN $3::text IS NULL THEN NULL ELSE now() END, $3)
-             ON CONFLICT (user_id) DO UPDATE SET
+             ON CONFLICT (account_id) DO UPDATE SET
                  flagged_at = COALESCE(mail_sending_policies.flagged_at, EXCLUDED.flagged_at),
                  flag_reason = COALESCE(mail_sending_policies.flag_reason, EXCLUDED.flag_reason),
                  paused_at = COALESCE(mail_sending_policies.paused_at, EXCLUDED.paused_at),
@@ -197,21 +197,27 @@ pub async fn record(pool: &PgPool, user_id: Uuid, event: Event, count: u32) -> s
 }
 
 /// Counts a delivery report among `user_id`'s mail as bounces, but only
-/// when it names a message this account sent outside through Kutup: anyone
-/// can mail a forged report.
+/// when it names a message this account sent outside through Kutup from its
+/// own mailbox (found by the keyed hash of its Message-ID): anyone can mail
+/// a forged report. A report about mail sent as a shared mailbox goes to
+/// that mailbox's address, not here.
 pub async fn record_bounce(
     pool: &PgPool,
     user_id: Uuid,
     original_message_id: &str,
     failures: u32,
-) -> sqlx::Result<bool> {
+) -> crate::error::AppResult<bool> {
+    let opener =
+        crate::mail::sealed::Opener::load(pool, crate::account_data::KeyOwner::Account(user_id))
+            .await?;
+    let hashes = crate::mail::sealed::thread_hashes(opener.keys(), &[original_message_id])?;
     let ours: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM mail_messages
-                         WHERE sender_account = $1 AND message_id = $2 AND direction = 'outbound'
-                           AND external_recipients > 0)",
+                         WHERE sender_account_id = $1 AND message_id_hash = ANY($2)
+                           AND direction = 'outbound' AND external_recipients > 0)",
     )
     .bind(user_id)
-    .bind(original_message_id)
+    .bind(&hashes)
     .fetch_one(pool)
     .await?;
     if ours {

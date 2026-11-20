@@ -4,11 +4,11 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
 
 ## 1. Derived or stored, never both: the Drive X-Wing key
 
-- **Today:** the Drive X-Wing seed is derived from the master key (`identity.rs`, `AccountIdentityKeysV1::derive`) and also stored as account-envelope purpose 3 (`DriveHpkePrivateKey`, column `users.drive_private_key_envelope`).
+- **Today:** the Drive X-Wing seed is derived from the master key (`identity.rs`, `AccountIdentityKeysV1::derive`) and also stored as account-envelope purpose 3 (`DriveXwingPrivateKey`, column `users.drive_private_key_envelope`).
 - **Change:** it is only derived. Purpose 3 goes from the registry: the number stays reserved and is refused on parse.
 - **Server:** the column goes, along with the field in registration, sign-in, the identity-suite upgrade, admin reset and the account head.
 - **Clients:** web, CLI and tests derive the key from the master key after sign-in, as they already derive the authority.
-- **Identity suite 1** (before X-Wing) can't exist after the wipe. So its one-time upgrade goes too: `POST /api/account/identity-suite`, the CLI's step 5b, and the web's `identitySuite.ts` path. That code is the other writer of purpose 3. `identity_suite` stays a column, and the server accepts only 2 at registration.
+- **Identity suite 1** (before X-Wing) can't exist after the wipe. So its one-time upgrade goes too: `POST /api/v1/account/identity-suite`, the CLI's step 5b, and the web's `identitySuite.ts` path. That code is the other writer of purpose 3. `identity_suite` stays a column, and the server accepts only 2 at registration. **Done** (2026-11-19, `wipe/api-pass`): the last of it, the manifest's one-way rise from a suite-1 key (`legacy_suite1_for_upgrade` in chat-proto and chat-core, the server's `drive_keys_follow`, the 32-byte length in the federation lookup), is gone; `AccountIdentitySuiteId` has suite 2 only, and the manifest's `drive.xwingPublicKey` must be 1216 bytes.
 
 ## 2. The master-key generation
 
@@ -32,6 +32,7 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
   - 164 were `kutup/…` literals. Of those, 14 lacked the NUL. 20 moved into their area: `area-purpose` became `area/purpose` where the area already had labels, and two versions were fixed (`gateway-key/v2-xwing`, `call-link/v1/joined`);
   - 13 were in the old `kutup-…-vN` style (federation documents, Chat profile keys);
   - 3 are new family salts: `chat-store`, `chat-profile`, `drive/names`.
+  - W7 (docs/plans/w7-schema.md §12) removed four that nothing read any more (`account/manifest/v1`, `device-registration/v1`, `device-revocation/v1`, `pass-vault-secret/v1`) with their negative tests: the registry holds 165.
 - **Tests:**
   - a unit test lists `labels::ALL` and checks the grammar, uniqueness, and that no label is a prefix of another;
   - a static-gate check (`scripts/check-labels.sh`) refuses a `"kutup/` or `"kutup-` literal (also `b"`, `br"`) outside `labels.rs` in any crate's `src/`, unless `scripts/check-labels.allow` names that file and literal as a non-label (a header, path, name or test fixture); an entry that no longer matches fails too. Labels the browser computes in TypeScript are registered too (marked so), and a `kutup/` literal in a frontend source must be one of them, NUL included;
@@ -44,6 +45,8 @@ The Argon2id account-protection derivation (`kdf::derive_account_protection_keys
 
 ## Rotation checklist
 
+**Done** (docs/plans/mk-rotation-exercise.md, 2026-11-16): every seal below takes the generation from the account's `MasterKeys` (Rust) or `session.masterKeys` (web), every open picks the key by the generation the record names, and `MASTER_KEY_GENERATION` is gone. The list stays as the record of what that covered.
+
 When master-key rotation is built, every place that writes `MasterKeyGeneration::FIRST` (Rust) or `MASTER_KEY_GENERATION` (TypeScript) outside tests must take the account's current generation instead. Find them with `grep -rn 'MasterKeyGeneration::FIRST\|MASTER_KEY_GENERATION' crates frontend/packages frontend/apps`; as of W6 they are:
 
 - **Master-key wraps (purposes 1 and 2):**
@@ -52,6 +55,7 @@ When master-key rotation is built, every place that writes `MasterKeyGeneration:
 - **Secrets sealed under the master key:**
   - mail address keys: `mail_key.rs` (`first_address_key`) and web `mailKey.ts` (generate, import, and `acceptMailForwarding`);
   - Pass kept keys: CLI `vaultsync.rs` and web `pass/src/vault/worker.ts` (`keepKey`). `kept::reseal` already keeps the generation of the envelope it opens, so a copied vault follows its source.
+- **Not on this list: Drive.** The account's own folder keys, its link owner copies and the top-level name hash key are under the stored Drive root (docs/plans/identity-rotation.md §3), so a rotation re-wraps the Drive-root record with the other roots and moves no Drive data.
 - **Account records sealed by Rust callers** (W1 slices 2 and 3a): identity pins from the CLI (`identity.rs`, `pin`) and from chat-core (`identity_sync.rs`); the Chat group and contact lists from chat-core (`group_list.rs`, `contact_list.rs`). The web passes `MASTER_KEY_GENERATION` to `sealContactCard`, `sealMailName` and `sealIdentityPins`.
 - **The server's fake recovery envelope** (`handlers/auth.rs`, `deterministic_fake_account_envelope`): an unknown name gets a stable fake so it looks like a real account. Once accounts can be past generation 1, the fake must carry a generation as plausible as a real one, or the header tells a fake from a real account.
 - **The constant itself:** `@kutup/crypto/masterKeyGeneration` and its doc comment in `kutup-crypto-wasm` (`sealAccountRecord`).

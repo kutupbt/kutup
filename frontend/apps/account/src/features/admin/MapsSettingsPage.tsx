@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { mapConfigKey, type CustomProvider, type MapSettings, type ProviderId, type ProxyMode, type TileKind } from '@kutup/map/config'
+import { mapConfigKey, providerOrigin, type AdminMapSettings, type CustomProvider, type MapSettings, type ProviderId, type ProxyMode, type TileKind } from '@kutup/map/config'
 import api from '@kutup/session/client'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -12,7 +12,7 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { adminKey } from './api'
 import { Choice } from './federation/Choice'
@@ -27,17 +27,20 @@ const OSM_POLICY = 'https://operations.osmfoundation.org/policies/tiles/'
 /**
  * The server's map settings (docs/plans/maps.md): which providers people may
  * choose, the server's own tile server, whether map traffic may or must go
- * through this server, and the size of its shared tile cache.
+ * through this server, and the size of its shared tile cache. A provider
+ * loads straight into browsers only when its origin is in the server's
+ * KUTUP_MAP_DIRECT_ORIGINS, the list the apps' Content-Security-Policy
+ * allows (docs/content-security-policy.md); every other one is relayed.
  */
 export function MapsSettingsPage() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const settings = useQuery({
     queryKey: mapsKey,
-    queryFn: async () => (await api.get<MapSettings>('/admin/maps')).data,
+    queryFn: async () => (await api.get<AdminMapSettings>('/admin/maps')).data,
   })
   const save = useMutation({
-    mutationFn: async (next: MapSettings) => (await api.put<MapSettings>('/admin/maps', next)).data,
+    mutationFn: async (next: MapSettings) => (await api.put<AdminMapSettings>('/admin/maps', next)).data,
     onSuccess: async (saved) => {
       queryClient.setQueryData(mapsKey, saved)
       await queryClient.invalidateQueries({ queryKey: mapConfigKey })
@@ -47,20 +50,28 @@ export function MapsSettingsPage() {
   })
   const [draft, setDraft] = useState<MapSettings | null>(null)
   useEffect(() => {
-    if (settings.data) setDraft(settings.data)
+    if (settings.data) setDraft(toDraft(settings.data))
   }, [settings.data])
 
   if (settings.isPending || !draft) {
     return settings.isError ? (
       <PageBody width="prose"><Alert variant="error">{apiErrorMessage(settings.error, t('common.tryAgain'))}</Alert></PageBody>
     ) : (
-      <LoadingPanel label={t('common.loading')} />
+      <FormSkeleton label={t('common.loading')} />
     )
   }
 
   const offersCustom = draft.providers.includes('custom')
   const custom = draft.custom ?? EMPTY_CUSTOM
-  const changed = JSON.stringify(draft) !== JSON.stringify(settings.data)
+  const changed = !settings.data || JSON.stringify(draft) !== JSON.stringify(toDraft(settings.data))
+  const directOrigins = settings.data?.directOrigins ?? []
+  const direct = (id: ProviderId) => {
+    const origin = providerOrigin(id, draft.custom)
+    return origin !== null && directOrigins.includes(origin)
+  }
+  // Off (browsers always go to the provider) only when every offered one may be loaded directly.
+  const offAllowed = draft.providers.every(direct)
+  const proxyModes = offAllowed || draft.proxy === 'off' ? PROXY_MODES : PROXY_MODES.filter((mode) => mode !== 'off')
 
   function toggleProvider(id: ProviderId, on: boolean) {
     setDraft((d) => {
@@ -115,6 +126,11 @@ export function MapsSettingsPage() {
                   <div className="space-y-1">
                     <Label htmlFor={`maps-provider-${id}`}>{t(`admin.maps.provider.${id}`)}</Label>
                     <p className="text-sm text-muted-foreground">{t(`admin.maps.providerHint.${id}`)}</p>
+                    {draft.providers.includes(id) ? (
+                      <p className="text-sm text-muted-foreground" data-testid={`admin-maps-direct-${id}`}>
+                        {direct(id) ? t('admin.maps.directAllowed') : t('admin.maps.relayOnly')}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -152,7 +168,7 @@ export function MapsSettingsPage() {
                 {() => (
                   <Choice
                     value={draft.proxy}
-                    options={PROXY_MODES}
+                    options={proxyModes}
                     labelPrefix="admin.maps.proxy"
                     ariaLabel={t('admin.maps.relayMode')}
                     onChange={(proxy) => setDraft({ ...draft, proxy })}
@@ -176,6 +192,11 @@ export function MapsSettingsPage() {
                   />
                 )}
               </Field>
+              {draft.proxy === 'off' && !offAllowed ? (
+                <Alert variant="warn" className="sm:col-span-2">
+                  {t('admin.maps.offNeedsDirect')}
+                </Alert>
+              ) : null}
               {draft.proxy !== 'off' && draft.cacheMegabytes === 0 && draft.providers.includes('openstreetmap') ? (
                 <Alert variant="warn" className="sm:col-span-2">
                   {t('admin.maps.noCacheWarning')}{' '}
@@ -193,4 +214,9 @@ export function MapsSettingsPage() {
       </form>
     </PageBody>
   )
+}
+
+/** The settings alone, as `PUT /api/v1/admin/maps` takes them. */
+function toDraft({ directOrigins: _origins, ...settings }: AdminMapSettings): MapSettings {
+  return settings
 }

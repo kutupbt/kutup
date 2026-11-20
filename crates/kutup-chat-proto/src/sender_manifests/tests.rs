@@ -16,13 +16,12 @@ fn editor(device_id: u32, seed: u8) -> AccountManifestDeviceV3 {
     let key = SigningKey::from_seed(Suite::V1, &[seed; 32])
         .verifying_key()
         .to_array::<32>();
-    AccountManifestDeviceV3 {
+    AccountManifestDeviceV3::editing(
         device_id,
-        kind: DeviceKind::Editor,
-        chat: None,
-        frame_key: Some(base64::engine::general_purpose::STANDARD.encode(key)),
-        session: "ab".repeat(32),
-    }
+        DeviceKind::Editor,
+        base64::engine::general_purpose::STANDARD.encode(key),
+        "ab".repeat(32),
+    )
 }
 
 /// A frame of `device_id` under `manifest_sequence`, signed with `seed`'s key.
@@ -63,7 +62,10 @@ fn chain(
 }
 
 fn keys() -> AccountIdentityKeysV1 {
-    AccountIdentityKeysV1::derive(&[5; 32]).unwrap()
+    AccountIdentityKeysV1::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+        [5; 32],
+    ))
+    .unwrap()
 }
 
 #[test]
@@ -153,7 +155,10 @@ fn a_logged_frame_counts_under_the_manifest_it_names() {
     let mut altered = manifests[2].clone();
     altered.devices.push(editor(5, 5));
     assert!(fresh.take_history(&[altered]).is_err());
-    let other = AccountIdentityKeysV1::derive(&[6; 32]).unwrap();
+    let other = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([6; 32]),
+    )
+    .unwrap();
     let theirs = chain(
         &other,
         &[vec![editor(1, 1)], vec![editor(1, 1)], vec![editor(1, 1)]],
@@ -237,7 +242,10 @@ fn the_head_only_moves_forward_along_a_verified_chain() {
 fn another_incarnation_needs_the_identity_pins_to_vouch() {
     let keys = keys();
     let manifests = chain(&keys, &[vec![editor(1, 1)]]);
-    let reset = AccountIdentityKeysV1::derive(&[7; 32]).unwrap();
+    let reset = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([7; 32]),
+    )
+    .unwrap();
     let fresh = chain(&reset, &[vec![editor(1, 1)]]);
     let mut sender = SenderManifests::new(account(), None);
     sender.take_head(manifests[0].clone(), &[], false).unwrap();

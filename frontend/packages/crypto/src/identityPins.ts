@@ -3,8 +3,9 @@
 // on other accounts' authorities. Rust owns both formats
 // (kutup-crypto drive_key_binding, identity_pins).
 
+import type { MasterKeys } from './masterKeys'
+import type { IdentityRoot } from './accountRoots'
 import type { AccountRef } from './accountRef'
-import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 import type { AccountRenameV1 } from './accountRename'
 import { getCryptoWasm } from './rustWasm'
 
@@ -79,8 +80,8 @@ export const FIRST_DRIVE_KEY_BINDING_EPOCH = 1
  * authority for `account` (its server and id). Each new set of Drive keys
  * takes the next epoch.
  */
-export async function signDriveKeyBinding(masterKeyBase64: string, account: AccountRef, bindingEpoch: number): Promise<string> {
-  return (await getCryptoWasm()).signDriveKeyBinding(masterKeyBase64, account, bindingEpoch)
+export async function signDriveKeyBinding(identityRoot: IdentityRoot, account: AccountRef, bindingEpoch: number): Promise<string> {
+  return (await getCryptoWasm()).signDriveKeyBinding(identityRoot, account, bindingEpoch)
 }
 
 /**
@@ -91,12 +92,12 @@ export async function signDriveKeyBinding(masterKeyBase64: string, account: Acco
 export async function verifyDriveKeyBinding(
   account: AccountRef,
   authorityPublicKey: string,
-  driveHpkePublicKey: string,
+  driveXwingPublicKey: string,
   driveSigningPublicKey: string,
   binding: string,
   bindingEpoch: number,
 ): Promise<boolean> {
-  return (await getCryptoWasm()).verifyDriveKeyBinding(account, authorityPublicKey, driveHpkePublicKey, driveSigningPublicKey, binding, bindingEpoch)
+  return (await getCryptoWasm()).verifyDriveKeyBinding(account, authorityPublicKey, driveXwingPublicKey, driveSigningPublicKey, binding, bindingEpoch)
 }
 
 /** The incarnation id an authority key stands for. */
@@ -126,13 +127,13 @@ export const EMPTY_PINS: PinsText = pinsText('{"pins":[]}')
  * Seals the pin list at `revision`, bound to the account's key binding
  * (`session.envelopeBinding`), never its address.
  */
-export async function sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, pins: PinsText): Promise<string> {
-  return (await getCryptoWasm()).sealIdentityPins(masterKeyBase64, MASTER_KEY_GENERATION, binding, revision, pins.text)
+export async function sealIdentityPins(masterKeys: MasterKeys, binding: string, revision: number, pins: PinsText): Promise<string> {
+  return (await getCryptoWasm()).sealIdentityPins(masterKeys, binding, revision, pins.text)
 }
 
 /** Opens the pin list of the account whose key binding is `binding`, and the revision it was sealed at. */
-export async function openIdentityPins(masterKeyBase64: string, binding: string, sealed: string): Promise<{ pins: PinsText; revision: number }> {
-  const opened = (await getCryptoWasm()).openIdentityPins(masterKeyBase64, binding, sealed)
+export async function openIdentityPins(masterKeys: MasterKeys, binding: string, sealed: string): Promise<{ pins: PinsText; revision: number }> {
+  const opened = (await getCryptoWasm()).openIdentityPins(masterKeys, binding, sealed)
   return { pins: pinsText(opened.value), revision: opened.revision }
 }
 

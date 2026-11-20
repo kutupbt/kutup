@@ -31,7 +31,7 @@ use uuid::Uuid;
 use crate::chat_hub::ChatHub;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// One push per device per this long; the push service keeps the latest.
@@ -123,6 +123,7 @@ impl WebPush {
         topic: &str,
         ttl: u32,
     ) -> anyhow::Result<StatusCode> {
+        crate::outbound::check("a push notification")?;
         if !self.allowed_endpoint(endpoint) {
             return Ok(StatusCode::GONE);
         }
@@ -242,7 +243,7 @@ async fn send(
     last_sent: &Mutex<HashMap<(Uuid, i32), Instant>>,
 ) -> anyhow::Result<()> {
     let Some(endpoint) = sqlx::query_scalar::<_, String>(
-        "SELECT endpoint FROM chat_push_subscriptions WHERE user_id = $1 AND device_id = $2",
+        "SELECT endpoint FROM chat_push_subscriptions WHERE account_id = $1 AND device_id = $2",
     )
     .bind(user_id)
     .bind(device_id)
@@ -268,6 +269,7 @@ async fn send(
         sent.retain(|_, at| now.duration_since(*at) < MIN_INTERVAL);
         sent.insert((user_id, device_id), now);
     }
+    crate::outbound::check("a push notification")?;
     let url = reqwest::Url::parse(&endpoint)?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp() as u64;
     let response = client
@@ -292,7 +294,7 @@ async fn send(
 }
 
 async fn forget(pool: &PgPool, user_id: Uuid, device_id: i32) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM chat_push_subscriptions WHERE user_id = $1 AND device_id = $2")
+    sqlx::query("DELETE FROM chat_push_subscriptions WHERE account_id = $1 AND device_id = $2")
         .bind(user_id)
         .bind(device_id)
         .execute(pool)
@@ -325,7 +327,7 @@ pub struct DeviceQuery {
 
 #[utoipa::path(
     put,
-    path = "/api/chat/push-subscription",
+    path = "/api/v1/chat/push-subscription",
     tag = "chat",
     operation_id = "putChatPushSubscription",
     request_body = PushSubscriptionRequest,
@@ -338,7 +340,7 @@ pub struct DeviceQuery {
 )]
 pub async fn put_subscription(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: axum::http::HeaderMap,
     Json(request): Json<PushSubscriptionRequest>,
 ) -> AppResult<Response> {
@@ -351,7 +353,7 @@ pub async fn put_subscription(
             "this push service is not one the server sends to",
         ));
     }
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     crate::handlers::chat_identity::authenticate_device(
         &state.pool,
         &headers,
@@ -360,9 +362,9 @@ pub async fn put_subscription(
     )
     .await?;
     sqlx::query(
-        "INSERT INTO chat_push_subscriptions (user_id, device_id, endpoint)
+        "INSERT INTO chat_push_subscriptions (account_id, device_id, endpoint)
          VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, device_id)
+         ON CONFLICT (account_id, device_id)
          DO UPDATE SET endpoint = EXCLUDED.endpoint, updated_at = now()",
     )
     .bind(user_id)
@@ -375,7 +377,7 @@ pub async fn put_subscription(
 
 #[utoipa::path(
     delete,
-    path = "/api/chat/push-subscription",
+    path = "/api/v1/chat/push-subscription",
     tag = "chat",
     operation_id = "deleteChatPushSubscription",
     params(DeviceQuery),
@@ -384,11 +386,11 @@ pub async fn put_subscription(
 )]
 pub async fn delete_subscription(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     headers: axum::http::HeaderMap,
     Query(query): Query<DeviceQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
+    let user_id = trusted_uuid(&auth.account_id)?;
     crate::handlers::chat_identity::authenticate_device(
         &state.pool,
         &headers,

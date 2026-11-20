@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -26,10 +26,10 @@ fn id_of(value: &str) -> AppResult<Uuid> {
     Uuid::parse_str(value).map_err(|_| AppError::not_found("not found"))
 }
 
-/// `GET /api/mail/outbox/{id}` — how a held send went.
+/// `GET /api/v1/mail/outbox/{id}` — how a held send went.
 #[utoipa::path(
     get,
-    path = "/api/mail/outbox/{id}",
+    path = "/api/v1/mail/outbox/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "The held send")),
@@ -40,25 +40,46 @@ fn id_of(value: &str) -> AppResult<Uuid> {
 )]
 pub async fn status(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailOutboxStatus>> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let row: Option<(String, Option<serde_json::Value>)> =
-        sqlx::query_as("SELECT state, result FROM mail_outbox WHERE id = $1 AND user_id = $2")
-            .bind(id_of(&id)?)
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let (state, result) = row.ok_or_else(|| AppError::not_found("not found"))?;
-    Ok(Json(MailOutboxStatus { state, result }))
+    let user_id = trusted_uuid(&user.account_id)?;
+    let outbox = id_of(&id)?;
+    let row: Option<(String, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT state, result_sealed FROM mail_outbox WHERE id = $1 AND account_id = $2",
+    )
+    .bind(outbox)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (send_state, sealed) = row.ok_or_else(|| AppError::not_found("not found"))?;
+    // Sealed under the account's data key; one that doesn't open (its key
+    // destroyed) is no outcome. A send a stopped server left half-done has
+    // none: interrupted.
+    let result = match sealed {
+        Some(sealed) => crate::account_data::open(
+            &state.pool,
+            &state.config.opaque_setup_keys,
+            user_id,
+            crate::mail::outbox::result_field(&outbox.to_string()),
+            &sealed,
+        )
+        .await?
+        .and_then(|plain| serde_json::from_slice(&plain).ok()),
+        None if send_state == "failed" => Some(serde_json::json!({ "error": "interrupted" })),
+        None => None,
+    };
+    Ok(Json(MailOutboxStatus {
+        state: send_state,
+        result,
+    }))
 }
 
-/// `POST /api/mail/outbox/{id}/cancel` — Undo: the send does not go, its
+/// `POST /api/v1/mail/outbox/{id}/cancel` — Undo: the send does not go, its
 /// draft stays. 409 once it has gone out.
 #[utoipa::path(
     post,
-    path = "/api/mail/outbox/{id}/cancel",
+    path = "/api/v1/mail/outbox/{id}/cancel",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "The held send")),
@@ -70,16 +91,16 @@ pub async fn status(
 )]
 pub async fn cancel(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = id_of(&id)?;
     if crate::mail::outbox::cancel(&state, user_id, id).await? {
         return Ok(axum::http::StatusCode::NO_CONTENT);
     }
     let known: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM mail_outbox WHERE id = $1 AND user_id = $2)",
+        "SELECT EXISTS (SELECT 1 FROM mail_outbox WHERE id = $1 AND account_id = $2)",
     )
     .bind(id)
     .bind(user_id)

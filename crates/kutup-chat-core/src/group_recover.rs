@@ -63,9 +63,13 @@ impl Engine {
             return Ok(false);
         }
         let group = decode_group_id(&group_id).map_err(ChatError::Invalid)?;
-        // The key must be the group's at the home the context names: the id
-        // binds the home, so a member who kept the key can't name a home of
-        // their own (that is another group, which no binding names).
+        // The key must be the group's at the home the context names. The id
+        // binds the home's identity document (hash and sequence), not its
+        // name (docs/plans/identity-rotation.md §6): a member who kept the key
+        // can't name a home of their own identity (that is another group,
+        // which no binding names). The name the context gives is checked
+        // below, by following the home's history there, before anything
+        // signed is sent.
         if group::master_at(&context.master_key, &group_id, &context.home).is_err() {
             return Ok(false);
         }
@@ -85,7 +89,10 @@ impl Engine {
         // Counted before anything is asked of a server (the list included),
         // so a member sending contexts can't make this device ask more than
         // the limits allow.
-        if !self.may_try_recovery(&group_id).await? {
+        if !self
+            .may_try_recovery(&group_id, &context.home.server)
+            .await?
+        {
             return Ok(false);
         }
         // The list first: read this run, it takes up what it holds.
@@ -130,6 +137,24 @@ impl Engine {
             join_epoch,
             endorsements: Default::default(),
         };
+        // The server the context names must serve the pinned identity: its
+        // history, fetched there, is followed from the pin (whose document
+        // names its server, signed) before any pseudonym-signed request goes
+        // to it. A context naming another server with the true document
+        // leads nowhere.
+        let transport = std::rc::Rc::clone(&self.transport);
+        if record
+            .gateway
+            .refresh(
+                transport.as_ref(),
+                &record.home,
+                crate::group_engine::now_seconds(),
+            )
+            .await
+            .is_err()
+        {
+            return Ok(false);
+        }
         if !matches!(
             self.fetch_whole_state(&mut record).await?,
             Some(GroupSync::Current { .. })
@@ -173,10 +198,14 @@ impl Engine {
         Ok(true)
     }
 
-    /// Whether a recovery of `group_id` may be tried now: once an hour per
-    /// group, and [`MAX_RECOVERIES_PER_HOUR`] groups an hour, across reloads;
-    /// recorded as tried before anything is asked.
-    async fn may_try_recovery(&mut self, group_id: &str) -> Result<bool> {
+    /// Whether a recovery of `group_id` at the home named `server` may be
+    /// tried now: once an hour per group and server, and
+    /// [`MAX_RECOVERIES_PER_HOUR`] tries an hour in all, across reloads;
+    /// recorded as tried before anything is asked. Per server, since the id
+    /// doesn't bind the home's name: a context naming another server with the
+    /// true document (refused once its history doesn't follow there) never
+    /// holds up the recovery at the real home.
+    async fn may_try_recovery(&mut self, group_id: &str, server: &str) -> Result<bool> {
         let now = unix_millis();
         self.load_repair_limits().await?;
         self.resent
@@ -186,7 +215,7 @@ impl Engine {
             .keys()
             .filter(|(who, _)| who == RECOVERY_LIMIT)
             .count();
-        let key = (RECOVERY_LIMIT.to_string(), group_id.to_string());
+        let key = (RECOVERY_LIMIT.to_string(), format!("{group_id}@{server}"));
         if tried >= MAX_RECOVERIES_PER_HOUR || self.resent.contains_key(&key) {
             return Ok(false);
         }

@@ -15,10 +15,10 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::account_record::MasterKeyGeneration;
 pub use kutup_crypto::chat_profile::ProfileOwnerKey;
 use kutup_crypto::chat_profile::{self as crypto, ProfileContents, SealedProfile};
 use kutup_crypto::error::CryptoError;
+use kutup_crypto::master_keys::MasterKeys;
 use rand::{CryptoRng, Rng};
 
 use crate::db::{LocalProfile, PeerProfile};
@@ -50,20 +50,11 @@ fn content(error: CryptoError) -> ChatError {
     ChatError::Content(error.to_string())
 }
 
-/// What the account's own copy of its profile key is sealed for: the master
-/// key and the account's key binding (`session.envelopeBinding`).
-/// Chat's devices seal with the first generation until master-key rotation
-/// exists, as its lists do.
-pub fn profile_owner_key(master_key: &[u8; 32], binding: &str) -> Result<ProfileOwnerKey> {
-    owner_at(master_key, MasterKeyGeneration::FIRST, binding)
-}
-
-fn owner_at(
-    master_key: &[u8; 32],
-    generation: MasterKeyGeneration,
-    binding: &str,
-) -> Result<ProfileOwnerKey> {
-    ProfileOwnerKey::new(master_key, generation, binding).map_err(invalid)
+/// What the account's own copy of its profile key is sealed for: the
+/// account's master keys (sealed under the current one, opened under the one
+/// its header names) and its key binding (`session.envelopeBinding`).
+pub fn profile_owner_key(master_keys: &MasterKeys, binding: &str) -> Result<ProfileOwnerKey> {
+    ProfileOwnerKey::from_keys(master_keys, binding).map_err(invalid)
 }
 
 pub fn profile_version(key: &[u8]) -> Result<String> {
@@ -232,8 +223,7 @@ pub struct AccountProfileUpdate {
 /// upload.
 #[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
 pub fn seal_account_profile<R: Rng + CryptoRng>(
-    master_key: &[u8; 32],
-    generation: MasterKeyGeneration,
+    master_keys: &MasterKeys,
     current: Option<&PutChatProfileRequest>,
     update: AccountProfileUpdate,
     canonical_account: &AccountRef,
@@ -248,7 +238,7 @@ pub fn seal_account_profile<R: Rng + CryptoRng>(
         about: update.about,
     };
     crypto::seal_account_profile(
-        &owner_at(master_key, generation, binding)?,
+        &profile_owner_key(master_keys, binding)?,
         current.as_ref(),
         &contents,
         canonical_account,
@@ -260,15 +250,14 @@ pub fn seal_account_profile<R: Rng + CryptoRng>(
 /// The account's own profile as the account app shows it.
 #[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
 pub fn open_account_profile(
-    master_key: &[u8; 32],
-    generation: MasterKeyGeneration,
+    master_keys: &MasterKeys,
     current: &PutChatProfileRequest,
     canonical_account: &AccountRef,
     binding: &str,
 ) -> Result<LocalProfile> {
     open_own_profile(
         current,
-        &owner_at(master_key, generation, binding)?,
+        &profile_owner_key(master_keys, binding)?,
         canonical_account,
     )
 }
@@ -420,7 +409,7 @@ mod tests {
         );
         let master_key = [0x09u8; 32];
         let profile_key = [0x51u8; 32];
-        let wrapping = profile_owner_key(&master_key, BINDING).unwrap();
+        let wrapping = profile_owner_key(&MasterKeys::first(&master_key), BINDING).unwrap();
         let version = profile_version(&profile_key).unwrap();
         let access = profile_access_key(&profile_key).unwrap();
         let delivery = derive_delivery_capability(&profile_key, &RECIPIENT).unwrap();
@@ -429,7 +418,7 @@ mod tests {
                     plaintext: &[u8],
                     nonce: u8| {
             let context =
-                ProfileEnvelopeContextV1::new(purpose, &RECIPIENT, &version, 4, 3).unwrap();
+                ProfileEnvelopeContextV1::new(purpose, &*RECIPIENT, &version, 4, 3).unwrap();
             json!({
                 "purpose": format!("{purpose:?}"),
                 "rootKey": STANDARD.encode(root),
@@ -520,7 +509,7 @@ mod tests {
     #[test]
     fn signal_style_name_padding_and_profile_round_trip() {
         let mut rng = StdRng::seed_from_u64(7);
-        let wrapping = profile_owner_key(&[9; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&MasterKeys::first(&[9; 32]), BINDING).unwrap();
         let profile = create_local_profile(
             "Alice Example",
             Some(vec![1, 2, 3, 4]),
@@ -549,7 +538,7 @@ mod tests {
     #[test]
     fn rotation_revokes_the_old_version_and_access_capability() {
         let mut rng = StdRng::seed_from_u64(8);
-        let wrapping = profile_owner_key(&[4; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&MasterKeys::first(&[4; 32]), BINDING).unwrap();
         let before =
             create_local_profile("Alice", None, None, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
         let after = rotate_local_profile(&before, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
@@ -567,7 +556,7 @@ mod tests {
     #[test]
     fn decryption_rejects_the_wrong_profile_key() {
         let mut rng = StdRng::seed_from_u64(9);
-        let wrapping = profile_owner_key(&[5; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&MasterKeys::first(&[5; 32]), BINDING).unwrap();
         let profile =
             create_local_profile("Alice", None, None, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
         let response = ChatProfileResponse::from(profile.pending_upload.as_ref().unwrap());
@@ -578,7 +567,7 @@ mod tests {
     fn profile_envelope_has_a_stable_canonical_vector() {
         let context = ProfileEnvelopeContextV1::new(
             ProfileEnvelopePurpose::DisplayName,
-            &RECIPIENT,
+            &*RECIPIENT,
             &"11".repeat(32),
             7,
             3,
@@ -588,14 +577,14 @@ mod tests {
             encrypt_b64_with_nonce(&[0x41; 53], &[0x22; 32], &context, &[0x44; 24]).unwrap();
         assert_eq!(
             encoded,
-            "S1VUUFBFMQAAAQEAAAAAAAAAAAcAAAADEREREREREREREREREREREREREREREREREREREREREREAHQALZXhhbXBsZS5jb20AAAAAAABAAIAAK9gGyX8OREREREREREREREREREREREREREREREREAAAARRubdPnnHl7w4lkqUKFAIV1FnKmbfaHhj1CHrJNw7WKL2bb1XTvm246n7PdiYKbSbs9nuCj58HUhcu3j9oQpdTZeOlHvnA=="
+            "S1VUUFBFMQAAAQEAAAAAAAAAAAcAAAADEREREREREREREREREREREREREREREREREREREREREREAAAAAAABAAIAAK9gGyX8OREREREREREREREREREREREREREREREREAAAAReCB0CtKcz4VF+7qkRsSO/IY1QQBkTkWSKCUYLrS8kB2hsAodRW7BkJoPPtyWgMT6SMVbzmOgoReNcgOH0bmKVykeQ7tkw=="
         );
     }
 
     #[test]
     fn stale_linked_device_rebase_preserves_edit_without_undoing_rotation() {
         let mut rng = StdRng::seed_from_u64(10);
-        let wrapping = profile_owner_key(&[6; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&MasterKeys::first(&[6; 32]), BINDING).unwrap();
         let original =
             create_local_profile("Alice", None, None, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
         let desired = update_local_profile(
@@ -626,7 +615,7 @@ mod tests {
     #[test]
     fn about_is_padded_encrypted_and_opened_by_owner_and_peer() {
         let mut rng = StdRng::seed_from_u64(11);
-        let wrapping = profile_owner_key(&[7; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&MasterKeys::first(&[7; 32]), BINDING).unwrap();
         let original =
             create_local_profile("Alice", None, None, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
         let about = "Out hiking 🥾 until Monday";
@@ -668,10 +657,9 @@ mod tests {
     #[test]
     fn the_account_app_seals_and_reopens_the_profile_from_the_master_key() {
         let mut rng = rand::rng();
-        let master = [7u8; 32];
+        let master = MasterKeys::first(&[7u8; 32]);
         let first = seal_account_profile(
             &master,
-            MasterKeyGeneration::FIRST,
             None,
             AccountProfileUpdate {
                 display_name: "Ada".into(),
@@ -688,20 +676,12 @@ mod tests {
             (first.revision, first.source_device_id),
             (1, kutup_chat_proto::ACCOUNT_PROFILE_SOURCE)
         );
-        let opened = open_account_profile(
-            &master,
-            MasterKeyGeneration::FIRST,
-            &first,
-            &RECIPIENT,
-            BINDING,
-        )
-        .unwrap();
+        let opened = open_account_profile(&master, &first, &RECIPIENT, BINDING).unwrap();
         assert_eq!(opened.display_name, "Ada");
         assert_eq!(opened.about.as_deref(), Some("Counting things"));
 
         let next = seal_account_profile(
             &master,
-            MasterKeyGeneration::FIRST,
             Some(&first),
             AccountProfileUpdate {
                 display_name: "Ada L.".into(),
@@ -729,31 +709,66 @@ mod tests {
         assert_eq!(device_view.display_name, "Ada L.");
         assert_eq!(device_view.about, None);
         // Another master key, or another key binding, opens nothing.
-        assert!(open_account_profile(
-            &[8u8; 32],
-            MasterKeyGeneration::FIRST,
-            &next,
-            &RECIPIENT,
-            BINDING
-        )
-        .is_err());
+        assert!(
+            open_account_profile(&MasterKeys::first(&[8u8; 32]), &next, &RECIPIENT, BINDING)
+                .is_err()
+        );
         assert!(open_account_profile(
             &master,
-            MasterKeyGeneration::FIRST,
             &next,
             &RECIPIENT,
             "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d"
         )
         .is_err());
         // The address is not a key binding.
-        assert!(open_account_profile(
-            &master,
-            MasterKeyGeneration::FIRST,
-            &next,
+        assert!(open_account_profile(&master, &next, &RECIPIENT, RECIPIENT_KEY).is_err());
+    }
+
+    #[test]
+    fn the_profile_follows_a_master_key_rotation() {
+        let mut rng = rand::rng();
+        let before = MasterKeys::first(&[7u8; 32]);
+        let update = |name: &str| AccountProfileUpdate {
+            display_name: name.into(),
+            avatar: None,
+            avatar_content_type: None,
+            about: None,
+        };
+        let first =
+            seal_account_profile(&before, None, update("Ada"), &RECIPIENT, BINDING, &mut rng)
+                .unwrap();
+        let after = before.rotated(&[8u8; 32]).unwrap();
+        // The copy sealed under the old key opens through the keyring.
+        let opened = open_account_profile(&after, &first, &RECIPIENT, BINDING).unwrap();
+        assert_eq!(opened.display_name, "Ada");
+        // The next revision is sealed under the new key: the new key alone
+        // opens it, and a device still on the old one is told it is stale.
+        let next = seal_account_profile(
+            &after,
+            Some(&first),
+            update("Ada L."),
             &RECIPIENT,
-            RECIPIENT_KEY
+            BINDING,
+            &mut rng,
         )
-        .is_err());
+        .unwrap();
+        let only_new = MasterKeys::only(
+            &[8u8; 32],
+            kutup_crypto::account_record::MasterKeyGeneration::new(2).unwrap(),
+        );
+        assert_eq!(
+            open_account_profile(&only_new, &next, &RECIPIENT, BINDING)
+                .unwrap()
+                .display_name,
+            "Ada L."
+        );
+        let stale = open_account_profile(&before, &next, &RECIPIENT, BINDING).unwrap_err();
+        assert!(
+            stale
+                .to_string()
+                .contains(kutup_crypto::master_keys::MASTER_KEY_STALE),
+            "{stale}"
+        );
     }
 
     /// Checked-in vectors for the account's own copy of its profile key
@@ -828,7 +843,7 @@ mod tests {
         }
 
         fn open(binding: &str, version: &str, revision: u64, wrapped: &str) -> Result<Vec<u8>> {
-            let owner = profile_owner_key(&MASTER, binding)?;
+            let owner = profile_owner_key(&MasterKeys::first(&MASTER), binding)?;
             crypto::unwrap_profile_key(wrapped, &owner, version, revision)
                 .map(|key| key.to_vec())
                 .map_err(content)

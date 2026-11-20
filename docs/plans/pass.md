@@ -133,7 +133,7 @@ one database, plus a report of what happened.
 
 - `POST /api/files/{id}/versions` gains an optional `basedOn` (a version id,
   or `original` for the upload). If the file's current content is not that
-  version, the server answers `409` `{ code: "version_conflict", current }`
+  version, the server answers `409` `{ code: "versionConflict", current }`
   and stores nothing. Without `basedOn` the endpoint behaves as today.
 - Each version records the version it replaced (`parent_version_id`, a
   migration numbered one above the highest on master and in open PRs at the
@@ -305,7 +305,8 @@ one database, plus a report of what happened.
 - **Page policy.** The pass host allows no inline or eval'd script
   (`script-src 'self' 'wasm-unsafe-eval'`), nothing may frame it
   (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), and its theme and
-  reload guard load as files (`strictCsp` in the shared Vite config). Spec 79
+  reload guard load as files, as every app's now do (the shared Vite
+  config; [`../content-security-policy.md`](../content-security-policy.md)). Spec 79
   checks the headers and that the page breaks none of it.
 - **Entries.** Standard fields, the TOTP secret (`otp`, an otpauth:// URI or
   a base32 key) with a live code, custom fields (hidden or not), tags,
@@ -397,7 +398,8 @@ one database, plus a report of what happened.
   one needs the password itself (`kept::PasswordKind`). Only a key that opened the vault is kept: the Pass
   worker keeps the key its vault was opened or made with, and the CLI opens
   the vault with the key first. Stored by the server
-  (`pass_vault_secrets`, `/api/pass/vault-secrets`), unreadable to it.
+  (the account-records scope `passSecrets`, docs/plans/account-records.md),
+  unreadable to it.
   Creating or opening a vault offers to remember it. Every record is
   listed, as the account head lists it, with what has become of its vault
   (`open`, `trashed`, `unreachable` for one not shared with its owner now,

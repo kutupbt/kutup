@@ -46,11 +46,20 @@ struct Vectors {
     share: String,
     request: String,
     escrow: String,
+    /// The member's key binding and identity-root record (sealed under the
+    /// member's master key): what an escrow is checked against.
+    member_binding: String,
+    member_identity_root_record: String,
 }
 
+const MEMBER_BINDING: &str = "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70";
+
 fn person(master: &str, account: &str) -> (AccountIdentityKeysV1, Party) {
-    let keys = AccountIdentityKeysV1::derive(&STANDARD.decode(master).unwrap().try_into().unwrap())
-        .unwrap();
+    let keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_slice(&STANDARD.decode(master).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
     let account: AccountRef = account.parse().unwrap();
     let party = Party::new(&account, &keys.incarnation_id()).unwrap();
     (keys, party)
@@ -74,12 +83,13 @@ fn write_vectors() {
     let (_, member) = person(&member_master, MEMBER);
     let issued_at = 1_793_000_000;
     let certificate = KeyCertificateV1::sign(ORG, &public, issued_at, &admin, &admin_keys).unwrap();
-    let binding = kutup_crypto::drive_key_binding::sign(&second_keys, &second.account, 1).unwrap();
+    let second_account: AccountRef = SECOND_ADMIN.parse().unwrap();
+    let binding = kutup_crypto::drive_key_binding::sign(&second_keys, &second_account, 1).unwrap();
     let second_drive_key = VerifiedDriveKey::verify(
-        &second.account,
+        &second_account,
         &second_keys.authority_public_key(),
         1,
-        &second_keys.drive_hpke_public_key(),
+        &second_keys.drive_xwing_public_key(),
         &second_keys.drive_signing_public_key(),
         &binding,
     )
@@ -97,8 +107,14 @@ fn write_vectors() {
     .unwrap();
     let verified =
         KeyCertificateV1::verify(&certificate, &admin_keys.authority_public_key()).unwrap();
-    let escrow =
-        EscrowV1::seal(&[0x33; 32], MasterKeyGeneration::FIRST, &verified, &member).unwrap();
+    let escrow = EscrowV1::seal(
+        &[0x33; 32],
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x33; 32]),
+        MasterKeyGeneration::FIRST,
+        &verified,
+        &member,
+    )
+    .unwrap();
     let vectors = Vectors {
         organization_id: ORG.into(),
         organization_seed: hex::encode(seed),
@@ -112,6 +128,21 @@ fn write_vectors() {
         share: STANDARD.encode(share),
         request: STANDARD.encode(request),
         escrow: STANDARD.encode(escrow),
+        member_binding: MEMBER_BINDING.into(),
+        member_identity_root_record: STANDARD.encode(
+            kutup_crypto::account_record::seal_suite(
+                kutup_crypto::account_record::AccountRecordSuiteId::V1,
+                &[0x33; 32],
+                &[0x33; 32],
+                kutup_crypto::account_record::AccountRecordPurpose::IdentityRoot,
+                MasterKeyGeneration::FIRST,
+                MEMBER_BINDING,
+                &kutup_crypto::account_roots::RootGeneration::FIRST.object(),
+                None,
+                &[0x77; 24],
+            )
+            .unwrap(),
+        ),
     };
     std::fs::write(PATH, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
 }
@@ -148,7 +179,7 @@ fn checked_in_vectors_hold() {
         &v.organization_id,
         &id,
         &second,
-        second_keys.drive_hpke_private_key(),
+        second_keys.drive_xwing_private_key(),
         &admin_keys.authority_public_key(),
     )
     .unwrap();
@@ -170,6 +201,8 @@ fn checked_in_vectors_hold() {
         &seed,
         &member,
         &member_keys.authority_public_key(),
+        &v.member_binding,
+        &STANDARD.decode(&v.member_identity_root_record).unwrap(),
     )
     .unwrap();
     assert_eq!(

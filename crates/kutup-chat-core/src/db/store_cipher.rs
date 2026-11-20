@@ -9,6 +9,7 @@
 
 use kutup_crypto::chat_store;
 use kutup_crypto::error::CryptoError;
+use kutup_crypto::master_keys::MasterKeys;
 use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroizing;
 
@@ -26,21 +27,39 @@ pub(crate) struct StoreCipher(chat_store::StoreCipher);
 impl StoreCipher {
     /// A new store key, and its wrapped form to keep beside the data.
     pub(crate) fn create<R: RngCore + CryptoRng>(
-        master_key: &[u8; 32],
+        master: &MasterKeys,
         binding: &str,
+        store_name: &str,
         rng: &mut R,
     ) -> Result<(Self, Vec<u8>)> {
         let (cipher, wrapped) =
-            chat_store::StoreCipher::create(master_key, binding, rng).map_err(db)?;
+            chat_store::StoreCipher::create(master, binding, store_name, rng).map_err(db)?;
         Ok((Self(cipher), wrapped))
     }
 
-    /// Open a wrapped store key. Fails, and must not be taken for an empty
-    /// store, when the key belongs to another account or store.
-    pub(crate) fn unwrap(master_key: &[u8; 32], binding: &str, wrapped: &[u8]) -> Result<Self> {
-        chat_store::StoreCipher::unwrap(master_key, binding, wrapped)
+    /// Open a wrapped store key, under the master key of the generation it
+    /// names. Fails, and must not be taken for an empty store, when the key
+    /// belongs to another account or store.
+    pub(crate) fn unwrap(
+        master: &MasterKeys,
+        binding: &str,
+        store_name: &str,
+        wrapped: &[u8],
+    ) -> Result<Self> {
+        chat_store::StoreCipher::unwrap(master, binding, store_name, wrapped)
             .map(Self)
             .map_err(db)
+    }
+
+    /// The wrapped store key sealed again under the current master key when
+    /// an older one sealed it; `None` when it is current.
+    pub(crate) fn rewrapped(
+        master: &MasterKeys,
+        binding: &str,
+        store_name: &str,
+        wrapped: &[u8],
+    ) -> Result<Option<Vec<u8>>> {
+        chat_store::StoreCipher::rewrapped(master, binding, store_name, wrapped).map_err(db)
     }
 
     /// The key a record is stored under: a keyed hash of its object store
@@ -77,13 +96,20 @@ impl StoreCipher {
 /// positions, the backup mirror's records), bound to the account scope and a
 /// purpose per value. Stateless towards the engine, so the page can use it
 /// while the engine is busy; one instance serves a whole batch.
-pub(crate) struct LocalCipher(chat_store::LocalCipher);
+///
+/// The sealed format names no master-key generation: a value is sealed under
+/// a key from the current master key, and opened by trying each master key of
+/// the set, newest first (an older one sealed what was kept before a
+/// rotation; the page seals it again as it next writes).
+pub(crate) struct LocalCipher(Vec<chat_store::LocalCipher>);
 
 impl LocalCipher {
-    pub(crate) fn new(master_key: &[u8; 32], scope: &str) -> Result<Self> {
-        chat_store::LocalCipher::new(master_key, scope)
+    pub(crate) fn new(master_keys: &MasterKeys, scope: &str) -> Result<Self> {
+        master_keys
+            .newest_first()
+            .map(|(_, key)| chat_store::LocalCipher::new(key, scope).map_err(db))
+            .collect::<Result<Vec<_>>>()
             .map(Self)
-            .map_err(db)
     }
 
     pub(crate) fn seal<R: RngCore + CryptoRng>(
@@ -92,11 +118,24 @@ impl LocalCipher {
         plaintext: &[u8],
         rng: &mut R,
     ) -> Result<Vec<u8>> {
-        self.0.seal(purpose, plaintext, rng).map_err(db)
+        self.current().seal(purpose, plaintext, rng).map_err(db)
     }
 
     pub(crate) fn open(&self, purpose: &str, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-        self.0.open(purpose, sealed).map_err(db)
+        let mut first_error = None;
+        for cipher in &self.0 {
+            match cipher.open(purpose, sealed) {
+                Ok(plain) => return Ok(plain),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        Err(db(first_error.expect("a master-key set is never empty")))
+    }
+
+    fn current(&self) -> &chat_store::LocalCipher {
+        self.0.first().expect("a master-key set is never empty")
     }
 }
 
@@ -150,6 +189,11 @@ mod tests {
     use rand_core::OsRng;
 
     const MASTER: [u8; 32] = [7; 32];
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+
+    fn first(key: &[u8; 32]) -> MasterKeys {
+        MasterKeys::first(key)
+    }
 
     /// Hands out 0, 1, 2, ... so a sealing is the same every run.
     struct CountingRng(u8);
@@ -195,9 +239,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../kutup-crypto/tests/vectors/chat-store-v1.json"
         );
-        let binding = "chat:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+        let store_name = "chat:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
         let mut rng = CountingRng(0);
-        let (store, wrapped) = StoreCipher::create(&MASTER, binding, &mut rng).unwrap();
+        let (store, wrapped) =
+            StoreCipher::create(&first(&MASTER), BINDING, store_name, &mut rng).unwrap();
         let record_key = keys::text("aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.test");
         let hashed = store.hashed_key("contacts", &record_key);
         let record = store
@@ -209,13 +254,14 @@ mod tests {
                 &mut rng,
             )
             .unwrap();
-        let local = LocalCipher::new(&MASTER, "account:example")
+        let local = LocalCipher::new(&first(&MASTER), "account:example")
             .unwrap()
             .seal("draft", b"half a message", &mut rng)
             .unwrap();
         let made = json!({
             "masterKey": STANDARD.encode(MASTER),
-            "binding": binding,
+            "binding": BINDING,
+            "storeName": store_name,
             "rng": "bytes 0, 1, 2, ... in order",
             "wrappedStoreKey": STANDARD.encode(&wrapped),
             "record": {
@@ -238,7 +284,7 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(made, v);
-        let reopened = StoreCipher::unwrap(&MASTER, binding, &wrapped).unwrap();
+        let reopened = StoreCipher::unwrap(&first(&MASTER), BINDING, store_name, &wrapped).unwrap();
         let (key, value) = reopened.open("contacts", &hashed, &record).unwrap();
         assert_eq!(
             (key, value.to_vec()),
@@ -249,7 +295,7 @@ mod tests {
     #[test]
     fn a_record_opens_where_it_was_sealed_and_nowhere_else() {
         let (cipher, wrapped) =
-            StoreCipher::create(&MASTER, "kutup-chat-v2:abc", &mut OsRng).unwrap();
+            StoreCipher::create(&first(&MASTER), BINDING, "kutup-chat-v2:abc", &mut OsRng).unwrap();
         let key = keys::text("alice@kutup.dev.1");
         let hashed = cipher.hashed_key("sessions", &key);
         assert_eq!(hashed.len(), 64);
@@ -269,7 +315,8 @@ mod tests {
         assert!(cipher.open("sessions", &other, &sealed).is_err());
 
         // The same account reopens it; another account or store name cannot.
-        let reopened = StoreCipher::unwrap(&MASTER, "kutup-chat-v2:abc", &wrapped).unwrap();
+        let reopened =
+            StoreCipher::unwrap(&first(&MASTER), BINDING, "kutup-chat-v2:abc", &wrapped).unwrap();
         assert_eq!(
             reopened
                 .open("sessions", &hashed, &sealed)
@@ -278,13 +325,51 @@ mod tests {
                 .as_slice(),
             b"ratchet"
         );
-        assert!(StoreCipher::unwrap(&[8; 32], "kutup-chat-v2:abc", &wrapped).is_err());
-        assert!(StoreCipher::unwrap(&MASTER, "kutup-chat-v2:other", &wrapped).is_err());
+        assert!(
+            StoreCipher::unwrap(&first(&[8; 32]), BINDING, "kutup-chat-v2:abc", &wrapped).is_err()
+        );
+        assert!(
+            StoreCipher::unwrap(&first(&MASTER), BINDING, "kutup-chat-v2:other", &wrapped).is_err()
+        );
+        assert!(StoreCipher::unwrap(
+            &first(&MASTER),
+            "1c7c6f1d-5d2f-4c9f-8d3e-7b2f4e6d8c0a",
+            "kutup-chat-v2:abc",
+            &wrapped
+        )
+        .is_err());
+
+        // After a rotation it opens through the keyring, and is wrapped again
+        // under the new key: then the new key alone opens it.
+        let rotated = first(&MASTER).rotated(&[8; 32]).unwrap();
+        StoreCipher::unwrap(&rotated, BINDING, "kutup-chat-v2:abc", &wrapped).unwrap();
+        let rewrapped = StoreCipher::rewrapped(&rotated, BINDING, "kutup-chat-v2:abc", &wrapped)
+            .unwrap()
+            .expect("sealed under the older key");
+        let only_new = MasterKeys::only(
+            &[8; 32],
+            kutup_crypto::account_record::MasterKeyGeneration::new(2).unwrap(),
+        );
+        let moved =
+            StoreCipher::unwrap(&only_new, BINDING, "kutup-chat-v2:abc", &rewrapped).unwrap();
+        assert_eq!(
+            moved
+                .open("sessions", &hashed, &sealed)
+                .unwrap()
+                .1
+                .as_slice(),
+            b"ratchet"
+        );
+        assert!(
+            StoreCipher::rewrapped(&rotated, BINDING, "kutup-chat-v2:abc", &rewrapped)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn local_data_opens_only_for_its_account_and_purpose() {
-        let local = LocalCipher::new(&MASTER, "scope-a").unwrap();
+        let local = LocalCipher::new(&first(&MASTER), "scope-a").unwrap();
         let sealed = local
             .seal("drafts", b"half a sentence", &mut OsRng)
             .unwrap();
@@ -293,10 +378,20 @@ mod tests {
             b"half a sentence"
         );
         assert!(local.open("read-marks", &sealed).is_err());
-        let other_scope = LocalCipher::new(&MASTER, "scope-b").unwrap();
+        let other_scope = LocalCipher::new(&first(&MASTER), "scope-b").unwrap();
         assert!(other_scope.open("drafts", &sealed).is_err());
-        let other_account = LocalCipher::new(&[8; 32], "scope-a").unwrap();
+        let other_account = LocalCipher::new(&first(&[8; 32]), "scope-a").unwrap();
         assert!(other_account.open("drafts", &sealed).is_err());
+        // After a rotation the old value still opens, and a new one is
+        // sealed under the new key: the old key alone does not open it.
+        let rotated =
+            LocalCipher::new(&first(&MASTER).rotated(&[9; 32]).unwrap(), "scope-a").unwrap();
+        assert_eq!(
+            rotated.open("drafts", &sealed).unwrap().as_slice(),
+            b"half a sentence"
+        );
+        let newer = rotated.seal("drafts", b"the rest", &mut OsRng).unwrap();
+        assert!(local.open("drafts", &newer).is_err());
     }
 
     #[test]

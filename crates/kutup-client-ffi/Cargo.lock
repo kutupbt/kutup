@@ -1442,6 +1442,7 @@ dependencies = [
  "futures-executor",
  "kutup-chat-core",
  "kutup-chat-proto",
+ "kutup-crypto",
  "rand 0.9.5",
  "serde",
  "serde_json",

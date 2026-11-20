@@ -1,6 +1,9 @@
+import { masterKeysBytes, type MasterKeys } from '@kutup/crypto/masterKeys'
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import api from '@kutup/session/client'
 import { isAxiosError } from 'axios'
 import { resolveApiBase } from '@kutup/session/apiBase'
+import { isClientTooOld, withClientParam } from '@kutup/session/clientVersion'
 import { ApiChatTransport, PEER_UNSUPPORTED } from './transport'
 import { takeDeviceCredentialRefusal } from './device-auth'
 import type {
@@ -134,7 +137,11 @@ const GROUP_SYNC_FIRST_MS = 15_000
  * distribution). Nothing reconnects it; it is linked again, keeping its
  * history.
  */
-export type ChatConnectionStatus = 'connected' | 'connecting' | 'polling' | 'offline' | 'deviceRemoved'
+/**
+ * `stopped`: the server refused this build (`clientTooOld`, docs/plans/api-surface.md
+ * §1.5); nothing is retried until the page reloads with the new one.
+ */
+export type ChatConnectionStatus = 'connected' | 'connecting' | 'polling' | 'offline' | 'deviceRemoved' | 'stopped'
 
 /** How often the mailbox is read while the live socket cannot be opened. */
 const POLL_VISIBLE_MS = 5_000
@@ -245,7 +252,8 @@ async function openClientHandle(
     accountKey(options.account),
     options.displayName,
     options.capabilities.sealedSender,
-    options.masterKey,
+    masterKeysBytes(options.masterKeys),
+    options.roots,
     options.envelopeBinding,
     transport,
   ] as const
@@ -255,7 +263,8 @@ async function openClientHandle(
   const state = await wasm.WasmChatClient.installation(
     databaseName,
     accountKey(options.account),
-    options.masterKey,
+    masterKeysBytes(options.masterKeys),
+    options.envelopeBinding,
     transport,
   )
   if (state === 'link') throw new ChatServiceError('linkRequired')
@@ -272,14 +281,17 @@ export class ChatServiceError extends Error {
 }
 
 export interface ChatServiceOptions {
-  userId: string
+  accountId: string
   /** What the account's sealed keys are bound to (`session.envelopeBinding`). */
   envelopeBinding: string
   /** This account: its server and permanent id. */
   account: AccountRef
   /** The name a first profile starts with (the username). */
   displayName: string
-  masterKey: Uint8Array
+  /** The account's master keys (`session.masterKeys`). */
+  masterKeys: MasterKeys
+  /** The account's stored roots (`session.roots`, docs/plans/identity-root.md). */
+  roots: AccountRoots
   capabilities: ChatCapabilities
   /**
    * How this browser gets its device (docs/plans/account-identity-key.md):
@@ -446,11 +458,11 @@ export class ChatService {
       throw new ChatServiceError('serverUnsupported')
     }
 
-    await completeRequestedLocalChatDeviceReset(options.userId)
-    const databaseName = await chatDeviceDatabaseName(options.userId)
+    await completeRequestedLocalChatDeviceReset(options.accountId)
+    const databaseName = await chatDeviceDatabaseName(options.accountId)
     const scope = databaseName.slice(databaseName.indexOf(':') + 1)
-    const lockName = `kutup-chat-engine:${scope}`
-    const channelName = `kutup-chat-updates:${scope}`
+    const lockName = `kutup.chat.engine:${scope}`
+    const channelName = `kutup.chat.updates:${scope}`
     const wasm = await loadChatWasm()
     const transport = new ApiChatTransport()
     // One lock for opening and for every later operation, so opening does
@@ -487,7 +499,7 @@ export class ChatService {
     let attachmentLedger: ChatAttachmentLedger | null = null
     try {
       attachmentLedger = capabilities.media
-        ? await ChatAttachmentLedger.open(options.masterKey, options.envelopeBinding)
+        ? await ChatAttachmentLedger.open(options)
         : null
     } catch (error) {
       client.free()
@@ -503,14 +515,15 @@ export class ChatService {
       transport,
       options.account,
       attachmentLedger,
-      new SealedStorage(wasm, options.masterKey, scope),
+      new SealedStorage(wasm, masterKeysBytes(options.masterKeys), scope),
     )
     try {
       if (capabilities.backup?.alwaysEnabled) {
         service.backup = await ChatBackupCoordinator.open({
           databaseName,
           envelopeBinding: options.envelopeBinding,
-          masterKey: options.masterKey,
+          masterKeys: options.masterKeys,
+          roots: options.roots,
           deviceId: service.deviceId,
           history: () => service.liveHistory(),
           manifestSequence: async () => requireManifestSequence(
@@ -518,7 +531,7 @@ export class ChatService {
           ),
           mediaSources: () => service.backupMediaSources(),
           localMediaCiphertext: (descriptor, signal) =>
-            privateCiphertextCacheForAccountV1(options.userId).readVerified(
+            privateCiphertextCacheForAccountV1(options.accountId).readVerified(
               chatMediaCacheBindingV1(descriptor), signal,
             ),
           sealer: service.sealedStorage,
@@ -533,8 +546,8 @@ export class ChatService {
         service.backupUnsubscribe = service.backup.subscribe(() => service.emitUpdate())
       }
       await service.syncOwnManifest()
-      await service.revokeReplacedDevice(options.userId)
-      rememberLocalChatDevice(options.userId, service.deviceId)
+      await service.revokeReplacedDevice(options.accountId)
+      rememberLocalChatDevice(options.accountId, service.deviceId)
       await service.reconcile()
       requestPersistentStorage()
       void service.maintainPrekeys()
@@ -654,11 +667,12 @@ export class ChatService {
 
   backupMediaCiphertext(
     mediaId: string,
+    manifestSha256: string,
     accessToken: string,
     signal?: AbortSignal,
   ): AsyncIterable<Uint8Array> {
     if (!this.backup) throw new Error('encrypted Chat history is unavailable')
-    return this.backup.fetchMediaCiphertext(mediaId, accessToken, signal)
+    return this.backup.fetchMediaCiphertext(mediaId, manifestSha256, accessToken, signal)
   }
 
   private liveHistory(): Promise<ChatHistoryEntry[]> {
@@ -842,17 +856,17 @@ export class ChatService {
    * through it, the account's groups). Never fatal: if it cannot be done now
    * it is tried again on the next open, and Devices offers it by hand.
    */
-  private async revokeReplacedDevice(userId: string): Promise<void> {
-    const replaced = replacedLocalChatDevice(userId)
+  private async revokeReplacedDevice(accountId: string): Promise<void> {
+    const replaced = replacedLocalChatDevice(accountId)
     if (replaced === null) return
     if (replaced === this.deviceId) {
-      forgetReplacedLocalChatDevice(userId)
+      forgetReplacedLocalChatDevice(accountId)
       return
     }
     try {
       const registered = (await this.devices()).some(device => device.deviceId === replaced)
       if (registered) await this.revokeDevice(replaced)
-      forgetReplacedLocalChatDevice(userId)
+      forgetReplacedLocalChatDevice(accountId)
     } catch (error) {
       console.warn('chat: could not revoke the device this browser replaced', error)
     }
@@ -1237,9 +1251,9 @@ export class ChatService {
       const receipt = await deliverChatMediaV1(due.descriptor, recipient, capability, due.operationId)
       switch (receipt.status) {
         case 'stored':
-        case 'already_stored':
+        case 'alreadyStored':
           return 'stored'
-        case 'storage_full':
+        case 'storageFull':
           return 'storageFull'
         default:
           return 'waiting'
@@ -1508,8 +1522,8 @@ export class ChatService {
     await this.attachmentLedger.create({
       version: 1,
       conversationKind: conversation.kind === 'group'
-        ? 'mls_group'
-        : address === self ? 'note_to_self' : 'direct',
+        ? 'group'
+        : address === self ? 'noteToSelf' : 'direct',
       conversationReference: address,
       messageId,
       attachmentId: descriptor.attachmentId,
@@ -1629,6 +1643,7 @@ export class ChatService {
           this.stopPolling()
           this.setConnection('deviceRemoved')
         }
+        if (isClientTooOld()) this.stopNetwork()
         throw error
       })
       .finally(() => {
@@ -2128,7 +2143,7 @@ export class ChatService {
 
   private async withAttachmentLedgerLock<T>(operation: () => Promise<T>): Promise<T> {
     return navigator.locks.request(
-      `${this.lockName}:attachment-ledger`,
+      this.lockName.replace('kutup.chat.engine:', 'kutup.chat.attachmentLedger:'),
       { mode: 'exclusive' },
       operation,
     )
@@ -2376,13 +2391,13 @@ export class ChatService {
     try {
       // One ticket endpoint for every device's socket; the device credential
       // names this device (device-auth's interceptor sends it).
-      const response = await api.post<{ ticket: string }>('/device-ticket')
+      const response = await api.post<{ ticket: string }>('/account/devices/tickets')
       if (this.disposed) return
       const base = await resolveApiBase()
       const url = new URL(`${base.replace(/\/$/, '')}/chat/ws`, window.location.href)
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
       url.searchParams.set('ticket', response.data.ticket)
-      const socket = new WebSocket(url)
+      const socket = new WebSocket(withClientParam(url))
       this.socket = socket
       socket.onopen = () => {
         this.retryAttempt = 0
@@ -2420,6 +2435,10 @@ export class ChatService {
         this.setConnection('deviceRemoved')
         return
       }
+      if (isClientTooOld()) {
+        this.stopNetwork()
+        return
+      }
       this.socketDown()
       this.scheduleSocketRetry()
     }
@@ -2447,6 +2466,7 @@ export class ChatService {
         !this.polling ||
         this.socket?.readyState === WebSocket.OPEN ||
         this.connection === 'deviceRemoved' ||
+        this.connection === 'stopped' ||
         navigator.onLine === false
       ) {
         this.polling = false
@@ -2478,8 +2498,16 @@ export class ChatService {
     this.polling = false
   }
 
+  /** The server refused this build: no socket, no polling, no retry. */
+  private stopNetwork(): void {
+    this.stopPolling()
+    if (this.socketRetry) clearTimeout(this.socketRetry)
+    this.socketRetry = null
+    this.setConnection('stopped')
+  }
+
   private scheduleSocketRetry(): void {
-    if (this.disposed || this.socketRetry) return
+    if (this.disposed || this.socketRetry || this.connection === 'stopped' || isClientTooOld()) return
     const delay = Math.min(30_000, 500 * 2 ** this.retryAttempt++)
     if (this.retryAttempt >= POLL_AFTER_ATTEMPTS) this.startPolling()
     this.socketRetry = setTimeout(() => {

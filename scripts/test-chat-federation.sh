@@ -150,7 +150,7 @@ until [[ "$(compose exec -T postgres-a psql -U kutup -d kutup -Atc \
   sleep 2
 done
 kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
-  "SELECT COUNT(*) FROM remote_account_renames WHERE domain='a.test' AND current_address LIKE 'ren_alicia@%'")"
+  "SELECT COUNT(*) FROM remote_account_renames WHERE server='a.test' AND current_address LIKE 'ren_alicia@%'")"
 [[ "$kept_renames" == "1" ]] || { echo "B did not keep A's rename chain ($kept_renames)" >&2; exit 1; }
 
 # Shares follow accounts (docs/plans/account-ids.md): renames on both sides
@@ -158,28 +158,17 @@ kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
 # new inheriting nothing.
 run_phase account-ids
 
-# The federation outbox migration with deliveries mid-flight on both sides
-# (docs/plans/federation-outbox.md): run on a database made for it on A's
-# Postgres, from the migration before it, so peers mid-stream see no gap.
-compose exec -T postgres-a psql -U kutup -d kutup -q \
-  -c "DROP DATABASE IF EXISTS outbox_migration" -c "CREATE DATABASE outbox_migration"
-postgres_a="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
-  "$(compose ps -q postgres-a)")"
-KUTUP_TEST_DB="postgres://kutup:federation_test_a@$postgres_a:5432/outbox_migration" \
-  cargo test -p kutup-server --test federation_outbox_migration_live -- --nocapture
-compose exec -T postgres-a psql -U kutup -d kutup -q -c "DROP DATABASE outbox_migration"
-
 # Pairwise groups' anonymous route (docs/plans/pairwise-groups.md §3): the
 # home's signed X-Wing key config, sealed requests relayed and answered. A's
 # administrator (set up in the setup phase) sets the link-join budget.
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
 KUTUP_LIVE_ADMIN="admina:federation-live-password" \
   cargo test -p kutup-server --test chat_groups_live -- --test-threads=1 --nocapture
-# The account's group list (§5): sealed entries by keyed id, the revision
-# from each entry's header, the head's chatGroups scope, the limit.
+# The account's group list (§5) is the records scope chatGroups: a scope
+# keeps at most its count (docs/plans/account-records.md).
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
-KUTUP_LIVE_ADMIN="admina:federation-live-password" \
-  cargo test -p kutup-server --test chat_group_list_live -- --test-threads=1 --nocapture
+  cargo test -p kutup-server --test account_records_live a_scope_keeps_at_most_its_count \
+    -- --test-threads=1 --nocapture
 # Multi-recipient sends (docs/plans/pairwise-groups.md, slice 2): stored once,
 # drained by every device; every send acked, no shared payload is left.
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
@@ -205,10 +194,6 @@ KUTUP_FEDERATION_SERVER_B="http://127.0.0.1:$port_b" \
     -- --test-threads=1 --nocapture
 compose start edge-b
 wait_url "http://127.0.0.1:$port_b/api/health"
-# The account's Chat contact list (docs/plans/chat-contacts-sync.md): the same
-# shape under its own scope, chatContacts, wherever Chat is.
-KUTUP_LIVE_SERVER="http://127.0.0.1:$port_a" \
-  cargo test -p kutup-server --test chat_contact_list_live -- --test-threads=1 --nocapture
 
 # Sealed batches: several sealed sends to one server's accounts in one
 # anonymous request; across servers, queued per recipient and delivered as
@@ -227,7 +212,7 @@ fi
 # its own local recipient, but never the remote sender account/device. Pending
 # reservations must also be empty after the durable retry finishes.
 media_sender_rows="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
-  "SELECT COUNT(*) FROM chat_media_objects WHERE origin_domain='a.test' AND origin_user_id IS NOT NULL")"
+  "SELECT COUNT(*) FROM chat_media_objects WHERE origin_server='a.test' AND origin_account_id IS NOT NULL")"
 media_pending_rows="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
   "SELECT COUNT(*) FROM chat_media_federation_inbound_pending")"
 media_sender_columns="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \

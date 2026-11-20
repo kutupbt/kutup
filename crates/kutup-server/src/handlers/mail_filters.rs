@@ -15,7 +15,7 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::mail::filters::{self, Actions, Condition, Destination, Match};
 use crate::mail::headers::Mailbox;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Messages one batch of "apply to existing" reads and files.
@@ -53,7 +53,7 @@ async fn check_sealed(state: &AppState, user_id: Uuid, id: &Uuid, name: &str) ->
 async fn check_places(state: &AppState, user_id: Uuid, actions: &Actions) -> AppResult<()> {
     if let Some(Destination::Custom(folder)) = actions.destination() {
         let mine: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM mail_folders WHERE user_id = $1 AND id = $2)",
+            "SELECT EXISTS (SELECT 1 FROM mail_folders WHERE account_id = $1 AND id = $2)",
         )
         .bind(user_id)
         .bind(folder)
@@ -68,7 +68,7 @@ async fn check_places(state: &AppState, user_id: Uuid, actions: &Actions) -> App
         wanted.sort();
         wanted.dedup();
         let found: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM mail_labels WHERE user_id = $1 AND id = ANY($2)",
+            "SELECT COUNT(*) FROM mail_labels WHERE account_id = $1 AND id = ANY($2)",
         )
         .bind(user_id)
         .bind(&wanted)
@@ -92,22 +92,22 @@ type FilterRow = (
     String,
 );
 
-/// `GET /api/mail/filters` — the account's filters, in order.
+/// `GET /api/v1/mail/filters` — the account's filters, in order.
 #[utoipa::path(
     get,
-    path = "/api/mail/filters",
+    path = "/api/v1/mail/filters",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Filters", body = [MailFilter]))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<MailFilter>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<FilterRow> = sqlx::query_as(
-        "SELECT id, name_sealed, enabled, position, match, conditions, actions, source
-           FROM mail_filters WHERE user_id = $1 ORDER BY position, created_at",
+        "SELECT id, kutup_b64(name_sealed), enabled, position, match, conditions, actions, source
+           FROM mail_filters WHERE account_id = $1 ORDER BY position, created_at",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -165,7 +165,7 @@ async fn check_enabled_limit(
     except: Option<Uuid>,
 ) -> AppResult<()> {
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM mail_filters WHERE user_id = $1 AND enabled AND id IS DISTINCT FROM $2",
+        "SELECT COUNT(*) FROM mail_filters WHERE account_id = $1 AND enabled AND id IS DISTINCT FROM $2",
     )
     .bind(user_id)
     .bind(except)
@@ -179,10 +179,10 @@ async fn check_enabled_limit(
     Ok(())
 }
 
-/// `POST /api/mail/filters` — a new filter, last in order.
+/// `POST /api/v1/mail/filters` — a new filter, last in order.
 #[utoipa::path(
     post,
-    path = "/api/mail/filters",
+    path = "/api/v1/mail/filters",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = CreateMailFilter,
@@ -194,10 +194,10 @@ async fn check_enabled_limit(
 )]
 pub async fn create(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CreateMailFilter>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&request.id).map_err(|_| AppError::bad_request("not an id"))?;
     check_sealed(&state, user_id, &id, &request.name).await?;
     filters::check(&request.conditions, &request.actions).map_err(AppError::bad_request)?;
@@ -213,9 +213,9 @@ pub async fn create(
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let inserted = sqlx::query(
-        "INSERT INTO mail_filters (id, user_id, name_sealed, enabled, position, match, conditions, actions, source)
-         SELECT $1, $2, $3, $4, COALESCE(MAX(position) + 1, 0), $5, $6, $7, $8
-           FROM mail_filters WHERE user_id = $2
+        "INSERT INTO mail_filters (id, account_id, name_sealed, enabled, position, match, conditions, actions, source)
+         SELECT $1, $2, kutup_unb64($3), $4, COALESCE(MAX(position) + 1, 0), $5, $6, $7, $8
+           FROM mail_filters WHERE account_id = $2
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(id)
@@ -255,10 +255,10 @@ pub struct UpdateMailFilter {
     pub head: Option<String>,
 }
 
-/// `PATCH /api/mail/filters/{id}` — rename, switch on or off, change what it matches or does.
+/// `PATCH /api/v1/mail/filters/{id}` — rename, switch on or off, change what it matches or does.
 #[utoipa::path(
     patch,
-    path = "/api/mail/filters/{id}",
+    path = "/api/v1/mail/filters/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Filter id")),
@@ -272,14 +272,14 @@ pub struct UpdateMailFilter {
 )]
 pub async fn update(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(request): Json<UpdateMailFilter>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such filter"))?;
     let current: Option<(serde_json::Value, serde_json::Value, String)> = sqlx::query_as(
-        "SELECT conditions, actions, name_sealed FROM mail_filters WHERE user_id = $1 AND id = $2",
+        "SELECT conditions, actions, kutup_b64(name_sealed) FROM mail_filters WHERE account_id = $1 AND id = $2",
     )
     .bind(user_id)
     .bind(id)
@@ -311,12 +311,12 @@ pub async fn update(
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let updated = sqlx::query(
         "UPDATE mail_filters SET
-             name_sealed = COALESCE($3, name_sealed),
+             name_sealed = COALESCE(kutup_unb64($3), name_sealed),
              enabled = COALESCE($4, enabled),
              match = COALESCE($5, match),
              conditions = $6,
              actions = $7
-          WHERE user_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = $8)",
+          WHERE account_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = kutup_unb64($8))",
     )
     .bind(user_id)
     .bind(id)
@@ -335,7 +335,7 @@ pub async fn update(
     if updated.rows_affected() == 0 {
         drop(tx);
         let now: Option<String> = sqlx::query_scalar(
-            "SELECT name_sealed FROM mail_filters WHERE user_id = $1 AND id = $2",
+            "SELECT kutup_b64(name_sealed) FROM mail_filters WHERE account_id = $1 AND id = $2",
         )
         .bind(user_id)
         .bind(id)
@@ -350,10 +350,10 @@ pub async fn update(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/mail/filters/{id}`.
+/// `DELETE /api/v1/mail/filters/{id}`.
 #[utoipa::path(
     delete,
-    path = "/api/mail/filters/{id}",
+    path = "/api/v1/mail/filters/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Filter id")),
@@ -362,16 +362,16 @@ pub async fn update(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Option<Json<crate::account_heads::HeadOnly>>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such filter"))?;
     let head = NextHead::parse(body.and_then(|Json(body)| body.head).as_deref())?;
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
-    let removed = sqlx::query("DELETE FROM mail_filters WHERE user_id = $1 AND id = $2")
+    let removed = sqlx::query("DELETE FROM mail_filters WHERE account_id = $1 AND id = $2")
         .bind(user_id)
         .bind(id)
         .execute(&mut *tx)
@@ -392,10 +392,10 @@ pub struct OrderMailFilters {
     pub ids: Vec<String>,
 }
 
-/// `PUT /api/mail/filters/order` — the order filters run in (Proton: drag to reorder).
+/// `PUT /api/v1/mail/filters/order` — the order filters run in (Proton: drag to reorder).
 #[utoipa::path(
     put,
-    path = "/api/mail/filters/order",
+    path = "/api/v1/mail/filters/order",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = OrderMailFilters,
@@ -403,10 +403,10 @@ pub struct OrderMailFilters {
 )]
 pub async fn order(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<OrderMailFilters>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let ids: Vec<Uuid> = request
         .ids
         .iter()
@@ -415,7 +415,7 @@ pub async fn order(
     let updated = sqlx::query(
         "UPDATE mail_filters f SET position = o.position
            FROM UNNEST($2::uuid[]) WITH ORDINALITY AS o(id, position)
-          WHERE f.user_id = $1 AND f.id = o.id",
+          WHERE f.account_id = $1 AND f.id = o.id",
     )
     .bind(user_id)
     .bind(&ids)
@@ -447,11 +447,11 @@ pub struct MailFilterRun {
     pub failed: bool,
 }
 
-/// `POST /api/mail/filters/apply` — runs filters over the mail already there
+/// `POST /api/v1/mail/filters/apply` — runs filters over the mail already there
 /// (outside Drafts, Spam and Trash), in the background; nothing is sent.
 #[utoipa::path(
     post,
-    path = "/api/mail/filters/apply",
+    path = "/api/v1/mail/filters/apply",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = ApplyMailFilters,
@@ -462,10 +462,10 @@ pub struct MailFilterRun {
 )]
 pub async fn apply(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<ApplyMailFilters>,
 ) -> AppResult<(StatusCode, Json<MailFilterRun>)> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let ids: Option<Vec<Uuid>> = request
         .ids
         .map(|ids| {
@@ -477,20 +477,20 @@ pub async fn apply(
     // A run that a restart cut short is over.
     sqlx::query(
         "UPDATE mail_filter_runs SET finished_at = now(), failed = true
-          WHERE user_id = $1 AND finished_at IS NULL AND started_at < now() - interval '1 hour'",
+          WHERE account_id = $1 AND finished_at IS NULL AND started_at < now() - interval '1 hour'",
     )
     .bind(user_id)
     .execute(&state.pool)
     .await?;
     let total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM mail_messages WHERE user_id = $1 AND folder NOT IN ('drafts', 'spam', 'trash')",
+        "SELECT COUNT(*) FROM mail_messages WHERE account_id = $1 AND folder NOT IN ('drafts', 'spam', 'trash')",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
     let run: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO mail_filter_runs (user_id, filter_ids, total) VALUES ($1, $2, $3)
-         ON CONFLICT (user_id) WHERE finished_at IS NULL DO NOTHING RETURNING id",
+        "INSERT INTO mail_filter_runs (account_id, filter_ids, total) VALUES ($1, $2, $3)
+         ON CONFLICT (account_id) WHERE finished_at IS NULL DO NOTHING RETURNING id",
     )
     .bind(user_id)
     .bind(ids.clone().unwrap_or_default())
@@ -523,17 +523,7 @@ pub async fn apply(
     ))
 }
 
-type RunRow = (
-    Uuid,
-    String,
-    String,
-    String,
-    serde_json::Value,
-    serde_json::Value,
-    String,
-    String,
-    i32,
-);
+type RunRow = (Uuid, String, Option<Vec<u8>>, String, i32);
 
 async fn run_filters(
     state: &AppState,
@@ -546,11 +536,15 @@ async fn run_filters(
     loop {
         let mut tx = state.pool.begin().await?;
         let loaded = filters::load(&mut tx, user_id, only).await?;
+        let opener = crate::mail::sealed::Opener::load_in(
+            &mut tx,
+            crate::account_data::KeyOwner::Account(user_id),
+        )
+        .await?;
         let rows: Vec<RunRow> = sqlx::query_as(
-            "SELECT m.id, m.direction, m.from_address, m.from_name, m.to_list, m.cc_list, m.subject,
-                    COALESCE(a.address, ''), m.attachment_count
+            "SELECT m.id, m.direction, m.headers, COALESCE(a.address, ''), m.attachment_count
                FROM mail_messages m LEFT JOIN mail_addresses a ON a.id = m.address_id
-              WHERE m.user_id = $1 AND m.folder NOT IN ('drafts', 'spam', 'trash') AND m.id > $2
+              WHERE m.account_id = $1 AND m.folder NOT IN ('drafts', 'spam', 'trash') AND m.id > $2
               ORDER BY m.id LIMIT $3",
         )
         .bind(user_id)
@@ -562,20 +556,15 @@ async fn run_filters(
             tx.commit().await?;
             break;
         }
-        for (id, direction, from_address, from_name, to, cc, subject, address, attachments) in &rows
-        {
-            let from = (!from_address.is_empty()).then(|| Mailbox {
-                address: from_address.clone(),
-                name: from_name.clone(),
-            });
-            let to: Vec<Mailbox> = serde_json::from_value(to.clone()).unwrap_or_default();
-            let cc: Vec<Mailbox> = serde_json::from_value(cc.clone()).unwrap_or_default();
+        for (id, direction, sealed, address, attachments) in &rows {
+            let headers = opener.open(*id, sealed.as_deref());
+            let from: Option<&Mailbox> = headers.from.as_ref().filter(|m| !m.address.is_empty());
             let message = filters::Subject {
-                from: from.as_ref(),
-                to: &to,
-                cc: &cc,
+                from,
+                to: &headers.to,
+                cc: &headers.cc,
                 address,
-                subject,
+                subject: &headers.subject,
                 attachments: *attachments,
             };
             let outcome = filters::outcome(&loaded, &message);
@@ -600,10 +589,10 @@ async fn run_filters(
     Ok(())
 }
 
-/// `GET /api/mail/filters/runs/{id}` — how far "apply to existing" got.
+/// `GET /api/v1/mail/filters/runs/{id}` — how far "apply to existing" got.
 #[utoipa::path(
     get,
-    path = "/api/mail/filters/runs/{id}",
+    path = "/api/v1/mail/filters/runs/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Run id")),
@@ -611,13 +600,13 @@ async fn run_filters(
 )]
 pub async fn run_status(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailFilterRun>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such run"))?;
     let row: Option<(i32, i32, i32, Option<OffsetDateTime>, bool)> = sqlx::query_as(
-        "SELECT total, done, changed, finished_at, failed FROM mail_filter_runs WHERE user_id = $1 AND id = $2",
+        "SELECT total, done, changed, finished_at, failed FROM mail_filter_runs WHERE account_id = $1 AND id = $2",
     )
     .bind(user_id)
     .bind(id)

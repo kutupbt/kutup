@@ -7,10 +7,12 @@
 //
 // On snapshot:
 //   1. Encode current Yjs state via Y.encodeStateAsUpdateV2.
-//   2. Call encryptSnapshot() (provided by caller — the V1 browser uses the
-//      same typed, context-bound Drive file-blob format as other snapshots).
-//   3. POST it to /api/files/:fileId/versions (one request: stored, charged
-//      by its measured size, recorded, update log truncated to the seq).
+//   2. Call encryptSnapshot() (provided by caller: the Drive block format,
+//      bound to a new revision, whose id becomes the version's).
+//   3. POST it to /api/v1/drive/files/:fileId/versions (one request: stored, charged
+//      by its measured size, recorded, update log truncated to the seq),
+//      with the file's next metadata naming it as the saved state
+//      (`commitState`; docs/plans/drive-block-format.md §2).
 //   A named version of unchanged content labels the latest version instead.
 //
 // See docs/superpowers/specs/2026-05-04-collab-edit-design.md §9.
@@ -25,9 +27,19 @@ const HARD_CEILING = 200
 export interface SnapshotEncryptResult {
   /** Complete typed encrypted blob to persist. */
   ciphertext: Uint8Array
+  /** The revision it is sealed for: the version's id once stored. */
+  revisionId: string
+  /** What the revision is, sealed (`sealDriveFile`'s): stored with the version. */
+  revisionContentEnvelope: string
   /** Carried into the version-record API call. */
   storageHints: { docKeyId: number; sizeBytes: number }
 }
+
+/** The file's next metadata, sealed, naming a state; see `SnapshotOpts.commitState`. */
+export type StateCommit = <T>(
+  revisionId: string,
+  store: (metadata: { metadataEnvelope: string; metadataRevision: number }) => Promise<T>,
+) => Promise<T>
 
 export interface SnapshotOpts {
   /** Where the file's calls go (see `localBase`); here by default. */
@@ -36,6 +48,13 @@ export interface SnapshotOpts {
   ydoc: Y.Doc
   /** Encrypt and frame the encoded state as a complete persistent blob. */
   encryptSnapshot: (bytes: Uint8Array) => Promise<SnapshotEncryptResult>
+  /**
+   * Commits the state with the file's next metadata, naming it as the saved
+   * state (drive-core `stateCommitter`): seals that metadata and hands it to
+   * `store`, sealing again on top of someone else's when theirs landed first.
+   * Every block-format state needs it (the server refuses one without).
+   */
+  commitState?: StateCommit
   /** Latest known per-device sequence number at snapshot time — drives log truncation server-side. */
   getSeq: () => number
   /** Optional: invoked when a snapshot fails. The caller decides whether
@@ -104,18 +123,24 @@ export class SnapshotTrigger {
         }
       }
       const stateUpdate = Y.encodeStateAsUpdateV2(this.opts.ydoc)
-      const { ciphertext, storageHints } = await this.opts.encryptSnapshot(stateUpdate)
+      const { ciphertext, revisionId, revisionContentEnvelope, storageHints } = await this.opts.encryptSnapshot(stateUpdate)
 
       // One request: the server stores it, charges its measured size,
       // records the row and truncates the update log. createVersion turns a
       // 413 into QuotaExceededError so the catch below can disarm autosave.
-      const recorded = await createVersion(this.opts.fileId, ciphertext, {
-        kind: 'yjs',
-        seqAtSnapshot: this.opts.getSeq(),
-        docKeyId: storageHints.docKeyId,
-        label: label ?? null,
-        keepForever,
-      }, this.opts.base)
+      const store = (metadata?: { metadataEnvelope: string; metadataRevision: number }) =>
+        createVersion(this.opts.fileId, ciphertext, {
+          kind: 'yjs',
+          seqAtSnapshot: this.opts.getSeq(),
+          docKeyId: storageHints.docKeyId,
+          label: label ?? null,
+          keepForever,
+          revisionId,
+          revisionContentEnvelope,
+          metadata,
+        }, this.opts.base)
+      // With the file's next metadata naming this state as the saved one.
+      const recorded = this.opts.commitState ? await this.opts.commitState(revisionId, store) : await store()
       this.latestVersionId = recorded.id
 
       this.updatesSince = 0

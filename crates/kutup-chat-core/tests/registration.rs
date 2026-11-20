@@ -50,8 +50,11 @@ impl ChatTransport for RegistrationServer {
         Ok(self.assigned)
     }
 
-    async fn fetch_device_session(&self) -> Result<String> {
-        Ok(DEVICE_SESSION.into())
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+        Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+            session: DEVICE_SESSION.into(),
+            next_device_id: 1,
+        })
     }
 
     async fn fetch_manifest(
@@ -123,7 +126,10 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
         manifest: RefCell::new(None),
         history: RefCell::new(Vec::new()),
     });
-    let authority = AccountAuthority::derive(&[9u8; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([9u8; 32]),
+    )
+    .unwrap();
 
     let first_db = Rc::new(SqliteChatDb::open(&path).unwrap());
     // The account's first Chat device: it re-registers.
@@ -218,11 +224,15 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
 
 /// One device list per account (docs/plans/one-device-list.md): a Chat
 /// re-registration leaves the account's other devices listed as they were,
-/// and takes the lowest id they leave free, under its sign-in's session.
+/// and takes the account's next id they leave free, under its sign-in's
+/// session.
 #[test]
 fn a_reregistration_keeps_the_accounts_other_devices() {
     use kutup_chat_proto::{AccountManifestDeviceV3, DeviceKind};
-    let authority = AccountAuthority::derive(&[9u8; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([9u8; 32]),
+    )
+    .unwrap();
     let editor = AccountManifestDeviceV3 {
         device_id: 1,
         kind: DeviceKind::Editor,
@@ -234,6 +244,7 @@ fn a_reregistration_keeps_the_accounts_other_devices() {
                 .to_bytes(),
         )),
         session: "52".repeat(32),
+        capabilities: Vec::new(),
     };
     // The account's manifest from before it had Chat: an Office instance,
     // and no Chat identity.
@@ -285,8 +296,8 @@ fn a_reregistration_keeps_the_accounts_other_devices() {
     assert_eq!(manifest.devices[0], editor);
     let chat = &manifest.devices[1];
     assert_eq!(
-        (chat.device_id, chat.kind, chat.session.as_str()),
-        (2, DeviceKind::Chat, DEVICE_SESSION)
+        (chat.device_id, &chat.kind, chat.session.as_str()),
+        (2, &DeviceKind::Chat, DEVICE_SESSION)
     );
     manifest.verify_successor(Some(&head)).unwrap();
 }

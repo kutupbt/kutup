@@ -51,7 +51,9 @@ fn computed() -> Vectors {
         .map(|join_epoch| {
             let mut info = group_id.to_vec();
             info.extend_from_slice(&join_epoch.to_be_bytes());
-            let key = GroupPseudonymKey::derive(&master);
+            let key = GroupPseudonymKey::derive(
+                &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes(master),
+            );
             let pair = key.pseudonym(&group_id, join_epoch);
             Case {
                 join_epoch,
@@ -83,9 +85,11 @@ fn pseudonyms_differ_by_account_group_and_epoch() {
         .unwrap()
         .group_id();
     let key = |master: u8, group: &[u8; 32], epoch| {
-        GroupPseudonymKey::derive(&[master; 32])
-            .pseudonym(group, epoch)
-            .public_key()
+        GroupPseudonymKey::derive(
+            &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes([master; 32]),
+        )
+        .pseudonym(group, epoch)
+        .public_key()
     };
     let base = key(0x11, &group, 0);
     assert_eq!(base, key(0x11, &group, 0), "deterministic");

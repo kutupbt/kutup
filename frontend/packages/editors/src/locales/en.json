@@ -238,6 +238,8 @@
     "notFound": "It may have been moved to the trash, or you may no longer have access to its folder.",
     "undecryptable": "Its keys could not be decrypted with your account. Ask the folder's owner to share it again.",
     "tooLarge": "At {{size}} it is too large to open in the browser (the limit is {{limit}}). Download it instead.",
+    "mediaTooLarge": "At {{size}} it is too large to play in this browser, which can’t stream it here. Download it instead.",
+    "busy": "Too many videos or songs are playing in this tab. Close one to play this.",
     "loadFailed": "It could not be loaded. Check your connection and try again.",
     "noPreviewTitle": "No preview for this kind of file",
     "noPreview": "Download it to open it on your device.",
@@ -285,6 +287,22 @@
         "title": "This link was removed",
         "description": "The server's administrators took it down. What it showed is no longer available here."
       },
+      "blocked": {
+        "title": "This link was blocked",
+        "description": "The server's operators blocked this link. What it showed is no longer available here."
+      },
+      "blockedLegal": {
+        "title": "This link is unavailable for legal reasons",
+        "description": "The server's operators blocked it under a legal order."
+      },
+      "sharingOff": {
+        "title": "Public links are turned off",
+        "description": "Links like this one don't open on this server at the moment."
+      },
+      "signInRequired": {
+        "title": "Sign in to open this link",
+        "description": "On this server, public links open only for people signed in to it. Sign in, then open the link again."
+      },
       "badKey": {
         "title": "This link's key does not fit",
         "description": "The link was changed or copied incompletely. Ask for the whole link again."
@@ -296,6 +314,10 @@
       "waiting": {
         "title": "Waiting for the owner",
         "description": "This file moved to a new key, and its owner has not updated this link yet. It works again once they open Kutup Drive."
+      },
+      "newerLink": {
+        "title": "This link needs a newer Kutup",
+        "description": "It was made by a newer version of Kutup than this server runs. Ask the person who shared it, or try again after the server is updated."
       }
     }
   }

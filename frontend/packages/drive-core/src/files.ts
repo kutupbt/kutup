@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { openFileRecordV1, type FileMetadataV1 } from '@kutup/crypto'
+import { fileMetadataRest, openFileRecordV1, type FileMetadataV2 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { FileRow } from '@kutup/session/api-types'
 import { fileKind } from './kinds'
 import { foldersKey } from './folders'
 import { folderKeyAt } from './keyring'
+import { acceptFileMetadata } from './metadataGuard'
 import { folderLocation, type DriveFile, type Folder } from './model'
 
 export const filesKey = (folderId: string) => ['files', folderId] as const
@@ -16,8 +17,8 @@ export const filesKey = (folderId: string) => ['files', folderId] as const
 export const folderFilesKey = (folder: Pick<Folder, 'id' | 'remoteShareId' | 'keyEpoch'>) =>
   [...filesKey(folder.remoteShareId ?? folder.id), folder.keyEpoch] as const
 
-export type FileRowLike = Omit<FileRow, 'uploaderUserId' | 'updatedAt'> & {
-  uploaderUserId?: string
+export type FileRowLike = Omit<FileRow, 'uploaderAccountId' | 'updatedAt'> & {
+  uploaderAccountId?: string
   updatedAt?: string
 }
 
@@ -30,6 +31,11 @@ async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
     // A file not re-keyed since the folder rotated is wrapped under an older key.
     pending = folderKeyAt(folder, row.keyEpoch)
       .then((collectionKey) => openFileRecordV1(row, collectionKey))
+      // Older metadata than this device has seen of the file does not open.
+      .then(async (result) => {
+        await acceptFileMetadata(row.id, row.metadataRevision)
+        return result
+      })
       .catch(() => null)
     opened.set(cacheKey, pending)
   }
@@ -39,13 +45,13 @@ async function openRow(row: FileRowLike, folder: Folder): Promise<DriveFile> {
 /** A listed file, from its row and what opening it gave (null: it did not open). */
 export function toDriveFile(
   row: FileRowLike,
-  result: { fileKey: Uint8Array; metadata: FileMetadataV1 } | null,
+  result: { fileKey: Uint8Array; metadata: FileMetadataV2 } | null,
 ): DriveFile {
   const name = result?.metadata.name ?? null
   return {
     id: row.id,
     collectionId: row.collectionId,
-    uploaderUserId: row.uploaderUserId ?? null,
+    uploaderAccountId: row.uploaderAccountId ?? null,
     keyEpoch: row.keyEpoch,
     keyGeneration: row.keyGeneration,
     metadataRevision: row.metadataRevision,
@@ -54,6 +60,10 @@ export function toDriveFile(
     size: result?.metadata.size ?? 0,
     sha256: result?.metadata.sha256 ?? null,
     media: result?.metadata.media ?? null,
+    content: result?.metadata.content ?? null,
+    originalRevisionId: result?.metadata.originalRevisionId ?? null,
+    stateRevisionId: result?.metadata.stateRevisionId ?? null,
+    metadataRest: result ? fileMetadataRest(result.metadata) : undefined,
     fileKey: result?.fileKey ?? null,
     fileKeyEnvelope: row.fileKeyEnvelope,
     originalKeyGeneration: row.originalKeyGeneration,
@@ -76,8 +86,8 @@ export async function loadFolderFiles(folder: Folder): Promise<DriveFile[]> {
   const location = folderLocation(folder)
   const { data } = await api.get<FileRowLike[]>(
     location.kind === 'local'
-      ? `/collections/${location.collectionId}/files`
-      : `/drive/federation/shares/${location.shareId}/files`,
+      ? `/drive/collections/${location.collectionId}/files`
+      : `/drive/federation/folder-shares/${location.shareId}/files`,
   )
   return Promise.all(data.map((row) => openRow(row, folder)))
 }
@@ -125,7 +135,7 @@ export function useFolderFiles(folder: Folder | undefined) {
       // the stored share up to date (docs/plans/drive-share-revocation.md).
       if (folder!.remoteShareId && files.some((f) => f.keyEpoch > folder!.keyEpoch)) {
         await api
-          .post(`/drive/federation/shares/${folder!.remoteShareId}/refresh`)
+          .post(`/drive/federation/folder-shares/${folder!.remoteShareId}/refresh`)
           .then(() => queryClient.invalidateQueries({ queryKey: foldersKey }))
           .catch(() => {})
       }

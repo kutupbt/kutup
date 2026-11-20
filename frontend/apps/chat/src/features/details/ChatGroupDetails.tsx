@@ -18,6 +18,7 @@ import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { normalizeAvatar, PAIRWISE_GROUP_AVATAR } from '@kutup/ui/lib/avatar'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
@@ -39,8 +40,8 @@ import { Section } from './DetailsPanel'
 const TITLE_MAX = 32
 
 /** Whether this member may do what `required` guards (the home checks it too). */
-function allowed(required: ChatGroupAccessRequired | undefined, isAdmin: boolean): boolean {
-  return required === 'any' || required === 'member' || (required === 'administrator' && isAdmin)
+function allowed(required: ChatGroupAccessRequired | undefined, administrator: boolean): boolean {
+  return required === 'any' || required === 'member' || (required === 'administrator' && administrator)
 }
 
 /**
@@ -222,9 +223,13 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
           </Button>
         ) : null}
         {members === null ? (
-          <p className="px-2 py-2 text-sm text-muted-foreground" role={membersFailed ? 'alert' : undefined}>
-            {membersFailed ? t('chat.chatGroup.membersFailed') : t('chat.chatGroup.loadingMembers')}
-          </p>
+          membersFailed ? (
+            <p className="px-2 py-2 text-sm text-muted-foreground" role="alert">
+              {t('chat.chatGroup.membersFailed')}
+            </p>
+          ) : (
+            <ListSkeleton label={t('chat.chatGroup.loadingMembers')} rows={3} avatar="round" className="p-0" />
+          )
         ) : (
           <ul className="space-y-1">
             {sorted.map((m) => (

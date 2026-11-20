@@ -1,6 +1,6 @@
 import { Script } from 'node:vm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { reloadGuard, reloadGuardScript, type GuardWindow } from './reloadGuard'
+import { RELOAD_NEEDED_EVENT, reloadGuard, reloadGuardScript, type GuardWindow } from './reloadGuard'
 
 const ORIGIN = 'https://mail.kutup.dev'
 
@@ -34,17 +34,30 @@ beforeEach(() => {
 })
 
 describe('the reload guard', () => {
+  it('offers Reload over a page that has drawn when the page says it is out of date', () => {
+    const p = page()
+    reloadGuard(p.win, 'b1')
+    document.getElementById('root')!.innerHTML = '<p>the app</p>'
+    p.fire(RELOAD_NEEDED_EVENT)
+    p.fire(RELOAD_NEEDED_EVENT)
+    expect(document.querySelectorAll('[role="alert"]')).toHaveLength(1)
+    expect(document.querySelector('[role="alert"] h1')?.textContent).toBe('Kutup was updated')
+    expect(p.reload).not.toHaveBeenCalled()
+    document.querySelector('button')!.click()
+    expect(p.reload).toHaveBeenCalledTimes(1)
+  })
+
   it('reloads a blank page once when its own script fails', () => {
     const p = page()
     reloadGuard(p.win, 'b1')
     p.scriptFailed()
     p.scriptFailed()
     expect(p.reload).toHaveBeenCalledTimes(1)
-    expect(p.storage.get('kutup-reload:b1')).toBe('1')
+    expect(p.storage.get('kutup.ui.reload:b1')).toBe('1')
   })
 
   it('shows an error page with Reload, not a second reload, when it fails again', () => {
-    const storage = new Map([['kutup-reload:b1', '1']])
+    const storage = new Map([['kutup.ui.reload:b1', '1']])
     const p = page(storage)
     reloadGuard(p.win, 'b1')
     p.scriptFailed()
@@ -53,11 +66,11 @@ describe('the reload guard', () => {
     // Reload asked for by the person clears the flag.
     document.querySelector('button')!.click()
     expect(p.reload).toHaveBeenCalledTimes(1)
-    expect(storage.has('kutup-reload:b1')).toBe(false)
+    expect(storage.has('kutup.ui.reload:b1')).toBe(false)
   })
 
   it('leaves a page that has drawn alone, and clears the flag after it drew', () => {
-    const storage = new Map([['kutup-reload:b1', '1']])
+    const storage = new Map([['kutup.ui.reload:b1', '1']])
     const p = page(storage)
     reloadGuard(p.win, 'b1')
     document.getElementById('root')!.innerHTML = '<p>Inbox</p>'
@@ -66,7 +79,7 @@ describe('the reload guard', () => {
     expect(p.reload).not.toHaveBeenCalled()
     p.fire('load')
     p.timers.forEach((run) => run())
-    expect(storage.has('kutup-reload:b1')).toBe(false)
+    expect(storage.has('kutup.ui.reload:b1')).toBe(false)
   })
 
   it('ignores other origins, and reloads on a failed preload', () => {
@@ -79,7 +92,7 @@ describe('the reload guard', () => {
   })
 
   it('is a flag per build', () => {
-    const p = page(new Map([['kutup-reload:old', '1']]))
+    const p = page(new Map([['kutup.ui.reload:old', '1']]))
     reloadGuard(p.win, 'new')
     p.scriptFailed()
     expect(p.reload).toHaveBeenCalledTimes(1)
@@ -87,7 +100,7 @@ describe('the reload guard', () => {
 
   it('inlines as a self-contained script', () => {
     const script = reloadGuardScript('b3')
-    expect(script).toContain('kutup-reload:')
+    expect(script).toContain('kutup.ui.reload:')
     expect(script).toMatch(/\(window, "b3"\);$/)
     // It parses on its own.
     expect(() => new Script(script)).not.toThrow()

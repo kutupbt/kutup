@@ -5,13 +5,12 @@ crypto core) is built: `kutup-crypto` `blocks.rs`, `drive_blocks.rs`,
 `chat_media_blocks.rs`, `chat_backup_media_blocks.rs`, `FileMetadataV2`,
 the revision-bound thumbnail context, vectors (`blocks-v1.json`), the
 `block_object_parsers` fuzz target, the WASM `BlockEncryptor` and
-`BlockReader`, and the benchmark (§9). Nothing uses them yet: clients switch
-in slices 3–6. The suite id 2 is a constant of each family for now:
-`DriveObjectSuiteId` and `ChatMediaSuiteId` (a wire type in descriptors and
-federation offers) gain it in the slice that switches their protocol, so
-nothing that parses suite 1 accepts suite 2 before the server checks it.
-When they do, the suite-1 parsers must still refuse suite 2 under the old
-magics (`KUTPDB2`, `KUTPCM1`), with a test each.
+`BlockReader`, and the benchmark (§9). Slices 3–6 switched the clients and
+Chat to them, and slice 7 removed suite 1 (§10): the block format is the
+only format of Drive blobs, Chat attachments and Chat backup media. The
+Drive blob suite 2 is a constant of its family (`DRIVE_BLOCKS_SUITE`;
+`DriveObjectSuiteId` stays the suite of Drive's envelopes), and
+`ChatMediaSuiteId` holds only suite 2.
 
 Slice 2 (the server) is built too:
 - one `Range` on every content route, with the revision id as the ETag
@@ -23,16 +22,19 @@ Slice 2 (the server) is built too:
   federated uploads (`drive_blob.rs`), for blobs naming a `revisionId`;
 - the federated range proxy (`drive_federation_ranges.rs`);
 - the §7 settings, with the upload and version limits, in the admin UI and
-  `GET /api/drive/limits`.
+  `GET /api/v1/drive/limits`.
 
-Streaming-format uploads still work beside it until slice 7. The user's decision: "follow proton drive". Reference:
+Slice 7 removed the streaming-format uploads that worked beside it. The user's decision: "follow proton drive". Reference:
 Proton's web client, `kutup-references/WebClients`. Its new
 `@protontech/drive-sdk` is not checked out there, so the in-repo upload and
 download code (`packages/drive-store`,
 `applications/drive/src/app/modules/fileSaver`, `modals/preview`) is the
 source for what follows.
 
-## Today
+## Before the block format
+
+What Kutup had when this plan was written (the streaming suite 1, removed in
+slice 7):
 
 - A file is one XChaCha20-Poly1305 secretstream (`crates/kutup-crypto`
   `stream.rs`, `drive_object.rs`):
@@ -229,10 +231,10 @@ block  = nonce(24) ‖ XChaCha20-Poly1305(block key, nonce, AAD, plaintext) ‖ 
 ```text
 manifest plaintext:
   u32 block size ‖ u32 n ‖ u64 plaintext size ‖ h_0 … h_{n−1}
-  ‖ signer: u8 kind (1 = Drive signing key) ‖ 16-byte account id
-  ‖ 64-byte Ed25519 signature
+  ‖ signer: u8 kind (2 = Drive signing key) ‖ 16-byte account id
+  ‖ 32-byte incarnation id ‖ 64-byte Ed25519 signature
 signed message = "kutup/drive/block-manifest/v1\0" ‖ header ‖ 16-byte account id
-                 ‖ u32 block size ‖ u32 n ‖ u64 size ‖ h_0 … h_{n−1}
+                 ‖ 32-byte incarnation id ‖ u32 block size ‖ u32 n ‖ u64 size ‖ h_0 … h_{n−1}
 sealed manifest = nonce(24 random) ‖ XChaCha20-Poly1305(manifest key, nonce,
                   AAD = header ‖ "manifest", plaintext) ‖ tag(16)
 trailer         = u32 sealed-manifest length ‖ "KUTPDBM\0"
@@ -249,6 +251,13 @@ trailer         = u32 sealed-manifest length ‖ "KUTPDBM\0"
   It proves who wrote the content: someone else who holds the file key, such
   as a co-editor, can seal blocks but cannot sign as you. It is checked
   against pins and warns, never blocks, as Drive's other signatures do.
+- **The signer** is named by the account id and the account's incarnation
+  id (the hash of its authority key, as named shares and the account
+  manifest carry it). An account that was reset keeps its id but has new
+  keys: the incarnation tells a reader which of them signed, so an old
+  revision is checked against the key that was pinned then, not the one the
+  account has now. Kind 1 (the account id alone) was never shipped and is
+  not read.
 - **Where the signature lives.** It sits inside the sealed manifest, so the
   server never sees which key signed. Proton's is in clear, but Kutup's
   server already knows the uploader.
@@ -333,9 +342,36 @@ Two more bindings close that:
   alone. Its revision slot then means something. A thumbnail of older
   content fails to open and is drawn again from the current content.
 
-Versions in the history list open by their own revision id: the header must
-name the version the listing asked for. The server can still mislabel an old
+Versions in the history list open by their own revision id and their own
+sealed commitment (`RevisionContent`, §10 slice 3): the header must name the
+version the listing asked for, and its manifest must be the one the
+version's uploader committed to. The server can still mislabel an old
 version's date in the list. It cannot change what opens.
+
+**Revisions read by what the response names.** Two reads take their sealed
+record from the response, not from a listing: the original upload
+(`/files/{id}/original`) and a public link's saved note or place list
+(`/share/{token}/state/{id}`). The record proves the bytes are a genuine
+revision of the file, not *which* one. So the metadata names both, and the
+reader requires the served revision to be the named one:
+- `FileMetadataV2.originalRevisionId`: set by the first commit (the first
+  `content.revisionId`) and carried unchanged by every later metadata
+  revision (a rename, a version's commit, a re-key, a saved state).
+- `FileMetadataV2.stateRevisionId`: a note's or place list's latest saved
+  Yjs state. Yjs states are versions beside the content, not the content,
+  so the smallest binding is the metadata itself: every block-format state
+  is stored with the file's next metadata naming it (the version request
+  carries `metadataEnvelope` and `metadataRevision`, as a whole-file save
+  does; a `409 revisionConflict` returns the current metadata, and the
+  saver seals on top of it once). The public page asks for that state by id
+  (`?revision=`) and refuses any other. Signed-in readers and the live
+  session still take the newest state the version list shows (the live
+  session replays the log after it): the server can hold newer states back
+  from them, as it can hold back any listing.
+
+Both are optional in the format; a reader of `/original` without
+`originalRevisionId`, or a public page whose metadata names no state,
+reads nothing (the page shows the upload).
 
 ## 3. Server and storage
 
@@ -368,9 +404,9 @@ header. `files.content_revision_id` names the original's.
 - Multipart uploads and `POST /files/{id}/versions` validate the same way.
 
 **Range GET on every content route:**
-- `GET /api/files/:id/download`, `/original` (renamed to the revision
-  route), `/api/files/:id/versions/:vid/download`;
-- `GET /api/share/:token/download/:fileId`;
+- `GET /api/v1/drive/files/:id/download`, `/original` (renamed to the revision
+  route), `/api/v1/drive/files/:id/versions/:vid/download`;
+- `GET /api/v1/drive/public-links/:token/files/:fileId/download`;
 - the Chat media download route and the federated proxies below.
 
 Each route takes one `bytes=a-b` range, or `a-`, or `-k` (the last k bytes).
@@ -404,78 +440,183 @@ same from block fetches. This is listed in §8.
 **Method: a service worker answering Range requests, as Proton does.**
 
 Proton's current preview (`modals/preview/streaming.ts`, `downloadSW.ts`
-route `/sw/stream/{id}`) works like this:
+route `/sw/stream/{id}`, its second, stateless range handler) works like
+this:
 - The video's `src` is a virtual same-origin URL.
-- The service worker parses `Range` and caps the answer at 4 MiB. Safari asks
-  for the whole file in one range, and a shorter `206` is valid HTTP.
-- It asks the page for those bytes over a MessageChannel.
-- It answers `206` with `Content-Range`.
+- For each request the service worker parses `Range`, finds the page that
+  asked (`clients.get(event.clientId)`), posts it `get_stream_chunk` with a
+  fresh `MessageChannel` port and answers `206` with what comes back,
+  capped at 4 MiB. Safari asks for the whole file in one range, and a
+  shorter `206` is valid HTTP.
+- The worker keeps no stream state: a worker the browser stops or replaces
+  between two requests loses nothing.
 
 The service worker holds no keys; the page decrypts. Proton also has an MSE
 path, but only for fragmented MP4, to avoid Chrome scanning fMP4 through the
 worker (`mseStreaming.ts`), and a full download as the last resort. Kutup
 builds the service worker path, which plays every container the browser
-supports (MP4, WebM, MOV/H.264, MP3, M4A, Opus, FLAC). MSE for fMP4 waits
-until a test shows the Chrome problem (open question 5).
+supports (MP4, WebM, MOV/H.264, MP3, M4A, Opus, FLAC, WAV). MSE for fMP4
+waits until a test shows the Chrome problem (open question 5). Proton's
+older stateful route (a stream registered in the worker, `/sw/video`) is not
+copied.
 
-**Pieces:**
-1. **Block reader, in a dedicated Worker** that the page starts
-   (`@kutup/files` `blockReader`).
-   - The page gives it the file key, the file id, the generation and the
-     revision id. Those are the same keys the page holds today.
-   - It runs the WASM block reader: header, then manifest, then blocks, as in
-     §2.
-   - It fetches with `fetch(url, { headers: { Range } })`, which `connect-src
-     'self'` already allows.
-   - It keeps a small LRU of verified plaintext blocks (default 3, about
-     12 MiB, Proton's `MAXIMUM_BLOCKS_CACHE`) and reads ahead one block.
-2. **Service worker** `kutup-sw.js` at scope `/` on each app host that plays
-   media: `drive.`, `photos.`, `chat.`.
-   - Chat already has `push-sw.js` at `/`. One origin can have only one
-     worker per scope, so push and streaming become one script there.
-   - Route `/sw/stream/{streamId}`. The `streamId` is 128 random bits.
-   - The page registers a stream with `{streamId, size, mimeType, port}`.
-     The worker answers only fetches whose `clientId` is the document that
-     registered the stream. It answers them one at a time per stream (as
-     Proton does).
-   - It caps each answer at `drive.stream.response_max_bytes` (5 MiB) and
-     drops the stream when the page closes the viewer or goes away.
-   - Responses carry `Content-Type`, `Content-Range` and `Accept-Ranges`,
-     plus a strict CSP and `nosniff`, as Proton's do.
-3. **Page glue.** On a request, the page asks the block reader for
-   `[a, b]` and posts the plaintext to the worker over the port as a
-   transferred `ArrayBuffer`.
+**Built (slice 4, 2026-11-12).** The pieces:
+1. **Block reader, in a dedicated Worker** (`@kutup/files`
+   `blockReader/`: `core.ts`, `blockReader.worker.ts`, `client.ts`), one
+   per revision read.
+   - The page gives it the file key, the file id, the generation and what
+     the object must be: the metadata's `content` and size, or a revision
+     and its `RevisionContent` record (from the listing, or served with the
+     response, §2). Those are the keys the page holds today.
+   - It fetches the header, then the trailer, then the sealed manifest with
+     `fetch(url, { headers: { Range } })` (`connect-src 'self'` allows it),
+     and opens them with the WASM `driveBlockReader`: the header must name
+     the file, generation and revision, the manifest must have the
+     committed digest and size, and the server's object length must be the
+     manifest's. Nothing is fetched by block before this succeeds.
+   - The page then runs the manifest's signer through the identity-pin
+     check (`setManifestSignerCheck`, warn-not-block) before it releases a
+     byte; the check may hold the first byte back for at most 10 s. The
+     hold is released after 10 s whatever the verdict, as everywhere else
+     (warn, not block): a signer that doesn't hold, or a check that never
+     answers, shows its warning, and the bytes still play.
+   - A stream opened with `served: true` (the original upload, a public
+     link's saved state) takes the revision the server's response names,
+     provided it is the one the metadata names, and opens against the
+     record served with it. As noted for slice 3 (§8, "Served
+     revisions"), that is only as fresh as the metadata the reader holds:
+     where the metadata itself can be rolled back (a public link's page),
+     the server can still roll back among genuine revisions of the file,
+     never mix new metadata with older content.
+   - Any byte range is served from blocks fetched by their own Range, each
+     hashed against the manifest's entry and opened at its index before a
+     byte leaves the Worker. It keeps an LRU of verified plaintext blocks
+     (`drive.stream.cache_blocks`, default 3, about 12 MiB, Proton's
+     `MAXIMUM_BLOCKS_CACHE`; one fewer on iOS) and reads ahead
+     `drive.stream.readahead_blocks` (default 1). A long range the server
+     answers in parts (`drive.stream.response_max_bytes`) is read in parts.
+   - Closing aborts its fetches (`AbortController`), drops the cache and
+     frees the Rust reader. Where there are no Workers (unit tests) the same
+     reader runs in the page.
+2. **Whole downloads** (`download/fetchDecrypt.ts` `fetchDecryptedChunks`)
+   use the same reader: blocks in order, one fetched ahead, each handed to
+   the save picker's file (File System Access) as it is verified. Without
+   the picker the Blob holds the whole file, refused above
+   `drive.stream.blob_fallback_max_bytes` (`BlobDownloadTooLarge`). ZIPs,
+   editors, Photos' downloads and public links read this way too.
+3. **Service worker** `kutup-sw.js` at scope `/`, one script for every app
+   that streams or takes Web Push: `drive.`, `photos.`, `chat.` and
+   `calendar.`. One origin has only one worker per scope, so Chat's and
+   Calendar's `push-sw.js` are merged into it. Its single source is
+   `frontend/packages/config/src/sw/kutup-sw.js`, a plain script with no
+   imports; the shared Vite plugin copies it into those apps' builds
+   (`kutupApp({ serviceWorker: true })`) and serves it in dev. An app opts
+   into push by its registration URL (`?push=chat&…`, `?push=calendar&…`,
+   the words in the page's language); a page that only streams keeps the
+   registration it finds.
+   - Route `GET /sw/stream/{streamId}`; the `streamId` is 128 random bits,
+     base64url, known only to the page. Every other path outside `/sw/` goes
+     to the network untouched (no `respondWith`); other `/sw/*` paths are
+     404.
+   - Per request, statelessly: a destination other than `video` or `audio`
+     is refused (403); no `Range` is a 400; a `Range` that isn't one
+     `a-b`, `a-` or `-k` is a 416; no client (a navigation, a closed page)
+     is a 404. Otherwise it posts `{type: 'get_stream_chunk', v, accepts,
+     streamId, range}` to that client with a fresh port and waits up to
+     190 s (then 504).
+   - It answers `206` with the bytes, checked against what it asked (the
+     same start, no byte past the asked end or the total, at most 16 MiB,
+     the largest `drive.stream.response_max_bytes`). The reader caps each
+     answer at the end of the block its first byte is in and at
+     `drive.stream.response_max_bytes`, so an answer is one verified block
+     at most. No bytes: `416` with `Content-Range: bytes */total`.
+   - Every response, errors included, carries `Content-Security-Policy:
+     default-src 'none'; sandbox`, `X-Content-Type-Options: nosniff`,
+     `Cross-Origin-Resource-Policy: same-origin`, `Cache-Control: no-store`,
+     `Accept-Ranges: bytes`, an exact `Content-Length`, and a
+     `Content-Type` from an audio/video allowlist, else
+     `application/octet-stream`; a `206` carries `Content-Range`.
+   - `skipWaiting()` on install, `clients.claim()` on activate; it is
+     registered with `updateViaCache: 'none'`.
+   - The message protocol is versioned. `accepts` lists the versions a
+     worker serves (its own, and the one before for a release after a
+     change). A page that speaks none of them answers `{kind: 'version'}`;
+     the worker answers `503`, and the page asks for a worker update and
+     shows the reload guard's prompt ("Kutup was updated", `@kutup/config`
+     `reloadGuard.ts`, event `kutup:reload-needed`).
+4. **Page glue** (`@kutup/files` `stream/page.ts`, `stream/limits.ts`;
+   drive-core `playback.ts`). The window registers nothing in the worker. It
+   listens on `navigator.serviceWorker` for `get_stream_chunk` naming one of
+   its own stream ids and transfers the port to that stream's reader
+   Worker, which answers on it directly with a transferred buffer.
+   `drive.stream.max_concurrent` (default 3) is enforced in the page. No
+   controller: the page waits for one up to 15 s (registration, activation
+   and claim), then falls back to a whole download into a Blob, up to
+   `drive.stream.blob_fallback_max_bytes`.
+   - A stream that fails before its first frame falls back the same way,
+     within the same limit (review, 2026-11-14): some WebKit builds give a
+     media element's requests an empty `destination`, which the worker
+     refuses (403) and keeps refusing, so the gate is never widened to
+     empty. The worker posts `{type: 'stream_refused', v, streamId}` to the
+     page that asked, for an id of the right form, and the page's stream
+     hears it (`onRefused`); the opener also hears the element's `error`
+     and `loadeddata` (caught on the way down, as they don't bubble). A
+     refusal or an error before `loadeddata` closes the stream and hands the
+     player a Blob (`openMediaPlayback`'s `onFallback`,
+     `streamFallbackDecision`); after the first frame an error is the
+     player's to show.
+   - The worker has one registration per origin (scope `/`), shared by
+     streaming and Web Push. Nothing ever `unregister()`s it: turning
+     notifications off drops only the push subscription, or it would end
+     streaming too.
+5. **Players.** Photos' viewer, Drive's Quick Look and file page
+   (`FileEditorPage`), Photos' public albums and Drive's public links
+   (a video or song opens in a player on the link's page) play video and
+   audio from `/sw/stream/{id}`, for files up to `drive.stream.max_bytes`
+   (Photos' `MAX_VIDEO_BYTES` and the file page's 100 MB limit for media
+   are gone). One opener does it for all of them (`@kutup/files`
+   `stream/playback.ts` `openMediaPlayback`; drive-core `playback.ts`
+   `openPlayback`, `openPublicPlayback`, `usePlaybackOf`). The limits come
+   from `GET /api/v1/drive/limits`; a public link's page has no session, so
+   its reader fetches with the link's key and no token, under the
+   defaults.
 
 **Seeking.** When the element seeks, it opens a new range request. The
-reader computes ⌊a/B⌋ and fetches only that block (and the next one, if the
-range crosses into it). A 2-hour film at 4 Mbit/s is about 3.6 GB; a seek
-costs one 4 MiB fetch. For an MP4 whose `moov` box is at the end, the browser
-first asks for the tail, which is one more block.
+reader computes ⌊a/B⌋ and fetches only that block (and reads the next one
+ahead). A 2-hour film at 4 Mbit/s is about 3.6 GB; a seek costs one 4 MiB
+fetch. For an MP4 whose `moov` box is at the end, the browser first asks for
+the tail (`bytes=-k` or `a-`), which is one more block. Repeated ranges are
+normal and come from the block cache.
 
 **Memory.** Bounded by the cache (blocks × 4 MiB), the readahead and one
-capped response in flight per stream, and at most
-`drive.stream.max_concurrent` streams per tab (default 3). Nothing grows with
-the file's size.
+capped answer in flight per request, and at most
+`drive.stream.max_concurrent` streams per tab. Nothing grows with the file's
+size.
 
-**Cancelling.** When the viewer closes, the page aborts the reader's
-fetches with an `AbortController`, clears the cache and unregisters the
-stream. If the browser cancels a request, the worker tells the page, and the
-page drops the pending read.
+**Cancelling.** When the viewer closes, the page closes the stream: the
+reader's fetches are aborted, its cache dropped and its id forgotten. A
+request for an id the page no longer has gets an error at once, so the
+worker never waits for it.
 
 **The keys stay in the page.** The file key and the plaintext blocks live in
 the page and its dedicated Worker, as they do today. The service worker sees
-only the plaintext ranges of a stream the page registered. It is
-same-origin, so it has the same trust, but it is longer-lived and shared by
-every tab of the origin. That is why it never gets keys. Keys there would
-outlive the viewer and be reachable from other tabs.
+only the plaintext of one answer at a time, for a request from the page
+that holds the stream. It is same-origin, so it has the same trust, but it
+is longer-lived and shared by every tab of the origin. That is why it never
+gets keys or state: keys there would outlive the viewer and be reachable
+from other tabs.
 
 **CSP and scope.**
-- The existing policy already allows a same-origin worker
-  (`worker-src 'self' blob:`) and same-origin media (`media-src 'self'`), so
-  nothing is loosened.
-- The script is served at `/kutup-sw.js` with `Cache-Control: no-cache`.
-- nginx answers `/sw/*` with 404, so a request that no worker controls never
-  falls through to the app.
+- The apps' policy (`frontend/docker/40-kutup-hosts.sh`) has `worker-src
+  'self' blob:` and `media-src 'self' blob:`: the worker script and the
+  stream URLs are same-origin, so `worker-src 'self'` and `media-src 'self'`
+  are all this design needs; `blob:` stays for the fallback (and the other
+  viewers). Nothing is loosened. The strict CSP branch, when it lands,
+  needs the same two.
+- The frontend container serves `/kutup-sw.js` with `Cache-Control:
+  no-cache` and answers `/sw/*` with 404 (strict CSP, `no-store`), so a
+  request that no worker controls never falls through to the app; the dev
+  server does the same.
 - The worker calls `clients.claim()`, so the first visit is controlled
   without a reload.
 
@@ -486,33 +627,74 @@ worker) and browsers with service workers disabled.
 
 **Safari and iOS.**
 - Safari probes with `bytes=0-1` and then may ask for the whole file. The
-  worker's per-answer cap (`drive.stream.response_max_bytes`, 5 MiB, at
-  least one sealed block) handles both.
+  per-answer cap (one block, at most `drive.stream.response_max_bytes`)
+  handles both.
 - It needs exact `Content-Range` and `Content-Length` on every `206`.
-- iOS gives a tab little memory, so the default cache there is 2 blocks.
+- iOS gives a tab little memory, so the cache there is one block fewer (2 by
+  default).
 - Lock screen and background playback are best-effort: iOS may suspend the
   page that supplies the bytes.
-- The e2e suite runs on WebKit to cover this.
+- The e2e suite runs on WebKit to cover this (slice 5): `suites/webkit.txt`,
+  where a player may stream or fall back, and records which.
+
+**Tests.** Unit tests: range parsing, the response headers, the type
+allowlist, the answer checks and the 503 on a version mismatch
+(`kutup-sw.test.ts`); the reader's order (the manifest before any block, a
+corrupted block refused, a short last block, the answer spans; `core.test.ts`,
+`plan.test.ts`); the page's version handling (`page.test.ts`). Browser
+regressions, in the account suite: `190-stream-worker-stopped` (the worker
+stopped through CDP between two range requests; playback goes on) and
+`191-stream-worker-swapped` (a new worker script takes over mid-playback).
 
 **Downloads to disk** keep File System Access, with a Blob fallback. Proton
 also streams downloads through its worker (`/sw/{id}` with
-`Content-Disposition`). That would lift the 1 GiB Blob limit on Firefox and
-Safari. It is a follow-up on the same worker, not part of this plan (open
-question 7).
+`Content-Disposition`, `download.ts`). That route is stateful (a
+`ReadableStream` handed to the worker) and needs a keep-alive ping; it would
+lift the Blob limit on Firefox and Safari. It is a follow-up on the same
+worker (open question 7).
 
 ## 5. Other clients
 
-- **CLI.** It switches with the web; it is the same Rust code.
-  - Upload: tus with `revisionId`; resume re-encrypts from the offset.
-  - Download: the manifest first (one ranged read), then blocks in order. It
-    can also fetch blocks in parallel, and resume after an interruption at a
-    block.
-  - `versions`, `sync`, `share` and `vaultsync` use the same functions.
+- **CLI.** It switches with the web; it is the same Rust code. Built
+  (2026-11-12, `crates/kutup-cli`: `transfer.rs`, `revisions.rs`,
+  `uploader.rs`, `version_upload.rs`, `drive_signer.rs`):
+  - [x] Upload: tus with `revisionId` (exactly the suite-2 `Upload-Metadata`),
+    `Upload-Length` the object's length, sealed block by block, two blocks a
+    PATCH, then the commit with `FileMetadataV2` (`originalRevisionId` on a
+    new file's first) and the `RevisionContent` envelope. `409
+    revisionConflict` reads the file again and seals on top once;
+    `alreadyCommitted` is success; a new file's taken name moves to the next
+    free one (up to 3); `objectMissing` and other refusals cancel the
+    upload; `notUploaded` and lost connections keep the record.
+  - [x] Resume: the record keeps the revision id, the content's SHA-256 and,
+    before any of it is sent, the sealed tail. A later run goes on from any
+    server offset, sealing again from block 0; the last block goes only if
+    the content hashes to the recorded SHA-256 (`NotTheSameFile`: the upload
+    is discarded); another content under the same path starts over; an
+    upload whose bytes all arrived is committed.
+  - [x] Download: the header, trailer and manifest by ranged reads, opened
+    against the metadata's `content` (current) or the revision's
+    `RevisionContent` (versions from the listing, the original and served
+    states from the response, which must name the revision asked for), then
+    blocks in order, each checked. Blocks are fetched one after another;
+    parallel fetches and resuming a download are not built (the CLI never
+    resumed downloads).
+  - [x] `versions` (download, restore), `sync`, `share` (federated download
+    and upload), `pubshare`, the note sync (Yjs states commit metadata naming
+    `stateRevisionId`), whiteboard re-snapshots and `vaultsync` use the same
+    functions.
+  - [x] Every manifest is signed with the account's Drive signing key (signer
+    kind 2: account id and incarnation from the session's master key). Every
+    open checks the signer against this account's own key and, where the
+    command read them (`download`, `versions`, `share download`, `sync`), the
+    identity pins, as `manifestSigners.ts` does: forged or changed signers
+    warn on stderr, never block. The CLI shows no author, so there is no
+    `authorMismatch`.
 - **Native apps, later.** `kutup-client-ffi` exposes the block reader (open
   header, open manifest, open block *i*). An app plugs it into
   AVAssetResourceLoader or an ExoPlayer `DataSource`, the native equivalents
   of the service worker.
-- **Chat attachments switch too.** Long videos and voice notes in Chat then
+- **Chat attachments switch too** (built, slice 6). Long videos in Chat
   stream the same way.
   - New `ChatMediaSuiteId` 2 with the same block construction. The header
     is `KUTPCM2\0` with the attachment id; there is no revision, since
@@ -521,7 +703,7 @@ question 7).
     The message is already authenticated by the Signal session, so the
     manifest needs no signature (`signer kind` 0).
   - Server admission and federation still bind the whole-object SHA-256.
-- **Chat backup media switches as well** (`KUTPBM2\0`, same construction).
+- **Chat backup media switches as well** (built, slice 6; `KUTPBM2\0`, same construction).
   It is only read for restore and does not need seeking. Switching it lets
   secretstream and the browser's libsodium stream code leave the codebase.
   That also closes part of the roadmap's "remaining libsodium primitives"
@@ -615,7 +797,7 @@ rPGP, and it is additive anyway.
 The block size is **not** a setting. It is a fact of suite 2, like the 5 MiB
 chunk of suite 1, and changing it changes the bytes. The limits around it
 are site settings (`site_settings.rs` `NumericSetting`, in the admin UI, per
-the standing rule). The client reads them from `GET /api/drive/limits`.
+the standing rule). The client reads them from `GET /api/v1/drive/limits`.
 
 | Setting | Default | Bounds |
 |---|---|---|
@@ -640,8 +822,9 @@ the keys are `drive_stream_*` (`driveStream*` in the admin API).
   where it was played and seeked to. Proton's server learns the same.
 
 It learns nothing of the content, the manifest or who signed it (the signer
-is inside the sealed manifest). The signature covers the account id it
-names, so a holder of the file key can't move it onto another name.
+is inside the sealed manifest). The signature covers the account id and
+the incarnation id it names, so a holder of the file key can't move it onto
+another name or another incarnation.
 
 **Key commitment.** XChaCha20-Poly1305 is not key-committing: a ciphertext
 can be crafted to open under two keys. Two things make an object single-key
@@ -676,6 +859,33 @@ signature.
 the metadata's content commitment. Old metadata with old content is refused
 by any device that has seen a newer metadata revision (`RevisionGuard`, the
 account head). A stale thumbnail fails its revision binding.
+
+**What the `RevisionContent` record defends against.** It is sealed under
+the file key, so it defends against the server alone: the server can't
+make one, so it can't pass off bytes of its own, or a revision's bytes
+under another revision's record. It does not defend against a holder of
+the file key (a co-editor, a link holder) colluding with the server: they
+can seal a record for an object of their own under any revision id the
+file doesn't use yet, and the server can store it as a version. The
+manifest signature is what names the writer then, and it warns.
+
+**Served revisions.** Where the response names the revision (the original
+upload, a public link's saved state), the reader requires it to be the
+revision the file's metadata names (`originalRevisionId`,
+`stateRevisionId`): the server can no longer pick another genuine
+revision of the file. This is as fresh as the metadata the reader holds:
+on a device that saw the file, `RevisionGuard` refuses older metadata; a
+public link's page has no history, so the server can still roll the whole
+file back (old metadata with the state it named), never mix new metadata
+with an older state.
+
+**Signer checks warn after the bytes are handed over.** The manifest's
+signature is checked against the identity pins once the object is open and
+its bytes have gone to the reader (an editor, a download, a vault). A
+forged or changed signer, or one who is not the author the history shows
+(`authorMismatch`), warns; nothing is held back. This is Drive's
+warn-not-block rule (docs/plans/drive-identity-pins.md): the bytes
+themselves are already bound to the file's key and committed digest.
 
 **Not covered:**
 - A device with no history of a file trusts the first metadata revision it
@@ -772,15 +982,152 @@ Each slice is a PR.
      as the content.
    - Thumbnails are drawn bound to the new revision.
    - `RevisionGuard` for Drive file metadata.
-   - The CLI upload.
-4. **Download and streaming.**
+   - The CLI upload (built, §5).
+
+   **The commit, as Proton's** (decided in slice 3, 2026-11-09). The manifest
+   digest is known only after the last block, so content and metadata can't
+   go up together at the start. Proton uploads the blocks, then commits the
+   revision with its manifest signature and sealed XAttr. Kutup does the same:
+   - Every suite-2 upload (tus file and version, multipart file and version,
+     federated) lands as an *uploaded revision*: stored, checked (header,
+     trailer, structure), counted in quota, but not current.
+   - `POST /api/v1/drive/files/{id}/revisions/{revisionId}/commit` with
+     `{ metadataEnvelope, metadataRevision }`: the `FileMetadataV2` sealed
+     with `content = { revisionId, manifestSha256 }`. In one transaction the
+     server checks the revision is uploaded and belongs to the file, takes
+     the metadata as the next revision (1 for a new file), and makes the
+     revision current (a new file appears in its folder; a version becomes
+     the content, the old one listed in its history).
+   - A new file is created at upload start with its key envelope and name
+     hash but no metadata. It is listed nowhere until its first commit, as
+     Proton's draft revisions. An upload that is never committed is swept with
+     the abandoned tus uploads, its object deleted and the quota released.
+   - The server can't read the commitment (the metadata is sealed). Readers
+     check it: a metadata/content mismatch fails to open.
+   - Multipart small-file and version uploads take the commit's fields in
+     the same request, since the client seals the whole buffer first.
+   - Server side: an uploaded revision is its upload row kept after the last
+     part (`uploads.uploaded_at`, migration 20261109130000), so a new file
+     has no `files` row and no listing needs a filter; the commit inserts the
+     row or stores the version as a tus version lands (docs/api.md).
+   - Web side: the client picks the revision id, sends it in the tus
+     `Upload-Metadata`, and commits after the last PATCH (`commit.ts`). A
+     `409 revisionConflict` re-reads the file from its folder's listing and
+     seals the metadata again on top of it, once (a version keeps a name
+     changed meanwhile); `alreadyCommitted` is success. A refusal at the
+     commit (name taken, file changed) cancels the upload (tus DELETE).
+   - Resume after a reload: the browser's record keeps the revision id and
+     a *draft* of the metadata (sealed under the file key in a context with
+     the revision id as parent, so it never opens as the file's metadata),
+     not a prefix. The server's offset may fall anywhere; the source seals
+     again from the block it falls in (synthetic nonces give the same bytes)
+     and sends from that exact byte. The manifest's nonce is random, so the
+     tail is made once and stored in the record before any of it is sent; an
+     upload resumed inside or after the tail sends the kept one. A record
+     whose bytes all arrived but whose commit did not is committed when the
+     upload is resumed. A PATCH carries two sealed blocks (above S3's 5 MiB
+     minimum part).
+   - History versions, note snapshots, the original upload and relayed
+     states: the metadata commits to the current content only, so each
+     block-format revision carries its own commitment, a `RevisionContent`
+     envelope (Drive envelope purpose 13, `kutup-crypto`
+     `revision_content.rs`): `{revisionId, manifestSha256, size}` under the
+     file key, object = file, parent = the revision id, epoch = the key
+     generation that sealed the object, revision 1, padded to one length.
+     The uploader seals it once the manifest's digest is known and sends it
+     with the commit (the commit body, the multipart upload and version
+     forms incl. note snapshots, the federated upload and version saves);
+     the server checks its header and length and stores it with the row the
+     revision becomes (`files` for the first upload, `file_versions` for
+     each version; both now record `blob_suite`, and a suite-2 row without
+     its envelope is refused by a CHECK; migration 20261109140000). Readers
+     get it from the version list, the federated saved state, or the
+     content response (`x-kutup-revision`, `x-kutup-revision-content`, the
+     way the original upload, which no listing names, is read), open it for
+     the expected file, revision and generation, then open the object
+     against that digest and size. `openDriveObject` takes no digest from
+     the object any more: a reader without a committed digest opens
+     nothing, so a co-editor can't pass off an object of their own under a
+     known revision id. A record served with the current content must agree
+     with the metadata's `content`, or the read is refused.
+   - The commit's checks (review, 2026-11-11): a storage `HEAD` finds the
+     object, whole, before a row names it (`409 objectMissing`); a cancel
+     and the sweep of abandoned uploads remove the upload row first (the
+     sweep `FOR UPDATE SKIP LOCKED`, staleness checked again under the lock)
+     and the bytes only after, so they never race a commit; a revision id
+     is unique across `files`, `file_versions` and `uploads` together (each
+     claim takes the id's advisory lock; `uploads.revision_id` is unique
+     too). A new file's commit may carry `nameHash`: a name taken while the
+     bytes went up is committed under the next free one, nothing sent again.
+   - Resume checks the content, not only the name, size and date: the
+     plaintext's SHA-256 is worked out again as the blocks are sealed and
+     the last block is not sent unless it matches the draft's
+     (`NotTheSameFile`, the upload discarded); a draft without one keeps the
+     sealed blocks' hashes in the browser's record and compares them as it
+     seals again, before anything of another file goes out.
+   - Every open checks the manifest's signer against the identity pins
+     (drive-core `manifestSigners.ts`): the account and incarnation it names
+     must have signed with the key their pinned authority vouches for. A
+     signature that doesn't hold, or one under an incarnation the user never
+     accepted (this account's own included, under an incarnation that isn't
+     its current one), warns (drive-ui `ManifestSignerWarnings`); it never
+     blocks. The author the UI shows for the revision (a version row's
+     `authorUserId` or `remoteAuthor`, the original's uploader; recorded by
+     the keyring before the open) must be the verified signer, or it warns
+     (`authorMismatch`). Accounts never met stay silent. The check runs
+     after the bytes are handed over (§8). Every app that opens Drive
+     objects mounts the warnings (a unit test finds them by their imports).
+   - Served revisions (review 2, 2026-11-12): `/original` and a public
+     link's saved state are read by the revision the metadata names
+     (`originalRevisionId`, `stateRevisionId`, §2), and a note's or place
+     list's state commits with the metadata naming it. The ZIP's entries
+     made in the browser (a note with its pictures) name no revision: they
+     are never fetched or opened.
+   - Incomplete multipart uploads whose abort failed after their row went:
+     the upload sweep aborts those no row names once older than
+     `server.storage.incomplete_multipart_max_age_seconds` (a day by default;
+     docs/self-hosting.md has the matching bucket rule).
+4. **Download and streaming.** Built (2026-11-12, §4).
    - The block reader Worker and `fetchDecrypt` on blocks.
-   - The CLI download.
-   - `kutup-sw.js` (merged with Chat's push worker) and the stream registry.
-5. **Players.** Photos' viewer and Drive's preview stream video and audio.
-   `MAX_VIDEO_BYTES` gives way to `drive.stream.max_bytes`. The e2e spec.
-6. **Chat.** Attachments and backup media on suite 2; Chat's viewer streams.
-7. **Removal.**
+   - The CLI download (built with slice 3, §5).
+   - `kutup-sw.js` (merged with Chat's and Calendar's push workers), its
+     stateless stream route and the page glue.
+   - Browser regressions 190 and 191 (written, not yet run).
+5. **Players.** Built (2026-11-13).
+   - Photos' viewer and Drive's Quick Look (with slice 4), Drive's file page
+     (`FileEditorPage`), Photos' public albums and Drive's public links stream
+     video and audio through one opener (§4, 5).
+   - The e2e spec of §9: `192-stream-long-video` (a two-hour WebM made with
+     ffmpeg, skipped without it; Photos' viewer and Drive's file page seek to
+     1:30:00 and the network log holds the reads to a few blocks; a song on
+     the file page; the Blob fallback with service workers blocked), in the
+     account suite. Written, not yet run.
+   - WebKit (2026-11-16): a `webkit` Playwright project runs 190-192 from
+     `tests/e2e/suites/webkit.txt` (`scripts/gate.sh browser webkit`; not in
+     CI). 192 makes an H.264 MP4 there; each player must play by stream or
+     Blob fallback, and the path is recorded. For the full test, on a host
+     with WebKit's libraries (`playwright install --with-deps webkit`; the dev
+     VM lacked them).
+   - Left: downloads through the worker (`/sw/{id}`, open question 7).
+6. **Chat.** Built (2026-11-13).
+   - Attachments: `ChatMediaSuiteId` 2 is the only suite the descriptor,
+     the delivery offer, federation and the tus upload accept. The
+     descriptor carries `manifestSha256` (base64) beside the whole-object
+     SHA-256, which admission and federation still bind. Uploads seal with
+     `chatMediaBlockEncryptor`; reads open with `chatMediaBlockReader`
+     against the descriptor's digest, by Range (`@kutup/chat-core`
+     `media.ts`), and a download into the private cache is authenticated
+     without decrypting. The server checks the `KUTPCM2` header at the first
+     part and the trailer's structure at finalization (docs/chat-media.md §3).
+   - Chat's viewer streams video and audio through `/sw/stream/{id}`: the
+     block reader is generic over family (`BlockReaderTarget`, `drive` or
+     `chatMedia`). Voice notes still play from the cache.
+   - Backup media: suite 2 (`KUTPBM2`), sealed by the server's copy or the
+     client's upload; the display record commits to the manifest's digest
+     (`backupMediaManifestSha256`); restore reads by Range
+     (docs/chat-backup.md "Protected media").
+   - Each suite's parser refuses the other's header (Rust tests).
+7. **Removal.** Built (2026-11-13).
    - `stream.rs`, suite 1, `KUTPDB2`/`KUTPCM1`/`KUTPBM1`, the JS
      `streamEncryptor`/`streamDecryptor` and the libsodium stream path all
      go.
@@ -793,6 +1140,22 @@ Each slice is a PR.
      `TAG_FINAL`" becomes "large objects use 4 MiB AEAD blocks bound to
      their index and revision, with a sealed, signed manifest of block hashes
      that fixes the size and the end".
+   - As built: the server takes only block-format blobs (`drive_blob.rs`
+     `BlockBlob`; every upload names its `revisionId`, every tus upload
+     commits its metadata, every stored revision carries its
+     `RevisionContent`), and migration `20261109160000` makes `blob_suite`
+     2 the only value of `files`, `file_versions` and `uploads`, with every
+     revision's record required and no upload metadata before the commit
+     (NOT VALID: suite-1 rows go with the wipe). A federated version save
+     carries the revision and the metadata as required fields. The thumbnail
+     envelope's context is the revision-bound one only, and
+     `PUT …/thumbnails/{variant}` names the revision (`?revision=`) the
+     server checks it against. The WASM exports of suite 1 (the Drive
+     file-blob and Chat-media header and key exports, and the backup media
+     header) went; `prepareChatBackupMedia` gives the media id, the outer
+     key and the padded length. The vectors lost `driveFileBlob` and
+     `stream`; `fileMetadata` holds `FileMetadataV2` cases only and the
+     thumbnail vector is revision-bound.
 
 Under (B), slices 3–7 land together with the wipe (§6). Under (A), a
 conversion slice comes between 6 and 7, and slice 7 waits for every account.

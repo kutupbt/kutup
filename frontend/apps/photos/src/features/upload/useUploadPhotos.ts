@@ -7,7 +7,7 @@ import { hashBlob } from '@kutup/crypto/contentHash'
 import { cachedFolderIndex, foldersKey } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
-import { uploadUnderFreeName } from '@kutup/drive-core/names'
+import { freeNameIn, uploadUnderFreeName } from '@kutup/drive-core/names'
 import { enqueueThumbnail } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails } from '@kutup/drive-core/thumbnails'
 import { classifyUploadError, isFolderKeyChanged } from '@kutup/drive-ui/uploadError'
@@ -26,7 +26,7 @@ function thumbnailsAfterUpload(uploaded: UploadedFile, file: File) {
   enqueueThumbnail(uploaded.fileId, async () => {
     const made = mediaKindOf(file.name, file.type) === 'video' ? await thumbnailsOfVideo(file) : await thumbnailsOfImage(file)
     return storeThumbnails(
-      { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyGeneration: uploaded.keyGeneration },
+      { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyGeneration: uploaded.keyGeneration, revisionId: uploaded.revisionId },
       made,
       'original',
     )
@@ -74,7 +74,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
   const settled = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['files'] })
     void api
-      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/user/me')
+      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/account')
       .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes, storageQuotaBytes: data.storageQuotaBytes }))
       .catch(() => {})
   }, [queryClient])
@@ -122,7 +122,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
       const paired = still?.value
       if (paired && looksLive(paired.media, media)) media = { ...(media ?? {}), liveOf: paired.id }
       let uploaded
-      const owner = getSession()?.userId
+      const owner = getSession()?.accountId
       const folderKey = folder.key
       try {
         // Cameras reuse names: a different photo under a taken one is kept
@@ -140,6 +140,7 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
             resumable: owner ? { owner } : undefined,
             nameHash,
             sha256,
+            freeName: freeNameIn(folder),
           }),
         )
       } catch (error) {
@@ -231,7 +232,7 @@ export function useResumePhotos() {
   const settled = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['files'] })
     void api
-      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/user/me')
+      .get<{ storageUsedBytes: number; storageQuotaBytes: number }>('/account')
       .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes, storageQuotaBytes: data.storageQuotaBytes }))
       .catch(() => {})
   }, [queryClient])
@@ -253,6 +254,7 @@ export function useResumePhotos() {
                 onProgress: progress,
                 onWaiting: waiting,
                 signal,
+                freeName: freeNameIn(folder),
               })
               thumbnailsAfterUpload(uploaded, file)
             },

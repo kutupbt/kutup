@@ -71,8 +71,8 @@ AccountHeadV1 {
 Every write of a listed value also writes the next head, in the same request:
 `{ …the value, baseRevision, head: { sequence, sealed } }`.
 - The server stores both in one transaction, on two compare-and-swaps: the
-  value's base revision and the head's sequence (`409 revision_conflict` or
-  `409 head_conflict`). On a conflict the client reads again and redoes its
+  value's base revision and the head's sequence (`409 revisionConflict` or
+  `409 headConflict`). On a conflict the client reads again and redoes its
   edit, as today.
 - **To compute the new digest,** the client needs the scope's current
   `(id, revision)` index. `GET /api/account/index/:scope` returns it: ids and
@@ -151,7 +151,7 @@ Every write of a listed value also writes the next head, in the same request:
     a `--json` report).
   - Re-anchoring is the explicit `kutup account reanchor`.
 - **Once a scope has a head:**
-  - the server refuses a listed write without one (`409 head_required`);
+  - the server refuses a listed write without one (`409 headRequired`);
   - clients refuse any value missing from the verified index.
   - The head starts at the first write after the update (trust on first use).
 - **Drive metadata is out of this round, and account-level QR linking comes
@@ -190,7 +190,7 @@ Every write of a listed value also writes the next head, in the same request:
   (their padded plaintext at most `account_head::MAX_PADDED_BYTES`). A head
   must be this account's (its key binding) and name the newest head kept as
   its predecessor (`account_head::validate`, then the digest compare), else
-  `400` or `409 head_conflict` (W1 slice 4b); the newest `RETENTION` + 1 (1,001) kept, so a device
+  `400` or `409 headConflict` (W1 slice 4b); the newest `RETENTION` + 1 (1,001) kept, so a device
   anchored exactly `RETENTION` back still gets its whole segment, anchor
   included; pruned in the write. `crates/kutup-server/src/account_heads.rs`.
 - **Every listed write first locks the account row** and checks, under the
@@ -201,7 +201,7 @@ Every write of a listed value also writes the next head, in the same request:
   stores the incarnation the server read there.
 - **The compare-and-swap** runs last in each listed write's transaction: the
   new head's sequence (read with `account_head::inspect`) must be the current
-  one plus one, else `409 head_conflict`, the whole write rolled back.
+  one plus one, else `409 headConflict`, the whole write rolled back.
 - **Starting the chain** is its own call, `POST /api/account/head`, with the
   first head and the `basis` an index answered with (a SHA-256 the server
   computes over every listed `(scope, id, revision)`). Under the lock the
@@ -209,7 +209,7 @@ Every write of a listed value also writes the next head, in the same request:
   client's read and its start moves it, and the start is refused, so a first
   head never leaves a value out. A listed write never starts the chain.
 - **Before the chain starts** a listed write needs no head (trust on first
-  use); after, `409 head_required`.
+  use); after, `409 headRequired`.
 - **Reads:** `GET /api/account/head`; `GET /api/account/heads?from=n`, 200
   heads a page with `next` (`410 tooOld` only when `n` is more than
   `RETENTION` behind the newest, exactly the client's "too old", so a gap the
@@ -227,12 +227,12 @@ Every write of a listed value also writes the next head, in the same request:
 |---|---|
 | Contact create, update, delete, delete many, import | yes (import and delete many: one per batch) |
 | Mail folder, label, filter: create, rename, delete | yes |
-| Mail folder delete (removes the folders inside it) | yes, with `removes`: every folder id it removes, compared in the transaction with what it does remove (`409 head_conflict` if they differ), since the server cannot read the head's digest |
+| Mail folder delete (removes the folders inside it) | yes, with `removes`: every folder id it removes, compared in the transaction with what it does remove (`409 headConflict` if they differ), since the server cannot read the head's digest |
 | Mail folder parent, colour, position, folding; label colour, position; filter on/off, match, conditions, actions | no: not sealed, not rollback-protected; a head sent with one is `400` |
 | Identity pin list put | yes |
 | Pass vault secret keep, forget, forget many | yes |
 | Group list entry put, delete (`chatGroups`) | yes |
-| A vault's file purged | nothing: the secret is no longer deleted with it (its foreign key to `files` is gone); it stays listed (`state: gone` in `GET /api/pass/vault-secrets`, as a trashed vault's is `trashed` and an unshared one's `unreachable`) and unused until its owner forgets it (`kutup pass forget`, or `POST /api/pass/vault-secrets/forget` for several under one head); never forgotten automatically, since it may be the only copy of a generated password or a key file's element |
+| A vault's file purged | nothing: the secret is no longer deleted with it (its foreign key to `files` is gone); it stays listed (`state: gone` in `GET /api/pass/vault-states`, as a trashed vault's is `trashed` and an unshared one's `unreachable`) and unused until its owner forgets it (`kutup pass forget`, or several in one account-records batch under one head); never forgotten automatically, since it may be the only copy of a generated password or a key file's element |
 | Account deletion | everything goes, heads included |
 | Account reset (an administrator's wipe) | the chain and every listed value sealed under the old keys go in the reset transaction: contacts, labels, filters, Pass secrets, identity pins, the group list. Custom folders keep their mail and lose their names (`name_sealed` null), left out of the index until their owner names them again from revision 0, under the new incarnation's first heads. So no verified head ever lists a value no key opens. |
 
@@ -241,7 +241,7 @@ this round).
 
 **Tests:** `tests/account_heads_live.rs` (the start on its basis, refused
 when a write moved it and when repeated; every kind of listed write with and
-without its head; `head_conflict` with the current sequence; a head with an
+without its head; `headConflict` with the current sequence; a head with an
 unsealed change; the index with its head; a folder delete that names too
 few; two starts at once, one wins; a wipe, then a start, a write and a read),
 and `account_heads::tests` against a database: 1,005 heads, 1,001 kept; the

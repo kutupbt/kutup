@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Request } from '@playwright/test'
+import { expect, test, type Page, type Request } from '../fixtures/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
 import { backupCursor, bubble, openChat, openChats, openNoteToSelf, send, waitForProtection } from '../fixtures/chat'
 import { recordSafeCheckpoint } from '../safe-diagnostics'
@@ -13,7 +13,7 @@ async function sendNoteAttachment(
   const protectedCopy = page.waitForResponse(response => {
     const path = new URL(response.url()).pathname
     return response.request().method() === 'POST'
-      && path === '/api/chat/backup/media/copy'
+      && path === '/api/v1/chat/backup/media/copy'
       && response.ok()
   }, { timeout: 45_000 })
   await page.getByTestId('chat-attachment-input').setInputFiles({
@@ -136,7 +136,7 @@ test('protected media restores lazily and presents an unavailable state without 
   })
   // Simulate expiry of the ordinary 45-day delivery copy. The independent
   // protected-history copy must still be usable after clean-browser restore.
-  await restoredContext.route('**/api/chat/media/objects/*', route => route.fulfill({ status: 404 }))
+  await restoredContext.route('**/api/v1/chat/media/objects/*', route => route.fulfill({ status: 404 }))
   await signIn(restoredContext, account)
   const restored = await openChat(restoredContext)
   await openNoteToSelf(restored)
@@ -147,7 +147,7 @@ test('protected media restores lazily and presents an unavailable state without 
   const protectedDownload = restored.waitForResponse(response => {
     const path = new URL(response.url()).pathname
     return response.request().method() === 'GET'
-      && path.includes('/api/chat/backup/media/')
+      && path.includes('/api/v1/chat/backup/media/')
       && response.ok()
   })
   await restored.getByRole('button', { name: `Download ${filename} into Kutup` }).click()
@@ -168,7 +168,7 @@ test('protected media restores lazily and presents an unavailable state without 
   await expect(restored.getByRole('button', { name: `Download ${filename} into Kutup` }))
     .toBeVisible({ timeout: 45_000 })
   await restoredContext.route(
-    '**/api/chat/backup/media/*',
+    '**/api/v1/chat/backup/media/*',
     route => route.fulfill({ status: 404 }),
   )
   await restored.getByRole('button', { name: `Download ${filename} into Kutup` }).click()

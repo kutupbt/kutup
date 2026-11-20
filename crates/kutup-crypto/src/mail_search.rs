@@ -16,11 +16,15 @@
 //! key, found before the wrapped store key is read.
 
 use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
+use crate::master_keys::MasterKeys;
 use crate::primitives::{Aead, Kdf, Mac, Suite};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 
+/// Salts the locator key the database's name comes from. The label's bytes
+/// say "wrap" from when it also salted the store key's wrap (now an account
+/// record); they stay, so a store keeps its name.
 const ACCOUNT_SALT: &[u8] = crate::labels::MAIL_SEARCH_WRAP_V1;
 const LOCATOR_KEY_INFO: &[u8] = crate::labels::MAIL_SEARCH_LOCATOR_KEY_V1;
 const STORE_SALT: &[u8] = crate::labels::MAIL_SEARCH_V1;
@@ -71,10 +75,11 @@ fn check_header(magic: &[u8; 8], sealed: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// The browser database's name for an account: an HMAC under a
-/// master-derived key, so it names no one and is found before anything is read.
-pub fn store_name(master_key: &[u8; 32]) -> Result<String> {
-    let locator = expand(ACCOUNT_SALT, master_key, LOCATOR_KEY_INFO)?;
+/// The browser database's name for an account: an HMAC under a key from its
+/// object-id root, so it names no one, is found before anything is read, and
+/// stays the same across a master-key rotation.
+pub fn store_name(object_id_key: &crate::account_roots::ObjectIdKey) -> Result<String> {
+    let locator = expand(ACCOUNT_SALT, object_id_key.as_bytes(), LOCATOR_KEY_INFO)?;
     let mut mac = Mac::new(Suite::V1, locator.as_slice());
     mac.update(b"database\0");
     Ok(hex::encode(&mac.finish().as_bytes()[..16]))
@@ -88,14 +93,19 @@ pub struct MailSearchKeys {
 
 impl MailSearchKeys {
     /// A new store key, and its wrapped form to keep in the database, for
-    /// the account bound by `binding` (its master key's first generation,
-    /// until rotation exists).
-    pub fn create(master_key: &[u8; 32], binding: &str) -> Result<(Self, Vec<u8>)> {
+    /// the account bound by `binding`, under its current master key.
+    pub fn create(master: &MasterKeys, binding: &str) -> Result<(Self, Vec<u8>)> {
         let mut store_key = Zeroizing::new([0u8; 32]);
         crate::primitives::random(store_key.as_mut_slice());
         let mut nonce = [0u8; NONCE_LEN];
         crate::primitives::random(&mut nonce);
-        let wrapped = Self::wrap_with_nonce(master_key, binding, &store_key, &nonce)?;
+        let wrapped = Self::wrap_with_nonce(
+            master.current(),
+            master.generation(),
+            binding,
+            &store_key,
+            &nonce,
+        )?;
         Ok((Self::from_store_key(&store_key)?, wrapped))
     }
 
@@ -103,6 +113,7 @@ impl MailSearchKeys {
     /// for checked-in vectors only.
     pub fn wrap_with_nonce(
         master_key: &[u8; 32],
+        generation: MasterKeyGeneration,
         binding: &str,
         store_key: &[u8; 32],
         nonce: &[u8; NONCE_LEN],
@@ -111,21 +122,22 @@ impl MailSearchKeys {
             store_key,
             master_key,
             WRAP_PURPOSE,
-            MasterKeyGeneration::FIRST,
+            generation,
             binding,
             nonce,
         )
     }
 
     /// The keys of an index whose wrapped store key is `wrapped`, for the
-    /// account bound by `binding`.
-    pub fn open(master_key: &[u8; 32], binding: &str, wrapped: &[u8]) -> Result<Self> {
+    /// account bound by `binding` (under the master key of the generation it
+    /// names; [`MasterKeys::reseal_if_older`] moves it to the current one).
+    pub fn open(master: &MasterKeys, binding: &str, wrapped: &[u8]) -> Result<Self> {
         if wrapped.len() != WRAPPED_STORE_KEY_LEN {
             return Err(invalid("wrapped store key size is invalid"));
         }
         let store_key = Zeroizing::new(account_record::open(
             wrapped,
-            master_key,
+            master.key_for(wrapped)?,
             WRAP_PURPOSE,
             binding,
         )?);
@@ -211,7 +223,8 @@ mod tests {
 
     #[test]
     fn a_record_opens_only_under_its_name_and_store() {
-        let (keys, wrapped) = MailSearchKeys::create(&[0x5a; 32], BINDING).unwrap();
+        let (keys, wrapped) =
+            MailSearchKeys::create(&MasterKeys::first(&[0x5a; 32]), BINDING).unwrap();
         let sealed = keys.seal("shard/680/fat", b"words").unwrap();
         assert_eq!(
             keys.open_record("shard/680/fat", &sealed).unwrap(),
@@ -220,18 +233,19 @@ mod tests {
         assert!(keys.open_record("shard/680/ekt", &sealed).is_err());
         assert!(keys.open_record("shard/680/fat", &sealed[..20]).is_err());
         // The wrapped store key gives the same keys back.
-        let again = MailSearchKeys::open(&[0x5a; 32], BINDING, &wrapped).unwrap();
+        let again =
+            MailSearchKeys::open(&MasterKeys::first(&[0x5a; 32]), BINDING, &wrapped).unwrap();
         assert_eq!(
             again.open_record("shard/680/fat", &sealed).unwrap(),
             b"words"
         );
         // Another store (a new index after Delete) opens nothing of the old one.
-        let (other, _) = MailSearchKeys::create(&[0x5a; 32], BINDING).unwrap();
+        let (other, _) = MailSearchKeys::create(&MasterKeys::first(&[0x5a; 32]), BINDING).unwrap();
         assert!(other.open_record("shard/680/fat", &sealed).is_err());
         // Another master key, or another account's key binding, cannot unwrap it.
-        assert!(MailSearchKeys::open(&[0x5b; 32], BINDING, &wrapped).is_err());
+        assert!(MailSearchKeys::open(&MasterKeys::first(&[0x5b; 32]), BINDING, &wrapped).is_err());
         assert!(MailSearchKeys::open(
-            &[0x5a; 32],
+            &MasterKeys::first(&[0x5a; 32]),
             "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
             &wrapped
         )
@@ -241,15 +255,21 @@ mod tests {
 
     #[test]
     fn names_hide_what_they_name() {
-        let (keys, _) = MailSearchKeys::create(&[0x5a; 32], BINDING).unwrap();
+        let (keys, _) = MailSearchKeys::create(&MasterKeys::first(&[0x5a; 32]), BINDING).unwrap();
         let id = keys.record_id("shard/680/fat");
         assert_eq!(id.len(), 64);
         assert!(!id.contains("fat"));
         assert_eq!(id, keys.record_id("shard/680/fat"));
         assert_ne!(id, keys.record_id("shard/680/fau"));
-        let name = store_name(&[0x5a; 32]).unwrap();
+        let name = store_name(&crate::account_roots::ObjectIdKey::from_bytes([0x5a; 32])).unwrap();
         assert_eq!(name.len(), 32);
-        assert_eq!(name, store_name(&[0x5a; 32]).unwrap());
-        assert_ne!(name, store_name(&[0x5b; 32]).unwrap());
+        assert_eq!(
+            name,
+            store_name(&crate::account_roots::ObjectIdKey::from_bytes([0x5a; 32])).unwrap()
+        );
+        assert_ne!(
+            name,
+            store_name(&crate::account_roots::ObjectIdKey::from_bytes([0x5b; 32])).unwrap()
+        );
     }
 }

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 // Snooze (docs/plans/mail-parity.md, P4), as Proton's: out of the Inbox

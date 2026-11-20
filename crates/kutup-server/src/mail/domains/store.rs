@@ -156,7 +156,7 @@ pub async fn add(
     let mut tx = pool.begin().await?;
     // One add at a time per account, so a first domain makes one
     // organization; then one at a time per organization, so its counts hold.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(account)
         .execute(&mut *tx)
         .await?;
@@ -557,7 +557,7 @@ pub async fn deactivate(pool: &PgPool, id: Uuid, admin: Uuid) -> AppResult<(Uuid
     .await?;
     let (organization, name) = row.ok_or_else(|| AppError::not_found("no such domain"))?;
     sqlx::query(
-        "INSERT INTO mail_domain_blocks (name, blocked_by) VALUES ($1, $2)
+        "INSERT INTO mail_domain_blocks (name, blocked_by_account_id) VALUES ($1, $2)
          ON CONFLICT (name) DO NOTHING",
     )
     .bind(&name)
@@ -589,7 +589,7 @@ pub async fn unblock(pool: &PgPool, name: &str) -> AppResult<()> {
 pub async fn blocks(pool: &PgPool) -> AppResult<Vec<(String, OffsetDateTime, Option<String>)>> {
     Ok(sqlx::query_as(
         "SELECT b.name, b.blocked_at, u.username FROM mail_domain_blocks b
-           LEFT JOIN users u ON u.id = b.blocked_by
+           LEFT JOIN accounts u ON u.id = b.blocked_by_account_id
           ORDER BY b.blocked_at DESC",
     )
     .fetch_all(pool)

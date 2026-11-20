@@ -29,7 +29,8 @@ pub use crate::padding::Length;
 const MAGIC: &[u8; 8] = b"KUTPAR1\0";
 const GENERATION_LEN: usize = 4;
 const FIXED_PREFIX_LEN: usize = MAGIC.len() + 2 + 2 + GENERATION_LEN + 2;
-const NONCE_LEN: usize = 24;
+/// An envelope's nonce length.
+pub const NONCE_LEN: usize = 24;
 const LENGTH_LEN: usize = 4;
 const REVISION_LEN: usize = 8;
 const TAG_LEN: usize = 16;
@@ -40,7 +41,6 @@ pub const MAX_OBJECT_LEN: usize = 64;
 const KEY_SALT: &[u8] = crate::labels::ACCOUNT_RECORD_V1;
 const KEY_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_KEY_V1;
 const COMMIT_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_COMMIT_V1;
-const OBJECT_ID_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_OBJECT_ID_V1;
 /// The key commitment's length (see [`record_keys`]).
 const COMMITMENT_LEN: usize = 32;
 /// The previous record's digest in a chained purpose's header.
@@ -96,7 +96,9 @@ impl TryFrom<u16> for AccountRecordSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::V1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown account-record suite {value}"
             ))),
         }
@@ -171,90 +173,133 @@ pub fn decode_record_b64(value: &str, purpose: AccountRecordPurpose) -> Result<V
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
 pub enum AccountRecordPurpose {
+    // Account: 1–9.
     PasswordMasterKey = 1,
     RecoveryMasterKey = 2,
-    // 3 was the Drive X-Wing private key, which is derived from the master
-    // key and never stored (docs/plans/w6-key-hierarchy.md §1): reserved,
-    // never reused.
-    ChatBackupRoot = 4,
-    /// A mail address's OpenPGP secret key (`mail_key`).
-    MailAddressPrivateKey = 5,
-    /// A Kutup Pass vault's password and key file (`pass_vault`).
-    PassVaultSecret = 6,
-    /// An organization key's seed, an owner's or admin's own copy
-    /// (docs/plans/organizations.md §3); its object is the key's id.
-    OrganizationPrivateKey = 7,
-    /// A contact's vCard (`contact_card`); its object is the SHA-256 of the
-    /// contact's UID, which the server reads from the card's signed summary
-    /// (Proton's model), so it checks the card is that contact's.
-    ContactCard = 8,
-    /// A mail folder's, label's or filter's name (`mail_names`); its object
-    /// is the kind byte and the 16-byte id.
-    MailName = 9,
-    /// The account's one identity-pin list (`identity_pins`).
-    IdentityPins = 10,
-    /// One entry of the account's Chat group list (`chat_group_list`); its
-    /// object is [`hashed_object`] of the group id, so the server never sees
-    /// a group id.
-    ChatGroupListEntry = 11,
-    /// One entry of the account's Chat contact list (`chat_contact_list`); its
-    /// object is [`hashed_object`] of the contact's account, so the server
-    /// never sees whom an entry is about.
-    ChatContactListEntry = 12,
-    /// The account's Photos library (`photos_library`); its object is the
-    /// account incarnation, and its records form a chain.
-    PhotosLibrary = 13,
-    /// One entry of the account's Chat attachment ledger
-    /// (`chat_attachment_ledger`); its object is the account incarnation and
-    /// the entry's id (48 bytes), and its records form a chain.
-    ChatAttachmentLedger = 14,
-    /// One meeting the account joined (`chat_call_link`); its object is the
-    /// row id the client chose (16 bytes), so a record can't be swapped for
-    /// another's.
-    JoinedMeeting = 15,
-    /// The account's own copy of its Chat profile key: the object is the
-    /// profile version the key derives (32 bytes), the revision the
-    /// profile's, so a copy can't be moved to another profile or revision.
-    ChatProfileKeyWrap = 16,
+    /// The account's previous master key, sealed under the current one
+    /// (docs/plans/mk-rotation-exercise.md): its object is the previous
+    /// key's generation (u32 big-endian), and the record's own generation is
+    /// the one after it, so one chain reaches every older key.
+    MasterKeyKeyring = 3,
+    /// One generation of the account's identity root
+    /// (`account_roots`, docs/plans/identity-root.md): the authority and both
+    /// Drive identity keys derive from it. Its object is the identity
+    /// generation (u32 big-endian); every generation is kept.
+    IdentityRoot = 4,
+    /// The key of [`hashed_object`] ids: its own, so record ids survive a
+    /// master-key rotation. Its object is its generation (u32 big-endian).
+    ObjectIdKey = 5,
     /// The account head (`account_head`): no object, its revision the head's
     /// sequence, chained, so the server checks a head's predecessor from the
     /// header alone.
-    AccountHead = 17,
+    AccountHead = 6,
     /// A device's own account-head state (`account_head`), never sent to a
     /// server: its object is the account incarnation, so it opens for no
     /// other account or incarnation.
-    AccountLocalAnchor = 18,
+    AccountLocalAnchor = 7,
     /// The highest revision a device has seen of one value
     /// (`revision_guard`), never sent to a server: its object is
     /// [`hashed_object`] of the value's scope and id, which is also the name
     /// the device stores it under.
-    RevisionSeen = 19,
-    /// A device's mail-search store key (`mail_search`), never sent to a
-    /// server: one per account.
-    MailSearchStoreKey = 20,
+    RevisionSeen = 8,
     /// The newest state of an account-private chain this device has seen (a
     /// revision or cursor and the chain's digest, `local_chain_pin`), never
     /// sent to a server, like [`Self::RevisionSeen`]: its object is
     /// [`hashed_object`] of the chain's scope and id, which is also the name
     /// the device stores it under.
-    LocalChainPin = 21,
+    LocalChainPin = 9,
+    // Drive: 10–12 (12 spare).
+    /// One generation of the account's Drive root: its own collection keys
+    /// and link owner copies are sealed under it. Its object is the Drive
+    /// root generation (u32 big-endian); every generation is kept.
+    DriveRoot = 10,
+    /// The account's one identity-pin list (`identity_pins`).
+    IdentityPins = 11,
+    // Chat: 13–22 (22 spare).
+    ChatBackupRoot = 13,
+    /// The account's own copy of its Chat profile key: the object is the
+    /// profile version the key derives (32 bytes), the revision the
+    /// profile's, so a copy can't be moved to another profile or revision.
+    ChatProfileKeyWrap = 14,
+    /// One entry of the account's Chat group list (`chat_group_list`); its
+    /// object is [`hashed_object`] of the group id, so the server never sees
+    /// a group id.
+    ChatGroupListEntry = 15,
+    /// One entry of the account's Chat contact list (`chat_contact_list`); its
+    /// object is [`hashed_object`] of the contact's account, so the server
+    /// never sees whom an entry is about.
+    ChatContactListEntry = 16,
+    /// One entry of the account's Chat attachment ledger
+    /// (`chat_attachment_ledger`), an account-records scope; its object is
+    /// the entry's random id (32 bytes).
+    ChatAttachmentLedger = 17,
+    /// One meeting the account joined (`chat_call_link`), an account-records
+    /// scope; its object is the record's random id the client chose (32
+    /// bytes), so a record can't be swapped for another's.
+    JoinedMeeting = 18,
+    /// The account's group pseudonym root: each group pseudonym derives from
+    /// it. Its object is its generation (u32 big-endian), so it can rotate
+    /// (with an identity rotation that releases an escrow).
+    GroupPseudonymRoot = 19,
+    /// The account's call-link root: call-link owner secrets and host tokens
+    /// derive from it. Its object is its generation (u32 big-endian).
+    CallLinkRoot = 20,
+    /// A device's Chat store key (`chat_store`), never sent to a server: the
+    /// key its SQLCipher or IndexedDB store's records are sealed under.
+    ChatStoreKey = 21,
+    // Mail: 23–26 (26 spare).
+    /// A mail address's OpenPGP secret key (`mail_key`).
+    MailAddressPrivateKey = 23,
+    /// A mail folder's, label's or filter's name (`mail_names`); its object
+    /// is the kind byte and the 16-byte id.
+    MailName = 24,
+    /// A device's mail-search store key (`mail_search`), never sent to a
+    /// server: one per account.
+    MailSearchStoreKey = 25,
+    // Pass: 27–28 (28 spare).
+    /// A Kutup Pass vault's password and key file (`pass_vault`).
+    PassVaultSecret = 27,
+    // Calendar: 29–30 (30 spare).
+    /// The account's own settings for one calendar it belongs to
+    /// (`calendar_settings`, the `calendarSettings` records scope): colour
+    /// and display. Its object is [`hashed_object`] of the calendar id, so
+    /// the server can't tie it to its calendar.
+    CalendarSettings = 29,
+    // Contacts: 31–33 (33 spare).
+    /// A contact's vCard (`contact_card`); its object is the SHA-256 of the
+    /// contact's UID, which the server reads from the card's signed summary
+    /// (Proton's model), so it checks the card is that contact's.
+    ContactCard = 31,
+    /// One of the account's contact groups (`contact_group`, the
+    /// `contactGroups` records scope): its name and colour. Its object is
+    /// [`hashed_object`] of a random id the creating device drew, so the
+    /// server sees neither the name nor anything to match it with.
+    ContactGroup = 32,
+    // Photos: 34–35 (35 spare).
+    /// The account's Photos library (`photos_library`), an account-records
+    /// scope; its object is the record's random id (32 bytes).
+    PhotosLibrary = 34,
+    // Organizations: 36–37 (37 spare); 38–39 spare. The third session
+    // holds 40 and up (docs/plans/w7-schema.md §11).
+    /// An organization key's seed, an owner's or admin's own copy
+    /// (docs/plans/organizations.md §3); its object is the key's id.
+    OrganizationPrivateKey = 36,
 }
 
 /// The object of a record whose id the server must not see (a group id, the
 /// account a contact entry is about): `HMAC(K_id, purpose ‖ id)`, where
-/// `K_id = KDF(master key, salt kutup/account-record/v1, info
-/// kutup/account-record/object-id/v1)`. Stable while the master key is, so
-/// the server keeps one row per record; a master-key rotation moves every
-/// such record to its new id (docs/plans/w6-key-hierarchy.md, "Rotation
-/// checklist").
-pub fn hashed_object(master_key: &[u8; 32], purpose: AccountRecordPurpose, id: &[u8]) -> [u8; 32] {
-    let mut id_key = Zeroizing::new([0u8; 32]);
-    Kdf::new(Suite::V1, KEY_SALT, master_key)
-        .expand(OBJECT_ID_INFO, id_key.as_mut_slice())
-        .expect("a 32-byte HKDF output is valid");
+/// `K_id` is the account's stored object-id key
+/// ([`AccountRecordPurpose::ObjectIdKey`], docs/plans/identity-root.md). It
+/// is random and never rotated, so a record keeps its id across a
+/// master-key rotation.
+pub fn hashed_object(
+    object_id_key: &crate::account_roots::ObjectIdKey,
+    purpose: AccountRecordPurpose,
+    id: &[u8],
+) -> [u8; 32] {
     crate::primitives::mac(
         Suite::V1,
-        id_key.as_ref(),
+        object_id_key.as_bytes(),
         &[&purpose.as_u16().to_be_bytes(), id],
     )
     .to_array()
@@ -312,6 +357,17 @@ impl AccountRecordPurpose {
         };
         match self {
             Self::PasswordMasterKey | Self::RecoveryMasterKey | Self::ChatBackupRoot => KEY,
+            // An account root: one record per generation, the generation the
+            // object.
+            Self::IdentityRoot
+            | Self::DriveRoot
+            | Self::GroupPseudonymRoot
+            | Self::CallLinkRoot
+            | Self::ObjectIdKey
+            | Self::MasterKeyKeyring => PurposePolicy {
+                object: ObjectPolicy::Required(4),
+                ..KEY
+            },
             // The address and the key's algorithm decide its length.
             Self::MailAddressPrivateKey => PurposePolicy {
                 object: ObjectPolicy::None,
@@ -379,20 +435,20 @@ impl AccountRecordPurpose {
                 length: Length::Bucket(256),
                 mutable: true,
                 max_len: bucketed(crate::photos_library::MAX_PHOTOS_LIBRARY_PLAINTEXT_BYTES),
-                chained: true,
+                chained: false,
             },
             Self::ChatAttachmentLedger => PurposePolicy {
-                object: ObjectPolicy::Required(48),
+                object: ObjectPolicy::Required(32),
                 length: Length::Bucket(256),
                 mutable: true,
                 max_len: bucketed(
                     crate::chat_attachment_ledger::MAX_CHAT_ATTACHMENT_LEDGER_PLAINTEXT_BYTES,
                 ),
-                chained: true,
+                chained: false,
             },
             // One size, so a stay's length says nothing of its meeting.
             Self::JoinedMeeting => PurposePolicy {
-                object: ObjectPolicy::Required(16),
+                object: ObjectPolicy::Required(32),
                 length: Length::Fixed(crate::chat_call_link::JOINED_PADDED_BYTES),
                 mutable: false,
                 max_len: crate::chat_call_link::JOINED_PADDED_BYTES,
@@ -434,6 +490,27 @@ impl AccountRecordPurpose {
                 max_len: 32,
                 chained: false,
             },
+            // The store's own key; its object is the SHA-256 of the store's
+            // name.
+            Self::ChatStoreKey => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                ..KEY
+            },
+            // One size each, so a record's length says nothing of its name.
+            Self::ContactGroup => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Fixed(crate::contact_group::MAX_PLAIN_LEN + 1),
+                mutable: true,
+                max_len: crate::contact_group::MAX_PLAIN_LEN + 1,
+                chained: false,
+            },
+            Self::CalendarSettings => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Fixed(crate::calendar_settings::MAX_PLAIN_LEN + 1),
+                mutable: true,
+                max_len: crate::calendar_settings::MAX_PLAIN_LEN + 1,
+                chained: false,
+            },
             // The revision (u64, big-endian) and the chain's 32-byte digest.
             Self::LocalChainPin => PurposePolicy {
                 object: ObjectPolicy::Required(32),
@@ -446,27 +523,36 @@ impl AccountRecordPurpose {
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 29] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
-        Self::ChatBackupRoot,
-        Self::MailAddressPrivateKey,
-        Self::PassVaultSecret,
-        Self::OrganizationPrivateKey,
-        Self::ContactCard,
-        Self::MailName,
-        Self::IdentityPins,
-        Self::ChatGroupListEntry,
-        Self::ChatContactListEntry,
-        Self::PhotosLibrary,
-        Self::ChatAttachmentLedger,
-        Self::JoinedMeeting,
-        Self::ChatProfileKeyWrap,
+        Self::MasterKeyKeyring,
+        Self::IdentityRoot,
+        Self::ObjectIdKey,
         Self::AccountHead,
         Self::AccountLocalAnchor,
         Self::RevisionSeen,
-        Self::MailSearchStoreKey,
         Self::LocalChainPin,
+        Self::DriveRoot,
+        Self::IdentityPins,
+        Self::ChatBackupRoot,
+        Self::ChatProfileKeyWrap,
+        Self::ChatGroupListEntry,
+        Self::ChatContactListEntry,
+        Self::ChatAttachmentLedger,
+        Self::JoinedMeeting,
+        Self::GroupPseudonymRoot,
+        Self::CallLinkRoot,
+        Self::ChatStoreKey,
+        Self::MailAddressPrivateKey,
+        Self::MailName,
+        Self::MailSearchStoreKey,
+        Self::PassVaultSecret,
+        Self::CalendarSettings,
+        Self::ContactCard,
+        Self::ContactGroup,
+        Self::PhotosLibrary,
+        Self::OrganizationPrivateKey,
     ];
 }
 
@@ -477,25 +563,36 @@ impl TryFrom<u16> for AccountRecordPurpose {
         match value {
             1 => Ok(Self::PasswordMasterKey),
             2 => Ok(Self::RecoveryMasterKey),
-            4 => Ok(Self::ChatBackupRoot),
-            5 => Ok(Self::MailAddressPrivateKey),
-            6 => Ok(Self::PassVaultSecret),
-            7 => Ok(Self::OrganizationPrivateKey),
-            8 => Ok(Self::ContactCard),
-            9 => Ok(Self::MailName),
-            10 => Ok(Self::IdentityPins),
-            11 => Ok(Self::ChatGroupListEntry),
-            12 => Ok(Self::ChatContactListEntry),
-            13 => Ok(Self::PhotosLibrary),
-            14 => Ok(Self::ChatAttachmentLedger),
-            15 => Ok(Self::JoinedMeeting),
-            16 => Ok(Self::ChatProfileKeyWrap),
-            17 => Ok(Self::AccountHead),
-            18 => Ok(Self::AccountLocalAnchor),
-            19 => Ok(Self::RevisionSeen),
-            20 => Ok(Self::MailSearchStoreKey),
-            21 => Ok(Self::LocalChainPin),
-            _ => Err(CryptoError::InvalidInput(format!(
+            3 => Ok(Self::MasterKeyKeyring),
+            4 => Ok(Self::IdentityRoot),
+            5 => Ok(Self::ObjectIdKey),
+            6 => Ok(Self::AccountHead),
+            7 => Ok(Self::AccountLocalAnchor),
+            8 => Ok(Self::RevisionSeen),
+            9 => Ok(Self::LocalChainPin),
+            10 => Ok(Self::DriveRoot),
+            11 => Ok(Self::IdentityPins),
+            13 => Ok(Self::ChatBackupRoot),
+            14 => Ok(Self::ChatProfileKeyWrap),
+            15 => Ok(Self::ChatGroupListEntry),
+            16 => Ok(Self::ChatContactListEntry),
+            17 => Ok(Self::ChatAttachmentLedger),
+            18 => Ok(Self::JoinedMeeting),
+            19 => Ok(Self::GroupPseudonymRoot),
+            20 => Ok(Self::CallLinkRoot),
+            21 => Ok(Self::ChatStoreKey),
+            23 => Ok(Self::MailAddressPrivateKey),
+            24 => Ok(Self::MailName),
+            25 => Ok(Self::MailSearchStoreKey),
+            27 => Ok(Self::PassVaultSecret),
+            29 => Ok(Self::CalendarSettings),
+            31 => Ok(Self::ContactCard),
+            32 => Ok(Self::ContactGroup),
+            34 => Ok(Self::PhotosLibrary),
+            36 => Ok(Self::OrganizationPrivateKey),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown account-record purpose {value}"
             ))),
         }
@@ -1438,10 +1535,11 @@ mod tests {
             assert!(inspect(&other).is_err(), "suite {suite}");
         }
 
-        // Purpose 3 (the Drive X-Wing key, now derived only) stays refused,
-        // and so does a purpose with a high byte.
-        assert!(AccountRecordPurpose::try_from(3).is_err());
-        for purpose in [3u16, 0x0101] {
+        // A spare purpose (12, Drive's) and one the third session holds (40
+        // and up) are refused, and so is a purpose with a high byte.
+        assert!(AccountRecordPurpose::try_from(12).is_err());
+        assert!(AccountRecordPurpose::try_from(40).is_err());
+        for purpose in [12u16, 40, 0x0101] {
             let mut other = envelope.clone();
             other[10..12].copy_from_slice(&purpose.to_be_bytes());
             assert!(inspect(&other).is_err(), "purpose {purpose}");

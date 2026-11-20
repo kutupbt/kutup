@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 // Folders and labels (docs/plans/mail-filters.md, F1): made from the
@@ -48,7 +48,7 @@ test('folders and labels: make, nest, file, label, drop, delete', async ({ brows
   // The server only ever sees sealed names.
   const plainNames: string[] = []
   mail.on('request', (r) => {
-    if (/\/api\/mail\/(folders|labels)/.test(r.url()) && r.method() !== 'GET') plainNames.push(r.postData() ?? '')
+    if (/\/api\/v1\/mail\/(folders|labels)/.test(r.url()) && r.method() !== 'GET') plainNames.push(r.postData() ?? '')
   })
 
   // A folder, and one inside it, from the sidebar.

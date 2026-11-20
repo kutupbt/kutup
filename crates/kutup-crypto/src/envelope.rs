@@ -60,7 +60,9 @@ impl TryFrom<u16> for CollabFrameSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::XChaCha20Poly1305Ed25519V1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown collaboration frame suite {value}"
             ))),
         }
@@ -334,11 +336,12 @@ pub fn seal_unsigned_with_nonce(
     Ok(frame.pack())
 }
 
-/// What the sender's frame key signs: the domain, the sender account, and the
+/// What the sender's frame key signs: the domain, the sender's account id
+/// (never its server's name, docs/plans/identity-rotation.md §6), and the
 /// packed frame without its signature.
 pub fn signing_bytes(packed: &[u8], sender: &AccountRef) -> Result<Vec<u8>> {
     Frame::unpack(packed)?;
-    let account = sender.bytes();
+    let account = sender.id_bytes();
     let mut out =
         Vec::with_capacity(SIGNATURE_DOMAIN.len() + account.len() + packed.len() - SIGNATURE_SIZE);
     out.extend_from_slice(SIGNATURE_DOMAIN);
@@ -392,10 +395,11 @@ pub fn verify(packed: &[u8], sender: &AccountRef, public_key: &[u8]) -> Result<(
 }
 
 /// A frame as a server delivers it: its sender account
-/// ([`AccountRef::bytes`]) then the packed frame. Senders send the bare
+/// ([`AccountRef::routing_bytes`], a routing attribute the
+/// signature does not cover) then the packed frame. Senders send the bare
 /// frame; the server that authenticated them names them.
 pub fn deliver(sender: &AccountRef, packed: &[u8]) -> Vec<u8> {
-    let mut out = sender.bytes();
+    let mut out = sender.routing_bytes();
     out.extend_from_slice(packed);
     out
 }
@@ -403,7 +407,7 @@ pub fn deliver(sender: &AccountRef, packed: &[u8]) -> Vec<u8> {
 /// The sender and the packed frame of a [`deliver`]ed frame. Whether the
 /// sender signed it is [`verify`]'s question.
 pub fn delivered(bytes: &[u8]) -> Result<(AccountRef, &[u8])> {
-    let (sender, used) = AccountRef::read(bytes)?;
+    let (sender, used) = AccountRef::read_routing(bytes)?;
     let packed = &bytes[used..];
     Frame::unpack(packed)?;
     Ok((sender, packed))
@@ -465,8 +469,14 @@ mod tests {
             .to_array::<32>();
         verify(&signed, &sender(), &public).unwrap();
         // Another account named beside it: the signature is someone else's.
-        let other = AccountRef::new("other.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+        let other =
+            AccountRef::new("example.test", "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
         assert!(verify(&signed, &other, &public).is_err());
+        // The same account under another server name: the same signature
+        // (the server is routing, identity-rotation.md §6).
+        let renamed =
+            AccountRef::new("other.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+        verify(&signed, &renamed, &public).unwrap();
         // The device, manifest sequence and sequence are signed.
         for byte in [39, 51, 59] {
             let mut moved = signed.clone();

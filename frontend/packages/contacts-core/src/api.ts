@@ -1,3 +1,4 @@
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { useCallback, useMemo } from 'react'
@@ -5,11 +6,11 @@ import {
   deriveAccountIdentityKeys,
   describeExternalMailKey,
   fromBase64,
+  contactSummaryRest,
   openContactCard,
   revisionGuard,
   sealContactCard,
   signContactSummary,
-  toBase64,
   verifyContactSummary,
   type ContactSummary,
 } from '@kutup/crypto'
@@ -21,6 +22,8 @@ import {
   type VerifiedIndex,
 } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
+import { randomBytes } from '@kutup/crypto/random'
+import { openScopeRecord, scopeRecordId, sealScopeRecord, type ContactGroupRecord } from '@kutup/crypto/scopeRecords'
 import { updateSession, useRequiredSession, type Session } from '@kutup/session/store'
 import { displayName, emptyDraft, pgpFor, newUid, type Contact, type ContactDraft, type ContactGroup, type ContactKey } from './model'
 import { parseVCards, toVCard } from './vcard'
@@ -43,6 +46,9 @@ const CONTACT_SCOPE = 'contact'
  */
 const HEAD_SCOPE = 'contacts'
 
+/** The account-records scope of the contact groups. */
+const GROUPS_SCOPE = 'contactGroups'
+
 /**
  * The head's index of the address book, or null when it cannot vouch (this
  * app is blocked on another history: reads go on, held to this browser's own
@@ -64,7 +70,7 @@ async function listedContacts<T>(session: Session, edit: (index: VerifiedIndex) 
 
 /**
  * Another device changed the contact since the edit started (the server's
- * `revision_conflict`, or the head's index listing another revision): the
+ * `revisionConflict`, or the head's index listing another revision): the
  * person's form is not laid over it.
  */
 export class ContactChangedError extends Error {
@@ -104,7 +110,7 @@ export function useAccountAddress() {
 async function openRow(
   session: Session,
   row: ContactRow,
-  masterKey: string,
+  masterKey: MasterKeys,
   authority: string,
   index: VerifiedIndex | null,
 ): Promise<Contact | null> {
@@ -126,7 +132,7 @@ async function openRow(
       summary.pinnedKeys.some((p) => p.address === key.address && p.fingerprint === key.fingerprint),
     )
     const draft = { ...card.draft, name: summary.name, groups: summary.groups, keys }
-    return { id: row.id, uid: summary.uid, revision: row.revision, draft, updatedAt: row.updatedAt }
+    return { id: row.id, uid: summary.uid, revision: row.revision, draft, updatedAt: row.updatedAt, summaryRest: contactSummaryRest(summary) }
   } catch (error) {
     if (error instanceof NotInVerifiedIndexError) throw error
     console.warn('contacts: a contact did not verify or open', row.id, error)
@@ -147,8 +153,8 @@ export function useContacts() {
 }
 
 export async function loadContacts(session: Session): Promise<{ contacts: Contact[]; unreadable: number }> {
-  const masterKey = toBase64(session.masterKey)
-  const { authorityPublicKey } = await deriveAccountIdentityKeys(masterKey)
+  const masterKey = session.masterKeys
+  const { authorityPublicKey } = await deriveAccountIdentityKeys(session.roots.identityRoot)
   // The book and the head's index are two reads: a write landing between
   // them is read again once before the book counts as one the head does not
   // vouch for (then nothing of it is shown).
@@ -191,7 +197,7 @@ async function withFingerprints(keys: ContactKey[]): Promise<ContactKey[]> {
   return read.filter((key): key is ContactKey => key !== null)
 }
 
-function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
+function summaryOf(uid: string, draft: ContactDraft, rest: Record<string, unknown> = {}): ContactSummary {
   const seen = new Set<string>()
   const emails = draft.emails
     .map((email) => ({ address: email.address.trim().toLowerCase(), label: email.label?.trim() || undefined }))
@@ -201,11 +207,12 @@ function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
     .filter((key) => seen.has(key.address) && key.fingerprint)
     .map(({ address, fingerprint }) => {
       const pgp = pgpFor(draft, address)
-      return { address, fingerprint, encrypt: pgp.encrypt ?? true, sign: pgp.encrypt === true || (pgp.sign ?? true) }
+      const keyVersion = fingerprint.length === 64 ? 6 : 4
+      return { address, keyVersion, fingerprint, encrypt: pgp.encrypt ?? true, sign: pgp.encrypt === true || (pgp.sign ?? true) }
     })
     .sort((a, b) => (a.address === b.address ? a.fingerprint.localeCompare(b.fingerprint) : a.address < b.address ? -1 : 1))
     .slice(0, MAX_PINNED_KEYS)
-  return { uid, name: displayName(draft), emails, groups: [...new Set(draft.groups)].sort(), pinnedKeys }
+  return { ...rest, uid, name: displayName(draft), emails, groups: [...new Set(draft.groups)].sort(), pinnedKeys }
 }
 
 /**
@@ -213,25 +220,29 @@ function summaryOf(uid: string, draft: ContactDraft): ContactSummary {
  * revision above every one seen and above `base` (the revision an edit
  * started from; 0 for a new contact).
  */
-async function prepare(session: Session, uid: string, input: ContactDraft, base = 0) {
-  const masterKey = toBase64(session.masterKey)
+async function prepare(session: Session, uid: string, input: ContactDraft, base = 0, summaryRest?: Record<string, unknown>) {
+  const masterKey = session.masterKeys
+  const known = input.groups.length ? await groupIds(session) : new Set<string>()
   // Keys of addresses still among the emails, each once, in order, as many as the summary holds.
   const addresses = new Set(input.emails.map((email) => email.address.trim().toLowerCase()))
   const keys = (await withFingerprints(input.keys))
     .filter((key, i, all) => addresses.has(key.address) && all.findIndex((k) => k.address === key.address && k.fingerprint === key.fingerprint) === i)
     .slice(0, MAX_PINNED_KEYS)
-  const draft = { ...input, keys }
-  const summary = summaryOf(uid, draft)
+  // A group deleted since the draft was opened is dropped: the server takes
+  // only groups the account keeps.
+  const groups = input.groups.length ? input.groups.filter((id) => known.has(id)) : input.groups
+  const draft = { ...input, keys, groups }
+  const summary = summaryOf(uid, draft, summaryRest)
   const revision = await revisionGuard(session).next(CONTACT_SCOPE, uid, base)
-  const signed = await signContactSummary(masterKey, session.envelopeBinding, revision, summary)
+  const signed = await signContactSummary(session.roots.identityRoot, session.envelopeBinding, revision, summary)
   const card = await sealContactCard(masterKey, session.envelopeBinding, uid, revision, toVCard({ ...draft, groups: summary.groups }, uid, summary.name))
   return { body: { summary: signed.summary, signature: signed.signature, card }, revision, uid }
 }
 
-/** Another device saved the contact first (the server's `revision_conflict`, or the head saying so). */
+/** Another device saved the contact first (the server's `revisionConflict`, or the head saying so). */
 export function isRevisionConflict(error: unknown): boolean {
   if (error instanceof ContactChangedError) return true
-  return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revision_conflict'
+  return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revisionConflict'
 }
 
 /**
@@ -241,8 +252,8 @@ export function isRevisionConflict(error: unknown): boolean {
  * {@link ContactChangedError} if the contact itself changed. Stored already (a
  * retry after a lost answer) counts as stored.
  */
-export async function putContact(session: Session, existing: Pick<Contact, 'id' | 'uid' | 'revision'>, draft: ContactDraft): Promise<void> {
-  const { body, revision } = await prepare(session, existing.uid, draft, existing.revision)
+export async function putContact(session: Session, existing: Pick<Contact, 'id' | 'uid' | 'revision' | 'summaryRest'>, draft: ContactDraft): Promise<void> {
+  const { body, revision } = await prepare(session, existing.uid, draft, existing.revision, existing.summaryRest)
   await listedContacts(session, (index) => {
     const listed = index.revision(existing.uid)
     if (listed === revision) return Promise.resolve(null)
@@ -326,7 +337,7 @@ function useContactMutation<T, R>(fn: (input: T, session: Session) => Promise<R>
         // and the sidebar meter reads the session's figure.
         queryClient.invalidateQueries({ queryKey: ['storage'] }),
         api
-          .get<{ storageUsedBytes: number }>('/user/me')
+          .get<{ storageUsedBytes: number }>('/account')
           .then(({ data }) => updateSession({ storageUsedBytes: data.storageUsedBytes }))
           .catch(() => undefined),
       ]),
@@ -336,7 +347,7 @@ function useContactMutation<T, R>(fn: (input: T, session: Session) => Promise<R>
 /** Creates a contact, or saves an edit made from its `revision`. */
 export function useSaveContact() {
   return useContactMutation(
-    async (input: { draft: ContactDraft; existing?: Pick<Contact, 'id' | 'uid' | 'revision'>; uid?: string }, session) => {
+    async (input: { draft: ContactDraft; existing?: Pick<Contact, 'id' | 'uid' | 'revision' | 'summaryRest'>; uid?: string }, session) => {
       // An edit made on an older revision fails with a revision conflict:
       // the person's form is not laid over another device's change.
       if (input.existing) {
@@ -409,29 +420,93 @@ export function useImportContacts() {
   )
 }
 
-export function useContactGroups() {
-  return useQuery({
-    queryKey: contactGroupsKey,
-    queryFn: async () => (await api.get<ContactGroup[]>('/contacts/groups')).data,
-  })
+/**
+ * The account's contact groups: records of its `contactGroups` scope
+ * (docs/plans/account-records.md), each name and colour sealed under the
+ * master key, read with the verified account head. A group this device
+ * can't open (a newer client's, or damaged) is left out.
+ */
+export async function loadGroups(session: Session): Promise<Omit<ContactGroup, 'members'>[]> {
+  const copy = await (await accountHead(session)).records(GROUPS_SCOPE)
+  const groups: Omit<ContactGroup, 'members'>[] = []
+  for (const [id, stored] of copy.records) {
+    try {
+      const { value, revision } = await openScopeRecord<ContactGroupRecord>(session.masterKeys, session.envelopeBinding, GROUPS_SCOPE, id, stored.envelope)
+      if (revision !== stored.revision) continue
+      groups.push({ id, name: value.name, color: value.color, record: value })
+    } catch {
+      // Not shown; it stays on the server for the client that wrote it.
+    }
+  }
+  return groups.sort((a, b) => a.name.localeCompare(b.name) || (a.id < b.id ? -1 : 1))
 }
 
+/** The ids of the groups the account keeps, read at most every few seconds. */
+let knownGroups: { accountId: string; at: number; ids: Promise<Set<string>> } | null = null
+async function groupIds(session: Session): Promise<Set<string>> {
+  const now = Date.now()
+  if (!knownGroups || knownGroups.accountId !== session.accountId || now - knownGroups.at > 5000) {
+    const ids = (async () => new Set((await (await accountHead(session)).records(GROUPS_SCOPE)).records.keys()))()
+    ids.catch(() => (knownGroups = null))
+    knownGroups = { accountId: session.accountId, at: now, ids }
+  }
+  return knownGroups.ids
+}
+
+/** The groups, each with how many of the loaded contacts are in it. */
+export function useContactGroups() {
+  const session = useRequiredSession()
+  const contacts = useContacts()
+  const groups = useQuery({
+    queryKey: contactGroupsKey,
+    queryFn: () => loadGroups(session),
+  })
+  const data = useMemo(() => {
+    if (!groups.data) return undefined
+    const counts = new Map<string, number>()
+    for (const contact of contacts.data?.contacts ?? []) for (const id of contact.draft.groups) counts.set(id, (counts.get(id) ?? 0) + 1)
+    return groups.data.map((group): ContactGroup => ({ ...group, members: counts.get(group.id) ?? 0 }))
+  }, [groups.data, contacts.data])
+  return { ...groups, data }
+}
+
+/** Creates a group, or renames and recolours one (a newer client's fields kept). */
 export function useSaveGroup() {
   const queryClient = useQueryClient()
+  const session = useRequiredSession()
   return useMutation({
     mutationFn: async (input: { id?: string; name: string; color: string }) => {
-      if (input.id) await api.put(`/contacts/groups/${input.id}`, { name: input.name, color: input.color })
-      else await api.post('/contacts/groups', { name: input.name, color: input.color })
+      const id = input.id ?? (await scopeRecordId(session.roots.objectIdKey, GROUPS_SCOPE, randomBytes(16)))
+      await (await accountHead(session)).recordsWrite(GROUPS_SCOPE, async (copy) => {
+        const stored = copy.records.get(id)
+        if (input.id && !stored) throw new Error('the group was deleted')
+        const kept = stored
+          ? (await openScopeRecord<ContactGroupRecord>(session.masterKeys, session.envelopeBinding, GROUPS_SCOPE, id, stored.envelope)).value
+          : {}
+        const revision = (stored?.revision ?? 0) + 1
+        const envelope = await sealScopeRecord(session.masterKeys, session.envelopeBinding, GROUPS_SCOPE, id, revision, {
+          ...kept,
+          name: input.name.trim(),
+          color: input.color.toLowerCase(),
+        })
+        return { puts: [{ id, revision, envelope }], deletes: [], done: id }
+      })
+      knownGroups = null
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: contactGroupsKey }),
   })
 }
 
+/** Deletes a group; its members stay, and drop it on their next save. */
 export function useDeleteGroup() {
   const queryClient = useQueryClient()
+  const session = useRequiredSession()
   return useMutation({
     mutationFn: async (id: string) => {
-      await api.delete(`/contacts/groups/${id}`)
+      await (await accountHead(session)).recordsWrite(GROUPS_SCOPE, (copy) =>
+        Promise.resolve(copy.records.has(id) ? { puts: [], deletes: [id], done: id } : null),
+      )
+      knownGroups = null
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: contactGroupsKey }),
   })

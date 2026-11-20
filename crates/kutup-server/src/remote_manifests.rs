@@ -65,7 +65,7 @@ async fn store(pool: &PgPool, manifest: &AccountManifestV3) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO remote_account_manifests
              (domain, account_id, sequence, manifest_hash, manifest, fetched_at)
-         VALUES ($1, $2, $3, $4, $5, now())
+         VALUES ($1, $2, $3, decode($4, 'hex'), $5, now())
          ON CONFLICT (domain, account_id) DO UPDATE SET
              sequence = EXCLUDED.sequence,
              manifest_hash = EXCLUDED.manifest_hash,
@@ -282,10 +282,10 @@ pub(crate) async fn sweep(pool: &PgPool) -> AppResult<u64> {
         .await?;
     let gone = sqlx::query(
         "DELETE FROM remote_account_manifests r
-          WHERE NOT EXISTS (SELECT 1 FROM federated_outgoing_shares s
-                             WHERE s.recipient_domain = r.domain)
-            AND NOT EXISTS (SELECT 1 FROM federated_outgoing_file_shares s
-                             WHERE s.recipient_domain = r.domain)",
+          WHERE NOT EXISTS (SELECT 1 FROM drive_federated_outgoing_shares s
+                             WHERE s.recipient_server = r.domain)
+            AND NOT EXISTS (SELECT 1 FROM drive_federated_outgoing_file_shares s
+                             WHERE s.recipient_server = r.domain)",
     )
     .execute(pool)
     .await?

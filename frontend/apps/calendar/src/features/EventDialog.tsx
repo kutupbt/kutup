@@ -197,7 +197,7 @@ export function EventDialog() {
   const valid = draft !== null && draft.calendarId !== '' && endsAfterStart(draft) && !repeated
   const saveError =
     save.error instanceof EventRefusedError
-      ? t(save.error.code === 'eventLimit' ? 'events.limit' : save.error.code === 'revision_conflict' ? 'events.changedElsewhere' : 'events.refused')
+      ? t(save.error.code === 'eventLimit' ? 'events.limit' : save.error.code === 'revisionConflict' ? 'events.changedElsewhere' : 'events.refused')
       : save.error
         ? apiErrorMessage(save.error, t('events.saveFailed'))
         : null
@@ -345,7 +345,7 @@ export function EventDialog() {
           pending={remove.isPending}
           error={remove.error}
           errorFallback={
-            remove.error instanceof EventRefusedError && remove.error.code === 'revision_conflict' ? t('events.changedElsewhere') : t('events.saveFailed')
+            remove.error instanceof EventRefusedError && remove.error.code === 'revisionConflict' ? t('events.changedElsewhere') : t('events.saveFailed')
           }
           onConfirm={() =>
             remove.mutate(undefined, {

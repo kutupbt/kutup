@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::security_keys::{self as keys, CeremonyKind, Refused};
 use crate::site_settings::{SECURITY_KEYS_PER_ACCOUNT, WEBAUTHN_CEREMONY_SECONDS};
 use crate::{jwt, ratelimit, AppState};
@@ -62,22 +62,22 @@ pub struct SecurityKeysResponse {
     available: bool,
 }
 
-/// `GET /api/auth/security-keys` — the account's keys.
+/// `GET /api/v1/auth/security-keys` — the account's keys.
 #[utoipa::path(
     get,
-    path = "/api/auth/security-keys",
+    path = "/api/v1/auth/security-keys",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, body = SecurityKeysResponse))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<SecurityKeysResponse>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let keys: Vec<SecurityKeyView> = sqlx::query_as(
         "SELECT id, name, created_at, last_used_at, compromised
-         FROM user_security_keys WHERE user_id = $1 ORDER BY created_at",
+         FROM account_security_keys WHERE account_id = $1 ORDER BY created_at",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -94,7 +94,7 @@ pub async fn list(
 
 /// A reauth's grant for this session (`totp` purpose: changing second
 /// factors).
-/// `POST /api/auth/security-keys/register/start` — options for adding a key,
+/// `POST /api/v1/auth/security-keys/register/start` — options for adding a key,
 /// with the password proved again (a `totp` grant from a reauth of this
 /// session) and, while two-step sign-in is on, a factor the account has
 /// (`code` or `securityKey`, as removing one takes; `403
@@ -102,7 +102,7 @@ pub async fn list(
 /// limit.
 #[utoipa::path(
     post,
-    path = "/api/auth/security-keys/register/start",
+    path = "/api/v1/auth/security-keys/register/start",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = crate::handlers::auth::CodeRequest,
@@ -110,12 +110,12 @@ pub async fn list(
 )]
 pub async fn register_start(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<super::auth::CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let rp = relying_party(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let seconds = ceremony_seconds(&state).await?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, req.grant(), crate::grants::Purpose::Totp, &user)
@@ -124,16 +124,16 @@ pub async fn register_start(
         super::auth::second_factor_if_on(tx, &state, &user, req.code(), req.security_key.as_ref())
             .await?;
     let (count, name, require_uv): (i64, Option<String>, bool) = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM user_security_keys WHERE user_id = u.id),
+        "SELECT (SELECT count(*) FROM account_security_keys WHERE account_id = u.id),
                 u.username, u.security_keys_require_uv
-         FROM users u WHERE u.id = $1 FOR UPDATE",
+         FROM accounts u WHERE u.id = $1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
     .await?;
     check_limit(&state, user_id, count).await?;
     let existing: Vec<keys::KeyRow> = sqlx::query_as(
-        "SELECT credential_id, transports FROM user_security_keys WHERE user_id = $1",
+        "SELECT credential_id, transports FROM account_security_keys WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -219,12 +219,12 @@ pub struct RegisterFinishResponse {
     recovery_codes: Option<Vec<String>>,
 }
 
-/// `POST /api/auth/security-keys/register/finish` — adds the key the
+/// `POST /api/v1/auth/security-keys/register/finish` — adds the key the
 /// browser made. `409 securityKeyExists` for a key already added. The first
 /// second factor turns two-step sign-in on, with its recovery codes.
 #[utoipa::path(
     post,
-    path = "/api/auth/security-keys/register/finish",
+    path = "/api/v1/auth/security-keys/register/finish",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = RegisterFinishRequest,
@@ -232,12 +232,12 @@ pub struct RegisterFinishResponse {
 )]
 pub async fn register_finish(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<RegisterFinishRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let rp = relying_party(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let name = key_name(&req.name)?;
     let response = serde_json::to_vec(&req.credential)
         .map_err(|_| AppError::bad_request("invalid credential"))?;
@@ -269,14 +269,14 @@ pub async fn register_finish(
         },
     )?;
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM user_security_keys WHERE user_id = $1")
+        sqlx::query_scalar("SELECT count(*) FROM account_security_keys WHERE account_id = $1")
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
     check_limit(&state, user_id, count).await?;
     let inserted: Option<SecurityKeyView> = sqlx::query_as(
-        "INSERT INTO user_security_keys
-             (user_id, credential_id, transports, static_state, dynamic_state, sign_count,
+        "INSERT INTO account_security_keys
+             (account_id, credential_id, transports, static_state, dynamic_state, sign_count,
               aaguid, name)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (credential_id) DO NOTHING
@@ -339,10 +339,10 @@ pub struct RenameRequest {
     name: String,
 }
 
-/// `PATCH /api/auth/security-keys/{id}` — renames a key.
+/// `PATCH /api/v1/auth/security-keys/{id}` — renames a key.
 #[utoipa::path(
     patch,
-    path = "/api/auth/security-keys/{id}",
+    path = "/api/v1/auth/security-keys/{id}",
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -351,15 +351,15 @@ pub struct RenameRequest {
 )]
 pub async fn rename(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Result<Json<RenameRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let renamed =
-        sqlx::query("UPDATE user_security_keys SET name = $3 WHERE id = $1 AND user_id = $2")
+        sqlx::query("UPDATE account_security_keys SET name = $3 WHERE id = $1 AND account_id = $2")
             .bind(id)
             .bind(user_id)
             .bind(key_name(&req.name)?)
@@ -371,20 +371,20 @@ pub async fn rename(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/auth/security-keys/proof/start` — options for proving the
+/// `POST /api/v1/auth/security-keys/proof/start` — options for proving the
 /// second factor again with a key, for this session (renewing recovery
 /// codes, removing a factor): the answer goes in that request's
 /// `securityKey`.
 #[utoipa::path(
     post,
-    path = "/api/auth/security-keys/proof/start",
+    path = "/api/v1/auth/security-keys/proof/start",
     tag = "auth",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "PublicKeyCredentialRequestOptions (JSON form)"))
 )]
-pub async fn proof_start(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+pub async fn proof_start(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
     let rp = relying_party(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let seconds = ceremony_seconds(&state).await?;
     let mut tx = state.pool.begin().await?;
     let options = keys::start_assertion(
@@ -400,12 +400,12 @@ pub async fn proof_start(State(state): State<AppState>, user: AuthUser) -> AppRe
     Ok(Json(options).into_response())
 }
 
-/// `POST /api/auth/login/security-key/start` — a sign-in's second step with
+/// `POST /api/v1/auth/login/security-key/start` — a sign-in's second step with
 /// a security key: options naming the account's keys. Only someone past the
 /// password step (its pre-auth token) learns the account's credential ids.
 #[utoipa::path(
     post,
-    path = "/api/auth/login/security-key/start",
+    path = "/api/v1/auth/login/security-key/start",
     tag = "auth",
     request_body = PreAuthRequest,
     responses((status = 200, description = "PublicKeyCredentialRequestOptions (JSON form)"))
@@ -460,14 +460,14 @@ pub struct LoginFinishRequest {
     credential: serde_json::Value,
 }
 
-/// `POST /api/auth/login/security-key/finish` — checks the key's answer and
+/// `POST /api/v1/auth/login/security-key/finish` — checks the key's answer and
 /// signs in, as `login/2fa` does for a code. Failures share the code's
 /// attempt budget. A key whose counter went back is refused: marked
 /// compromised (`securityKeyCompromised`), or, when it was used after this
 /// sign-in's start (another tab), only refused (`409 securityKeyRetry`).
 #[utoipa::path(
     post,
-    path = "/api/auth/login/security-key/finish",
+    path = "/api/v1/auth/login/security-key/finish",
     tag = "auth",
     request_body = LoginFinishRequest,
     responses((status = 200, description = "The session", body = crate::handlers::auth::LoginResponse))
@@ -544,14 +544,14 @@ pub struct RemoveResponse {
     two_factor_off: bool,
 }
 
-/// `DELETE /api/auth/security-keys/{id}` — removes a key, with the password
+/// `DELETE /api/v1/auth/security-keys/{id}` — removes a key, with the password
 /// (a `totp` grant) and the second factor proved again (`code`: the
 /// authenticator's or a recovery code; or `securityKey`: an answer to
 /// `proof/start`), as turning the authenticator app off takes. Removing the
 /// account's last factor turns two-step sign-in off.
 #[utoipa::path(
     delete,
-    path = "/api/auth/security-keys/{id}",
+    path = "/api/v1/auth/security-keys/{id}",
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -560,12 +560,12 @@ pub struct RemoveResponse {
 )]
 pub async fn remove(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     body: Result<Json<super::auth::CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     super::auth::second_factor_not_blocked(user_id)?;
     let mut tx = state.pool.begin().await?;
@@ -584,7 +584,7 @@ pub async fn remove(
     }
     let mut tx = super::auth::settle_second_factor(tx, user_id, &outcome).await?;
     let removed: Option<String> = sqlx::query_scalar(
-        "DELETE FROM user_security_keys WHERE id = $1 AND user_id = $2 RETURNING name",
+        "DELETE FROM account_security_keys WHERE id = $1 AND account_id = $2 RETURNING name",
     )
     .bind(id)
     .bind(user_id)
@@ -634,13 +634,13 @@ pub struct RequireUvRequest {
     security_key: Option<serde_json::Value>,
 }
 
-/// `PUT /api/auth/security-keys/require-uv` — Proton's "Require PIN": keys
+/// `PUT /api/v1/auth/security-keys/require-uv` — Proton's "Require PIN": keys
 /// verify their user (a PIN or a fingerprint) when added and at sign-in.
 /// With the password proved again (a `totp` grant); turning it off takes
 /// the second factor too (`403 secondFactorRequired` without).
 #[utoipa::path(
     put,
-    path = "/api/auth/security-keys/require-uv",
+    path = "/api/v1/auth/security-keys/require-uv",
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = RequireUvRequest,
@@ -648,11 +648,11 @@ pub struct RequireUvRequest {
 )]
 pub async fn set_require_uv(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     body: Result<Json<RequireUvRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
@@ -664,7 +664,7 @@ pub async fn set_require_uv(
             .await?
             .0
     };
-    sqlx::query("UPDATE users SET security_keys_require_uv = $2 WHERE id = $1")
+    sqlx::query("UPDATE accounts SET security_keys_require_uv = $2 WHERE id = $1")
         .bind(user_id)
         .bind(req.require_uv)
         .execute(&mut *tx)

@@ -14,7 +14,7 @@ vi.mock('./rustWasm', async () => {
 import { openThumbnailV1, sealThumbnailV1, type ThumbnailImage } from './thumbnail'
 
 const key = new Uint8Array(32).fill(0x41)
-const context = { fileId: '11111111-1111-4111-8111-111111111111', generation: 3, variant: 'sm' as const }
+const context = { fileId: '11111111-1111-4111-8111-111111111111', revisionId: '55555555-5555-4555-8555-555555555555', generation: 3, variant: 'sm' as const }
 const picture: ThumbnailImage = {
   format: 'jpeg',
   width: 320,
@@ -33,6 +33,8 @@ describe('thumbnail envelope', () => {
     const envelope = await sealThumbnailV1(picture, key, context)
     await expect(openThumbnailV1(envelope, key, { ...context, variant: 'lg' })).rejects.toThrow()
     await expect(openThumbnailV1(envelope, key, { ...context, generation: 4 })).rejects.toThrow()
+    // A thumbnail of other content (an older revision) is drawn again.
+    await expect(openThumbnailV1(envelope, key, { ...context, revisionId: '66666666-6666-4666-8666-666666666666' })).rejects.toThrow()
     await expect(
       openThumbnailV1(envelope, key, { ...context, fileId: '33333333-3333-4333-8333-333333333333' }),
     ).rejects.toThrow()

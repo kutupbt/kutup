@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
+pub mod counters;
 mod registry;
 
 pub use registry::{Limit, Per, Section, Spec, Unit, SPECS};
@@ -75,16 +76,21 @@ pub(crate) fn apply_overrides(rows: Vec<(String, String, i64)>) {
     *OVERRIDES.write().unwrap() = overrides;
 }
 
-/// Every account's own values, as stored (`user_setting_overrides`, keyed
-/// `rate_limit.<key>`), by limit key.
+/// Every limit's key, as `account_entitlements` and `site_settings` store it.
+fn keys() -> Vec<&'static str> {
+    SPECS.iter().map(|spec| spec.key).collect()
+}
+
+/// Every account's own values, as stored (`account_entitlements`, by the
+/// limit's key). Rows of keys this server doesn't know (a newer server's,
+/// or a fork's) are left alone.
 pub async fn stored_overrides(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, String, i64)>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT user_id::text, substr(key, length($1) + 1), value FROM user_setting_overrides
-         WHERE starts_with(key, $1)",
+        "SELECT account_id::text, key, value FROM account_entitlements WHERE key = ANY($1)",
     )
-    .bind(SETTING_PREFIX)
+    .bind(keys())
     .fetch_all(pool)
     .await
 }
@@ -107,10 +113,6 @@ pub enum FirstFrom {
     TestStack,
 }
 
-/// The `site_settings` key prefix of the values administrators set:
-/// `rate_limit.<key>`.
-pub const SETTING_PREFIX: &str = "rate_limit.";
-
 /// A limit's first value and where it came from.
 pub fn first(limit: Limit) -> (u64, FirstFrom) {
     FIRST
@@ -119,7 +121,7 @@ pub fn first(limit: Limit) -> (u64, FirstFrom) {
         .unwrap_or((limit.spec().default, FirstFrom::Default))
 }
 
-/// The values administrators set, by limit (stored as `rate_limit.<key>`),
+/// The values administrators set, by limit (stored under the limit's key),
 /// over the first values: what every check reads from now on. A stored
 /// value outside the limit's bounds (a bound since lowered) is ignored, and
 /// logged.
@@ -150,17 +152,15 @@ fn effective(spec: &Spec, stored: Option<&String>, first: u64, ceiling: u64) -> 
     }
 }
 
-/// The values administrators set, by limit key.
+/// The values administrators set, by limit key. Rows of keys this server
+/// doesn't know are left alone.
 pub async fn stored(pool: &sqlx::PgPool) -> Result<HashMap<String, String>, sqlx::Error> {
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT key, value FROM site_settings WHERE starts_with(key, $1)")
-            .bind(SETTING_PREFIX)
+        sqlx::query_as("SELECT key, value FROM site_settings WHERE key = ANY($1)")
+            .bind(keys())
             .fetch_all(pool)
             .await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(key, value)| Some((key.strip_prefix(SETTING_PREFIX)?.to_owned(), value)))
-        .collect())
+    Ok(rows.into_iter().collect())
 }
 
 /// Held across a reload's reads and its apply, so reloads apply in the
@@ -185,13 +185,15 @@ const RELOAD_EVERY: Duration = Duration::from_secs(30);
 
 /// Rereads the values administrators set every [`RELOAD_EVERY`].
 pub fn spawn_reload(pool: sqlx::PgPool) {
+    crate::job_health::register("rate_limits.reload", RELOAD_EVERY);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(RELOAD_EVERY);
         tick.tick().await;
         loop {
             tick.tick().await;
-            if let Err(error) = reload(&pool).await {
-                tracing::warn!("rate limits not reloaded: {error}");
+            match reload(&pool).await {
+                Ok(_) => crate::job_health::beat(&pool, "rate_limits.reload").await,
+                Err(error) => tracing::warn!("rate limits not reloaded: {error}"),
             }
         }
     });
@@ -223,8 +225,7 @@ pub fn value_for(limit: Limit, account: &str) -> u64 {
     value(limit)
 }
 
-/// A limit counted in the database (`chat_anonymous_rate_counters` and the
-/// like): `(its value, its window in seconds)`.
+/// A limit counted in the database ([`counters`]): `(its value, its window in seconds)`.
 pub fn budget(limit: Limit) -> (i64, i64) {
     let window = match limit.spec().unit {
         Unit::Events(window) => window,
@@ -522,6 +523,12 @@ pub static REPORT: LazyLock<RateLimiter> =
 /// sends a few; more is someone filling the administrators' inbox.
 pub static FEEDBACK: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::Feedback));
+/// Content-Security-Policy violation reports (`POST /api/csp-report`): 60 /
+/// minute / IP (`RATE_LIMIT_CSP_REPORTS_PER_MIN`). A browser sends one per
+/// violation, unauthenticated; a page that breaks the policy everywhere sends
+/// a burst, and the rest are dropped.
+pub static CSP_REPORTS: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::registered(Limit::CspReports));
 /// Admin API: 120 / minute / IP (`RATE_LIMIT_ADMIN_PER_MIN`). The dashboard fires a
 /// handful of requests per view; 120/min is generous for a human and a wall for a script.
 pub static ADMIN: LazyLock<RateLimiter> = LazyLock::new(|| RateLimiter::registered(Limit::Admin));
@@ -1103,11 +1110,17 @@ mod tests {
         let limiter = RateLimiter::registered(Limit::LiveLocationStreams);
         let account = "0b7c9a52-3a8e-4bb4-9a0e-6c1f2e1d0a11";
         apply_overrides(vec![
-            (account.to_owned(), "live_location_streams".to_owned(), 1),
-            // Not per account, out of bounds, unknown: ignored.
-            (account.to_owned(), "reports".to_owned(), 1),
-            (account.to_owned(), "pass_icons".to_owned(), 0),
-            (account.to_owned(), "no_such_limit".to_owned(), 1),
+            (
+                account.to_owned(),
+                "chat.rate.live_location_streams".to_owned(),
+                1,
+            ),
+            // Not per account, out of bounds, unknown (a newer server's, a
+            // fork's): ignored.
+            (account.to_owned(), "drive.rate.reports".to_owned(), 1),
+            (account.to_owned(), "pass.rate.icons".to_owned(), 0),
+            (account.to_owned(), "chat.rate.no_such_limit".to_owned(), 1),
+            (account.to_owned(), "enterprise.rate.seats".to_owned(), 1),
         ]);
         assert_eq!(
             account_override(Limit::LiveLocationStreams, account),

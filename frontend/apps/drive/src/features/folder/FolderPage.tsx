@@ -1,4 +1,5 @@
 import { CheckCheck, Copy, Download, ExternalLink, Eye, FolderInput, Link2, Palette, Pencil, Trash2, UserPlus, X } from 'lucide-react'
+import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
 import { useCallback, useMemo, useState, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -30,6 +31,7 @@ import { canonicalName } from '@kutup/drive-core/names'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
+import { isTargetBlocked, sharingOffScope } from '@kutup/drive-core/publicSharing'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { isListName } from '@kutup/map/list'
 import { moveRefusal, type MoveRefusal } from '../drive/move'
@@ -191,8 +193,8 @@ export function FolderPage() {
 
   const mayChangeFile = useCallback(
     (container: Folder, file: DriveFile) =>
-      container.canManage || (container.canDelete && file.uploaderUserId === session.userId),
-    [session.userId],
+      container.canManage || (container.canDelete && file.uploaderAccountId === session.accountId),
+    [session.accountId],
   )
 
   const open = useCallback(
@@ -267,7 +269,13 @@ export function FolderPage() {
         }
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return
-        toast.error(error instanceof FsaRequiredError ? t('drive.zipTooLarge') : t('drive.downloadFailed'))
+        toast.error(
+          error instanceof FsaRequiredError
+            ? t('drive.zipTooLarge')
+            : error instanceof BlobDownloadTooLarge
+              ? t('drive.fileTooLargeForBrowser')
+              : t('drive.downloadFailed'),
+        )
       }
     },
     [t, folder],
@@ -328,7 +336,16 @@ export function FolderPage() {
             onSelect: () =>
               publicLink.mutate(f, {
                 onSuccess: (url) => setDialog({ kind: 'link', url }),
-                onError: (error) => toast.error(apiErrorMessage(error, t('drive.linkFailed'))),
+                onError: (error) => {
+                  const off = sharingOffScope(error)
+                  toast.error(
+                    off
+                      ? t(`publicSharing.off.${off}`)
+                      : isTargetBlocked(error)
+                        ? t('publicSharing.targetBlocked')
+                        : apiErrorMessage(error, t('drive.linkFailed')),
+                  )
+                },
               }),
           },
           { id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setDialog({ kind: 'rename', target }), separated: true },

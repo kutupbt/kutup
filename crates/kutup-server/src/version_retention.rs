@@ -6,9 +6,6 @@
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-/// The retention choices an account can make, in days.
-pub const RETENTION_DAYS: [i32; 6] = [7, 30, 90, 180, 365, 3650];
-
 pub struct Candidate {
     pub id: Uuid,
     pub created_at: OffsetDateTime,

@@ -14,6 +14,93 @@ and 2 GiB at first; a tus chunk 64 MiB, a whiteboard asset one envelope, a
 federated Drive upload the upload limit plus 16 MiB, streamed to disk). A
 larger body gets `413`.
 
+## Health
+
+### GET /api/health
+
+Anonymous liveness and identity: `{ "name": "kutup", "version": "…",
+"tusVersions": ["1.0.0"], "apiVersions": [1], "minimumClients": {"cli":
+"0.0.14"}, "instanceId": "…" }`. `version` is the release (`YYYY.MDD.N`, `0.0.0-dev` for a
+developer's build); `minimumClients` lists the client types that have a
+minimum. It touches neither the database nor storage.
+
+## Client versions
+
+Every Kutup client sends `X-Kutup-Client: <clientType>/<version>`
+(`web-drive/2026.1120.0`, `cli/0.0.14`); a WebSocket upgrade, which a
+browser can't give headers, sends `?client=` instead. A client older than
+its type's minimum gets `426 clientTooOld`. The minimum is the higher of
+the server build's own floor and the one administrators set
+(`GET`/`PUT /api/v1/admin/client-versions`; a change is logged as
+`clientVersion.setMinimum`). A request naming no client is not
+checked; a `-dev` version is not on a developer's server. Every client path
+is under `/api/v1/` (health, CSP reports and federation stay outside it); a
+bare `/api/…` path, what a client from before versions calls, answers
+`clientTooOld`.
+
+## Server instance
+
+`instanceId` (health) names this database's lifetime: 16 random bytes
+(base64url) minted when the server first starts on an empty database. A
+restore keeps it; a wipe changes it (`kutup-server reset-instance-id` makes a
+new one on purpose, refused while any account exists). Every `/api/` answer
+carries it in `X-Kutup-Instance`. A client that sees another id than it
+remembers drops what it keeps for this server, but its anti-rollback anchors,
+and signs in again.
+
+### GET /api/health/ready
+
+Readiness: whether the server can do its work
+(docs/plans/restore-drill-and-alerting.md). Allowed with an administrator's
+session (`Authorization: Bearer …`), or without one from this machine or the
+internal network: the connecting address is loopback, private (RFC 1918),
+unique-local or link-local, and so is every client the proxy names in
+`X-Real-IP` and `X-Forwarded-For` (a `Forwarded` header counts as outside).
+Otherwise `401` (no session) or `403` (not an administrator).
+
+Each request runs every check:
+
+| Check | Passes when |
+|---|---|
+| `database` | `SELECT 1` answers |
+| `storage` | a small object under `kutup-health/` is written, read back unchanged and deleted |
+| `mail` | Stalwart's submission port (`MAIL_SUBMISSION_ADDR`) accepts a TCP connection; `off` when mail is off (`MAIL_INBOUND_TOKEN` unset) |
+| `jobs` | each background job this server runs succeeded within twice its interval plus `healthJobGraceSeconds`; one this server started more recently than that and hasn't succeeded yet is `starting` |
+| `backups` | the newest database backup (and mail backup, where mail is on) finished within `healthBackupMaxAgeSeconds`, as the backup scripts (`scripts/backup-postgres.sh`, `scripts/backup-stalwart.sh`) recorded it; `off` when that setting is 0 |
+
+The database, storage and mail probes each wait at most
+`healthProbeTimeoutSeconds`. Statuses: `ok`, `starting`, `off`, `fail`. The
+answer is `200` when no check is `fail`, else `503`, with the same body:
+
+```json
+{
+  "status": "ok",
+  "checkedAt": "2026-11-14T09:00:00Z",
+  "checks": {
+    "database": { "status": "ok", "millis": 2 },
+    "storage": { "status": "ok", "millis": 41 },
+    "mail": { "status": "off" },
+    "jobs": {
+      "status": "ok",
+      "jobs": [
+        { "name": "drive.trash_sweep", "status": "ok", "intervalSeconds": 3600, "lastSuccessAt": "2026-11-14T08:12:03Z" },
+        { "name": "storage.deleted_blob_purge", "status": "ok", "intervalSeconds": 300, "lastSuccessAt": "2026-11-14T08:58:40Z" }
+      ]
+    },
+    "backups": {
+      "status": "ok",
+      "maxAgeSeconds": 172800,
+      "database": { "status": "ok", "name": "kutup-20261114T023112Z.dump.age", "finishedAt": "2026-11-14T02:31:40Z", "ageSeconds": 23300 },
+      "mail": { "status": "off", "finishedAt": null }
+    }
+  }
+}
+```
+
+A failed probe adds `"error"` with the reason. The settings named here are
+whole-number site settings under Administration → Server settings
+(`/api/v1/admin/settings`, section `backups`).
+
 ## Errors
 
 A failed request answers JSON `{"error": "<English text>", "code": "<code>"}`,
@@ -43,25 +130,36 @@ Specific codes, where an app does something particular (a test in
 | Code | Status | Meaning |
 |---|---|---|
 | `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
-| `noManifest` | 404 | `GET /api/chat/accounts/{accountId}/manifest` (and its federation route): the account has no Chat manifest, since no Chat device ever registered. Clients take only this 404 for "re-register as the account's first device"; any other 404 is an error |
+| `unknownStreamControl` | 400 | `POST /api/fed/v2/chat/stream-control`: a must-understand control code (`0x8000..=0xffff`) this server doesn't know; the sequence is not used up |
+| `noManifest` | 404 | `GET /api/v1/chat/accounts/{accountId}/manifest` (and its federation route): the account has no Chat manifest, since no Chat device ever registered. Clients take only this 404 for "re-register as the account's first device"; any other 404 is an error |
 | `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber), or a manifest's `identityBinding`, not signed by the account's identity key |
-| `keysDiffer` | 409 | `POST /api/chat/keys/check`: the server holds other keys for this device; it uploads them again |
-| `linkTokenLimit` | 409 | `POST /api/chat/link-tokens`: as many unused link tokens as the administrators allow (`chatLinkTokensPerAccount`) |
-| `manifestConflict` | 409 | A re-registration (`POST /api/chat/device` with `registration.type = reregistration`) or an identity distribution lost a race with another manifest change for the account: read the manifest again and retry (a replay of the current head answers 200) |
-| `linkToken` | 403 | `POST /api/chat/device` linking: the link token is used, expired, unknown or another account's |
-| `noAccountIdentity` | 409 | `POST /api/chat/device` linking: the account has no Chat identity yet; its first device re-registers |
+| `keysDiffer` | 409 | `POST /api/v1/chat/keys/check`: the server holds other keys for this device; it uploads them again |
+| `linkTokenLimit` | 409 | `POST /api/v1/chat/link-tokens`: as many unused link tokens as the administrators allow (`chatLinkTokensPerAccount`) |
+| `manifestConflict` | 409 | A re-registration (`POST /api/v1/chat/devices` with `registration.type = reregistration`) or an identity distribution lost a race with another manifest change for the account: read the manifest again and retry (a replay of the current head answers 200) |
+| `linkToken` | 403 | `POST /api/v1/chat/devices` linking: the link token is used, expired, unknown or another account's |
+| `noAccountIdentity` | 409 | `POST /api/v1/chat/devices` linking: the account has no Chat identity yet; its first device re-registers |
 | `deviceLimit` | 409 | A device registration, or a manifest listing more devices than the account may have: the site setting `devicesPerAccount` (default 32) over every kind of device |
 | `devicesMismatch` | 409 | A manifest whose entries the server can't back: a listed device that isn't a live row of the account with the entry's kind, sign-in (`session`), frame key and Chat keys; or a re-registration that changes the account's non-Chat entries |
 | `identityMismatch` | 409 | A Chat registration or manifest naming another identity than the account's (it changes only by a distribution or a re-registration) |
 | `invalidCredentials` | 401 | A sign-in that does not finish: a wrong password, a name that is no account, a used or expired login id, a password changed since the sign-in started (not an expired session). At `login/2fa`: a wrong code, the token still good |
+| `authenticatorLost` | 401 / 409 | The authenticator app's secret can't be read any more (its account data key is gone, as after a restore without it): at `login/2fa`, sign in with a recovery code or a security key; at `2fa/verify`, set the app up again. An administrator can turn two-step sign-in off |
 | `preAuthInvalid` | 401 | `login/2fa`: the second step's token is expired, not one, or from a password the account no longer has: back to the password step |
 | `setupTokenInvalid` | 401 | `complete-setup` (and `register/start` under it): the setup token is expired, not one, already used, or from a temporary password since replaced: sign in again |
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
+| `accountRootsInvalid` | 400 | `register`, `complete-setup`: `accountRoots` is not one record of each root, at generation 1, bound to the key binding (docs/plans/identity-root.md) |
+| `masterKeyStale` | 409 | a write sealed under an older master key than the account's (another device rotated it, docs/plans/mk-rotation-exercise.md): sign in again |
+| `scopeFull` | 400 | an account-records batch would take a scope past its per-account count (a site setting; `scope` names it, `max` is the count) |
+| `rotationInvalid` | 400 | `account/master-key/rotate`: a record is not this rotation's (`field` names it) |
+| `organizationKeys` | 409 | `account/master-key/rotate`: the account holds an organization escrow or key copy, which a rotation can't carry yet |
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
 | `revisionTaken` | 409 | A Drive upload or version naming a `revisionId` the file, another file or an open upload already has (a revision names one content: choose a new one) |
+| `objectMissing` | 409 | A Drive revision commit whose uploaded object is not in storage (or not whole): the upload is lost; upload again |
+| `revisionConflict` | 409 | Drive metadata whose `metadataRevision` is not exactly the file's current + 1 (1 for a new file): read the file again |
+| `alreadyCommitted` | 409 | `POST /api/v1/drive/files/:id/revisions/:revisionId/commit`: the revision is already the file's (current or in its history); nothing changed |
+| `notUploaded` | 409 | The same commit while the revision's upload is still in progress: send its remaining parts first |
 | `securityKeysOff` | 503 | This server can't offer security keys (its account app isn't on https) |
-| `securityKeyLimit` | 409 | `POST /api/auth/security-keys/register/*`: the account has `limit` keys already |
+| `securityKeyLimit` | 409 | `POST /api/v1/auth/security-keys/register/*`: the account has `limit` keys already |
 | `securityKeyExists` | 409 | That security key is already added |
 | `securityKeyRefused` | 400 | The key's answer was not accepted (another origin or RP, user verification missing when required, a bad attestation) |
 | `securityKeyCeremony` | 400 | The security key prompt expired, or was answered already: start again |
@@ -76,6 +174,10 @@ Specific codes, where an app does something particular (a test in
 | `idTaken` | 409 | Creating a group: the id the browser drew is some group's: draw another |
 | `noAccountKey` | 400 | A shared mailbox's key share for an account not set up yet (no account keys to seal it to) |
 | `grantInvalid` | 403 | A one-time grant that does not fit: unknown, used, expired, for another purpose, account or session (one answer for all): prove the password again |
+| `lastAdmin` | 403 | The last usable administrator can't close their own account: make someone else an administrator first |
+| `accountClosing` | 409 | The account is closing (docs/plans/server-personal-data.md, A5): keep it before suspending it, or it is closing already |
+| `accountDeleting` | 409 | A closing account past its date is being deleted and can't be kept |
+| `legalHold` | 409 | The account is under a legal hold: nothing of it is deleted until the hold is lifted |
 | `opaqueKeyStale` | 409 | An OPAQUE record made against a setup that is no longer the server's current one: register again |
 | `opaqueKeyMissing` | 500 | The account's record names an OPAQUE setup whose key is not in `OPAQUE_SETUP_KEYS`: the operator restores the key (the account can recover with its phrase meanwhile) |
 | `keyBindingTaken` | 409 | The key binding drawn for a new record is another account's: draw another |
@@ -86,25 +188,24 @@ Specific codes, where an app does something particular (a test in
 | `sequenceGap` | 409 | Federation: a transaction arrived out of order; `expectedSequence` names the next one |
 | `sealedVersionUnsupported` | 400 | Federation: a sealed transaction of another wire version, refused for good |
 | `recordGone` | 410 | Federation: a repeat of a plain chat transaction whose record was pruned (past `federationRecordDays`); the origin settles it as not delivered to the recipient, never as delivered |
-| `version_conflict` | 409 | A newer version exists (Drive, collab) |
-| `revision_conflict` | 409 | A newer revision exists |
-| `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
-| `head_required` | 409 | The account keeps a head, and this listed write carried none |
-| `contactListFull` | 400 | `PUT /api/chat/contact-list/{id}`: a new entry past the 10,000 the list keeps; the client keeps the write due (a block is never dropped) and tells its person |
-| `malformed` | 400 | `POST /api/chat/anonymous/messages/multi`: the payload doesn't parse, names nobody, lists a device twice, or the token isn't canonical base64 of at most 256 bytes ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
-| `groupSendTokenInvalid` | 401 | `POST /api/chat/anonymous/messages/multi`: the group send token doesn't hold for the payload's accounts (expired, an account added or missing, another server's key), checked before any account is looked up; another server's answer is relayed as it is. Send those copies one by one and fetch the endorsements anew ([plans/group-send-endorsements.md](plans/group-send-endorsements.md) §3.5) |
+| `versionConflict` | 409 | A newer version exists (Drive, collab) |
+| `revisionConflict` | 409 | A newer revision exists |
+| `headConflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
+| `headRequired` | 409 | The account keeps a head, and this listed write carried none |
+| `malformed` | 400 | `POST /api/v1/chat/anonymous/messages/multi`: the payload doesn't parse, names nobody, lists a device twice, or the token isn't canonical base64 of at most 256 bytes ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
+| `groupSendTokenInvalid` | 401 | `POST /api/v1/chat/anonymous/messages/multi`: the group send token doesn't hold for the payload's accounts (expired, an account added or missing, another server's key), checked before any account is looked up; another server's answer is relayed as it is. Send those copies one by one and fetch the endorsements anew ([plans/group-send-endorsements.md](plans/group-send-endorsements.md) §3.5) |
 | `endorsementExpiration` | — | A group route's `putEndorsement` refusal: the expiration isn't day-aligned, is past, or is more than 3 days ahead |
 | `endorsementSize` | — | A group route's `putEndorsement` refusal: the sealed blob isn't the one length |
-| `peerUnavailable` | 503 | `POST /api/chat/anonymous/messages/multi` for another server's accounts: that server didn't take the send (slow, unreachable or unwilling); send their copies one by one |
-| `calendarExists` | 409 | `POST /api/calendar/calendars`: the id (or the calendar key) is in use; draw another |
-| `calendarLimit` | 409 | `POST /api/calendar/calendars`: the account owns as many calendars as the administrators allow (`calendarsPerAccount`) |
+| `peerUnavailable` | 503 | `POST /api/v1/chat/anonymous/messages/multi` for another server's accounts: that server didn't take the send (slow, unreachable or unwilling); send their copies one by one |
+| `calendarExists` | 409 | `POST /api/v1/calendar/calendars`: the id (or the calendar key) is in use; draw another |
+| `calendarLimit` | 409 | `POST /api/v1/calendar/calendars`: the account owns as many calendars as the administrators allow (`calendarsPerAccount`) |
 | `eventLimit` | 409 | An events sync: the calendar holds as many events as the administrators allow (`calendarEventsPerCalendar`); that change only |
 | `sequenceBehind` | 409 | An events sync: the changed event's `SEQUENCE` is lower than the stored one's, or a changed occurrence's is lower than its series'; that change only |
 | `uidTaken` | 409 | An events sync: an event with this UID is in the calendar already; that change only |
 | `eventIdTaken` | 409 | An events sync: a create's id holds another event (in any calendar); that change only |
 | `recurrenceIdChanged` | 400 | An events sync: an update would turn a series into a changed occurrence, a change into a series, or move a change to another `RECURRENCE-ID`; that change only |
 | `invalidReminders` | 400 | A calendar event's or default reminders out of bounds or too many; that change only |
-| `unknownZone` | 400 | `PUT /api/calendar/settings`: a time zone the server's database doesn't know |
+| `unknownZone` | 400 | `PUT /api/v1/calendar/settings`: a time zone the server's database doesn't know |
 | `countTooLarge` | 400 | An events sync: the rule's `COUNT` is above `calendarMaxCount`; that change only |
 | `exdateNotAnOccurrence` | 400 | An events sync: a calendar-part `EXDATE` isn't an occurrence of the series; that change only |
 | `parentMissing` | 400 | An events sync: a changed occurrence's series isn't in the calendar; that change only |
@@ -120,43 +221,54 @@ Specific codes, where an app does something particular (a test in
 | `addressReceiveOnly` | 403 | An account's old address receives only; mail is sent from its current one |
 | `notHeld` | 409 | Not a name the account (or, for an admin, anyone) holds |
 | `breakGlassAccount` | 403 | The break-glass account keeps its name |
-| `forwardingMaterialMismatch` | 400 | `POST /api/mail/forwardings`: the proxy factors aren't for the address's current key, or don't name the forwardee key's subkeys |
-| `endToEndRequired` | 400 | `POST /api/mail/forwardings` to a Kutup address without `endToEnd` material |
+| `forwardingMaterialMismatch` | 400 | `POST /api/v1/mail/forwardings`: the proxy factors aren't for the address's current key, or don't name the forwardee key's subkeys |
+| `endToEndRequired` | 400 | `POST /api/v1/mail/forwardings` to a Kutup address without `endToEnd` material |
 | `forwardingExists` | 409 | The address already forwards there |
 | `forwardingLimit` | 409 | 10 forwardings per address or 25 per account |
-| `customDomainsOff` | 403 | Custom mail domains are off here (`POST /api/mail/domains`) |
-| `orgRoleRequired` | 403 | `/api/mail/domains`: the account is in an organization whose domains it doesn't manage (a member, invited or disabled, or the organization disabled); only owners and admins add, check, remove or set a catch-all |
+| `customDomainsOff` | 403 | Custom mail domains are off here (`POST /api/v1/mail/domains`) |
+| `orgRoleRequired` | 403 | `/api/v1/mail/domains`: the account is in an organization whose domains it doesn't manage (a member, invited or disabled, or the organization disabled); only owners and admins add, check, remove or set a catch-all |
 | `addressDisabled` | 403/404/422 | The address is disabled: a send from it (403), a key lookup for it (404), a send to it (422); clients never send to it another way |
-| `addressEnabled` | 409 | `PUT /api/mail/addresses/{id}/delete` or `/enable`: the address isn't disabled |
-| `addressSetChanged` | 409 | `PUT /api/mail/addresses/order`: the ids aren't exactly the account's current addresses |
+| `addressEnabled` | 409 | `PUT /api/v1/mail/addresses/{id}/delete` or `/enable`: the address isn't disabled |
+| `addressSetChanged` | 409 | `PUT /api/v1/mail/addresses/order`: the ids aren't exactly the account's current addresses |
 | `defaultAddress` | 409 | Disabling the default address: make another address default first |
-| `disabledDefault` | 400 | `PUT /api/mail/addresses/order`: a disabled address cannot be default |
+| `disabledDefault` | 400 | `PUT /api/v1/mail/addresses/order`: a disabled address cannot be default |
 | `ownAddress` | 409 | Disabling or deleting the account's own address (on the server's domain) |
 | `domainNotVerified` | 409 | The address's custom domain doesn't take mail now (sending from it, a new address or a catch-all on it) |
 | `notYourAddress` | 404 | `fromAddress` names no active address of the caller's |
-| `mimeMismatch` | 400 | `POST /api/mail/send`: the readable `mime` isn't the same message (another From than the sender's address, another Message-ID, or a Bcc header) |
-| `checkTimedOut` | 503 | `GET /api/mail/domains/{id}?refresh=1`: the domain's whole DNS check ran past its time (`mail_domains.check_timeout_seconds`); nothing changed |
-| `domainBlocked` | 409 | `POST /api/mail/domains`: an administrator deactivated this name; nobody may add it until they lift the block |
+| `mimeMismatch` | 400 | `POST /api/v1/mail/send`: the readable `mime` isn't the same message (another From than the sender's address, another Message-ID, or a Bcc header) |
+| `checkTimedOut` | 503 | `GET /api/v1/mail/domains/{id}?refresh=1`: the domain's whole DNS check ran past its time (`mail.domains.check_timeout_seconds`); nothing changed |
+| `domainBlocked` | 409 | `POST /api/v1/mail/domains`: an administrator deactivated this name; nobody may add it until they lift the block |
 | `forwardingUnavailable` | 409 | This server has no `MAIL_FORWARDING_KEYS`: no forwarding can be set up |
 | `forwardingState` | 409 | A forwarding action from the wrong state (pause an active one, accept a pending one, …) |
 | `keyListRequired` | 400 | The first outside forwarding of an address brings its next key list, with EMAIL_NO_ENCRYPT on every key |
 | `keyListMismatch` | 400 | That key list changes more than adding EMAIL_NO_ENCRYPT |
 | `forwardingKeepsNoEncrypt` | 409 | A key list clearing EMAIL_NO_ENCRYPT while the address forwards outside Kutup |
-| `internationalAddressUnsupported` | 400 | `POST /api/mail/forwardings` to an address with non-ASCII characters: not supported yet (an IDN domain works in its punycode `xn--` form) |
-| `codeWrong` | 400 | `POST /api/mail/forwardings/:id/verify`: not the code; `attemptsLeft` says how many more tries the code takes |
-| `codeVoid` | 409 | `POST /api/mail/forwardings/:id/verify`: the code took its last wrong try (`forwarding_code_attempts`); send a new one |
-| `codeExpired` | 409 | `POST /api/mail/forwardings/:id/verify`: no live code (past `forwarding_code_minutes`, or none sent); send a new one |
-| `forwardingVerified` | 409 | `POST /api/mail/forwardings/:id/code`: the forwarding is verified already |
-| `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
-| `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
+| `internationalAddressUnsupported` | 400 | `POST /api/v1/mail/forwardings` to an address with non-ASCII characters: not supported yet (an IDN domain works in its punycode `xn--` form) |
+| `codeWrong` | 400 | `POST /api/v1/mail/forwardings/:id/verify`: not the code; `attemptsLeft` says how many more tries the code takes |
+| `codeVoid` | 409 | `POST /api/v1/mail/forwardings/:id/verify`: the code took its last wrong try (`forwarding_code_attempts`); send a new one |
+| `codeExpired` | 409 | `POST /api/v1/mail/forwardings/:id/verify`: no live code (past `forwarding_code_minutes`, or none sent); send a new one |
+| `forwardingVerified` | 409 | `POST /api/v1/mail/forwardings/:id/code`: the forwarding is verified already |
+| `tooOld` | 410 | `GET /api/v1/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
+| `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
+| `driveRootChanged` | 409 | A top-level name hash sent with a `nameHashGeneration` that is not the owner's newest Drive-root generation: hash it again under the current root |
 | `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
 | `frameRefused` | 409 | A collaboration frame sent over HTTP was not kept (stale key or document key, not this device's, a replay): read the log again |
 | `deviceNotAuthorized` | 403 | A collaboration device the account has not vouched for (an unanswered, used or expired challenge, a statement that does not verify, a revoked device or one of an earlier incarnation): register one again, do not sign out |
 | `tooManyDevices` | 409 | The account has 20 collaboration devices in use (trusted, renewed within 30 days): the user removes one under Account → Devices; nothing is removed for them |
-| `link_removed` | 404/410 | The shared link was removed |
+| `linkRemoved` | 404/410 | The shared link was removed |
+| `linkBlocked` | 451/410 | An operator blocked the public link: `451` for a legal order, `410` otherwise; `reason` is `legalOrder`, `abuse` or `other` |
+| `sharingOff` | 403/410 | Public links are off, for the whole server or the link owner's account: `403` when making one (with `scope`: `site` or `account`), `410` when opening one (no scope: a link's holder isn't told whose switch it was) |
+| `targetBlocked` | 409 | Making a public link to what an operator blocked links to (`reason`) |
+| `federationOff` | 403 | This account doesn't talk to other servers (Settings → Privacy): a request that would reach one is refused |
+| `consentRequired` | 409 | Turning on talking to other servers needs the `federation` consent: the site asks for it (`federationConsentRequired`; `purpose` names it) |
+| `acknowledgementsRequired` | 400 | Sign-up without confirming the current version of every required document (`kinds` names those missing); see `GET /api/v1/legal/documents` |
+| `documentNotCurrent` | 400 | A document named that is not the current version (an acknowledgement, or the text a consent is given under) |
+| `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
+| `signInRequired` | 403 | Public links on this server open only for someone signed in to it |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
-| `keysPendingUpgrade` | 409 | The person's Drive key is still X25519 (identity suite 1): share with them once they have signed in again (docs/plans/pq-shares.md) |
+| `keysPendingUpgrade` | 409 | The person can't be shared with yet: an account here with no keys (one an administrator made or reset, before its first sign-in), or one on another server still on an X25519 Drive key (docs/plans/pq-shares.md); share with them once they have signed in again |
+| `versionRetentionNotOffered` | 400 | `PATCH /api/v1/account`: the version retention period is not one the administrators offer; `choices` lists those that are |
 | `peerOutdated` | 502 | The other server runs an older version without post-quantum Drive keys and must upgrade before sharing |
 | `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
 | `registrationCodeRequired` | 403 | Registration needs a referral code and none was given |
@@ -171,6 +283,9 @@ Specific codes, where an app does something particular (a test in
 | `sendLimit`, `scheduledLimit` | 429 | A sending or scheduling limit was reached |
 | `spam`, `refused` | 403 | The message was refused |
 | `expiringOutside` | 400 | Expiring messages cannot go outside Kutup |
+| `clientTooOld` | 426 | This client is older than the server accepts for its type (`clientType`, `minimum`; the `X-Kutup-Min-Client` header says `<type>/<minimum>`). Every client latches it: the web apps offer a reload, the CLI exits 7 asking for an update, native apps show their store's update prompt |
+| `apiVersionUnsupported` | 404 | A path under an API version this server doesn't serve (`/api/v2/…` on a v1 server): `supported` lists the ones it does. The server is older than the client |
+| `federationVersionUnsupported` | 426 | A federation request under `/api/fed/v{n}/` for a version this server doesn't serve: `supported` lists the ones it does, as its discovery's `fedVersions` |
 
 Not covered: server-to-server federation answers (signed, their own shapes)
 and the framework's own refusals of a request it cannot read (a body that is
@@ -198,21 +313,26 @@ client type, sent by the client in the `X-Kutup-Client` header:
 | Client type | Who | Signs in | Refresh token |
 |---|---|---|---|
 | `web-account` | the account web app (`account.<domain>`) | password (`/login/start` and `/login/finish`, `/login/2fa`, `/complete-setup`, `/register`) | HttpOnly cookie on that origin |
-| `web-drive`, `web-chat` | the Drive and Chat web apps | **forked** from a `web-account` session (`/api/auth/forks`) | HttpOnly cookie on their own origin |
+| `web-drive`, `web-chat` | the Drive and Chat web apps | **forked** from a `web-account` session (`/api/v1/auth/forks`) | HttpOnly cookie on their own origin |
 | `cli` | the `kutup` CLI | password | JSON body |
+| `mail-bridge` | the Mail bridge (IMAP and SMTP for desktop mail apps, on the person's computer) | password | JSON body |
 
 Access tokens are 15-minute JWTs carrying the session id (`sid`); every
 authenticated request (and each collab / chat WebSocket upgrade) checks that
 the session is still live, so revoking a session takes effect immediately.
 Refresh tokens are opaque 32-byte secrets that **rotate on every refresh**;
-see `/api/auth/refresh`. A new password ends the account's other sessions, a
+see `/api/v1/auth/refresh`. A new password ends the account's other sessions, a
 recovery all of them; an admin disabling the account and an admin wipe end
 every session of the account.
 
 **Passwords are OPAQUE** (RFC 9807, docs/plans/opaque.md): the server keeps a
 record per account that is useless without an online exchange, and never sees
 the password or anything to test a guess against offline. Sign-in is
-`login/start` then `login/finish`; a new password is `opaque/register/start`
+`login/start` then `login/finish`. A wrong password fails on the client (the
+server's answer does not open), which then sends `POST /api/v1/auth/login/abort`
+`{"loginId"}` (always `204`, no auth) instead of a finish; the account's
+security log counts it, and counts a sign-in left unfinished the same way when
+it expires (two minutes) or newer ones push it out. A new password is `opaque/register/start`
 then `opaque/register/finish` (or the request that creates the account). Every
 binary value is canonical base64 of the `opaque-ke` messages; suite 1 is
 ristretto255, Triple-DH and Argon2id (64 MiB, t = 3, p = 1).
@@ -225,7 +345,7 @@ the session it was issued to; it is used once and expires in five minutes (a
 `403 grantInvalid`, whatever the reason.
 Design: `docs/plans/multi-app-web-rewrite.md`.
 
-### GET /api/auth/settings
+### GET /api/v1/auth/settings
 
 Returns public server settings: who may register (`registrationMode`:
 `on`, `code` with a referral code, or `off`), the Chat
@@ -268,7 +388,7 @@ caller's own)
 
 `passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
 upload (an existing vault brought in from KeePassXC or a backup), as
-administrators set it (`PUT /api/admin/settings`; 64 MiB at first). The
+administrators set it (`PUT /api/v1/admin/settings`; 64 MiB at first). The
 browser opens a vault whole, so this bounds what an upload makes it hold;
 a vault's own saves are never refused by it.
 
@@ -282,7 +402,7 @@ federated path is enabled.
 
 ---
 
-### POST /api/auth/register
+### POST /api/v1/auth/register
 
 Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE_LIMIT_REGISTER_PER_HOUR`).
 Who may register is the registration mode (docs/plans/registration-codes.md),
@@ -309,7 +429,8 @@ uses admits exactly N accounts however many sign up at once.
   "opaqueServerKeyId": 1,
   "masterKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "recoveryKeyEnvelope": "<canonical base64 AccountRecordV1>",
-  "publicKey": "<base64>",
+  "accountRoots": ["<canonical base64 AccountRecordV1>", "… five"],
+  "driveXwingPublicKey": "<base64 X-Wing public key>",
   "accountAuthorityPublicKey": "<base64 32 bytes>",
   "accountAuthorityKeyId": "<lowercase SHA-256 hex>",
   "accountIncarnationId": "<lowercase SHA-256 hex>",
@@ -320,7 +441,7 @@ uses admits exactly N accounts however many sign up at once.
 ```
 
 All key material is encrypted client-side before being sent. The password is
-registered first (`POST /api/auth/opaque/register/start` for the new key
+registered first (`POST /api/v1/auth/opaque/register/start` for the new key
 binding, then the client's half), and its OPAQUE export key seals the master
 key (`masterKeyEnvelope`). `opaqueServerKeyId` is the setup register/start
 answered under; a record made against a setup that is no longer the current
@@ -332,11 +453,19 @@ envelope authenticates its suite, purpose, key binding, nonce and
 exact ciphertext length as AEAD associated data. The three purposes cannot be
 substituted for one another or relocated to another account.
 
+`accountRoots` are the account's stored roots (docs/plans/identity-root.md):
+one account record of each root purpose (4 the identity root, 10 the Drive
+root, 19 the group pseudonym root, 20 the call-link root, 5 the object-id key), each
+at generation 1 (the record's object), sealed under the master key for the
+key binding (`400 accountRootsInvalid` otherwise). The account identity derives from the
+identity root, never from the master key, so a new master key leaves it
+unchanged. An administrator-made account sends them at `complete-setup`.
+
 The complete account identity is fixed at registration: the account authority,
 incarnation, Drive X25519 key, and Drive Ed25519 share-signing key are persisted
 as one binding. A later account manifest must match all of them exactly; a
 self-signed first manifest cannot select a replacement authority.
-The account's permanent id (`users.id`, docs/plans/account-ids.md) is the one
+The account's permanent id (`accounts.id`, docs/plans/account-ids.md) is the one
 `register/start` minted for this sign-up's key binding: `accountId` and
 `accountIdProof` come back unchanged (`400 accountIdInvalid` for anything
 else; `409 accountIdTaken` for an id some account has, or had: a deleted
@@ -348,7 +477,7 @@ names no username, so a rename never signs it again.
 
 **Header:** `X-Kutup-Client` as for sign-in.
 
-**Response:** `200`, the session, as `POST /api/auth/login/finish` answers it:
+**Response:** `200`, the session, as `POST /api/v1/auth/login/finish` answers it:
 the client made the keys and holds the export key, so there is no second
 exchange.
 
@@ -358,7 +487,7 @@ exchange.
 
 ---
 
-### POST /api/auth/registration-code/check
+### POST /api/v1/auth/registration-code/check
 
 Whether a referral code can admit a sign-up now, so the sign-up page can say
 so before it derives the account's keys. It uses nothing up; the account's
@@ -376,7 +505,7 @@ reason), `403 registrationClosed` when registration is off, `429 rateLimited`.
 
 ---
 
-### POST /api/auth/login/start
+### POST /api/v1/auth/login/start
 
 The server's half of an OPAQUE sign-in's first message. Rate-limited (10/min/IP,
 `RATE_LIMIT_LOGIN_PER_MIN`).
@@ -391,10 +520,12 @@ the start is the attempt. A right finish gives it back.
   per account, all together (`LOGIN_ACCOUNT_CEILING`, 20 in the same window;
   `LOGIN_ACCOUNT_DAILY_CEILING`, 200 a day; an IPv6 client counts by its /64).
   A client that signed in to the account before carries the HttpOnly
-  `kutup_known` cookie (set at a session's finish and by
-  `POST /api/auth/forks/consume`, `Path=/api/auth`: no route outside sign-in
+  `kutup.known` cookie (set at a session's finish and by
+  `POST /api/v1/auth/forks/consume`, `Path=/api/v1/auth`: no route outside sign-in
   sees it; the same answers clear one a browser may hold at `Path=/api`) and
-  is not held by that cap.
+  is not held by that cap. It stays good for the site setting
+  `account.known_client_days` (`knownClientDays`, 1–400, default 90), read
+  at each attempt.
 - **Unknown names:** both apply to them too, keyed by the canonical name, so a
   `429` does not reveal whether the account exists.
 - **Codes:** a `429` from the lockout or the ceiling carries `code:
@@ -410,8 +541,8 @@ either, the oldest is dropped. A sign-in waits at most two minutes for its
 finish.
 
 **Auth:** None (`purpose: "reauth"`: Bearer JWT, and the name must be the
-caller's account) · **Header:** `X-Kutup-Client: web-account` or `cli` for a
-session (`400` otherwise)
+caller's account) · **Header:** `X-Kutup-Client: web-account`, `cli` or
+`mail-bridge` for a session (`400` otherwise)
 
 **Request body:**
 ```json
@@ -434,7 +565,7 @@ sign-in does.
 
 ---
 
-### POST /api/auth/login/finish
+### POST /api/v1/auth/login/finish
 
 Checks the client's KE3. Every miss is the same `401 invalidCredentials`: a
 wrong password, a name that is no account, a used or expired login id. A
@@ -450,19 +581,33 @@ malformed finalization is a `400`.
 {
   "accessToken": "<jwt>",
   "sessionId": "<uuid>",
-  "userId": "<uuid>",
+  "accountId": "<uuid>",
   "username": "alice",
   "masterKeyEnvelope": "<canonical base64 AccountRecordV1>",
-  "publicKey": "<base64>",
+  "accountRoots": ["<canonical base64 AccountRecordV1>", "…"],
+  "accountAuthorityPublicKey": "<base64 32 bytes>",
+  "masterKeyGeneration": 1,
+  "masterKeyring": [],
+  "driveXwingPublicKey": "<base64>",
   "keyBinding": "<the account's key binding (a UUID v4)>",
-  "isAdmin": false,
+  "role": "member",
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 104857600
 }
 ```
 
 The export key the client got from the exchange opens `masterKeyEnvelope`
-(`kutup_crypto::opaque::ExportKey::open_master_key`). For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
+(`kutup_crypto::opaque::ExportKey::open_master_key`), and the master key the
+`accountRoots` (every kept generation): the newest identity root must derive
+`accountAuthorityPublicKey`, or the client refuses the keys
+(`identityRootMismatch`) and uses no older root. `masterKeyGeneration` is the
+generation the envelope holds (its authenticated header names it too), and
+`masterKeyring` every older master key's keyring record, newest first (purpose
+27: generation n−1 sealed under generation n; empty before a first rotation,
+docs/plans/mk-rotation-exercise.md): the client opens the chain down to
+generation 1 and opens every record under the key of the generation its header
+names. Only a session answer carries them; nothing before the password is
+proved does. For `web-account` the refresh token is an HttpOnly, host-only cookie named `kutup.refresh` (`Path=/api/v1/auth/refresh`, `SameSite=Lax`, a sliding `Max-Age` of the session's lifetime, `Secure` outside development) and is **not** in the JSON body. For `cli` and `mail-bridge` (the Mail bridge, a program that signs in on its own, as the CLI does) it is returned as `"refreshToken"` in the body and no cookie is set. A session lasts unused for the site setting `account.session_ttl_days` (`sessionTtlDays`, 1–365, default 30); each refresh moves its end that far ahead.
 
 When the account's record is under a setup that is no longer the server's
 current one (`OPAQUE_SETUP_KEYS` rotated), the session also carries
@@ -471,22 +616,34 @@ the client registers the password it just used again
 (`opaque/register/start` and `/finish` for the account's own key binding),
 silently. Nobody's sign-in ends for that.
 
-**Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
+**Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/v1/auth/login/2fa`.
 
-**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>", "userId": "<uuid>", "username": "alice"}` — proceed to `/api/auth/complete-setup` (`userId` is the account id the new keys' `driveKeyBinding` names). Its temporary password was registered by the administrator's client; the server never had it.
+**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>", "accountId": "<uuid>", "username": "alice"}` — proceed to `/api/v1/auth/complete-setup` (`accountId` is the account id the new keys' `driveKeyBinding` names). Its temporary password was registered by the administrator's client; the server never had it.
 
 **Response (a reauth):** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>" }`.
 
 ---
 
-### POST /api/auth/login/2fa
+### POST /api/v1/auth/login/2fa
 
 Complete login when 2FA is enabled. Locked after 5 failed attempts.
 `code` is the authenticator's six digits, or one of the account's recovery
-codes (`POST /api/user/2fa/verify`), which works once: case, spaces and the
+codes (`POST /api/v1/account/2fa/verify`), which works once: case, spaces and the
 dash are ignored, and I/L read as 1, O as 0.
 
-**Auth:** None (uses `preAuthToken` from the sign-in's answer) · **Header:** `X-Kutup-Client` as for `/api/auth/login/start`
+An authenticator code is taken once (RFC 6238 §5.2): it is checked against
+the 30-second steps within `totpSkewSteps` of now (the
+`account.totp_skew_steps` setting, 1 at first, 0–2, site-wide and per
+account), and only a step later than the last one the account's code was
+taken at passes. The code that turned the app on, a code that already
+signed in, renewed recovery codes or turned something off, and the loser
+of two requests racing with one code are all answered as a wrong code
+(`401 invalidCredentials`, counted against the same attempt budget). The
+same holds wherever the authenticator's code is asked for
+(`/api/v1/account/2fa`, `/api/v1/account/2fa/recovery-codes`, the security-key and
+"Require PIN" changes): there a reused code is `400` like a wrong one.
+
+**Auth:** None (uses `preAuthToken` from the sign-in's answer) · **Header:** `X-Kutup-Client` as for `/api/v1/auth/login/start`
 
 **Request body:**
 ```json
@@ -496,7 +653,7 @@ dash are ignored, and I/L read as 1, O as 0.
 }
 ```
 
-**Response:** the same session as `/api/auth/login/finish` answers (with
+**Response:** the same session as `/api/v1/auth/login/finish` answers (with
 `rotate` and `grant` when due). The client keeps the export key across this
 step.
 
@@ -506,7 +663,7 @@ take, a security key first: `securityKey`, `totp`, `recoveryCode`. Only an
 authenticator app that is turned on counts here; a secret still being set
 up never signs in.
 
-### POST /api/auth/login/security-key/start, …/finish
+### POST /api/v1/auth/login/security-key/start, …/finish
 
 The second step with a security key (docs/plans/security-keys.md).
 - `start` `{ "preAuthToken" }` answers `PublicKeyCredentialRequestOptions` in
@@ -528,9 +685,13 @@ The second step with a security key (docs/plans/security-keys.md).
 
 ---
 
-### GET /api/auth/recover/preflight
+### GET /api/v1/auth/recover/preflight
 
-Fetch the encrypted recovery key bundle so the client can decrypt the master key with the mnemonic-derived recovery key. Rate-limited (5/hr/IP). Returns deterministic fake data for names that are no account, to prevent user enumeration.
+The key binding a recovery proof is derived with. Rate-limited (5/hr/IP). An
+unknown name gets a stable fake binding, so a name's existence is not shown.
+The recovery envelope comes only with the grant, after the proof: its header
+names the master key's generation, which would tell a rotated account from an
+unknown name.
 
 **Auth:** None
 **Query:** `?name=alice` (the username, or the Kutup address `alice@<domain>`)
@@ -538,14 +699,13 @@ Fetch the encrypted recovery key bundle so the client can decrypt the master key
 **Response:**
 ```json
 {
-  "recoveryKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "envelopeBinding": "<the account's key binding>"
 }
 ```
 
 ---
 
-### POST /api/auth/recover/grant
+### POST /api/v1/auth/recover/grant
 
 The recovery phrase's proof, for a `recovery` grant (no session): with it the
 client registers a new password (`opaque/register/start` and `/finish` for the
@@ -565,11 +725,15 @@ off and drops the recovery codes, as Proton's lost-2FA path does, and records
 `twoFactorOff` in the security log: someone who lost the authenticator signs
 in with the new password alone.
 
-**Response:** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>" }`.
+**Response:** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>",
+"recoveryKeyEnvelope": "<canonical base64 AccountRecordV1>" }`: the master key
+under the recovery phrase (purpose 2). The new password's envelope is sealed at
+the generation its header names; `register/finish` refuses another
+(`409 masterKeyStale`).
 
 ---
 
-### POST /api/auth/opaque/register/start
+### POST /api/v1/auth/opaque/register/start
 
 The server's answer to a registration request for a key binding: stateless,
 derived from the current setup and the key binding. Each answer is one query
@@ -593,11 +757,11 @@ grant is checked here and used at the request that stores the record.
 for a sign-up (no grant, no Bearer) also `"accountId"` and `"accountIdProof"`:
 the new account's permanent id, minted here (random, as Signal mints an ACI),
 and a proof bound to the key binding, both given back with
-`POST /api/auth/register`. Nothing is stored until then.
+`POST /api/v1/auth/register`. Nothing is stored until then.
 
 ---
 
-### POST /api/auth/opaque/register/finish
+### POST /api/v1/auth/opaque/register/finish
 
 A new password for an existing account. The grant must be
 `passwordChange` (used by the session it was issued to), `recovery`, or
@@ -608,7 +772,7 @@ A new password for an existing account. The grant must be
 
 In the same transaction, a password change ends the account's other sessions
 and a recovery all of them; a rotation ends none. Each is recorded as a
-security event (`GET /api/user/security-events`). A `rotate` grant is good
+security event (`GET /api/v1/account/security-events`). A `rotate` grant is good
 only while the account's record is under a retired setup: once moved, a
 second one is refused (`403`), so it never serves as a password change.
 
@@ -629,10 +793,10 @@ second one is refused (`403`), so it never serves as a password change.
 
 ---
 
-### POST /api/auth/refresh
+### POST /api/v1/auth/refresh
 
 Rotate the session's refresh token and get a new access token. Web sessions
-present the token in their `refresh_token` cookie and receive the next one the
+present the token in their `kutup.refresh` cookie and receive the next one the
 same way; the CLI presents it in the body and receives the next one in the body.
 A token presented the other way is refused (and does not rotate anything).
 
@@ -661,28 +825,28 @@ session** and everything forked from it. A failed web refresh clears the cookie.
 
 ---
 
-### POST /api/auth/complete-setup
+### POST /api/v1/auth/complete-setup
 
 Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't yet generated a recovery phrase. The client derives a full key bundle (mnemonic, master key, recovery entropy, account Drive keys and typed account envelopes) and submits it here.
 
-**Auth:** Bearer `setupToken` (returned by `/api/auth/login/finish` when `requiresSetup` is true) · **Header:** `X-Kutup-Client` as for sign-in
+**Auth:** Bearer `setupToken` (returned by `/api/v1/auth/login/finish` when `requiresSetup` is true) · **Header:** `X-Kutup-Client` as for sign-in
 
-**Request body:** Same shape as `POST /api/auth/register` (the key bundle, the
+**Request body:** Same shape as `POST /api/v1/auth/register` (the key bundle, the
 OPAQUE record of the person's own password under a key binding they drew now,
 registered with the setup token as Bearer, and the required `driveKeyBinding`
-for the account's id, the `userId` of the first sign-in; `username` is
+for the account's id, the `accountId` of the first sign-in; `username` is
 ignored, and `accountId`/`accountIdProof` are refused: the account has its
 id). The temporary password's
 record goes with it.
 
-**Response:** creates a session and issues tokens exactly as `/api/auth/login/finish` does (cookie for `web-account`, body for `cli`) — the encrypted key bundle just submitted is **not** echoed back.
+**Response:** creates a session and issues tokens exactly as `/api/v1/auth/login/finish` does (cookie for `web-account`, body for `cli`) — the encrypted key bundle just submitted is **not** echoed back.
 ```json
 {
   "accessToken": "<jwt>",
   "sessionId": "<uuid>",
-  "userId": "<uuid>",
+  "accountId": "<uuid>",
   "username": "alice",
-  "isAdmin": false,
+  "role": "member",
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 0
 }
@@ -692,7 +856,7 @@ record goes with it.
 
 ## Sessions
 
-### POST /api/auth/logout
+### POST /api/v1/auth/logout
 
 End the caller's sign-in: the `web-account` (or `cli`) session **and every
 session forked from it**. Signing out of Drive or Chat therefore signs out of
@@ -700,10 +864,15 @@ all Kutup web apps on that browser; they notice on their next request.
 
 **Auth:** Bearer · **Response:** `{"ok": true}` (web: also clears the cookie)
 
-### GET /api/auth/sessions
+### GET /api/v1/auth/sessions
 
 The account's live sessions, most recently used first. `current` marks the
-caller's own sign-in (its root and the sessions forked from it).
+caller's own sign-in (its root and the sessions forked from it). `browser`,
+`browserMajor` and `os` are what the server parsed from the sign-in's
+`User-Agent`; the header itself is never stored, and the parsed family is
+sealed under the account's data key (docs/plans/server-personal-data.md, A10).
+Each is absent when unknown. A session that ended is kept for **Keep ended
+sessions** (a site setting, default 30 days), then deleted.
 
 **Auth:** Bearer
 
@@ -713,7 +882,9 @@ caller's own sign-in (its root and the sessions forked from it).
     "id": "<uuid>",
     "clientType": "web-drive",
     "parentId": "<uuid of the web-account session>",
-    "userAgent": "Mozilla/5.0 …",
+    "browser": "Firefox",
+    "browserMajor": 128,
+    "os": "Linux",
     "createdAt": "2026-09-23T14:07:00Z",
     "lastUsedAt": "2026-09-23T14:12:00Z",
     "current": true
@@ -721,17 +892,17 @@ caller's own sign-in (its root and the sessions forked from it).
 ]
 ```
 
-### DELETE /api/auth/sessions/:id
+### DELETE /api/v1/auth/sessions/:id
 
 End one session of the caller's account and anything forked from it. `404` for
 an unknown or foreign id. **Auth:** Bearer
 
-### DELETE /api/auth/sessions
+### DELETE /api/v1/auth/sessions
 
 Sign out everywhere else: end every session except the caller's own sign-in.
 **Auth:** Bearer
 
-### POST /api/auth/forks
+### POST /api/v1/auth/forks
 
 The account app hands a child web app a session (the Proton pattern). The
 payload is a `SessionFork` local-state envelope (`kutup-crypto::local_state`,
@@ -763,7 +934,7 @@ The child redeems it only when `state` is one its own tab saved when it
 asked for the fork; any other link (someone else's, sent to this browser)
 is ignored without calling `consume`.
 
-### POST /api/auth/forks/consume
+### POST /api/v1/auth/forks/consume
 
 The child app, on its own origin, turns a fork into its own session. The
 `X-Kutup-Client` header must be the client type the fork was minted for and the
@@ -778,12 +949,12 @@ on its own origin. Rate-limited with login.
 {
   "accessToken": "<jwt>",
   "sessionId": "<uuid>",
-  "userId": "<uuid>",
+  "accountId": "<uuid>",
   "payload": "<the SessionFork envelope, canonical base64>"
 }
 ```
 
-### PUT / GET /api/auth/sessions/current/local-key
+### PUT / GET /api/v1/auth/sessions/current/local-key
 
 A web session keeps its unlocked keys in the browser as a `WebSession`
 local-state envelope (profile `<client type>:<session id>`); the 32-byte key
@@ -798,9 +969,9 @@ blob useless. Web sessions only (`400` for the CLI).
 
 ## User
 
-### GET /api/user/me
+### GET /api/v1/account
 
-Return the current user's profile (public key + storage stats). The encrypted key bundle is **not** returned here — it is delivered as part of the `/api/auth/login` response.
+Return the current user's profile (public key + storage stats). The encrypted key bundle is **not** returned here — it is delivered as part of the `/api/v1/auth/login` response.
 
 **Auth:** Bearer JWT
 
@@ -813,22 +984,37 @@ Return the current user's profile (public key + storage stats). The encrypted ke
   "address": "alice@example.com",
   "envelopeBinding": "<the account's key binding>",
   "username": "alice",
-  "publicKey": "<base64>",
-  "totpEnabled": false,
+  "driveXwingPublicKey": "<base64>",
+  "twoFactor": "off",
+  "securityKeys": 0,
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 104857600,
-  "isAdmin": false,
+  "role": "member",
   "color": "",
-  "versionRetentionDays": 30
+  "versionRetentionDays": 30,
+  "versionRetentionChoices": [7, 30, 90, 180, 365, 3650]
 }
 ```
+
+`role` is `member`, `admin` or `breakGlassAdmin` (the administrator
+`bootstrap_admin` made: never demoted, suspended, closed or reset).
+`twoFactor` is the authenticator app: `on`, `pending` (set up, its first code
+not confirmed yet) or `off`; two-step sign-in is on while it is `on` or
+`securityKeys` is above 0. `driveXwingPublicKey` is the account's Drive key.
 
 `storageQuotaBytes` / `storageUsedBytes` are the account's one storage pool.
 Drive, Photos, Office, Maps and Chat all count against it.
 
+`versionRetentionChoices` are the periods (days, ascending) the
+administrators offer for keeping Drive file versions
+(`driveVersionRetentionChoices` in `PUT /api/v1/admin/settings`).
+`PATCH /api/v1/account` with `{ "versionRetentionDays": 90 }` takes one of them
+(`400 versionRetentionNotOffered` otherwise, with the `choices`). An account
+keeps a period taken off the list since, until it chooses another.
+
 ---
 
-### GET /api/user/storage/versions
+### GET /api/v1/account/storage/versions
 
 The caller's deletable earlier versions (every version they saved except each
 file's newest), grouped by whole days of age and whether they are kept
@@ -838,7 +1024,7 @@ forever, so a client can show what deleting by age would free.
 
 **Response:** `[{ "ageDays": 0, "keepForever": false, "bytes": 1300, "count": 2 }, …]`
 
-### POST /api/user/storage/versions/prune
+### POST /api/v1/account/storage/versions/prune
 
 Delete for good the caller's earlier versions at least `olderThanDays` whole
 days old (`0`: every earlier version). Each file's newest version always
@@ -853,7 +1039,7 @@ released with each row. At most 500 versions per request: repeat while
 
 **Response:** `{ "deletedCount": 12, "freedBytes": 4800000, "more": false }`
 
-### GET /api/user/storage
+### GET /api/v1/account/storage
 
 Return what fills the caller's storage pool, by app and by kind of stored
 bytes. All sizes are the ciphertext bytes the server stores and charges. The
@@ -906,7 +1092,7 @@ page works out "Files by type" in the browser from decrypted names.
 
 ---
 
-### POST /api/user/2fa/setup
+### POST /api/v1/account/2fa/setup
 
 Generate a TOTP secret and return a QR code URI.
 
@@ -920,11 +1106,11 @@ Generate a TOTP secret and return a QR code URI.
 }
 ```
 
-The secret is stored as *pending* and only becomes active after `POST /api/user/2fa/verify` succeeds. While two-step sign-in is on, this is `409`: the secret in use changes only by turning it off and on again.
+The secret is stored as *pending* and only becomes active after `POST /api/v1/account/2fa/verify` succeeds. While two-step sign-in is on, this is `409`: the secret in use changes only by turning it off and on again.
 
 ---
 
-### POST /api/user/2fa/verify
+### POST /api/v1/account/2fa/verify
 
 Confirm TOTP setup by providing the first valid code, with the password proved
 again: a `totp` grant from a reauth of this session. Beside security keys
@@ -942,6 +1128,9 @@ the response's `recoveryCodes` is empty (the account's codes stay).
 }
 ```
 
+The code's time step becomes the account's last taken one as the app is
+turned on, so the same code then signs in nowhere (see `login/2fa`).
+
 **Response:** `{ "message": "TOTP enabled", "recoveryCodes": ["xxxxx-xxxxx", …] }`:
 the account's recovery codes, shown once (Crockford base32, 10 characters;
 as many as `twoFactorRecoveryCodes`, 16 at first). Each takes the second
@@ -950,11 +1139,11 @@ makes for itself, bound to the account.
 
 ---
 
-### GET /api/user/2fa/recovery-codes
+### GET /api/v1/account/2fa/recovery-codes
 
 `{ "remaining": <n> }`: how many recovery codes are left. **Auth:** Bearer JWT.
 
-### POST /api/user/2fa/recovery-codes
+### POST /api/v1/account/2fa/recovery-codes
 
 New recovery codes in place of the old ones, which stop working: `{ "code":
 "…", "grant": "kg1_…" }` → `{ "recoveryCodes": [...] }`, shown once. The code
@@ -966,16 +1155,16 @@ two-step sign-in is off.
 
 ---
 
-### DELETE /api/user/2fa
+### DELETE /api/v1/account/2fa
 
 Turn the authenticator app off. Requires a valid TOTP code (or a recovery
 code, or `securityKey`: a key's answer to `POST
-/api/auth/security-keys/proof/start`) and a `totp` grant from a reauth of
+/api/v1/auth/security-keys/proof/start`) and a `totp` grant from a reauth of
 this session, so a stolen session cannot remove 2FA. With security keys left
 two-step sign-in stays on, with its recovery codes; otherwise they go with
 it.
 
-A wrong code here or at `POST /api/user/2fa/recovery-codes` still uses up
+A wrong code here or at `POST /api/v1/account/2fa/recovery-codes` still uses up
 the grant, so each guess takes the password again. Wrong codes count per
 account: the `totp_attempts`-th (5) blocks both routes for
 `totp_block_minutes` (both rate-limit settings), with `429`, the right code
@@ -993,7 +1182,7 @@ included.
 
 ---
 
-### Security keys: `/api/auth/security-keys`
+### Security keys: `/api/v1/auth/security-keys`
 
 Security keys (WebAuthn: a YubiKey, or a phone's or computer's built-in
 authenticator used as a key) as a second factor beside the authenticator app,
@@ -1023,7 +1212,7 @@ off: `available: false`, and the routes answer `503 securityKeysOff`.
   securityKeyCeremony` (expired or answered).
 - `PATCH {id}` `{ name }` renames it (`204`).
 - `DELETE {id}` `{ grant, code | securityKey }`: the password and the second
-  factor proved again, as `DELETE /api/user/2fa` takes them → `{
+  factor proved again, as `DELETE /api/v1/account/2fa` takes them → `{
   twoFactorOff }`. Removing the last factor turns two-step sign-in off and
   drops the recovery codes.
 - `POST proof/start` → options for proving the second factor with a key for
@@ -1051,42 +1240,48 @@ live address is delivered.
 A rename keeps everything but the name. The old name is **held** for the
 account: its address receives (only) for `oldAddressReceiveDays`, then
 bounces; after `nameHoldDays` the name is freed for anyone (a new owner is
-another incarnation, so pins warn). Both are in `GET /api/auth/settings`
+another incarnation, so pins warn). Both are in `GET /api/v1/auth/settings`
 (`nameHoldDays`, `oldAddressReceiveDays`) and set by administrators
-(`PUT /api/admin/settings`). A deleted account's names are held the same way,
+(`PUT /api/v1/admin/settings`). A deleted account's names are held the same way,
 receiving nothing.
 
-- `GET /api/user/rename/check?name=` → `{ "available": true, "takeBack"?,
+- `GET /api/v1/account/rename/check?name=` → `{ "available": true, "takeBack"?,
   "needsKey", "spelling"? }` or `{ "available": false, "reason": "taken" |
   "held" | "reserved" | "invalid" }` (30 per 15 minutes per account).
   `needsKey`: the rename sends the address's first key (`mailAddress`); false
   only for a held name whose address kept its keys. `spelling`: for a name
   taken back, the spelling it is taken back as (its address, keys and key
   lists name it so; another spelling is `renameInvalid` with `spelling`).
-- `POST /api/user/rename` → `{ "grant": "<a rename grant from a reauth>",
+- `POST /api/v1/account/rename` → `{ "grant": "<a rename grant from a reauth>",
   "rename": <AccountRenameV1>, "mailAddress": { "publicKey",
   "privateKeyEnvelope", "keyList" } }` (the Drive key binding names the
   account's id, so it stays as it is) → `200 { "username", "address", "sequence", "oldAddressReceivesUntil",
   "oldNameFreeAt" }`. `mailAddress` is the new address's first key and key
-  list (sequence 1, that key primary), as `POST /api/mail/addresses/{id}/keys`
+  list (sequence 1, that key primary), as `POST /api/v1/mail/addresses/{id}/keys`
   takes them, stored in the rename's transaction so mail to the new address is
   never deferred; sent exactly when the check says `needsKey` (otherwise
-  `renameInvalid`). The display
+  `renameInvalid`). The statement must name this account's id (`accountId`,
+  signed), or it is `renameInvalid`. The display
   name and signature move to the new address. Errors: `renameInvalid`, `grantInvalid`, `breakGlassAccount`,
   `setupRequired`, `nameTaken`, `nameReserved`, `renameConflict`,
   `tooManyHeldNames`, `renameTooSoon`. One counted rename per 30 days; going
   back to the name just left within 7 days of that rename is free, once, and
   restarts the clock. No session ends.
-- `GET /api/user/names` → `[{ "name", "state": "current" | "held",
+- `GET /api/v1/account/names` → `[{ "name", "state": "current" | "held",
   "receiveUntil", "freeAt" }]`.
-- `DELETE /api/user/names/:name` (`{ "grant" }`, a rename grant) → `204`:
+- `DELETE /api/v1/account/names/:name` (`{ "grant" }`, a rename grant) → `204`:
   receiving there ends now; the name stays held until its date (`notHeld`;
   `dropTooSoon`: one drop per 30 days).
-- `GET /api/users/renames/:address[?incarnationId=]` → `{ "version": 1,
-  "chains": [{ "incarnationId", "authorityPublicKey", "current", "state":
-  "current" | "held" | "gone", "chain": [<AccountRenameV1>, …] }] }`, newest
-  first; a reused name appears in several. Clients verify every chain against
-  their pins (`version` other than 1: unverifiable, warn). For another
+- `GET /api/v1/accounts/by-address/:address/renames[?incarnationId=]` → `{ "version": 1,
+  "chains": [{ "incarnationId", "authorityPublicKey", "current",
+  "state": "current" | "held" | "gone", "chain": [<AccountRenameV1>, …] }] }`,
+  newest first; a reused name appears in several. An `AccountRenameV1` is `{
+  "incarnationId", "accountId", "sequence", "previous", "current",
+  "issuedAtMs", "signature" }`: `accountId` is the account's permanent id,
+  signed with the rest (`kutup/account/rename/v2`), the same in every
+  statement of a chain, so whose chain it is is the account's own word, never
+  the server's. Clients verify every chain against
+  their pins and the account id they know (`version` other than 1: unverifiable, warn). For another
   server's address: the chains this server keeps of it (from announces, earlier
   lookups and relayed `409 renamed`), asked of that server when none is fresh
   (a day). The server unreachable and nothing kept: `{ "version": 1, "chains":
@@ -1104,16 +1299,94 @@ receiving nothing.
   account's chain ends, what its devices anchor to.
 - **Reauth** (`login/start`, `purpose: "reauth"`) names no account: it is the
   session's own; a `name` is `400`.
-- Admin: `POST /api/admin/names/:name/close` (receiving ends now) and
-  `POST /api/admin/names/:name/free` (free now) → `204`; recorded on the
+- Admin: `POST /api/v1/admin/names/:name/close` (receiving ends now) and
+  `POST /api/v1/admin/names/:name/free` (free now) → `204`; recorded on the
   account as `nameClosed` / `nameFreed`.
 
-### GET /api/user/security-events
+### POST /api/v1/account/close
+
+Ask for this account to be deleted (docs/plans/server-personal-data.md, A5).
+It is `closing` for `account.closing_days` (default 14), then deleted with
+everything in it; every sign-in, this one included, ends now. A sign-in before
+then is offered to keep it (`POST /api/v1/auth/keep`). Recorded as
+`accountClosing`.
+
+**Auth:** Bearer JWT
+
+**Request body:** `{"grant": "kg1_…"}`: a reauth grant for `close`.
+
+**Response:** `200 OK` `{"closesAt": "2026-11-20T10:00:00Z"}`. `403
+grantInvalid`; `403` for the break-glass admin; `403 lastAdmin` for the last
+usable admin.
+
+### POST /api/v1/auth/keep
+
+A sign-in of a closing account that passed every step answers (`409
+accountDeleting` once its date has passed; a closing account that was
+suspended doesn't sign in at all), instead of a session, `{"accountId", "username", "closing": {"closesAt", "grant"}}`: the grant
+(purpose `keep`, minutes, once) keeps the account here. The account is active
+again (`accountKept`), and the answer is the sign-in's, with the session.
+
+**Request body:** `{"grant": "kg1_…"}`, with `X-Kutup-Client`.
+
+**Response:** `200 OK`, as a sign-in; `403 grantInvalid`, also once the
+account's date has passed (it is being deleted).
+
+### Legal documents, acknowledgements and consents
+
+docs/plans/server-personal-data.md, A3 and A4. The operator publishes its
+documents (the text lives at their `url`; the server keeps the SHA-256 of the
+exact text shown). Nothing published means nothing is asked.
+
+- `GET /api/v1/legal/documents` (anyone): the current version of each kind, in
+  every language it was published in: `[{ id, kind, version, language, url,
+  sha256, requiredAtSignup, publishedAt }]`.
+- Sign-up (`POST /api/v1/auth/register`) takes `acknowledgements: [<document
+  id>]`: the current version of each `requiredAtSignup` kind (any language),
+  recorded with the account; `400 acknowledgementsRequired` otherwise.
+- `GET /api/v1/account/legal/pending`: the required documents whose current version
+  the caller hasn't confirmed (shown at the next sign-in);
+  `POST /api/v1/account/legal/acknowledge` `{ documentIds }` confirms them (`204`;
+  `400 documentNotCurrent`).
+- `GET /api/v1/account/consents`: `{ consents: [{ purpose, given, documentId, at }],
+  documents, federationConsentRequired }`, each purpose's latest state, its
+  current text, and whether turning federation on asks for its consent.
+  `PUT /api/v1/account/consents` `{ purpose, given, documentId? }` (`purpose`:
+  `federation` or `marketing`): giving one names the current document of
+  the purpose's kind when one is published (`400 documentNotCurrent`). Each
+  change is a new row; the records are append-only for the server.
+- `PUT /api/v1/account/federation` `{ on, documentId? }`: whether this account's
+  Chat and Drive talk to other Kutup servers (`federation` in `/user/me`).
+  Where the site asks for the `federation` consent (the site setting
+  `server.federation_consent_required`, `federationConsentRequired` in
+  `/api/v1/admin/settings`; off unless set), turning it on gives that consent,
+  under `documentId` when a `federation` text is published, or needs it given
+  before (`409 consentRequired`; an administrator's switch gives none), and a
+  new account starts off; withdrawing the consent turns it off. While off, the
+  account's requests that would reach another server are `403
+  federationOff`, and to other servers it is no account (each of their
+  lookups, deliveries and share reads answers as for an unknown one); its
+  groups and shares stay, quiet. The apps refuse anonymous sealed sends to
+  other servers themselves (the server can't tell whose they are). Mail is
+  email, not federation, and isn't covered. A new account starts from the
+  site setting `federationDefault` (`GET`/`PUT /api/v1/admin/settings`); an
+  administrator sets one account's with `federation` in
+  `PUT /api/v1/admin/accounts/:id`.
+- Admin: `GET /api/v1/admin/legal/documents` (every version);
+  `POST /api/v1/admin/legal/documents` `{ kind, version, language, url, sha256,
+  requiredAtSignup }` publishes one (`201`; `400` for a malformed field;
+  `409 documentExists`), logged as `legal.publish`. A version is never edited.
+
+### GET /api/v1/account/security-events
 
 What changed the caller's sign-in, newest first: a new password, a recovery, a
-move to the server's current sign-in setup, an administrator's reset. Kept a
-year, or the newest 500. No IP addresses. An account reset keeps the earlier
-events.
+move to the server's current sign-in setup, an administrator's reset, a
+sign-in, a wrong password or second step, a sign-out, a session ended, an
+administrator opening the account's details. Kept `retentionDays` (a site
+setting, default 365), and of each kind at most the newest a second setting
+says (default 100), so repeated failures can't push out a password change. No
+IP addresses. An account reset keeps the earlier events. The log is append-only for the server when it
+runs as its own database role (docs/plans/server-personal-data.md, A8).
 
 **Auth:** Bearer JWT
 
@@ -1130,24 +1403,40 @@ one that is not one of the caller's events is `400`: start from the first page)
       "at": "2026-10-14T09:00:00Z",
       "thisSession": true,
       "client": "web-account",
-      "userAgent": "Mozilla/5.0 …",
-      "byAdmin": false
+      "browser": "Firefox",
+      "browserMajor": 128,
+      "os": "Linux",
+      "byAdmin": false,
+      "count": 1
     }
   ],
-  "next": "<uuid or null>"
+  "next": "<uuid or null>",
+  "retentionDays": 365
 }
 ```
 
 - `kind`: `passwordChange`, `recovery`, `rotate`, `adminReset`,
-  `accountReset`. More kinds will come; show an unknown one generally.
+  `accountReset`, the name and two-step kinds, and `signIn`,
+  `signInFailedPassword` (a sign-in that named this account and did not
+  finish: the client found the password wrong and ended it with
+  `login/abort`, or it was dropped unfinished),
+  `signInFailed2fa`, `signOut`, `sessionRevoked`, `allSessionsRevoked`,
+  `adminAccess`, `accountClosing` (the owner asked for the account to be
+  deleted), `accountKept`. More kinds will come; show an unknown one
+  generally.
+- `count`: how many times it happened. A wrong password, a wrong second step
+  and an administrator's view within ten minutes of the same kind's last one
+  are counted into it.
 - `thisSession`: made from the caller's own sign-in.
-- `client`, `userAgent`: what made it, as the session list shows it (absent
-  for a recovery or an administrator's reset).
+- `client`, `browser`, `browserMajor`, `os`: what made it, as the session list
+  shows it (absent for a recovery or an administrator's reset, and each
+  absent when unknown). Sealed for this event's own row, so it stays after the
+  session is deleted.
 - `byAdmin`: an administrator's reset.
 
 ---
 
-### GET /api/users/by-address/:address
+### GET /api/v1/accounts/by-address/:address
 
 An account by the address a person types: the one place a name becomes an
 account (docs/plans/account-ids.md); everything after takes the account id.
@@ -1162,14 +1451,14 @@ lookups always have.
 **Param:** `:address` — the URL-encoded Kutup address (`username@<server>`). `404` when no active account has it.
 
 **Response**, one shape for an account here or on another server (the same
-as `GET /api/users/by-id`; on this server `accountId` is the user id):
+as `GET /api/v1/accounts/by-id`; on this server `accountId` is the user id):
 ```json
 {
   "username": "bob",
   "server": "example.com",
   "accountId": "<uuid>",
   "account": "bob@example.com",
-  "driveHpkePublicKey": "<canonical base64, 32 bytes>",
+  "driveXwingPublicKey": "<canonical base64, 32 bytes>",
   "accountIncarnationId": "<lowercase SHA-256 hex>",
   "driveSigningPublicKey": "<canonical base64, 32 bytes>",
   "accountAuthorityPublicKey": "<canonical base64, 32 bytes>",
@@ -1188,13 +1477,13 @@ as `by-id` does. Clients check the binding and pin the authority
 (docs/plans/drive-identity-pins.md); another server's answer carries the
 same two fields.
 
-### GET /api/users/by-id/:accountId
+### GET /api/v1/accounts/:accountId
 
 An account by its permanent id (docs/plans/account-ids.md): its address now
 (server-asserted, a label) and its Drive identity, as the address lookup
 answers them. `?server=` names the account's server (this one when left
 out); another server's account is asked of that server through federation
-(`GET /api/fed/drive/accounts/:accountId`, the pinned peer, never a URL from
+(`GET /api/fed/v2/drive/accounts/:accountId`, the pinned peer, never a URL from
 the query). One fetch per account at a time; its answer (or its `404`)
 serves every lookup of that account for 30 seconds, unless a rename of the
 account reaches this server first (its announce, or a chain a lookup brings),
@@ -1209,44 +1498,36 @@ hyphenated UUID or a server that is not a canonical name; `404` when no
 active, set-up account has it.
 
 **Response:** `{ "username", "server", "accountId", "account",
-"driveHpkePublicKey", "accountIncarnationId", "driveSigningPublicKey",
+"driveXwingPublicKey", "accountIncarnationId", "driveSigningPublicKey",
 "accountAuthorityPublicKey", "driveKeyBinding" }`. No rename chain: a client
-showing the address verifies it with `GET /api/users/renames/:address`.
+showing the address verifies it with `GET /api/v1/accounts/by-address/:address/renames`.
 
-### POST /api/users/drive-identities
+### POST /api/v1/drive/identities
 
 The Drive identities of up to 100 accounts on this server at once, by exact
 address: what a page that shows many people checks them with, in one request.
 Body: `{ "accounts": ["alice@example.org", …] }`. Answers an array of
-`{ account, accountAuthorityPublicKey, driveHpkePublicKey,
+`{ account, accountAuthorityPublicKey, driveXwingPublicKey,
 driveSigningPublicKey, driveKeyBinding? }` for the accounts found (unknown,
 disabled and not yet set-up accounts are left out); `400` for more than 100.
 
 **Auth:** Bearer JWT; counted with the user lookups (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), one per request.
 
-### GET /api/user/identity-pins · PUT /api/user/identity-pins
+### The identity pin list
 
 The account's pins on other accounts' authorities: one list sealed under a key
 derived from its master key (`kutup_crypto::identity_pins`), opaque to the
-server, shared by every app of the account.
+server, shared by every app of the account. It is the one record of the
+account-records scope `pins` (id `pins`; [the account-records
+store](#the-account-records-store)): read with `GET
+/api/v1/account/records/pins` (or `…/pins/pins`, `404` before the first) and
+stored with `POST /api/v1/account/records` and the next head. The revision is
+sealed in the envelope's authenticated header (a time in unix milliseconds,
+above every revision the writer has seen; docs/plans/sealed-revisions.md). On
+a `revisionConflict` the client merges with the stored list and tries again.
+Clients refuse a list older than one they have seen.
 
-**Auth:** Bearer JWT
-
-**Response (GET):** `{ "revision": 1791633600000, "envelope": "<canonical base64>" }`
-(the revision is the one in the envelope's header).
-**Body (PUT):** `{ "baseRevision": 1791633600000, "envelope": "<canonical base64>" }`
-
-`GET` answers `404` before the first list. The revision is sealed in the
-envelope's authenticated header (a time in unix milliseconds, above every
-revision the writer has seen; docs/plans/sealed-revisions.md). A `PUT` is
-stored only if the stored list is still `baseRevision` (0 before the first)
-and the envelope's revision is above it (`400` if not), else `409` with
-`{ "code": "revision_conflict", "revision": <stored> }`: the client merges with
-the stored list and tries again. Clients refuse a list older than one they
-have seen.
-
-
-### GET /api/account/ui-preferences · PUT /api/account/ui-preferences
+### GET /api/v1/account/ui-preferences · PUT /api/v1/account/ui-preferences
 
 The account's theme and language, the same in every web app and on every
 device. Not secret, so stored as they are (not end-to-end encrypted).
@@ -1284,14 +1565,14 @@ contacts (create, update, delete, `delete` many, import: one head per batch),
 mail folder, label and filter names (create, rename, delete), the identity pin
 list, Pass vault secrets (keep, forget). A delete takes a JSON body
 `{ "head": "…" }`. The head's sequence must be the current one plus one, else
-`409 head_conflict`; the check runs last in the write's own transaction, after
+`409 headConflict`; the check runs last in the write's own transaction, after
 the account row is locked and the session found live under the lock (a write
 that began before a wipe is refused). Before the chain is started a listed
-write needs none (and a head with it is `409 head_conflict`: start the chain
-first); after, one without a head is `409 head_required`.
+write needs none (and a head with it is `409 headConflict`: start the chain
+first); after, one without a head is `409 headRequired`.
 
 **Starting the chain** is its own call, on the `basis` an index answers with
-before the first head (`POST /api/account/head`): a listed write landing
+before the first head (`POST /api/v1/account/head`): a listed write landing
 between the client's read and its start moves the basis, and the start is
 refused, so the first head always covers every value. A head sent with a change that is no listed write (a
 folder's colour, parent, position or folding; a filter switched on or off, or
@@ -1299,23 +1580,63 @@ what it matches or does: these are not sealed and not rollback-protected) is
 `400`.
 
 **A folder delete** removes the folders inside it too, so it names them all:
-`DELETE /api/mail/folders/:id` with `{ "removes": ["<id>", …], "head": "…" }`.
+`DELETE /api/v1/mail/folders/:id` with `{ "removes": ["<id>", …], "head": "…" }`.
 If they are not exactly the folders it removes (one was added inside since),
-`409 head_conflict`.
+`409 headConflict`.
 
-### GET /api/account/head
+### GET /api/v1/account/head
 
 **Auth:** Bearer JWT. **Response:** `{ "head": "<base64>" | null }` (null
 before the account's first).
 
-### POST /api/account/head
+### POST /api/v1/account/head
 
 Starts the chain: `{ "head": "<base64, sequence 1>", "basis": "<from an
-index>" }` → `201`. `409 head_conflict` when the account has a head already or
+index>" }` → `201`. `409 headConflict` when the account has a head already or
 the basis moved (read the index again and remake the head). **Auth:** Bearer
 JWT.
 
-### GET /api/account/heads?from=n
+### GET /api/v1/account/roots
+
+The caller's own root records (docs/plans/identity-root.md), every kept
+generation, and the authority the newest identity root must derive:
+`{ "accountRoots": ["<base64 AccountRecordV1>", …],
+"accountAuthorityPublicKey": "<base64>", "masterKeyGeneration": 1,
+"masterKeyring": ["<base64 AccountRecordV1>", …] }` (the keyring as at
+sign-in). For a client that holds the master key but not the roots. **Auth:**
+Bearer JWT; only the session's own account's.
+
+### POST /api/v1/account/master-key/rotate
+
+A new master key (docs/plans/mk-rotation-exercise.md), in one transaction.
+**Auth:** Bearer JWT, and a grant `for: masterKeyRotation` from this session's
+reauth, which `opaque/register/start` also takes.
+
+```json
+{
+  "grant": "kg1_…",
+  "opaqueRecord": "<base64>", "opaqueServerKeyId": 1,
+  "masterKeyEnvelope": "<purpose 1, generation n+1>",
+  "recoveryKeyEnvelope": "<purpose 2, generation n+1, under a new phrase>",
+  "recoveryProof": "<base64 32 bytes, the new phrase's>",
+  "accountRoots": ["<the five roots, each at its newest generation, sealed at n+1>", "…"],
+  "masterKeyring": "<purpose 3, generation n+1, object n: the previous key>",
+  "head": "<the next account head, sealed at n+1>"
+}
+```
+
+The server checks every header (purpose, key binding, object, generation n+1),
+replaces the password and recovery wraps and verifier and the roots' records,
+keeps the keyring record, stores the head after the newest one, sets the
+account's generation to n+1, ends every other sign-in and records
+`masterKeyRotated` → `204`. `400 rotationInvalid` (`field` names the record),
+`403 grantInvalid`, `409 headConflict` (read the head again),
+`409 opaqueKeyStale`, `409 organizationKeys` (the account holds an
+organization escrow or key copy, which a rotation can't carry until the
+organization routes do). After it, a listed write whose head is sealed under
+an older key is `409 masterKeyStale`: that device signs in again.
+
+### GET /api/v1/account/heads?from=n
 
 The chain from sequence `n` toward the newest, oldest first, at most 200 at a
 time: `{ "heads": ["<base64>", …], "next": <sequence> | null }` (ask again from
@@ -1326,7 +1647,7 @@ Bearer JWT.
 The three reads are limited to 300 a minute per account
 (`RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN`; `429 rateLimited`).
 
-### GET /api/account/index/:scope
+### GET /api/v1/account/index/:scope
 
 A scope's values and the head they go with, read in one snapshot (check the
 index against this head, not one fetched separately):
@@ -1338,38 +1659,98 @@ chain start names. **Auth:** Bearer JWT. Scopes and their ids:
   the sealed name's header (a folder without a name, kept through an account
   reset, is left out until it is named again);
 - `pins`: one value, `pins`;
-- `chatGroups`: the group list's entry ids (`GET /api/chat/group-list`), with
-  the revision in each sealed entry's header. Readable whether or not pairwise
-  groups are on (empty when they are off, since nothing can be written);
-- `chatContacts`: the Chat contact list's entry ids (`GET
-  /api/chat/contact-list`), with the revision in each sealed entry's header;
+- `chatGroups`: the group list's entry ids, with the revision in each sealed
+  entry's header. Readable whether or not pairwise groups are on (empty when
+  they are off, since nothing can be written);
+- `chatContacts`: the Chat contact list's entry ids, with the revision in each
+  sealed entry's header;
 - `passSecrets`: the vault's file id, for every secret the account keeps, the
   vault trashed, purged or out of reach included ("unreachable but listed":
-  the secret stays until its owner forgets it, `POST
-  /api/pass/vault-secrets/forget`).
+  the secret stays until its owner forgets it). Read from the account-records
+  store (below).
 
 Any other scope is `404`: a client treats it as one with no index yet
 (`IndexCheck::Uncovered`).
 
 **An account reset** (an administrator's wipe) deletes the head chain with the
 old incarnation, and every listed value sealed under the old keys: contacts,
-the group list, labels, filters and Pass secrets. Custom folders keep their mail and lose their
-names (`name: null` in `GET /api/mail/places`; "Unnamed folder" until renamed
+the group list, labels, filters, Pass secrets and every account record (whose
+older cursors then start over). Custom folders keep their mail and lose their
+names (`name: null` in `GET /api/v1/mail/places`; "Unnamed folder" until renamed
 with `baseNameRevision: 0`). The new incarnation's first write makes its first
 head.
+
+### The account-records store
+
+One store for the account's synced private records
+([plans/account-records.md](plans/account-records.md)), under the account
+head. The server keeps the records opaque. Scopes (`kutup_crypto::account_records`)
+are `passSecrets` (id: the vault's file id), `pins` (id: `pins`),
+`chatGroups`, `chatContacts`, `contactGroups` and `calendarSettings` (id:
+43-character base64url of a keyed hash), `photosLibrary` (the Photos marks,
+one record), `chatAttachments` (the Chat attachment ledger, one record per
+entity at its newest revision) and `joinedMeetings` (immutable, filed at
+revision 1), the last three with random ids (43-character base64url of 32
+random bytes the client chose).
+Each record is an account record sealed for its own id. Until a scope's
+clients move here, `GET /api/v1/account/index/:scope` lists its old store and
+this one. **Auth:** Bearer JWT on all three.
+
+#### GET /api/v1/account/records/:scope?after=<seq>
+
+A page of the scope's changes after the cursor, in the account's change
+order, with the head of the same snapshot:
+`{ "records": [{ "id", "revision", "envelope", "seq" }], "deleted": [{ "id",
+"seq" }], "next": <seq>, "more": bool, "resync": bool, "head": "<base64>" |
+null, "basis": "<hex>" | null }`. Read from `next` while `more`; check the
+head against the device's anchor before applying a page, and the scope's
+index against the head after the last. `after=0` (or none) lists every record
+and no deletions. `resync: true` (the cursor is older than the removals the
+server keeps, a site setting, or was never given): read from 0 again. `404`
+for an unknown scope.
+
+#### GET /api/v1/account/records/:scope/:id
+
+One record: `{ "id", "revision", "envelope", "seq" }`, or `404`.
+
+#### POST /api/v1/account/records
+
+`{ "head": "<base64>"?, "puts": [{ "scope", "id", "baseRevision",
+"envelope" }], "deletes": [{ "scope", "id", "baseRevision" }] }`, applied
+all or nothing with the next head (required once the account keeps one).
+- Every item names the revision it read (0: a new record; a delete at least
+  1), and the stored revision must still be it.
+- A put's new revision is the one in its envelope's header, above
+  `baseRevision`. A record of an immutable purpose (a joined meeting) has
+  none: it takes only `baseRevision` 0 and is filed at revision 1. The envelope must be this account's, of the scope's purpose
+  and sealed for the item's id.
+- Each record at most once per batch; at most a site-set number of items;
+  each scope's count is a per-account site setting.
+- A Pass secret's vault must be a live file the caller can open (`404`).
+
+`200 { "seq" }`. `409 revisionConflict` with `conflicts: [{ "scope", "id",
+"revision" }]` (the stored revision, 0 for none) for every item not at its
+base; a batch that already landed and is sent again gets this, and the client
+reads again. `409 headConflict`, `headRequired`, `masterKeyStale` as for any
+listed write. `400 scopeFull` past a scope's count, with `scope` and `max`
+(the count allowed), so a client can make room (the Chat app removes its
+oldest joined meetings in the same batch).
 
 ---
 
 ## Collections
 
-### GET /api/collections/
+### GET /api/v1/drive/collections/
 
 List all collections accessible to the current user (owned and shared).
 
 **Auth:** Bearer JWT
 
 **Response:** Array of collection objects. Owned and shared collections use the
-same authenticated record. An owned row contains `ownerKeyEnvelope`; a shared
+same authenticated record. An owned row contains `ownerKeyEnvelope` (the
+folder key sealed under the owner's Drive root, `DriveEnvelopeV1` purpose 1,
+revision = the Drive root's generation; creating a folder or rotating its key
+takes it at the owner's newest generation, else `400`); a shared
 row contains `namedShareEnvelope`, `isShared: true`, and the owner's registered
 identity fields required for independent client verification. Neither key
 envelope is returned in the other row type.
@@ -1378,7 +1759,7 @@ envelope is returned in the other row type.
 [
   {
     "id": "<uuid>",
-    "ownerUserId": "<uuid>",
+    "ownerAccountId": "<uuid>",
     "nameEnvelope": "<DriveEnvelopeV1 base64>",
     "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
     "keyEpoch": 1,
@@ -1406,7 +1787,7 @@ envelope is returned in the other row type.
 `updatedAt` is the folder's "modified" time as a file manager shows it: the
 latest of the folder's own change (rename, colour), its newest direct file
 change (upload, rename, or a new saved version), and its newest direct
-subfolder. `GET /api/collections/:id` returns the same fields.
+subfolder. `GET /api/v1/drive/collections/:id` returns the same fields.
 
 `canUpload`, `canDelete`, `uploadQuotaBytes`, `uploadUsedBytes`, `isShared`, and
 the owner identity fields are present only on shared collections (the owner has
@@ -1416,7 +1797,7 @@ envelope before displaying or using a shared collection.
 
 ---
 
-### POST /api/collections/
+### POST /api/v1/drive/collections/
 
 Create a new collection.
 
@@ -1437,7 +1818,7 @@ Create a new collection.
 `nameHash` (required for a folder, see "Names in a folder"; ignored for an
 album) keeps the name unique among the parent's files and subfolders, or
 among the owner's top-level folders; a missing one is `400`, a taken name
-`409 name_taken`.
+`409 nameTaken`.
 
 The name envelope is bound to `(collection ID, owner user ID, epoch 1,
 revision 1)`. The owner-key envelope binds the same identifiers with the
@@ -1454,7 +1835,7 @@ database transaction.
 
 ---
 
-### GET /api/collections/:id
+### GET /api/v1/drive/collections/:id
 
 Get a single owned or shared collection by ID. The response has the same
 owner-vs-recipient key-envelope separation as the list route.
@@ -1465,7 +1846,7 @@ owner-vs-recipient key-envelope separation as the list route.
 ```json
 {
   "id": "<uuid>",
-  "ownerUserId": "<uuid>",
+  "ownerAccountId": "<uuid>",
   "nameEnvelope": "<DriveEnvelopeV1 base64>",
   "ownerKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "keyEpoch": 1,
@@ -1479,7 +1860,7 @@ owner-vs-recipient key-envelope separation as the list route.
 
 ---
 
-### PUT /api/collections/:id
+### PUT /api/v1/drive/collections/:id
 
 Rename a collection (client re-encrypts the name with the collection key).
 
@@ -1496,7 +1877,7 @@ Rename a collection (client re-encrypts the name with the collection key).
 
 `nameHash` (required for a folder; albums have none) is the new name's
 hash in the folder's place; a name another item there holds is
-`409 name_taken`.
+`409 nameTaken`.
 
 The revision must be exactly one greater than the stored revision and the
 envelope must authenticate that exact revision, current epoch, collection and
@@ -1506,7 +1887,7 @@ owner. Concurrent/stale renames fail instead of overwriting a newer name.
 
 ---
 
-### DELETE /api/collections/:id
+### DELETE /api/v1/drive/collections/:id
 
 Move a collection — with its whole subtree (sub-folders + files) — to the trash. The folder becomes a single trash entry; restore or purge it via the Trash endpoints. Items already in the trash keep their own entry and deletion time. While trashed, the subtree is invisible to every other endpoint (listings, downloads, shares, federation, collab) and its public share links go dark. Trashed items keep counting against quota until purged.
 
@@ -1516,7 +1897,7 @@ Move a collection — with its whole subtree (sub-folders + files) — to the tr
 
 ---
 
-### PATCH /api/collections/:id/color
+### PATCH /api/v1/drive/collections/:id/color
 
 Set the display color of a folder.
 
@@ -1533,7 +1914,7 @@ Set the display color of a folder.
 
 ---
 
-### POST /api/collections/:id/share
+### POST /api/v1/drive/collections/:id/share
 
 Share a collection with another user on this server.
 
@@ -1542,7 +1923,7 @@ Share a collection with another user on this server.
 **Request body:**
 ```json
 {
-  "recipientUserId": "<uuid>",
+  "recipientAccountId": "<uuid>",
   "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
   "canUpload": false,
   "canDelete": false,
@@ -1561,7 +1942,7 @@ per-share cap.
 
 ---
 
-### POST /api/collections/:id/federated-shares
+### POST /api/v1/drive/collections/:id/federated-shares
 
 Create a domain-bound share for a user on a remote Kutup instance.
 
@@ -1581,7 +1962,7 @@ Create a domain-bound share for a user on a remote Kutup instance.
 
 The named envelope is sealed to the account the lookup above returned
 (`other.example.com` and its `accountId`). The origin asks the recipient's
-server for that account by id (`GET /api/fed/drive/accounts/:accountId`):
+server for that account by id (`GET /api/fed/v2/drive/accounts/:accountId`):
 the username the share lists is its answer, never the client's, and the
 envelope must be sealed to the incarnation it answers (`409 keyChanged`).
 Accepting compares the account id, so a rename on either side never breaks
@@ -1616,7 +1997,7 @@ other the key to their end-to-end encrypted profile so Drive can show names
 and pictures (docs/plans/unified-profile.md). One key per pair, however many
 folders they share.
 
-### GET /api/drive/people
+### GET /api/v1/drive/people
 
 **Auth:** Bearer JWT
 
@@ -1640,13 +2021,13 @@ Everyone you share a folder with or who shares one with you:
 
 People are their server and account id; `account` is their address now,
 shown only. For someone on another server (`local: false`) the three key
-fields are null: look them up with `GET /api/users/by-id/:accountId?server=`. Open
+fields are null: look them up with `GET /api/v1/accounts/:accountId?server=`. Open
 `receivedEnvelope` with your Drive key and check it with theirs; the profile
 key then fetches their profile through
-`GET /api/chat/accounts/:accountId/profile/:version?server=`. When `sentProfileVersion` is
+`GET /api/v1/chat/accounts/:accountId/profile/:version?server=`. When `sentProfileVersion` is
 not your current profile version, give them your key again.
 
-### PUT /api/drive/profile-keys
+### PUT /api/v1/drive/profile-keys
 
 **Auth:** Bearer JWT
 
@@ -1662,7 +2043,7 @@ not your current profile version, give them your key again.
 The server checks that the envelope is from you (your account, incarnation
 and Drive signing key), is for that account (and, here, its current
 incarnation), and that a share exists between you. Someone on another server
-gets it through `PUT /api/fed/drive/profile-keys`. `204`; `404` when there is
+gets it through `PUT /api/fed/v2/drive/profile-keys`. `204`; `404` when there is
 no share between you; `400` for an envelope that does not match.
 
 ---
@@ -1678,7 +2059,7 @@ binding the address and fingerprint), and each address's signed key list
 use Proton's bits: `1` may verify, `2` may encrypt to, `4` mail not end-to-end
 encrypted, `8` mail not expected to be signed.
 
-### GET /api/mail/addresses
+### GET /api/v1/mail/addresses
 
 The caller's addresses: its current ones in the account's order (the first
 enabled one with a key is the default), then, after a rename, the old ones,
@@ -1714,7 +2095,7 @@ opening its mail). An account without a username has none.
 is a forwarding key (below): it opens only mail forwarded to the address, is
 never primary or encrypted to, and isn't in `keyList`.
 
-### GET /api/mail/identity · PATCH /api/mail/identity
+### GET /api/v1/mail/identity · PATCH /api/v1/mail/identity
 
 An address's display name and signature, as Proton's per-address identity:
 `?addressId=` one of the caller's current addresses, or the default address
@@ -1724,7 +2105,7 @@ username when none is set); `PATCH` takes `{ displayName?, signature? }`
 (a name up to 100 characters without control characters, a signature up to
 10 KB of HTML) and answers the same.
 
-### PUT /api/mail/addresses/order
+### PUT /api/v1/mail/addresses/order
 
 Proton's `PUT addresses/order`: `{ "ids": [...] }`, every current address of
 the account (enabled or disabled) in the new order; "Set as default" moves one
@@ -1732,7 +2113,7 @@ first. Not exactly the account's current addresses: `409 addressSetChanged`
 (a tab that missed one added or deleted); a disabled address first: `400
 disabledDefault`. `204`.
 
-### PUT /api/mail/addresses/:id/disable · PUT /api/mail/addresses/:id/enable
+### PUT /api/v1/mail/addresses/:id/disable · PUT /api/v1/mail/addresses/:id/enable
 
 Proton's Disable and Enable, for an address on a custom domain (the account's
 own address stays enabled: `409 ownAddress`). The body is the address's next
@@ -1745,7 +2126,7 @@ sends (`403 addressDisabled`); its keys keep opening the mail it received.
 The default address can't be disabled (`409 defaultAddress`). `200` with the
 address.
 
-### PUT /api/mail/addresses/:id/delete
+### PUT /api/v1/mail/addresses/:id/delete
 
 Proton's Delete for a disabled address on a custom domain (`409
 addressEnabled` while enabled: disable it first, as Proton's client does; one
@@ -1754,7 +2135,7 @@ its keys stay with this account, opening the mail it received, never
 published or used for new mail. Its forwardings end, from it and to it, and
 never come back if the account takes the address back. `204`.
 
-### POST /api/mail/addresses/:id/keys
+### POST /api/v1/mail/addresses/:id/keys
 
 Add a key to one of the caller's addresses together with the next signed key
 list. The server checks: the public key is a v4 Ed25519 + Curve25519 key whose
@@ -1772,11 +2153,11 @@ generated one; the server cannot tell them apart).
 
 **Body:** `{ "publicKey": "base64", "privateKeyEnvelope": "base64", "keyList": { "data": "base64", "signature": "base64" } }`
 
-**Response:** the address, as in `GET /api/mail/addresses`. `400` for an
+**Response:** the address, as in `GET /api/v1/mail/addresses`. `400` for an
 invalid key, envelope or list; `409` when the list does not follow the current
 one (another device changed it; reload and retry) or the key is in use.
 
-### PUT /api/mail/addresses/:id/key-list
+### PUT /api/v1/mail/addresses/:id/key-list
 
 Publish the next signed key list for the same keys: another key made primary,
 or a key marked obsolete (flag `NOT_OBSOLETE` cleared: not encrypted to, still
@@ -1790,11 +2171,11 @@ is a disabled address's, and only Disable publishes one (Proton's).
 
 **Body:** `{ "keyList": { "data": "base64", "signature": "base64" } }`
 
-**Response:** the address, as in `GET /api/mail/addresses`. `400` for an
+**Response:** the address, as in `GET /api/v1/mail/addresses`. `400` for an
 invalid list or one that adds or leaves out a key; `409` when it does not
 follow the current one.
 
-### GET /api/mail/keys?email=
+### GET /api/v1/mail/keys?email=
 
 A Kutup address's public keys (primary first) and every signed key list, oldest
 first. Clients verify the chain against `accountAuthorityPublicKey`, checked
@@ -1814,7 +2195,7 @@ compared folded, and that the newest list names it.
 
 **Response:** `{ "address": "...", "server": "...", "accountId": "<uuid>", "accountAuthorityPublicKey": "...", "keys": [{ "fingerprint", "sha256Fingerprint", "publicKey", "primary", "flags" }], "keyLists": [{ "data", "signature" }] }`; `404` when the address has no keys.
 
-### GET /api/mail/keys/outside?email=
+### GET /api/v1/mail/keys/outside?email=
 
 An outside address's OpenPGP key (docs/plans/mail.md, C3), looked up by the
 server in order: its Web Key Directory (advanced, then direct), Proton's key
@@ -1828,7 +2209,7 @@ Rate-limited like user lookup.
 
 **Response:** `{ "address", "source": "wkd" | "proton" | "keysOpenpgp", "publicKey", "fingerprint", "createdAt" }`;
 `404` when no source has a usable key; `400` for a Kutup address (use
-`GET /api/mail/keys`).
+`GET /api/v1/mail/keys`).
 
 ### GET /.well-known/openpgpkey/hu/:hash?l=:local
 
@@ -1855,7 +2236,7 @@ outside forwarding lasts (as Proton's). k is sealed at once under
 `MAIL_FORWARDING_KEYS` and no answer carries it. **Auth:** Bearer JWT, but
 for the three `external` endpoints.
 
-A forwarding: `{ "id", "kind": "end_to_end"|"outside", "state":
+A forwarding: `{ "id", "kind": "endToEnd"|"outside", "state":
 "pending"|"active"|"outdated"|"paused"|"rejected", "forwarderAddress",
 "forwardeeEmail", "match": "all"|"any", "conditions": [filter conditions on
 sender, subject, attachments], "skipped": <messages that couldn't be
@@ -1864,13 +2245,13 @@ null }`. `notice` says why an outside forwarding stopped on its own: paused
 after 5 bounces in a day, or today's budget (200 per forwarding, 500 per
 account) spent; it goes on tomorrow.
 
-### GET /api/mail/forwardings
+### GET /api/v1/mail/forwardings
 
 `{ "outgoing": [...], "incoming": [...] }`: the caller's addresses'
 forwardings ("From me") and those to them ("To me", declined ones left out).
 Pending forwardings past their expiry (7 days) lapse to `rejected` first.
 
-### POST /api/mail/forwardings
+### POST /api/v1/mail/forwardings
 
 `{ "id": "<UUID v4 the client chose>", "forwarderAddressId", "forwardeeEmail",
 "match", "conditions", "endToEnd": { "forwardeePublicKey": "<base64>",
@@ -1890,7 +2271,7 @@ keyListMismatch` for any other change). It stays pending (7 days) until the
 forwarder enters the code mailed to the destination (see Verification below). While the address forwards outside,
 WKD offers none of its keys, and a key list clearing the flag is `409
 forwardingKeepsNoEncrypt`. When the last one ends without the owner's client
-(declined, or deleted), `GET /api/mail/addresses` says `keyListOwed: true`
+(declined, or deleted), `GET /api/v1/mail/addresses` says `keyListOwed: true`
 until the client signs a list without the flag. The forwarder address must be the caller's current
 one; the forwardee a Kutup person address of someone else on this server.
 The instances must cover exactly the forwarder primary key's encryption
@@ -1918,13 +2299,13 @@ a forwarding unverified and sends a new code. A forwarding's row says
 `"verified"` and, for the forwarder while a code is live,
 `"codeExpiresAt"` and `"codeAttemptsLeft"`.
 
-### POST /api/mail/forwardings/:id/code
+### POST /api/v1/mail/forwardings/:id/code
 
 The forwarder has a new code mailed (the last one void) → the forwarding.
 `409 forwardingVerified` when verified; `409 forwardingState` when rejected
 or outdated; `429 rateLimited` past the limits above.
 
-### POST /api/mail/forwardings/:id/verify
+### POST /api/v1/mail/forwardings/:id/verify
 
 The forwarder enters `{ "code": "123456" }` → the forwarding, verified: an
 outside one becomes active; an end-to-end one now waits for its forwardee to
@@ -1933,13 +2314,13 @@ with `attemptsLeft`; `409 codeVoid` after the last wrong try; `409
 codeExpired` when no code is live. Verifying a verified one answers it
 unchanged.
 
-### PUT /api/mail/forwardings/:id
+### PUT /api/v1/mail/forwardings/:id
 
 The forwarder renews an `outdated` or `rejected` forwarding with new
 material: `{ "endToEnd": {...} }` as above → pending and unverified again,
 with a new code mailed.
 
-### PUT /api/mail/forwardings/:id/reinvite
+### PUT /api/v1/mail/forwardings/:id/reinvite
 
 The forwarder asks an outside destination again (pending, or declined):
 pending and unverified, with a new code mailed; `429 rateLimited` past the
@@ -1948,7 +2329,7 @@ forwardings is likewise limited to 10 an hour per account, however many are
 deleted). A declined one whose address is end to end again is `400
 keyListRequired`: set it up anew.
 
-### POST /api/mail/forwardings/external · /external/decline
+### POST /api/v1/mail/forwardings/external · /external/decline
 
 No account: the stop page, with `{ "token" }` from the link in an outside
 forwarding's code mail (in the body, never the URL); 30 requests a minute
@@ -1959,20 +2340,20 @@ forwarder's code does. The link doesn't expire (it is derived from the
 current `MAIL_FORWARDING_KEYS` key; rotating the key ends old links). `404`
 for an unknown token.
 
-### PUT /api/mail/forwardings/:id/pause · /resume · /conditions
+### PUT /api/v1/mail/forwardings/:id/pause · /resume · /conditions
 
 The forwarder pauses an active forwarding (k is kept), resumes a paused one,
 or changes `{ "match", "conditions" }`. `409 forwardingState` from the wrong
 state.
 
-### GET /api/mail/forwardings/:id/activation
+### GET /api/v1/mail/forwardings/:id/activation
 
 The forwardee's pending activation: `{ "forwardingId", "forwarderAddress",
 "forwardeeAddress", "activation", "expiresAt" }`. Their client checks it
 (signed by the forwarder's key from its signed key list, for this
 forwarding, unexpired) before accepting.
 
-### POST /api/mail/forwardings/:id/accept
+### POST /api/v1/mail/forwardings/:id/accept
 
 The forwardee keeps the forwarding key: `{ "publicKey": "<base64>",
 "privateKeyEnvelope": "<base64, purpose MailAddressPrivateKey>" }`. Its
@@ -1980,17 +2361,17 @@ subkeys must be exactly the forwarding's. The key becomes an address key
 with `forwarding: true`; the forwarding is active, and its activation is
 dropped.
 
-### POST /api/mail/forwardings/:id/decline
+### POST /api/v1/mail/forwardings/:id/decline
 
 The forwardee declines a pending forwarding → `204`; its k and activation go
 and it is `rejected` for the forwarder.
 
-### DELETE /api/mail/forwardings/:id
+### DELETE /api/v1/mail/forwardings/:id
 
 Either side ends a forwarding → `204`; its k goes. The forwardee keeps the
 forwarding key until they delete it.
 
-### DELETE /api/mail/addresses/:address/forwarding-keys/:key
+### DELETE /api/v1/mail/addresses/:address/forwarding-keys/:key
 
 The forwardee deletes a forwarding key → `204`; the forwarding it serves
 ends with it.
@@ -2041,13 +2422,13 @@ Then its addresses are freed and the organization's owners see a
 `domainLost` security event, as when another organization proves the domain
 (two checks an hour apart that find its code and not the holder's).
 
-### GET /api/mail/domains
+### GET /api/v1/mail/domains
 
 `{ "domains": [...], "used", "max", "mode": "everyone"|"approve"|"off" }`: the
 domains of the organization the account manages (none yet: an empty list
 under the site's limit). `max` is the organization's domain limit.
 
-### POST /api/mail/domains
+### POST /api/v1/mail/domains
 
 `{ "name" }` → `201` with the domain (or the one the organization removed
 before, with its code); the account's first domain makes its organization of
@@ -2057,48 +2438,48 @@ doesn't manage. The name is lowercased and put in its IDNA form. `400`
 under it) or `publicSuffix`; `409` `domainLimit`, `domainDailyLimit`,
 `serverDomainLimit` or `domainBlocked`.
 
-### GET /api/mail/domains/{id}?refresh=1
+### GET /api/v1/mail/domains/{id}?refresh=1
 
 The domain; `refresh=1` checks its DNS now, uncached (Proton's "Refresh
 status"), at most 30 times an hour per account (`429`), and at most
-`mail_domains.refreshes_at_once` across the server at a time (`429`). A
-check that runs past `mail_domains.check_timeout_seconds` changes nothing
+`mail.domains.refreshes_at_once` across the server at a time (`429`). A
+check that runs past `mail.domains.check_timeout_seconds` changes nothing
 (`503` `checkTimedOut`). A check that finds the domain changed since it was
 read (another check, an administrator) returns it as it is.
 
-### DELETE /api/mail/domains/{id}
+### DELETE /api/v1/mail/domains/{id}
 
 `204`: the domain is removed and its addresses freed (their keys stay for old
 mail; nothing is published for them).
 
-### PUT /api/mail/domains/{id}/catch-all
+### PUT /api/v1/mail/domains/{id}/catch-all
 
 `{ "addressId": "<an active address on the domain>" | null }` → `204`. Unknown
 names on the domain then reach it, at most the owner's
-`mail_domains.catch_all_per_day` a day (500 at first; `452 4.2.2` after),
+`mail.domains.catch_all_per_day` a day (500 at first; `452 4.2.2` after),
 counted once per stored message across every backend; caught mail is never
 forwarded. `403` when catch-alls are off, `409`
 while the domain isn't verified.
 
-### POST /api/mail/domains/addresses
+### POST /api/v1/mail/domains/addresses
 
 `{ "local", "domainId" }` → `201 { "id", "address" }`: an address on one of
 the caller's verified domains, compared lowercased (no `. _ -` folding there).
 It has no key yet: the client adds one with `POST
-/api/mail/addresses/{id}/keys`. Every address counts toward the account's
+/api/v1/mail/addresses/{id}/keys`. Every address counts toward the account's
 limit (10 by default), its username's included. `400 invalidAddress`, `409`
 `addressLimit`, `addressTaken` or `domainNotVerified`. An address the
 account held before (deleted, or freed with its domain lost) comes back with
 its keys and signed key list, disabled, and `continues: true`: the client
-enables it with the chain's next list (`PUT /api/mail/addresses/{id}/enable`),
+enables it with the chain's next list (`PUT /api/v1/mail/addresses/{id}/enable`),
 so devices that saw the old chain never see it start over. After an account
 reset the address starts a new chain instead. Sending from it: `POST
-/api/mail/send` (and drafts) with `fromAddress: "<its id>"` in the meta.
+/api/v1/mail/send` (and drafts) with `fromAddress: "<its id>"` in the meta.
 
-### GET /api/admin/mail/domains · PUT /api/admin/mail/domains/settings
+### GET /api/v1/admin/mail/domains · PUT /api/v1/admin/mail/domains/settings
 
-Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail_domains.mode":
-"everyone"|"approve"|"off", "mail_domains.per_account", …addresses_per_account,
+Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail.domains.mode":
+"everyone"|"approve"|"off", "mail.domains.per_organization", …addresses_per_account,
 …on_server, …adds_per_day, …pending_days, …catch_all, …catch_all_per_day,
 …grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "ranges": {
 "<key>": { "min", "max" } } (each numeric setting's range, what the page offers), "spf", "dkimKeys": [{ "selector",
@@ -2116,7 +2497,7 @@ mail to them is refused at RCPT (`5xx`, the sender bounces it) rather than
 deferred. Turning the mode back on restores held domains that still prove
 themselves; their addresses keep working as before.
 
-### POST /api/admin/mail/domains/{id}/approve · /deactivate
+### POST /api/v1/admin/mail/domains/{id}/approve · /deactivate
 
 Administrators only. `approve` lets a verified domain take mail in the
 `approve` mode; `deactivate` ends a domain at once (its addresses freed, its
@@ -2124,7 +2505,7 @@ owner told in its inbox and its security events) and blocks its name and
 every name under it (`mail.<name>` too), so no account proves or takes any of
 them over until the block is lifted. Both audited.
 
-### GET /api/admin/mail/domains/blocks · DELETE /api/admin/mail/domains/blocks/{name}
+### GET /api/v1/admin/mail/domains/blocks · DELETE /api/v1/admin/mail/domains/blocks/{name}
 
 Administrators only. `GET`: the blocked names, newest first, `[{ "name",
 "blockedAt", "blockedBy" }]` (`blockedBy` null once that administrator's
@@ -2132,13 +2513,13 @@ account is gone), whether or not a domain row is left for them. `DELETE`
 lifts one by its name (`204`; `404` for a name not blocked), audited
 (`mail.domains.unblock`).
 
-### GET · PUT /api/admin/users/{id}/mail-domains
+### GET · PUT /api/v1/admin/accounts/{id}/mail-domains
 
 Administrators only. One account's limits over the site's: `{ "maxDomains":
 0–100 | null, "maxAddresses": 1–1000 | null, "catchAll": bool | null }`, `null`
 keeping the site's. `maxDomains` and `catchAll` are the account's
-organization's (`organization_setting_overrides`), `maxAddresses` its own
-(`user_setting_overrides`); setting an organization's limit for an account
+organization's (`organization_entitlements`), `maxAddresses` its own
+(`account_entitlements`); setting an organization's limit for an account
 without one makes its organization of one, so a limit (0 blocks custom
 domains) can be set before the first domain. `GET` adds `maxDomainsRange` and
 `maxAddressesRange` (`{ min, max }`, the ranges of the site settings they
@@ -2153,7 +2534,7 @@ fields: subject, addresses, dates, size, folder and flags. Each message is
 stored whole as a binary OpenPGP message that the client opens with its
 address key.
 
-### GET /api/mail/messages?folder=&before=&limit=
+### GET /api/v1/mail/messages?folder=&before=&limit=
 
 One folder (`inbox`, `drafts`, `sent`, `archive`, `spam` or `trash`), newest
 first, at most 200 per page (default 50).
@@ -2161,53 +2542,61 @@ first, at most 200 per page (default 50).
 **Auth:** Bearer JWT
 
 **Response:** `{ "messages": [{ "id", "threadId", "folder", "seen", "starred", "protection", "size", "receivedAt", "sentAt", "subject", "from": { "address", "name" }, "to": [...], "cc": [...], "replyTo": [...], "messageId", "attachmentCount" }], "next": "..." }`.
-`protection` is `zero_access` (encrypted on arrival) or `end_to_end` (between
+`protection` is `zeroAccess` (encrypted on arrival) or `endToEnd` (between
 Kutup users, or arrived OpenPGP-encrypted by its sender). Pass
 `next` as `before` for the next page; it is absent on the last. Instead,
 `page` (from 0) pages by number, `limit` to a page (Proton's paging), and the
 answer carries `total`, how many the place holds with the filters; `page` with
 `before` is `400`. `400` for an unknown folder or cursor.
 
-### GET /api/mail/messages/:id/content
+### GET /api/v1/mail/messages/:id/content
 
 The stored message: `application/octet-stream`, an OpenPGP message encrypted to
 the address key. `404` unless it is the caller's.
 
 **Auth:** Bearer JWT
 
-### PATCH /api/mail/messages
+### PATCH /api/v1/mail/messages
 
 `{ "ids": [...], "seen"?, "starred"?, "folder"? }`, 1 to 500 ids. Received mail
 can go to `inbox`, `archive`, `spam` or `trash`; sent mail to `sent`,
 `archive` or `trash`; drafts stay in Drafts. Moving to Trash marks read.
 **Response:** `{ "updated": 3 }`, counting only the messages that changed.
 
-### POST /api/mail/messages/batch
+### POST /api/v1/mail/messages/batch
 
 `{ "place", "seen"?, "folder"?, "customFolder"?, "addLabels"?, "removeLabels"?, "group"? }`:
-the same change as `PATCH /api/mail/messages`, on every message of a place
+the same change as `PATCH /api/v1/mail/messages`, on every message of a place
 (Proton's select all): a folder, `starred`, `folder:<id>` or `label:<id>`; All
 mail is `400`. Only the caller's mailbox, or a shared one they are a member of.
 Runs in chunks (`MAIL_BATCH_CHUNK`, 5,000 messages), each its own transaction.
 **Response:** `{ "updated": 1234 }`.
 
-### POST /api/mail/messages/delete
+### POST /api/v1/mail/messages/delete
 
 `{ "ids": [...] }`: deletes for good, only from Trash, Spam and Drafts (a
 draft's attachments go with it), and frees their storage.
 **Response:** `{ "updated": 2 }`.
 
-### GET /api/mail/counts · GET /api/mail/threads/:id
+### GET /api/v1/mail/counts · GET /api/v1/mail/threads/:id
 
 `counts`: `[{ "folder", "unread", "total" }]`, one per folder in use plus
 `starred`. `threads/:id`: the thread's messages, oldest first, as in the list.
 
-`GET /api/mail/messages` also takes `q` (subjects and addresses) and the
-folders `starred` and `all` (everything but Spam and Trash). Each message
+`GET /api/v1/mail/messages` also takes `q` (subjects, senders and To/Cc), and
+advanced search's `from` (the sender) and `to` (To, Cc or Bcc), and the
+folders `starred` and `all` (everything but Spam and Trash). Searches match
+**whole words**, every word of the query, folded (case, accents, Turkish
+dotted and dotless I): `fatura ekim` finds "Ekim faturası" only if both words
+are there whole, so `fatur` finds nothing. An address matches whole, by its
+local part or domain (`ali@ornek.com`, `@ornek.com`), or by its words. The
+server keeps headers sealed and only keyed hashes of their words
+(docs/plans/server-personal-data.md, L7), so substring search is gone; body
+search runs in the browser (docs/plans/mail-body-search.md). Each message
 carries `direction` (`inbound` or `outbound`), `bcc` (your sent copies
 only), `inReplyTo` and `references`.
 
-### POST /api/mail/drafts · PUT /api/mail/drafts/:id
+### POST /api/v1/mail/drafts · PUT /api/v1/mail/drafts/:id
 
 Multipart: `meta` (JSON: `subject`, `fromName`, `to`, `cc`, `bcc` as
 `[{ "address", "name" }]`, `messageId` as `…@<server name>` or `…@<the sender's domain>`, `inReplyTo`,
@@ -2218,12 +2607,12 @@ over quota.
 
 ### Draft attachments
 
-`POST /api/mail/drafts/:id/attachments` (multipart `part`: the MIME part as
+`POST /api/v1/mail/drafts/:id/attachments` (multipart `part`: the MIME part as
 it will be sent, encrypted to your own key, all of a draft's together at
 most 25 MB) → `{ "id", "size" }`; `GET` the list; `GET` or `DELETE`
-`/api/mail/drafts/:id/attachments/:attachment`.
+`/api/v1/mail/drafts/:id/attachments/:attachment`.
 
-### POST /api/mail/send
+### POST /api/v1/mail/send
 
 Multipart: `meta` (the draft fields, plus `draftId`, `keyPackets`: base64
 key packets, `self` for your copy and one per Kutup recipient address, and
@@ -2236,7 +2625,7 @@ messages must be From you with the same Message-ID and no Bcc header; a PGP
 message must hold an encrypted OpenPGP message, and `mime` is refused when
 nobody needs it. The server stores `key packet || data packet` for you
 (Sent) and each Kutup recipient (Inbox), hands `mime` and each PGP message
-to Stalwart, and deletes the draft. Your sent copy is `end_to_end` when no
+to Stalwart, and deletes the draft. Your sent copy is `endToEnd` when no
 recipient got the plaintext.
 
 **Response:** `{ "message": {...your sent copy...}, "recipients": [{ "address", "status" }] }`,
@@ -2249,39 +2638,39 @@ and its refusal fails the whole send). Errors: `409` `keyChanged` with
 recipients by default), `413` over 25 MB or quota, `503` when Stalwart is
 unreachable.
 
-With undo send on (`delaySendSeconds` in `/api/mail/settings`: 5, 10 or 20)
+With undo send on (`delaySendSeconds` in `/api/v1/mail/settings`: 5, 10 or 20)
 and a `draftId`, the send is checked at once (every error above still comes
 now) and held: **202** `{ "outboxId", "deliverAt" }`. The server sends it at
 `deliverAt`, also with the browser closed; until then the draft stays and
 cannot change (`409`, code `sending`). A send that was going out when the
 server stopped fails rather than going twice.
 
-### GET /api/mail/outbox/:id
+### GET /api/v1/mail/outbox/:id
 
 A held send's `state` (`pending`, `sending`, `sent`, `cancelled`, `failed`)
 and `result`: `{ "recipients": [...] }` once sent, the send's error body once
 failed. `404` unless it is yours.
 
-### POST /api/mail/outbox/:id/cancel
+### POST /api/v1/mail/outbox/:id/cancel
 
 Undo: the held send does not go; its draft stays. `204`, or `409` once it has
 gone out.
 
-### GET /api/mail/sending
+### GET /api/v1/mail/sending
 
 Your limits on mail to outside addresses: `{ "perHour", "perDay", "sentHour",
 "sentDay", "newAccount", "paused", "outsideAllowed" }`. `outsideAllowed` is
 false while the server does not send outside for you (the administrators'
-setting is `off`, or `admins` and you are not one); `POST /api/mail/send` then answers
+setting is `off`, or `admins` and you are not one); `POST /api/v1/mail/send` then answers
 `403` with `code: outsideSendingOff` for any outside recipient. `paused` is `admin`, `bounces` or `spam`
 while sending outside is paused (mail between Kutup users still goes). New
 accounts may send to 50 outside recipients a day in their first week
 (`MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY`, `MAIL_NEW_ACCOUNT_DAYS`), then
-`MAIL_SEND_RECIPIENTS_PER_HOUR` and `…_PER_DAY`. `POST /api/mail/send` answers
+`MAIL_SEND_RECIPIENTS_PER_HOUR` and `…_PER_DAY`. `POST /api/v1/mail/send` answers
 `403` with `code: sendingPaused` while paused, and `429` `sendLimit` (with
 `perHour`, `perDay`, `newAccount`) over a limit.
 
-### GET · PUT /api/admin/mail/outside-sending
+### GET · PUT /api/v1/admin/mail/outside-sending
 
 Administrators only. Who may send mail to addresses outside Kutup:
 `{ "outsideSending": "off" | "admins" | "on" }`. A `PUT` applies at once,
@@ -2289,11 +2678,11 @@ without a restart, and writes `mail.outside_sending.update` to the audit log
 (`payload: { from, to }`); anything else is `400`. `MAIL_OUTSIDE_SENDING`
 only seeds the stored value when the server starts without one.
 
-### GET /api/admin/mail/senders?attention= · PUT /api/admin/users/:id/mail-sending
+### GET /api/v1/admin/mail/senders?attention= · PUT /api/v1/admin/accounts/:id/mail-sending
 
 Admin only. The list: accounts that sent outside in the last week, or have
 their own limits, a pause or a flag, paused and flagged first:
-`[{ "userId", "username", "sentDay", "sentWeek", "bouncesWeek",
+`[{ "accountId", "username", "sentDay", "sentWeek", "bouncesWeek",
 "spamRefusedWeek", "perHour", "perDay", "pausedAt", "pausedReason",
 "flaggedAt", "flagReason" }]` (counts only, never content). `attention=true`
 keeps only paused and flagged ones. The update takes `{ "perHour"?, "perDay"?
@@ -2313,32 +2702,32 @@ The role addresses are system groups: they take mail from anyone, cannot be
 deleted, and while none of their members can receive mail it goes to every
 active administrator.
 
-- `GET /api/mail/groups` — the caller's groups, with `myRole` and
+- `GET /api/v1/mail/groups` — the caller's groups, with `myRole` and
   `myCanSendAs`.
-- `GET /api/mail/accounts?address=` — `{ "userId", "username", "address" }`
+- `GET /api/v1/mail/accounts?address=` — `{ "accountId", "username", "address" }`
   of the active account at a Kutup address with a mail key, so members are
   added by address (there is no user search). Rate-limited like user lookup.
-- `GET /api/mail/groups/directory?q=` — up to 10 groups whose address or name
+- `GET /api/v1/mail/groups/directory?q=` — up to 10 groups whose address or name
   starts with `q` and that take the caller's mail, for the composer's
   suggestions.
 - Message rows carry `groupAddress` (the list or shared mailbox a copy came
   through) and `sentBy` (who sent a shared mailbox's message).
-- `GET /api/mail/groups/:id` — `{ "group", "members": [{ "userId", "username",
+- `GET /api/v1/mail/groups/:id` — `{ "group", "members": [{ "accountId", "username",
   "address", "role", "canSendAs", "active" }], "goesToAdministrators" }`, for
   members and administrators.
-- `PATCH /api/mail/groups/:id` — `displayName`, `description`, `postPolicy`
+- `PATCH /api/v1/mail/groups/:id` — `displayName`, `description`, `postPolicy`
   (`anyone`, `local`, `members`, `managers`; role addresses stay `anyone`),
   for owners, managers and administrators.
-- `PUT /api/mail/groups/:id/members` — `{ "members": [{ "userId", "role":
+- `PUT /api/v1/mail/groups/:id/members` — `{ "members": [{ "accountId", "role":
   "owner" | "manager" | "member", "canSendAs" }] }`, the whole list. Owners
   and administrators change anyone; managers neither add, remove nor change
   owners; a group other than a role address keeps an owner. At most 1000.
-- `GET /api/mail/groups/recipients?email=` — the receivers of a group the
-  caller may post to, each as `GET /api/mail/keys` answers: the browser
+- `GET /api/v1/mail/groups/recipients?email=` — the receivers of a group the
+  caller may post to, each as `GET /api/v1/mail/keys` answers: the browser
   encrypts a key packet per member and sends them in `keyPackets` by member
   address. `403` `notAllowed` when the group does not take the caller's
-  mail. `GET /api/mail/keys` answers a group's address with `404` and `code:
-  group`. `POST /api/mail/send` answers `409` `groupChanged` when a member's
+  mail. `GET /api/v1/mail/keys` answers a group's address with `404` and `code:
+  group`. `POST /api/v1/mail/send` answers `409` `groupChanged` when a member's
   key packet is missing (look the group up again) and gives the group one
   status (`delivered` or `full`); members who get the message directly and
   the sender get it once.
@@ -2348,23 +2737,23 @@ active administrator.
   that their key binding ties to their account id, and bound to the group
   id, the group key's fingerprint, their account and its incarnation:
   `mail_key::seal_group_key_share`; a rename keeps it,
-  docs/plans/account-ids.md). `GET /api/mail/keys` answers
+  docs/plans/account-ids.md). `GET /api/v1/mail/keys` answers
   a shared mailbox with its key-list chain, signed by the group's own signing
   key, which its owners and managers hold (never by the server), and WKD
   serves its key.
   Its messages are read and filed with `?group={id}` on `GET
-  /api/mail/messages`, `/counts`, `/threads/:id` and `/messages/:id/content`,
-  and `"group"` in the bodies of `PATCH /api/mail/messages` and `POST
-  /api/mail/messages/delete` (members only; anything else is `404`).
-  `POST /api/mail/send` with `fromGroup` sends as it (owners, managers and
+  /api/v1/mail/messages`, `/counts`, `/threads/:id` and `/messages/:id/content`,
+  and `"group"` in the bodies of `PATCH /api/v1/mail/messages` and `POST
+  /api/v1/mail/messages/delete` (members only; anything else is `404`).
+  `POST /api/v1/mail/send` with `fromGroup` sends as it (owners, managers and
   members with `canSendAs`; `403` `notAllowedToSendAs` otherwise): From is its
   address, `keyPackets.self` is for its key, the copy lands in its Sent with
   `sentBy`, and the sender's limits count it.
-  - `GET /api/mail/groups/:id/keys` — `{ keys, signer?, signingShare? }`:
+  - `GET /api/v1/mail/groups/:id/keys` — `{ keys, signer?, signingShare? }`:
     its keys, primary first, with the caller's `share` (only one sealed to
     their current account keys), the signer in force of its key lists and,
     for an owner or manager, their share of its seed.
-  - `POST /api/mail/groups/:id/keys` — `{ "key": NewGroupKey }`, a new
+  - `POST /api/v1/mail/groups/:id/keys` — `{ "key": NewGroupKey }`, a new
     primary key with a share for every member and none for anyone else
     (owners and managers). `NewGroupKey` is `{ publicKey, shares, keyList:
     { data, signature }, signer?: { publicKey, shares, handover? } }`:
@@ -2376,11 +2765,11 @@ active administrator.
     refuses (another signer, an old signer after its handover, a gap, other
     keys); `403 handoverNeeded` for a new signer without a handover from
     anyone but an administrator (who starts a new chain).
-  - `PUT /api/mail/groups/:id/members` also takes `keyShares` (`[{
-    "groupFingerprint", "userId", "share" }]`, every existing key for each
+  - `PUT /api/v1/mail/groups/:id/members` also takes `keyShares` (`[{
+    "groupFingerprint", "accountId", "share" }]`, every existing key for each
     joining member; `400` `sharesNeeded`) and `newKey` (required when anyone
     leaves, with a share for exactly the members who stay; `400`
-    `newKeyNeeded`), and `signerShares` (`[{ "userId", "share" }]`, the
+    `newKeyNeeded`), and `signerShares` (`[{ "accountId", "share" }]`, the
     signer in force's seed for owners and managers who lack it: joining,
     promoted, or reset since). Losing an owner or manager (removed, or no
     longer one) needs `newKey` with a new `signer` (`400 newSignerNeeded`).
@@ -2395,16 +2784,16 @@ active administrator.
     change. Each share must be sealed to the member's current account
     incarnation (`409` `keyChanged`; `400` `noAccountKey` for an account not
     set up yet). Browsers look each member up by
-    `GET /api/users/by-id/:accountId` and check their Drive key binding
+    `GET /api/v1/accounts/:accountId` and check their Drive key binding
     before sealing.
-- Administrators: `GET /api/admin/mail/groups`, `POST /api/admin/mail/groups`
+- Administrators: `GET /api/v1/admin/mail/groups`, `POST /api/v1/admin/mail/groups`
   (`id`, a lowercase UUID the browser draws, which a shared mailbox's key
   shares are bound to (`409` `idTaken`: draw another); `name`, `displayName`, `description`, `kind: "list" | "shared"`,
   `postPolicy`, `storageQuotaBytes`, `owners`, and for a shared mailbox
   `groupKey` (a `NewGroupKey` with the first `signer`, no handover) with a
   share for each owner; `409` `nameTaken` when the name is an
-  account's, a group's or reserved), `PATCH /api/admin/mail/groups/:id`
-  (quota, names, policy), `DELETE /api/admin/mail/groups/:id` (not a role
+  account's, a group's or reserved), `PATCH /api/v1/admin/mail/groups/:id`
+  (quota, names, policy), `DELETE /api/v1/admin/mail/groups/:id` (not a role
   address; members keep their copies). Each change is in the audit log, by
   the group's id and members' account ids (the address is a snapshot).
 - `GET /.well-known/security.txt` (RFC 9116, no authentication): `Contact:
@@ -2436,7 +2825,7 @@ holds. The server verifies every summary against the account's authority key,
 indexes its emails (autocomplete) and groups, and charges summary and card to
 the storage pool (`413` when full).
 
-### GET /api/contacts?offset=&limit=
+### GET /api/v1/contacts?offset=&limit=
 
 The caller's contacts by name, at most 1000 per page.
 **Response:** `{ "contacts": [{ "id", "summary", "signature", "card", "revision", "createdAt", "updatedAt" }], "total": 12 }`.
@@ -2448,32 +2837,32 @@ card's authenticated header, which the summary's signature binds too
 (docs/plans/sealed-revisions.md); clients refuse a contact older than one they
 have seen.
 
-### POST /api/contacts
+### POST /api/v1/contacts
 
 **Body:** `{ "summary": "canonical JSON", "signature": "base64", "card": "base64" }`.
 **Response 201:** the contact. `400` for a summary that is not canonical, not
 signed by this account, or names a group that does not exist; `409` when the
 UID is already in the address book.
 
-### PUT /api/contacts/:id
+### PUT /api/v1/contacts/:id
 
 **Body:** the same plus `baseRevision` (the revision the edit started from);
 the new card's revision must be above it (`400` if not). The UID cannot
 change. **Response:** the contact at its new revision; `409` with
-`{ "code": "revision_conflict", "revision": <stored> }` when it changed
+`{ "code": "revisionConflict", "revision": <stored> }` when it changed
 elsewhere.
 
-### DELETE /api/contacts/:id · POST /api/contacts/delete
+### DELETE /api/v1/contacts/:id · POST /api/v1/contacts/delete
 
 Delete one, or `{ "ids": [...] }` (up to 500). Storage is released.
 **Response:** `204`.
 
-### POST /api/contacts/import
+### POST /api/v1/contacts/import
 
 `{ "contacts": [ ...like POST... ] }`, 1 to 500, all or nothing.
 **Response:** `{ "imported": 2 }`.
 
-### GET /api/contacts/emails?q=&limit=
+### GET /api/v1/contacts/emails?q=&limit=
 
 Addresses whose address, or any word of the contact's name, starts with `q`;
 recently used first. For recipient, share and invitee pickers.
@@ -2481,12 +2870,13 @@ recently used first. For recipient, share and invitee pickers.
 
 ### Groups
 
-`GET /api/contacts/groups` → `[{ "id", "name", "color", "members" }]`;
-`POST /api/contacts/groups` `{ "name", "color": "#rrggbb" }` → `201`;
-`PUT /api/contacts/groups/:id` (rename, recolour) → `204`;
-`DELETE /api/contacts/groups/:id` → `204` (members stay; their summaries are
-re-signed without it on their next edit, and readers ignore unknown ids).
-Membership is the summary's `groups`, so it is signed.
+Contact groups are records of the account-records store's `contactGroups`
+scope (above): each one's name and colour sealed under the master key
+(`ContactGroupV1`, purpose `ContactGroup`), so the server sees neither.
+Membership is the summary's `groups`, the groups' record ids, so it is
+signed; the server checks each is a record the account keeps (`400`
+otherwise). A deleted group's members stay; their summaries drop it on their
+next edit, and readers ignore ids that no longer exist.
 
 ---
 
@@ -2499,11 +2889,14 @@ name and description are sealed to the calendar key. Events are Proton's
 parts (`SealedEventV1`): signed parts in the clear, encrypted parts as data
 packets, two key packets to the calendar key, every part signed by its
 author's address key. The browser makes and opens all of it through the
-`crypto-calendar` WASM. Every calendar a member holds is listed by the
-account head's `calendars` scope (the calendar id and the member row's
-`revision`); a write that adds, changes or removes one carries `head`.
+`crypto-calendar` WASM. A member's own colour and display flag are a record
+of the account-records store's `calendarSettings` scope (`CalendarSettingsV1`,
+purpose `CalendarSettings`), filed under a keyed hash of the calendar id, so
+the server can't tie it to its calendar; the client writes it before it
+creates the calendar, and lists the calendars against those records. The
+default reminders stay on the member row: the server fires the alarms.
 
-### GET /api/calendar/calendars · POST /api/calendar/calendars
+### GET /api/v1/calendar/calendars · POST /api/v1/calendar/calendars
 
 **Auth:** Bearer JWT
 
@@ -2512,13 +2905,13 @@ account head's `calendars` scope (the calendar id and the member row's
 signatures), `publicKey`, `fingerprint`, `lockedSecretKey`, `passphrase`
 (`dataPacket`, `signature`, `keyPacket`), `addressId` (the member's address
 the key packet is to), `metadata` (`keyPacket`, `dataPacket`, `signature`),
-`permissions` (Proton's bits; 127 for the owner), `color`, `display`,
-`revision`, `createdAt`, `updatedAt`.
+`permissions` (Proton's bits; 127 for the owner), `defaultReminders`,
+`createdAt`, `updatedAt`.
 
-`POST` makes one: `{ id, addressId, publicKey, lockedSecretKey, passphrase,
-metadata, color, head }` (`createCalendar` in WASM makes the keys, the
+`POST` makes one: `{ id, publicKey, lockedSecretKey, passphraseShare,
+metadata }` (`createCalendar` in WASM makes the keys, the
 passphrase and the metadata). `id` is a fresh UUID v4 the client draws, so
-the account head naming it is made before the create; one in use is
+its settings record is filed before the create; one in use is
 `409 calendarExists`. The server checks the key's shape, that the locked secret is the
 key's and locked, that the passphrase's key packet is to the address's
 primary key and the metadata's to the calendar key. `201` with the
@@ -2526,19 +2919,18 @@ CalendarView; `400` when a check fails; `409 calendarLimit` at the
 administrators' `calendarsPerAccount` (25 at first); `413` over the storage
 quota.
 
-### PUT /api/calendar/calendars/{id} · DELETE /api/calendar/calendars/{id}
+### PUT /api/v1/calendar/calendars/{id} · DELETE /api/v1/calendar/calendars/{id}
 
-`PUT` takes `{ metadata?, color?, display?, defaultReminders?, baseRevision,
-revision, head }`: the owner's new sealed name and description, and the
-member's own colour, visibility and default reminders (`{ timed, allDay }`,
+`PUT` takes `{ metadata?, defaultReminders? }`: the owner's new sealed name
+and description, and the member's own default reminders (`{ timed, allDay }`,
 lists of reminders as below, `calendarDefaultReminders` (5) each; Proton's
 defaults: 15 minutes before a timed event, 15 hours before an all-day one,
 on the device and by email). A calendar's view carries the member's
-`defaultReminders`. `409 revision_conflict` when `baseRevision` is not the
-member row's; `403` when someone else than the owner sends `metadata`.
-`DELETE` (body `{ head }`) deletes the calendar and its events, owner only.
+`defaultReminders`. `403` when someone else than the owner sends `metadata`.
+`DELETE` deletes the calendar and its events, owner only; the owner's
+client then deletes its settings record.
 
-### GET /api/calendar/calendars/{id}/events?start=&end=&afterStart=&afterId=&limit=
+### GET /api/v1/calendar/calendars/{id}/events?start=&end=&afterStart=&afterId=&limit=
 
 The events that meet the half-open window `[start, end)` (RFC 3339, at most
 `calendarWindowDays`, 400 at first), ordered by start then id, at most
@@ -2553,7 +2945,7 @@ the caller's own for it, null for their calendar's defaults); the times are what
 part, which a client checks again when it opens the event. A calendar the
 caller isn't a member of is `404`. `GET …/events/{eventId}` answers one.
 
-### POST /api/calendar/calendars/{id}/events/sync
+### POST /api/v1/calendar/calendars/{id}/events/sync
 
 `{ addressId, changes: [{"create": {id, event}} | {"update": {id,
 baseRevision, event}} | {"delete": {id, baseRevision}}] }` (a create's `id`
@@ -2582,7 +2974,7 @@ every event that meets it, and also those ending exactly at its start (a
 series' last occurrence of no length there). `409 uidTaken`
 for a UID already in the calendar, `409 eventLimit` at
 `calendarEventsPerCalendar` (25,000). An update or a delete names
-the event's `revision` it was made from: another one is `409 revision_conflict` (with
+the event's `revision` it was made from: another one is `409 revisionConflict` (with
 the stored `revision`), so a replayed or older change never overwrites a
 newer one; a `SEQUENCE` lower than the stored one is `409 sequenceBehind`.
 An event starts at revision 1 and each update adds one. The caller's
@@ -2612,7 +3004,7 @@ defaults, a list replaces them. Each member's are their own.
 
 The server keeps each member's next alarm per event and reminder (the
 series expanded from both parts' `EXDATE`s; all-day ones in the zone of
-`/api/calendar/settings`) and fires the due ones: a **device** reminder as a
+`/api/v1/calendar/settings`) and fires the due ones: a **device** reminder as a
 web push to each of the member's signed-in browsers that subscribed, its
 payload encrypted to the browser (RFC 8291) and only `{ eventId, startUtc }`;
 an **email** reminder to the member's own Kutup address, saying only when,
@@ -2627,14 +3019,14 @@ A reminder push lives at the push service until its occurrence starts (at
 least the lateness), one per event (`Topic`), signed with the server's
 VAPID key (the one Chat's pushes carry).
 
-### GET /api/calendar/alarms?start=&end=&afterFire=&afterEvent=
+### GET /api/v1/calendar/alarms?start=&end=&afterFire=&afterEvent=
 
 The caller's next alarms firing in the window, by fire time,
 `calendarAlarmsPage` (100) at most; the page's last `fireAt` and `eventId`
 continue it. `{ alarms: [{ calendarId, eventId, action, occurrenceStart,
 fireAt }] }`: the open app fires its own notifications from these.
 
-### GET · PUT /api/calendar/settings
+### GET · PUT /api/v1/calendar/settings
 
 `{ zone }`: the IANA zone the account's calendars show in, where all-day
 reminders fire (`null`: UTC). `400 unknownZone` for a zone the bundled
@@ -2642,7 +3034,7 @@ database doesn't know. Setting it moves the account's all-day alarms
 shortly after: the job recomputes them, `calendarRecomputeBatch` (500)
 events at a time (as for a change of a calendar's default reminders).
 
-### PUT · DELETE /api/calendar/push-subscription
+### PUT · DELETE /api/v1/calendar/push-subscription
 
 `{ endpoint, p256dh, auth }` from the browser's `PushSubscription`
 (base64url keys): this signed-in session's browser takes reminder pushes,
@@ -2658,7 +3050,7 @@ links neither two members' pushes nor one account's browsers. The push service m
 allowlist (`400`); `404` where Web Push is off. A push service's `404` or
 `410` drops the subscription. `DELETE` ends it.
 
-### GET /api/maps
+### GET /api/v1/maps
 
 **Auth:** Bearer JWT
 
@@ -2671,7 +3063,7 @@ allowlist (`400`); `404` where Web Push is off. A push service's `404` or
     "name": "OpenFreeMap",
     "kind": "vector | raster",
     "url": "https://tiles.openfreemap.org/styles/liberty",
-    "proxyUrl": "/api/maps/proxy/openfreemap/styles/liberty",
+    "proxyUrl": "/api/v1/maps/proxy/openfreemap/styles/liberty",
     "attribution": "…"
   }],
   "preferences": { "enabled": false, "provider": null, "viaProxy": true }
@@ -2682,14 +3074,14 @@ allowlist (`400`); `404` where Web Push is off. A push service's `404` or
 listed). `proxyUrl` is null when the relay is off. A vector provider's `url`
 is a MapLibre style; a raster provider's is a `{z}/{x}/{y}` template.
 
-### PUT /api/maps/preferences
+### PUT /api/v1/maps/preferences
 
 **Auth:** Bearer JWT. Body: `{ enabled, provider, viaProxy, saveFolderId }`;
 `provider` must be one on offer (or null). `saveFolderId` is where the Maps
 app puts new lists: one of your own folders, not in the trash (`400`
-otherwise), or null for My files. Returns the same shape as `GET /api/maps`.
+otherwise), or null for My files. Returns the same shape as `GET /api/v1/maps`.
 
-### GET /api/maps/proxy/:provider/*path
+### GET /api/v1/maps/proxy/:provider/*path
 
 **Auth:** Bearer JWT. The resource at that path on the provider (style,
 TileJSON, tile, glyphs, sprite), fetched by this server and kept in its
@@ -2704,7 +3096,7 @@ served instead when there is one).
 
 A re-authentication (Kutup Pass's lock, a new password, turning 2FA off,
 deleting the account, an admin reset) is a sign-in exchange with `purpose:
-"reauth"` (`POST /api/auth/login/start`, above), whose answer is a one-time
+"reauth"` (`POST /api/v1/auth/login/start`, above), whose answer is a one-time
 grant for that action.
 
 Vault secrets (docs/plans/pass.md, "Vault secrets"). A vault is a KeePass
@@ -2716,74 +3108,52 @@ purpose `PassVaultSecret` (6) whose payload binds the vault's file id
 `kutup sync` then open the vault with the Kutup sign-in. The server checks
 only the envelope's public header.
 
-### GET /api/pass/vault-secrets
+The kept keys are the account-records scope `passSecrets` ([the
+account-records store](#the-account-records-store)): one record per vault,
+its id the vault's file id, stored and forgotten with `POST
+/api/v1/account/records` and the next head, and read with `GET
+/api/v1/account/records/passSecrets`. A put is `404` for a vault that does not
+exist, is in the trash, or the caller cannot open. A key goes only when its
+owner forgets it, never with its vault: a purged or unreachable vault's key
+stays in the scope ("unreachable but listed"), since it may be the only copy
+of a generated password or a key file's element; the owner's client forgets
+it.
 
-Every one of the caller's vault secrets, as the account head's `passSecrets`
-index lists them: `[{fileId, envelope, state, revision, updatedAt}]`
-(`envelope` base64; `revision` the one in its header, the base of the next
-keep). `state` says what has become of the vault: `open` (the caller can
-open it: the only state whose key clients use), `trashed` (kept for a
-restore), `unreachable` (the vault is there but not shared with the caller
-now; `open` again if access comes back) or `gone` (purged). A read never
-deletes one, and a failed access check fails the request; a secret goes only
-when its owner forgets it (`DELETE`, or `POST …/forget` for several), since
-it may be the only copy of a generated password or a key file's element.
-Clients check the whole list, every state, against the head.
+### GET /api/v1/pass/vault-states
 
-### PUT /api/pass/vault-secrets/:fileId
-
-**Body:** `{envelope, baseRevision}`, the envelope canonical base64 of at
-most 4608 bytes. Stores or replaces the caller's secret for that vault, on
-top of the secret it was kept at (`baseRevision`, 0 for none;
-docs/plans/sealed-revisions.md). `400` unless the envelope is a
-`PassVaultSecret` envelope for the caller's key binding and this vault, with
-a revision above `baseRevision` (at most 2^53 − 1); `404` for a vault that
-does not exist, is in the trash, or the caller cannot open; `409` with
-`{ "code": "revision_conflict", "revision": <stored> }` when another device
-kept a key first.
-**Response:** `204`.
-
-### DELETE /api/pass/vault-secrets/:fileId
-
-Forgets the caller's secret for the vault (the vault is untouched). Body
-`{ "head": "…" }` once the account keeps a head. **Response:** `204`.
-
-A secret goes only this way, never with its vault: a purged or unreachable
-vault's secret stays in the account's `passSecrets` index ("unreachable but
-listed") until the owner's client forgets it, which it does on its next Pass
-write or unlock, all such secrets under one head:
-
-### POST /api/pass/vault-secrets/forget
-
-`{ "fileIds": ["<id>", …], "head": "…" }` (1 to 1,000). **Response:** `204`
-(those there were).
+What has become of the vault of every key the caller keeps:
+`[{fileId, state}]`. `state` is `open` (the caller can open it: the only
+state whose key clients use), `trashed` (kept for a restore), `unreachable`
+(the vault is there but not shared with the caller now; `open` again if
+access comes back) or `gone` (purged). A failed access check fails the
+request. **Auth:** Bearer JWT.
 
 The PIN lock (docs/plans/pass.md, "The PIN"): six digits per account, kept
 as a bcrypt hash and checked only here. It releases no key; the server's part
 is the limit of three tries per sign-in. **Auth:** Bearer JWT for all four.
 
-### GET /api/pass/pin
+### GET /api/v1/pass/pin
 
 `{set}`: whether the account has a PIN.
 
-### PUT /api/pass/pin
+### PUT /api/v1/pass/pin
 
 **Body:** `{grant, pin}`. Sets or changes the PIN; `grant` is a `pass` grant
 from a reauth of this session, used once. Resets the wrong-PIN count of every
 sign-in. **Response:** `204`, `400` unless `pin` is six digits (checked first:
 no grant is spent on a typo), `403 grantInvalid`.
 
-### DELETE /api/pass/pin
+### DELETE /api/v1/pass/pin
 
 **Body:** `{grant}`, as above. **Response:** `204` (also when there was
 none), `403 grantInvalid`.
 
-### POST /api/pass/pin/verify
+### POST /api/v1/pass/pin/verify
 
 **Body:** `{pin}`. **Response:** `204` when right (this sign-in's wrong-PIN
 count starts again); `403 {error: "wrongPin", attemptsLeft}`; `403 {error:
 "signedOut", attemptsLeft: 0}` on the third wrong PIN in a row, which ends the
-caller's whole sign-in (as `POST /api/auth/logout`); `404 {error: "noPin"}`.
+caller's whole sign-in (as `POST /api/v1/auth/logout`); `404 {error: "noPin"}`.
 The count is per sign-in (the root session and the app sessions forked from
 it), each try is reserved before the check so parallel tries get no more than
 three, and other sign-ins neither add to it nor clear it.
@@ -2791,17 +3161,17 @@ three, and other sign-ins neither add to it nor clear it.
 Website icons for entries (docs/plans/pass.md, "Site icons"). **Auth:**
 Bearer JWT.
 
-### GET /api/pass/settings
+### GET /api/v1/pass/settings
 
 `{siteIcons}`: whether the account's entries show their website's icon, the
 same on every device: `"kutup"` (through this server; the default) or
 `"off"`.
 
-### PUT /api/pass/settings
+### PUT /api/v1/pass/settings
 
 **Body:** `{siteIcons}`. **Response:** `204`, `400` for another value.
 
-### POST /api/pass/icon
+### POST /api/v1/pass/icon
 
 **Body:** `{domain}`: a host name only (`accounts.example.org`; no IP
 address, port, path or `localhost`). The server reads the site's home page
@@ -2824,69 +3194,61 @@ nosniff` and a sandboxing CSP.
 The Photos app's library (docs/plans/photos.md). Photos are Drive files;
 their details are sealed in each file's metadata (`media`), never sent here.
 
-### GET /api/photos/preferences
+### GET /api/v1/photos/preferences
 
 **Auth:** Bearer JWT. `{ uploadFolderId, libraryFolderIds }`: where uploads
 go (one of your own folders, or null until the app makes "Photos" in My
 files), and the other folders the library shows, each with its subfolders.
 Folders deleted, or no longer shared with you, are left out.
 
-### PUT /api/photos/preferences
+### PUT /api/v1/photos/preferences
 
 **Auth:** Bearer JWT. Body: the same shape. `uploadFolderId` must be one of
 your own folders, not in the trash; each library folder one you can open,
 at most 200 (`400` otherwise). Returns what was saved.
 
-### GET /api/photos/library · PUT /api/photos/library
+### The Photos library record
 
-Your own marks on photos (favourites, archived, hidden) as one
-account-private envelope (`kutup-crypto` `photos_library`), sealed under a
-subkey of the master key; the server never reads it.
-
-- **GET** (Bearer JWT): `{ envelope, revision, envelopeDigest }`, `404`
-  before the first.
-- **PUT** (Bearer JWT): `{ envelope }`, the next revision: its header must
-  name this account's incarnation, the stored revision plus one and the
-  stored envelope's SHA-256 (revision 1 when there is none, or when the
-  stored one is from before the account was reset). `200` with the stored
-  record; `409` with the current record otherwise, which the client merges
-  into and seals again. Up to 6 MiB.
+Your own marks on photos (favourites, archived, hidden) are one
+account-private record (`kutup-crypto` `photos_library`, purpose 34) in the
+account-records store's `photosLibrary` scope (see "The account-records
+store"); the server never reads it.
 
 ### Albums
 
 Albums (docs/plans/photos.md) are collections of kind `album`: keys and
 epochs as a folder's, but they hold references to photos, never files or
 folders (the database refuses both), sit at the top level, and are left out
-of `GET /api/collections` and the trash. Each item is a file and its key
+of `GET /api/v1/drive/collections` and the trash. Each item is a file and its key
 sealed under the album key (Drive envelope purpose 12: object = file,
 parent = album, epoch = album epoch, revision = file key generation).
 
-- `GET /api/albums`: your albums (`{ id, ownerUserId, nameEnvelope,
+- `GET /api/v1/photos/albums`: your albums (`{ id, ownerAccountId, nameEnvelope,
   ownerKeyEnvelope, keyEpoch, nameRevision, epochStatement,
   epochStatementHash, itemCount, createdAt, updatedAt }`).
-- `POST /api/albums`: a new album, with the body of `POST /api/collections`
-  and no parent. Rename it with `PUT /api/collections/:id`.
-- `DELETE /api/albums/:id`: the album goes; its photos stay.
-- `GET /api/albums/:id/items`: `[{ file, fileKeyEnvelope, keyGeneration,
+- `POST /api/v1/photos/albums`: a new album, with the body of `POST /api/v1/drive/collections`
+  and no parent. Rename it with `PUT /api/v1/drive/collections/:id`.
+- `DELETE /api/v1/photos/albums/:id`: the album goes; its photos stay.
+- `GET /api/v1/photos/albums/:id/items`: `[{ file, fileKeyEnvelope, keyGeneration,
   albumEpoch, addedBy, addedAt }]`, `file` as in a folder listing; photos in
   the trash are left out.
-- `POST /api/albums/:id/items`: `{ items: [{ fileId, fileKeyEnvelope,
+- `POST /api/v1/photos/albums/:id/items`: `{ items: [{ fileId, fileKeyEnvelope,
   keyGeneration }] }`, up to 500; each one of your own files, sealed at its
   current generation and the album's current epoch (`409` when a key
   changed). Adding again re-seals.
-- `POST /api/albums/:id/items/remove`: `{ fileIds }`.
+- `POST /api/v1/photos/albums/:id/items/remove`: `{ fileIds }`.
 
-- `GET /api/albums/:id/keys` (owner): every item's sealed key, those in
+- `GET /api/v1/photos/albums/:id/keys` (owner): every item's sealed key, those in
   the trash too, for a rotation.
-- `DELETE /api/albums/:id/membership` (member): leave; the photos you put in
+- `DELETE /api/v1/photos/albums/:id/membership` (member): leave; the photos you put in
   leave with you.
 
-Albums are shared as folders are (`POST /api/collections/:id/share`, with
-`canUpload` meaning "can add photos"; `GET /api/collections/:id/access`).
-`GET /api/albums` lists albums shared with you too. Members read the items
+Albums are shared as folders are (`POST /api/v1/drive/collections/:id/share`, with
+`canUpload` meaning "can add photos"; `GET /api/v1/drive/collections/:id/access`).
+`GET /api/v1/photos/albums` lists albums shared with you too. Members read the items
 and open the photos (their content, versions and thumbnails); members who may
 add put in their own photos and take out only those. Removing someone is a
-rotation (`POST /api/collections/:id/rotate`) whose body also carries
+rotation (`POST /api/v1/drive/collections/:id/rotate`) whose body also carries
 `albumItems: [{ fileId, fileKeyEnvelope }]`: every item re-sealed under the
 new album key at the new epoch, or nothing changes (`409`).
 
@@ -2896,20 +3258,20 @@ A live location's stream on the sharer's server (docs/chat-protocol.md
 "Live locations"). The server keeps only the latest sealed update and
 deletes the stream at its end.
 
-- `POST /api/live-locations` (Bearer JWT):
+- `POST /api/v1/chat/live-locations` (Bearer JWT):
   `{ streamId: <16 bytes hex>, writeSecret: <32 bytes b64>,
   readCapability: <32 bytes b64>, expiresAtMs }`, at most 8 hours ahead.
   `201`; `409` for a taken id; `429` above 60 a hour per person.
-- `PUT /api/live-locations/:streamId` (Bearer JWT, `x-kutup-live-write`):
+- `PUT /api/v1/chat/live-locations/:streamId` (Bearer JWT, `x-kutup-live-write`):
   `{ update: <88-byte LiveLocationUpdateV1 b64> }`. `204`; `404` for a wrong
   secret or an ended stream; `409` when the counter is not above the stored
   one; `429` within 3 s of the last write.
-- `GET /api/live-locations/:streamId[?server=]` (Bearer JWT,
+- `GET /api/v1/chat/live-locations/:streamId[?server=]` (Bearer JWT,
   `x-kutup-live-read`): `{ update, updatedAtMs, expiresAtMs }`; with
   `server`, read from the sharer's server over signed federation
-  (`GET /api/fed/chat/live-locations/:streamId`). `404` for a wrong
+  (`GET /api/fed/v2/chat/live-locations/:streamId`). `404` for a wrong
   capability or an ended stream; `429` above 600 reads a minute per person.
-- `DELETE /api/live-locations/:streamId` (Bearer JWT, `x-kutup-live-write`):
+- `DELETE /api/v1/chat/live-locations/:streamId` (Bearer JWT, `x-kutup-live-write`):
   `204`.
 
 ---
@@ -2925,18 +3287,56 @@ them and counts against the share's `uploadQuotaBytes`.
 
 **Quota.** Every writer checks the same headroom: quota − stored − the full
 declared length of the user's open tus uploads (an upload reserves its whole
-length until it is finalised).
+length until it is finalised, an uploaded revision until it is committed).
 
 **Revisions and the block format** (docs/plans/drive-block-format.md §3).
 Each stored content of a file — its first upload and every version — is a
 revision with its own id, stored at `files/{fileId}/revisions/{revisionId}`.
-An upload in the block format (suite 2) names its revision with
-`revisionId`: the client chooses it before it seals, and the blob's header
-binds it, so the server checks the two agree. It also checks the blob's
-structure from its length and trailer (the manifest length fits the block
-count, and the count the length); it can't check the AEAD. An upload without
-`revisionId` is the streaming format (suite 1) and gets a new revision id. A
-revision id already used is `409 revisionTaken`.
+Every blob is in the block format (Drive object suite 2; the streaming
+suite 1 is gone) and every upload names its revision with `revisionId`
+(`400` without): the client chooses it before it seals, and the blob's
+header binds it, so the server checks the two agree. It also checks the
+blob's structure from its length and trailer (the manifest length fits the
+block count, and the count the length); it can't check the AEAD. A
+revision id already used is `409 revisionTaken`: one id names one content
+across files, versions and open uploads together (each claim takes the
+id's lock, and each table has its unique key).
+
+**Uploaded revisions and the commit** (docs/plans/drive-block-format.md §10
+slice 3, as Proton's draft revisions). The metadata (`FileMetadata`)
+commits to the content's revision and manifest digest, known only after the
+last block, so a tus upload carries no metadata: its last part leaves an
+*uploaded revision*, stored, checked and reserved in quota, but not current. A new file is then no file yet: it is in
+no listing, search, share, trash or count, and can't be downloaded.
+`POST /api/v1/drive/files/:id/revisions/:revisionId/commit` (below) brings the
+metadata and makes the revision current. A revision never committed is
+reaped a day after its last part with the abandoned uploads: its object is
+deleted and its reservation released; tus `DELETE` drops it at once. The
+multipart uploads (`POST /api/v1/drive/files`, `POST /api/v1/drive/files/:id/versions`
+with `kind: file`, and the federated upload) seal the whole buffer first, so
+they carry the metadata and `metadataRevision` in the same request and commit
+inline.
+
+**What each revision is** (docs/plans/drive-block-format.md §2). The file's
+metadata commits to the current content only. Every revision therefore also
+carries its `revisionContentEnvelope`: a `DriveEnvelopeV1` of
+purpose 13 (`RevisionContent`) under the file key, bound to the file (object),
+the revision id (parent) and the key generation that sealed the object
+(epoch), revision slot 1, sealing `{revisionId, manifestSha256, size}`, padded
+to one length (356 bytes, 476 in base64). It comes with the revision's commit
+(the commit body, the multipart upload and version forms, the federated
+upload and version saves) and is stored with the row the revision becomes
+(`drive_files` for the first upload, `drive_file_versions` for every version); the server
+checks only its header and length (`400` otherwise) and requires it for every
+revision. Readers of any
+revision other than the current content (a history version, a note's
+snapshot, the original upload, a relayed state) open it first and then the
+object against the digest and size it commits to; it is in the version list
+(`revisionContentEnvelope`), in the federated
+saved state, and on every content response as `x-kutup-revision-content`,
+beside `x-kutup-revision` (the revision served). A reader of the current
+content checks a served record against the metadata's `content` and refuses
+a disagreement.
 
 **Ranges.** Every content route (download, original, version, public link,
 Chat media and the federated reads) takes one `Range: bytes=a-b`, `a-` or
@@ -2952,9 +3352,9 @@ content gets the whole new content. One answer carries at most
 account (docs/plans/settings-registry.md): the largest upload
 (`driveUploadMaxBytes`, 10 GiB) and version (`driveVersionMaxBytes`, 2 GiB)
 for the uploading account, counted as the body arrives (`413` past them),
-and the streaming settings `GET /api/drive/limits` lists.
+and the streaming settings `GET /api/v1/drive/limits` lists.
 
-### GET /api/drive/limits
+### GET /api/v1/drive/limits
 
 The upload and streaming limits a client works with, as they are for this
 account: its own where administrators set them, else the site's.
@@ -2975,7 +3375,7 @@ account: its own where administrators set them, else the site's.
 }
 ```
 
-### POST /api/files/upload
+### POST /api/v1/drive/files
 
 Upload an encrypted file to a collection. Multipart form.
 
@@ -2991,7 +3391,9 @@ Upload an encrypted file to a collection. Multipart form.
 | `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record under the collection key, bound to file, collection, the collection's current epoch and key generation 1 (the revision slot) |
 | `nameHash` | string | The name's hash in the folder ("Names in a folder"); required, checked before anything is stored |
 | `contentHash` | string (optional) | The content's hash in the folder, when known before the upload |
-| `revisionId` | string (canonical UUID, optional) | The block-format blob's revision (see "Revisions and the block format") |
+| `revisionId` | string (canonical UUID) | The blob's revision (see "Revisions and the block format") |
+| `metadataRevision` | string (`1`) | The metadata's revision, which must be `1` (`409 revisionConflict` otherwise). The upload commits inline |
+| `revisionContentEnvelope` | string (canonical base64) | The revision's sealed content record at key generation 1 (see "What each revision is") |
 | `file` | binary | Complete typed Drive file blob (`application/octet-stream`) |
 
 The server obtains the current collection epoch itself and rejects malformed,
@@ -3012,7 +3414,7 @@ a retry cannot overwrite what an earlier attempt stored.
 
 ---
 
-### GET /api/collections/:id/files
+### GET /api/v1/drive/collections/:id/files
 
 List files in a collection.
 
@@ -3024,7 +3426,7 @@ List files in a collection.
   {
     "id": "<uuid>",
     "collectionId": "<uuid>",
-    "uploaderUserId": "<uuid>",
+    "uploaderAccountId": "<uuid>",
     "metadataEnvelope": "<DriveEnvelopeV1 base64>",
     "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
     "keyEpoch": 1,
@@ -3049,17 +3451,18 @@ counts the file's own keys (see "Moving" and `rekey` below).
 was drawn from something other than the file's latest version, so a client
 with write access should redraw it (see "Thumbnails" below).
 
-`encryptedSizeBytes` is the size of the ciphertext blob on disk: a 32-byte
-typed Drive header, a 24-byte secretstream header, and at least one frame with
-a 17-byte authentication/tag overhead.
+`encryptedSizeBytes` is the size of the ciphertext blob on disk: the 48-byte
+block-format header, one 4 MiB block per started 4 MiB of plaintext (at
+least one) with 40 bytes of nonce and tag each, the sealed manifest and a
+12-byte trailer (docs/plans/drive-block-format.md §2).
 
 ---
 
-### GET /api/drive/files
+### GET /api/v1/drive/files
 
 Every file in the folders the account owns or has been given (not albums,
 not the trash, not folders on other servers), newest first, in one request:
-the rows of `GET /api/collections/:id/files` for all of them. The Office
+the rows of `GET /api/v1/drive/collections/:id/files` for all of them. The Office
 home lists documents across all folders with it instead of one request per
 folder.
 
@@ -3067,7 +3470,7 @@ folder.
 
 ---
 
-### PUT /api/files/:id
+### PUT /api/v1/drive/files/:id
 
 Replace only the authenticated metadata envelope, sealed at the file's current
 key generation. The request must advance the stored revision by exactly one;
@@ -3083,13 +3486,13 @@ return `409` or `400` without changing the row.
 ```
 
 `nameHash` is the new name's hash in the file's folder; a name another item
-there holds is `409 name_taken`. Absent, the stored hash stays (the metadata
+there holds is `409 nameTaken`. Absent, the stored hash stays (the metadata
 changed, not the name). Someone renaming a file shared by itself, without
 the folder's key, sends a random hash (docs/plans/drive-unique-names.md).
 
 ---
 
-### GET /api/files/:id/download
+### GET /api/v1/drive/files/:id/download
 
 Download the encrypted content of a file.
 
@@ -3101,12 +3504,12 @@ bytes as the file is now: its latest `kind = file` version when it has one
 Public links and federated reads serve the same. The `X-Kutup-Version` header
 names what was served: the version id, or `original` for the upload. A client
 that saves its edit with `basedOn` passes it on (see
-`POST /api/files/:fileId/versions`). The ETag is the content's revision id,
+`POST /api/v1/drive/files/:fileId/versions`). The ETag is the content's revision id,
 and one `Range` is served (see "Ranges").
 
 ---
 
-### GET /api/files/:id/original
+### GET /api/v1/drive/files/:id/original
 
 Download the encrypted original upload, while it is kept (retention prunes
 it once versions cover it): the base of an office editing session that began
@@ -3115,14 +3518,18 @@ sessions").
 
 **Auth:** Bearer JWT (the same access as download)
 
-**Response:** Raw binary (`application/octet-stream`); `404` for no such
+**Response:** Raw binary (`application/octet-stream`), with
+`x-kutup-revision` (the original's revision id) and
+`x-kutup-revision-content` (its sealed content record, which the reader opens
+first: no listing names the original). The reader requires the revision to be
+the one the file's metadata names (`originalRevisionId`); `404` for no such
 file or a pruned original.
 
 ---
 
-### DELETE /api/files/:id
+### DELETE /api/v1/drive/files/:id
 
-Move a file to the trash (soft delete). The file disappears from every normal endpoint but keeps counting against quota; restore or purge it via the Trash endpoints. Permanent deletion happens from the trash — explicitly, or automatically after `TRASH_RETENTION_DAYS` (default 30).
+Move a file to the trash (soft delete). The file disappears from every normal endpoint but keeps counting against quota; restore or purge it via the Trash endpoints. Permanent deletion happens from the trash — explicitly, or automatically after the site setting `drive.trash_retention_days` (default 30; Administration → Server settings → Drive).
 
 **Auth:** Bearer JWT (collection owner, or the uploader holding a `canDelete` share)
 
@@ -3137,7 +3544,10 @@ and subfolders together, and among an owner's top-level folders (albums
 aside), compared without letter case or Unicode composition. The server
 never reads a name: clients send its hash, `HMAC-SHA256(hash key, "name" ‖
 0 ‖ canonical name)` (`kutup_crypto::drive_names`), under the folder's hash
-key (from its first key) or, at the top level, the account's. A file's
+key (from its first key) or, at the top level, the account's (from its
+Drive root; a top-level hash comes with `nameHashGeneration`, the Drive-root
+generation, on create, rename, move and restore, required there and refused
+in a folder; `409 driveRootChanged` when it is not the owner's newest). A file's
 content hash, `HMAC-SHA256(hash key, "content" ‖ 0 ‖ SHA-256 of the
 plaintext)`, lets a client tell that the file it is about to upload is
 already there.
@@ -3147,69 +3557,135 @@ already there.
   known.
 - Every write that names something or puts it somewhere requires `nameHash`
   (`400` with code `nameNeeded` without it):
-  `POST /api/collections`, `PUT /api/collections/:id`,
-  `POST /api/collections/:id/move`, `POST /api/files/upload`, tus
-  `POST /api/uploads` (`nameHash` in `Upload-Metadata`; checked again when
-  the upload finishes), `PUT /api/files/:id`, `POST /api/files/:id/move`
+  `POST /api/v1/drive/collections`, `PUT /api/v1/drive/collections/:id`,
+  `POST /api/v1/drive/collections/:id/move`, `POST /api/v1/drive/files`, tus
+  `POST /api/v1/drive/uploads` (`nameHash` in `Upload-Metadata`; checked again when
+  the upload finishes), `PUT /api/v1/drive/files/:id`, `POST /api/v1/drive/files/:id/move`
   (with `contentHash` under the destination's key, if known; otherwise the
   content hash is dropped), and uploads from another server
-  (`nameHash` multipart field). `PUT /api/files/:id` may leave it out when
+  (`nameHash` multipart field). `PUT /api/v1/drive/files/:id` may leave it out when
   the name does not change.
 - A taken name is `409` with what holds it:
 
   ```json
-  { "error": "an item with this name is already here", "code": "name_taken",
+  { "error": "an item with this name is already here", "code": "nameTaken",
     "holder": { "kind": "file", "id": "<uuid>", "contentHash": "<hex or null>" } }
   ```
 - A file or folder restored from the trash after its name was taken is
-  `409 name_taken`; restore it under a new name in the same request
-  (`POST /api/trash/:id/restore`).
-- A new version (`POST /api/files/:id/versions`) clears the content hash;
+  `409 nameTaken`; restore it under a new name in the same request
+  (`POST /api/v1/drive/trash/:id/restore`).
+- A new version (`POST /api/v1/drive/files/:id/versions`) clears the content hash;
   the client records the new one. A version uploaded over tus (below)
   carries its content hash and lands with it.
 
-### POST /api/uploads with `versionOf` — a new version over tus
+### POST /api/v1/drive/uploads with `versionOf` — a new version over tus
 
 Replace on an upload clash, and a CLI sync push of an edited file, upload
 the new content as a version of the file there, as Proton Drive's revisions:
 resumable (tus `HEAD`/`PATCH` as for a new file) and of any size. The
-`Upload-Metadata` holds `versionOf` (the file id), `metadataEnvelope` and
-`metadataRevision` (the file's next metadata revision: its new size and
-`sha256`), and optionally `contentHash` (the new content's hash in its
-folder) and `basedOn` (a version id or `original`, as a multipart save). The
-blob is sealed for the file at its current key generation. In the block
-format `revisionId` names the blob's revision, which becomes the version's
-id; its structure is checked when the last part lands. Answers `201` with
+`Upload-Metadata` holds `versionOf` (the file id), and optionally
+`contentHash` (the new content's hash in its folder) and `basedOn` (a version
+id or `original`, as a multipart save), and `revisionId`, the blob's
+revision, which becomes the version's id. The blob is sealed for the file at
+its current key generation. It carries no metadata (`400` with
+`metadataEnvelope` or `metadataRevision`): its structure is
+checked when the last part lands, and it stays an uploaded revision until
+its commit (below), which brings the metadata and stores the version.
+Answers `201` with
 `{ "fileId", "versionId" }` (the upload's id is the version's). At most
 `driveVersionMaxBytes` (`413`).
 
 Checked when the upload starts, so a conflict fails before the content is
-sent, and again when its last part lands: the caller may write the file
-(`403`), the file is live (`404`), it still holds `basedOn`
-(`409 version_conflict`), its key has not changed (`409`), the metadata is
-its next revision (`409 revision_conflict`), and the upload fits the
-uploader's storage and share limits (`413`). One open upload per file:
+sent, again when its last part lands, and at its commit: the caller may
+write the file (`403`), the file is live (`404`), it still holds `basedOn`
+(`409 versionConflict`), its key has not changed (`409`), the metadata (at
+the commit) is its next revision (`409 revisionConflict`), and the upload
+fits the uploader's storage and share limits (`413`). One open upload per file:
 another is `409 versionUploading`, with `idleSeconds` since its last part,
+`uploaded` (true: an uploaded revision waiting only for its commit),
 and its `uploadId` when the caller uploads it (`yours: true`) or owns the
 folder (`yours: false`): either may cancel it (tus `DELETE`), so nobody can
 hold the file's slot. A client cancels its own idle one (left by a crash)
 and starts again, and waits for an active one (a save running on another
 device), never merging over it. Each part re-checks that its writer may
 still write the file: one whose access was taken away loses the upload.
-Purging the file drops its open version upload. The last part stores the version, the
-file's new metadata and its content hash in one transaction, charged to the
-uploader as a multipart version is; refused there, the upload is discarded
-at once. An abandoned one is reaped like any tus upload, and reserves its
+Purging the file drops its open version upload. The last part leaves an
+uploaded revision (refused there, the upload is discarded at once); its
+commit stores the version, the file's new metadata and its content hash in
+one transaction, charged to the uploader as a multipart version is. An abandoned one is reaped like any tus upload, and reserves its
 length until then. Folders on other servers take versions by multipart only
 (`POST BASE/versions`, at most 2 GiB).
 
-### PUT /api/files/:id/content-hash
+### POST /api/v1/drive/files/:id/revisions/:revisionId/commit
+
+Makes an uploaded revision (a tus upload whose last part landed) the file's current content, with its metadata, in one transaction.
+
+**Auth:** Bearer JWT — the revision's uploader, who must still be allowed to
+write: into the folder for a new file, to the file for a version (the rules
+of the upload itself).
+
+```json
+{ "metadataEnvelope": "<DriveEnvelopeV1 base64>", "metadataRevision": 2,
+  "revisionContentEnvelope": "<DriveEnvelopeV1 base64>",
+  "nameHash": "<64 hex, optional>" }
+```
+
+`nameHash` (a new file only; `400` with a version): the name to commit
+under when it is not the one the upload started with. The upload's own name
+hash was only checked when it started; a name taken while the bytes went up
+is answered `409 nameTaken` here, and the client commits again under
+another name (its next free one, as "Keep both" picks it) without sending
+the bytes again.
+
+`revisionContentEnvelope` is what the revision is ("What each revision is"),
+sealed for the file, this revision and the key generation that sealed the
+object (1 for a new file); it is stored with the revision. Missing, or sealed
+for another file, revision or generation: `400`.
+
+`metadataEnvelope` is the file's next metadata (`FileMetadata`, its
+`content` naming this revision and its manifest's SHA-256), sealed for the
+file, its key generation and `metadataRevision`, which must be exactly the
+file's current revision + 1, and `1` for a new file (`409
+revisionConflict`). The server can't read the commitment; readers check it.
+
+- **A new file** is checked as its last part was (the folder live at the
+  epoch its key envelope is bound to, `409`; the caller may still upload
+  there, `403`; the name still free, `409 nameTaken`; the quota, `413`), then
+  its row goes in with the metadata, its bytes are charged and it appears in
+  its folder.
+- **A version** is checked as its last part was (`403`, `404`, `409
+  versionConflict` when the file no longer holds `basedOn`, `409` on a key
+  change, `413`), then stored as a tus version lands: the version row (the
+  content it replaces is its `parentVersionId`, kept in the history), the
+  metadata, the content hash, the charge; editors reopen on the new content.
+
+Before any row names it, the server checks with a storage `HEAD` that the
+revision's object is there and as long as the upload was: otherwise `409
+objectMissing` (the upload is lost; upload again).
+
+A refused commit leaves the uploaded revision as it was: commit again with
+the right metadata, or cancel the upload (tus `DELETE`). A cancel, like the
+sweep of abandoned uploads, removes the upload row first and only then its
+bytes, so a revision is never made current without its object, and a commit
+after a cancel finds nothing (`404`).
+
+**Response 200:**
+```json
+{ "fileId": "<uuid>", "revisionId": "<uuid>", "metadataRevision": 2, "kind": "version" }
+```
+
+`kind` is `file` or `version`. `404`: no uploaded revision of this file by
+the caller (another file's revision, someone else's upload, one cancelled or
+reaped). `409 alreadyCommitted`: the revision is already the file's (a
+repeated commit applies nothing). `409 notUploaded`: parts are still missing.
+
+### PUT /api/v1/drive/files/:id/content-hash
 
 `{ "contentHash": "<hex>" }` — what the file's content is recognised by in
 its folder, recorded once an upload has read the whole file. Whoever can
 write the folder (or edit the file shared by itself). `204`.
 
-### POST /api/collections/:id/available-hashes
+### POST /api/v1/drive/collections/:id/available-hashes
 
 `{ "hashes": ["<hex>", …] }` (1 to 10) → `{ "available": ["<hex>", …] }`:
 the ones no file or folder there holds (items in the trash hold none), so a
@@ -3218,7 +3694,7 @@ Proton Drive's `checkAvailableHashes`). Whoever can write the folder;
 `RATE_LIMIT_AVAILABLE_HASHES_PER_MIN` (default 120) per account, then
 `429 rateLimited`.
 
-### POST /api/drive/top-level-available-hashes
+### POST /api/v1/drive/top-level-available-hashes
 
 The same among the account's own top-level folders.
 
@@ -3230,7 +3706,7 @@ Who can open a folder and taking that access away
 (docs/plans/drive-share-revocation.md). A folder's keys form a chain of
 epochs; every removal rotates to the next.
 
-### GET /api/collections/:id/epochs
+### GET /api/v1/drive/collections/:id/epochs
 
 The folder's key history, oldest first:
 `[{ epoch, epochStatement, epochStatementHash, previousKeyEnvelope? }]`.
@@ -3238,24 +3714,24 @@ The folder's key history, oldest first:
 under this epoch's (purpose 8). Clients unlock older keys from the current one
 with `collection_keyring::unlock`, which verifies the owner-signed chain and
 every key commitment. **Auth:** owner (also for a trashed folder) or member.
-Public links: `GET /api/share/:token/epochs` (anonymous); federated
-recipients: `GET /api/drive/federation/shares/:shareId/epochs`.
+Public links: `GET /api/v1/drive/public-links/:token/epochs` (anonymous); federated
+recipients: `GET /api/v1/drive/federation/folder-shares/:shareId/epochs`.
 
-### GET /api/collections/:id/access
+### GET /api/v1/drive/collections/:id/access
 
-Owner only. `{ keyEpoch, epochStatementHash, members: [{ userId, account,
+Owner only. `{ keyEpoch, epochStatementHash, members: [{ accountId, account,
 accountIncarnationId, drivePublicKey, driveSigningPublicKey, canUpload, canDelete, uploadQuotaBytes,
 createdAt }], publicLinks: [{ id, token, ownerLinkKeyEnvelope, expiresAt?,
 createdAt }], federatedShares: [{ id, recipientUsername, recipientServer,
 recipientIncarnationId, canUpload, canDelete, uploadQuotaBytes, createdAt }] }`.
 Every link carries `ownerLinkKeyEnvelope`, so a rotation re-wraps it.
 
-### POST /api/collections/:id/rotate
+### POST /api/v1/drive/collections/:id/rotate
 
 Owner only; all or nothing. **Body:** `{ fromEpoch, epochStatement,
-ownerKeyEnvelope, previousKeyEnvelope, nameEnvelope, members: [{ userId,
+ownerKeyEnvelope, previousKeyEnvelope, nameEnvelope, members: [{ accountId,
 namedShareEnvelope }], publicLinks: [{ id, collectionKeyEnvelope }],
-federatedShares: [{ id, namedShareEnvelope }], removed: { members: [userId],
+federatedShares: [{ id, namedShareEnvelope }], removed: { members: [accountId],
 publicLinks: [id], federatedShares: [id] } }`. The statement must chain from
 the current one under the owner's authority; the owner key, previous-key and
 name (next name revision) envelopes must be at `fromEpoch + 1`; every kept
@@ -3265,7 +3741,7 @@ re-wrapped. Kept plus removed must be exactly the current access, else `409`
 (also when `fromEpoch` is stale). **Response:** `{ keyEpoch,
 epochStatementHash }`.
 
-### POST /api/files/:id/rekey
+### POST /api/v1/drive/files/:id/rekey
 
 Give a file a new key before writing to it (or moving it) when its folder has
 rotated past it. **Body:** `{ fromGeneration, fileKeyEnvelope,
@@ -3308,32 +3784,32 @@ epoch. Otherwise `403`, and the share waits for the owner. Rename, move,
 delete and share stay with the owner. A file in the trash is out of reach
 through its shares.
 
-- **`POST /api/files/:id/share`**: owner only. **Body:** `{ recipientUserId,
+- **`POST /api/v1/drive/files/:id/share`**: owner only. **Body:** `{ recipientAccountId,
   shareEnvelope, canEdit }`. The envelope must be at the file's current
   generation, sealed to that exact account (`400` otherwise). Sharing again
   replaces the envelope and permission. `204`.
-- **`GET /api/files/:id/access`**: owner only. `{ keyGeneration, members:
-  [{ userId, account, accountIncarnationId, drivePublicKey,
+- **`GET /api/v1/drive/files/:id/access`**: owner only. `{ keyGeneration, members:
+  [{ accountId, account, accountIncarnationId, drivePublicKey,
   driveSigningPublicKey, canEdit, keyGeneration, createdAt }] }`. A member
   whose `keyGeneration` is below the file's is waiting to be re-sealed.
-- **`POST /api/files/:id/rotate`**: remove people, owner only, all or
+- **`POST /api/v1/drive/files/:id/rotate`**: remove people, owner only, all or
   nothing. **Body:** `{ fromGeneration, fileKeyEnvelope, metadataEnvelope,
-  previousKeyEnvelope, members: [{ userId, shareEnvelope }], removed: [userId]
+  previousKeyEnvelope, members: [{ accountId, shareEnvelope }], removed: [accountId]
   }`. It uses the same new-generation envelopes as `rekey`, wrapped at the
   folder's current epoch, plus an envelope at the new generation for everyone
   who stays. Kept plus removed must be exactly the file's people and `removed`
   must not be empty, else `409`. Collaboration sockets on the file are
   closed. **Response:** the new `FileAccess`.
-- **`PUT /api/files/:id/shares`**: owner only. **Body:** `{ members: [{
-  userId, shareEnvelope }] }`. It re-seals shares left at an older generation
+- **`PUT /api/v1/drive/files/:id/shares`**: owner only. **Body:** `{ members: [{
+  accountId, shareEnvelope }] }`. It re-seals shares left at an older generation
   (someone else re-keyed the file) at the current one. `204`.
-- **`GET /api/file-shares/pending`**: the caller's files with shares to bring
+- **`GET /api/v1/drive/shared-with-me/pending`**: the caller's files with shares to bring
   up to date, `[{ fileId, collectionId }]`. These are shares below the file's
   generation, or a file wrapped below its folder's epoch. The owner's Drive
   re-keys the file if needed and re-seals.
-- **`GET /api/shared-files`**: files shared with the caller. `[{ file:
+- **`GET /api/v1/drive/shared-with-me`**: files shared with the caller. `[{ file:
   FileRow, shareEnvelope, canEdit, keyGeneration, folderKeyCurrent, server,
-  ownerUserId, ownerAccount, ownerIncarnationId, ownerSigningPublicKey,
+  ownerAccountId, ownerAccount, ownerIncarnationId, ownerSigningPublicKey,
   sharedAt }]`. The owner and the sharer are accounts on `server`, by their
   user ids (as the envelope names them); `ownerAccount` and `sharerAccount`
   are their addresses now, shown only. With `keyGeneration` below `file.keyGeneration`, the current
@@ -3345,49 +3821,52 @@ folder's owner only.
 
 **Editors.** Someone with edit access may rename the file (at its current
 key). If the owner turns on "Editors can share"
-(`PUT /api/files/:id/sharing`, body `{ editorsCanShare }`, owner only, off by
+(`PUT /api/v1/drive/files/:id/sharing`, body `{ editorsCanShare }`, owner only, off by
 default), an editor may also share it with new people. They sign the
 envelope themselves, may not change anyone who already has it (`409`), and
-may read `GET /api/files/:id/access`. Only the owner removes people (the
+may read `GET /api/v1/drive/files/:id/access`. Only the owner removes people (the
 rotation takes the folder's key). Envelopes the owner re-seals become the
 owner's.
 
-- `GET /api/shared-files` rows also carry the envelope's sender
-  (`sharerUserId`, `sharerAccount`, `sharerIncarnationId`,
+- `GET /api/v1/drive/shared-with-me` rows also carry the envelope's sender
+  (`sharerAccountId`, `sharerAccount`, `sharerIncarnationId`,
   `sharerSigningPublicKey`), which is
   the owner or an editor, plus `editorsCanShare`. A share left at an older
   generation carries `metadataAtShare: { envelope, revision }`: the file's
   metadata as it was then, under the key the share opens.
-- `GET /api/files/:id/access` also returns `editorsCanShare`.
-- **Public link to one file:** `POST /api/share` with `shareType: "file"`,
+- `GET /api/v1/drive/files/:id/access` also returns `editorsCanShare`.
+- **Public link to one file:** `POST /api/v1/drive/public-links` with `shareType: "file"`,
   `targetId` = the file, `collectionKeyEnvelope` = the file's current key
   sealed under the link key (Drive envelope purpose 11,
   `public_link_file_key`: object = file, parent = owner, epoch = key
   generation), `id` and `ownerLinkKeyEnvelope` as for folder links. Owner
   only.
-  - Anonymous reads through the token: `GET /api/share/:token` (with
-    `file`, the file's record) and `GET /api/share/:token/download/:fileId`
+  - Anonymous reads through the token: `GET /api/v1/drive/public-links/:token` (with
+    `file`, the file's record) and `GET /api/v1/drive/public-links/:token/files/:fileId/download`
     (that file only).
   - The file's links appear in its `access` (`publicLinks`, for the owner).
   - Removing a link is a rotation (`removedLinks`), and a rotation re-wraps
     every kept link (`publicLinks: [{ id, keyEnvelope }]`); kept plus
-    removed links must be exactly the current ones. `PUT /api/files/:id/shares`
+    removed links must be exactly the current ones. `PUT /api/v1/drive/files/:id/shares`
     re-wraps links left behind, and `pending` lists files whose links wait.
-- **`GET /api/share/:token/state/:fileId`** (anonymous, folder or file
-  links): the latest saved Yjs state of a note or place list, sealed under
-  the file key of the generation in `X-Kutup-Key-Generation` (`404` when it
-  has none). Their edits are not whole-file versions, so a link's page turns
+- **`GET /api/v1/drive/public-links/:token/files/:fileId/state`** (anonymous, folder or file
+  links): a saved Yjs state of a note or place list, sealed under
+  the file key of the generation in `X-Kutup-Key-Generation`, with
+  `X-Kutup-Revision` (the version it is) and `X-Kutup-Revision-Content` (its
+  sealed content record, opened first). `?revision=` asks for the state the
+  file's metadata names (`stateRevisionId`; the page refuses any other);
+  without it, the latest (`404` when there is no such state). Their edits are not whole-file versions, so a link's page turns
   the state back into the file.
-- **`GET /api/shared-by-me`**: `[{ collectionId, fileId?, people,
+- **`GET /api/v1/drive/shared-by-me`**: `[{ collectionId, fileId?, people,
   otherServers, links }]`. These are your folders shared with people or by
   link, and your files shared by themselves, with counts.
 
-### POST /api/files/:id/move
+### POST /api/v1/drive/files/:id/move
 
 Move a file to another folder of the same owner (docs/plans/drive-move.md).
 **Body:** `{ fromCollectionId, toCollectionId, toKeyEpoch, fileKeyEnvelope,
 nameHash, contentHash? }` — the name's (and, if known, the content's) hash
-in the destination ("Names in a folder"; a taken name is `409 name_taken`),
+in the destination ("Names in a folder"; a taken name is `409 nameTaken`),
 and the file's current key sealed under the destination's key at its current
 epoch `toKeyEpoch`, with the file's key generation. Nothing else changes: the
 content, metadata, versions, thumbnails and assets are bound to the file, not
@@ -3399,11 +3878,11 @@ folder first, so no one removed from that folder can follow it), `409 folder
 key changed` (the destination rotated; reload). Open collaboration sockets on
 the file are closed.
 
-### POST /api/collections/:id/move
+### POST /api/v1/drive/collections/:id/move
 
 Put a folder under another of the owner's folders, or at the top level.
 **Body:** `{ parentCollectionId: string | null, nameHash }` — its name's hash
-in the new place (`409 name_taken` when held). A folder's key is sealed to
+in the new place (`409 nameTaken` when held). A folder's key is sealed to
 its owner, not its parent, so nothing encrypted changes. **Response:** `204`.
 **Auth:** owner (`404` otherwise). `400` into itself or a folder inside it, or
 under a folder the caller does not own.
@@ -3412,9 +3891,9 @@ under a folder the caller does not own.
 
 ## Trash
 
-Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than `TRASH_RETENTION_DAYS` (default 30; `0` disables the sweeper). Federated Drive deletes (`DELETE /api/fed/drive/files/:fileId`) remain permanent — there is no cross-server trash.
+Trash is **owner-scoped**: an item lives in the trash of the user who owns the collection it belongs to (a share recipient's delete lands in the owner's trash — the Google Drive model). Every entry is a *trash root*: a deleted file, or a deleted folder carrying its whole subtree. A background sweeper purges roots older than the site setting `drive.trash_retention_days` (`driveTrashRetentionDays`, default 30; `0` keeps the trash until it is emptied). Federated Drive deletes (`DELETE /api/fed/v2/drive/folder-shares/files/:fileId`) remain permanent — there is no cross-server trash.
 
-### GET /api/trash
+### GET /api/v1/drive/trash
 
 List the caller's trash roots, newest first. Folder rows carry the complete
 authenticated owner collection record. File rows additionally carry the parent
@@ -3432,7 +3911,7 @@ new name for the right place.
   "folders": [
     {
       "id": "<uuid>",
-      "ownerUserId": "<uuid>",
+      "ownerAccountId": "<uuid>",
       "nameEnvelope": "<DriveEnvelopeV1 base64>",
       "ownerKeyEnvelope": "<DriveEnvelopeV1 base64>",
       "keyEpoch": 1,
@@ -3453,7 +3932,7 @@ new name for the right place.
       "fileKeyEnvelope": "<DriveEnvelopeV1 base64>",
       "keyEpoch": 1,
       "metadataRevision": 1,
-      "collectionOwnerUserId": "<uuid>",
+      "collectionOwnerAccountId": "<uuid>",
       "collectionOwnerKeyEnvelope": "<DriveEnvelopeV1 base64>",
       "collectionKeyEpoch": 1,
       "collectionEpochStatement": "<CollectionEpochStatementV1 base64>",
@@ -3468,13 +3947,13 @@ new name for the right place.
 `items` is the number of files trashed together with the folder (its subtree).
 A file row's `thumbnails` are as in a folder listing: while a file is in its
 owner's trash on its own, its owner may still read them
-(`GET /api/files/:id/thumbnails/:variant`), as Photos' trash shows them.
+(`GET /api/v1/drive/files/:id/thumbnails/:variant`), as Photos' trash shows them.
 
-### POST /api/trash/:id/restore
+### POST /api/v1/drive/trash/:id/restore
 
 Put a trash root back where it was. Restoring a folder restores its whole subtree; if its original parent is gone or still trashed, it comes back at the top level. Restoring a file whose folder is still in the trash returns `409 Conflict` (restore the folder instead).
 
-Its name must be free where it lands ("Names in a folder"): a taken one is `409 name_taken` (with what holds it), and a folder that comes back at the top level, where its hash never applied, is `409` with code `nameNeeded`. Either way, restore it again with a name for that place:
+Its name must be free where it lands ("Names in a folder"): a taken one is `409 nameTaken` (with what holds it), and a folder that comes back at the top level, where its hash never applied, is `409` with code `nameNeeded`. Either way, restore it again with a name for that place:
 
 ```json
 {
@@ -3490,7 +3969,7 @@ Its name must be free where it lands ("Names in a folder"): a taken one is `409 
 
 **Response:** `200 OK` `{"message": "restored"}` · `409 Conflict` when the parent folder is still trashed, the name is taken or a name is needed.
 
-### DELETE /api/trash/:id
+### DELETE /api/v1/drive/trash/:id
 
 Permanently purge one trash root: DB rows, S3 blobs (including version/asset children), and the held quota. Irreversible.
 
@@ -3498,7 +3977,7 @@ Permanently purge one trash root: DB rows, S3 blobs (including version/asset chi
 
 **Response:** `204 No Content`.
 
-### DELETE /api/trash
+### DELETE /api/v1/drive/trash
 
 Empty the caller's whole trash. Irreversible.
 
@@ -3510,12 +3989,13 @@ Empty the caller's whole trash. Irreversible.
 
 ## Public Shares
 
-### POST /api/share/
+### POST /api/v1/drive/public-links/
 
 Create a public share link for one collection. **Body** also carries the
 link's client-chosen `id` (canonical UUID) and `ownerLinkKeyEnvelope`: the
-link key sealed for the owner under their master key (`DriveEnvelopeV1`
-purpose 9, object = link id, parent = owner, epoch 1), so the owner can list
+link key sealed for the owner under their Drive root (`DriveEnvelopeV1`
+purpose 9, object = link id, parent = owner, epoch 1, revision = the owner's
+newest Drive-root generation, else `400`), so the owner can list
 and copy the link and keep it working across folder-key rotations. The link key used to open the
 typed collection-key envelope lives only in the URL fragment; the server never
 sees it.
@@ -3552,9 +4032,27 @@ The client builds the share URL as
 `<SERVER_URL>/s/<token>#key=<base64-link-key>`; the server returns only the
 token.
 
+`403 sharingOff` while public links are off for the server or the caller's
+account (docs/plans/server-personal-data.md, A11).
+
+**Every public route** (`/api/v1/drive/public-links/:token…`) answers, before anything else:
+while the server's public sharing is `signedIn`, `403 signInRequired`
+without a signed-in caller (`401` when a sign-in is sent but no longer holds,
+so the page refreshes it; the web pages send their sign-in when they have
+one); `451`/`410 linkBlocked` when an operator blocked what the link
+reaches (any link to the same target, or for a file, to its folder);
+`410 linkRemoved` for one taken down, or whose owner's account isn't
+active; `410 sharingOff` while public links are off for the server or the
+owner's account. Its answers are never cached (`Cache-Control: no-store`).
+
+A block belongs to what a link reaches: no new link to it is made
+(`409 targetBlocked`), and an owner who removes a blocked link (in a folder's
+or file's access change) only hides it from themselves; the block stays
+until an operator lifts it. Owners' link lists carry `blockedReason`.
+
 ---
 
-### GET /api/share/:token
+### GET /api/v1/drive/public-links/:token
 
 Get metadata for a public share. The wrapped collection key is included; the link key needed to unwrap it lives only in the URL fragment held by the recipient.
 
@@ -3568,7 +4066,7 @@ Get metadata for a public share. The wrapped collection key is included; the lin
   "targetId": "<uuid>",
   "collectionKeyEnvelope": "<DriveEnvelopeV1 base64>",
   "collectionKeyEpoch": 1,
-  "ownerUserId": "<uuid>",
+  "ownerAccountId": "<uuid>",
   "ownerAccount": "alice@example.org",
   "expiresAt": "2026-04-01T00:00:00Z",
   "collectionKind": "album",
@@ -3585,7 +4083,7 @@ opens under the collection key (album links show the album's name).
 
 ---
 
-### GET /api/share/:token/album
+### GET /api/v1/drive/public-links/:token/album
 
 The items of an album reached by a public link: each photo's file record, its
 thumbnails, and its file key sealed under the album key (Drive envelope
@@ -3611,7 +4109,7 @@ Trashed photos are left out.
 
 ---
 
-### GET /api/share/:token/thumbnails/:fileId/:variant
+### GET /api/v1/drive/public-links/:token/files/:fileId/thumbnails/:variant
 
 A thumbnail (`sm` or `lg`) of a file the link reaches (for an album, one of
 its items). Streams the encrypted thumbnail; the client opens it with the
@@ -3621,13 +4119,13 @@ file key. `404` when the file is not reached or has no such thumbnail.
 
 ---
 
-### GET /api/share/:token/files
+### GET /api/v1/drive/public-links/:token/files
 
 List files in a public share.
 
 **Auth:** None
 
-**Response:** Array of file objects. Note: shape is similar to `GET /api/collections/:id/files` but **omits** `uploaderUserId` and `updatedAt`, and `createdAt` is serialized as a string (matches the database `TIMESTAMP` text form).
+**Response:** Array of file objects. Note: shape is similar to `GET /api/v1/drive/collections/:id/files` but **omits** `uploaderAccountId` and `updatedAt`, and `createdAt` is serialized as a string (matches the database `TIMESTAMP` text form).
 ```json
 [
   {
@@ -3650,7 +4148,7 @@ Returns `400` if the share targets a single file (use `/download/:fileId` instea
 
 ---
 
-### GET /api/share/:token/download/:fileId
+### GET /api/v1/drive/public-links/:token/files/:fileId/download
 
 Download a file from a public share. Streams the encrypted blob (`application/octet-stream`) through the backend; the client decrypts it with the link key from the URL fragment.
 
@@ -3662,7 +4160,33 @@ Returns `410 Gone` if the share has expired, `403` if the file does not belong t
 
 ---
 
-### POST /api/share/:token/report
+### POST /api/csp-report
+
+A browser's report of a web app page breaking its Content-Security-Policy,
+enforced or report-only ([`content-security-policy.md`](content-security-policy.md)).
+The apps' policies name it in `report-uri` and, through `Reporting-Endpoints`,
+`report-to kutup-csp`.
+
+**Auth:** None. At most 64 KiB; 60 a minute per address
+(`RATE_LIMIT_CSP_REPORTS_PER_MIN`).
+
+**Request body:** `application/csp-report` (`{"csp-report": {"document-uri",
+"effective-directive", "blocked-uri", "disposition", …}}`) or
+`application/reports+json` (an array of Reporting API reports; only
+`csp-violation` ones are read, at most 20 a body).
+
+The server logs each at warn level with only the page's host, the directive,
+the blocked resource's origin (or its kind: `inline`, `eval`, `data`, `blob`)
+and the disposition; never a path or a query. Nothing is stored.
+
+**Response:** `204 No Content` · `413` too large · `415` another content type ·
+`429` too many.
+
+Every `/api/` response carries `Content-Security-Policy: default-src 'none';
+frame-ancestors 'none'` unless it sets its own, and `/api/` on the editor
+sandbox's host answers `404`.
+
+### POST /api/v1/drive/public-links/:token/report
 
 Report a public link to the server's administrators. Anyone may, without an
 account; rate-limited per address (20/hour, `RATE_LIMIT_REPORT_PER_HOUR`),
@@ -3688,16 +4212,16 @@ erased when the report is resolved. A link with 50 open reports takes no more.
 **Response:** `204 No Content` · `404` unknown link · `410` removed.
 
 Every public-link endpoint answers `410` with `{"error": "…", "code":
-"link_removed"}` for a link an administrator took down or whose owner's
+"linkRemoved"}` for a link an administrator took down or whose owner's
 account is disabled (an expired link answers `410` without that code).
 
 ---
 
-### GET /api/share/:token/files/:fileId/assets/:assetId
+### GET /api/v1/drive/public-links/:token/files/:fileId/assets/:assetId
 
 A picture in a note reached by a public link: the asset envelope, sealed
 under the note's file key at the generation in `X-Kutup-Key-Generation`, as
-`GET /api/files/:fileId/assets/:assetId` serves it to members.
+`GET /api/v1/drive/files/:fileId/assets/:assetId` serves it to members.
 
 **Auth:** None (the token is the capability)
 
@@ -3730,17 +4254,26 @@ app: Drive, Office, Maps, Pass) or `cli`; `chat: { directChatSuite,
 registrationId }` on a device that takes Chat (required on `chat`, optional
 on `cli`, never on `editor`); `frameKey`, its Ed25519 collab-frame key
 (required on `editor` and `cli`); and `session`, the hash of its sign-in
-(`GET /api/device-session`). Messages go to the Chat devices only. A manifest
+(`GET /api/v1/account/devices/session`). Messages go to the Chat devices only. A manifest
 lists at most `devicesPerAccount` devices (`409 deviceLimit`; the format's cap
 is 127).
 
-### GET /api/device-session
+### GET /api/v1/account/devices/session
 
-`{ "session": "<64 hex>" }`: what a device of the caller's sign-in lists as
-its manifest entry's `session`. It is SHA-256 over
+`{ "session": "<64 hex>", "nextDeviceId": 1..127 }`: what a device of the
+caller's sign-in lists as its manifest entry's `session`, and the account's
+device counter. `session` is SHA-256 over
 `kutup/account/device-session/v1\0` and the root sign-in's id: an app
 session's parent, or the session itself. A device asks before it signs its
 own entry.
+
+**Device ids.** A new device takes the first id at or after the account's
+counter that no row of the account and no entry of its head manifest holds,
+wrapping from 127 to 1; the counter then moves past it. Ids are libsignal's
+1-127, so they are reused (as Signal reuses them), but a removed device's id
+comes back only after every other free id has had its turn. Everything stored
+under an id goes with its device, or is bound to the device's instance
+(docs/plans/one-device-list.md, "Device id reuse").
 
 **Device credentials.** A device draws 32 random bytes at registration (its
 `credential`, unpadded base64url); the server keeps a salted hash. Every call
@@ -3752,7 +4285,7 @@ segments, and device rename and removal. A missing or
 wrong credential, or one of a removed or expired device, is `401
 deviceCredential`.
 
-### POST /api/chat/device
+### POST /api/v1/chat/devices
 
 Register a Chat device (`RegisterChatDeviceRequestV2`): `suite` (`1`),
 `registrationId` (`1..16383`), the account's `identityKey`, `signedPreKey`
@@ -3765,7 +4298,7 @@ keys too: `400 badSignature`), optional `oneTimePreKeys[]` /
   (below). The identity is the account's (`409 identityMismatch`; `409
   noAccountIdentity` when it has none); the token is unused, unexpired and the
   account's (`403 linkToken`), consumed with the insert. The server assigns the
-  lowest device id no row of the account holds, within `chatMaxActiveDevices`
+  account's next device id (above), within `chatMaxActiveDevices`
   Chat devices (`409`) and `devicesPerAccount` devices of every kind (`409
   deviceLimit`). A device of the account then publishes the manifest that
   lists it.
@@ -3775,8 +4308,11 @@ keys too: `400 badSignature`), optional `oneTimePreKeys[]` /
   (`verifySuccessor`: sequence 1 with no manifest, else head + 1 linked by
   hash) and lists this device as its one Chat device, under this sign-in's
   `session`, with the head's other (non-Chat) entries unchanged (`409
-  devicesMismatch`); the device takes the lowest id those leave free (1 when
-  there are none). In one transaction the server drops every other Chat
+  devicesMismatch`); the device takes the account's next id those leave
+  free: the first at or after `nextDeviceId` (`GET
+  /api/v1/account/devices/session`), wrapping from 127 to 1 (`409
+  devicesMismatch` for another; a registration in between moves the
+  counter, and the device asks again). In one transaction the server drops every other Chat
   device of the account and every row the manifest doesn't list (prekeys,
   mailboxes, tickets and push subscriptions with them), inserts this one,
   records the identity and publishes the manifest. The gate is the account
@@ -3785,11 +4321,11 @@ keys too: `400 badSignature`), optional `oneTimePreKeys[]` /
 A retry with the same credential answers the device it made. `200 OK` →
 `{ "deviceId": 1 }`.
 
-### GET /api/chat/device
+### GET /api/v1/chat/devices
 
 The account's Chat devices: those its manifest lists with Chat keys (a registration not yet listed isn't one): `{ "devices": [{ "deviceId", "suite", "name", "createdAt", "lastSeenAt" }] }`.
 
-### PATCH /api/chat/device/{deviceId}
+### PATCH /api/v1/chat/devices/{deviceId}
 
 Rename one of the caller's registered Chat installations. The body is
 `{ "name": "Work laptop" }`; names are trimmed, required, limited to 64 Unicode
@@ -3798,20 +4334,20 @@ account-private display metadata—the numeric device ID, encryption keys,
 sessions, signed device manifest, and protected history remain unchanged.
 `204`.
 
-### DELETE /api/chat/device/{deviceId}
+### DELETE /api/v1/chat/devices/{deviceId}
 
 Revoke a chat device — hard delete; prekey pools and mailbox rows are removed,
 and live sockets close. It does not delete account-level Chat history backup.
 `204`.
 
-### POST /api/chat/backup
+### POST /api/v1/chat/backup
 
 Idempotently provision the always-on Chat archive after account recovery. The
 body contains a typed account-master-key envelope for the random backup root
 and an account-authority-signed manifest-signer authorization. The server
 validates public bindings and signatures but never receives the root key.
 
-### GET /api/chat/backup
+### GET /api/v1/chat/backup
 
 Return provisioning state, current signed manifest/cursor, latest
 server-acknowledged protected time, and Chat's usage of the account storage
@@ -3820,7 +4356,7 @@ history media. `deviceHeads` lists, per source device number, the sequence
 and digest of the last segment accepted from it: a device continues its
 number's chain from there (`docs/chat-backup.md`).
 
-### POST /api/chat/backup/segments
+### POST /api/v1/chat/backup/segments
 
 Append one idempotent encrypted event segment. Requests bind a random operation
 ID, active source device, contiguous per-device sequence and digest chain,
@@ -3828,46 +4364,55 @@ account-manifest sequence, ciphertext digest and length. The server assigns the
 monotonic account cursor. `507` means the durable local outbox is not yet
 protected; clients must show the latest acknowledged time and storage action.
 
-### GET /api/chat/backup/segments?after=N&limit=N
+### GET /api/v1/chat/backup/segments?after=N&limit=N
 
 Page the complete ordered encrypted event tail. Restoring it does not advance a
 mailbox cursor or establish Direct Chat or group protocol state.
 
-### POST /api/chat/backup/bases
+### POST /api/v1/chat/backup/bases
 
 Stage a typed encrypted compacted base using multipart `metadata` and
 `ciphertext` fields. Staging is bounded and expires after 24 hours. Temporary
 overlap with the current archive is allowed only when the post-CAS footprint
 fits the account storage pool.
 
-### GET /api/chat/backup/bases/{objectId}
+### GET /api/v1/chat/backup/bases/{objectId}
 
 Stream only the currently committed encrypted base and its ciphertext digest.
 
-### PUT /api/chat/backup/manifest
+### PUT /api/v1/chat/backup/manifest
 
 Verify and compare-and-swap a signed manifest against the exact current
 generation, cursor and digest. Commit atomically activates the staged base and
 reconciled media set, then releases superseded message/media quota.
 
-### POST /api/chat/backup/media/copy
+### POST /api/v1/chat/backup/media/copy
 
 Copy an account-owned ordinary Chat-media ciphertext into a padded,
-backup-specific outer encryption. The client supplies only the derived outer
-key; the original attachment plaintext/key never reaches the server.
+backup-specific outer encryption in the block format (`KUTPBM2`, backup media
+suite 2). The client supplies only the derived outer key; the original
+attachment plaintext/key never reaches the server. The receipt
+(`ChatBackupMediaReceiptV1`) names the sealed manifest's SHA-256
+(`manifestSha256`, base64), which the backup's records commit to; a retry
+gets the same one.
 
-### POST /api/chat/backup/media
+### POST /api/v1/chat/backup/media
 
 Multipart direct-upload fallback for a verified outer-encrypted media object
-retained locally after its ordinary delivery object has expired.
+retained locally after its ordinary delivery object has expired. The metadata
+names the object's `manifestSha256`; the server checks the header, length and
+block structure and that the uploaded manifest hashes to it.
 
-### GET /api/chat/backup/media/{mediaId}
+### GET /api/v1/chat/backup/media/{mediaId}
 
-Lazily stream one opaque history-media object. Clients validate its typed
-header, digest, secretstream final tag, source length and zero padding before
-placing the inner Chat-media ciphertext in the private cache.
+Lazily read one opaque history-media object, whole or by one `Range`
+(`206`, at most `drive.stream.response_max_bytes`; the ETag is the object's
+SHA-256). Clients read the header and the sealed manifest first, open it
+against the digest their record commits to, then each block (its hash, AEAD
+and zero padding) before placing the inner Chat-media ciphertext in the
+private cache.
 
-### POST /api/chat/backup/media/reconciliation
+### POST /api/v1/chat/backup/media/reconciliation
 
 Page the exact, digest-bound media reference set for a target generation before
 manifest CAS. Unreferenced history media is garbage-collected only at commit.
@@ -3877,35 +4422,36 @@ device-transfer fallback. Account deletion and administrator loss-recovery wipe
 invoke internal lifecycle cleanup that transactionally removes backup database
 state/quota and deletes its object-storage prefix.
 
-### GET /api/chat/media/storage
+### GET /api/v1/chat/media/storage
 
 The caller's storage pool as the Chat storage screen shows it:
 `{ "totalQuotaBytes", "totalUsedBytes", "driveBytes", "chatMediaBytes" }`.
 `totalQuotaBytes` / `totalUsedBytes` are the account pool. `driveBytes` sums
 the caller's files, assets, thumbnails and versions; `chatMediaBytes` sums the
 caller's Chat delivery media references. Per-conversation totals are computed
-on the client from the encrypted attachment ledger. `GET /api/user/storage`
+on the client from the encrypted attachment ledger (the account-records
+`chatAttachments` scope). `GET /api/v1/account/storage`
 gives the full breakdown.
 
-### PUT /api/chat/keys?deviceId=N
+### PUT /api/v1/chat/keys?deviceId=N
 
 Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prekeys (only fields present are changed; pool inserts are idempotent per `keyId`). Signed keys must be the account identity's (`400 badSignature`).
 
-### POST /api/chat/keys/check
+### POST /api/v1/chat/keys/check
 
 Signal's `/v2/keys/check`: `{ "digest" }`, lowercase hex of
 `repeated_use_keys_digest` (kutup-chat-proto) over the account identity, the
 device's signed prekey and its last-resort key. `204` when the server holds
 the same, `409 keysDiffer` otherwise (the device uploads its keys again).
 
-### PUT /api/chat/account-identity
+### PUT /api/v1/chat/account-identity
 
 A new account identity for the devices the account keeps (Signal's
 `PhoneNumberIdentityKeyDistributionRequest`), for "reset identity, keep my
 devices" after a lost or stolen device: `{ identityKey, devices: [{ deviceId,
 registrationId, signedPreKey, lastResortKyberPreKey }], deviceMessages:
 [OutgoingEnvelope], manifest }`, each list strictly ordered by `deviceId`.
-`devices` names exactly the manifest's devices (the sender included) with its
+`account_devices` names exactly the manifest's devices (the sender included) with its
 registration ids, and `deviceMessages` one sealed `accountIdentity` sync per
 other listed device on its current session (each at most
 `chatDistributionMessageBytes`). `409` (`DeviceListMismatch`) when
@@ -3921,31 +4467,31 @@ new ones) and queues the syncs. At most `chatIdentityDistributions` a day.
 
 As Signal links Desktop to the phone:
 
-1. The new device, signed in, asks `POST /api/chat/provisioning/ticket` for a
+1. The new device, signed in, asks `POST /api/v1/chat/provisioning/ticket` for a
    socket ticket (`{ ticket }`, once, within `chatProvisioningTicketSeconds`;
    per address at most `chatProvisioningSockets` a minute; at most
    `chatProvisioningSocketsPerAccount` sockets of one account open at once) and opens `GET
-   /api/chat/provisioning?ticket=` (WebSocket). The socket sends `{ "type":
+   /api/v1/chat/provisioning?ticket=` (WebSocket). The socket sends `{ "type":
    "address", "address" }` (16 random bytes, base64url) and shows it with its
    ephemeral key as the link code `kutup://link?address=…&key=…`. Pings every
    30 seconds; closed `1000` after the envelope, `4408` (expired) after
    `chatLinkTokenSeconds`.
-2. A device of the account asks `POST /api/chat/link-tokens` for a token
+2. A device of the account asks `POST /api/v1/chat/link-tokens` for a token
    (`{ token, expiresAt }`, single use, lasting `chatLinkTokenSeconds`; at most
    `chatLinkTokensPerAccount` unused: `409 linkTokenLimit`; at most
    `chatLinkTokens` an hour).
 3. It sends the provisioning message, encrypted to the new device's key, with
-   `PUT /api/chat/provisioning/{address}` (`{ envelope: ProvisionEnvelopeV1 }`,
+   `PUT /api/v1/chat/provisioning/{address}` (`{ envelope: ProvisionEnvelopeV1 }`,
    at most `chatProvisionBodyBytes`; `chatProvisioningRelays` a minute). The
    server relays it to that socket (`{ "type": "envelope", "envelope" }`) and
    keeps nothing; an address that is no socket of the account is `404`.
 4. The new device registers with `{"type": "link", "linkToken"}`.
 
-### GET /api/chat/keys/count?deviceId=N
+### GET /api/v1/chat/keys/count?deviceId=N
 
 Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n }` — clients replenish below a threshold.
 
-### POST /api/chat/manifest
+### POST /api/v1/chat/manifest
 
 Publish the account's next `AccountManifestV3`, signed by the account
 self-authority (device-authenticated: any device of the account, of every
@@ -3978,12 +4524,12 @@ working; the account's next manifest (any of its devices publishes one on
 Every Chat route that names another person takes their permanent account id
 in the path and their server as `?server=` (this server when absent): `aci`
 accounts, never names (docs/plans/account-ids.md). A name becomes an account
-only through `GET /api/users/by-address/:address`. A local account that is
+only through `GET /api/v1/accounts/by-address/:address`. A local account that is
 not active answers `404`; the anonymous routes give one answer for every
 failure. Manifests, profiles, key bundles (`account`) and mailbox envelopes
 (`sender`) name accounts as `{ "server", "accountId" }`.
 
-### GET /api/chat/accounts/{accountId}/manifest
+### GET /api/v1/chat/accounts/{accountId}/manifest
 
 Return the current account-signed device manifest for an account. This direct
 manifest endpoint is authenticated. A client independently verifies its
@@ -3992,7 +4538,7 @@ status label. `404 noManifest`: the account has no Chat manifest yet; a 404
 without that code (an unknown account; a remote server that didn't say so)
 is not that answer.
 
-### GET /api/chat/accounts/{accountId}/manifest-history
+### GET /api/v1/chat/accounts/{accountId}/manifest-history
 
 Return complete, individually account-signed manifest records for an exact
 inclusive range. Query parameters are `fromSequence`, `toSequence`, and an
@@ -4002,7 +4548,7 @@ reordered, cross-incarnation, or partially verified history does not clear a
 client gap and blocks new sends to that peer. Another server's account is
 asked only through the authenticated federation transport.
 
-### GET /api/chat/profile
+### GET /api/v1/chat/profile
 
 Owner-only recovery of the current opaque encrypted profile, including the
 random profile key wrapped under the account master key for linked-device
@@ -4012,7 +4558,7 @@ source device, and canonical `ProfileEnvelopeV1` fields. The owner-only
 response includes `wrappedKey`, the account's own copy of the profile key;
 peer responses omit it.
 
-### PUT /api/chat/profile
+### PUT /api/v1/chat/profile
 
 Publish a new opaque encrypted profile: display name, optional avatar and
 optional `about` (Signal's one-line "about", ≤ 140 characters, padded to
@@ -4031,13 +4577,13 @@ revision, source device and purpose. Unknown suites,
 noncanonical base64, malformed headers, relocation and trailing bytes return
 `400` before persistence.
 
-### GET /api/chat/accounts/{accountId}/profile/{version}
+### GET /api/v1/chat/accounts/{accountId}/profile/{version}
 
 Capability-gated encrypted profile lookup for a local or federated account. The caller supplies the profile access key in the dedicated request
 header rather than the URL. A wrong version or capability is deliberately
 indistinguishable from a missing profile and returns `404`.
 
-### GET /api/chat/accounts/{accountId}/keys
+### GET /api/v1/chat/accounts/{accountId}/keys
 
 Return `AccountPreKeyBundlesResponse`: the account's `identityKey` once,
 PQXDH prekey bundles for **every** device its manifest lists that hasn't
@@ -4053,11 +4599,11 @@ fetch is made as that device (its credential). Fetches are limited to 30/min per
 (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall
 (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
 
-### POST /api/chat/accounts/{accountId}/messages
+### POST /api/v1/chat/accounts/{accountId}/messages
 
 Deliver one logical message as per-device ciphertexts: `{ "senderDeviceId": n, "envelopes": [{ "deviceId", "registrationId", "envelopeType": "preKey"|"message", "suite": 1, "content": "<base64>" }] }`. The device set must exactly match the recipient's current devices — ids **and** registration ids — or the send fails with `409 { "missingDevices": [], "staleDevices": [], "extraDevices": [] }` (Signal's contract: no device can be silently skipped, and reinstalled devices are detected). Stored envelopes are also pushed to the recipient's live chat sockets.
 
-### POST /api/chat/sync/messages
+### POST /api/v1/chat/sync/messages
 
 Deliver an encrypted sent transcript to every other active device belonging to
 the authenticated account. The sending device is excluded from the exact
@@ -4065,15 +4611,15 @@ device-set check; an empty destination set succeeds for a single-device
 account. Note to Self and ordinary outgoing-message synchronization use this
 same idempotent mailbox path.
 
-### GET /api/chat/messages?deviceId=N&limit=100
+### GET /api/v1/chat/messages?deviceId=N&limit=100
 
 Drain the device's mailbox, oldest first (max 500/page): `{ "envelopes": [{ "id", "sender" (`{ server, accountId }`, absent under sealed sender), "senderDeviceId", "envelopeType", "suite", "content", "serverTimestamp" }], "more": bool }`. Envelopes stay stored until acked.
 
-### POST /api/chat/messages/ack?deviceId=N
+### POST /api/v1/chat/messages/ack?deviceId=N
 
 `{ "ids": ["<uuid>", …] }` → deletes processed envelopes; returns `{ "acked": n }`.
 
-### POST /api/chat/link-preview
+### POST /api/v1/chat/link-preview
 
 Fetch one public page or image for a link preview the caller is building
 (`{ "url": "https://…", "kind": "page" | "image" }` → `{ finalUrl,
@@ -4082,12 +4628,12 @@ every resolved address is public; the connection is pinned to the checked
 address; at most three redirects, each checked again; pages are cut at
 512 KiB and must be HTML, images must be JPEG/PNG/WebP/GIF of at most 2 MiB;
 8 s total. 30 per minute per account. `404` when `CHAT_LINK_PREVIEWS=false`
-(then `/api/auth/settings` → `chat.linkPreviews` is false), `400` for a
+(then `/api/v1/auth/settings` → `chat.linkPreviews` is false), `400` for a
 non-public or non-https URL, `422` when the site gives nothing usable. The
 browser parses the page (`DOMParser`) and resizes the image; the preview then
 travels end-to-end encrypted in the message.
 
-### GET /api/chat/call-servers
+### GET /api/v1/chat/call-servers
 
 ICE servers for a call ([`chat-calls.md`](chat-calls.md)):
 `{ "iceServers": [{ "urls": [...], "username"?, "credential"? }], "relay": bool, "expiresAt"? }`.
@@ -4096,17 +4642,17 @@ With `CHAT_TURN_URLS` and `CHAT_TURN_SECRET` set, the TURN entry carries a
 password `base64(HMAC-SHA1(secret, username))`); `relay` is then true. 60
 per minute per account.
 
-### POST /api/chat/group-calls/token
+### POST /api/v1/chat/group-calls/token
 
 `{ "host", "roomId", "participantId" }` (room and tag: 32 lowercase hex each)
 → `{ "url", "token" }`: the SFU's WebSocket URL and a 6-hour LiveKit token
 for that room ([`chat-calls.md`](chat-calls.md) "Group calls"). The host
 mints it; another host is asked over signed federation
-(`POST /api/fed/chat/group-calls/token`). `404` when the host has no SFU,
+(`POST /api/fed/v2/chat/group-calls/token`). `404` when the host has no SFU,
 `429` over 30 per minute per account (300 per origin server), `502` when
 the host cannot be reached.
 
-### GET /api/chat/groups/gateway-key?server={home}&fromSequence={n}
+### GET /api/v1/chat/groups/gateway-key?server={home}&fromSequence={n}
 
 Pairwise groups' anonymous route ([`plans/pairwise-groups.md`](plans/pairwise-groups.md) §3;
 groups are off unless `CHAT_GROUPS=true`, `404` otherwise). Signed-in:
@@ -4114,18 +4660,18 @@ groups are off unless `CHAT_GROUPS=true`, `404` otherwise). Signed-in:
 the home's HPKE key config, signed by its federation identity, and its
 identity documents from sequence `n` (the one the group pins) on, at most 64.
 This server fetches a peer's config over signed federation
-(`GET /api/fed/chat/groups/gateway-key`) and gives the history it has
+(`GET /api/fed/v2/chat/groups/gateway-key`) and gives the history it has
 verified; the client trusts neither until it follows the history from its
 pin and verifies the config. The key changes weekly; the previous one is
 accepted for 24 hours. `502` when the home is unreachable.
 
-### POST /api/chat/groups/relay/{home}
+### POST /api/v1/chat/groups/relay/{home}
 
 Signed-in. The body is a request sealed to the home's gateway key
 (RFC 9458 encapsulation, `message/ohttp-req`, at most 256 KiB + 55 bytes);
 the answer is the sealed response (`application/octet-stream`, `no-store`).
 This server passes it on unread: to its own gateway when it is the home,
-otherwise over signed federation to `POST /api/fed/chat/groups/gateway`, and
+otherwise over signed federation to `POST /api/fed/v2/chat/groups/gateway`, and
 only to federation peers. `400` (empty) when the home could not open it,
 `429` over 240 per minute per account, `502` when the home is unreachable.
 Inside, the home checks the request's home, clock (5 minutes), signature and
@@ -4201,7 +4747,7 @@ over the storage per group (the current blob and the upload), both
 administrators' settings; `malformed` for a body not padded so. An upload
 spends the change budgets.
 
-### GET /api/chat/group-send/endorsement
+### GET /api/v1/chat/group-send/endorsement
 
 Group send endorsements ([`plans/group-send-endorsements.md`](plans/group-send-endorsements.md)
 §3.2; `404` unless `CHAT_GROUPS=true` and federation is on). Signed-in: today's
@@ -4214,7 +4760,7 @@ it, sealed, with each of its groups. It says nothing about groups: every
 account fetches one a day. `429` past the account's endorsements a day
 (`chatGroupSendEndorsementsPerDay`, 48 at first).
 
-### GET /api/chat/group-send/params?server={host}
+### GET /api/v1/chat/group-send/params?server={host}
 
 Signed-in (§4). `GroupSendParamsV1 { keys: [{ keyId, endorsementPublicKey,
 issuesUntil }] }`: the server's issuing key and, while it still verifies, the
@@ -4230,68 +4776,23 @@ the key with `kutup-server chat-zk-keys rotate`: the new key issues at once,
 the old one verifies until the last endorsement it issued expires, and a
 second rotation waits for that.
 
-### GET /api/chat/group-list
+### The Chat group list and contact list
 
-The account's group list ([`plans/pairwise-groups.md`](plans/pairwise-groups.md) §5;
-`404` unless `CHAT_GROUPS=true` and federation is on): one sealed entry per
-pairwise group the account is in, so its other devices find its groups.
-`{ "entries": [{ "id", "revision", "envelope" }] }`. `id` is a keyed hash of
-the group id under a key derived from the account's master key (43
-characters of base64url without padding), so lists can't be matched across
-members; `envelope` is the sealed entry (standard base64, always 4032 bytes),
-whose authenticated header carries its revision. The server never opens it.
-The account head's `chatGroups` scope lists every entry. **Auth:** Bearer JWT.
+The account's group list ([`plans/pairwise-groups.md`](plans/pairwise-groups.md) §5:
+one sealed entry per pairwise group the account is in) and its Chat contacts
+([`plans/chat-contacts-sync.md`](plans/chat-contacts-sync.md): one sealed
+entry per person the account accepted, rejected, blocked or asked) are the
+account-records scopes `chatGroups` and `chatContacts` ([the account-records
+store](#the-account-records-store)). Each entry's id is a keyed hash of the
+group id, or of the contact's account, under the account's object-id key (43
+characters of base64url), so lists can't be matched across accounts; the
+envelope is one size per scope (4144 and 2160 bytes) and its header carries
+the revision. Writes of `chatGroups` are `404` unless `CHAT_GROUPS=true` and
+federation is on. A new contact past the scope's count is `400 scopeFull`:
+the client evicts before that (the oldest rejections, then the oldest pending
+requests, never a block).
 
-### PUT /api/chat/group-list/{id}
-
-`{ "baseRevision": <n>, "envelope": "<base64>", "head"?: "<base64>" }` →
-`200` with the stored entry. `baseRevision` is the revision the write started
-from (0 for a new entry); the new revision is read from the envelope's header
-and must be above it (`400` otherwise; a body carrying its own `revision` is
-`422`). `409 revision_conflict` with `revision`, the current one, when another
-device wrote first. Once the account keeps a head, `head` must be the next
-one, covering the new revision (`409 head_required` / `head_conflict`).
-`400` for an envelope that isn't 4032 bytes of canonical base64 or doesn't
-parse, and for a new entry past 1024; `404` for an id that isn't one.
-
-### DELETE /api/chat/group-list/{id}
-
-`{ "baseRevision": <n>, "head"?: "<base64>" }` → `204`: removes the entry if
-it is still at `baseRevision` (an ended group whose chat its person deleted).
-`409 revision_conflict` with the current revision when it moved, `404` when
-there is no such entry; `head` as for `PUT`.
-
-### GET /api/chat/contact-list
-
-The account's Chat contacts ([`plans/chat-contacts-sync.md`](plans/chat-contacts-sync.md)):
-one sealed entry per person the account accepted, rejected, blocked or asked,
-so a device that lost everything restores them. Wherever Chat is (pairwise
-groups needn't be on). `{ "entries": [{ "id", "revision", "envelope" }] }`.
-`id` is a keyed hash of the contact's account (`AccountRef`) under a key
-derived from the account's master key (43 characters of base64url without
-padding); `envelope` is the sealed entry (standard base64, always 2048 bytes),
-whose authenticated header carries its revision. The server never opens it.
-The account head's `chatContacts` scope lists every entry. **Auth:** Bearer
-JWT. An account reset clears the list.
-
-### PUT /api/chat/contact-list/{id}
-
-As `PUT /api/chat/group-list/{id}`: `{ "baseRevision", "envelope", "head"? }`
-→ `200` with the stored entry; `409 revision_conflict` with the current
-`revision`, `head_required` / `head_conflict`. `400` for an envelope that
-isn't 2048 bytes of canonical base64 or isn't a contact list entry (a group
-list entry isn't one), and `400 contactListFull` for a new entry past 10,000
-(the client evicts before that: the oldest rejections, then the oldest pending
-requests, never a block); `404` for an id that isn't one.
-
-### DELETE /api/chat/contact-list/{id}
-
-`{ "baseRevision": <n>, "head"?: "<base64>" }` → `204`: removes the entry if
-it is still at `baseRevision` (one the client evicted). `409
-revision_conflict` with the current revision when it moved, `404` when there
-is no such entry; `head` as for `PUT`.
-
-### POST /api/chat/call-links
+### POST /api/v1/chat/call-links
 
 `{ "roomId", "nonce", "accessTokenHash", "info", "hostTokenHash", "waitingRoom"? }` → `201` with
 `{ "roomId", "nonce", "info", "createdAt" }`: register a meeting
@@ -4306,23 +4807,23 @@ the SFU and its link deleted, so the two never both work; the new link
 does not count against the 50. `404` when the account has no such link,
 `502` when the SFU cannot close the old meeting (nothing changes).
 
-### GET /api/chat/call-links
+### GET /api/v1/chat/call-links
 
 → `{ "links": [{ "roomId", "nonce", "info", "createdAt" }] }`: the
 account's meetings, newest first. Its clients derive each link again from
 the nonce and open the info.
 
-### PUT /api/chat/call-links/:roomId/info
+### PUT /api/v1/chat/call-links/:roomId/info
 
 `{ "info" }` → `204`: replace the meeting's sealed title and time. `404`
 when the account has no such meeting.
 
-### DELETE /api/chat/call-links/:roomId
+### DELETE /api/v1/chat/call-links/:roomId
 
 → `204`: nobody can join through the link any more, and whoever is in the
 meeting is disconnected. `404` when the account has no such meeting.
 
-### POST /api/chat/call-links/info
+### POST /api/v1/chat/call-links/info
 
 **No authentication.** `{ "roomId", "accessToken" }` →
 `{ "info", "waitingRoom", "locked" }`: the meeting's sealed title and time,
@@ -4331,7 +4832,7 @@ holds the link. `404` for an
 unknown room and for a wrong access token alike, `429` over 60 a minute per
 address (`RATE_LIMIT_CALL_LINK_PER_MIN`, shared with the token route).
 
-### POST /api/chat/call-links/token
+### POST /api/v1/chat/call-links/token
 
 **No authentication needed.**
 `{ "roomId", "accessToken", "participantId", "seat", "label", "hostToken"? }`
@@ -4353,21 +4854,21 @@ the account's id; the address is its current one, read at every token, so a
 rename shows at the next one. Without it the joiner is a guest. The same
 holds for `…/knock`.
 
-### PUT /api/chat/call-links/:roomId/waiting-room
+### PUT /api/v1/chat/call-links/:roomId/waiting-room
 
 `{ "enabled", "hostTokenHash" }` → `204`: turn the meeting's waiting room on
 or off ([`chat-calls.md`](chat-calls.md) "The waiting room"). `hostTokenHash`
 is the SHA-256 of the owner's host token (standard base64, 32 bytes).
 Turning it off lets in everyone still waiting. `404` when the account has no
-such meeting. `POST /api/chat/call-links` takes the same two fields
+such meeting. `POST /api/v1/chat/call-links` takes the same two fields
 (`hostTokenHash` required, `waitingRoom` optional) when a meeting is made, the list returns
-`waitingRoom`, and `POST /api/chat/call-links/info` returns it beside the
+`waitingRoom`, and `POST /api/v1/chat/call-links/info` returns it beside the
 sealed info.
 
-With a waiting room, `POST /api/chat/call-links/token` answers `403` unless
+With a waiting room, `POST /api/v1/chat/call-links/token` answers `403` unless
 its optional `hostToken` is the owner's, or the seat was already let in.
 
-### POST /api/chat/call-links/knock
+### POST /api/v1/chat/call-links/knock
 
 **No authentication needed.**
 `{ "roomId", "accessToken", "participantId", "seat", "label" }` → `201` with
@@ -4375,7 +4876,7 @@ its optional `hostToken` is the owner's, or the seat was already let in.
 waiting room, `423` when it is locked, `429` when 50 people are already
 waiting or over 60 a minute per address.
 
-### POST /api/chat/call-links/knock/leave
+### POST /api/v1/chat/call-links/knock/leave
 
 **No authentication.** `{ "roomId", "accessToken", "knockId", "ticket" }` →
 `204`: the knocker stops waiting and the knock leaves the host's list at
@@ -4384,7 +4885,7 @@ once. Sent with
 its outcome; a wrong ticket changes nothing (still `204`). `404` for an
 unknown link or a wrong access token.
 
-### POST /api/chat/call-links/knock/status
+### POST /api/v1/chat/call-links/knock/status
 
 **No authentication.** `{ "roomId", "accessToken", "knockId", "ticket" }` →
 `{ "status" }` (`waiting`, `turnedAway`) or
@@ -4393,7 +4894,7 @@ the knock alive. `404` for a wrong ticket or a knock that is gone. This and
 the two routes below are limited to 600 a minute per address
 (`RATE_LIMIT_CALL_LINK_POLL_PER_MIN`).
 
-### POST /api/chat/call-links/knocks
+### POST /api/v1/chat/call-links/knocks
 
 **No authentication; a host's proof.** A host is the owner, who sends
 `hostToken`, or a co-host, who sends `sfuToken`: the SFU token this server
@@ -4404,13 +4905,13 @@ waiting, oldest first, each with their sealed name and, when they showed
 it, the account this server vouches for (its current address). `404` for anyone who is not a
 host, as for an unknown room.
 
-### POST /api/chat/call-links/knocks/decide
+### POST /api/v1/chat/call-links/knocks/decide
 
 **No authentication; a host's proof.**
 `{ "roomId", "accessToken", "hostToken" | "sfuToken", "knockId", "admit" }`
 → `204`. `404` when nobody is waiting under that knock.
 
-### POST /api/chat/call-links/roles
+### POST /api/v1/chat/call-links/roles
 
 **No authentication.** `{ "roomId", "accessToken", "hostToken"?, "sfuToken"? }`
 → `{ "me"?, "roles": [{ "participantId", "role" }], "locked", "waitingRoom",
@@ -4422,7 +4923,7 @@ participant becomes a co-host, so ask again then. Asking also has the
 server remove again anyone who was removed and is back in the room. The
 routes from here to `…/end` are limited like the knock routes.
 
-### POST /api/chat/call-links/co-hosts
+### POST /api/v1/chat/call-links/co-hosts
 
 **No authentication; the owner's host token.**
 `{ "roomId", "accessToken", "hostToken", "participantId", "enabled" }` →
@@ -4430,7 +4931,7 @@ routes from here to `…/end` are limited like the knock routes.
 it is the owner's own identity; `404` for anyone but the owner, or when
 nobody in the meeting has that identity.
 
-### POST /api/chat/call-links/participants/remove
+### POST /api/v1/chat/call-links/participants/remove
 
 **No authentication; a host's proof.**
 `{ "roomId", "accessToken", "hostToken" | "sfuToken", "participantId" }` →
@@ -4440,28 +4941,28 @@ owner; `404` for anyone who is not a host; `502` when the SFU's API
 (`CHAT_SFU_API_URL`) cannot be reached. The same answers apply to the two
 routes below.
 
-### POST /api/chat/call-links/participants/mute
+### POST /api/v1/chat/call-links/participants/mute
 
 **No authentication; a host's proof.**
 `{ "roomId", "accessToken", "hostToken" | "sfuToken", "participantId"? }` →
 `204`: mute that participant's microphone, or, with nobody named, the
 microphone of everyone who is not a host. They can turn it back on.
 
-### POST /api/chat/call-links/participants/screen
+### POST /api/v1/chat/call-links/participants/screen
 
 **No authentication; a host's proof.**
 `{ "roomId", "accessToken", "hostToken" | "sfuToken", "participantId",
 "allowed" }` → `204`: stop that participant sharing their screen (what they
 share ends, and they cannot start again), or allow it again.
 
-### POST /api/chat/call-links/lock
+### POST /api/v1/chat/call-links/lock
 
 **No authentication; a host's proof.**
 `{ "roomId", "accessToken", "hostToken" | "sfuToken", "locked" }` → `204`:
 lock the meeting (nobody new comes in; whoever is waiting is turned away) or
 unlock it.
 
-### POST /api/chat/call-links/end
+### POST /api/v1/chat/call-links/end
 
 **No authentication; the owner's host token.**
 `{ "roomId", "accessToken", "hostToken" }` → `204`: end the meeting for
@@ -4470,46 +4971,23 @@ one do not open. Every seat and role is forgotten and whoever is waiting is
 turned away; the link keeps working. `404` for anyone but the owner, `502`
 when the SFU's API cannot be reached.
 
-### GET /api/chat/joined-meetings
-
-→ `{ "entries": [{ "id", "entry" }] }`: the meetings this account joined,
-most recently recorded first, at most 100
-([`chat-calls.md`](chat-calls.md) "History"). Each `entry` is a stay sealed
-in the browser as an account record (`KUTPAR1`, purpose `JoinedMeeting`,
-base64, 1171 bytes); the server cannot open it.
-
-### POST /api/chat/joined-meetings
-
-`{ "id", "entry" }` → `204`: record a stay. `id` is 32 lowercase hex
-characters chosen by the browser, and the record names it: a record of
-another account, or one sealed for another id, is refused (`400`).
-Recording the same id again changes nothing. Beyond 100 the oldest are dropped.
-
-### DELETE /api/chat/joined-meetings/:id
-
-→ `204`: take one stay off the list.
-
-### DELETE /api/chat/joined-meetings
-
-→ `204`: clear the list.
-
-### PUT /api/chat/push-subscription
+### PUT /api/v1/chat/push-subscription
 
 `{ "deviceId": N, "endpoint": "https://…" }` → `204`: wake this chat device
 through the browser's push subscription while it has no live socket
 ([`chat-notifications.md`](chat-notifications.md)). Only endpoints of the
 push services in `CHAT_WEB_PUSH_HOSTS` (https, port 443); `400` otherwise,
-`404` when Web Push is off (`/api/auth/settings` → `chat.webPushPublicKey`
+`404` when Web Push is off (`/api/v1/auth/settings` → `chat.webPushPublicKey`
 is then absent) or the device is not the caller's.
 
-### DELETE /api/chat/push-subscription?deviceId=N
+### DELETE /api/v1/chat/push-subscription?deviceId=N
 
 `204`: stop waking the device.
 
-Browsers mint the socket's one-time ticket with `POST /api/device-ticket`
+Browsers mint the socket's one-time ticket with `POST /api/v1/account/devices/tickets`
 (Devices, below); the Chat socket takes only a Chat device's.
 
-### GET /api/chat/ws?ticket=…
+### GET /api/v1/chat/ws?ticket=…
 
 WebSocket. Browsers use the one-time ticket; native clients instead send `Authorization: Bearer …` with `?deviceId=N`. Reusable JWT query parameters are rejected. Server → client JSON frames: `{ "type": "drainMailbox" }` once on connect (fetch the backlog over REST), then `{ "type": "envelope", "envelope": {…} }` per newly arrived message (each envelope, here and in the mailbox drain, carries the sender's `sendId` when the server has it, so a device that cannot decrypt one can ask its sender for that message again), and `{ "type": "devicesChanged" }` to every connected device of an account whenever one of its devices is registered, removed or expired or a new signed manifest is published (it carries nothing; each device fetches and verifies the list itself, and one that misses it is corrected by the device-set check on its next send). Acks stay on REST — the mailbox is the source of truth. The only client → server frame is `{ "type": "ping" }`, answered by `{ "type": "pong" }`: browsers cannot send protocol pings, so the web client probes every 25 s and reconnects when no answer arrives within 10 s.
 
@@ -4550,55 +5028,60 @@ Return one immutable identity document from the locally verified, contiguous
 history. Genesis is sequence zero. Every rotation hash-links its predecessor
 and is signed by both old and new keys.
 
-### GET /api/fed/chat/accounts/{accountId}/keys
+### GET /api/fed/v2/chat/accounts/{accountId}/keys
 
 Authenticated server-to-server directory lookup. Returns the remote user's
 account-signed complete manifest and replay-safe last-resort PQ bundles. It
 deliberately does not consume one-time prekeys, so a replayed signed read cannot
 exhaust the remote recipient's pool.
 
-### GET /api/fed/chat/accounts/{accountId}/manifest
+### GET /api/fed/v2/chat/accounts/{accountId}/manifest
 
 Return the current complete account-signed manifest through an authenticated,
 origin- and destination-bound federation response (`404 noManifest` when the
 account has none).
 
-### GET /api/fed/chat/accounts/{accountId}/manifest-history
+### GET /api/fed/v2/chat/accounts/{accountId}/manifest-history
 
 Return the same exact-sequence, maximum-64-entry history pages as the local
 route. The signed request URI binds `fromSequence`, `toSequence`, and optional
 `pageFromSequence`.
 
-### GET /api/fed/chat/accounts/{accountId}/profile/{version}
+### GET /api/fed/v2/chat/accounts/{accountId}/profile/{version}
 
 Authenticated proxy lookup for an opaque encrypted profile. The server-to-
 server signature authenticates and destination-binds the originating
 homeserver; the separate profile access-key header remains the end-to-end
 capability. Wrong capabilities return `404`.
 
-### GET /api/fed/{chat|drive}/names/{username}/renames
+### GET /api/fed/v2/{chat|drive}/names/{username}/renames
 
-Signed, under `chat.v2` at `/api/fed/chat/…` or `drive.v1` at
-`/api/fed/drive/…` (each feature's requests stay in its own namespace;
+Signed, under `chat.v2` at `/api/fed/v2/chat/…` or `drive.v1` at
+`/api/fed/v2/drive/…` (each feature's requests stay in its own namespace;
 servers send under whichever the peer admits). Every
 rename chain naming `username@<this server>`, in any spelling, as `GET
-/api/users/renames/:address` answers them; `?incarnationId=` narrows them.
+/api/v1/accounts/by-address/:address/renames` answers them; `?incarnationId=` narrows them.
 
-### POST /api/fed/{chat|drive}/accounts/renames
+### POST /api/fed/v2/{chat|drive}/accounts/renames
 
 Signed (under `chat.v2` or `drive.v1`). A peer announces one of its accounts'
-renames: `{ "version": 1, "username", "incarnationId", "authorityPublicKey",
-"chain": [<AccountRenameV1>, …] }`, the whole chain, `username` its last
-current. Kept when it verifies (the incarnation is its authority's hash, every
-address is on the sending server) and extends the one kept (`204`); then this
-server's rows about that incarnation (incoming and outgoing federated shares,
-profile keys, collaboration devices) move to the new address, by incarnation
-only. `400` for a chain that does not check out, `409` for one that does not
-extend the one kept, `429` past 50,000 chains of that server or 600 announces
+renames: `{ "version": 1, "username", "accountId", "incarnationId",
+"authorityPublicKey", "chain": [<AccountRenameV1>, …] }`, the whole chain,
+`username` its last current. `accountId` is routing: it must be the id every
+statement signs (`400` otherwise). Kept as that account's address here
+(`remote_account_renames`, one row per (server, account id), the id the chain
+signs) when it verifies (the incarnation is its authority's hash, every
+statement names the one account id, every address is on the sending
+server) and extends the one kept, or replaces another incarnation's (an admin
+reset there) (`204`). Rows naming the account (incoming and outgoing federated
+shares, the Drive people list) carry only its id and show this address, so
+nothing is relabelled. `400` for a chain that does not check out, `409` for one
+that does not extend the one kept, `429` past 50,000 chains of that server
+(accounts only met by a share, without a chain, don't count) or 600 announces
 a minute. Announces are sent after a rename commits to every pinned peer not
 quarantined, retried with backoff for 7 days.
 
-### POST /api/fed/chat/messages
+### POST /api/fed/v2/chat/messages
 
 Receive one signed, ordered `FederatedChatTransaction`. The receiver enforces a
 contiguous per-origin sequence, exact recipient device set, canonical
@@ -4608,6 +5091,28 @@ high-water mark commit atomically. Exact replay returns the stored response;
 device mismatch or sequence gap returns typed `409` data so the origin can
 refresh/re-encrypt or replay the missing retained transaction.
 
+### POST /api/fed/v2/chat/stream-control
+
+A control message on one of the origin's sequenced streams (plain Chat sends,
+sealed sends or media offers): it uses up one sequence with nothing delivered. Signed
+`FederatedStreamControlV1` `{ "version": 1, "control", "transactionId",
+"stream": "chat"|"media"|"sealed", "sequence", "origin", "destination", "data"? }`
+(at most 1 KiB), naming no sender, recipient or payload. `control` is a
+`u16` type code, so a new one needs no new version:
+
+| Code | Meaning |
+|---|---|
+| `0` | Invalid: `400 invalid` |
+| `1` | Withdrawn: the transaction never left, as its sending account turned its federation off (docs/plans/server-personal-data.md), or as the origin can no longer read its queued row (settled `undecodable`). No `data` |
+| `2..=0x7fff` | Skip-safe: a destination that doesn't know the code still uses the sequence up and answers as for a withdrawal |
+| `0x8000..=0xffff` | Must be understood: a destination that doesn't know the code answers `400 unknownStreamControl` and does not use the sequence up |
+
+`data` carries what a code needs, and is never needed to use a sequence up.
+The receiver uses the sequence up exactly as a delivery would (it must be
+the next one; otherwise `409` with the `sequenceGap` data) and stores the
+answer, so a repeat of the same `transactionId` gets the same `200
+{ "acceptedSequence" }`. Required of every server: there is no fallback.
+
 ---
 
 ## Drive Federation — Local Authenticated Endpoints
@@ -4616,7 +5121,7 @@ These routes let a local browser interact with a remote encrypted share. The
 local server performs all remote discovery, admission, identity pinning, and
 message authentication; browsers never submit a remote API URL.
 
-### POST /api/drive/federation/shares
+### POST /api/v1/drive/federation/folder-shares
 
 Accept an invite after the browser parses its fragment.
 
@@ -4644,7 +5149,7 @@ intended recipient username match the authenticated local account. Success is
   "nameRevision": 1,
   "epochStatement": "<CollectionEpochStatementV1 base64>",
   "epochStatementHash": "<lowercase SHA-256 hex>",
-  "ownerUserId": "<uuid>",
+  "ownerAccountId": "<uuid>",
   "ownerAccount": "alice@sharer.example.com",
   "ownerIncarnationId": "<lowercase SHA-256 hex>",
   "ownerSigningPublicKey": "<canonical base64, 32 bytes>",
@@ -4661,51 +5166,54 @@ The retained remote capability is secret server-side state and is omitted from
 all responses. `collectionKind` is `folder` or `album`, as the owner's server
 states in the invite.
 
-### GET /api/drive/federation/shares
+### GET /api/v1/drive/federation/folder-shares
 
 List the authenticated user's accepted remote shares. Returns the same public
 shape as acceptance, without any capability. `?kind=folder` (the default)
 lists folders, for Drive; `?kind=album` lists Photos albums.
 
-### DELETE /api/drive/federation/shares/:shareId
+### DELETE /api/v1/drive/federation/folder-shares/:shareId
 
 Remove one accepted remote share for the authenticated user. Returns `204`.
 
-### GET /api/drive/federation/shares/:shareId/files
+### GET /api/v1/drive/federation/folder-shares/:shareId/files
 
 Return the signed and verified remote ciphertext metadata list.
 
-### GET /api/drive/federation/shares/:shareId/files/:fileId/content
+### GET /api/v1/drive/federation/folder-shares/:shareId/files/:fileId/content
 
 Stream remote ciphertext. The local server first spools and hashes the complete
 remote response, verifies its signed RFC 9530 digest under the pinned peer key,
 then releases the verified stream to the browser.
 
-### POST /api/drive/federation/shares/:shareId/files
+### POST /api/v1/drive/federation/folder-shares/:shareId/files
 
 Upload encrypted multipart fields (`fileId`, `metadataEnvelope`,
-`fileKeyEnvelope`, and `file`). Exact retries are idempotent
+`metadataRevision`, `fileKeyEnvelope`, `revisionId`,
+`revisionContentEnvelope`, and `file`). Exact retries are idempotent
 and return the same `201 { "id": "<uuid>" }` result. The body is spooled to
 disk and streamed on to the owner's server with its signed content digest;
 it is never held in memory.
 
-### POST /api/drive/federation/shares/:shareId/refresh
+### POST /api/v1/drive/federation/folder-shares/:shareId/refresh
 
 Bring a share's stored copy up to the owner's current folder key after a
 rotation. The recipient's server fetches the invite again and accepts it only
 from the same owner, folder and authority, never at an older epoch, and only
-if the owner's signed history (`GET /api/fed/drive/epochs`) descends from the
+if the owner's signed history (`GET /api/fed/v2/drive/folder-shares/epochs`) descends from the
 stored epoch. A revoked share fails from the owner's server. **Response:** the
 refreshed share.
 
-### GET /api/drive/federation/shares/:shareId/files/:fileId/state
+### GET /api/v1/drive/federation/folder-shares/:shareId/files/:fileId/state
 
 A note's or place list's latest saved Yjs state in the remote folder, relayed:
-`{ keyGeneration, state }` (state base64, sealed under the file key of that
-generation), `404` when it has none. Their edits are not whole-file versions,
+`{ keyGeneration, state, versionId, revisionContentEnvelope }` (state base64,
+sealed under the file key of that generation; the version it is and its
+sealed content record, which the browser opens first), `404` when it has
+none. Their edits are not whole-file versions,
 so the browser turns the state back into the file.
 
-### GET /api/drive/federation/shares/:shareId/album
+### GET /api/v1/drive/federation/folder-shares/:shareId/album
 
 The photos of an album on another server, relayed and verified: each item
 is `{ file, thumbnails, fileKeyEnvelope, keyGeneration, albumEpoch }`, the
@@ -4713,7 +5221,7 @@ file key sealed under the album key (Drive envelope purpose 12). Content is
 read through `…/files/:fileId/content` above. `404` when the owner stopped
 sharing it.
 
-### GET /api/drive/federation/shares/:shareId/files/:fileId/thumbnails/:variant
+### GET /api/v1/drive/federation/folder-shares/:shareId/files/:fileId/thumbnails/:variant
 
 A thumbnail (`sm` or `lg`) of a file the share reaches, relayed (still
 sealed under the file key) after its signed digest is checked.
@@ -4726,25 +5234,25 @@ with a capability for that file alone. With `canEdit`, notes and place lists
 are edited live through the recipient's server (see *Collaboration across
 servers* below).
 
-- **`POST /api/files/:id/federated-shares`**: owner only. **Body:**
+- **`POST /api/v1/drive/files/:id/federated-shares`**: owner only. **Body:**
   `{ recipientServer, recipientAccountId, shareEnvelope, canEdit }` (the
   recipient's username is taken from their server, as for folders). The envelope is a `FileShareEnvelopeV1` at the file's current
   generation, sealed to the remote account (`recipientServer` and
   `recipientAccountId`, looked up with
-  `GET /api/users/by-address/:address`).
+  `GET /api/v1/accounts/by-address/:address`).
   **Response:** `201 { inviteUrl }`, of the form
   `…/invite#server=…&capability=…&kind=file`. Only the capability's hash is
   kept.
   - The file's `access` lists these recipients (`federatedShares`).
   - A rotation re-seals them (`federatedShares: [{ id, shareEnvelope }]`, to
     the same account incarnation) or removes them (`removedFederated`).
-  - `PUT /api/files/:id/shares` re-seals any left behind, and `pending`
+  - `PUT /api/v1/drive/files/:id/shares` re-seals any left behind, and `pending`
     lists files whose remote recipients wait.
-- **`POST /api/drive/federation/file-shares`** (recipient's server):
+- **`POST /api/v1/drive/federation/file-shares`** (recipient's server):
   `{ server, capability }`. The server fetches the invite over the pinned
   peer, checks it is for this account and sealed by the named owner, and
   keeps the capability. The browser never gets it.
-- **`GET /api/drive/federation/file-shares`**: the accepted files.
+- **`GET /api/v1/drive/federation/file-shares`**: the accepted files.
   **`GET …/file-shares/:id`**: the file as it is now on its owner's server
   (`{ file, shareEnvelope, keyGeneration, owner… }`), checked again. It must
   still be the owner first accepted; `404` once no longer shared.
@@ -4756,9 +5264,9 @@ servers* below).
 
 Live editing of a file on another server, through your own server
 (docs/plans/collab-federation.md). `BASE` is
-`/api/drive/federation/shares/:shareId/files/:fileId` for a file in a shared
-folder, or `/api/drive/federation/file-shares/:id` for a file shared by
-itself. Each route behaves as its local counterpart under `/api/files/:id`,
+`/api/v1/drive/federation/folder-shares/:shareId/files/:fileId` for a file in a shared
+folder, or `/api/v1/drive/federation/file-shares/:id` for a file shared by
+itself. Each route behaves as its local counterpart under `/api/v1/drive/files/:id`,
 with the same bodies and responses; this server relays it to the file's
 server, which applies the share's permission (`canUpload` on a folder,
 `canEdit` on a file) to every write.
@@ -4773,7 +5281,7 @@ server, which applies the share's permission (`canUpload` on a folder,
 - **`POST BASE/claim-seed`**: whether your editor seeds a never-saved
   document.
 
-### DELETE /api/drive/federation/shares/:shareId/files/:fileId
+### DELETE /api/v1/drive/federation/folder-shares/:shareId/files/:fileId
 
 Move a file this share uploaded to the owner's trash, when `canDelete`
 permits it. Exact retries are idempotent and return `204`.
@@ -4782,17 +5290,24 @@ permits it. Exact retries are idempotent and return `204`.
 
 ## Drive Federation — Server-to-Server Endpoints
 
-All `/api/fed/drive/*` routes require the unified `drive.v1` RFC 9421/9530
-request signature and return an authenticated response. Except for user lookup,
-they also require `Kutup-Share-Capability`; the capability is checked only
+All `/api/fed/v2/drive/*` routes require the unified `drive.v1` RFC 9421/9530
+request signature and return an authenticated response. Except for the
+account by id, they also require `Kutup-Share-Capability`; the capability is checked only
 after the request's canonical origin domain has authenticated, and the share
 must be bound to that same domain.
 
-### GET /api/fed/drive/users/:username
+### GET /api/fed/v2/accounts/lookup?name=
 
-Return `{ "username", "server", "publicKey" }` for one active local user.
+The one place a name on this server becomes an account, in the account
+namespace (`/api/fed/v2/accounts/`), which Chat's and Drive's signed requests
+may both use, each under its own feature's policy. `?name=<name>` answers the
+active account with that name now, as `GET /api/fed/v2/drive/accounts/:accountId`
+answers it; a held or moved name answers `409 renamed` with its rename chains,
+an unknown one `404`. `?name=<name>&renames=all[&incarnationId=]` answers every
+rename chain naming `name@<this server>` (an empty list when none does).
+`POST /api/fed/v2/accounts/renames` takes a peer's rename announce.
 
-### PUT /api/fed/drive/profile-keys
+### PUT /api/fed/v2/drive/profile-keys
 
 Signed server-to-server delivery of a profile key
 (`{ sender: { server, accountId }, recipient: { server, accountId },
@@ -4801,42 +5316,42 @@ must be on the calling server and the recipient here, the envelope must name
 both (and the recipient's current incarnation), and a share must exist
 between them. The recipient's client checks the sender's signature.
 
-### GET /api/fed/drive/accounts/:accountId
+### GET /api/fed/v2/drive/accounts/:accountId
 
 Signed: one active local account by its permanent id, answered as
-`GET /api/users/by-id/:accountId` answers it (for a peer whose user holds
+`GET /api/v1/accounts/:accountId` answers it (for a peer whose user holds
 the account). `404` when there is none.
 
-### GET /api/fed/drive/invite
+### GET /api/fed/v2/drive/folder-shares/invite
 
 Return the encrypted collection metadata, wrapped key, intended recipient, and
 grants for the capability-authorized share.
 
-### GET /api/fed/drive/files
+### GET /api/fed/v2/drive/folder-shares/files
 
 List ciphertext file metadata for the capability-authorized collection.
 
-### GET /api/fed/drive/epochs
+### GET /api/fed/v2/drive/folder-shares/epochs
 
 The capability-authorized folder's key history, signed.
 
-### GET /api/fed/drive/album
+### GET /api/fed/v2/drive/folder-shares/album
 
 The capability-authorized album's photos, signed (see the relayed route
 above). `404` when the share is not for an album. For an album share,
-`GET /api/fed/drive/files/:fileId/content` reaches the album's items.
+`GET /api/fed/v2/drive/folder-shares/files/:fileId/content` reaches the album's items.
 
-### GET /api/fed/drive/files/:fileId/thumbnails/:variant
+### GET /api/fed/v2/drive/folder-shares/files/:fileId/thumbnails/:variant
 
 A thumbnail of a file the capability reaches (a file in the folder, or a
 photo in the album), as a signed stream with its digest.
 
-### GET /api/fed/drive/files/:fileId/state
+### GET /api/fed/v2/drive/folder-shares/files/:fileId/state
 
 A note's or place list's latest saved state in the capability-authorized
 folder, signed (`404` when none).
 
-### GET /api/fed/drive/file-invite · file-content · file-state
+### GET /api/fed/v2/drive/file-shares/invite · file-content · file-state
 
 The capability names one file shared by itself:
 - `file-invite`: its record, its key sealed to the recipient, and the owner's
@@ -4846,7 +5361,7 @@ The capability names one file shared by itself:
 
 A file (or its folder) in the trash answers `404`.
 
-### GET /api/fed/drive/files/:fileId/content
+### GET /api/fed/v2/drive/folder-shares/files/:fileId/content
 
 Stream ciphertext with its precomputed signed content digest and exact length;
 the ETag is the content's revision id. A ranged read
@@ -4854,14 +5369,14 @@ the ETag is the content's revision id. A ranged read
 query, `?range=a-b` (or `a-`, `-k`) and optionally `&ifRange=<etag>`;
 nothing else may be in the query. The answer is `206`, signed over the
 content digest of that part (at most `driveStreamResponseMaxBytes`), with
-`Content-Range`, or `416`. `GET /api/fed/drive/file-content` (a file shared
+`Content-Range`, or `416`. `GET /api/fed/v2/drive/file-shares/content` (a file shared
 by itself) takes the same query. The receiving server forwards its client's
 `Range` (cut to its own part limit first) and `If-Range` this way, and
 releases a part only once it is the one asked: its start, its length (which the signed digest covers) and the part
 limit. `Content-Range`'s total is not signed; the reader's own metadata gives
 the object's length, and its manifest fixes every byte.
 
-### POST /api/fed/drive/files
+### POST /api/fed/v2/drive/folder-shares/files
 
 Store one encrypted multipart upload. The exact ciphertext is hashed while it
 is spooled and the digest is persisted with the file row. A stable request ID
@@ -4871,16 +5386,20 @@ share's `uploadQuotaBytes`, measured from the files the share uploaded. A
 `fileId` already in use is `409`. The request is signed over its content
 digest: the server verifies the signature first, spools and hashes the body,
 and parses nothing until the digest matches. Body cap: the upload limit
-(`driveUploadMaxBytes`) plus 16 MiB. A block-format blob names its
-`revisionId`, checked as a local upload's.
+(`driveUploadMaxBytes`) plus 16 MiB. The upload names its `revisionId`,
+`metadataRevision` (`1`) and `revisionContentEnvelope`, checked as a local
+upload's: it commits inline. A version saved by a recipient on another
+server (`POST /api/fed/v2/drive/collab/versions/create`) carries `revisionId`,
+`revisionContentEnvelope`, `metadataEnvelope` and `metadataRevision` (all
+required), checked as a local save's.
 
-### DELETE /api/fed/drive/files/:fileId
+### DELETE /api/fed/v2/drive/folder-shares/files/:fileId
 
 Move one file **this share uploaded** to the owner's trash (restorable, and
 purged with its versions, assets, thumbnails and charges by the trash's own
 path), under a persistent idempotent mutation result. Other files are `404`.
 
-### Collaboration: `/api/fed/drive/collab/*`
+### Collaboration: `/api/fed/v2/drive/collab/*`
 
 Between the file's server (home) and an editor's server (bridge). All are
 signed and carry the share's capability, except `push`, which home signs
@@ -4915,9 +5434,9 @@ base64 sealed collab frames.
   32 MiB); **`POST versions/patch`** `{ fileId, versionId, label,
   keepForever }`; **`POST claim-seed`** `{ fileId }`.
 
-The removed `/api/fed/users`, `/api/fed/invites/*`, `/api/fed/shares/*`,
-`/api/fed-proxy/*`, `/api/collections/:id/share-federated`, and
-`/api/collections/fed-pubkey` routes have no compatibility handlers and return
+The removed `/api/fed/v2/users`, `/api/fed/v2/invites/*`, `/api/fed/v2/shares/*`,
+`/api/fed-proxy/*`, `/api/v1/drive/collections/:id/share-federated`, and
+`/api/v1/drive/collections/fed-pubkey` routes have no compatibility handlers and return
 `404`.
 
 ---
@@ -4937,7 +5456,7 @@ they removed personal details. The public settings advertise the tracker as
 `feedback.githubRepository` (absent when off), and the form offers it to
 people who want to report there in public instead.
 
-### POST /api/feedback
+### POST /api/v1/feedback
 
 **Auth:** Bearer JWT. Rate limit: 10 per hour per account
 (`RATE_LIMIT_FEEDBACK_PER_HOUR`); over it, `429`.
@@ -4961,41 +5480,59 @@ before sending, never the page's address (it can name a file or a person).
 
 ## Admin
 
-All admin endpoints require the `isAdmin` flag on the JWT and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
+All admin endpoints require an administrator's session (`role` `admin` or `breakGlassAdmin`) and share a stricter per-IP rate limit (120/min, `RATE_LIMIT_ADMIN_PER_MIN`; over-limit requests return `429`).
 
-Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; the human-readable identities (usernames) are snapshotted into the row's `payload` at action time.
+Every mutating admin endpoint (create / update / delete user, force-disable 2FA, settings update) writes a row to the **admin audit log** — who did what to whom, when. The log is readable via `GET /api/v1/admin/activity` below. Audit rows have no foreign keys and outlive the accounts they reference; payloads name accounts by id only (no username snapshot). Some rows are the server's own (a job or an operator command, for example a federation identity rotation): their `adminAccountId` is the nil UUID, shown as "system".
 
-### GET /api/admin/reports
+### GET /api/v1/admin/reports
 
 Reports on public links: open ones oldest first (default, `?status=open`), or
 the latest 100 resolved (`?status=resolved`). Each carries the report
 (`id`, `reason`, `details`, `link` while open, `createdAt`, `resolvedAt`,
 `resolution`: `dismissed`, `removed` or `disabled`), its link (`shareId`,
 `shareType`, `shareCreatedAt`, `shareRemovedAt`), the account that made it
-(`ownerUserId`, `ownerUsername`, `ownerIsActive`) and
+(`ownerAccountId`, `ownerUsername`, `ownerIsActive`) and
 `openReportsOnLink`.
 
-### POST /api/admin/reports/:id/dismiss
+### POST /api/v1/admin/reports/:id/dismiss
 
 Close an open report: nothing to do. `204`; `404` for no such open report.
 Logged as `report.dismiss`.
 
-### POST /api/admin/reports/:id/remove-link
+### POST /api/v1/admin/reports/:id/remove-link
 
-Take the reported link down (it answers `410 link_removed` from then on) and
+Take the reported link down (it answers `410 linkRemoved` from then on) and
 close every open report on it. `204`; `404` for no such open report. Logged as
-`share.remove`. Disabling the owner (`PUT /api/admin/users/:id` with
-`isActive: false`) takes every link of theirs down and closes their reports.
+`share.remove`. Disabling the owner (`PUT /api/v1/admin/accounts/:id` with
+`state: "suspended"`) takes every link of theirs down and closes their reports.
 
-### GET /api/admin/feedback
+### POST /api/v1/admin/public-links/:id/block · DELETE /api/v1/admin/public-links/:id/block
+
+An operator's block on one public link (by its id, `shareId` in a report):
+`{ "reason": "legalOrder" | "abuse" | "other", "reference"?: "…" }`
+(the reference, at most 200 characters, is for the administrators). The link
+answers `451 linkBlocked` for a legal order and `410 linkBlocked` otherwise,
+as does every other link to what it reaches, and its open reports close as
+`blocked` (keeping the reported link, which may be evidence). The block and
+its record are one transaction. `DELETE` lifts the block. `204`;
+`400` for another reason; `404` for no such link. Logged as `share.block` and
+`share.unblock`. Reports carry the link's `shareBlockedReason`.
+
+Public sharing for the whole server is `publicSharing` in
+`GET`/`PUT /api/v1/admin/settings` (`on`, `off`, `signedIn`; also in the public
+`GET /api/v1/auth/settings`), and for one account `publicSharing` (`on`, `off`)
+in `PUT /api/v1/admin/accounts/:id` (also in the user list and the account's
+`GET /api/v1/account`).
+
+### GET /api/v1/admin/feedback
 
 Feedback: open items oldest first (default, `?status=open`), or the latest 100
 resolved (`?status=resolved`). Each carries `id`, `kind`, `app`, `message`,
-`details`, `createdAt`, who sent it (`userId`, `userUsername`;
+`details`, `createdAt`, who sent it (`accountId`, `userUsername`;
 null once the account is deleted), `resolvedAt`, `resolution` (`done`,
 `dismissed` or `forwarded`) and `githubUrl`.
 
-### POST /api/admin/feedback/:id/resolve
+### POST /api/v1/admin/feedback/:id/resolve
 
 `{ "resolution": "done" | "dismissed" | "forwarded", "githubUrl"?: "…" }`.
 `githubUrl`, only with `forwarded` and optional there, must be an issue of the
@@ -5003,12 +5540,12 @@ configured tracker (`https://github.com/<owner>/<repo>/issues/<n>`). `204`;
 `400` for an unknown resolution or another address; `404` for no such open
 item. Logged as `feedback.resolve`.
 
-### DELETE /api/admin/feedback/:id
+### DELETE /api/v1/admin/feedback/:id
 
 Delete an item for good, open or resolved. `204`; `404` for no such item.
 Logged as `feedback.delete`.
 
-### GET /api/admin/users
+### GET /api/v1/admin/accounts
 
 List all registered users.
 
@@ -5022,20 +5559,28 @@ List all registered users.
     "username": "alice",
     "storageQuotaBytes": 10737418240,
     "storageUsedBytes": 524288000,
-    "isAdmin": false,
-    "isActive": true,
-    "totpEnabled": false,
-    "createdAt": "2026-03-14T12:00:00Z",
-    "isProtected": false
+    "role": "member",
+    "state": "closing",
+    "closesAt": "2026-11-20T10:00:00Z",
+    "legalHoldReference": "case 2026/17",
+    "legalHoldAt": "2026-11-06T09:00:00Z",
+    "twoFactor": "off",
+    "keysSetUp": true,
+    "createdAt": "2026-03-14T12:00:00Z"
   }
 ]
 ```
 
-`isProtected` is `true` for the break-glass admin (the account from the `ADMIN_ACCOUNT` env var, known by its username). Protected users cannot be demoted, disabled, or deleted — the relevant mutations below return `403`.
+`state` is `active`, `suspended` (with `suspendedReason`: `admin`,
+`operatorOrder` or `security`) or `closing` (with `closesAt`, when it is
+deleted) (docs/plans/server-personal-data.md, A5). `legalHoldReference` and `legalHoldAt` are present while a legal hold is
+set.
+
+`role` is `member`, `admin` or `breakGlassAdmin`: the break-glass admin (the account from the `ADMIN_ACCOUNT` env var) cannot be demoted, disabled, or deleted — the relevant mutations below return `403`. `twoFactor` is the authenticator app (`on`, `pending`, `off`); `keysSetUp` is false while the account is still on the temporary password an administrator gave it.
 
 ---
 
-### POST /api/admin/users
+### POST /api/v1/admin/accounts
 
 Create a user account (admin-initiated, bypasses registration settings). The
 administrator's client makes a temporary password and registers it with OPAQUE
@@ -5059,11 +5604,14 @@ asked: an account signs in with its username.
 }
 ```
 
-`storageQuotaBytes` is optional and defaults to 10 GB. Returns `201 Created` `{"message": "user created"}`. `400` for a record that is not one (a password sent as it is included), `409` if the username is already taken, `409 keyBindingTaken`, `409 opaqueKeyStale`.
+`storageQuotaBytes` is optional: given (above 0), it is the account's own
+quota (the entitlement `account.storage_quota_bytes`); 0 or none leaves the
+account on the site's default storage quota, which follows that setting as it
+changes. Returns `201 Created` `{"message": "user created"}`. `400` for a record that is not one (a password sent as it is included), `409` if the username is already taken, `409 keyBindingTaken`, `409 opaqueKeyStale`.
 
 ---
 
-### PUT /api/admin/users/:id
+### PUT /api/v1/admin/accounts/:id
 
 Update a user. All fields are optional; only the ones present in the request are applied.
 
@@ -5073,30 +5621,73 @@ Update a user. All fields are optional; only the ones present in the request are
 ```json
 {
   "storageQuotaBytes": 21474836480,
-  "isActive": true,
-  "isAdmin": false
+  "state": "suspended",
+  "suspendedReason": "operatorOrder",
+  "role": "member"
 }
 ```
 
-`isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
+`state: "suspended"` suspends the account (`suspendedReason`, default `admin`);
+its sign-ins end. A closing account is `409 accountClosing`: keep it first.
+`state: "active"` makes a suspended account active again, and keeps a closing
+one (as it was before it closed: a suspended account is suspended again, with
+its reason, and records `accountKept`) until its date (`409 accountDeleting` after: the closing job may be
+deleting it; a held account can still be kept). `storageQuotaBytes` gives the
+account its own quota (above 0; audited as `account.setEntitlement` with `key`
+`account.storage_quota_bytes`). `role` (`member` or `admin`) demotes or promotes the user, from its next request on (the session row carries it; tokens carry no role).
 
 **Response:** `200 OK` `{"message": "updated"}`. `403` if the request would demote or disable the break-glass admin; `400` if it would leave zero usable admins.
 
 ---
 
-### DELETE /api/admin/users/:id
+### DELETE /api/v1/admin/accounts/:id
 
-Delete a user and all their data.
+Delete a user and all their data, now: everything it holds, bytes included,
+then its row, with its account data key. A destruction event names it only by
+keyed hashes (docs/plans/server-personal-data.md, A7).
 
 **Auth:** Bearer JWT (admin)
 
-**Response:** `204 No Content`. `403` if the target is the break-glass admin.
+**Response:** `204 No Content`. `403` if the target is the break-glass admin;
+`409 legalHold` while the account is under a legal hold.
 
 ---
 
-### DELETE /api/admin/users/:id/2fa
+### POST /api/v1/admin/accounts/:id/close
 
-Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears `totp_secret` and `totp_enabled` and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
+Close the account: every sign-in ends, and it is deleted after
+`account.closing_days` (a Privacy and retention setting, default 14) unless it
+is kept, by its owner at sign-in or here (`PUT` with `state: "active"`).
+Recorded as `account.close`.
+
+**Auth:** Bearer JWT (admin)
+
+**Response:** `200 OK` `{"closesAt": "2026-11-20T10:00:00Z"}`. `403` for the
+break-glass admin; `400` for the last usable admin; `409 accountClosing` if it
+is closing already.
+
+---
+
+### PUT /api/v1/admin/accounts/:id/legal-hold · DELETE /api/v1/admin/accounts/:id/legal-hold
+
+Set (or change) and lift a legal hold. While it is set nothing deletes the
+account or anything of it: the closing job waits, an admin delete or reset is
+`409 legalHold`, and the retention jobs pass its sessions, security events and
+admin-log rows by. Recorded as `account.setLegalHold` / `account.clearLegalHold`,
+with the reference.
+
+**Auth:** Bearer JWT (admin)
+
+**Request body (PUT):** `{"reference": "case 2026/17"}` (1–200 characters).
+
+**Response:** `204 No Content`; `400` for an empty or long reference; `404`
+for an unknown account; `409 accountDeleting` once its deletion has begun.
+
+---
+
+### DELETE /api/v1/admin/accounts/:id/2fa
+
+Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears the sealed authenticator secret (and one being set up) and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
 
 **Auth:** Bearer JWT (admin)
 
@@ -5104,9 +5695,9 @@ Force-disable a user's TOTP two-factor authentication — an admin override for 
 
 ---
 
-### POST /api/admin/users/:id/rotate-temp-password
+### POST /api/v1/admin/accounts/:id/rotate-temp-password
 
-Replace the temporary password of an account still in first-login state (`isFirstLogin: true`). Such an account has no E2EE key material yet, so nothing is destroyed. For an established account this returns `409` — under E2EE the server cannot reset a password without destroying the user's data; the user self-serves with the recovery phrase (`POST /api/auth/recover/grant`), or the admin wipes (below). Design: `docs/research/10-admin-password-reset.md`.
+Replace the temporary password of an account still in first-login state (`keysSetUp: false`). Such an account has no E2EE key material yet, so nothing is destroyed. For an established account this returns `409` — under E2EE the server cannot reset a password without destroying the user's data; the user self-serves with the recovery phrase (`POST /api/v1/auth/recover/grant`), or the admin wipes (below). Design: `docs/research/10-admin-password-reset.md`.
 
 **Auth:** Bearer JWT (admin)
 
@@ -5116,7 +5707,7 @@ Replace the temporary password of an account still in first-login state (`isFirs
 
 ---
 
-### POST /api/admin/users/:id/reset-grant
+### POST /api/v1/admin/accounts/:id/reset-grant
 
 The administrator's fresh password proof (a reauth grant `for: "adminReset"`,
 from this admin session) exchanged for a grant bound to this account: what
@@ -5129,7 +5720,7 @@ Single use, five minutes, this admin session only.
 
 ---
 
-### POST /api/admin/users/:id/wipe
+### POST /api/v1/admin/accounts/:id/reset-keys
 
 Destructive account reset for a user who lost both their password and their recovery phrase (their data is cryptographically unreachable anyway). Purges every collection the user owns — files, versions, assets, S3 blobs, share links, trash — erases the key bundle, disables TOTP, revokes collab device keys and received shares, then resets the account to first-login with the supplied temp password. Username and quota survive. **Irreversible.** Refused (`403`) for the break-glass admin.
 
@@ -5141,7 +5732,7 @@ Destructive account reset for a user who lost both their password and their reco
 
 ---
 
-### GET /api/admin/stats
+### GET /api/v1/admin/stats
 
 Return aggregate server statistics.
 
@@ -5150,8 +5741,8 @@ Return aggregate server statistics.
 **Response:**
 ```json
 {
-  "totalUsers": 42,
-  "activeUsers": 39,
+  "totalAccounts": 42,
+  "activeAccounts": 39,
   "totalFiles": 1234,
   "totalStorageUsedBytes": 107374182400,
   "totalCollections": 87,
@@ -5164,7 +5755,7 @@ Return aggregate server statistics.
 
 ---
 
-### GET /api/admin/activity
+### GET /api/v1/admin/activity
 
 The admin audit-log feed, newest first.
 
@@ -5182,12 +5773,12 @@ cursor remains stable.
   "entries": [
     {
       "id": 7,
-      "action": "user.create",
-      "adminUserId": "<uuid>",
+      "action": "account.create",
+      "adminAccountId": "<uuid>",
       "adminUsername": "admin",
-      "targetUserId": "<uuid>",
+      "targetAccountId": "<uuid>",
       "targetUsername": "newuser",
-      "payload": { "username": "newuser", "storageQuotaBytes": 10737418240 },
+      "payload": { "storageQuotaBytes": 10737418240 },
       "occurredAt": "2026-06-11T11:22:33Z"
     }
   ],
@@ -5195,16 +5786,20 @@ cursor remains stable.
 }
 ```
 
-Actions include user/settings changes plus `federation.policy.*`,
-`federation.rule.*`, `federation.peer.*`, and `federation.identity.*`. Identity
-pin, authenticated rotation, quarantine, verification, and break-glass re-pin
-events retain full fingerprints, sequences, and reasons but never private
-signing keys or Drive capabilities. `adminUsername`/`targetUsername` are the live
-identities and become `null` once the referenced account is deleted — the
-`payload` snapshot keeps the trail readable. `nextBefore` is non-null while
-older pages remain.
+Actions are `area.verb`, two camelCase segments with the verb imperative
+(`account.create`, `settings.setRateLimit`, `mailGroup.updateMembers`,
+`federation.updatePolicy`, `federation.pinPeer`, …); the full list, with the
+payload keys each may carry, is `AdminAction` in
+`crates/kutup-server/src/audit_log.rs`. Identity pin, authenticated rotation,
+quarantine, verification, and break-glass re-pin events retain full
+fingerprints, sequences, and reasons but never private signing keys or Drive
+capabilities. Payloads name accounts by id only, never by username (A8): the
+account is `targetAccountId`. `adminUsername`/`targetUsername` are the live
+identities and become `null` once the referenced account is deleted (the page
+then shows "a deleted account"). `nextBefore` is non-null while older pages
+remain.
 
-### GET /api/admin/activity/export
+### GET /api/v1/admin/activity/export
 
 Export the same filtered audit stream as spreadsheet-safe UTF-8 CSV. It accepts
 `before`, `actionPrefix`, and `domain`; `limit` is clamped to 1–5000 and defaults
@@ -5213,7 +5808,29 @@ the response is downloaded as `kutup-admin-audit.csv`.
 
 ---
 
-### GET /api/admin/maps · PUT /api/admin/maps
+### GET /api/v1/admin/activity/verify
+
+The admin log's integrity (docs/plans/server-personal-data.md, A8): each row
+stores the previous row's hash and its own, over its actor kind and actor,
+kind, subject account, time, payload and count; the first row's previous hash
+is 32 zero bytes. This walks the chain from the oldest row kept.
+
+**Auth:** Bearer JWT (admin)
+
+**Response:** `{ "checked": 120, "brokenAt": null, "appendOnly": true }`:
+`brokenAt` is the first row whose hash or link is wrong, or that has none. The
+walk starts where the retention job last cut the chain (the last row it
+deleted and its hash, which only the database owner writes), so deleting more
+of the oldest rows breaks it too; `appendOnly` is false
+while the server runs as the database's owner (`DATABASE_OWNER_URL` unset).
+
+Opening one account's limits, mail-domain overrides or mail-sending state
+writes an `account.view` row here, and `adminAccess` in that account's security
+log.
+
+---
+
+### GET /api/v1/admin/maps · PUT /api/v1/admin/maps
 
 **Auth:** Bearer JWT (admin)
 
@@ -5231,12 +5848,12 @@ the response is downloaded as `kutup-admin-audit.csv`.
 `{ name, kind: "vector" | "raster", url, attribution }`: a style URL, or a
 tile template with `{z}`, `{x}` and `{y}`; it must also be listed in
 `providers`. Maps on with no provider, a provider listed twice, or a cache
-above 102,400 MB is `400`. Saving writes the `maps.settings.update` audit
+above 102,400 MB is `400`. Saving writes the `maps.updateSettings` audit
 entry.
 
 ---
 
-### GET /api/admin/rate-limits · PUT /api/admin/rate-limits/{key}
+### GET /api/v1/admin/rate-limits · PUT /api/v1/admin/rate-limits/{key}
 
 **Auth:** Bearer JWT (admin)
 
@@ -5246,7 +5863,7 @@ Every rate limit the server keeps (docs/plans/admin-rate-limits.md):
 {
   "limits": [
     {
-      "key": "login",
+      "key": "account.rate.login",
       "section": "accounts",
       "per": "address",
       "unit": "events",
@@ -5268,10 +5885,13 @@ Every rate limit the server keeps (docs/plans/admin-rate-limits.md):
 `firstFrom` is `default`, `environment` or `testStack`. `PUT` takes
 `{ "value": 20 }`, or `{ "value": null }` to go back to the first value, and
 answers the limit as it is now. A value outside `min`–`max` is `400`, an
-unknown key `404`. It applies at once on this backend and within 30 seconds
-on the others; each change writes a `settings.rate_limit` audit entry.
+unknown key `404`. A limit's key is `<app>.rate.<name>` (`account`, `drive`,
+`chat`, `mail`, `calendar`, `pass` or `server`), the same key it is stored
+under in `site_settings` and, for one account, in `account_entitlements`.
+It applies at once on this backend and within 30 seconds on the others; each
+change writes a `settings.setRateLimit` audit entry.
 
-### GET /api/admin/users/{id}/limits · PUT /api/admin/users/{id}/limits/{key}
+### GET /api/v1/admin/accounts/{id}/entitlements · PUT /api/v1/admin/accounts/{id}/entitlements/{key}
 
 **Auth:** Bearer JWT (admin)
 
@@ -5280,38 +5900,39 @@ one (docs/plans/settings-registry.md):
 
 ```json
 {
-  "settings": [{ "key": "drive_upload_max_bytes", "field": "driveUploadMaxBytes",
+  "settings": [{ "key": "drive.upload_max_bytes", "field": "driveUploadMaxBytes",
     "section": "drive", "unit": "bytes", "value": 1073741824, "source": "account",
     "siteValue": 10737418240, "min": 1048576, "max": 4398046511104 }],
-  "rateLimits": [{ "key": "rate_limit.feedback", "limit": "feedback",
+  "rateLimits": [{ "key": "account.rate.feedback", "limit": "account.rate.feedback",
     "section": "administration", "unit": "events", "windowSeconds": 3600,
     "value": 10, "source": "default", "siteValue": 10, "min": 1, "max": 1000 }]
 }
 ```
 
 `source` says where `value` comes from: `account`, `site` or `default`.
-`PUT` takes a setting's key or `rate_limit.<key>`, and gives the account its
+`PUT` takes a setting's or a rate limit's key, and gives the account its
 own value (`{ "value": 3 }`) or takes it back (`null`); it answers the entry
 as it is now. A value outside the range is `400` (never clamped), and so is a
 setting or rate limit that doesn't limit one account; an unknown key is
 `404`. Lowering a value below what the account already uses only stops new
-growth: nothing is removed. Each change writes a `user.setting` or
-`user.rate_limit` audit entry.
+growth: nothing is removed. Each change writes an `account.setEntitlement` or
+`account.setRateLimit` audit entry.
 
-### GET /api/admin/settings/registry
+### GET /api/v1/admin/settings/registry
 
 **Auth:** Bearer JWT (admin)
 
 Every whole-number setting, as Server settings builds its fields from it:
 `{ "settings": [{ "key", "field", "section", "unit", "default", "min", "max",
-"perAccount", "value", "set" }] }`. `field` is its name in
-`/api/admin/settings`, `section` one of `chatMulti`, `calendar`,
+"perAccount", "value", "set" }] }`. `key` is the setting's key in
+`site_settings` (`<namespace>.<name>`, docs/settings-model.md), `field` its name in
+`/api/v1/admin/settings`, `section` one of `chatMulti`, `calendar`,
 `chatLinking`, `twoFactor` and `drive`, and `perAccount` whether one account
 may have its own value.
 
 ---
 
-### GET /api/admin/settings
+### GET /api/v1/admin/settings
 
 Return current global server settings.
 
@@ -5333,6 +5954,12 @@ Return current global server settings.
   "chatGroupAvatarStoragePerGroupBytes": 82002,
   "chatGroupAvatarPendingSeconds": 86400,
   "passVaultMaxBytes": 67108864,
+  "driveVersionRetentionChoices": [7, 30, 90, 180, 365, 3650],
+  "driveTrashRetentionDays": 30,
+  "federationConsentRequired": false,
+  "chatSendRetentionDays": 30,
+  "sessionTtlDays": 30,
+  "knownClientDays": 90,
   "calendarsPerAccount": 25,
   "calendarEventsPerCalendar": 25000,
   "calendarSyncBatch": 10,
@@ -5345,12 +5972,36 @@ Return current global server settings.
   "driveStreamReadaheadBlocks": 1,
   "driveStreamMaxConcurrent": 3,
   "driveStreamResponseMaxBytes": 5242880,
-  "driveStreamBlobFallbackMaxBytes": 1073741824
+  "driveStreamBlobFallbackMaxBytes": 1073741824,
+  "storageDeletedBlobRetentionSeconds": 172800,
+  "storageDeletedBlobSweepSeconds": 300,
+  "healthBackupMaxAgeSeconds": 172800,
+  "healthJobGraceSeconds": 600,
+  "healthProbeTimeoutSeconds": 5
 }
 ```
 
+`federationConsentRequired` (site setting
+`server.federation_consent_required`, off at first): whether turning
+federation on asks each person's `federation` consent (`PUT /api/v1/account/federation`);
+new accounts then start off. `chatSendRetentionDays` (section `privacy`,
+0–3650, 0 keeps them) is how long a Chat send record is kept. The `sessions`
+section: `sessionTtlDays` (1–365) is how long a session lasts unused, and
+`knownClientDays` (1–400) how long a client that signed in stays known to
+the account's sign-in limits; both also take one account's own value
+(`PUT /api/v1/admin/accounts/{id}/entitlements/{key}`), which wins over the site's.
+
+The backup and health settings (section `backups`;
+docs/plans/restore-drill-and-alerting.md): `storageDeletedBlobRetentionSeconds`
+(0–90 days, two days at first) is how long a deleted blob stays in the object
+store before it is purged, so a restored database dump still finds every blob
+it names; `storageDeletedBlobSweepSeconds` (1–86400) how often the purge runs;
+`healthBackupMaxAgeSeconds` (0–30 days, 0 off), `healthJobGraceSeconds`
+(0–86400) and `healthProbeTimeoutSeconds` (1–60) shape `GET
+/api/health/ready`.
+
 The Drive settings (docs/plans/drive-block-format.md §7; clients read them
-from `GET /api/drive/limits`): `driveUploadMaxBytes` and
+from `GET /api/v1/drive/limits`): `driveUploadMaxBytes` and
 `driveVersionMaxBytes` (1 MiB–4 TiB) are the largest upload and saved
 version; `driveStreamMaxBytes` (0–4 TiB, 0 never streams) the largest file a
 player streams rather than downloads first; `driveStreamCacheBlocks` (1–16),
@@ -5369,6 +6020,12 @@ page.
 
 `passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
 upload: 1 MiB to 1 GiB (`400` otherwise), 64 MiB at first.
+
+`driveVersionRetentionChoices` (site setting `drive.version_retention_choices`)
+are the periods an account may choose to keep its Drive file versions for:
+1 to 20 whole numbers of days, each 1 to 36500, ascending with none twice
+(`400` otherwise); 7, 30, 90, 180, 365 and 3650 at first. A new account
+starts at 30 days.
 
 `chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
 for the groups it hosts: 8233, 16425, 32809 or 41001.
@@ -5394,7 +6051,7 @@ administrator sets another. Existing accounts keep their own quota.
 
 ---
 
-### PUT /api/admin/settings
+### PUT /api/v1/admin/settings
 
 Update global server settings.
 
@@ -5413,7 +6070,7 @@ Update global server settings.
 
 `defaultStorageQuotaBytes` must be positive (`400` otherwise).
 
-**Response:** Same shape as `GET /api/admin/settings`.
+**Response:** Same shape as `GET /api/v1/admin/settings`.
 
 ---
 
@@ -5423,29 +6080,29 @@ Codes that admit a sign-up when the registration mode asks for one
 (docs/plans/registration-codes.md). A code is 20 Crockford base32 characters
 (100 random bits) shown once, when it is made; the server keeps only its HMAC
 under a key of its own, so a database dump gives no usable code. Each change is
-in the audit log (`registration_code.created`, `registration_code.revoked`).
+in the audit log (`registrationCode.create`, `registrationCode.revoke`).
 
-- `POST /api/admin/registration-codes` with `{ "note": "beta testers",
+- `POST /api/v1/admin/registration-codes` with `{ "note": "beta testers",
   "expiresAt": "2026-11-01T00:00:00Z" | null, "maxUses": 5 | null }` (a note of
   at most 200 characters; an expiry in the future or none; 1 to 100000 uses or
   unlimited) → `201` with the code's row and `code`, the text, never returned
   again.
-- `GET /api/admin/registration-codes` → every code, newest first: `{ id, hint
+- `GET /api/v1/admin/registration-codes` → every code, newest first: `{ id, hint
   (its last 4 characters), note, createdBy, createdAt, expiresAt, maxUses,
   uses, revokedAt, state }`, `state` one of `active`, `expired`, `usedUp`,
   `revoked`.
-- `POST /api/admin/registration-codes/{id}/revoke` → the row, revoked at once
+- `POST /api/v1/admin/registration-codes/{id}/revoke` → the row, revoked at once
   (also "expire now").
-- `GET /api/admin/registration-codes/{id}/uses` → `[{ userId, username,
+- `GET /api/v1/admin/registration-codes/{id}/uses` → `[{ accountId, username,
   usedAt }]`, the accounts that signed up with it.
-- `GET /api/admin/users/{id}/registration-code` → `{ codeId, hint, note,
+- `GET /api/v1/admin/accounts/{id}/registration-code` → `{ codeId, hint, note,
   createdBy, usedAt }`, the code an account signed up with, or `null`.
 
 **Auth:** Bearer JWT (admin)
 
 ---
 
-### GET /api/admin/federation
+### GET /api/v1/admin/federation
 
 Return the unified federation identity, feature policies, domain rules, and
 persisted peer trust/discovery state. Rules remain visible while inactive.
@@ -5528,7 +6185,7 @@ the last day. A kind with nothing pending or refused is left out.
 `configured` reports whether the persistent v2 identity exists. Fingerprints
 are always returned in full; the grouped form is display-only.
 
-### PUT /api/admin/federation
+### PUT /api/v1/admin/federation
 
 Update the emergency stop and one feature policy:
 
@@ -5542,13 +6199,13 @@ Update the emergency stop and one feature policy:
 ```
 
 Returns the full control-plane response, wakes the Chat outbox, and audits
-`federation.policy.update`. The global stop denies every feature. A disabled
+`federation.updatePolicy`. The global stop denies every feature. A disabled
 Chat feature also hides public discovery. `allowlist` requires an explicit
 directional allow, `blocklist` permits inherited directions except explicit
 blocks, and `open` permits every admitted direction. Admission never bypasses
 the effective trust requirement.
 
-### PUT /api/admin/federation/rules/:feature/:domain
+### PUT /api/v1/admin/federation/rules/:feature/:domain
 
 Create or replace a rule for `chat` or `drive` and a canonical lowercase DNS
 domain. The local domain cannot be added.
@@ -5562,15 +6219,15 @@ domain. The local domain cannot be added.
 ```
 
 Returns the full response, wakes pending Chat delivery for the domain, and
-audits `federation.rule.upsert`.
+audits `federation.setRule`.
 
-### DELETE /api/admin/federation/rules/:feature/:domain
+### DELETE /api/v1/admin/federation/rules/:feature/:domain
 
 Delete the feature-scoped rule. Returns the full response, or `404` when the
 rule does not exist, wakes pending Chat delivery, and audits
-`federation.rule.delete`.
+`federation.deleteRule`.
 
-### POST /api/admin/federation/peers/:domain/verify
+### POST /api/v1/admin/federation/peers/:domain/verify
 
 Promote the current TOFU pin to verified trust after comparing its full
 fingerprint through an independent channel. Body:
@@ -5579,14 +6236,14 @@ fingerprint through an independent channel. Body:
 { "fingerprint": "64-lowercase-hex-characters" }
 ```
 
-### POST /api/admin/federation/peers/:domain/retry
+### POST /api/v1/admin/federation/peers/:domain/retry
 
 Evict positive and negative discovery caches, retry authenticated discovery
 through either enabled Chat or Drive capability, and wake pending Chat
 delivery. The returned control-plane state exposes the new discovery result or
-`lastDiscoveryError`. The outcome is audited as `federation.peer.retry`.
+`lastDiscoveryError`. The outcome is audited as `federation.retryPeer`.
 
-### POST /api/admin/federation/peers/retry
+### POST /api/v1/admin/federation/peers/retry
 
 Retry up to 100 selected canonical domains independently. One failed peer does
 not abort the others.
@@ -5596,9 +6253,9 @@ not abort the others.
 ```
 
 The response contains `{domain, refreshed, error}` per peer and the complete
-batch result is retained in `federation.peer.retry-bulk` audit evidence.
+batch result is retained in `federation.retryPeers` audit evidence.
 
-### GET /api/admin/federation/peers/:domain/evidence
+### GET /api/v1/admin/federation/peers/:domain/evidence
 
 Return the immutable accepted, superseded, and quarantined signed identity
 documents preserved by the generic trust store. Each entry includes sequence,
@@ -5608,7 +6265,7 @@ document hashes and quarantine reason. Results are newest-first and bounded to
 200 documents with `truncated: true` when older history exists. This endpoint
 does not expose federation private keys or Drive capabilities.
 
-### POST /api/admin/federation/peers/:domain/repin
+### POST /api/v1/admin/federation/peers/:domain/repin
 
 Break-glass replacement for a quarantined competing identity only. It requires
 the exact old fingerprint, pending new fingerprint, and domain:
@@ -5645,34 +6302,34 @@ by a publication, or by the account's next device registration, after
 it counts toward `devicesPerAccount` (a per-account setting) and the Chat
 cap.
 
-### POST /api/devices
+### POST /api/v1/account/devices
 Register an editor or CLI device of the caller's account (a Chat device
-registers with `POST /api/chat/device`).
+registers with `POST /api/v1/chat/devices`).
 **Auth:** Bearer JWT.
 **Body:** `RegisterDeviceRequestV1` `{kind: "editor"|"cli", name?, frameKey,
 credential}`: the frame key (canonical base64 of an Ed25519 public key, not
 a small-order point) and the device's credential (unpadded base64url of 32
 random bytes; the server keeps a salted hash).
-**Response 200:** `{deviceId, session}`: the lowest id no row of the account
-holds, and the `session` hash its manifest entry lists. A retry with the
+**Response 200:** `{deviceId, session}`: the account's next device id (see
+"Device ids" under Chat), and the `session` hash its manifest entry lists. A retry with the
 same credential answers the row it made. The device then lists itself in the
-account's next manifest (`POST /api/chat/manifest`, with its
+account's next manifest (`POST /api/v1/chat/manifest`, with its
 `X-Kutup-Device`); an account with no manifest yet gets its first, with no
 Chat identity. **409 `deviceLimit`**: the account has `devicesPerAccount`
 devices. **429**: `RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN` (default 20) per
 account.
 
-### GET /api/devices
+### GET /api/v1/account/devices
 Every device of the account, of every kind: `{devices: [{deviceId, kind,
 name, session, thisSignIn, listed, expired, createdAt, lastSeenAt}]}`.
 `listed`: the head manifest lists it. `thisSignIn`: of the caller's sign-in.
 `expired`: idle too long, dropped by the next manifest.
 
-### GET /api/device-session
-`{session}`: the hash a device of the caller's sign-in lists in its manifest
-entry (Chat, above).
+### GET /api/v1/account/devices/session
+`{session, nextDeviceId}`: the hash a device of the caller's sign-in lists in
+its manifest entry, and the account's device counter (Chat, above).
 
-### POST /api/device-ticket
+### POST /api/v1/account/devices/tickets
 A single-use WebSocket ticket for the device `X-Kutup-Device` names, of any
 kind, valid 60 seconds: `{ticket, expiresAt}`. Browsers can't set headers on
 a socket, so the Chat socket (`?ticket=`, a Chat device's only) and the
@@ -5682,8 +6339,8 @@ collaboration sockets (a device with a frame key) take it.
 
 ## Collaborative Editing
 
-### GET /api/files/:fileId/collab/ws
-WebSocket upgrade. Auth via `?ticket=` (a device ticket, `POST /api/device-ticket`: browsers can't set custom headers on the handshake) **or** `Authorization: Bearer …` with `X-Kutup-Device`.
+### GET /api/v1/drive/files/:fileId/collab/ws
+WebSocket upgrade. Auth via `?ticket=` (a device ticket, `POST /api/v1/account/devices/tickets`: browsers can't set custom headers on the handshake) **or** `Authorization: Bearer …` with `X-Kutup-Device`.
 
 PreUpgrade validates: the device (a live row with a frame key, of a live sign-in, listed in the account's head manifest with that key: `403 deviceNotAuthorized` otherwise) and file access (owner OR collection-share recipient). Failures return HTTP 401/403/404 BEFORE the WS handshake completes.
 
@@ -5697,9 +6354,9 @@ sending edits faster than 50 frames/s or 1 MiB/s sustained (bursts of 500
 frames / 16 MiB) is disconnected. Office edit frames stay in the log for a
 day, as a buffer for peers resuming after a dropped connection.
 
-On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{account, deviceId, userId}]}` (a device id is its account's: a peer is `account` and `deviceId` together). Every binary message the server sends is a delivered frame: the sender account (`AccountRef` bytes) then the packed frame (`envelope::deliver`); a client sends bare frames, and the server names it. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF3\0` format (`kutup-crypto::envelope`: the header names the sender's device id and manifest sequence; the signature covers the sender account too); the server rejects an unknown suite, malformed length, a frame of another device or naming a manifest sequence the account doesn't have, an invalid signature under the device's listed frame key, or any file/collection/epoch/document-generation mismatch.
+On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{account, deviceId, accountId}]}` (a device id is its account's: a peer is `account` and `deviceId` together). Every binary message the server sends is a delivered frame: the sender account (`AccountRef` bytes) then the packed frame (`envelope::deliver`); a client sends bare frames, and the server names it. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF3\0` format (`kutup-crypto::envelope`: the header names the sender's device id and manifest sequence; the signature covers the sender account too); the server rejects an unknown suite, malformed length, a frame of another device or naming a manifest sequence the account doesn't have, an invalid signature under the device's listed frame key, or any file/collection/epoch/document-generation mismatch.
 
-### GET /api/files/:fileId/collab/frames and POST /api/files/:fileId/collab/frames
+### GET /api/v1/drive/files/:fileId/collab/frames and POST /api/v1/drive/files/:fileId/collab/frames
 
 The collaboration log over HTTP, for a peer that does not hold a socket open:
 the CLI editing notes, code files and place lists as a Yjs peer
@@ -5722,7 +6379,7 @@ device whose frames count, as the socket's).
   the gate drops it (read the log again and rebuild), `403` without write
   access, `429` past `RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN` (600) per device.
 
-### PUT /api/files/:fileId/assets/:assetId
+### PUT /api/v1/drive/files/:fileId/assets/:assetId
 
 Upload one whiteboard image as multipart field `file`. The part must be a
 complete `DriveEnvelopeV1` purpose-6 asset envelope for the exact live file,
@@ -5733,28 +6390,33 @@ object-storage mutation. **Auth:** Bearer JWT and write access. **Response:**
 `204`. Assets are content-addressed and immutable: once an id is stored a
 re-upload changes nothing (neither bytes nor charge) and returns `204`.
 
-### GET /api/files/:fileId/assets/:assetId
+### GET /api/v1/drive/files/:fileId/assets/:assetId
 
 Return the stored opaque asset envelope as `application/octet-stream`. The
 client opens it with the current collection key and the same exact context;
 key, file, collection, epoch, asset-ID relocation and tampering fail closed.
 **Auth:** Bearer JWT and file access.
 
-### PUT /api/files/:fileId/thumbnails/:variant
+### PUT /api/v1/drive/files/:fileId/thumbnails/:variant
 
 Store the file's `sm` (≤ 512 px) or `lg` (≤ 1920 px) thumbnail, replacing any
 previous one of that variant. **Body:** the raw `DriveEnvelopeV1` purpose-7
 thumbnail envelope (`application/octet-stream`), sealed under the file key
 by the client; the server checks its public header against the exact file,
-variant and current key epoch and its size against the variant cap
-(64 KiB / 1 MiB plaintext) before any quota or storage change.
-**Query:** `source` — the version id it was drawn from, or `original`
-(default); a version of another file is refused. The size is charged to the
-uploader; replacing your own thumbnail charges only the difference.
+variant, content revision and current key epoch and its size against the
+variant cap (64 KiB / 1 MiB plaintext) before any quota or storage change.
+**Query:** `revision` (required) — the content revision the envelope is
+bound to, the one the file's metadata commits to (`content.revisionId`,
+docs/plans/drive-block-format.md §2): readers open it only while that is
+the file's content; `source` — the version id it was drawn from, or
+`original` (default); a version of another file is refused. The size is charged to the
+uploader; replacing your own thumbnail charges only the difference. Each
+upload is stored under a key of its own; the one it replaces is deleted once
+the new one is recorded.
 **Auth:** Bearer JWT and write access. **Response:** `204`; `400` invalid
 envelope or source; `404` unknown variant; `413` too large or over quota.
 
-### GET /api/files/:fileId/thumbnails/:variant
+### GET /api/v1/drive/files/:fileId/thumbnails/:variant
 
 The stored envelope as `application/octet-stream`, with
 `Cache-Control: private, max-age=31536000, immutable` — clients add
@@ -5762,7 +6424,7 @@ The stored envelope as `application/octet-stream`, with
 and caches hold only ciphertext. **Auth:** Bearer JWT and file access.
 **Response:** `200`; `404` when there is none.
 
-### DELETE /api/files/:fileId/thumbnails
+### DELETE /api/v1/drive/files/:fileId/thumbnails
 
 Remove both variants and release their bytes to whoever was charged.
 **Auth:** Bearer JWT and write access. **Response:** `204`.
@@ -5771,9 +6433,12 @@ Remove both variants and release their bytes to whoever was charged.
 
 ## Version History
 
-### GET /api/files/:fileId/versions
+### GET /api/v1/drive/files/:fileId/versions
 List all versions newest-first.
-**Response:** array of `{id, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId}`.
+**Response:** array of `{id, storagePath, seqAtSnapshot, docKeyId, authorAccountId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId, revisionContentEnvelope}`.
+`revisionContentEnvelope` is the version's sealed content record ("What each
+revision is"); readers open it before the version (`null`: a streaming-format
+version).
 `parentVersionId` is, for a whole-file version, the version it replaced (the
 file's current content when it was stored); `null` for the original upload,
 for notes' states and for versions stored before it was recorded. Whole-file
@@ -5781,18 +6446,19 @@ saves of a file are serialized, so each version replaces the one before it;
 with conditional saves (`basedOn`, below) no edit is overwritten unseen
 (docs/plans/pass.md).
 
-### GET /api/files/:fileId/versions/:vid/download
+### GET /api/v1/drive/files/:fileId/versions/:vid/download
 Get the encrypted snapshot bytes for a specific version. Returns
-`application/octet-stream`. Headers: `X-Kutup-Doc-Key-Id`, `X-Kutup-Seq`. The snapshot uses the same typed,
+`application/octet-stream`. Headers: `X-Kutup-Doc-Key-Id`, `X-Kutup-Seq`,
+`X-Kutup-Revision` and `X-Kutup-Revision-Content`. The snapshot uses the same typed,
 file/collection/epoch-bound Drive file-blob format as an original file. There
 is no snapshot-specific legacy decoder.
 
-### PATCH /api/files/:fileId/versions/:vid
+### PATCH /api/v1/drive/files/:fileId/versions/:vid
 **Body:** `{label?: string, keepForever?: boolean}` — set or unset; a label
 is at most 200 characters. **Auth:** write access (it changes what retention
 keeps). **Response:** updated version row.
 
-### DELETE /api/files/:fileId/versions/:vid
+### DELETE /api/v1/drive/files/:fileId/versions/:vid
 Delete one earlier version for good: the row and its charge go together, then
 the stored object, and the author's storage is freed. **Auth:** the file's
 owner or the version's author (`403` for anyone else who can see the file,
@@ -5810,18 +6476,27 @@ uploader's storage freed in one transaction, then the stored object is
 deleted. Retention removes it the same way, so a delete racing retention, or
 another delete, frees the storage once. **Response:** `204`.
 
-### POST /api/files/:fileId/versions
+### POST /api/v1/drive/files/:fileId/versions
 Store a version in one request (docs/plans/drive-versions-v2.md). Multipart:
 `file` — a complete typed Drive file blob, validated against the exact file,
 collection and current epoch; `kind` — `file` (the whole file: office
 documents, whiteboards, restored copies) or `yjs` (a note's collaboration
 state); `seqAtSnapshot`, `docKeyId`; optional `label`, `keepForever`, and
-`basedOn` (below).
+`basedOn` (below); and, all required, `revisionId` (the version's id),
+`revisionContentEnvelope` (its sealed content record at the file's current
+key generation, every kind) and `metadataEnvelope` and `metadataRevision`: the file's next
+metadata, stored in the same transaction (the save commits inline; `409
+revisionConflict` unless it is the file's current revision + 1, with
+`metadataRevision` and `metadataEnvelope` giving the current metadata to
+seal on top of). For `kind: file` it commits to this revision as the
+content; a `yjs` state is not the file's content, and the metadata names it
+as the saved state (`stateRevisionId`, docs/plans/drive-block-format.md §2),
+so a reader asks for that state and refuses another.
 
 The server measures the body and charges **that** size to the author's
 quota (a client's size claim is not read), stores it as an object of its own
-(`files/{id}/versions/{versionId}`), records the row, truncates
-`file_update_log` up to `seqAtSnapshot` and sets the file's `updatedAt` (and
+(`files/{id}/revisions/{versionId}`), records the row, truncates
+`collab_update_log` up to `seqAtSnapshot` and sets the file's `updatedAt` (and
 so its folder's) — one transaction; the object is removed again if the
 commit fails. Under the relay's per-file lock, `seqAtSnapshot` is clamped
 to the log's head before the row is stored; truncation happens only when
@@ -5832,7 +6507,7 @@ floor to that position so the next frame continues after it. **Auth:** write acc
 overwriting"): a whole-file save made from a known version names it, as a
 version id or `original`. Whole-file saves of one file are serialized; if
 the file's current content is no longer that version, nothing is stored or
-charged and the answer is `409 {"code": "version_conflict", "current":
+charged and the answer is `409 {"code": "versionConflict", "current":
 "<version id | original>"}`: the client fetches the current content, merges
 and saves again with `basedOn` set to it. Without `basedOn` a save is stored
 as before. `basedOn` on a `yjs` state is a `400`. Federated saves pass it on
@@ -5840,10 +6515,10 @@ to the file's server, and its `409` back. Kutup Pass and `kutup sync` save
 KeePass vaults this way.
 
 **Response 201:** the version row, including `kind` and `parentVersionId`.
-`409 version_conflict` as above. `413` over quota.
+`409 versionConflict` as above. `413` over quota.
 
 Versions are kept by the file owner's `versionRetentionDays` (see
-`PATCH /api/user/me`): the last day whole, the last week one per hour, then
-one per day; the newest version and `keepForever` ones always. Earlier
+`PATCH /api/v1/account`): the last day whole, the last week one per hour, then
+one per day; the newest version of each kind (the content, a note's saved state) and `keepForever` ones always. Earlier
 versions can also be deleted by hand (`DELETE` above) or in bulk by age
-(`POST /api/user/storage/versions/prune`).
+(`POST /api/v1/account/storage/versions/prune`).

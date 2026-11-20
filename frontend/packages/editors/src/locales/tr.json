@@ -238,6 +238,8 @@
     "notFound": "Çöp kutusuna taşınmış olabilir ya da klasörüne artık erişimin olmayabilir.",
     "undecryptable": "Anahtarları hesabınla çözülemedi. Klasörün sahibinden yeniden paylaşmasını iste.",
     "tooLarge": "{{size}} boyutuyla tarayıcıda açılamayacak kadar büyük (sınır {{limit}}). Bunun yerine indir.",
+    "mediaTooLarge": "{{size}} boyutuyla bu tarayıcıda oynatılamayacak kadar büyük; tarayıcı burada akışla oynatamıyor. Bunun yerine indir.",
+    "busy": "Bu sekmede çok fazla video ya da ses oynuyor. Bunu oynatmak için birini kapat.",
     "loadFailed": "Yüklenemedi. Bağlantını kontrol edip yeniden dene.",
     "noPreviewTitle": "Bu dosya türü için önizleme yok",
     "noPreview": "Cihazında açmak için indir.",
@@ -285,6 +287,22 @@
         "title": "Bu bağlantı kaldırıldı",
         "description": "Sunucunun yöneticileri onu kaldırdı. Gösterdikleri artık burada yok."
       },
+      "blocked": {
+        "title": "Bu bağlantı engellendi",
+        "description": "Sunucunun işletmecileri bu bağlantıyı engelledi. Gösterdiği içerik burada artık kullanılamıyor."
+      },
+      "blockedLegal": {
+        "title": "Bu bağlantı hukuki nedenlerle kullanılamıyor",
+        "description": "Sunucunun işletmecileri bir yasal karar üzerine engelledi."
+      },
+      "sharingOff": {
+        "title": "Herkese açık bağlantılar kapalı",
+        "description": "Bu tür bağlantılar şu an bu sunucuda açılmıyor."
+      },
+      "signInRequired": {
+        "title": "Bu bağlantıyı açmak için oturum açın",
+        "description": "Bu sunucuda herkese açık bağlantılar yalnızca oturum açmış kişiler için açılır. Oturum açın, sonra bağlantıyı yeniden açın."
+      },
       "badKey": {
         "title": "Bu bağlantının anahtarı uymuyor",
         "description": "Bağlantı değiştirilmiş ya da eksik kopyalanmış. Bağlantının tamamını yeniden isteyin."
@@ -296,6 +314,10 @@
       "waiting": {
         "title": "Sahibi bekleniyor",
         "description": "Bu dosya yeni bir anahtara geçti ve sahibi bu bağlantıyı henüz güncellemedi. Sahibi Kutup Depo’yu açtığında yeniden çalışır."
+      },
+      "newerLink": {
+        "title": "Bu bağlantı daha yeni bir Kutup gerektiriyor",
+        "description": "Bu sunucunun çalıştırdığından daha yeni bir Kutup sürümüyle oluşturulmuş. Paylaşan kişiye sorun ya da sunucu güncellendikten sonra yeniden deneyin."
       }
     }
   }

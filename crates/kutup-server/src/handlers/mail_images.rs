@@ -4,7 +4,7 @@
 //! sees the server, not the reader's address or browser; it still learns that
 //! and when the message was read. Nothing is stored or cached.
 //!
-//! `POST /api/mail/images` with `{ url }`: one image. The address travels in
+//! `POST /api/v1/mail/images` with `{ url }`: one image. The address travels in
 //! the body, never in a URL that a proxy or access log would keep. A known
 //! tracker answers 204 with `X-Kutup-Tracker` and is never fetched, nor
 //! followed to by a redirect. The reader checks the same list
@@ -29,7 +29,7 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::public_fetch::{self, Checks, Options};
 use crate::ratelimit::{Limit, RateLimiter};
 
@@ -118,7 +118,7 @@ pub struct ImageRequest {
 
 #[utoipa::path(
     post,
-    path = "/api/mail/images",
+    path = "/api/v1/mail/images",
     tag = "mail",
     operation_id = "fetchMailImage",
     request_body = ImageRequest,
@@ -132,8 +132,8 @@ pub struct ImageRequest {
     ),
     security(("BearerAuth" = []))
 )]
-pub async fn fetch(auth: AuthUser, Json(request): Json<ImageRequest>) -> AppResult<Response> {
-    if !MAIL_IMAGES.allow(&auth.user_id) {
+pub async fn fetch(auth: AuthAccount, Json(request): Json<ImageRequest>) -> AppResult<Response> {
+    if !MAIL_IMAGES.allow(&auth.account_id) {
         return Err(AppError::too_many_requests(
             "too many images; try again shortly",
         ));
@@ -143,10 +143,10 @@ pub async fn fetch(auth: AuthUser, Json(request): Json<ImageRequest>) -> AppResu
         return Ok(tracker_response(provider));
     }
     let _slot = AT_ONCE
-        .take(&auth.user_id)
+        .take(&auth.account_id)
         .ok_or_else(|| AppError::too_many_requests("too many images at once; try again shortly"))?;
     // The most this fetch may bring, held until it is known; never given back on failure.
-    if !BYTES.reserve(&auth.user_id, IMAGE_LIMIT_BYTES as f64) {
+    if !BYTES.reserve(&auth.account_id, IMAGE_LIMIT_BYTES as f64) {
         return Err(AppError::too_many_requests(
             "too many image bytes this minute; try again shortly",
         ));
@@ -166,7 +166,7 @@ pub async fn fetch(auth: AuthUser, Json(request): Json<ImageRequest>) -> AppResu
         Fetched::Image(mime, body) => (mime, body),
         Fetched::Tracker(provider) => return Ok(tracker_response(provider)),
     };
-    BYTES.give_back(&auth.user_id, (IMAGE_LIMIT_BYTES - body.len()) as f64);
+    BYTES.give_back(&auth.account_id, (IMAGE_LIMIT_BYTES - body.len()) as f64);
     Ok((
         StatusCode::OK,
         [

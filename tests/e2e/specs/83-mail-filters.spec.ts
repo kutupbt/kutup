@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 // Filters (docs/plans/mail-filters.md, F2): built in Settings with Proton's

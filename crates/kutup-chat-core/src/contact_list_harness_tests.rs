@@ -47,6 +47,7 @@ fn list_key(person: &Person) -> (ContactListKey, String) {
         ContactListKey::new(
             &[seed; 32],
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([seed; 32]),
         ),
         format!("{seed:08x}-0000-4000-8000-{seed:012x}"),
     )
@@ -331,7 +332,10 @@ fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
     let (seed, binding) = (alice.authority_seed, list_key(&alice).1);
     alice
         .engine
-        .enable_identity_pins(&[seed; 32], &binding)
+        .enable_identity_pins(
+            &kutup_crypto::master_keys::MasterKeys::first(&[seed; 32]),
+            &binding,
+        )
         .unwrap();
     befriend(&mut alice, &mut bob);
     befriend(&mut alice, &mut carol);

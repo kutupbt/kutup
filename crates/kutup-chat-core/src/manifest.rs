@@ -151,8 +151,12 @@ pub fn derive_safety_number(
         .ok()
         .and_then(|bytes| libsignal_protocol::IdentityKey::decode(&bytes).ok())
         .ok_or_else(|| ChatError::Trust("the peer has no account identity pinned".into()))?;
-    let (fingerprint, scannable) =
-        fingerprint(&local.bytes(), local_identity_key, &peer.bytes(), &peer_key)?;
+    let (fingerprint, scannable) = fingerprint(
+        &local.id_bytes(),
+        local_identity_key,
+        &peer.id_bytes(),
+        &peer_key,
+    )?;
     let qr_payload = format!(
         "{SAFETY_QR_PREFIX}{}",
         URL_SAFE_NO_PAD.encode(
@@ -183,8 +187,10 @@ pub fn derive_safety_number(
 }
 
 impl AccountAuthority {
-    pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key)
+    /// The account's authority, from its identity root (a stored root,
+    /// docs/plans/identity-root.md).
+    pub fn derive(identity_root: &kutup_crypto::account_roots::IdentityRoot) -> Result<Self> {
+        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(identity_root)
             .map_err(|error| ChatError::Invalid(error.to_string()))?;
         Ok(Self { identity })
     }
@@ -228,7 +234,7 @@ impl AccountAuthority {
     pub fn drive_keys(&self) -> AccountManifestDriveKeysV1 {
         AccountManifestDriveKeysV1 {
             suite: AccountIdentitySuiteId::XWingEd25519V2,
-            hpke_public_key: STANDARD.encode(self.identity.drive_hpke_public_key()),
+            xwing_public_key: STANDARD.encode(self.identity.drive_xwing_public_key()),
             share_signing_public_key: STANDARD.encode(self.identity.drive_signing_public_key()),
         }
     }
@@ -301,6 +307,7 @@ impl AccountAuthority {
         devices.sort_by_key(|device| device.device_id);
         let mut manifest = AccountManifestV3 {
             manifest_version: ACCOUNT_MANIFEST_V3_VERSION,
+            min_version: None,
             account,
             incarnation_id: self.incarnation_id(),
             sequence,
@@ -312,12 +319,37 @@ impl AccountAuthority {
             issued_at: issued_at.into(),
             authority_key_id: self.key_id(),
             self_authority_key: self.public_key_base64(),
+            successions: Vec::new(),
+            extensions: Vec::new(),
             signature: String::new(),
         };
         let bytes = manifest.signing_bytes().map_err(ChatError::Invalid)?;
         manifest.signature = STANDARD.encode(self.identity.authority_signing_key().sign(&bytes));
         manifest.verify().map_err(ChatError::Protocol)?;
         Ok(manifest)
+    }
+
+    /// `next`, a successor of `head` this authority signed, with what the
+    /// head carries that this device doesn't write itself, signed again: its
+    /// extensions, known or not (docs/plans/format-evolution.md, rule 3),
+    /// and its successions (kept in every later manifest).
+    pub fn keep_from_head(
+        &self,
+        mut next: AccountManifestV3,
+        head: Option<&AccountManifestV3>,
+    ) -> Result<AccountManifestV3> {
+        let Some(head) = head else {
+            return Ok(next);
+        };
+        if next.extensions == head.extensions && next.successions == head.successions {
+            return Ok(next);
+        }
+        next.extensions = head.extensions.clone();
+        next.successions = head.successions.clone();
+        let bytes = next.signing_bytes().map_err(ChatError::Invalid)?;
+        next.signature = STANDARD.encode(self.identity.authority_signing_key().sign(&bytes));
+        next.verify().map_err(ChatError::Protocol)?;
+        Ok(next)
     }
 }
 
@@ -432,23 +464,9 @@ fn verify_manifest_trust(
                         .into(),
                 ));
             }
-            // The Drive key changes only by the one-way suite upgrade: from a
-            // suite-1 key to X-Wing, the authority (checked above) and signing
-            // key unchanged, in a manifest linked to the one before it. Seen
-            // across a sequence gap, the rise is taken as part of the gap
-            // (`continuity_gap` below), and `verify_manifest_history` checks
-            // that it happened in a linked step before anything is committed.
-            let consecutive = manifest.sequence == prior.highest_sequence.saturating_add(1);
-            let linked = consecutive
-                && manifest.previous_hash.as_deref() == Some(prior.manifest_hash.as_str());
-            let drive_key_ok = prior.drive_hpke_public_key == manifest.drive.hpke_public_key
-                || ((linked || !consecutive)
-                    && legacy_suite1_for_upgrade::drive_key_rises(
-                        &prior.drive_hpke_public_key,
-                        manifest,
-                    ));
+            // The Drive key never changes inside one incarnation.
             if prior.account != manifest.account.to_string()
-                || !drive_key_ok
+                || prior.drive_xwing_public_key != manifest.drive.xwing_public_key
                 || prior.drive_share_signing_public_key != manifest.drive.share_signing_public_key
             {
                 return Err(ChatError::Trust(
@@ -488,7 +506,7 @@ fn verify_manifest_trust(
         incarnation_id: manifest.incarnation_id.clone(),
         authority_key_id: manifest.authority_key_id.clone(),
         self_authority_key: manifest.self_authority_key.clone(),
-        drive_hpke_public_key: manifest.drive.hpke_public_key.clone(),
+        drive_xwing_public_key: manifest.drive.xwing_public_key.clone(),
         drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
         highest_sequence: manifest.sequence,
         manifest_hash,
@@ -555,8 +573,7 @@ pub(crate) fn verify_manifest_history(
                 ));
             }
             // Each manifest against the one before it: the identity holds
-            // through the history, but for the one-way suite upgrade, which
-            // only a linked successor may make.
+            // through the history.
             let checked =
                 verify_manifest_trust(expected_peer, manifest, rolling.as_ref().or(prior))?;
             if let Some((account, incarnation, authority, self_authority)) = &identity {
@@ -604,24 +621,6 @@ pub(crate) fn verify_manifest_history(
     })?;
     trust.continuity_gap = false;
     Ok((trust, records))
-}
-
-/// Identity suite 1 (X25519 Drive keys), only for seeing an account rise to
-/// suite 2 (docs/plans/pq-shares.md). The enforcing change, once every
-/// account has upgraded, deletes this module and its two callers' use of it.
-mod legacy_suite1_for_upgrade {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine as _;
-    use kutup_chat_proto::{
-        legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN, AccountIdentitySuiteId, AccountManifestV3,
-    };
-
-    /// Whether `next` raises a suite-1 Drive key (`prior_key`, as pinned) to
-    /// an X-Wing one. Never the other way.
-    pub(super) fn drive_key_rises(prior_key: &str, next: &AccountManifestV3) -> bool {
-        STANDARD.decode(prior_key).map(|key| key.len()) == Ok(HPKE_PUBLIC_KEY_LEN)
-            && next.drive.suite == AccountIdentitySuiteId::XWingEd25519V2
-    }
 }
 
 fn match_expected_account(expected_peer: &str, authenticated_account: &AccountRef) -> Result<()> {
@@ -715,13 +714,46 @@ mod tests {
             .unwrap());
     }
 
-    /// The one-way suite upgrade (docs/plans/pq-shares.md): a pinned suite-1
-    /// Drive key rises to X-Wing only in the linked next manifest, under the
-    /// same authority and signing key; never back, never across a gap.
+    /// The server's name is not signed (identity-rotation.md §6): a peer's
+    /// manifest re-labelled with another server still verifies, but it is
+    /// taken only for the address it was asked for, server included.
     #[test]
-    fn a_drive_key_changes_only_by_rising_to_x_wing_in_the_next_manifest() {
+    fn a_manifest_naming_another_server_than_the_one_asked_is_refused() {
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([5u8; 32]),
+        )
+        .unwrap();
+        let manifest = authority
+            .sign_manifest(
+                BOB.parse().unwrap(),
+                1,
+                None,
+                &pair(BOB_IDENTITY),
+                vec![device(1, 7)],
+                "2026-10-18T00:00:00Z",
+            )
+            .unwrap();
+        verify_manifest_evidence(BOB, &manifest, None).unwrap();
+        let mirror = BOB.replace("@beta.example", "@mirror.example");
+        // Asked for Bob's id on another server, answered with Bob's manifest.
+        assert!(verify_manifest_evidence(&mirror, &manifest, None).is_err());
+        // Bob's manifest re-labelled as the other server's: it verifies, and
+        // is refused for Bob's address.
+        let mut relabelled = manifest.clone();
+        relabelled.account = mirror.parse().unwrap();
+        relabelled.verify().unwrap();
+        assert!(verify_manifest_evidence(BOB, &relabelled, None).is_err());
+    }
+
+    /// The Drive key never changes inside an incarnation: another key at
+    /// the next sequence, or across a gap, is refused.
+    #[test]
+    fn a_drive_key_never_changes_inside_an_incarnation() {
         let peer = BOB;
-        let authority = AccountAuthority::derive(&[5u8; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([5u8; 32]),
+        )
+        .unwrap();
         let sign = |sequence: u64, previous: Option<String>| {
             authority
                 .sign_manifest(
@@ -734,37 +766,30 @@ mod tests {
                 )
                 .unwrap()
         };
-        // Pinned at sequence 4 with a suite-1 (32-byte X25519) Drive key.
         let first = sign(4, Some("22".repeat(32)));
-        let mut pinned = verify_manifest_trust(peer, &first, None).unwrap();
-        pinned.drive_hpke_public_key = STANDARD.encode([7u8; 32]);
-        // The linked next manifest carries the X-Wing key: accepted.
+        let pinned = verify_manifest_trust(peer, &first, None).unwrap();
         let next = sign(5, Some(pinned.manifest_hash.clone()));
-        let risen = verify_manifest_trust(peer, &next, Some(&pinned)).unwrap();
-        assert_eq!(risen.drive_hpke_public_key, next.drive.hpke_public_key);
-        // Across a gap: a gap to recover, not a changed identity. The
-        // history then has to show the rise in a linked step.
-        let later = sign(6, Some("33".repeat(32)));
-        let gapped = verify_manifest_trust(peer, &later, Some(&pinned)).unwrap();
-        assert!(gapped.continuity_gap);
-        assert_eq!(gapped.trust, pinned.trust);
-        // From an X-Wing pin, another key: refused (no second change, never
-        // back to suite 1).
-        let mut xwing_pin = risen.clone();
-        xwing_pin.drive_hpke_public_key = STANDARD.encode([9u8; 1216]);
-        let after = sign(6, Some(risen.manifest_hash.clone()));
-        assert!(verify_manifest_trust(peer, &after, Some(&xwing_pin)).is_err());
-        // Nor across a gap.
+        // The same key at the next sequence: fine.
+        assert!(verify_manifest_trust(peer, &next, Some(&pinned)).is_ok());
+        // Another X-Wing key pinned: refused, linked or across a gap.
+        let mut other = pinned.clone();
+        other.drive_xwing_public_key = STANDARD.encode([9u8; 1216]);
+        assert!(verify_manifest_trust(peer, &next, Some(&other)).is_err());
         let much_later = sign(9, Some("44".repeat(32)));
-        assert!(verify_manifest_trust(peer, &much_later, Some(&xwing_pin)).is_err());
-        // The same key at the next sequence stays fine.
-        assert!(verify_manifest_trust(peer, &after, Some(&risen)).is_ok());
+        assert!(verify_manifest_trust(peer, &much_later, Some(&other)).is_err());
+        // A 32-byte (X25519) key pinned, as suite 1 had: refused too.
+        let mut x25519 = pinned.clone();
+        x25519.drive_xwing_public_key = STANDARD.encode([7u8; 32]);
+        assert!(verify_manifest_trust(peer, &next, Some(&x25519)).is_err());
     }
 
     /// A peer's pin, as a verified manifest of `account` with `identity`
     /// leaves it.
     fn trust(account: &str, seed: u8, identity: &str) -> ManifestTrust {
-        let authority = AccountAuthority::derive(&[seed; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([seed; 32]),
+        )
+        .unwrap();
         let manifest = authority
             .sign_manifest(
                 account.parse().unwrap(),
@@ -828,7 +853,10 @@ mod tests {
     /// manifests only change devices, gone with another identity.
     #[test]
     fn verified_clears_with_another_identity_only() {
-        let authority = AccountAuthority::derive(&[2u8; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([2u8; 32]),
+        )
+        .unwrap();
         let sign = |sequence: u64, previous: Option<String>, identity: &str, devices| {
             authority
                 .sign_manifest(

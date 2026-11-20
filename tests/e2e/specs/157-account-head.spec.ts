@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process'
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { createVault, openPass } from '../fixtures/pass'
 
@@ -10,18 +10,19 @@ import { createVault, openPass } from '../fixtures/pass'
 
 const PASSWORD = 'Deneme123*AccountHeadSpec'
 
-test('a kept vault key starts the account head, and Account → Security shows it', async ({ browser }) => {
+test('the account head starts at sign-up, a kept vault key moves it, and Account → Security shows it', async ({ browser }) => {
   test.slow()
   const context = await browser.newContext()
   await registerAccount(context, newAccount('head157', PASSWORD))
   const page = await context.newPage()
 
-  // Nothing changed yet.
+  // A new account's head starts with its sign-up (#1).
   await page.goto(appUrl('account', '/settings/security'))
-  await expect(page.getByText('No changes yet.')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('#1', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await page.getByText("This app's history").click()
+  await expect(page.getByText('Started following #1')).toBeVisible()
 
-  // A vault whose key Kutup Pass keeps: the chain starts (#1), and the keep
-  // follows it (#2).
+  // A vault whose key Kutup Pass keeps: the next state (#2).
   await openPass(page)
   await createVault(page, 'Kişisel', null)
 
@@ -29,8 +30,6 @@ test('a kept vault key starts the account head, and Account → Security shows i
   await expect(page.getByText('#2', { exact: true })).toBeVisible({ timeout: 30_000 })
   // Pass wrote it: another app, as far as Account is concerned.
   await expect(page.getByText('Last changed on another device or app')).toBeVisible()
-  await page.getByText("This app's history").click()
-  await expect(page.getByText('Started following #2')).toBeVisible()
 
   // Another kept key: #3, and no app shows a warning.
   await openPass(page)
@@ -58,7 +57,7 @@ test('an app shown an older history stops its listed writes until the person con
   // The server goes back to the head before the keep (as a restore from a
   // backup would; an attack looks the same).
   execSync(psql!, {
-    input: `DELETE FROM account_heads WHERE sequence > 1 AND user_id = (SELECT id FROM users WHERE username = '${account.username}');\n`,
+    input: `DELETE FROM account_heads WHERE sequence > 1 AND account_id = (SELECT id FROM accounts WHERE username = '${account.username}');\n`,
     stdio: ['pipe', 'inherit', 'inherit'],
   })
 

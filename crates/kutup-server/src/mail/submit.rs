@@ -44,6 +44,8 @@ pub async fn submit(
     password: &str,
     envelope: Envelope<'_>,
 ) -> Result<(), SubmitError> {
+    // Held, as if Stalwart were away: callers keep the message to retry.
+    crate::outbound::check("mail").map_err(|held| SubmitError::Unavailable(held.to_string()))?;
     let stream = tokio::time::timeout(
         Duration::from_secs(10),
         tokio::net::TcpStream::connect(address),

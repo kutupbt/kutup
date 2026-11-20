@@ -61,6 +61,13 @@ compose up --detach --build --wait \
 curl --fail --silent --show-error --retry 30 --retry-delay 1 \
   --retry-connrefused --retry-all-errors \
   "http://127.0.0.1:$port/api/health" >/dev/null
+# Deleted blobs normally wait two days before they leave the store
+# (docs/self-hosting.md, "Backups"); the purge checks below need them gone
+# within seconds.
+compose exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  --quiet -v ON_ERROR_STOP=1 --command "INSERT INTO site_settings (key, value) VALUES
+    ('server.storage.deleted_blob_retention_seconds', '0'), ('server.storage.deleted_blob_sweep_seconds', '1')
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
 
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
@@ -93,6 +100,20 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test account_identity_live -- --nocapture
+# The account's stored roots (docs/plans/identity-root.md): with the session,
+# to the account only, each once at sign-up, replaced by a reset; and gone
+# with the account.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test account_roots_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server account_roots::tests::live_ -- --nocapture
+# A master-key rotation (docs/plans/mk-rotation-exercise.md): the server's
+# transaction (its account purged after, so the storage check below holds);
+# the CLI's two-device run is in the CLI checks at the end.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test master_key_live -- --nocapture
 # Permanent account ids (docs/plans/account-ids.md): minted at sign-up,
 # retired on delete, found by id, kept through a rename.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
@@ -104,12 +125,47 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test mail_groups_live -- --nocapture --test-threads 1
-# The Photos library record (docs/plans/photos.md): this account's chain only.
+# The security log (docs/plans/server-personal-data.md, A8): sign-ins, sign-outs
+# and folded wrong passwords (a sign-in left unfinished counts); and, as the owner, the logs append-only for the
+# server's role.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  cargo test -p kutup-server --test photos_library_live -- --nocapture
-# The Chat attachment ledger: this account's records, per entity, chained.
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test security_log_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server -- db::tests::live_ audit_log::tests::live_ \
+    grants::tests::live_ --nocapture
+# Each account's data key (docs/plans/server-personal-data.md, A2): the
+# authenticator secret sealed under it, and the key gone with the account.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  cargo test -p kutup-server --test chat_attachment_ledger_live -- --nocapture
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test account_data_live -- --nocapture
+# An account's end (docs/plans/server-personal-data.md, A5 and A7): closing,
+# keeping, the legal hold, the destruction log; and a restore replaying it.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test account_closing_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server destruction_events::tests::live_ -- --nocapture
+# Share-link controls (docs/plans/server-personal-data.md, A11): an operator's
+# block, the per-account and site-wide switches.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test share_controls_live -- --nocapture --test-threads 1
+# Client versions and the instance id (docs/plans/api-surface.md §1, §5).
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test client_versions_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server instance::tests::live_ -- --nocapture
+# Notices and consents (A3, A4): the federation switch follows its consent.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test consents_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server -- legal::tests::live_ federation_switch::tests::live_ \
+    mail::sealed::tests::live_ federation_stream_control::tests::live_ --nocapture
 
 # Drive: names unique in a folder, as Proton Drive's hashes (required on
 # every write, restore under a new name, which names are free), moves, and
@@ -172,6 +228,12 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test account_heads_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server account_heads::tests::live_ -- --nocapture
+# The account-records store (docs/plans/account-records.md): batches under
+# the head, compare-and-swap, the counter feed, forgotten tombstones' floor.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  cargo test -p kutup-server --test account_records_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server account_records::tests::live_ -- --nocapture
 
 # Username renames (docs/plans/username-renames.md): folded names, the held
 # name's fake answer and shared lockout, 409 renamed, holds and freeing.
@@ -229,10 +291,6 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
 # every owner told of a loss.
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server organizations::tests::live_ -- --nocapture
-# The organizations migration on a database with domains and limits (it
-# makes and drops a database of its own on this server).
-KUTUP_TEST_DB="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
-  cargo test -p kutup-server --test organizations_migration_live -- --nocapture
 
 # Federation queues (docs/plans/federation-outbox.md): a backlog for one
 # server does not starve another, and a rejected row never reorders one.
@@ -272,25 +330,64 @@ backup_facts="$(compose exec -T postgres psql \
     (SELECT COUNT(*) FROM chat_backup_media_reconciliations) +
     (SELECT COUNT(*) FROM chat_backup_media_reconciliation_entries) +
     (SELECT COUNT(*) FROM chat_backup_media_reconciliation_pages),
-    COALESCE((SELECT SUM(storage_used_bytes) FROM users), 0);")"
+    COALESCE((SELECT SUM(storage_used_bytes) FROM accounts), 0);")"
 if [[ "$backup_facts" != "0|0" ]]; then
   echo "account purge left backup rows or charged storage bytes: $backup_facts" >&2
   exit 1
 fi
 
-backup_objects="$(compose exec -T seaweedfs-filer wget \
-  --header=Accept:application/json --quiet --output-document=- \
-  "http://seaweedfs-filer:8888/buckets/${S3_BUCKET:-kutup-files}/chat-backup/?pretty=y" \
-  2>/dev/null || true)"
-if [[ "$backup_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]]; then
-  echo "account purge left Chat backup object bytes" >&2
-  exit 1
-fi
+# The purged objects leave the store on the deleted-blob purge's next pass.
+deadline=$((SECONDS + 60))
+while :; do
+  backup_objects="$(compose exec -T seaweedfs-filer wget \
+    --header=Accept:application/json --quiet --output-document=- \
+    "http://seaweedfs-filer:8888/buckets/${S3_BUCKET:-kutup-files}/chat-backup/?pretty=y" \
+    2>/dev/null || true)"
+  [[ "$backup_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]] || break
+  if (( SECONDS >= deadline )); then
+    echo "account purge left Chat backup object bytes" >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 # The kutup CLI end to end, as a person runs it: Drive (scripts/verify-cli.sh),
-# then Kutup Pass sync between two machines and its SSH agent. Each makes its
-# own account with `kutup register`. After the purge checks above, which
-# expect no account's bytes left.
-for check in verify-cli verify-pass-sync verify-pass-ssh; do
+# then Kutup Pass sync between two machines and its SSH agent, then a
+# master-key rotation on two devices (docs/plans/mk-rotation-exercise.md).
+# Each makes its own account with `kutup register`. After the purge checks
+# above, which expect no account's bytes left.
+for check in verify-cli verify-pass-sync verify-pass-ssh verify-mk-rotation; do
   KUTUP_SERVER="http://127.0.0.1:$port" "$root_dir/scripts/$check.sh"
 done
+
+# A reset server (docs/plans/api-surface.md §5): another instance id makes
+# the CLI drop what its profile keeps for the server and ask for a new
+# sign-in (exit 3); the profile is then signed out. Last, since it restarts
+# the server.
+cli_tmp="$(mktemp -d)"
+cli() { XDG_DATA_HOME="$cli_tmp/data" KUTUP_PASSWORD="InstanceCheck123!$$" "$root_dir/target/debug/kutup" --profile reset "$@"; }
+cli_user="instance$(date +%s | tail -c 7)"
+cargo build -q -p kutup-cli
+cli register --server "http://127.0.0.1:$port" --username "$cli_user" >/dev/null
+cli login --server "http://127.0.0.1:$port" --username "$cli_user" >/dev/null
+cli ls >/dev/null
+compose exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  -v ON_ERROR_STOP=1 -c "UPDATE server_instance SET id = decode(md5(random()::text), 'hex')" >/dev/null
+compose restart backend >/dev/null
+curl --fail --silent --show-error --retry 30 --retry-delay 1 \
+  --retry-connrefused --retry-all-errors "http://127.0.0.1:$port/api/health" >/dev/null
+set +e
+cli ls >/dev/null 2>"$cli_tmp/err"
+reset_exit=$?
+cli whoami >/dev/null 2>&1
+after_exit=$?
+set -e
+if (( reset_exit != 3 )) || ! grep -q 'was reset' "$cli_tmp/err"; then
+  echo "the CLI did not notice the reset server (exit $reset_exit): $(cat "$cli_tmp/err")" >&2
+  exit 1
+fi
+if (( after_exit != 3 )); then
+  echo "the reset profile still holds a session (whoami exit $after_exit)" >&2
+  exit 1
+fi
+rm -rf "$cli_tmp"

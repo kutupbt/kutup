@@ -14,7 +14,7 @@ disable certificate verification against a production server.
 ## 1. Register
 
 ```sh
-curl --insecure --silent -X POST https://localhost:38443/api/auth/register \
+curl --insecure --silent -X POST https://localhost:38443/api/v1/auth/register \
   -H 'Content-Type: application/json' \
   -d '{
     "email": "test@example.com",
@@ -22,7 +22,7 @@ curl --insecure --silent -X POST https://localhost:38443/api/auth/register \
     "loginKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "masterKeyEnvelope": "S1VUUEFFMQAAAQEAABB0ZXN0QGV4YW1wbGUuY29tJHfwtPzRJ9xNvol1mHoKXyjNjJ25+8qlAAAAMJFcjAe0u9Km+mtjVuVv+zV6d28wIw5oexWbRggZMjQ4Wz0fgvwwBLT1s4ZmSeAtYg==",
     "recoveryKeyEnvelope": "S1VUUEFFMQAAAQIAABB0ZXN0QGV4YW1wbGUuY29tUF4VvGfWEX+5PwSlg+YDzPwKYZYe+MVpAAAAMH0nCNyq3eXxgQsONFv2wH8ja/djLUC0hOq7uqkUv48u4wXY9WacGyftLHZcQgiOjA==",
-    "publicKey": "cHVia2V5",
+    "driveXwingPublicKey": "cHVia2V5",
     "accountProtectionSuite": 1,
     "accountProtectionSalt": "AAAAAAAAAAAAAAAAAAAAAA==",
     "argonMemoryKib": 65536,
@@ -35,7 +35,7 @@ curl --insecure --silent -X POST https://localhost:38443/api/auth/register \
 ## 2. Login
 
 ```sh
-TOKEN=$(curl --insecure --silent -X POST https://localhost:38443/api/auth/login \
+TOKEN=$(curl --insecure --silent -X POST https://localhost:38443/api/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"test@example.com","loginKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}' \
   | jq -r '.accessToken')
@@ -45,7 +45,7 @@ echo "TOKEN=$TOKEN"
 ## 3. Create collection
 
 ```sh
-COLL_ID=$(curl --insecure --silent -X POST https://localhost:38443/api/collections/ \
+COLL_ID=$(curl --insecure --silent -X POST https://localhost:38443/api/v1/drive/collections/ \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -61,14 +61,14 @@ echo "COLL_ID=$COLL_ID"
 ## 4. List collections
 
 ```sh
-curl --insecure --silent https://localhost:38443/api/collections/ \
+curl --insecure --silent https://localhost:38443/api/v1/drive/collections/ \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
 ## 5. Set folder color
 
 ```sh
-curl --insecure --silent -X PATCH https://localhost:38443/api/collections/$COLL_ID/color \
+curl --insecure --silent -X PATCH https://localhost:38443/api/v1/drive/collections/$COLL_ID/color \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"color": "blue"}' -w "\nHTTP %{http_code}\n"
@@ -80,7 +80,7 @@ Set `NAME_ENVELOPE` to a valid next-revision `DriveEnvelopeV1` produced by a
 Kutup client. Arbitrary base64 is intentionally rejected.
 
 ```sh
-curl --insecure --silent -X PUT https://localhost:38443/api/collections/$COLL_ID \
+curl --insecure --silent -X PUT https://localhost:38443/api/v1/drive/collections/$COLL_ID \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d "{\"nameEnvelope\":\"$NAME_ENVELOPE\",\"nameRevision\":2}" | jq
@@ -94,7 +94,7 @@ crypto implementation. Set `FILE_ID`, `METADATA_ENVELOPE`, and
 server's purpose/object/collection/epoch checks.
 
 ```sh
-STORED_FILE_ID=$(curl --insecure --silent -X POST https://localhost:38443/api/files/upload \
+STORED_FILE_ID=$(curl --insecure --silent -X POST https://localhost:38443/api/v1/drive/files \
   -H "Authorization: Bearer $TOKEN" \
   -F "fileId=$FILE_ID" \
   -F "collectionId=$COLL_ID" \
@@ -110,14 +110,14 @@ test "$STORED_FILE_ID" = "$FILE_ID"
 ## 8. List files in collection
 
 ```sh
-curl --insecure --silent https://localhost:38443/api/collections/$COLL_ID/files \
+curl --insecure --silent https://localhost:38443/api/v1/drive/collections/$COLL_ID/files \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
 ## 9. Download file
 
 ```sh
-curl --insecure --silent https://localhost:38443/api/files/$FILE_ID/download \
+curl --insecure --silent https://localhost:38443/api/v1/drive/files/$FILE_ID/download \
   -H "Authorization: Bearer $TOKEN" \
   -o /tmp/downloaded_encrypted
 echo "saved to /tmp/downloaded_encrypted"
@@ -126,14 +126,14 @@ echo "saved to /tmp/downloaded_encrypted"
 ## 10. Delete file
 
 ```sh
-curl --insecure --silent -X DELETE https://localhost:38443/api/files/$FILE_ID \
+curl --insecure --silent -X DELETE https://localhost:38443/api/v1/drive/files/$FILE_ID \
   -H "Authorization: Bearer $TOKEN" -w "\nHTTP %{http_code}\n"
 ```
 
 ## 11. Delete collection
 
 ```sh
-curl --insecure --silent -X DELETE https://localhost:38443/api/collections/$COLL_ID \
+curl --insecure --silent -X DELETE https://localhost:38443/api/v1/drive/collections/$COLL_ID \
   -H "Authorization: Bearer $TOKEN" -w "\nHTTP %{http_code}\n"
 ```
 
@@ -144,7 +144,7 @@ one shared identity plus Chat/Drive operational counts; it must not contain a
 signing seed or plaintext Drive capability.
 
 ```sh
-curl --insecure --silent https://localhost:38443/api/admin/federation \
+curl --insecure --silent https://localhost:38443/api/v1/admin/federation \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   | jq '{serverName, features, operational, peers}'
 ```
@@ -154,10 +154,10 @@ peer through the common resolver:
 
 ```sh
 PEER=friend.example
-curl --insecure --silent "https://localhost:38443/api/admin/federation/peers/$PEER/evidence" \
+curl --insecure --silent "https://localhost:38443/api/v1/admin/federation/peers/$PEER/evidence" \
   -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 
-curl --insecure --silent -X POST https://localhost:38443/api/admin/federation/peers/retry \
+curl --insecure --silent -X POST https://localhost:38443/api/v1/admin/federation/peers/retry \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "{\"domains\":[\"$PEER\"]}" | jq
@@ -166,7 +166,7 @@ curl --insecure --silent -X POST https://localhost:38443/api/admin/federation/pe
 Export only federation audit events:
 
 ```sh
-curl --insecure --silent 'https://localhost:38443/api/admin/activity/export?actionPrefix=federation.&limit=5000' \
+curl --insecure --silent 'https://localhost:38443/api/v1/admin/activity/export?actionPrefix=federation.&limit=5000' \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -o /tmp/kutup-federation-audit.csv
 ```

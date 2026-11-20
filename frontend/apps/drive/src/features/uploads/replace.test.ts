@@ -17,7 +17,7 @@ vi.mock('@kutup/drive-core/rekey', () => ({ rekeyFile: (_folder: unknown, file: 
 vi.mock('@kutup/drive-core/names', () => ({ contentHashIn: () => Promise.resolve('cd'.repeat(32)) }))
 vi.mock('@kutup/crypto/contentHash', () => ({ hashBlob: () => Promise.resolve('BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=') }))
 vi.mock('@kutup/files/media', () => ({ readMedia: () => Promise.resolve(undefined) }))
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'me' }) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ accountId: 'me' }) }))
 vi.mock('@kutup/session/client', () => ({ default: { delete: mocks.del }, freshAccessToken: () => Promise.resolve('t') }))
 
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
@@ -43,7 +43,7 @@ const file = new File(['new content'], 'report.bin', { lastModified: 5 })
 const signal = new AbortController().signal
 const pending = (uploadId: string, version = true) => ({
   fileId: 'f1',
-  uploadUrl: `https://drive.localhost/api/uploads/${uploadId}`,
+  uploadUrl: `https://drive.localhost/api/v1/drive/uploads/${uploadId}`,
   version: version ? { keyGeneration: 3, metadataRevision: 8 } : undefined,
 })
 
@@ -134,7 +134,7 @@ describe('Replace', () => {
     mocks.del.mockResolvedValue({})
     mocks.list.mockResolvedValue([pending('u1')])
     await cancelVersionUpload('f1', 'u1')
-    expect(mocks.del).toHaveBeenCalledWith('/uploads/u1', { headers: { 'Tus-Resumable': '1.0.0' } })
+    expect(mocks.del).toHaveBeenCalledWith('/drive/uploads/u1', { headers: { 'Tus-Resumable': '1.0.0' } })
     expect(mocks.remove).toHaveBeenCalledWith('f1')
   })
 })

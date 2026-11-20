@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{
     CollectionRow, CreateCollectionRequest, CreateCollectionResult, MessageResponse,
     ShareCollectionRequest, UpdateCollectionRequest, UpdateColorRequest,
@@ -26,7 +26,7 @@ use crate::AppState;
 #[derive(sqlx::FromRow)]
 struct SharedCollectionDbRow {
     id: Uuid,
-    owner_user_id: Uuid,
+    owner_account_id: Uuid,
     name_envelope: String,
     key_epoch: i32,
     name_revision: i64,
@@ -83,21 +83,21 @@ fn decode_public_key(value: &str) -> AppResult<Vec<u8>> {
     Ok(bytes)
 }
 
-/// `GET /api/collections` — mirrors `ListCollections`. Owned collections, then those
+/// `GET /api/v1/drive/collections` — mirrors `ListCollections`. Owned collections, then those
 /// shared with the user (with the recipient-specific key + permissions + computed usage).
 #[utoipa::path(
     get,
-    path = "/api/collections",
-    tag = "collections",
+    path = "/api/v1/drive/collections",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Owned + shared collections", body = Vec<CollectionRow>))
 )]
 pub async fn list_collections(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    // Albums are the Photos app's (GET /api/albums), never Drive folders.
+    let user_id = trusted_uuid(&user.account_id)?;
+    // Albums are the Photos app's (GET /api/v1/photos/albums), never Drive folders.
     Ok(Json(collection_rows(&state, user_id, "folder").await?).into_response())
 }
 
@@ -122,18 +122,21 @@ pub(crate) async fn collection_rows(
         time::OffsetDateTime,
         time::OffsetDateTime,
         Option<String>,
+        Option<i32>,
     );
     let own: Vec<OwnRow> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
-                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash,
+        r#"SELECT c.id, c.owner_account_id, kutup_b64(c.name_envelope) AS name_envelope,
+                  kutup_b64(c.owner_key_envelope) AS owner_key_envelope,
+                  c.key_epoch, c.name_revision, kutup_b64(c.epoch_statement) AS epoch_statement,
+                  encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
                   c.parent_collection_id, c.color, c.created_at,
                   GREATEST(c.updated_at,
-                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                           COALESCE((SELECT MAX(f.updated_at) FROM drive_files f
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
-                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                           COALESCE((SELECT MAX(sc.created_at) FROM drive_collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
-                  c.name_hash
-           FROM collections c WHERE c.owner_user_id = $1 AND c.deleted_at IS NULL
+                  encode(c.name_hash, 'hex') AS name_hash, c.name_hash_generation
+           FROM drive_collections c WHERE c.owner_account_id = $1 AND c.deleted_at IS NULL
              AND c.kind = $2
            ORDER BY c.created_at ASC"#,
     )
@@ -159,9 +162,10 @@ pub(crate) async fn collection_rows(
                 created_at,
                 updated_at,
                 name_hash,
+                name_hash_generation,
             )| CollectionRow {
                 id: id.to_string(),
-                owner_user_id: owner.to_string(),
+                owner_account_id: owner.to_string(),
                 name_envelope: name,
                 owner_key_envelope: Some(owner_key),
                 named_share_envelope: None,
@@ -182,6 +186,7 @@ pub(crate) async fn collection_rows(
                 upload_used_bytes: None,
                 is_shared: false,
                 name_hash,
+                name_hash_generation,
                 created_at,
                 updated_at,
             },
@@ -189,24 +194,26 @@ pub(crate) async fn collection_rows(
         .collect();
 
     let shared: Vec<SharedCollectionDbRow> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.key_epoch,
-                  c.name_revision, c.epoch_statement, c.epoch_statement_hash,
-                  c.parent_collection_id, c.color, cs.named_share_envelope,
+        r#"SELECT c.id, c.owner_account_id, kutup_b64(c.name_envelope) AS name_envelope, c.key_epoch,
+                  c.name_revision, kutup_b64(c.epoch_statement) AS epoch_statement,
+                  encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
+                  c.parent_collection_id, c.color,
+                  kutup_b64(cs.named_share_envelope) AS named_share_envelope,
                   cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
                   c.created_at, GREATEST(c.updated_at,
-                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                           COALESCE((SELECT MAX(f.updated_at) FROM drive_files f
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
-                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                           COALESCE((SELECT MAX(sc.created_at) FROM drive_collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
-                  owner.username AS owner_username,
-                  owner.account_incarnation_id AS owner_incarnation_id,
-                  owner.drive_signing_public_key AS owner_signing_public_key,
-                  owner.account_authority_public_key AS owner_authority_public_key,
-                  c.name_hash
-           FROM collections c
-           JOIN collection_shares cs ON cs.collection_id = c.id
-           JOIN users owner ON owner.id = c.owner_user_id
-           WHERE cs.recipient_user_id = $1 AND c.deleted_at IS NULL AND c.kind = $2
+                  mailbox_owner.username AS owner_username,
+                  encode(mailbox_owner.account_incarnation_id, 'hex') AS owner_incarnation_id,
+                  kutup_b64(mailbox_owner.drive_signing_public_key) AS owner_signing_public_key,
+                  kutup_b64(mailbox_owner.account_authority_public_key) AS owner_authority_public_key,
+                  encode(c.name_hash, 'hex') AS name_hash
+           FROM drive_collections c
+           JOIN drive_collection_shares cs ON cs.collection_id = c.id
+           JOIN accounts mailbox_owner ON mailbox_owner.id = c.owner_account_id
+           WHERE cs.recipient_account_id = $1 AND c.deleted_at IS NULL AND c.kind = $2
            ORDER BY c.created_at ASC"#,
     )
     .bind(user_id)
@@ -218,7 +225,7 @@ pub(crate) async fn collection_rows(
         // Compute this user's usage in the shared collection when an upload quota applies.
         let upload_used_bytes = if row.can_upload && row.upload_quota_bytes.is_some() {
             let used: Option<i64> = sqlx::query_scalar(
-                "SELECT COALESCE(SUM(encrypted_size_bytes), 0)::bigint FROM files WHERE collection_id = $1 AND uploader_user_id = $2",
+                "SELECT COALESCE(SUM(encrypted_size_bytes), 0)::bigint FROM drive_files WHERE collection_id = $1 AND uploader_account_id = $2",
             )
             .bind(row.id)
             .bind(user_id)
@@ -237,7 +244,7 @@ pub(crate) async fn collection_rows(
             .ok_or_else(|| AppError::conflict("share owner identity is unavailable"))?;
         out.push(CollectionRow {
             id: row.id.to_string(),
-            owner_user_id: row.owner_user_id.to_string(),
+            owner_account_id: row.owner_account_id.to_string(),
             name_envelope: row.name_envelope,
             owner_key_envelope: None,
             named_share_envelope: Some(row.named_share_envelope),
@@ -258,6 +265,7 @@ pub(crate) async fn collection_rows(
             upload_used_bytes,
             is_shared: true,
             name_hash: row.name_hash.clone(),
+            name_hash_generation: None,
             created_at: row.created_at,
             updated_at: row.updated_at,
         });
@@ -266,21 +274,21 @@ pub(crate) async fn collection_rows(
     Ok(out)
 }
 
-/// `POST /api/collections` — mirrors `CreateCollection`.
+/// `POST /api/v1/drive/collections` — mirrors `CreateCollection`.
 #[utoipa::path(
     post,
-    path = "/api/collections",
-    tag = "collections",
+    path = "/api/v1/drive/collections",
+    tag = "drive",
     security(("BearerAuth" = [])),
     request_body = CreateCollectionRequest,
     responses((status = 201, description = "Collection created", body = CreateCollectionResult))
 )]
 pub async fn create_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<CreateCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     create_owned_collection(&state, user_id, req, "folder").await
 }
 
@@ -304,22 +312,24 @@ pub(crate) async fn create_owned_collection(
         return Err(AppError::bad_request("an album is not inside a folder"));
     }
 
-    let authority_public_key: String =
-        sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let authority_public_key: String = sqlx::query_scalar(
+        "SELECT kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let authority_public_key = decode_public_key(&authority_public_key)?;
     let id_string = id.to_string();
     let owner_string = user_id.to_string();
+    // The owner copy, under the owner's Drive root at its newest generation.
+    let drive_generation = crate::account_roots::drive_generation(&state.pool, user_id).await?;
     validate_drive_envelope(
         &req.owner_key_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::CollectionKey,
-            1,
-            1,
+        DriveEnvelopeContextV1::owner_collection_key(
             &id_string,
             &owner_string,
+            1,
+            drive_generation,
         )
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
@@ -354,7 +364,7 @@ pub(crate) async fn create_owned_collection(
     let mut tx = state.pool.begin().await?;
     if let Some(parent_id) = parent {
         let parent_owned: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL AND c.kind = 'folder')",
+            "SELECT EXISTS(SELECT 1 FROM drive_collections c WHERE c.id = $1 AND c.owner_account_id = $2 AND c.deleted_at IS NULL AND c.kind = 'folder')",
         )
         .bind(parent_id)
         .bind(user_id)
@@ -364,17 +374,21 @@ pub(crate) async fn create_owned_collection(
             return Err(AppError::bad_request("invalid parent collection"));
         }
     }
+    let mut name_hash_generation = None;
     if let Some(hash) = &name_hash {
         let place = crate::drive_names::Place::of(parent, user_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
         crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await?;
+        name_hash_generation =
+            crate::drive_names::hash_generation(&mut tx, place, req.name_hash_generation).await?;
     }
     sqlx::query(
-        r#"INSERT INTO collections
-              (id, owner_user_id, name_envelope, owner_key_envelope, key_epoch,
+        r#"INSERT INTO drive_collections
+              (id, owner_account_id, name_envelope, owner_key_envelope, key_epoch,
                name_revision, epoch_statement, epoch_statement_hash, parent_collection_id, kind,
-               name_hash)
-           VALUES ($1,$2,$3,$4,1,1,$5,$6,$7,$8,$9)"#,
+               name_hash, name_hash_generation)
+           VALUES ($1,$2,kutup_unb64($3),kutup_unb64($4),1,1,kutup_unb64($5),decode($6, 'hex'),
+                   $7,$8,decode($9, 'hex'),$10)"#,
     )
     .bind(id)
     .bind(user_id)
@@ -385,13 +399,14 @@ pub(crate) async fn create_owned_collection(
     .bind(parent)
     .bind(kind)
     .bind(&name_hash)
+    .bind(name_hash_generation)
     .execute(&mut *tx)
     .await
     .map_err(crate::drive_names::map_unique_violation)?;
     sqlx::query(
-        r#"INSERT INTO collection_key_epoch_history
+        r#"INSERT INTO drive_collection_key_epoch_history
               (collection_id, epoch, owner_key_envelope, epoch_statement, epoch_statement_hash)
-           VALUES ($1,1,$2,$3,$4)"#,
+           VALUES ($1,1,kutup_unb64($2),kutup_unb64($3),decode($4, 'hex'))"#,
     )
     .bind(id)
     .bind(&req.owner_key_envelope)
@@ -408,21 +423,21 @@ pub(crate) async fn create_owned_collection(
         .into_response())
 }
 
-/// `GET /api/collections/{id}` — mirrors `GetCollection`.
+/// `GET /api/v1/drive/collections/{id}` — mirrors `GetCollection`.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "One collection (owned or shared view)", body = CollectionRow))
 )]
 pub async fn get_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
     type Row = (
@@ -439,18 +454,21 @@ pub async fn get_collection(
         time::OffsetDateTime,
         time::OffsetDateTime,
         Option<String>,
+        Option<i32>,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.owner_key_envelope,
-                  c.key_epoch, c.name_revision, c.epoch_statement, c.epoch_statement_hash,
+        r#"SELECT c.id, c.owner_account_id, kutup_b64(c.name_envelope) AS name_envelope,
+                  kutup_b64(c.owner_key_envelope) AS owner_key_envelope,
+                  c.key_epoch, c.name_revision, kutup_b64(c.epoch_statement) AS epoch_statement,
+                  encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
                   c.parent_collection_id, c.color, c.created_at,
                   GREATEST(c.updated_at,
-                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                           COALESCE((SELECT MAX(f.updated_at) FROM drive_files f
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
-                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                           COALESCE((SELECT MAX(sc.created_at) FROM drive_collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
-                  c.name_hash
-           FROM collections c WHERE c.id = $1 AND c.owner_user_id = $2 AND c.deleted_at IS NULL"#,
+                  encode(c.name_hash, 'hex') AS name_hash, c.name_hash_generation
+           FROM drive_collections c WHERE c.id = $1 AND c.owner_account_id = $2 AND c.deleted_at IS NULL"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -471,12 +489,14 @@ pub async fn get_collection(
         created_at,
         updated_at,
         name_hash,
+        name_hash_generation,
     )) = row
     {
         return Ok(Json(CollectionRow {
             name_hash,
+            name_hash_generation,
             id: cid.to_string(),
-            owner_user_id: owner.to_string(),
+            owner_account_id: owner.to_string(),
             name_envelope: name,
             owner_key_envelope: Some(owner_key),
             named_share_envelope: None,
@@ -507,23 +527,25 @@ pub async fn get_collection(
     // owner-only Go GetCollection 404'd here, which left shared-file open broken; serving the
     // share view matches ListCollections + the frontend's FileEditorPage.
     let shared: Option<SharedCollectionDbRow> = sqlx::query_as(
-        r#"SELECT c.id, c.owner_user_id, c.name_envelope, c.key_epoch, c.name_revision,
-                  c.epoch_statement, c.epoch_statement_hash, c.parent_collection_id, c.color,
-                  cs.named_share_envelope, cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
+        r#"SELECT c.id, c.owner_account_id, kutup_b64(c.name_envelope) AS name_envelope, c.key_epoch,
+                  c.name_revision, kutup_b64(c.epoch_statement) AS epoch_statement,
+                  encode(c.epoch_statement_hash, 'hex') AS epoch_statement_hash,
+                  c.parent_collection_id, c.color,
+                  kutup_b64(cs.named_share_envelope) AS named_share_envelope, cs.can_upload, cs.can_delete, cs.upload_quota_bytes,
                   c.created_at, GREATEST(c.updated_at,
-                           COALESCE((SELECT MAX(f.updated_at) FROM files f
+                           COALESCE((SELECT MAX(f.updated_at) FROM drive_files f
                                      WHERE f.collection_id = c.id AND f.deleted_at IS NULL), c.updated_at),
-                           COALESCE((SELECT MAX(sc.created_at) FROM collections sc
+                           COALESCE((SELECT MAX(sc.created_at) FROM drive_collections sc
                                      WHERE sc.parent_collection_id = c.id AND sc.deleted_at IS NULL), c.updated_at)) AS updated_at,
-                  owner.username AS owner_username,
-                  owner.account_incarnation_id AS owner_incarnation_id,
-                  owner.drive_signing_public_key AS owner_signing_public_key,
-                  owner.account_authority_public_key AS owner_authority_public_key,
-                  c.name_hash
-           FROM collections c
-           JOIN collection_shares cs ON cs.collection_id = c.id
-           JOIN users owner ON owner.id = c.owner_user_id
-           WHERE c.id = $1 AND cs.recipient_user_id = $2 AND c.deleted_at IS NULL"#,
+                  mailbox_owner.username AS owner_username,
+                  encode(mailbox_owner.account_incarnation_id, 'hex') AS owner_incarnation_id,
+                  kutup_b64(mailbox_owner.drive_signing_public_key) AS owner_signing_public_key,
+                  kutup_b64(mailbox_owner.account_authority_public_key) AS owner_authority_public_key,
+                  encode(c.name_hash, 'hex') AS name_hash
+           FROM drive_collections c
+           JOIN drive_collection_shares cs ON cs.collection_id = c.id
+           JOIN accounts mailbox_owner ON mailbox_owner.id = c.owner_account_id
+           WHERE c.id = $1 AND cs.recipient_account_id = $2 AND c.deleted_at IS NULL"#,
     )
     .bind(coll_id)
     .bind(user_id)
@@ -541,8 +563,9 @@ pub async fn get_collection(
         .ok_or_else(|| AppError::conflict("share owner identity is unavailable"))?;
     Ok(Json(CollectionRow {
         name_hash: row.name_hash.clone(),
+        name_hash_generation: None,
         id: coll_id.to_string(),
-        owner_user_id: row.owner_user_id.to_string(),
+        owner_account_id: row.owner_account_id.to_string(),
         name_envelope: row.name_envelope,
         owner_key_envelope: None,
         named_share_envelope: Some(row.named_share_envelope),
@@ -568,11 +591,11 @@ pub async fn get_collection(
     .into_response())
 }
 
-/// `PUT /api/collections/{id}` — mirrors `UpdateCollection` (rename).
+/// `PUT /api/v1/drive/collections/{id}` — mirrors `UpdateCollection` (rename).
 #[utoipa::path(
     put,
-    path = "/api/collections/{id}",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = UpdateCollectionRequest,
@@ -580,17 +603,17 @@ pub async fn get_collection(
 )]
 pub async fn update_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateCollectionRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
     let mut tx = state.pool.begin().await?;
     let current: Option<(i32, i64, Option<Uuid>, String)> = sqlx::query_as(
-        "SELECT key_epoch, name_revision, parent_collection_id, kind FROM collections
-         WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        "SELECT key_epoch, name_revision, parent_collection_id, kind FROM drive_collections
+         WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(coll_id)
     .bind(user_id)
@@ -606,10 +629,14 @@ pub async fn update_collection(
         let place = crate::drive_names::Place::of(parent, user_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
         crate::drive_names::ensure_name_free(&mut tx, place, &hash, Some(coll_id)).await?;
-        Some(hash)
+        let generation =
+            crate::drive_names::hash_generation(&mut tx, place, req.name_hash_generation).await?;
+        Some((hash, generation))
     } else {
         None
     };
+    let (name_hash, name_hash_generation) = name_hash.unzip();
+    let name_hash_generation = name_hash_generation.flatten();
     if req.name_revision != current_revision.saturating_add(1) {
         return Err(AppError::conflict(
             "collection name revision must advance by exactly one",
@@ -628,8 +655,9 @@ pub async fn update_collection(
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
     let res = sqlx::query(
-        r#"UPDATE collections SET name_envelope = $1, name_revision = $2, name_hash = $6, updated_at = NOW()
-           WHERE id = $3 AND owner_user_id = $4 AND name_revision = $5 AND deleted_at IS NULL"#,
+        r#"UPDATE drive_collections SET name_envelope = kutup_unb64($1), name_revision = $2, name_hash = decode($6, 'hex'),
+                  name_hash_generation = $7, updated_at = NOW()
+           WHERE id = $3 AND owner_account_id = $4 AND name_revision = $5 AND deleted_at IS NULL"#,
     )
     .bind(&req.name_envelope)
     .bind(req.name_revision)
@@ -637,6 +665,7 @@ pub async fn update_collection(
     .bind(user_id)
     .bind(current_revision)
     .bind(&name_hash)
+    .bind(name_hash_generation)
     .execute(&mut *tx)
     .await;
     match res {
@@ -652,11 +681,11 @@ pub async fn update_collection(
     }
 }
 
-/// `PATCH /api/collections/{id}/color` — mirrors `UpdateCollectionColor`.
+/// `PATCH /api/v1/drive/collections/{id}/color` — mirrors `UpdateCollectionColor`.
 #[utoipa::path(
     patch,
-    path = "/api/collections/{id}/color",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/color",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = UpdateColorRequest,
@@ -664,11 +693,11 @@ pub async fn update_collection(
 )]
 pub async fn update_collection_color(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateColorRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
     // `#rrggbb`, stored lowercase; null or "" clears it. Every client (web,
     // CLI) writes the same form, so a colour set in one shows in the other.
@@ -679,7 +708,7 @@ pub async fn update_collection_color(
     };
 
     let res = sqlx::query(
-        "UPDATE collections SET color = $1, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL",
+        "UPDATE drive_collections SET color = $1, updated_at = NOW() WHERE id = $2 AND owner_account_id = $3 AND deleted_at IS NULL",
     )
     .bind(color)
     .bind(coll_id)
@@ -692,35 +721,35 @@ pub async fn update_collection_color(
     }
 }
 
-/// `DELETE /api/collections/{id}` — soft-deletes the folder *and its whole subtree*
+/// `DELETE /api/v1/drive/collections/{id}` — soft-deletes the folder *and its whole subtree*
 /// (sub-folders + files) into the trash. The folder is the single trash entry
 /// (`trash_root_id = its id`); restore/purge operate on the entry and everything
 /// tagged with it. Items already in the trash keep their own entry + deletion time.
 #[utoipa::path(
     delete,
-    path = "/api/collections/{id}",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 204, description = "Folder + subtree moved to trash"))
 )]
 pub async fn delete_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
     let mut tx = state.pool.begin().await?;
     // Walk the live subtree from the root (only the owner's root qualifies).
     let subtree: Vec<Uuid> = sqlx::query_scalar(
         r#"WITH RECURSIVE subtree AS (
-             SELECT id FROM collections
-             -- An album is deleted with DELETE /api/albums/{id}, not trashed.
-             WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL AND kind = 'folder'
+             SELECT id FROM drive_collections
+             -- An album is deleted with DELETE /api/v1/photos/albums/{id}, not trashed.
+             WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL AND kind = 'folder'
              UNION ALL
-             SELECT c.id FROM collections c
+             SELECT c.id FROM drive_collections c
              JOIN subtree s ON c.parent_collection_id = s.id
              WHERE c.deleted_at IS NULL
            )
@@ -735,14 +764,14 @@ pub async fn delete_collection(
     }
 
     sqlx::query(
-        "UPDATE collections SET deleted_at = NOW(), trash_root_id = $2 WHERE id = ANY($1) AND deleted_at IS NULL",
+        "UPDATE drive_collections SET deleted_at = NOW(), trash_root_id = $2 WHERE id = ANY($1) AND deleted_at IS NULL",
     )
     .bind(&subtree)
     .bind(coll_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE files SET deleted_at = NOW(), trash_root_id = $2 WHERE collection_id = ANY($1) AND deleted_at IS NULL",
+        "UPDATE drive_files SET deleted_at = NOW(), trash_root_id = $2 WHERE collection_id = ANY($1) AND deleted_at IS NULL",
     )
     .bind(&subtree)
     .bind(coll_id)
@@ -753,11 +782,11 @@ pub async fn delete_collection(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/collections/{id}/share` — mirrors `ShareCollection` (local share/upsert).
+/// `POST /api/v1/drive/collections/{id}/share` — mirrors `ShareCollection` (local share/upsert).
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/share",
-    tag = "collections",
+    path = "/api/v1/drive/collections/{id}/share",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     request_body = ShareCollectionRequest,
@@ -765,18 +794,18 @@ pub async fn delete_collection(
 )]
 pub async fn share_collection(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<ShareCollectionRequest>,
 ) -> AppResult<Response> {
-    let sharer_id = trusted_uuid(&user.user_id)?;
+    let sharer_id = trusted_uuid(&user.account_id)?;
     // Invalid collection id ⇒ ownership check fails ⇒ 403 (matches Go).
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
-    let recipient_id = Uuid::parse_str(&req.recipient_user_id)
+    let recipient_id = Uuid::parse_str(&req.recipient_account_id)
         .map_err(|_| AppError::bad_request("invalid request"))?;
 
     let collection: Option<(Uuid, i32)> = sqlx::query_as(
-        "SELECT owner_user_id, key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT owner_account_id, key_epoch FROM drive_collections WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(coll_id)
     .fetch_optional(&state.pool)
@@ -790,15 +819,17 @@ pub async fn share_collection(
 
     type IdentityRow = (Option<String>, String, String, String);
     let sender: IdentityRow = sqlx::query_as(
-        "SELECT username, account_incarnation_id, drive_signing_public_key, public_key
-         FROM users WHERE id = $1",
+        "SELECT username, COALESCE(encode(account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(drive_signing_public_key), ''),
+                COALESCE(kutup_b64(drive_xwing_public_key), '')
+         FROM accounts WHERE id = $1",
     )
     .bind(sharer_id)
     .fetch_one(&state.pool)
     .await?;
     let recipient: IdentityRow = sqlx::query_as(
-        "SELECT username, account_incarnation_id, drive_signing_public_key, public_key
-         FROM users WHERE id = $1 AND is_active = true",
+        "SELECT username, COALESCE(encode(account_incarnation_id, 'hex'), ''), COALESCE(kutup_b64(drive_signing_public_key), ''),
+                COALESCE(kutup_b64(drive_xwing_public_key), '')
+         FROM accounts WHERE id = $1 AND state = 'active'",
     )
     .bind(recipient_id)
     .fetch_optional(&state.pool)
@@ -824,11 +855,11 @@ pub async fn share_collection(
         .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
 
     sqlx::query(
-        r#"INSERT INTO collection_shares (collection_id, sharer_user_id, recipient_user_id,
+        r#"INSERT INTO drive_collection_shares (collection_id, sharer_account_id, recipient_account_id,
                                           named_share_envelope, can_upload, can_delete, upload_quota_bytes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
-           ON CONFLICT (collection_id, recipient_user_id)
-           DO UPDATE SET named_share_envelope = $4, can_upload = $5, can_delete = $6, upload_quota_bytes = $7"#,
+           VALUES ($1,$2,$3,kutup_unb64($4),$5,$6,$7)
+           ON CONFLICT (collection_id, recipient_account_id)
+           DO UPDATE SET named_share_envelope = EXCLUDED.named_share_envelope, can_upload = $5, can_delete = $6, upload_quota_bytes = $7"#,
     )
     .bind(coll_id)
     .bind(sharer_id)

@@ -108,9 +108,9 @@ them. What exists already is the server's SFU token:
 
 **Joining:**
 - A member asks its own server for an SFU token
-  (`POST /api/chat/group-calls/token` with host, room and participant tag).
+  (`POST /api/v1/chat/group-calls/token` with host, room and participant tag).
 - If the host is another server, the request goes over signed federation
-  (`POST /api/fed/chat/group-calls/token`).
+  (`POST /api/fed/v2/chat/group-calls/token`).
 - The host mints a 6-hour LiveKit token for that one room (join, publish,
   subscribe; never room admin).
 - The room id is the capability: only the group's members know it.
@@ -185,10 +185,10 @@ with a waiting room, the people waiting (below). It
 offers:
 
 - to the owner: create, list, replace the info and delete
-  (`/api/chat/call-links`);
+  (`/api/v1/chat/call-links`);
 - to anyone presenting the access token, with no account:
-  - `POST /api/chat/call-links/info`: the sealed info;
-  - `POST /api/chat/call-links/token`: a 6-hour LiveKit token for that one
+  - `POST /api/v1/chat/call-links/info`: the sealed info;
+  - `POST /api/v1/chat/call-links/token`: a 6-hour LiveKit token for that one
     room (join, publish, subscribe; never room admin), carrying the joiner's
     sealed name as the participant's metadata.
 
@@ -230,8 +230,10 @@ account, so it is the same on all of its devices:
   header naming the account's key binding and the row's 16-byte id. The
   server checks that header, so a record can't be moved to another row or
   another account.
-- The server stores the records (`/api/chat/joined-meetings`, the newest
-  100 per account) and hands them back. It cannot open them, so it still
+- The server stores the records in the account-records store (scope
+  `joinedMeetings`, docs/plans/account-records.md, under the account head;
+  at most `accountRecordsJoinedMeetings` per account, 100 at first: adding
+  one past it removes the oldest in the same batch) and hands them back. It cannot open them, so it still
   has no readable record of who joined what; it does learn that the account
   recorded a stay and when, which someone watching the server could set
   beside the token requests of that moment.
@@ -258,7 +260,7 @@ changing one). With it on, holding the link is not enough to join.
   secret, nobody the link is shared with can compute it. The server stores
   its SHA-256.
 - This server enforces it, because it mints the SFU tokens:
-  `POST /api/chat/call-links/token` answers `403` for a meeting with a
+  `POST /api/v1/chat/call-links/token` answers `403` for a meeting with a
   waiting room unless the host token is presented. Whether a meeting has a
   waiting room is therefore kept in the clear on the server, and told to
   whoever asks for the meeting's details.
@@ -339,7 +341,7 @@ SFU itself, as the room's administrator, through LiveKit's room service
   Their page says a host removed them. They still hold the link, which is
   why the waiting room goes on: to come back they have to ask, and a host
   decides. It stays on until the owner turns it off. (Every link has a
-  host token: `POST /api/chat/call-links` requires its hash.) The database changes
+  host token: `POST /api/v1/chat/call-links` requires its hash.) The database changes
   are made together, before the SFU is asked: if it cannot be reached the
   host sees an error, the person stays out of the seat they had, and asking
   again disconnects them.
@@ -393,7 +395,7 @@ SFU itself, as the room's administrator, through LiveKit's room service
   Meetings page makes one for the same meeting (same title, time and
   waiting room, a new secret and so new keys), deletes the old one and
   disconnects whoever is in it. Only the people the new link is sent to
-  come back. It is one request (`replaces` on `POST /api/chat/call-links`):
+  come back. It is one request (`replaces` on `POST /api/v1/chat/call-links`):
   the server closes the old meeting at the SFU, deletes the old link and
   stores the new one in one transaction, so the two links never both work.
   If the SFU cannot close the old meeting nothing changes and the owner
@@ -441,7 +443,7 @@ screen, People, Chat, leave).
 
 ## ICE servers
 
-`GET /api/chat/call-servers` returns what `RTCPeerConnection` needs:
+`GET /api/v1/chat/call-servers` returns what `RTCPeerConnection` needs:
 
 - **STUN:** the servers in `CHAT_STUN_URLS`.
 - **TURN:** with `CHAT_TURN_URLS` and `CHAT_TURN_SECRET` set, a relay entry

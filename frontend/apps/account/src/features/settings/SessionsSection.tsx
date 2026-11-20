@@ -1,4 +1,4 @@
-import { LogOut, Monitor, Terminal } from 'lucide-react'
+import { LogOut, Mail, Monitor, Terminal } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -8,14 +8,15 @@ import { Button } from '@kutup/ui/components/button'
 import { Card } from '@kutup/ui/components/card'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Section } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant, formatRelative } from '@kutup/ui/lib/format'
 import { useRevokeOtherSessions, useRevokeSession, useSessions, type SessionView } from './api'
-import { describeUserAgent } from './userAgent'
+import { clientName, PROGRAM_CLIENTS } from './securityEvents'
 
-/** One sign-in: a root session (account. or a CLI) and the app sessions forked from it. */
+/** One sign-in: a root session (the account app, the CLI or the Mail bridge) and the app sessions forked from it. */
 interface SignIn {
   root: SessionView
   apps: SessionView[]
@@ -50,7 +51,7 @@ const CLIENT_KEYS: Record<string, string> = {
   'web-mail': 'apps.mail',
   'web-pass': 'apps.pass',
   'web-calendar': 'apps.calendar',
-  cli: 'settings.sessions.cli',
+  ...PROGRAM_CLIENTS,
 }
 
 export function SessionsSection() {
@@ -80,7 +81,7 @@ export function SessionsSection() {
       {sessions.isError ? (
         <Alert variant="error">{apiErrorMessage(sessions.error, t('common.tryAgain'))}</Alert>
       ) : null}
-      {sessions.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+      {sessions.isPending ? <ListSkeleton label={t('common.loading')} rows={3} /> : null}
       {sessions.data && groups.length === 0 ? (
         <EmptyState title={t('settings.sessions.emptyTitle')} description={t('settings.sessions.emptyDescription')} />
       ) : null}
@@ -88,24 +89,24 @@ export function SessionsSection() {
       {groups.length > 0 ? (
         <Card className="divide-y divide-border p-0">
           {groups.map((group) => {
-            const cli = group.root.clientType === 'cli'
-            const { browser, os } = describeUserAgent(group.root.userAgent)
-            const name = cli
-              ? t('settings.sessions.cli')
+            const program = PROGRAM_CLIENTS[group.root.clientType]
+            const { browser, os } = clientName(group.root)
+            const name = program
+              ? t(program)
               : browser && os
                 ? t('settings.sessions.browserOn', { browser, os })
                 : (browser ?? os ?? t('settings.sessions.unknownBrowser'))
             return (
               <div key={group.root.id} className="flex flex-wrap items-center gap-4 p-4">
                 <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground [&_svg]:size-5">
-                  {cli ? <Terminal /> : <Monitor />}
+                  {group.root.clientType === 'mail-bridge' ? <Mail /> : program ? <Terminal /> : <Monitor />}
                 </span>
                 <div className="min-w-0 flex-1 space-y-1">
                   <p className="flex flex-wrap items-center gap-2 font-medium">
                     {name}
                     {group.current ? <Badge variant="ok">{t('settings.sessions.thisDevice')}</Badge> : null}
                   </p>
-                  {!cli ? (
+                  {!program ? (
                     <p className="text-sm text-muted-foreground">
                       {group.apps
                         .map((s) => t(CLIENT_KEYS[s.clientType] ?? 'settings.sessions.unknownApp'))

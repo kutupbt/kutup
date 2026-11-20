@@ -1,23 +1,30 @@
-// Browser orchestration for immutable E2EE Chat-media objects. Persistent
-// headers, suite selection and key derivation remain Rust-owned; this adapter
-// only provides bounded browser File/ReadableStream I/O and tus mechanics.
+// Browser orchestration for immutable E2EE Chat-media objects in the block
+// format (docs/chat-media.md; docs/plans/drive-block-format.md §2): Chat-media
+// suite 2, `KUTPCM2`. Headers, keys, blocks and the manifest are Rust-owned;
+// this adapter only provides bounded browser File/ReadableStream I/O, tus
+// mechanics and the block reader's ranged reads.
 
 import * as tus from 'tus-js-client'
 import {
-  CHAT_MEDIA_CIPHER_CHUNK_BYTES,
-  CHAT_MEDIA_OBJECT_PREFIX_BYTES,
+  CHAT_MEDIA_SUITE,
   MAX_CHAT_MEDIA_PLAINTEXT_BYTES,
-  chatMediaCipherSize,
-  newChatMediaStreamEncryptorV1,
-  openChatMediaStreamV1,
+  chatMediaLayout,
+  newChatMediaBlockEncryptor,
+  openChatMediaReader,
 } from '@kutup/crypto/chatMedia'
 import { toBase64 } from '@kutup/crypto/base64'
 import { exactBytes } from '@kutup/crypto/bytes'
 import { createHasher, toHex } from '@kutup/crypto/hash'
 import { randomBytes } from '@kutup/crypto/random'
-import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
 import { resolveApiBase } from '@kutup/session/apiBase'
+import { clientFetch, clientHeaders, latchClientTooOld } from '@kutup/session/clientVersion'
+import { freshAccessToken } from '@kutup/session/client'
+import { openBlockReader, type AccessToken } from '@kutup/files/blockReader/client'
+import type { ChatMediaBlockSource } from '@kutup/files/blockReader/protocol'
 import { openDownloadSink } from '@kutup/files/download/streamDownload'
+import { driveStreamLimits } from '@kutup/files/stream/limits'
+import { openPlayerStream } from '@kutup/files/stream/page'
+import { openMediaPlayback, type Playback, type PlaybackFallback } from '@kutup/files/stream/playback'
 import {
   CiphertextCacheRequestCoordinatorV1,
   type CiphertextCacheBindingV1,
@@ -39,6 +46,9 @@ import { encodeChatMediaPreviewV1 } from './media-preview'
 import { hash } from '@kutup/crypto/hash'
 
 const SHA256_HEX_BYTES = 64
+/** The block format's plaintext block and per-block overhead (`blocks.rs`). */
+const CHAT_MEDIA_BLOCK_BYTES = 4 * 1024 * 1024
+const CHAT_MEDIA_BLOCK_OVERHEAD = 40
 const chatMediaCacheRequestsV1 = new CiphertextCacheRequestCoordinatorV1()
 
 export interface UploadChatMediaOptions {
@@ -91,9 +101,9 @@ export function chatMediaPresentationV1(
 
 export type ChatMediaDeliveryStatusV1 =
   | 'stored'
-  | 'already_stored'
+  | 'alreadyStored'
   | 'queued'
-  | 'storage_full'
+  | 'storageFull'
 
 export interface ChatMediaDeliveryResponseV1 {
   operationId: string
@@ -162,13 +172,23 @@ export async function uploadChatMediaV1(
   const attachmentId = crypto.randomUUID()
   const attachmentKey = randomBytes(32)
   const retrievalToken = randomBytes(32)
-  const encryptor = await newChatMediaStreamEncryptorV1(attachmentKey, attachmentId)
-  const ciphertextBytes = chatMediaCipherSize(options.file.size)
+  // Sealed block by block in Rust; the manifest's digest is known once the
+  // last block is, and goes into the descriptor.
+  const encryptor = await newChatMediaBlockEncryptor(attachmentKey, attachmentId, options.file.size)
+  const ciphertextBytes = encryptor.objectLength
+  const headerBytes = encryptor.header().length
+  const blockCount = encryptor.blockCount
+  let manifestSha256 = ''
+  let encryptorFreed = false
+  const freeEncryptor = () => {
+    if (encryptorFreed) return
+    encryptorFreed = true
+    encryptor.free()
+  }
   const hasher = await createHasher()
   let hashFinalized = false
+  let nextBlock = -1
   let position = 0
-  let prefixSent = false
-  let emptyFinalSent = false
 
   const hashAndEnqueue = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -179,27 +199,27 @@ export async function uploadChatMediaV1(
   }
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (!prefixSent) {
-        prefixSent = true
-        hashAndEnqueue(controller, encryptor.prefix)
+      if (nextBlock < 0) {
+        nextBlock = 0
+        hashAndEnqueue(controller, encryptor.header())
         return
       }
-      if (options.file.size === 0 && !emptyFinalSent) {
-        emptyFinalSent = true
-        hashAndEnqueue(controller, encryptor.push(new Uint8Array(), true))
-        controller.close()
+      if (nextBlock < blockCount) {
+        const length = encryptor.blockLength(nextBlock)
+        const plain = new Uint8Array(await options.file.slice(position, position + length).arrayBuffer())
+        if (plain.length !== length) throw new Error('the file changed while it was read')
+        hashAndEnqueue(controller, encryptor.sealNext(plain))
+        position += length
+        nextBlock++
         return
       }
-      if (position >= options.file.size) {
-        controller.close()
-        return
-      }
-      const end = Math.min(position + PLAIN_CHUNK, options.file.size)
-      const plain = new Uint8Array(await options.file.slice(position, end).arrayBuffer())
-      const isLast = end === options.file.size
-      hashAndEnqueue(controller, encryptor.push(plain, isLast))
-      position = end
-      if (isLast) controller.close()
+      hashAndEnqueue(controller, encryptor.finish())
+      manifestSha256 = encryptor.manifestSha256 ?? ''
+      freeEncryptor()
+      controller.close()
+    },
+    cancel() {
+      freeEncryptor()
     },
   })
 
@@ -218,17 +238,19 @@ export async function uploadChatMediaV1(
     const upload = new tus.Upload(stream.getReader(), {
       endpoint,
       uploadSize: ciphertextBytes,
-      chunkSize: CHAT_MEDIA_CIPHER_CHUNK_BYTES,
+      // Two sealed blocks a PATCH: above the server's 5 MiB part minimum.
+      chunkSize: 2 * (CHAT_MEDIA_BLOCK_BYTES + CHAT_MEDIA_BLOCK_OVERHEAD),
       retryDelays: [0, 1000, 3000, 5000, 10000],
       storeFingerprintForResuming: false,
       removeFingerprintOnSuccess: true,
-      headers: { Authorization: `Bearer ${options.accessToken}` },
+      headers: { Authorization: `Bearer ${options.accessToken}`, ...clientHeaders() },
       metadata: {
         attachmentId,
-        suite: '1',
+        suite: String(CHAT_MEDIA_SUITE),
         retrievalToken: toBase64(retrievalToken),
       },
       onAfterResponse(request, response) {
+        if (response.getStatus() === 426) latchClientTooOld()
         if (request.getMethod() === 'POST' && response.getStatus() === 201) {
           try {
             const body = JSON.parse(response.getBody()) as { attachmentId?: string }
@@ -244,16 +266,17 @@ export async function uploadChatMediaV1(
         }
       },
       onChunkComplete(_chunkSize, bytesAccepted) {
-        if (bytesAccepted <= CHAT_MEDIA_OBJECT_PREFIX_BYTES) return
-        const afterPrefix = bytesAccepted - CHAT_MEDIA_OBJECT_PREFIX_BYTES
-        const chunks = Math.ceil(afterPrefix / CHAT_MEDIA_CIPHER_CHUNK_BYTES)
-        const plain = Math.min(options.file.size, Math.max(0, afterPrefix - 17 * chunks))
+        const blocks = Math.floor(Math.max(0, bytesAccepted - headerBytes) / (CHAT_MEDIA_BLOCK_BYTES + CHAT_MEDIA_BLOCK_OVERHEAD))
+        const plain = Math.min(options.file.size, blocks * CHAT_MEDIA_BLOCK_BYTES)
         if (plain > lastPlainSent) {
           lastPlainSent = plain
           options.onProgress?.(plain, options.file.size)
         }
       },
-      onError: fail,
+      onError(error) {
+        freeEncryptor()
+        fail(error)
+      },
       onSuccess() {
         void finalizeSuccess().catch(fail)
       },
@@ -262,7 +285,7 @@ export async function uploadChatMediaV1(
     async function finalizeSuccess() {
       if (settled) return
       if (createdAttachmentId !== attachmentId || !storageReferenceId ||
-          serverDigest.length !== SHA256_HEX_BYTES) {
+          serverDigest.length !== SHA256_HEX_BYTES || !manifestSha256) {
         fail(new Error('Chat-media server returned incomplete finalization evidence'))
         return
       }
@@ -293,12 +316,13 @@ export async function uploadChatMediaV1(
         storageReferenceId,
         descriptor: {
             version: 1,
-            suite: 1,
+            suite: CHAT_MEDIA_SUITE,
             attachmentId,
             originDomain: options.originDomain,
             retrievalToken: toBase64(retrievalToken),
             ciphertextBytes,
             ciphertextSha256: localDigest,
+            manifestSha256,
             attachmentKey: toBase64(attachmentKey),
             plaintextBytes: options.file.size,
             ...chatMediaPresentationV1(options, generatedPreview),
@@ -308,11 +332,13 @@ export async function uploadChatMediaV1(
 
     if (options.signal) {
       if (options.signal.aborted) {
+        freeEncryptor()
         void upload.abort(true).catch(() => {})
         fail(new DOMException('Upload aborted', 'AbortError'))
         return
       }
       options.signal.addEventListener('abort', () => {
+        freeEncryptor()
         void upload.abort(true).catch(() => {})
         fail(new DOMException('Upload aborted', 'AbortError'))
       }, { once: true })
@@ -338,16 +364,33 @@ export function chatMediaCacheBindingV1(
   }
 }
 
+async function chatMediaObjectUrl(attachmentId: string): Promise<string> {
+  return `${await resolveApiBase()}/chat/media/objects/${encodeURIComponent(attachmentId)}`
+}
+
+/** The block reader's source for an attachment on the account's own server. */
+export async function chatMediaBlockSourceV1(descriptor: ChatAttachmentDescriptorV1): Promise<ChatMediaBlockSource> {
+  return {
+    family: 'chatMedia',
+    url: await chatMediaObjectUrl(descriptor.attachmentId),
+    attachmentKey: fromBase6432(descriptor.attachmentKey),
+    attachmentId: descriptor.attachmentId,
+    manifestSha256: descriptor.manifestSha256,
+    size: descriptor.plaintextBytes,
+    objectLength: descriptor.ciphertextBytes,
+  }
+}
+
 async function* fetchChatMediaCiphertextV1(
   descriptor: ChatAttachmentDescriptorV1,
   accessToken: string,
   signal?: AbortSignal,
   onProgress?: (receivedBytes: number, totalBytes: number) => void,
 ): AsyncGenerator<Uint8Array, void, void> {
-  const response = await fetch(
-    `${await resolveApiBase()}/chat/media/objects/${encodeURIComponent(descriptor.attachmentId)}`,
-    { headers: { Authorization: `Bearer ${accessToken}` }, signal },
-  )
+  const response = await clientFetch(await chatMediaObjectUrl(descriptor.attachmentId), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal,
+  })
   if (!response.ok) throw new Error(`Chat-media download HTTP ${response.status}`)
   if (!response.body) throw new Error('Chat-media download has no response body')
   const reader = response.body.getReader()
@@ -372,80 +415,204 @@ async function* fetchChatMediaCiphertextV1(
   }
 }
 
-/** Authenticate the digest, public binding, framing, final tag, AEAD and exact
- * plaintext length of an arbitrary ciphertext chunk stream. */
-export async function* decryptChatMediaCiphertextV1(
+interface ChatMediaLayoutV1 {
+  headerBytes: number
+  blockCount: number
+  /** Where the sealed manifest starts and ends (the trailer follows). */
+  manifestStart: number
+  manifestEnd: number
+}
+
+/** Where an attachment's parts sit, from its descriptor's lengths. */
+async function layoutOf(descriptor: ChatAttachmentDescriptorV1): Promise<ChatMediaLayoutV1> {
+  if (descriptor.suite !== CHAT_MEDIA_SUITE) throw new Error('unknown Chat-media suite')
+  const layout = await chatMediaLayout()
+  const size = descriptor.plaintextBytes
+  if (!Number.isSafeInteger(size) || size < 0 || size > MAX_CHAT_MEDIA_PLAINTEXT_BYTES) {
+    throw new Error('Chat-media plaintext length is invalid')
+  }
+  const blockCount = Math.max(1, Math.ceil(size / layout.blockSize))
+  const manifestStart = layout.headerBytes + size + blockCount * layout.blockOverhead
+  const manifestEnd = descriptor.ciphertextBytes - layout.trailerBytes
+  if (manifestEnd <= manifestStart) throw new Error('Chat-media lengths do not fit the block format')
+  return { headerBytes: layout.headerBytes, blockCount, manifestStart, manifestEnd }
+}
+
+/**
+ * Reads an attachment's ciphertext through once, as it arrives: its exact
+ * length and whole-object digest against the descriptor, and its header
+ * and sealed manifest, opened in Rust against the descriptor's manifest
+ * digest. Nothing is decrypted. Returns the header and manifest.
+ */
+async function authenticateCiphertext(
   ciphertext: AsyncIterable<Uint8Array>,
   descriptor: ChatAttachmentDescriptorV1,
   signal?: AbortSignal,
-): AsyncGenerator<ChatMediaPlainChunk, void, void> {
-  const digestState = await createHasher()
-  let buffer: Uint8Array<ArrayBufferLike> = new Uint8Array()
-  let decryptor: Awaited<ReturnType<typeof openChatMediaStreamV1>> | null = null
-  let ciphertextRead = 0
-  let plaintextRead = 0
-  let sawFinal = false
-
-  for await (const value of ciphertext) {
+): Promise<{ header: Uint8Array; manifest: Uint8Array }> {
+  const layout = await layoutOf(descriptor)
+  const digest = await createHasher()
+  const header = new Uint8Array(layout.headerBytes)
+  const manifest = new Uint8Array(layout.manifestEnd - layout.manifestStart)
+  let read = 0
+  for await (const chunk of ciphertext) {
     throwIfAborted(signal)
-    if (!value.length) continue
-    if (sawFinal) throw new Error('Chat-media object has bytes after FINAL')
-    ciphertextRead += value.length
-    if (ciphertextRead > descriptor.ciphertextBytes) {
-      throw new Error('Chat-media object exceeds its authenticated length')
-    }
-    digestState.update(value)
-    buffer = appendBytes(buffer, value)
-    while (true) {
-      if (!decryptor) {
-        if (buffer.length < CHAT_MEDIA_OBJECT_PREFIX_BYTES) break
-        decryptor = await openChatMediaStreamV1(
-          buffer.subarray(0, CHAT_MEDIA_OBJECT_PREFIX_BYTES),
-          fromBase6432(descriptor.attachmentKey),
-          descriptor.attachmentId,
-        )
-        buffer = buffer.subarray(CHAT_MEDIA_OBJECT_PREFIX_BYTES)
-      }
-      if (buffer.length < CHAT_MEDIA_CIPHER_CHUNK_BYTES) break
-      const result = decryptor.pull(buffer.subarray(0, CHAT_MEDIA_CIPHER_CHUNK_BYTES))
-      buffer = buffer.subarray(CHAT_MEDIA_CIPHER_CHUNK_BYTES)
-      plaintextRead += result.plain.length
-      yield result
-      if (result.isFinal) {
-        sawFinal = true
-        if (buffer.length) throw new Error('Chat-media object has bytes after FINAL')
-        break
-      }
-    }
+    if (!chunk.length) continue
+    const start = read
+    read += chunk.length
+    if (read > descriptor.ciphertextBytes) throw new Error('Chat-media object exceeds its authenticated length')
+    digest.update(chunk)
+    copyOverlap(chunk, start, header, 0)
+    copyOverlap(chunk, start, manifest, layout.manifestStart)
   }
   throwIfAborted(signal)
-  if (!decryptor) throw new Error('Chat-media object ended before its prefix')
-  if (!sawFinal && buffer.length) {
-    const result = decryptor.pull(buffer)
-    buffer = new Uint8Array()
-    plaintextRead += result.plain.length
-    yield result
-    sawFinal = result.isFinal
-  }
-  if (!sawFinal) throw new Error('Chat-media object ended before FINAL')
-  const digest = toHex(digestState.digest())
-  if (ciphertextRead !== descriptor.ciphertextBytes ||
-      plaintextRead !== descriptor.plaintextBytes ||
-      digest !== descriptor.ciphertextSha256) {
+  if (read !== descriptor.ciphertextBytes || toHex(digest.digest()) !== descriptor.ciphertextSha256) {
     throw new Error('Chat-media object differs from its authenticated descriptor')
+  }
+  const reader = await openChatMediaReader(fromBase6432(descriptor.attachmentKey), descriptor.attachmentId, descriptor.manifestSha256, header, manifest)
+  try {
+    if (reader.size !== descriptor.plaintextBytes || reader.objectLength !== descriptor.ciphertextBytes) {
+      throw new Error('Chat-media manifest differs from its authenticated descriptor')
+    }
+  } finally {
+    reader.free()
+  }
+  return { header, manifest }
+}
+
+/** Copies the part of `chunk` (at `chunkStart` in the object) that falls in `target` (at `targetStart`). */
+function copyOverlap(chunk: Uint8Array, chunkStart: number, target: Uint8Array, targetStart: number): void {
+  const from = Math.max(chunkStart, targetStart)
+  const to = Math.min(chunkStart + chunk.length, targetStart + target.length)
+  if (from < to) target.set(chunk.subarray(from - chunkStart, to - chunkStart), from - targetStart)
+}
+
+/**
+ * Authenticates an attachment's ciphertext without decrypting it: what the
+ * private cache checks before it keeps a download (its length, its digest,
+ * its header and the manifest the descriptor commits to).
+ */
+export async function verifyChatMediaCiphertextV1(
+  ciphertext: AsyncIterable<Uint8Array>,
+  descriptor: ChatAttachmentDescriptorV1,
+  signal?: AbortSignal,
+): Promise<void> {
+  await authenticateCiphertext(ciphertext, descriptor, signal)
+}
+
+/**
+ * Decrypts an attachment whose ciphertext can be read more than once
+ * (`ciphertext()`, from the private cache): the first read authenticates it
+ * and finds its manifest, which sits at the end; the second opens each
+ * block in order, its hash checked against the manifest before its AEAD.
+ * No plaintext leaves before the manifest is the descriptor's.
+ */
+export async function* decryptChatMediaCiphertextV1(
+  ciphertext: () => AsyncIterable<Uint8Array>,
+  descriptor: ChatAttachmentDescriptorV1,
+  signal?: AbortSignal,
+): AsyncGenerator<ChatMediaPlainChunk, void, void> {
+  const layout = await layoutOf(descriptor)
+  const { header, manifest } = await authenticateCiphertext(ciphertext(), descriptor, signal)
+  const reader = await openChatMediaReader(fromBase6432(descriptor.attachmentKey), descriptor.attachmentId, descriptor.manifestSha256, header, manifest)
+  try {
+    let index = 0
+    let read = 0
+    let pending: Uint8Array<ArrayBufferLike> = new Uint8Array()
+    let pendingStart = layout.headerBytes
+    let plaintextRead = 0
+    for await (const chunk of ciphertext()) {
+      throwIfAborted(signal)
+      const start = read
+      read += chunk.length
+      // The blocks: from the header's end to the manifest.
+      const from = Math.max(start, layout.headerBytes)
+      const to = Math.min(read, layout.manifestStart)
+      if (from >= to) continue
+      pending = appendBytes(pending, chunk.subarray(from - start, to - start))
+      while (index < layout.blockCount) {
+        const sealedLength = reader.sealedBlockLength(index)
+        if (pendingStart + pending.length < reader.blockOffset(index) + sealedLength) break
+        const plain = reader.openBlock(index, pending.subarray(0, sealedLength))
+        pending = pending.subarray(sealedLength)
+        pendingStart += sealedLength
+        plaintextRead += plain.length
+        index++
+        yield { plain, isFinal: index === layout.blockCount }
+      }
+    }
+    throwIfAborted(signal)
+    if (index !== layout.blockCount || plaintextRead !== descriptor.plaintextBytes || read !== descriptor.ciphertextBytes) {
+      throw new Error('Chat-media object differs from its authenticated descriptor')
+    }
+  } finally {
+    reader.free()
   }
 }
 
-/** Fetch from the user's own server and verify digest, framing, ID and AEAD. */
+/**
+ * Fetches from the user's own server by Range and opens it block by block:
+ * the header and the manifest the descriptor commits to first, then each
+ * block checked against it before it is released.
+ */
 export async function* fetchChatMediaV1(
   descriptor: ChatAttachmentDescriptorV1,
-  accessToken: string,
+  accessToken: AccessToken,
   signal?: AbortSignal,
 ): AsyncGenerator<ChatMediaPlainChunk, void, void> {
-  yield* decryptChatMediaCiphertextV1(
-    fetchChatMediaCiphertextV1(descriptor, accessToken, signal),
-    descriptor,
+  const reader = await openBlockReader({
+    source: await chatMediaBlockSourceV1(descriptor),
+    accessToken,
+    settings: { cacheBlocks: 2, readaheadBlocks: 1, responseMaxBytes: 5 * 1024 * 1024 },
     signal,
+  })
+  try {
+    const { blockCount } = reader.opened
+    for (let index = 0; index < blockCount; index++) {
+      throwIfAborted(signal)
+      yield { plain: await reader.block(index), isFinal: index === blockCount - 1 }
+    }
+  } finally {
+    reader.close()
+  }
+}
+
+/**
+ * Plays a video or song attachment (docs/plans/drive-block-format.md §4):
+ * streamed from the account's own server through the service worker, so a
+ * seek fetches one block; where no worker controls the page, opened whole
+ * from the private cache (downloading it there first). A stream that fails
+ * before it plays is replaced the same way, handed to `onFallback`.
+ */
+export async function openChatMediaPlaybackV1(
+  descriptor: ChatAttachmentDescriptorV1,
+  cache: PrivateCiphertextCacheV1,
+  signal?: AbortSignal,
+  onFallback?: (next: PlaybackFallback) => void,
+): Promise<Playback> {
+  const mimeType = descriptor.mimeType || 'application/octet-stream'
+  return openMediaPlayback(
+    {
+      size: descriptor.plaintextBytes,
+      mimeType,
+      limits: () => driveStreamLimits(),
+      stream: async (limits, streamSignal) =>
+        openPlayerStream({
+          source: await chatMediaBlockSourceV1(descriptor),
+          accessToken: freshAccessToken,
+          mimeType,
+          limits,
+          signal: streamSignal,
+        }),
+      readWhole: async (readSignal) => {
+        if (!(await isChatMediaAvailableInKutupV1(cache, descriptor))) {
+          await downloadChatMediaToCacheV1(cache, descriptor, await freshAccessToken(), undefined, readSignal)
+        }
+        return (await openCachedChatMediaV1(cache, descriptor, readSignal)).blob
+      },
+    },
+    signal,
+    undefined,
+    onFallback,
   )
 }
 
@@ -480,13 +647,7 @@ export async function downloadChatMediaToCacheV1(
           backupCiphertext,
         ),
         async (chunks, _binding, verifySignal) => {
-          for await (const _chunk of decryptChatMediaCiphertextV1(
-            chunks,
-            descriptor,
-            verifySignal,
-          )) {
-            // Authentication is complete only after the generator reaches EOF.
-          }
+          await verifyChatMediaCiphertextV1(chunks, descriptor, verifySignal)
         },
         lifecycle,
         sharedSignal,
@@ -535,7 +696,7 @@ export async function saveCachedChatMediaToDeviceV1(
   let written = 0
   try {
     for await (const { plain } of decryptChatMediaCiphertextV1(
-      cache.readVerified(chatMediaCacheBindingV1(descriptor), signal),
+      () => cache.readVerified(chatMediaCacheBindingV1(descriptor), signal),
       descriptor,
       signal,
     )) {
@@ -612,7 +773,7 @@ export async function openCachedChatMediaV1(
   const plaintext = new Uint8Array(descriptor.plaintextBytes)
   let offset = 0
   for await (const { plain } of decryptChatMediaCiphertextV1(
-    cache.readVerified(chatMediaCacheBindingV1(descriptor), signal),
+    () => cache.readVerified(chatMediaCacheBindingV1(descriptor), signal),
     descriptor,
     signal,
   )) {

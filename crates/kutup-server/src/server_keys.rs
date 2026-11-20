@@ -26,10 +26,10 @@ pub(crate) enum GeneratedKey {
 impl GeneratedKey {
     fn purpose(self) -> &'static str {
         match self {
-            Self::FederationIdentity => "federation-identity",
-            Self::FakeAccounts => "fake-accounts",
-            Self::RegistrationCodes => "registration-codes",
-            Self::RecoveryCodes => "two-factor-recovery-codes",
+            Self::FederationIdentity => "federationIdentity",
+            Self::FakeAccounts => "fakeAccounts",
+            Self::RegistrationCodes => "registrationCodes",
+            Self::RecoveryCodes => "twoFactorRecoveryCodes",
         }
     }
 }

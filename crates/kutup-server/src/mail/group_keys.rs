@@ -29,7 +29,7 @@ use crate::handlers::mail_keys::SignedKeyList;
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShareInput {
-    pub user_id: String,
+    pub account_id: String,
     /// The group key's secret sealed to the member's account key
     /// (`mail_key::seal_group_key_share`), base64.
     pub share: String,
@@ -136,7 +136,7 @@ fn signer_key(value: &str) -> AppResult<[u8; 32]> {
 
 /// A share checked against the member's current account incarnation.
 pub struct CheckedShare {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub share: Vec<u8>,
     pub member_incarnation_id: String,
 }
@@ -155,38 +155,35 @@ pub async fn check_shares(
 ) -> AppResult<Vec<CheckedShare>> {
     let mut checked = Vec::with_capacity(shares.len());
     for input in shares {
-        let user_id = Uuid::parse_str(&input.user_id)
-            .map_err(|_| AppError::bad_request("userId must be an account id"))?;
+        let user_id = Uuid::parse_str(&input.account_id)
+            .map_err(|_| AppError::bad_request("accountId must be an account id"))?;
         let share = decode(&input.share, "share")?;
-        let current: Option<(String, i16)> = sqlx::query_as(
-            "SELECT account_incarnation_id, identity_suite FROM users
-              WHERE id = $1 AND is_active AND NOT is_first_login AND account_incarnation_id <> ''",
+        // Every set-up account is X-Wing (identity_suite = 2 in the schema;
+        // docs/plans/pq-shares.md).
+        let current: Option<String> = sqlx::query_scalar(
+            "SELECT encode(account_incarnation_id, 'hex') FROM accounts
+              WHERE id = $1 AND state = 'active' AND keys_set_up_at IS NOT NULL",
         )
         .bind(user_id)
         .fetch_optional(&mut *conn)
         .await?;
-        let Some((current, suite)) = current else {
-            return Err(AppError::bad_request("a member has no account keys yet")
-                .with_details(serde_json::json!({ "code": "noAccountKey", "userId": user_id })));
+        let Some(current) = current else {
+            return Err(
+                AppError::bad_request("a member has no account keys yet").with_details(
+                    serde_json::json!({ "code": "noAccountKey", "accountId": user_id }),
+                ),
+            );
         };
-        // Sealed to X-Wing keys only (docs/plans/pq-shares.md).
-        if suite < kutup_crypto::identity::IDENTITY_SUITE as i16 {
-            let mut error = crate::handlers::identity::keys_pending_upgrade();
-            if let Some(details) = error.details.as_mut() {
-                details.insert("userId".into(), serde_json::json!(user_id));
-            }
-            return Err(error);
-        }
         if mail_key::group_key_share_incarnation(&share)
             .ok()
             .as_deref()
             != Some(current.as_str())
         {
             return Err(AppError::conflict("a member's keys changed; try again")
-                .with_details(serde_json::json!({ "code": "keyChanged", "userId": user_id })));
+                .with_details(serde_json::json!({ "code": "keyChanged", "accountId": user_id })));
         }
         checked.push(CheckedShare {
-            user_id,
+            account_id: user_id,
             share,
             member_incarnation_id: current,
         });
@@ -227,22 +224,22 @@ pub async fn publish(
         .iter()
         .map(
             |(fingerprint, sha256, flags)| -> AppResult<MailKeyEntryV1> {
-                Ok(MailKeyEntryV1 {
-                    fingerprint: hex_array(fingerprint)?,
-                    sha256_fingerprint: hex_array(sha256)?,
-                    primary: false,
-                    flags: *flags as u32 & !FLAG_NOT_OBSOLETE,
-                })
+                Ok(MailKeyEntryV1::v4(
+                    hex_array(fingerprint)?,
+                    hex_array(sha256)?,
+                    false,
+                    *flags as u32 & !FLAG_NOT_OBSOLETE,
+                ))
             },
         )
         .collect::<AppResult<Vec<_>>>()?;
-    expected.push(MailKeyEntryV1 {
-        fingerprint: info.fingerprint,
-        sha256_fingerprint: info.sha256_fingerprint,
-        primary: true,
-        flags: DEFAULT_FLAGS,
-    });
-    expected.sort_by_key(|key| key.fingerprint);
+    expected.push(MailKeyEntryV1::v4(
+        info.fingerprint,
+        info.sha256_fingerprint,
+        true,
+        DEFAULT_FLAGS,
+    ));
+    expected.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
     // An owner or manager deleted or deactivated may hold the signer's seed:
     // only a new signer publishes, and it ends that.
     let needs_new_signer: bool =
@@ -303,11 +300,11 @@ pub async fn publish(
     .ok_or_else(|| AppError::conflict("this key is already in use"))?;
     for share in shares {
         sqlx::query(
-            "INSERT INTO mail_group_key_shares (group_key_id, user_id, share, member_incarnation_id)
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO mail_group_key_shares (group_key_id, account_id, share, member_incarnation_id)
+             VALUES ($1, $2, $3, decode($4, 'hex'))",
         )
         .bind(key_id)
-        .bind(share.user_id)
+        .bind(share.account_id)
         .bind(&share.share)
         .bind(&share.member_incarnation_id)
         .execute(&mut **tx)
@@ -448,15 +445,15 @@ pub async fn add_signing_shares(
     for share in shares {
         sqlx::query(
             "INSERT INTO mail_group_signing_shares
-                    (group_id, signer_public_key, user_id, share, member_incarnation_id)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (group_id, signer_public_key, user_id) DO UPDATE
+                    (group_id, signer_public_key, account_id, share, member_incarnation_id)
+             VALUES ($1, $2, $3, $4, decode($5, 'hex'))
+             ON CONFLICT (group_id, signer_public_key, account_id) DO UPDATE
                SET share = EXCLUDED.share, member_incarnation_id = EXCLUDED.member_incarnation_id,
                    created_at = now()",
         )
         .bind(group_id)
         .bind(signer.as_slice())
-        .bind(share.user_id)
+        .bind(share.account_id)
         .bind(&share.share)
         .bind(&share.member_incarnation_id)
         .execute(&mut **tx)
@@ -482,13 +479,13 @@ pub async fn add_shares(
     .ok_or_else(|| AppError::bad_request("no such group key"))?;
     for share in shares {
         sqlx::query(
-            "INSERT INTO mail_group_key_shares (group_key_id, user_id, share, member_incarnation_id)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (group_key_id, user_id) DO UPDATE
+            "INSERT INTO mail_group_key_shares (group_key_id, account_id, share, member_incarnation_id)
+             VALUES ($1, $2, $3, decode($4, 'hex'))
+             ON CONFLICT (group_key_id, account_id) DO UPDATE
                SET share = EXCLUDED.share, member_incarnation_id = EXCLUDED.member_incarnation_id, created_at = now()",
         )
         .bind(key_id)
-        .bind(share.user_id)
+        .bind(share.account_id)
         .bind(&share.share)
         .bind(&share.member_incarnation_id)
         .execute(&mut **tx)
@@ -505,7 +502,7 @@ pub async fn primary_public_key(pool: &PgPool, group_id: Uuid) -> sqlx::Result<O
         .await
 }
 
-/// A shared mailbox's keys and its key-list chain for `GET /api/mail/keys`:
+/// A shared mailbox's keys and its key-list chain for `GET /api/v1/mail/keys`:
 /// the lists signed by the group's signers, the first signer and the
 /// handovers between them, for senders to verify and pin.
 pub async fn lookup(
@@ -599,10 +596,10 @@ pub async fn signer_leaving(conn: &mut sqlx::PgConnection, user: Uuid) -> AppRes
                 SELECT g.id FROM mail_groups g
                  WHERE g.kind = 'shared'
                    AND (EXISTS (SELECT 1 FROM mail_group_members m
-                                 WHERE m.group_id = g.id AND m.user_id = $1
+                                 WHERE m.group_id = g.id AND m.account_id = $1
                                    AND m.role IN ('owner', 'manager'))
                         OR EXISTS (SELECT 1 FROM mail_group_signing_shares s
-                                    WHERE s.group_id = g.id AND s.user_id = $1))
+                                    WHERE s.group_id = g.id AND s.account_id = $1))
                  ORDER BY g.id
                  FOR UPDATE)",
     )

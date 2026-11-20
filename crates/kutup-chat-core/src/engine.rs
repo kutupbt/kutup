@@ -110,6 +110,9 @@ pub struct ReceiveReport {
     /// Mailbox ids that could not be decrypted and were given up on, with
     /// the sender's session refreshed where that was due.
     pub repaired: Vec<String>,
+    /// Mailbox ids of envelopes whose type or suite is newer than this
+    /// client: left on the server unread ("update Kutup").
+    pub unsupported: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -248,6 +251,9 @@ pub struct Engine {
     pub(crate) group_list: Option<crate::group_list::GroupListSync>,
     /// The account's Chat contact list (`enable_contact_list`).
     pub(crate) contact_list: Option<crate::contact_list::ContactListSync>,
+    /// When this device last read the account's lists (`records_sync`; 0:
+    /// not this run).
+    pub(crate) records_read_at_ms: i64,
     /// First-seen identity pins waiting for their delayed write, by peer
     /// (docs/plans/chat-contacts-sync.md, "The pin list follows the same
     /// rule"). A pin lost to a reload is due again at the next contact.
@@ -358,6 +364,7 @@ impl Engine {
             identity_pins: None,
             group_list: None,
             contact_list: None,
+            records_read_at_ms: 0,
             pins_due: BTreeMap::new(),
             group_keys: None,
         }
@@ -373,9 +380,14 @@ impl Engine {
     /// Share identities with the account's other apps through its synced
     /// identity pins (docs/plans/drive-identity-pins.md). The list is sealed
     /// to the account's key binding (`binding`), never to its address.
-    pub fn enable_identity_pins(&mut self, master_key: &[u8; 32], binding: &str) -> Result<()> {
+    pub fn enable_identity_pins(
+        &mut self,
+        master_keys: &kutup_crypto::master_keys::MasterKeys,
+        binding: &str,
+    ) -> Result<()> {
         self.identity_pins = Some(crate::identity_sync::IdentityPinsSync::new(
-            binding, master_key,
+            binding,
+            master_keys,
         )?);
         Ok(())
     }
@@ -1229,16 +1241,19 @@ impl Engine {
                 // says which sign-in this is.
                 let session = match listed {
                     Ok(index) => devices[index].session.clone(),
-                    Err(_) => transport.fetch_device_session().await?,
+                    Err(_) => transport.fetch_device_session().await?.session,
                 };
                 let local = self.session.manifest_device(session);
                 match listed {
                     // Unchanged, unless the account's Drive keys moved on (an
                     // upgrade to X-Wing, docs/plans/pq-shares.md): then the
                     // next manifest carries them.
+                    // So are what it reads: an update that reads something
+                    // new lists itself again with it (format-evolution rule 8).
                     Ok(index)
                         if devices[index].kind == local.kind
                             && devices[index].chat == local.chat
+                            && devices[index].capabilities == local.capabilities
                             && current.drive == authority.drive_keys() =>
                     {
                         current
@@ -1246,20 +1261,26 @@ impl Engine {
                     location => {
                         match location {
                             // Its Chat keys renewed; a frame key it holds stays.
-                            Ok(index) => devices[index].chat = local.chat,
+                            Ok(index) => {
+                                devices[index].chat = local.chat;
+                                devices[index].capabilities = local.capabilities;
+                            }
                             Err(index) => devices.insert(index, local),
                         }
                         let next_sequence = current.sequence.checked_add(1).ok_or_else(|| {
                             ChatError::Trust("manifest sequence is exhausted".into())
                         })?;
-                        let next = authority.sign_manifest_with_binding(
-                            canonical_self.clone(),
-                            next_sequence,
-                            Some(current.manifest_hash().map_err(ChatError::Trust)?),
-                            current.identity_key.clone(),
-                            current.identity_binding.clone(),
-                            devices,
-                            issued_at,
+                        let next = authority.keep_from_head(
+                            authority.sign_manifest_with_binding(
+                                canonical_self.clone(),
+                                next_sequence,
+                                Some(current.manifest_hash().map_err(ChatError::Trust)?),
+                                current.identity_key.clone(),
+                                current.identity_binding.clone(),
+                                devices,
+                                issued_at,
+                            )?,
+                            Some(&current),
                         )?;
                         next.verify_successor(Some(&current))
                             .map_err(ChatError::Trust)?;
@@ -1337,14 +1358,17 @@ impl Engine {
             .sequence
             .checked_add(1)
             .ok_or_else(|| ChatError::Trust("manifest sequence is exhausted".into()))?;
-        let candidate = authority.sign_manifest_with_binding(
-            canonical_self.clone(),
-            next_sequence,
-            Some(current.manifest_hash().map_err(ChatError::Trust)?),
-            current.identity_key.clone(),
-            current.identity_binding.clone(),
-            devices,
-            issued_at,
+        let candidate = authority.keep_from_head(
+            authority.sign_manifest_with_binding(
+                canonical_self.clone(),
+                next_sequence,
+                Some(current.manifest_hash().map_err(ChatError::Trust)?),
+                current.identity_key.clone(),
+                current.identity_binding.clone(),
+                devices,
+                issued_at,
+            )?,
+            Some(&current),
         )?;
         candidate
             .verify_successor(Some(&current))
@@ -1830,14 +1854,25 @@ impl Engine {
 
         loop {
             let page = transport.drain(device_id, after, DRAIN_LIMIT).await?;
+            // Envelopes of a type or suite newer than this client are paged
+            // past, not acknowledged: the server keeps them for this device
+            // once it updates (docs/plans/format-evolution.md).
+            let skipped = page.unsupported.iter().map(|item| item.cursor).max();
+            report
+                .unsupported
+                .extend(page.unsupported.iter().map(|item| item.id.clone()));
             if page.envelopes.is_empty() {
+                if page.more && skipped.is_some() {
+                    after = after.max(skipped);
+                    continue;
+                }
                 break;
             }
             let received_at = self.now_ms();
             self.session
                 .journal_envelopes(&page.envelopes, received_at)
                 .await?;
-            after = self.session.last_cursor().await?;
+            after = self.session.last_cursor().await?.max(skipped);
             let ids: Vec<String> = page.envelopes.iter().map(|item| item.id.clone()).collect();
             self.process_inbound(Some(&ids), &mut report, rng).await?;
             if !page.more {

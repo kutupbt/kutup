@@ -3,6 +3,7 @@
 //! from `kutup_crypto::drive_names`, which owns the format.
 
 use anyhow::{Context, Result};
+use kutup_crypto::account_roots::AccountRoots;
 use kutup_crypto::drive_names;
 
 use crate::keyring::Keyring;
@@ -14,9 +15,17 @@ pub fn folder_hash_key(keys: &Keyring, collection_id: &str) -> Result<[u8; 32]> 
     Ok(drive_names::folder_hash_key(first, collection_id)?)
 }
 
-/// The hash key for the account's top-level folders.
-pub fn top_level_hash_key(master_key: &[u8]) -> Result<[u8; 32]> {
-    Ok(drive_names::top_level_hash_key(master_key)?)
+/// The hash key for the account's top-level folders, from its current
+/// Drive root: a hash made with it is sent with the root's generation
+/// ([`hash_generation`]).
+pub fn top_level_hash_key(roots: &AccountRoots) -> Result<[u8; 32]> {
+    Ok(drive_names::top_level_hash_key(&roots.drive)?)
+}
+
+/// The Drive-root generation a name hash in a place is sent with: the
+/// top level's key comes from the Drive root, a folder's from the folder.
+pub fn hash_generation(roots: &AccountRoots, parent: Option<&str>) -> Option<u32> {
+    parent.is_none().then(|| roots.drive_generation.get())
 }
 
 /// The hash `name` is kept unique by under `hash_key`.

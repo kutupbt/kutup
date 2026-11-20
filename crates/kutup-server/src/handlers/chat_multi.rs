@@ -48,7 +48,7 @@ const SEALED_SUITE: i16 = 1;
 /// One recipient account as the payload names it.
 struct Recipient {
     account_id: String,
-    user_id: Uuid,
+    account_uuid: Uuid,
     /// Device id and registration id, as the sender has them.
     devices: Vec<(u32, u32)>,
     /// `C_i ‖ AT_i`.
@@ -153,7 +153,7 @@ fn parse(submission: &SealedMultiSubmissionV1, limits: &MultiLimits) -> AppResul
             account_id.clone(),
             Recipient {
                 account_id,
-                user_id,
+                account_uuid: user_id,
                 devices: devices.into_iter().collect(),
                 key_material,
             },
@@ -183,7 +183,7 @@ async fn check_token(
     let token = submission
         .group_send_token_bytes()
         .map_err(|error| malformed(&error))?;
-    let accounts: Vec<Uuid> = parsed.recipients.iter().map(|r| r.user_id).collect();
+    let accounts: Vec<Uuid> = parsed.recipients.iter().map(|r| r.account_uuid).collect();
     let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp())
         .map_err(|_| AppError::internal("clock"))?;
     let verified = tokio::task::spawn_blocking(move || {
@@ -248,13 +248,13 @@ fn device_answers(
     (missing, extra, stale)
 }
 
-/// `POST /api/chat/anonymous/messages/multi?server=` — one group message to
+/// `POST /api/v1/chat/anonymous/messages/multi?server=` — one group message to
 /// member accounts of one server, sent once (docs/plans/pairwise-groups.md,
 /// slice 2). Anonymous, as the other sealed routes. Another server's
 /// members: forwarded to it at once, its answer relayed as it is.
 #[utoipa::path(
     post,
-    path = "/api/chat/anonymous/messages/multi",
+    path = "/api/v1/chat/anonymous/messages/multi",
     tag = "chat",
     params(("server" = Option<String>, Query, description = "The recipients' server; this one when absent")),
     request_body = SealedMultiSubmissionV1,
@@ -289,7 +289,16 @@ pub async fn send_multi(
     )
     .into();
     let bytes = i64::try_from(submission.payload.len()).unwrap_or(i64::MAX);
-    if charge(&state, "ip_bytes", &address_digest, bytes, 60).await? > limits.ip_bytes_per_min {
+    if charge(
+        &state,
+        crate::ratelimit::counters::Scope::AnonymousIpBytes,
+        &address_digest,
+        bytes,
+        60,
+    )
+    .await?
+        > limits.ip_bytes_per_min
+    {
         crate::telemetry::rate_limit_rejection("anonymous_ip");
         return Err(AppError::too_many_requests(
             "anonymous delivery rate limit exceeded",
@@ -299,7 +308,7 @@ pub async fn send_multi(
     let server = query.server.as_deref().unwrap_or(local);
     let (status, answer) = if server == local {
         check_token(&state, &submission, &parsed).await?;
-        deliver(&state, &submission, parsed, &limits).await?
+        deliver(&state, &submission, parsed, &limits, false).await?
     } else {
         match forward(&state, server, &submission).await? {
             Some(answered) => answered,
@@ -314,7 +323,7 @@ pub async fn send_multi(
 /// probe); the new count.
 async fn charge(
     state: &AppState,
-    scope: &str,
+    scope: crate::ratelimit::counters::Scope,
     digest: &[u8; 32],
     amount: i64,
     window_seconds: i64,
@@ -333,6 +342,7 @@ async fn deliver(
     submission: &SealedMultiSubmissionV1,
     parsed: Parsed,
     limits: &MultiLimits,
+    federated: bool,
 ) -> AppResult<(StatusCode, SealedMultiResponseV1)> {
     // 1. The token's budget (§3.6): weak, as anyone holding endorsements can
     // combine other subsets, but it caps replays of one send. Charged on its
@@ -346,7 +356,16 @@ async fn deliver(
         .concat(),
     )
     .into();
-    if charge(state, "group_send_token", &token_digest, 1, 60).await? > limits.per_token_per_min {
+    if charge(
+        state,
+        crate::ratelimit::counters::Scope::AnonymousGroupSendToken,
+        &token_digest,
+        1,
+        60,
+    )
+    .await?
+        > limits.per_token_per_min
+    {
         crate::telemetry::rate_limit_rejection("group_send_token");
         return Err(AppError::too_many_requests(
             "this group send token's budget is spent",
@@ -356,12 +375,18 @@ async fn deliver(
     let mut answer = SealedMultiResponseV1::default();
     let mut passing = Vec::new();
     for recipient in parsed.recipients {
-        // 2. An account that isn't an active one here is refused.
-        let active: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active FOR SHARE")
-                .bind(recipient.user_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        // 2. An account that isn't an active one here is refused; from another
+        // server, so is one that doesn't talk to other servers, the same way
+        // (crate::federation_switch).
+        let active: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM accounts
+              WHERE id = $1 AND state = 'active' AND (NOT $2 OR kutup_account_federates(id))
+              FOR SHARE",
+        )
+        .bind(recipient.account_uuid)
+        .bind(federated)
+        .fetch_optional(&mut *tx)
+        .await?;
         if active.is_none() {
             answer.refused.push(recipient.account_id);
             continue;
@@ -372,12 +397,21 @@ async fn deliver(
             Suite::V1,
             [
                 kutup_crypto::labels::MULTI_RECIPIENT_V1,
-                recipient.user_id.as_bytes(),
+                recipient.account_uuid.as_bytes(),
             ]
             .concat(),
         )
         .into();
-        if charge(state, "multi_recipient", &digest, 1, 60).await? > limits.per_recipient_per_min {
+        if charge(
+            state,
+            crate::ratelimit::counters::Scope::AnonymousMultiRecipient,
+            &digest,
+            1,
+            60,
+        )
+        .await?
+            > limits.per_recipient_per_min
+        {
             answer.rate_limited.push(recipient.account_id);
             continue;
         }
@@ -389,7 +423,7 @@ async fn deliver(
     for recipient in &passing {
         let current: Vec<(i32, i64)> =
             sqlx::query_as(crate::handlers::chat_identity::LISTED_DEVICES)
-                .bind(recipient.user_id)
+                .bind(recipient.account_uuid)
                 .fetch_all(&mut *tx)
                 .await?;
         let (missing, extra, stale) = device_answers(&current, &recipient.devices);
@@ -430,10 +464,10 @@ async fn deliver(
             // stores nothing again for it, while a device added since gets
             // its copy.
             let claimed: Option<i32> = sqlx::query_scalar(
-                "INSERT INTO chat_multi_send_ids (user_id, device_id, send_id)
+                "INSERT INTO chat_multi_send_ids (account_id, device_id, send_id)
                  VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING 1",
             )
-            .bind(recipient.user_id)
+            .bind(recipient.account_uuid)
             .bind(device_id)
             .bind(send_id)
             .fetch_optional(&mut *tx)
@@ -456,11 +490,11 @@ async fn deliver(
             };
             sqlx::query(
                 "INSERT INTO chat_mailbox
-                    (recipient_user_id, recipient_device_id, sealed_sender, sender_device_id,
+                    (recipient_account_id, recipient_device_id, sealed_sender, sender_device_id,
                      envelope_type, suite, content, send_id, shared_payload_id)
-                 VALUES ($1, $2, true, 0, $3, $4, $5, $6, $7)",
+                 VALUES ($1, $2, true, 0, $3, $4, kutup_unb64($5), $6, $7)",
             )
-            .bind(recipient.user_id)
+            .bind(recipient.account_uuid)
             .bind(device_id)
             .bind(envelope_type_code(EnvelopeType::Message))
             .bind(SEALED_SUITE)
@@ -469,7 +503,7 @@ async fn deliver(
             .bind(shared_id)
             .execute(&mut *tx)
             .await?;
-            stored.push((recipient.user_id, device_id));
+            stored.push((recipient.account_uuid, device_id));
         }
     }
     tx.commit().await?;
@@ -549,7 +583,7 @@ async fn forward(
 }
 
 /// The destination's endpoint for a forwarded multi-recipient send.
-pub(crate) const FEDERATED_PATH: &str = "/api/fed/chat/sealed/multi";
+pub(crate) const FEDERATED_PATH: &str = "/api/fed/v2/chat/sealed/multi";
 
 /// The largest send body either route reads: the largest request the
 /// settings can allow (their highest base size and recipient count), base64,
@@ -562,13 +596,13 @@ pub(crate) const MAX_BODY: usize = {
     payload * 4 / 3 + token * 4 / 3 + 4096
 };
 
-/// `POST /api/fed/chat/sealed/multi` — a multi-recipient send another
+/// `POST /api/fed/v2/chat/sealed/multi` — a multi-recipient send another
 /// server forwarded for this server's accounts, checked and stored as a
 /// local one. The origin is budgeted per request and per byte (all its
 /// users together), never per stored recipient.
 #[utoipa::path(
     post,
-    path = "/api/fed/chat/sealed/multi",
+    path = "/api/fed/v2/chat/sealed/multi",
     tag = "federation",
     request_body = SealedMultiSubmissionV1,
     responses(
@@ -628,10 +662,17 @@ pub async fn deliver_federated(
         .concat(),
     )
     .into();
-    let requests = charge(&state, "origin_multi_requests", &origin, 1, 60).await?;
+    let requests = charge(
+        &state,
+        crate::ratelimit::counters::Scope::AnonymousOriginMultiRequests,
+        &origin,
+        1,
+        60,
+    )
+    .await?;
     let bytes = charge(
         &state,
-        "origin_multi_bytes",
+        crate::ratelimit::counters::Scope::AnonymousOriginMultiBytes,
         &origin,
         i64::try_from(body.len()).unwrap_or(i64::MAX),
         60,
@@ -655,7 +696,7 @@ pub async fn deliver_federated(
     if let Err(error) = check_token(&state, &submission, &parsed).await {
         return signed_error(error);
     }
-    match deliver(&state, &submission, parsed, &limits).await {
+    match deliver(&state, &submission, parsed, &limits, true).await {
         Ok((status, answer)) => {
             crate::chat_federation::signed_json(federation, &authenticated, status, &answer)
         }
@@ -797,9 +838,13 @@ mod tests {
         // In account-id order, whatever order the payload has.
         let mut expected = [a, b];
         expected.sort();
-        let order: Vec<Uuid> = parsed.recipients.iter().map(|r| r.user_id).collect();
+        let order: Vec<Uuid> = parsed.recipients.iter().map(|r| r.account_uuid).collect();
         assert_eq!(order, expected);
-        let first = parsed.recipients.iter().find(|r| r.user_id == a).unwrap();
+        let first = parsed
+            .recipients
+            .iter()
+            .find(|r| r.account_uuid == a)
+            .unwrap();
         assert_eq!(first.devices, vec![(1, 10), (2, 20)]);
         assert_eq!(first.key_material, [1u8; KEY_MATERIAL_LEN]);
         // What the device drains is libsignal's received message for it.

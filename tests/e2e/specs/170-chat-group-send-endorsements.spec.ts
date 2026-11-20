@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { newAccount, registerAccount } from '../fixtures/apps'
 import {
   acceptGroup,
@@ -11,7 +11,7 @@ import {
 } from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*GroupSendPassword'
-const MULTI = /\/api\/chat\/anonymous\/messages\/multi(\?|$)/
+const MULTI = /\/api\/v1\/chat\/anonymous\/messages\/multi(\?|$)/
 
 /** The multi-recipient sends `page` makes from now on, with their answers. */
 function watchMulti(page: Page): number[] {

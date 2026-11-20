@@ -22,8 +22,6 @@ pub const TWO_FACTOR_RECOVERY_CODE_V1: &[u8] = b"kutup/2fa-recovery-code/v1\0";
 
 /// `kutup-crypto/src/account_record.rs` (`COMMIT_INFO`): the key commitment
 pub const ACCOUNT_RECORD_COMMIT_V1: &[u8] = b"kutup/account-record/commit/v1\0";
-/// `kutup-crypto/src/account_record.rs` (`OBJECT_ID_INFO`): the key of hashed objects
-pub const ACCOUNT_RECORD_OBJECT_ID_V1: &[u8] = b"kutup/account-record/object-id/v1\0";
 /// `kutup-crypto/src/account_record.rs` (`KEY_INFO`)
 pub const ACCOUNT_RECORD_KEY_V1: &[u8] = b"kutup/account-record/key/v1\0";
 /// `kutup-crypto/src/account_record.rs` (`KEY_SALT`)
@@ -48,7 +46,7 @@ pub const ACCOUNT_HEAD_WRITER_V1: &[u8] = b"kutup/account-head/writer/v1\0";
 
 /// `kutup-chat-proto/src/account_identity.rs`
 pub const ACCOUNT_IDENTITY_BINDING_V1: &[u8] = b"kutup/account-identity/binding/v1\0";
-/// `kutup-crypto/src/identity.rs` (`DRIVE_HPKE_INFO`)
+/// `kutup-crypto/src/identity.rs` (`DRIVE_XWING_INFO`)
 pub const ACCOUNT_IDENTITY_DRIVE_HPKE_XWING_V1: &[u8] =
     b"kutup/account-identity/drive-hpke-xwing/v1\0";
 /// `kutup-crypto/src/identity.rs` (`DRIVE_SIGNING_INFO`)
@@ -72,12 +70,21 @@ pub const ACCOUNT_DEVICE_SESSION_V1: &[u8] = b"kutup/account/device-session/v1\0
 pub const ACCOUNT_ID_PROOF_V1: &[u8] = b"kutup/account/id-proof/v1\0";
 /// `kutup-chat-proto/src/account_identity.rs`
 pub const ACCOUNT_INCARNATION_V1: &[u8] = b"kutup/account/incarnation/v1\0";
-/// `kutup-crypto/src/chat_group.rs`
-pub const ACCOUNT_MANIFEST_V1: &[u8] = b"kutup/account/manifest/v1\0";
 /// `kutup-chat-proto/src/account_identity.rs` (`DOMAIN`)
 pub const ACCOUNT_MANIFEST_V3: &[u8] = b"kutup/account/manifest/v3\0";
-/// `kutup-crypto/src/account_rename.rs` (`DOMAIN`)
-pub const ACCOUNT_RENAME_V1: &[u8] = b"kutup/account/rename/v1\0";
+/// `kutup-crypto/src/account_rename.rs` (`DOMAIN`): v2 binds the account id
+pub const ACCOUNT_RENAME_V2: &[u8] = b"kutup/account/rename/v2\0";
+/// `kutup-chat-proto/src/account_identity.rs` (`AccountSuccessionV1`): the
+/// previous authority's signature over an identity rotation's statement.
+pub const ACCOUNT_SUCCESSION_BY_PREVIOUS_V1: &[u8] = b"kutup/account/succession/by-previous/v1\0";
+/// The same statement, signed by the new authority.
+pub const ACCOUNT_SUCCESSION_BY_NEW_V1: &[u8] = b"kutup/account/succession/by-new/v1\0";
+
+// --- calendar ----------------------------------------------------------------
+
+/// `kutup-crypto/src/named_share.rs` (`CALENDAR_HPKE_INFO`): a calendar's
+/// passphrase to a member's account key
+pub const CALENDAR_SHARE_HPKE_V1: &[u8] = b"kutup/calendar/share-hpke/v1\0";
 
 // --- calls -------------------------------------------------------------------
 
@@ -85,15 +92,6 @@ pub const ACCOUNT_RENAME_V1: &[u8] = b"kutup/account/rename/v1\0";
 /// the pseudonym a relay credential names instead of the account (was
 /// `kutup-turn:` hashed with the secret)
 pub const CALLS_TURN_PSEUDONYM_V1: &[u8] = b"kutup/calls/turn-pseudonym/v1\0";
-
-// --- chat-attachment-ledger --------------------------------------------------
-
-/// `frontend/packages/chat-core/src/attachment-ledger.ts` (`LOCAL_PIN_DOMAIN`, TypeScript)
-pub const CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1: &[u8] =
-    b"kutup/chat-attachment-ledger/local-pin/v1\0";
-/// `frontend/packages/chat-core/src/attachment-ledger.ts` (operation ids, TypeScript)
-pub const CHAT_ATTACHMENT_LEDGER_OPERATION_V1: &[u8] =
-    b"kutup/chat-attachment-ledger/operation/v1\0";
 
 // --- chat-backup-media -------------------------------------------------------
 
@@ -198,8 +196,6 @@ pub const CHAT_MEDIA_DELIVERY_OPERATION_V1: &[u8] = b"kutup/chat-media/delivery-
 /// `kutup-server/src/chat_media_federation.rs`
 pub const CHAT_MEDIA_FEDERATION_ORIGIN_RATE_V1: &[u8] =
     b"kutup/chat-media/federation-origin-rate/v1\0";
-/// `kutup-crypto/src/chat_media.rs` (`OBJECT_KEY_SALT`)
-pub const CHAT_MEDIA_OBJECT_KEY_V1: &[u8] = b"kutup/chat-media/object-key/v1\0";
 /// `kutup-server/src/handlers/chat_media.rs`
 pub const CHAT_MEDIA_RECIPIENT_RATE_V1: &[u8] = b"kutup/chat-media/recipient-rate/v1\0";
 
@@ -213,8 +209,6 @@ pub const CHAT_STORE_INDEX_V1: &[u8] = b"kutup/chat-store/index/v1\0";
 pub const CHAT_STORE_RECORD_V1: &[u8] = b"kutup/chat-store/record/v1\0";
 /// `kutup-crypto/src/chat_store.rs` (`VALUE_INFO`)
 pub const CHAT_STORE_VALUE_V1: &[u8] = b"kutup/chat-store/value/v1\0";
-/// `kutup-crypto/src/chat_store.rs` (`WRAP_INFO`)
-pub const CHAT_STORE_WRAP_V1: &[u8] = b"kutup/chat-store/wrap/v1\0";
 
 // --- chat --------------------------------------------------------------------
 
@@ -244,16 +238,6 @@ pub const CONTACT_CONTROL_V1: &[u8] = b"kutup/contact-control/v1\0";
 /// `kutup-crypto/src/chat_group.rs`
 pub const CONTACT_SUMMARY_V2: &[u8] = b"kutup/contact-summary/v2\0";
 
-// --- device-registration -----------------------------------------------------
-
-/// `kutup-crypto/src/chat_group.rs`
-pub const DEVICE_REGISTRATION_V1: &[u8] = b"kutup/device-registration/v1\0";
-
-// --- device-revocation -------------------------------------------------------
-
-/// `kutup-crypto/src/chat_group.rs`
-pub const DEVICE_REVOCATION_V1: &[u8] = b"kutup/device-revocation/v1\0";
-
 // --- dkim-key ----------------------------------------------------------------
 
 /// `kutup-crypto/src/dkim_key.rs` (`SEAL_DOMAIN`)
@@ -264,8 +248,6 @@ pub const DKIM_KEY_V1: &[u8] = b"kutup/dkim-key/v1\0";
 /// `kutup-crypto/src/drive_envelope.rs` (`KEY_DERIVATION_SALT`)
 pub const DRIVE_ENVELOPE_KEY_V1: &[u8] = b"kutup/drive-envelope/key/v1\0";
 /// `kutup-crypto/src/drive_envelope.rs` (`THUMBNAIL_BINDING_LABEL`)
-pub const DRIVE_ENVELOPE_THUMBNAIL_V1: &[u8] = b"kutup/drive-envelope/thumbnail/v1\0";
-/// `kutup-crypto/src/drive_envelope.rs` (`THUMBNAIL_REVISION_BINDING_LABEL`)
 pub const DRIVE_ENVELOPE_THUMBNAIL_V2: &[u8] = b"kutup/drive-envelope/thumbnail/v2\0";
 /// `kutup-crypto/src/drive_envelope.rs` (`WHITEBOARD_ASSET_BINDING_LABEL`)
 pub const DRIVE_ENVELOPE_WHITEBOARD_ASSET_V2: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v2\0";
@@ -279,8 +261,6 @@ pub const DRIVE_OBJECT_BLOCKS_MANIFEST_KEY_V1: &[u8] =
     b"kutup/drive-object/blocks/manifest-key/v1\0";
 /// `kutup-crypto/src/drive_blocks.rs`
 pub const DRIVE_OBJECT_BLOCKS_NONCE_KEY_V1: &[u8] = b"kutup/drive-object/blocks/nonce-key/v1\0";
-/// `kutup-crypto/src/drive_object.rs` (`FILE_BLOB_KEY_SALT`)
-pub const DRIVE_OBJECT_FILE_BLOB_KEY_V1: &[u8] = b"kutup/drive-object/file-blob-key/v1\0";
 
 // --- drive -------------------------------------------------------------------
 
@@ -439,12 +419,8 @@ pub const ORG_MEMBER_ESCROW_V1: &[u8] = b"kutup/org/member-escrow/v1\0";
 
 // --- pass-vault-secret -------------------------------------------------------
 
-/// `kutup-crypto/src/pass_vault.rs`
-pub const PASS_VAULT_SECRET_V1: &[u8] = b"kutup/pass-vault-secret/v1\0";
 /// `kutup-crypto/src/pass_vault.rs` (`DOMAIN`)
 pub const PASS_VAULT_SECRET_V2: &[u8] = b"kutup/pass-vault-secret/v2\0";
-
-// --- photos-library ----------------------------------------------------------
 
 // --- private-ciphertext-cache ------------------------------------------------
 
@@ -479,6 +455,31 @@ pub const SEALED_ORIGIN_RATE_V1: &[u8] = b"kutup/sealed-origin-rate/v1\0";
 
 /// `kutup-server/src/handlers/chat.rs`
 pub const SEALED_RECIPIENT_RATE_V1: &[u8] = b"kutup/sealed-recipient-rate/v1\0";
+
+// --- server ------------------------------------------------------------------
+
+/// `kutup-server/src/audit_log.rs` (`CHAIN_DOMAIN`)
+pub const SERVER_ADMIN_AUDIT_CHAIN_V2: &[u8] = b"kutup/server/admin-audit-chain/v2\0";
+/// `kutup-crypto/src/server_data.rs` (`SALT`)
+pub const SERVER_DATA_V1: &[u8] = b"kutup/server/data/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`KEK_INFO`)
+pub const SERVER_DATA_KEK_V1: &[u8] = b"kutup/server/data-kek/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`WRAP_AAD`)
+pub const SERVER_DATA_KEY_WRAP_V1: &[u8] = b"kutup/server/data-key-wrap/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`FIELD_KEY_INFO`)
+pub const SERVER_DATA_FIELD_KEY_V1: &[u8] = b"kutup/server/data-field-key/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`FIELD_AAD`)
+pub const SERVER_DATA_FIELD_V1: &[u8] = b"kutup/server/data-field/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`SUBJECT_INFO`)
+pub const SERVER_DESTRUCTION_SUBJECT_V1: &[u8] = b"kutup/server/destruction-subject/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`Lookup::MailThread`)
+pub const SERVER_DATA_MAIL_THREAD_V1: &[u8] = b"kutup/server/mail-thread/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`Lookup::MailSearchToken`)
+pub const SERVER_DATA_MAIL_SEARCH_TOKEN_V1: &[u8] = b"kutup/server/mail-search-token/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`Lookup::MailAutoReplySender`): a
+/// correspondent an auto-reply answered
+pub const SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1: &[u8] =
+    b"kutup/server/mail-auto-reply-sender/v1\0";
 
 // --- session-version ---------------------------------------------------------
 
@@ -535,7 +536,8 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 163] = [
+pub const ALL: [&[u8]; 165] = [
+    SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -547,15 +549,12 @@ pub const ALL: [&[u8]; 163] = [
     MAIL_FORWARDING_CODE_KEY_V1,
     MAIL_FORWARDING_STOP_V1,
     CALLS_TURN_PSEUDONYM_V1,
-    CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1,
-    CHAT_ATTACHMENT_LEDGER_OPERATION_V1,
     CHAT_MEDIA_DELIVERY_OPERATION_V1,
     PRIVATE_CIPHERTEXT_CACHE_ACCOUNT_V1,
     PRIVATE_CIPHERTEXT_CACHE_BINDING_V1,
     TWO_FACTOR_RECOVERY_CODE_V1,
     ACCOUNT_RECORD_COMMIT_V1,
     ACCOUNT_RECORD_KEY_V1,
-    ACCOUNT_RECORD_OBJECT_ID_V1,
     ACCOUNT_RECORD_V1,
     ACCOUNT_HEAD_ID_KEY_V1,
     ACCOUNT_HEAD_LOCAL_NAME_V1,
@@ -572,9 +571,10 @@ pub const ALL: [&[u8]; 163] = [
     ACCOUNT_DEVICE_SESSION_V1,
     ACCOUNT_ID_PROOF_V1,
     ACCOUNT_INCARNATION_V1,
-    ACCOUNT_MANIFEST_V1,
     ACCOUNT_MANIFEST_V3,
-    ACCOUNT_RENAME_V1,
+    ACCOUNT_SUCCESSION_BY_PREVIOUS_V1,
+    ACCOUNT_SUCCESSION_BY_NEW_V1,
+    ACCOUNT_RENAME_V2,
     CHAT_BACKUP_MEDIA_BLOCKS_BLOCK_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_MANIFEST_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_NONCE_KEY_V1,
@@ -614,12 +614,10 @@ pub const ALL: [&[u8]; 163] = [
     CHAT_MEDIA_BLOCKS_NONCE_KEY_V1,
     CHAT_MEDIA_DELIVERY_OFFER_DIGEST_V1,
     CHAT_MEDIA_FEDERATION_ORIGIN_RATE_V1,
-    CHAT_MEDIA_OBJECT_KEY_V1,
     CHAT_MEDIA_RECIPIENT_RATE_V1,
     CHAT_STORE_INDEX_V1,
     CHAT_STORE_RECORD_V1,
     CHAT_STORE_VALUE_V1,
-    CHAT_STORE_WRAP_V1,
     CHAT_CALL_LINK_V1,
     CHAT_DEVICE_CREDENTIAL_V1,
     CHAT_KEYS_CHECK_V1,
@@ -628,17 +626,13 @@ pub const ALL: [&[u8]; 163] = [
     COLLAB_FRAME_V3,
     CONTACT_CONTROL_V1,
     CONTACT_SUMMARY_V2,
-    DEVICE_REGISTRATION_V1,
-    DEVICE_REVOCATION_V1,
     DKIM_KEY_V1,
     DRIVE_ENVELOPE_KEY_V1,
-    DRIVE_ENVELOPE_THUMBNAIL_V1,
     DRIVE_ENVELOPE_THUMBNAIL_V2,
     DRIVE_ENVELOPE_WHITEBOARD_ASSET_V2,
     DRIVE_OBJECT_BLOCKS_BLOCK_KEY_V1,
     DRIVE_OBJECT_BLOCKS_MANIFEST_KEY_V1,
     DRIVE_OBJECT_BLOCKS_NONCE_KEY_V1,
-    DRIVE_OBJECT_FILE_BLOB_KEY_V1,
     DRIVE_BLOCK_MANIFEST_V1,
     DRIVE_COLLECTION_EPOCH_RECORD_HASH_V1,
     DRIVE_COLLECTION_KEY_COMMITMENT_V1,
@@ -646,6 +640,7 @@ pub const ALL: [&[u8]; 163] = [
     DRIVE_FOLDER_HASH_KEY_V1,
     DRIVE_KEY_BINDING_V2,
     DRIVE_NAMED_SHARE_HPKE_V1,
+    CALENDAR_SHARE_HPKE_V1,
     DRIVE_PROFILE_KEY_HPKE_V1,
     DRIVE_TOP_LEVEL_NAMES_V1,
     FAKE_ACCOUNT_V1,
@@ -676,13 +671,21 @@ pub const ALL: [&[u8]; 163] = [
     OPAQUE_MASTER_KEY_KEK_V1,
     OPAQUE_SETUP_V1,
     OPAQUE_V1,
-    PASS_VAULT_SECRET_V1,
     PASS_VAULT_SECRET_V2,
     PROFILE_ENVELOPE_KEY_V1,
     REGISTRATION_CODE_V1,
     SEALED_DELIVERY_CAPABILITY_V1,
     SEALED_ORIGIN_RATE_V1,
     SEALED_RECIPIENT_RATE_V1,
+    SERVER_ADMIN_AUDIT_CHAIN_V2,
+    SERVER_DATA_V1,
+    SERVER_DATA_KEK_V1,
+    SERVER_DATA_KEY_WRAP_V1,
+    SERVER_DATA_FIELD_KEY_V1,
+    SERVER_DATA_FIELD_V1,
+    SERVER_DESTRUCTION_SUBJECT_V1,
+    SERVER_DATA_MAIL_THREAD_V1,
+    SERVER_DATA_MAIL_SEARCH_TOKEN_V1,
     SESSION_VERSION_V1,
     YJS_SEED_V1,
     CHAT_PROFILE_ACCESS_V1,

@@ -1,34 +1,56 @@
-//! Bounded-memory streaming encrypt-upload / download-decrypt helpers —
-//! mirrors `internal/upload/stream.go` and `internal/download/stream.go`.
+//! Drive revisions in the block format (docs/plans/drive-block-format.md
+//! §2), as the CLI sends and reads them, with bounded memory whatever the
+//! size:
 //!
-//! Wire framing matches the frontend/server exactly: a 24-byte secretstream
-//! header followed by 5 MiB plaintext chunks, each producing `5 MiB + 17 B`
-//! ciphertext. The final chunk carries `TAG_FINAL`.
+//! ```text
+//! [header 48][block 0]…[block n−1][sealed manifest][trailer 12]
+//! ```
+//!
+//! Upload ([`BlockSource`]): any byte range of the object, sealed from the
+//! plaintext on demand, as the web's `encryptedSource.ts`. Block nonces are
+//! synthetic, so sealing the same plaintext again gives the same bytes: a
+//! range already sent (a resumed upload, from wherever the server stopped,
+//! even inside a block) is made again by sealing from block 0. The manifest's
+//! nonce is random: the tail is made once and kept by the caller before any
+//! of it is sent ([`BlockSource::take_new_tail`]).
+//!
+//! Download ([`read_object`]): the header, the trailer and the manifest by
+//! ranged reads, opened against the committed digest (the file's metadata,
+//! or the revision's sealed `RevisionContent` record), then every block in
+//! order, its hash and AEAD checked before any byte is written.
 
-use kutup_crypto::primitives::{Hasher, Suite};
+use std::collections::BTreeMap;
 use std::io::{self, ErrorKind, Read, Write};
 
-use anyhow::{bail, Result};
-
-use kutup_crypto::drive_object::{
-    self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES, FILE_BLOB_PREFIX_BYTES,
+use anyhow::{anyhow, bail, Context, Result};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use kutup_crypto::blocks::{
+    block_count, block_offset, block_plaintext_len, BlockSealer, Manifest, SignerIdentity,
+    BLOCK_OVERHEAD, BLOCK_SIZE, TRAILER_LEN,
 };
-use kutup_crypto::stream::{
-    StreamDecryptor, StreamEncryptor, ABYTES, CHUNK_SIZE, HEADER_BYTES, TAG_FINAL, TAG_MESSAGE,
+use kutup_crypto::drive_blocks::{
+    self, DriveBlobContextV2, DRIVE_BLOCKS, DRIVE_BLOCKS_HEADER_BYTES,
 };
+use kutup_crypto::file_metadata::ContentCommitmentV1;
+use kutup_crypto::primitives::{Hasher, SigningKey, Suite};
+use kutup_crypto::revision_content;
 
-/// Total ciphertext byte count for `plain_bytes`: typed Drive header +
-/// secretstream header + at least one authenticated frame.
-pub fn cipher_size(plain_bytes: i64) -> i64 {
-    let chunk = CHUNK_SIZE as i64;
-    let plain_bytes = plain_bytes.max(0);
-    let num_chunks = ((plain_bytes + chunk - 1) / chunk).max(1);
-    FILE_BLOB_PREFIX_BYTES as i64 + plain_bytes + ABYTES as i64 * num_chunks
+/// The whole object's length for `size` plaintext bytes: the tus
+/// `Upload-Length`, known before anything is sealed.
+pub fn object_len(size: u64) -> Result<i64> {
+    let len = drive_blocks::blob_len(size)?;
+    i64::try_from(len).map_err(|_| anyhow!("file too large"))
 }
 
-/// Reads into `buf` until full or EOF; returns the number of bytes read
-/// (`< buf.len()` ⇒ EOF reached). Like Go's `io.ReadFull` but tolerant of a
-/// short final read.
+/// How many bytes one PATCH carries: two sealed blocks, above S3's 5 MiB
+/// minimum for every part but the last (as the web's `PATCH_BLOCKS`).
+pub const PATCH_BYTES: u64 = 2 * (BLOCK_SIZE + BLOCK_OVERHEAD) as u64;
+
+/// How many sealed blocks stay at hand for ranges asked again.
+const KEEP_BLOCKS: u64 = 4;
+
+/// Reads into `buf` until full or EOF; the number of bytes read.
 fn read_full(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
     let mut filled = 0;
     while filled < buf.len() {
@@ -42,285 +64,520 @@ fn read_full(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
     Ok(filled)
 }
 
-fn file_blob_prefix(
-    object_header: &[u8; FILE_BLOB_HEADER_BYTES],
-    stream_header: &[u8; HEADER_BYTES],
-) -> [u8; FILE_BLOB_PREFIX_BYTES] {
-    let mut prefix = [0u8; FILE_BLOB_PREFIX_BYTES];
-    prefix[..FILE_BLOB_HEADER_BYTES].copy_from_slice(object_header);
-    prefix[FILE_BLOB_HEADER_BYTES..].copy_from_slice(stream_header);
-    prefix
-}
-
-/// Returns the number of whole ciphertext chunks a tus `Upload-Offset`
-/// represents, or `None` if the offset doesn't sit on a chunk boundary.
-/// Valid offsets are `0` (nothing sent) or `PREFIX + k·(CHUNK+ABYTES)` —
-/// the CLI ships exactly one chunk per PATCH (the first with the header
-/// prepended) and the server only advances by whole PATCH bodies.
-pub fn chunk_boundary(offset: i64) -> Option<u64> {
-    if offset == 0 {
-        return Some(0);
-    }
-    let per = (CHUNK_SIZE + ABYTES) as i64;
-    let body = offset - FILE_BLOB_PREFIX_BYTES as i64;
-    if body <= 0 || body % per != 0 {
-        return None;
-    }
-    Some((body / per) as u64)
-}
-
-/// Iterates ciphertext chunks for a tus upload. The first chunk has the 24-byte
-/// header prepended; the final chunk carries `TAG_FINAL`. Mirrors the Go
-/// `StreamEncryptor` / `NextChunk`.
-pub struct StreamUploader<R: Read> {
-    enc: StreamEncryptor,
-    prefix: Option<[u8; FILE_BLOB_PREFIX_BYTES]>,
-    /// Retained copy for persisting resume state (never consumed).
-    header_copy: [u8; HEADER_BYTES],
-    reader: R,
-    plain_total: i64,
-    plain_read: i64,
-    buf: Vec<u8>,
-    done: bool,
-    /// SHA-256 of the plaintext read so far: what is actually sealed.
-    digest: Hasher,
-}
-
-/// The file changed while it was being uploaded: what was read is not what
-/// was measured or hashed before.
+/// The file changed size while it was being uploaded.
 #[derive(Debug, thiserror::Error)]
 #[error("the file changed while it was being uploaded; run it again")]
 pub struct ChangedWhileUploading;
 
-impl<R: Read> StreamUploader<R> {
-    pub fn new(
-        reader: R,
-        file_key: &[u8],
-        plain_total: i64,
-        context: DriveFileBlobContextV1,
-    ) -> Result<Self> {
-        let object_header = drive_object::file_blob_header(context);
-        let stream_key = drive_object::derive_file_blob_key(file_key, context)?;
-        let (enc, header) = StreamEncryptor::new_with_aad(stream_key.as_slice(), &object_header)?;
-        let prefix = file_blob_prefix(&object_header, &header);
-        Ok(Self {
-            enc,
-            prefix: Some(prefix),
-            header_copy: header,
-            reader,
-            plain_total,
-            plain_read: 0,
-            buf: vec![0u8; CHUNK_SIZE],
-            done: false,
-            digest: Hasher::new(Suite::V1),
-        })
+/// The plaintext sealed is not the content the upload started with (its
+/// SHA-256 differs from the one its metadata carries): a file changed since
+/// it was hashed, or another file under the same path on resume. The upload
+/// is discarded: blocks of another file may be on the server.
+#[derive(Debug, thiserror::Error)]
+#[error("this is not the file the upload started with; it was discarded, run it again")]
+pub struct NotTheSameFile;
+
+/// A revision's tail once made: the sealed manifest and the trailer, and
+/// what the file's metadata commits to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeptTail {
+    pub bytes: Vec<u8>,
+    pub content: ContentCommitmentV1,
+}
+
+impl KeptTail {
+    /// As a resume record keeps it: the bytes and the digest, base64.
+    pub fn store(&self) -> (String, String) {
+        (
+            STANDARD.encode(&self.bytes),
+            self.content.manifest_sha256.clone(),
+        )
     }
 
-    /// Resumes an interrupted upload at ciphertext offset `skip_cipher_bytes`
-    /// (must be a [`chunk_boundary`]). Rebuilds the deterministic encryptor
-    /// from the stream's original `header`, replays the first `k` plaintext
-    /// chunks discarding their (byte-identical) ciphertext, and positions the
-    /// reader so [`Self::next_chunk`] yields chunk `k` onward exactly as the
-    /// original run would have.
-    pub fn resume(
-        mut reader: R,
-        key: &[u8],
-        plain_total: i64,
-        header: &[u8; HEADER_BYTES],
-        skip_cipher_bytes: i64,
-        context: DriveFileBlobContextV1,
-    ) -> Result<Self> {
-        let Some(k) = chunk_boundary(skip_cipher_bytes) else {
-            bail!("offset {skip_cipher_bytes} is not a chunk boundary");
+    pub fn load(bytes: &str, manifest_sha256: &str, revision_id: &str) -> Result<Self> {
+        let content = ContentCommitmentV1 {
+            revision_id: revision_id.to_string(),
+            manifest_sha256: manifest_sha256.to_string(),
         };
-        let object_header = drive_object::file_blob_header(context);
-        let stream_key = drive_object::derive_file_blob_key(key, context)?;
-        let mut enc =
-            StreamEncryptor::resume_with_aad(stream_key.as_slice(), header, &object_header)?;
-        let mut buf = vec![0u8; CHUNK_SIZE];
-        let mut replayed = 0i64;
-        let mut digest = Hasher::new(Suite::V1);
-        for _ in 0..k {
-            let to_read = (plain_total - replayed).min(CHUNK_SIZE as i64) as usize;
-            if to_read == 0 {
-                bail!("resume offset extends past the plaintext");
-            }
-            let n = read_full(&mut reader, &mut buf[..to_read])?;
-            if n < to_read {
-                bail!("file is shorter than when the upload started");
-            }
-            // Already-sent chunks are never FINAL — an upload with its FINAL
-            // chunk received would have completed server-side.
-            let _ = enc.push(&buf[..n], TAG_MESSAGE)?;
-            digest.update(&buf[..n]);
-            replayed += n as i64;
-        }
-        if k > 0 && replayed >= plain_total {
-            bail!("resume offset covers the whole file (upload should have completed)");
-        }
+        content.validate()?;
         Ok(Self {
-            enc,
-            prefix: if k == 0 {
-                Some(file_blob_prefix(&object_header, header))
-            } else {
-                None
-            },
-            header_copy: *header,
-            reader,
-            plain_total,
-            plain_read: replayed,
-            buf,
-            done: false,
-            digest,
+            bytes: STANDARD.decode(bytes).context("kept tail is not base64")?,
+            content,
         })
-    }
-
-    /// The stream's 24-byte header (persisted for resume).
-    pub fn header_bytes(&self) -> [u8; HEADER_BYTES] {
-        self.header_copy
-    }
-
-    /// Plaintext bytes consumed so far (for progress reporting).
-    pub fn plain_read(&self) -> i64 {
-        self.plain_read
-    }
-
-    /// Whether the last chunk has been returned.
-    pub fn finished(&self) -> bool {
-        self.done
-    }
-
-    /// Checks, once the last chunk is out of [`Self::next_chunk`] and before
-    /// it is sent, that the bytes sealed are the ones hashed beforehand
-    /// (`expected`, the SHA-256 the metadata carries): a change of the same
-    /// size between the two reads is [`ChangedWhileUploading`].
-    pub fn check_sha256(&self, expected: &[u8; 32]) -> Result<()> {
-        let sealed: [u8; 32] = self.digest.clone().finish().into();
-        if &sealed != expected {
-            return Err(ChangedWhileUploading.into());
-        }
-        Ok(())
-    }
-
-    /// At the measured end: a byte more means the file grew while read.
-    fn check_no_more(&mut self) -> Result<()> {
-        let mut probe = [0u8; 1];
-        if read_full(&mut self.reader, &mut probe)? > 0 {
-            return Err(ChangedWhileUploading.into());
-        }
-        Ok(())
-    }
-
-    /// Returns the next ciphertext chunk to ship, or `None` at end of stream.
-    pub fn next_chunk(&mut self) -> Result<Option<Vec<u8>>> {
-        if self.done {
-            return Ok(None);
-        }
-        let remaining = self.plain_total - self.plain_read;
-
-        // Empty files still emit an authenticated FINAL frame so the typed
-        // object header is never accepted without a MAC.
-        if remaining <= 0 {
-            self.done = true;
-            let Some(prefix) = self.prefix.take() else {
-                return Ok(None);
-            };
-            self.check_no_more()?;
-            let final_frame = self.enc.push(&[], TAG_FINAL)?;
-            let mut output = Vec::with_capacity(prefix.len() + final_frame.len());
-            output.extend_from_slice(&prefix);
-            output.extend_from_slice(&final_frame);
-            return Ok(Some(output));
-        }
-
-        let to_read = remaining.min(CHUNK_SIZE as i64) as usize;
-        let n = read_full(&mut self.reader, &mut self.buf[..to_read])?;
-        // Shorter than when it was measured: the file changed while it was
-        // read. Stop rather than send empty chunks for ever.
-        if n < to_read {
-            return Err(ChangedWhileUploading.into());
-        }
-        self.plain_read += n as i64;
-        self.digest.update(&self.buf[..n]);
-
-        let is_last = self.plain_read == self.plain_total;
-        // Longer than measured: it grew while read; cutting it short would
-        // store a different file.
-        if is_last {
-            self.check_no_more()?;
-        }
-        let tag = if is_last { TAG_FINAL } else { TAG_MESSAGE };
-        let cipher = self.enc.push(&self.buf[..n], tag)?;
-
-        let out = match self.prefix.take() {
-            Some(prefix) => {
-                let mut v = Vec::with_capacity(prefix.len() + cipher.len());
-                v.extend_from_slice(&prefix);
-                v.extend_from_slice(&cipher);
-                v
-            }
-            None => cipher,
-        };
-        if is_last {
-            self.done = true;
-        }
-        Ok(Some(out))
     }
 }
 
-/// Reads the encrypted stream from `src`, decrypts each 5 MiB + 17 B chunk, and
-/// writes plaintext to `dst`. Returns total plaintext bytes written. Memory
-/// stays bounded (~10 MiB) regardless of size. Mirrors `download.Stream`.
-pub fn stream_download(
-    mut src: impl Read,
-    file_key: &[u8],
-    context: DriveFileBlobContextV1,
+/// Who signs the manifest: the uploader's Drive signing key and what the
+/// manifest names (`drive_signer::DriveIdentity::signer`).
+pub type UploadSigner<'a> = (&'a SigningKey, SignerIdentity);
+
+struct Sealing<R> {
+    sealer: BlockSealer<'static>,
+    reader: R,
+    hasher: Hasher,
+}
+
+/// A revision's object, made from its plaintext on demand: any byte range.
+pub struct BlockSource<'a, R: Read> {
+    open: Box<dyn Fn() -> Result<R> + 'a>,
+    file_key: [u8; 32],
+    context: DriveBlobContextV2,
+    signer: UploadSigner<'a>,
+    size: u64,
+    count: u64,
+    header: [u8; DRIVE_BLOCKS_HEADER_BYTES],
+    tail_start: u64,
+    total: u64,
+    sealing: Option<Sealing<R>>,
+    /// The block the sealer seals next.
+    next: u64,
+    kept: BTreeMap<u64, Vec<u8>>,
+    tail: Option<KeptTail>,
+    new_tail: bool,
+    /// The plaintext's SHA-256 the metadata carries: the last block is not
+    /// handed out unless the bytes sealed hash to it.
+    sha256: [u8; 32],
+    wrong: bool,
+}
+
+impl<'a, R: Read> BlockSource<'a, R> {
+    /// `open` gives the plaintext from its first byte, each time it is
+    /// called; `tail` is the one made before (a resumed upload's).
+    pub fn new(
+        open: impl Fn() -> Result<R> + 'a,
+        file_key: &[u8; 32],
+        context: DriveBlobContextV2,
+        signer: UploadSigner<'a>,
+        size: u64,
+        sha256: [u8; 32],
+        tail: Option<KeptTail>,
+    ) -> Result<Self> {
+        let count = block_count(size)?;
+        let total = drive_blocks::blob_len(size)?;
+        let last = count - 1;
+        let tail_start = block_offset(DRIVE_BLOCKS_HEADER_BYTES, last)
+            + block_plaintext_len(size, last)? as u64
+            + BLOCK_OVERHEAD as u64;
+        if let Some(kept) = &tail {
+            if kept.bytes.len() as u64 != total - tail_start {
+                bail!("the kept tail is for another object");
+            }
+            let revision = uuid::Uuid::from_bytes(context.revision_id)
+                .hyphenated()
+                .to_string();
+            if kept.content.revision_id != revision {
+                bail!("the kept tail is for another revision");
+            }
+        }
+        Ok(Self {
+            open: Box::new(open),
+            file_key: *file_key,
+            context,
+            signer,
+            size,
+            count,
+            header: drive_blocks::header(context),
+            tail_start,
+            total,
+            sealing: None,
+            next: 0,
+            kept: BTreeMap::new(),
+            tail,
+            new_tail: false,
+            sha256,
+            wrong: false,
+        })
+    }
+
+    /// The object's length.
+    pub fn len(&self) -> u64 {
+        self.total
+    }
+
+    /// What the metadata commits to, once the tail is made.
+    pub fn content(&self) -> Option<&ContentCommitmentV1> {
+        self.tail.as_ref().map(|tail| &tail.content)
+    }
+
+    /// The tail, once, right after it was made: keep it before sending any
+    /// of it (its manifest's nonce is random, it can't be made again).
+    pub fn take_new_tail(&mut self) -> Option<&KeptTail> {
+        if !std::mem::take(&mut self.new_tail) {
+            return None;
+        }
+        self.tail.as_ref()
+    }
+
+    /// Roughly how much plaintext lies before `offset` (for progress).
+    pub fn plain_before(&self, offset: u64) -> u64 {
+        let header = DRIVE_BLOCKS_HEADER_BYTES as u64;
+        if offset <= header {
+            return 0;
+        }
+        let stride = (BLOCK_SIZE + BLOCK_OVERHEAD) as u64;
+        let sealed = offset - header;
+        let blocks = sealed.div_ceil(stride);
+        sealed
+            .saturating_sub(blocks * BLOCK_OVERHEAD as u64)
+            .min(self.size)
+    }
+
+    /// The object's bytes in `[start, end)` (cut at its end).
+    pub fn bytes(&mut self, start: u64, end: u64) -> Result<Vec<u8>> {
+        if self.wrong {
+            return Err(NotTheSameFile.into());
+        }
+        let stop = end.min(self.total);
+        let mut out = Vec::with_capacity(stop.saturating_sub(start) as usize);
+        let mut at = start;
+        let header = DRIVE_BLOCKS_HEADER_BYTES as u64;
+        let stride = (BLOCK_SIZE + BLOCK_OVERHEAD) as u64;
+        while at < stop {
+            let (piece, from): (&[u8], u64) = if at < header {
+                (&self.header[..], 0)
+            } else if at >= self.tail_start {
+                self.sealed_tail()?;
+                let tail = self.tail.as_ref().expect("the tail was made");
+                (&tail.bytes[..], self.tail_start)
+            } else {
+                let index = ((at - header) / stride).min(self.count - 1);
+                self.block(index)?;
+                let block = self.kept.get(&index).expect("the block was sealed");
+                (&block[..], block_offset(DRIVE_BLOCKS_HEADER_BYTES, index))
+            };
+            let within = (at - from) as usize;
+            let take = (piece.len() - within).min((stop - at) as usize);
+            if take == 0 {
+                bail!("a sealed piece is shorter than its place in the object");
+            }
+            out.extend_from_slice(&piece[within..within + take]);
+            at += take as u64;
+        }
+        Ok(out)
+    }
+
+    fn block(&mut self, index: u64) -> Result<()> {
+        if self.kept.contains_key(&index) {
+            return Ok(());
+        }
+        self.seal_up_to(index)
+    }
+
+    fn restart(&mut self) -> Result<()> {
+        self.sealing = Some(Sealing {
+            sealer: drive_blocks::sealer(&self.file_key, self.context, self.size)?,
+            reader: (self.open)()?,
+            hasher: Hasher::new(Suite::V1),
+        });
+        self.next = 0;
+        Ok(())
+    }
+
+    /// Seals on to block `index`, from the start again when it is behind.
+    fn seal_up_to(&mut self, index: u64) -> Result<()> {
+        if self.sealing.is_none() || self.next > index {
+            self.restart()?;
+        }
+        while self.next <= index {
+            let at = self.next;
+            let len = block_plaintext_len(self.size, at)?;
+            let sealing = self.sealing.as_mut().expect("sealing");
+            let mut plain = vec![0u8; len];
+            if read_full(&mut sealing.reader, &mut plain)? < len {
+                return Err(ChangedWhileUploading.into());
+            }
+            sealing.hasher.update(&plain);
+            let sealed = sealing.sealer.seal_next(&plain)?;
+            if at + 1 == self.count {
+                // Every byte was read: no more, and the content the metadata
+                // names.
+                let mut probe = [0u8; 1];
+                if read_full(&mut sealing.reader, &mut probe)? > 0 {
+                    return Err(ChangedWhileUploading.into());
+                }
+                let digest: [u8; 32] = sealing.hasher.clone().finish().into();
+                if digest != self.sha256 {
+                    self.wrong = true;
+                    return Err(NotTheSameFile.into());
+                }
+            }
+            self.kept.insert(at, sealed);
+            if at >= KEEP_BLOCKS {
+                self.kept.remove(&(at - KEEP_BLOCKS));
+            }
+            self.next = at + 1;
+        }
+        Ok(())
+    }
+
+    /// The tail: kept, or made once every block is sealed by one sealer.
+    fn sealed_tail(&mut self) -> Result<()> {
+        if self.tail.is_some() {
+            return Ok(());
+        }
+        if self.next != self.count {
+            self.seal_up_to(self.count - 1)?;
+        }
+        let sealing = self
+            .sealing
+            .take()
+            .ok_or_else(|| anyhow!("the revision is not sealed to its end"))?;
+        let made = sealing.sealer.finish(Some(self.signer))?;
+        if made.bytes.len() as u64 != self.total - self.tail_start {
+            bail!("the tail is not the length the layout gives");
+        }
+        self.tail = Some(KeptTail {
+            bytes: made.bytes,
+            content: ContentCommitmentV1::new(self.context.revision_id, made.manifest_sha256),
+        });
+        self.new_tail = true;
+        Ok(())
+    }
+}
+
+/// What a revision is sealed as, for an upload or save of a whole buffer:
+/// the object and what its metadata and record commit to.
+pub struct SealedRevision {
+    pub bytes: Vec<u8>,
+    pub content: ContentCommitmentV1,
+    /// The revision's `RevisionContent` envelope (base64), sent with it.
+    pub revision_content_envelope: String,
+}
+
+/// Seals a whole buffer as revision `revision_id` of `file_id` under the
+/// file key of `generation`, signed by the uploader.
+pub fn seal_revision(
+    plaintext: &[u8],
+    file_key: &[u8; 32],
+    file_id: &str,
+    revision_id: &str,
+    generation: u32,
+    signer: UploadSigner<'_>,
+) -> Result<SealedRevision> {
+    let context = DriveBlobContextV2::new(file_id, revision_id, generation)?;
+    let sealed = drive_blocks::seal_file(plaintext, file_key, context, signer.0, signer.1)?;
+    let content = ContentCommitmentV1::new(context.revision_id, sealed.manifest_sha256);
+    let revision_content_envelope = seal_revision_content(
+        file_key,
+        file_id,
+        generation,
+        &content,
+        plaintext.len() as u64,
+    )?;
+    Ok(SealedRevision {
+        bytes: sealed.bytes,
+        content,
+        revision_content_envelope,
+    })
+}
+
+/// A revision's sealed content record (base64): its id, its manifest's
+/// digest and its size, under the file key of the generation that sealed it.
+pub fn seal_revision_content(
+    file_key: &[u8; 32],
+    file_id: &str,
+    generation: u32,
+    content: &ContentCommitmentV1,
+    size: u64,
+) -> Result<String> {
+    let record = revision_content::RevisionContentV1 {
+        revision_id: content.revision_id.clone(),
+        manifest_sha256: content.manifest_sha256.clone(),
+        size,
+    };
+    Ok(STANDARD.encode(revision_content::seal_revision_content(
+        &record, file_key, file_id, generation,
+    )?))
+}
+
+// ------------------------------------------------------------------ reading
+
+/// One byte range of an object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ByteRange {
+    /// `bytes=a-b`, inclusive.
+    Span(u64, u64),
+}
+
+/// What a ranged read answered: the bytes, the whole object's length, and
+/// what the response names (`x-kutup-revision`, `x-kutup-revision-content`,
+/// `x-kutup-version`).
+#[derive(Clone, Debug, Default)]
+pub struct Ranged {
+    pub bytes: Vec<u8>,
+    pub total: u64,
+    pub revision: Option<String>,
+    pub revision_content: Option<String>,
+    pub version: Option<String>,
+}
+
+/// What the object must be to open.
+#[derive(Clone, Debug)]
+pub enum Expect {
+    /// The file's current content: what its metadata commits to, and its
+    /// size. A record served with it must agree.
+    Current {
+        content: ContentCommitmentV1,
+        size: u64,
+    },
+    /// Any other revision (a version, the original, a saved state): its id
+    /// and its sealed record, from a listing, or (`None`) from the response,
+    /// whose revision must then be this one.
+    Revision {
+        revision_id: String,
+        envelope: Option<String>,
+    },
+}
+
+/// A revision read: its plaintext size, its manifest (for the signer
+/// check), the revision and the version the response named.
+pub struct Opened {
+    pub size: u64,
+    pub manifest: Manifest,
+    pub revision_id: String,
+    pub version: Option<String>,
+}
+
+fn committed(
+    file_key: &[u8; 32],
+    file_id: &str,
+    generation: u32,
+    expect: &Expect,
+    first: &Ranged,
+) -> Result<(ContentCommitmentV1, u64)> {
+    match expect {
+        Expect::Current { content, size } => {
+            if let Some(envelope) = &first.revision_content {
+                if first
+                    .revision
+                    .as_deref()
+                    .is_some_and(|r| r != content.revision_id)
+                {
+                    bail!("the server served another revision than the metadata commits to");
+                }
+                let opened = revision_content::open_revision_content(
+                    &STANDARD
+                        .decode(envelope)
+                        .context("revision record is not base64")?,
+                    file_key,
+                    file_id,
+                    &content.revision_id,
+                    generation,
+                )?;
+                if opened.manifest_sha256 != content.manifest_sha256 || opened.size != *size {
+                    bail!("the revision's record disagrees with the file's metadata");
+                }
+            }
+            Ok((content.clone(), *size))
+        }
+        Expect::Revision {
+            revision_id,
+            envelope,
+        } => {
+            if first.revision.as_deref().is_some_and(|r| r != revision_id) {
+                bail!("the server served another revision than the one asked for");
+            }
+            let envelope = envelope
+                .as_ref()
+                .or(first.revision_content.as_ref())
+                .ok_or_else(|| anyhow!("this revision has no committed content"))?;
+            let opened = revision_content::open_revision_content(
+                &STANDARD
+                    .decode(envelope)
+                    .context("revision record is not base64")?,
+                file_key,
+                file_id,
+                revision_id,
+                generation,
+            )?;
+            Ok((opened.commitment(), opened.size))
+        }
+    }
+}
+
+/// Reads `[start, start + len)`, in as many answers as the server cuts it
+/// into.
+fn fetch_exact(
+    fetch: &mut impl FnMut(ByteRange) -> Result<Ranged>,
+    start: u64,
+    len: u64,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(len as usize);
+    while (out.len() as u64) < len {
+        let at = start + out.len() as u64;
+        let got = fetch(ByteRange::Span(at, start + len - 1))?;
+        if got.bytes.is_empty() || got.bytes.len() as u64 > len - out.len() as u64 {
+            bail!("the server answered another range than asked");
+        }
+        out.extend_from_slice(&got.bytes);
+    }
+    Ok(out)
+}
+
+/// Reads revision `expect` of `file_id`, sealed under `file_key` of
+/// `generation`, writing its plaintext to `dst` block by block, each
+/// checked first; `fetch` makes one ranged read.
+pub fn read_object(
+    mut fetch: impl FnMut(ByteRange) -> Result<Ranged>,
+    file_key: &[u8; 32],
+    file_id: &str,
+    generation: u32,
+    expect: &Expect,
     dst: &mut impl Write,
-    mut on_progress: impl FnMut(i64),
-) -> Result<i64> {
-    let mut object_header = [0u8; FILE_BLOB_HEADER_BYTES];
-    if read_full(&mut src, &mut object_header)? < FILE_BLOB_HEADER_BYTES {
-        bail!("Drive file-blob header truncated");
+    mut on_progress: impl FnMut(u64),
+) -> Result<Opened> {
+    let header_len = DRIVE_BLOCKS_HEADER_BYTES as u64;
+    let first = fetch(ByteRange::Span(0, header_len - 1))?;
+    if first.bytes.len() as u64 != header_len {
+        bail!("Drive blob header truncated");
     }
-    drive_object::validate_file_blob_header(&object_header, context)?;
-    let mut header = [0u8; HEADER_BYTES];
-    if read_full(&mut src, &mut header)? < HEADER_BYTES {
-        bail!("stream header truncated");
+    let (content, size) = committed(file_key, file_id, generation, expect, &first)?;
+    let context = DriveBlobContextV2::new(file_id, &content.revision_id, generation)?;
+    drive_blocks::validate_header(&first.bytes, context)?;
+    let total = first.total;
+    if total < header_len + TRAILER_LEN as u64 {
+        bail!("Drive blob too short");
     }
-    let stream_key = drive_object::derive_file_blob_key(file_key, context)?;
-    let mut dec = StreamDecryptor::new_with_aad(stream_key.as_slice(), &header, &object_header)?;
-
-    let mut buf = vec![0u8; CHUNK_SIZE + ABYTES];
-    let mut plain_written = 0i64;
-    loop {
-        let n = read_full(&mut src, &mut buf)?;
-        let at_eof = n < buf.len();
-        if n == 0 {
-            bail!("stream cut before FINAL chunk");
-        }
-        let (plain, tag) = dec.pull(&buf[..n])?;
+    let trailer = fetch_exact(&mut fetch, total - TRAILER_LEN as u64, TRAILER_LEN as u64)?;
+    let manifest_len = DRIVE_BLOCKS.parse_trailer(&trailer)? as u64;
+    let manifest_end = total - TRAILER_LEN as u64;
+    let manifest_start = manifest_end
+        .checked_sub(manifest_len)
+        .filter(|start| *start >= header_len)
+        .ok_or_else(|| anyhow!("Drive blob manifest does not fit"))?;
+    let sealed_manifest = fetch_exact(&mut fetch, manifest_start, manifest_len)?;
+    let reader = drive_blocks::reader(file_key, context, &sealed_manifest, &content, size)?;
+    if reader.object_len()? != total {
+        bail!("the Drive blob is not the length its manifest gives");
+    }
+    let mut written = 0u64;
+    for index in 0..reader.manifest().count {
+        let start = block_offset(DRIVE_BLOCKS_HEADER_BYTES, index);
+        let len = block_plaintext_len(size, index)? as u64 + BLOCK_OVERHEAD as u64;
+        let block = fetch_exact(&mut fetch, start, len)?;
+        let plain = reader.open_block(index, &block)?;
         dst.write_all(&plain)?;
-        plain_written += plain.len() as i64;
-        on_progress(plain_written);
+        written += plain.len() as u64;
+        on_progress(written);
+    }
+    Ok(Opened {
+        size,
+        manifest: reader.manifest().clone(),
+        revision_id: content.revision_id,
+        version: first.version,
+    })
+}
 
-        let is_final = tag == TAG_FINAL;
-        if is_final {
-            if at_eof {
-                return Ok(plain_written);
-            }
-            // A plaintext that is an exact multiple of CHUNK_SIZE produces a
-            // full-size FINAL chunk, so the read above fills the buffer
-            // completely and `at_eof` can't tell — probe for the true EOF
-            // before declaring trailing garbage.
-            let mut probe = [0u8; 1];
-            if read_full(&mut src, &mut probe)? == 0 {
-                return Ok(plain_written);
-            }
-            bail!("FINAL chunk seen but bytes remain on wire");
-        }
-        if at_eof {
-            bail!("stream cut before FINAL chunk");
-        }
+/// An object held whole in memory, read as ranges (tests, and a server that
+/// answered without one).
+pub fn slice_whole(object: &[u8], range: ByteRange) -> Ranged {
+    let total = object.len() as u64;
+    let ByteRange::Span(a, b) = range;
+    let (start, end) = (a.min(total), (b + 1).min(total));
+    Ranged {
+        bytes: object[start as usize..end.max(start) as usize].to_vec(),
+        total,
+        ..Default::default()
     }
 }
 
@@ -328,173 +585,289 @@ pub fn stream_download(
 mod tests {
     use super::*;
 
-    fn context() -> DriveFileBlobContextV1 {
-        DriveFileBlobContextV1::new("11111111-1111-4111-8111-111111111111", 3).unwrap()
+    const FILE: &str = "11111111-1111-4111-8111-111111111111";
+    const REVISION: &str = "22222222-2222-4222-8222-222222222222";
+    const KEY: [u8; 32] = [9; 32];
+
+    fn signing() -> SigningKey {
+        SigningKey::from_seed(Suite::V1, &[4; 32])
     }
 
-    #[test]
-    fn upload_download_roundtrip() {
-        let key = [9u8; 32];
-        // Spans two chunks to exercise framing.
-        let plain: Vec<u8> = (0..CHUNK_SIZE + 1234).map(|i| (i % 251) as u8).collect();
-
-        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64, context()).unwrap();
-        let mut wire = Vec::new();
-        while let Some(chunk) = up.next_chunk().unwrap() {
-            wire.extend_from_slice(&chunk);
-        }
-        assert_eq!(wire.len() as i64, cipher_size(plain.len() as i64));
-
-        let mut out = Vec::new();
-        let n = stream_download(&wire[..], &key, context(), &mut out, |_| {}).unwrap();
-        assert_eq!(n, plain.len() as i64);
-        assert_eq!(out, plain);
-    }
-
-    // A file shorter than measured (it changed while read) stops the
-    // upload instead of sending empty chunks for ever.
-    #[test]
-    fn a_file_that_shrinks_stops_the_upload() {
-        let plain = [1u8; 100];
-        let mut up = StreamUploader::new(&plain[..], &[2u8; 32], 200, context()).unwrap();
-        let error = up.next_chunk().unwrap_err();
-        assert!(error.to_string().contains("changed"), "{error}");
-    }
-
-    // A file longer than measured (it grew while read) is never cut short.
-    #[test]
-    fn a_file_that_grows_stops_the_upload() {
-        let plain = [1u8; 100];
-        let mut up = StreamUploader::new(&plain[..], &[2u8; 32], 60, context()).unwrap();
-        let error = up.next_chunk().unwrap_err();
-        assert!(error.is::<ChangedWhileUploading>(), "{error}");
-    }
-
-    // Exact-multiple-of-CHUNK_SIZE plaintexts produce a full-size FINAL
-    // chunk; the download loop must recognize EOF via the probe read.
-    #[test]
-    fn exact_chunk_multiple_roundtrip() {
-        let key = [4u8; 32];
-        let plain: Vec<u8> = (0..2 * CHUNK_SIZE).map(|i| (i % 253) as u8).collect();
-        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64, context()).unwrap();
-        let mut wire = Vec::new();
-        while let Some(c) = up.next_chunk().unwrap() {
-            wire.extend_from_slice(&c);
-        }
-        assert_eq!(wire.len() as i64, cipher_size(plain.len() as i64));
-        let mut out = Vec::new();
-        let n = stream_download(&wire[..], &key, context(), &mut out, |_| {}).unwrap();
-        assert_eq!(n, plain.len() as i64);
-        assert_eq!(out, plain);
-    }
-
-    #[test]
-    fn trailing_garbage_still_rejected() {
-        let key = [4u8; 32];
-        let plain = vec![7u8; CHUNK_SIZE]; // exact single chunk
-        let mut up = StreamUploader::new(&plain[..], &key, plain.len() as i64, context()).unwrap();
-        let mut wire = Vec::new();
-        while let Some(c) = up.next_chunk().unwrap() {
-            wire.extend_from_slice(&c);
-        }
-        wire.push(0xAA); // junk after the FINAL chunk
-        let mut out = Vec::new();
-        let err = stream_download(&wire[..], &key, context(), &mut out, |_| {}).unwrap_err();
-        assert!(err.to_string().contains("bytes remain"), "{err}");
-    }
-
-    #[test]
-    fn chunk_boundaries() {
-        let per = (CHUNK_SIZE + ABYTES) as i64;
-        let h = FILE_BLOB_PREFIX_BYTES as i64;
-        assert_eq!(chunk_boundary(0), Some(0));
-        assert_eq!(chunk_boundary(h + per), Some(1));
-        assert_eq!(chunk_boundary(h + 3 * per), Some(3));
-        assert_eq!(chunk_boundary(h), None); // header alone is not a resumable point
-        assert_eq!(chunk_boundary(h + per - 1), None);
-        assert_eq!(chunk_boundary(h + per + 1), None);
-        assert_eq!(chunk_boundary(-5), None);
-    }
-
-    // Interrupt after k chunks, resume, and the concatenated wire must be
-    // byte-identical to an uninterrupted run (same key + header).
-    #[test]
-    fn resumed_wire_equals_uninterrupted() {
-        let key = [5u8; 32];
-        let plain: Vec<u8> = (0..2 * CHUNK_SIZE + 777).map(|i| (i % 249) as u8).collect();
-        let total = plain.len() as i64;
-
-        let mut full_up = StreamUploader::new(&plain[..], &key, total, context()).unwrap();
-        let header = full_up.header_bytes();
-        let mut full_wire = Vec::new();
-        while let Some(c) = full_up.next_chunk().unwrap() {
-            full_wire.extend_from_slice(&c);
-        }
-
-        // "Send" only the first PATCH (header + chunk 0), then resume.
-        let mut first =
-            StreamUploader::resume(&plain[..], &key, total, &header, 0, context()).unwrap();
-        let mut sent = first.next_chunk().unwrap().unwrap();
-        let offset = sent.len() as i64;
-        assert_eq!(chunk_boundary(offset), Some(1));
-
-        let mut resumed =
-            StreamUploader::resume(&plain[..], &key, total, &header, offset, context()).unwrap();
-        assert_eq!(resumed.plain_read(), CHUNK_SIZE as i64);
-        while let Some(c) = resumed.next_chunk().unwrap() {
-            sent.extend_from_slice(&c);
-        }
-        assert_eq!(sent, full_wire);
-
-        // And it decrypts back to the original plaintext.
-        let mut out = Vec::new();
-        stream_download(&sent[..], &key, context(), &mut out, |_| {}).unwrap();
-        assert_eq!(out, plain);
-    }
-
-    #[test]
-    fn resume_rejects_bad_offsets() {
-        let key = [1u8; 32];
-        let plain = vec![0u8; CHUNK_SIZE + 10];
-        let header = [9u8; HEADER_BYTES];
-        // Mid-chunk offset.
-        assert!(StreamUploader::resume(
-            &plain[..],
-            &key,
-            plain.len() as i64,
-            &header,
-            100,
-            context(),
+    fn signer(key: &SigningKey) -> UploadSigner<'_> {
+        (
+            key,
+            SignerIdentity {
+                account_id: [3; 16],
+                incarnation_id: [5; 32],
+            },
         )
-        .is_err());
-        // Offset claiming more chunks than the plaintext holds.
-        let per = (CHUNK_SIZE + ABYTES) as i64;
-        let too_far = FILE_BLOB_PREFIX_BYTES as i64 + 3 * per;
-        assert!(StreamUploader::resume(
-            &plain[..],
-            &key,
-            plain.len() as i64,
-            &header,
-            too_far,
+    }
+
+    fn context() -> DriveBlobContextV2 {
+        DriveBlobContextV2::new(FILE, REVISION, 3).unwrap()
+    }
+
+    fn pattern(len: usize, seed: u8) -> Vec<u8> {
+        (0..len).map(|i| (i % 251) as u8 ^ seed).collect()
+    }
+
+    fn sha(plain: &[u8]) -> [u8; 32] {
+        kutup_crypto::primitives::hash(Suite::V1, plain).into()
+    }
+
+    fn source<'a>(
+        plain: &'a [u8],
+        key: &'a SigningKey,
+        tail: Option<KeptTail>,
+    ) -> BlockSource<'a, &'a [u8]> {
+        BlockSource::new(
+            move || Ok(plain),
+            &KEY,
             context(),
+            signer(key),
+            plain.len() as u64,
+            sha(plain),
+            tail,
         )
-        .is_err());
+        .unwrap()
+    }
+
+    /// The whole object, sent in PATCH-sized parts from `from`.
+    fn send_from(source: &mut BlockSource<'_, &[u8]>, from: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut at = from;
+        while at < source.len() {
+            let part = source.bytes(at, at + PATCH_BYTES).unwrap();
+            at += part.len() as u64;
+            out.extend_from_slice(&part);
+        }
+        out
+    }
+
+    fn read_back(object: &[u8], content: &ContentCommitmentV1, size: u64) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        read_object(
+            |range| Ok(slice_whole(object, range)),
+            &KEY,
+            FILE,
+            3,
+            &Expect::Current {
+                content: content.clone(),
+                size,
+            },
+            &mut out,
+            |_| {},
+        )?;
+        Ok(out)
     }
 
     #[test]
-    fn empty_file_roundtrip() {
-        let key = [3u8; 32];
-        let mut up = StreamUploader::new(&[][..], &key, 0, context()).unwrap();
-        let mut wire = Vec::new();
-        while let Some(c) = up.next_chunk().unwrap() {
-            wire.extend_from_slice(&c);
+    fn every_size_goes_up_and_reads_back() {
+        let key = signing();
+        for size in [
+            0,
+            1,
+            BLOCK_SIZE - 1,
+            BLOCK_SIZE,
+            BLOCK_SIZE + 1,
+            2 * BLOCK_SIZE + 17,
+        ] {
+            let plain = pattern(size, 1);
+            let mut up = source(&plain, &key, None);
+            assert_eq!(up.len() as i64, object_len(size as u64).unwrap());
+            let object = send_from(&mut up, 0);
+            assert_eq!(object.len() as u64, up.len());
+            let content = up.content().unwrap().clone();
+            assert_eq!(
+                read_back(&object, &content, size as u64).unwrap(),
+                plain,
+                "{size}"
+            );
+            // Another size than the metadata's, or another digest, opens nothing.
+            assert!(read_back(&object, &content, size as u64 + 1).is_err());
+            let other = ContentCommitmentV1::new(context().revision_id, [0; 32]);
+            assert!(read_back(&object, &other, size as u64).is_err());
         }
-        assert_eq!(wire.len(), FILE_BLOB_PREFIX_BYTES + ABYTES);
-        let mut out = Vec::new();
+    }
+
+    /// An upload cut at any offset (inside the header, a block, or the
+    /// tail) goes on by sealing again from block 0; the bytes are the same.
+    #[test]
+    fn a_resume_from_any_offset_sends_the_same_bytes() {
+        let key = signing();
+        let plain = pattern(2 * BLOCK_SIZE + 777, 2);
+        let mut first = source(&plain, &key, None);
+        let whole = send_from(&mut first, 0);
+        let tail = first.tail.clone().unwrap();
+        let tail_start = first.tail_start;
+        for offset in [
+            0,
+            17,
+            DRIVE_BLOCKS_HEADER_BYTES as u64,
+            DRIVE_BLOCKS_HEADER_BYTES as u64 + 5,
+            PATCH_BYTES,
+            PATCH_BYTES - 12_345,
+            tail_start - 1,
+            tail_start,
+            tail_start + 3,
+            whole.len() as u64 - 1,
+        ] {
+            let mut resumed = source(&plain, &key, Some(tail.clone()));
+            let rest = send_from(&mut resumed, offset);
+            assert_eq!(rest, whole[offset as usize..], "offset {offset}");
+            assert!(resumed.take_new_tail().is_none(), "the kept tail is sent");
+        }
+        // Asked again for a range behind the sealer: sealed again from 0.
+        let mut again = source(&plain, &key, Some(tail));
+        let late = again.bytes(tail_start - 10, tail_start + 5).unwrap();
+        let early = again.bytes(0, 100).unwrap();
         assert_eq!(
-            stream_download(&wire[..], &key, context(), &mut out, |_| {}).unwrap(),
-            0
+            late,
+            whole[tail_start as usize - 10..tail_start as usize + 5]
         );
-        assert!(out.is_empty());
+        assert_eq!(early, whole[..100]);
+    }
+
+    #[test]
+    fn the_tail_is_made_once_and_handed_out_to_keep() {
+        let key = signing();
+        let plain = pattern(100, 3);
+        let mut up = source(&plain, &key, None);
+        assert!(up.take_new_tail().is_none());
+        let _ = up.bytes(0, up.len()).unwrap();
+        let tail = up.take_new_tail().cloned().expect("made");
+        assert!(up.take_new_tail().is_none(), "only once");
+        let (bytes, digest) = tail.store();
+        assert_eq!(KeptTail::load(&bytes, &digest, REVISION).unwrap(), tail);
+        // A tail for another revision or length is refused.
+        assert!(BlockSource::new(
+            || Ok(&plain[..]),
+            &KEY,
+            DriveBlobContextV2::new(FILE, "44444444-4444-4444-8444-444444444444", 3).unwrap(),
+            signer(&key),
+            100,
+            sha(&plain),
+            Some(tail.clone()),
+        )
+        .is_err());
+        assert!(BlockSource::new(
+            || Ok(&plain[..]),
+            &KEY,
+            context(),
+            signer(&key),
+            BLOCK_SIZE as u64 + 100,
+            sha(&plain),
+            Some(tail),
+        )
+        .is_err());
+    }
+
+    /// Another file of the same size under the record (or a file changed
+    /// since it was hashed): the last block is never handed out, and nothing
+    /// more after.
+    #[test]
+    fn another_file_on_resume_is_not_the_same_file() {
+        let key = signing();
+        let started = pattern(BLOCK_SIZE + 10, 4);
+        let other = pattern(BLOCK_SIZE + 10, 5);
+        let mut up = BlockSource::new(
+            || Ok(&other[..]),
+            &KEY,
+            context(),
+            signer(&key),
+            other.len() as u64,
+            sha(&started),
+            None,
+        )
+        .unwrap();
+        // The first block goes (the plaintext can't be told yet)…
+        assert!(up.bytes(0, PATCH_BYTES / 2).is_ok());
+        // …the last does not.
+        let error = up.bytes(0, up.len()).unwrap_err();
+        assert!(error.is::<NotTheSameFile>(), "{error:#}");
+        assert!(up.bytes(0, 10).unwrap_err().is::<NotTheSameFile>());
+    }
+
+    #[test]
+    fn a_file_that_shrinks_or_grows_stops_the_upload() {
+        let key = signing();
+        let plain = pattern(100, 6);
+        let shorter = &plain[..60];
+        let mut up = BlockSource::new(
+            || Ok(shorter),
+            &KEY,
+            context(),
+            signer(&key),
+            100,
+            sha(&plain),
+            None,
+        )
+        .unwrap();
+        assert!(up.bytes(0, 200).unwrap_err().is::<ChangedWhileUploading>());
+        let mut up = BlockSource::new(
+            || Ok(&plain[..]),
+            &KEY,
+            context(),
+            signer(&key),
+            60,
+            sha(&plain[..60]),
+            None,
+        )
+        .unwrap();
+        assert!(up.bytes(0, 200).unwrap_err().is::<ChangedWhileUploading>());
+    }
+
+    #[test]
+    fn a_version_reads_against_its_record_and_the_served_revision() {
+        let key = signing();
+        let plain = pattern(5000, 7);
+        let sealed = seal_revision(&plain, &KEY, FILE, REVISION, 3, signer(&key)).unwrap();
+        let read = |expect: &Expect, served: Option<&str>| {
+            let mut out = Vec::new();
+            read_object(
+                |range| {
+                    let mut ranged = slice_whole(&sealed.bytes, range);
+                    ranged.revision = served.map(str::to_string);
+                    ranged.revision_content = Some(sealed.revision_content_envelope.clone());
+                    Ok(ranged)
+                },
+                &KEY,
+                FILE,
+                3,
+                expect,
+                &mut out,
+                |_| {},
+            )
+            .map(|_| out)
+        };
+        let by_listing = Expect::Revision {
+            revision_id: REVISION.into(),
+            envelope: Some(sealed.revision_content_envelope.clone()),
+        };
+        assert_eq!(read(&by_listing, Some(REVISION)).unwrap(), plain);
+        let by_response = Expect::Revision {
+            revision_id: REVISION.into(),
+            envelope: None,
+        };
+        assert_eq!(read(&by_response, None).unwrap(), plain);
+        // The server serving another revision than the metadata names.
+        assert!(read(&by_response, Some("44444444-4444-4444-8444-444444444444")).is_err());
+        // Read as another revision: the record is bound to this one.
+        let other = Expect::Revision {
+            revision_id: "44444444-4444-4444-8444-444444444444".into(),
+            envelope: Some(sealed.revision_content_envelope.clone()),
+        };
+        assert!(read(&other, None).is_err());
+        // The current content: a served record must agree with the metadata.
+        let current = Expect::Current {
+            content: sealed.content.clone(),
+            size: plain.len() as u64,
+        };
+        assert_eq!(read(&current, Some(REVISION)).unwrap(), plain);
+        let wrong_size = Expect::Current {
+            content: sealed.content.clone(),
+            size: plain.len() as u64 - 1,
+        };
+        assert!(read(&wrong_size, Some(REVISION)).is_err());
     }
 }

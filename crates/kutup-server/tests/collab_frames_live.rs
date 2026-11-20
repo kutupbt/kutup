@@ -56,7 +56,7 @@ fn post(
     body: Vec<u8>,
 ) -> (StatusCode, Value) {
     let r = bearer(
-        c.post(format!("{base}/api/files/{file_id}/collab/frames")),
+        c.post(format!("{base}/api/v1/drive/files/{file_id}/collab/frames")),
         &user.token,
     )
     .header(kutup_chat_proto::DEVICE_HEADER, device)
@@ -70,7 +70,9 @@ fn post(
 
 fn log(c: &Client, base: &str, user: &User, file_id: &str, device: &Device) -> Value {
     bearer(
-        c.get(format!("{base}/api/files/{file_id}/collab/frames?after=0")),
+        c.get(format!(
+            "{base}/api/v1/drive/files/{file_id}/collab/frames?after=0"
+        )),
         &user.token,
     )
     .header(kutup_chat_proto::DEVICE_HEADER, device.header())
@@ -179,21 +181,24 @@ fn http_and_socket_refuse_the_same_frames() {
     let unlisted = {
         let mut credential = [0u8; 32];
         kutup_crypto::primitives::random(&mut credential);
-        let r = bearer(c.post(format!("{base}/api/devices")), &owner.token)
-            .json(&serde_json::json!({
-                "kind": "editor",
-                "frameKey": STANDARD.encode(
-                    kutup_crypto::primitives::SigningKey::from_seed(
-                        kutup_crypto::primitives::Suite::V1,
-                        &[0x33; 32],
-                    )
-                    .verifying_key()
-                    .to_array::<32>()
-                ),
-                "credential": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credential),
-            }))
-            .send()
-            .unwrap();
+        let r = bearer(
+            c.post(format!("{base}/api/v1/account/devices")),
+            &owner.token,
+        )
+        .json(&serde_json::json!({
+            "kind": "editor",
+            "frameKey": STANDARD.encode(
+                kutup_crypto::primitives::SigningKey::from_seed(
+                    kutup_crypto::primitives::Suite::V1,
+                    &[0x33; 32],
+                )
+                .verifying_key()
+                .to_array::<32>()
+            ),
+            "credential": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credential),
+        }))
+        .send()
+        .unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         let id = r.json::<Value>().unwrap()["deviceId"].as_u64().unwrap();
         format!(
@@ -214,15 +219,18 @@ fn http_and_socket_refuse_the_same_frames() {
 
     // The same bad frames over the socket, then one good frame: only the
     // good one is kept.
-    let ticket: Value = bearer(c.post(format!("{base}/api/device-ticket")), &owner.token)
-        .header(kutup_chat_proto::DEVICE_HEADER, mine.header())
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let ticket: Value = bearer(
+        c.post(format!("{base}/api/v1/account/devices/tickets")),
+        &owner.token,
+    )
+    .header(kutup_chat_proto::DEVICE_HEADER, mine.header())
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let ws_base = base.replacen("http", "ws", 1);
     let url = format!(
-        "{ws_base}/api/files/{}/collab/ws?ticket={}",
+        "{ws_base}/api/v1/drive/files/{}/collab/ws?ticket={}",
         file.id,
         ticket["ticket"].as_str().unwrap()
     );
@@ -291,14 +299,17 @@ fn a_removed_devices_busy_socket_is_cut() {
         .is_success());
     let mine = register_device(&c, &base, &owner);
     let second = register_device(&c, &base, &owner);
-    let ticket: Value = bearer(c.post(format!("{base}/api/device-ticket")), &owner.token)
-        .header(kutup_chat_proto::DEVICE_HEADER, mine.header())
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let ticket: Value = bearer(
+        c.post(format!("{base}/api/v1/account/devices/tickets")),
+        &owner.token,
+    )
+    .header(kutup_chat_proto::DEVICE_HEADER, mine.header())
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     let url = format!(
-        "{}/api/files/{}/collab/ws?ticket={}",
+        "{}/api/v1/drive/files/{}/collab/ws?ticket={}",
         base.replacen("http", "ws", 1),
         file.id,
         ticket["ticket"].as_str().unwrap()
@@ -353,7 +364,7 @@ fn a_removed_devices_busy_socket_is_cut() {
 }
 
 /// A saved version trims the log; a trimmed frame's counter stays a replay
-/// (`file_sender_floors`), and the device's next counter is above it.
+/// (`collab_sender_floors`), and the device's next counter is above it.
 #[test]
 fn a_trimmed_frame_is_still_a_replay() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
@@ -382,27 +393,14 @@ fn a_trimmed_frame_is_still_a_replay() {
         last = body["seq"].as_i64().unwrap();
     }
     // A version of the notes through the last frame: the log is trimmed.
-    let blob = kutup_crypto::drive_object::encrypt_file_blob(
-        b"yjs state",
-        &file.key,
-        kutup_crypto::drive_object::DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-    )
-    .unwrap();
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("kind", "yjs")
-        .text("seqAtSnapshot", last.to_string())
-        .text("docKeyId", "1")
-        .part(
-            "file",
-            reqwest::blocking::multipart::Part::bytes(blob).file_name("version"),
-        );
-    let r = bearer(
-        c.post(format!("{base}/api/files/{}/versions", file.id)),
+    let seq = last.to_string();
+    let r = save_version(
+        &c,
+        &base,
         &owner.token,
-    )
-    .multipart(form)
-    .send()
-    .unwrap();
+        &Version::seal(&file.id, &file.key, 1, b"yjs state"),
+        &[("kind", "yjs"), ("seqAtSnapshot", &seq), ("docKeyId", "1")],
+    );
     assert!(r.status().is_success(), "save a version: {}", r.status());
     let page = log(&c, &base, &owner, &file.id, &mine);
     assert_eq!(page["frames"].as_array().unwrap().len(), 0, "{page}");

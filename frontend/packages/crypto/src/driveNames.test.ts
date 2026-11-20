@@ -11,6 +11,7 @@ vi.mock('./rustWasm', async () => {
 })
 
 import vectors from '../../../../crates/kutup-crypto/tests/vectors/crypto.json'
+import type { DriveRoot } from './accountRoots'
 import { fromBase64, toBase64 } from './base64'
 import { hashBlob } from './contentHash'
 import { canonicalName, contentHash, folderHashKey, nameHash, topLevelHashKey } from './driveNames'
@@ -21,7 +22,7 @@ describe('drive names (vectors shared with Rust)', () => {
   it('derives the folder hash key, canonical names and name hashes', async () => {
     const key = await folderHashKey(fromBase64(v.firstFolderKey), v.collectionId)
     expect(toBase64(key)).toBe(v.hashKey)
-    expect(toBase64(await topLevelHashKey(fromBase64(v.masterKey)))).toBe(v.topLevelHashKey)
+    expect(toBase64(await topLevelHashKey({ driveRoot: v.driveRoot as DriveRoot }))).toBe(v.topLevelHashKey)
     for (const c of v.names) {
       expect(await canonicalName(c.name)).toBe(c.canonical)
       expect(await nameHash(key, c.name)).toBe(c.hash)

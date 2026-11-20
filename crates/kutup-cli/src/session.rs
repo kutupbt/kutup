@@ -50,9 +50,9 @@ pub struct Session {
     pub envelope_binding: String,
     /// The account's permanent id (`users.id`) and its server's name: who
     /// this account is to everyone (docs/plans/account-ids.md).
-    pub user_id: String,
+    pub account_id: String,
     pub server_name: String,
-    /// Shown only: the account's username, as `/user/me` last said.
+    /// Shown only: the account's username, as `/account` last said.
     pub username: String,
     pub access_token: String,
     pub refresh_token: String,
@@ -62,11 +62,58 @@ pub struct Session {
     pub public_key: String,
     /// Server-returned encrypted blobs (kept for possible re-derivation).
     pub master_key_envelope: String,
+    /// The account's root records (docs/plans/identity-root.md), sealed
+    /// under the master key, as the sign-in gave them, and the authority the
+    /// newest identity root must derive. A session from before them has
+    /// neither: `kutup login` again.
+    #[serde(default)]
+    pub account_roots: Vec<String>,
+    #[serde(default)]
+    pub account_authority_public_key: String,
+    /// The master key's generation (the one `master_key` is), and every
+    /// older key's keyring record (docs/plans/mk-rotation-exercise.md). A
+    /// session from before them is at generation 1, with no keyring.
+    #[serde(default = "first_generation")]
+    pub master_key_generation: u32,
+    #[serde(default)]
+    pub master_keyring: Vec<String>,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
+    /// The server's instance id at sign-in (docs/plans/api-surface.md §5):
+    /// another one later means the server was reset, and what this profile
+    /// keeps for it is dropped.
+    #[serde(default)]
+    pub instance_id: String,
+}
+
+fn first_generation() -> u32 {
+    1
 }
 
 impl Session {
+    /// The account's master keys: the current one, which seals, and every
+    /// older one through the keyring, which still opens what was sealed
+    /// before a rotation.
+    pub fn master_keys(&self) -> Result<kutup_crypto::master_keys::MasterKeys> {
+        let master: [u8; 32] = self
+            .master_key_bytes()?
+            .try_into()
+            .map_err(|_| anyhow!("master key must be 32 bytes"))?;
+        let master = zeroize::Zeroizing::new(master);
+        let generation =
+            kutup_crypto::account_record::MasterKeyGeneration::new(self.master_key_generation)
+                .map_err(|_| {
+                    anyhow!("this session's master-key generation is 0: run 'kutup login' again")
+                })?;
+        let keyring = self
+            .master_keyring
+            .iter()
+            .map(|record| b64(record))
+            .collect::<Result<Vec<_>>>()?;
+        kutup_crypto::master_keys::MasterKeys::open(&master, generation, self.binding(), &keyring)
+            .context("open the account's master-key keyring")
+    }
+
     /// The string every seal and open uses (docs/plans/account-identity.md).
     pub fn binding(&self) -> &str {
         &self.envelope_binding
@@ -74,7 +121,7 @@ impl Session {
 
     /// This account as every share and binding names it.
     pub fn person(&self) -> Result<kutup_crypto::account_ref::AccountRef> {
-        kutup_crypto::account_ref::AccountRef::new(&self.server_name, &self.user_id)
+        kutup_crypto::account_ref::AccountRef::new(&self.server_name, &self.account_id)
             .map_err(|_| anyhow!("this session's account is not known: run 'kutup login' again"))
     }
 }
@@ -85,6 +132,69 @@ impl Session {
     }
     pub fn private_key_bytes(&self) -> Result<Vec<u8>> {
         b64(&self.private_key)
+    }
+
+    /// The account's roots, opened with the master key: the newest identity
+    /// root must derive the account's authority, or this fails (no older
+    /// one stands in).
+    pub fn roots(&self) -> Result<kutup_crypto::account_roots::AccountRoots> {
+        if self.account_roots.is_empty() || self.account_authority_public_key.is_empty() {
+            return Err(anyhow!(
+                "this session has no account roots: run 'kutup login' again"
+            ));
+        }
+        let master = self.master_keys()?;
+        let authority: [u8; 32] = b64(&self.account_authority_public_key)?
+            .try_into()
+            .map_err(|_| anyhow!("the account authority must be 32 bytes"))?;
+        let records = self
+            .account_roots
+            .iter()
+            .map(|record| b64(record))
+            .collect::<Result<Vec<_>>>()?;
+        kutup_crypto::account_roots::AccountRoots::open(
+            &records,
+            &master,
+            self.binding(),
+            &authority,
+        )
+        .context("open the account's roots")
+    }
+
+    /// A signed-in account with master key `master_key` and new roots, for
+    /// tests.
+    #[cfg(test)]
+    pub fn for_tests(master_key: [u8; 32]) -> Session {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let binding = "4b0a3c52-9a1e-4d1c-9a55-0d3f4f6e1b2a";
+        let roots = kutup_crypto::account_roots::AccountRoots::generate();
+        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
+            .expect("an identity derives");
+        Session {
+            envelope_binding: binding.into(),
+            master_key: b64.encode(master_key),
+            master_key_generation: 1,
+            account_roots: roots
+                .seal(
+                    &master_key,
+                    kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                    binding,
+                )
+                .expect("roots seal")
+                .iter()
+                .map(|record| b64.encode(record))
+                .collect(),
+            account_authority_public_key: b64.encode(identity.authority_public_key()),
+            ..Session::default()
+        }
+    }
+
+    /// The account's identity keys, from its identity root.
+    pub fn identity(&self) -> Result<kutup_crypto::identity::AccountIdentityKeysV1> {
+        Ok(kutup_crypto::identity::AccountIdentityKeysV1::derive(
+            &self.roots()?.identity,
+        )?)
     }
 }
 
@@ -222,6 +332,28 @@ impl Store {
             let mut t = wtx.open_table(COLLAB_DEVICE)?;
             t.remove("device")?;
         }
+        wtx.commit()?;
+        Ok(())
+    }
+
+    /// Drops everything this profile keeps for its server once the server
+    /// was reset (another instance id): the session, the collaboration
+    /// device, the sync state and the upload resume records. The manifest
+    /// pins stay: they are anti-rollback anchors keyed by account, which a
+    /// server claiming a new id must not be able to erase. Local files a sync
+    /// mirrored are never touched; the next sync treats both sides as new.
+    pub fn forget_server_state(&self) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(SESSION)?;
+            t.remove("data")?;
+            let mut t = wtx.open_table(COLLAB_DEVICE)?;
+            t.remove("device")?;
+        }
+        wtx.delete_table(SYNC_STATE)?;
+        wtx.delete_table(RESUME)?;
+        wtx.open_table(SYNC_STATE)?;
+        wtx.open_table(RESUME)?;
         wtx.commit()?;
         Ok(())
     }
@@ -524,8 +656,7 @@ impl Store {
 /// State needed to resume an interrupted tus upload. Values in the sync/resume
 /// tables are plaintext JSON, so the file key is stored only in its
 /// collection-key wrap (`file_key_envelope` — the exact blob the server already
-/// holds), never raw; the 24-byte header is public (it's the first bytes of
-/// ciphertext the server already received).
+/// holds), never raw. The kept tail is ciphertext the server receives anyway.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeState {
@@ -535,8 +666,20 @@ pub struct ResumeState {
     /// Typed envelope wrapped with the collection key.
     pub file_key_envelope: String,
     pub key_epoch: u32,
-    /// base64 24-byte secretstream header.
-    pub header: String,
+    /// The revision the object is sealed as (block format): the commit
+    /// names it.
+    #[serde(default)]
+    pub revision_id: String,
+    /// The plaintext's SHA-256 (base64), as the metadata will carry it: a
+    /// resumed upload seals the file again and refuses another content.
+    #[serde(default)]
+    pub sha256: String,
+    /// The sealed manifest and trailer (base64) and its digest, once made:
+    /// kept before any of it is sent (its nonce is random).
+    #[serde(default)]
+    pub tail: String,
+    #[serde(default)]
+    pub tail_manifest_sha256: String,
     pub plain_size: i64,
     pub cipher_total: i64,
     pub mtime_secs: i64,
@@ -590,7 +733,7 @@ pub struct SyncFileState {
 #[serde(rename_all = "camelCase")]
 pub struct CollabDevice {
     pub server: String,
-    pub user_id: String,
+    pub account_id: String,
     pub device_id: u32,
     /// The Ed25519 seed, base64.
     pub seed: String,
@@ -735,6 +878,31 @@ mod tests {
             assert_eq!(loaded.master_key, "bWtleQ==");
             store.clear_session().unwrap();
             assert!(store.load_session().unwrap().is_none());
+        }
+        {
+            // A reset server: the session, sync state and resume records go.
+            let mut store = Store::open(profile).unwrap();
+            store
+                .save_session(&Session {
+                    instance_id: "old".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            store.sync_state_put("pair|f|a.txt", b"{}").unwrap();
+            {
+                let wtx = store.db.begin_write().unwrap();
+                wtx.open_table(RESUME)
+                    .unwrap()
+                    .insert("c\n/p", b"{}".as_slice())
+                    .unwrap();
+                wtx.commit().unwrap();
+            }
+            store.forget_server_state().unwrap();
+            assert!(store.load_session().unwrap().is_none());
+            use redb::ReadableTableMetadata;
+            let rtx = store.db.begin_read().unwrap();
+            assert!(rtx.open_table(SYNC_STATE).unwrap().is_empty().unwrap());
+            assert!(rtx.open_table(RESUME).unwrap().is_empty().unwrap());
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }

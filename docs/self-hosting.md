@@ -47,7 +47,7 @@ and its [environment reference](https://ente.com/help/self-hosting/installation/
    | `CHAT_SERVER_NAME` | The name after the `@` in every address; set once | — |
    | `POSTGRES_PASSWORD` | The database password | `openssl rand -hex 32` |
    | `JWT_SECRET` | Signs sessions | `openssl rand -hex 64` |
-   | `OPAQUE_SETUP_KEYS` | The keys sign-in is sealed under; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
+   | `OPAQUE_SETUP_KEYS` | The server key list: sign-in, group send keys and every account's data key are sealed under it; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
    | `S3_SECRET_KEY` | The bundled object store's secret | `openssl rand -hex 32` |
    | `MAIL_FORWARDING_KEYS` | Mail forwarding's keys; forwarding stays off until it's set; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
    | `ADMIN_ACCOUNT` | The break-glass administrator, `username:password` | — |
@@ -105,6 +105,16 @@ name) stops it with exit code 2 and the full list of problems, never a silent
 default. `kutup-server check-config` runs that check alone (no database, no
 migrations); run it against a new image and your `.env` before switching over.
 
+**Content-Security-Policy.** The web apps' strict policy
+([`content-security-policy.md`](content-security-policy.md)) is sent
+report-only beside the older, looser one, and browsers report what it would
+block to the server's log (warn level, `content security policy
+violation`). Three settings reach the frontend container: `CHAT_SFU_URL`
+(Chat may connect to the group-call SFU), `KUTUP_MAP_DIRECT_ORIGINS` (also
+read by the server; see Maps) and `KUTUP_CSP_ENFORCE=1`, which enforces the
+strict policy and drops the old one. A deployment that runs the frontend
+image without the compose file must pass them itself.
+
 **Rate limits** are administrators' settings: Administration → Rate limits
 lists every limit the server keeps (sign-in, Drive, Chat, groups, Mail, calls
 and maps, Pass, federation, the admin API), what it counts and per what, its
@@ -119,7 +129,9 @@ above 100 times their default. The limits counted per account can also be set fo
 its page under Administration. The windows are counted in each backend's
 memory: with several backends behind a balancer, a client spread over them
 can get up to that many times a limit (Kutup runs one backend per server).
-The sealed-sender budgets are counted in the database and shared.
+The sealed-sender, multi-recipient and Chat-media delivery budgets are
+counted in the database (`rate_counters`) and shared; a job deletes the
+windows that are over every 15 minutes.
 
 **Chat groups are off by default** (`CHAT_GROUPS=false`): Chat offers direct
 chats, calls and meeting links, but no group chats or group calls; the
@@ -129,8 +141,9 @@ switches the current groups on, for testing only. Groups need federation
 configured: a group's home answers only through the anonymous route, under
 a weekly HPKE key derived from the federation identity. A home stores each
 group's state and change log with members as per-group pseudonyms, never an
-account; `CHAT_GROUP_MAX_MEMBERS` (1 to 256, default 256) caps a group's
-members and open invitations, and `CHAT_GROUP_MAX_GROUPS` (default 100000)
+account; `CHAT_GROUP_MAX_MEMBERS` (1 to 256, default 256) seeds the cap on a
+group's members and open invitations, which administrators then set under
+Server settings, and `CHAT_GROUP_MAX_GROUPS` (default 100000)
 the groups it hosts (new groups are also limited per relaying server). A
 group's change log keeps only the changes a current member may still read:
 those from the earliest revision any member joined at, plus the latest.
@@ -148,10 +161,11 @@ copies.
 
 Each account has one storage pool. Drive, Photos, Office, Maps and Chat
 (message-history ciphertext, ordinary delivery media, and protected history
-media) all count against it. New accounts get the **Default storage quota
-(GiB)** set under **Admin → Server settings** (10 GiB until changed); existing
-accounts keep theirs. Change an individual account's **Storage quota (GiB)**
-under **Admin → Users**. Lowering
+media) all count against it. Every account gets the **Default storage quota
+(GiB)** set under **Admin → Server settings** (10 GiB until changed), and a
+change applies to all of them at once, except an account given its own
+**Storage quota (GiB)** under **Admin → Users** (or a quota other than the
+default when it was created there), which keeps that one. Lowering
 a quota below current use preserves reads and blocks new charged work rather
 than evicting files or history.
 
@@ -400,7 +414,7 @@ yourself (for rotation, say), copy it into the environment unchanged,
 
 ```sh
 docker compose exec -T postgres psql -U kutup -d kutup -Atc \
-  "SELECT encode(private_key, 'base64') FROM server_generated_keys WHERE purpose = 'federation-identity'"
+  "SELECT encode(private_key, 'base64') FROM server_generated_keys WHERE purpose = 'federationIdentity'"
 ```
 
 and set it as `FEDERATION_SIGNING_KEY` with `FEDERATION_SERVER_NAME` equal to
@@ -505,8 +519,10 @@ See [`chat-backup.md`](chat-backup.md) for the lifecycle and
 for the trust boundary.
 
 The hourly job applies 30-day mailbox retention and 45-day ordinary
-delivery-media retention by default. Runtime admin settings can override both,
-and zero disables that policy. Delivery-media cleanup never deletes separately
+delivery-media retention by default, and drops send records (the ids that
+make a retried send land once) after 30 days (`chat.send_retention_days`,
+Server settings → Privacy and retention). Runtime admin settings can override
+each, and zero disables that policy. Delivery-media cleanup never deletes separately
 protected history media. Account deletion and administrator loss-recovery wipe
 purge all backup rows, object prefixes, staging/reconciliation state, and
 charged Chat bytes.
@@ -530,7 +546,7 @@ no setup:
 
 - On first start it generates a root in memory, signs a 90-day online
   certificate with it, stores the root's public key, the certificate and the
-  online private key (`sealed_sender_generated_certificates`), publishes the
+  online private key (`chat_sealed_sender_certificates`), publishes the
   signed policy, and drops the root's private key. It is never written
   anywhere.
 - 30 days before a certificate runs out it does the same with a new root. The
@@ -660,11 +676,162 @@ durable operator backups.
 
 ---
 
+## Backups
+
+Backups are encrypted with [age](https://age-encryption.org) to a public
+key and stored in a bucket of their own. Set this up once, before the first
+backup.
+
+1. **Install age** on the machine that runs the backup scripts (the host,
+   not a container): `apt install age` on Debian and Ubuntu (1.0 or newer).
+   The scripts stop with a message when it is missing.
+2. **Make the key pair on another machine** (your laptop, kept offline):
+   `age-keygen -o kutup-backup.key`. It prints the public key (`age1…`).
+   Put that in `.env` as `KUTUP_BACKUP_AGE_RECIPIENT`. The identity file
+   `kutup-backup.key` never goes on the server: the server can write
+   backups but not read them, so a stolen server or a leaked backup key
+   reveals nothing. Keep at least two copies of the identity (for example a
+   password manager and a printed copy in a safe); without it no backup can
+   be read. Several recipients, comma-separated, let two people each hold
+   their own identity.
+3. **Create a second bucket**, with an access key of its own that can reach
+   only that bucket: write and list (and delete, for pruning), never the
+   data bucket. Put it in `.env` as `BACKUP_S3_ENDPOINT`,
+   `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY` (and
+   `BACKUP_S3_REGION`, `auto` for R2). The scripts refuse to run while any
+   is missing, and refuse the data bucket or its key: one lost bucket or one
+   leaked key must not take both the data and its backups. Prefer a
+   provider or account other than the data bucket's, and turn on object
+   lock or versioning there if it has it.
+4. **Give the blobs a second copy.** The data bucket holds the only copy of
+   every file's ciphertext. Replicate it to a second bucket at the provider
+   (Kutup itself needs no versioning in either; deletes reach the data
+   bucket only after `server.storage.deleted_blob_retention_seconds`). The
+   blobs are ciphertext, so a replica leaks nothing new.
+
+**Deleted files wait before they leave storage.** A database dump taken at
+time T names blobs that must still exist when it is restored. So the server
+never deletes a blob at once: every delete is queued, and a job removes it
+from the store only after `storageDeletedBlobRetentionSeconds`
+(Administration → Server settings → Backups and health; two days at first,
+checked every `storageDeletedBlobSweepSeconds`). Keep that wait longer than
+the time between database backups plus a margin; with nightly backups, two
+days. Within it a restored dump finds every blob it names. The bucket holds
+deleted ciphertext that much longer; quotas count only what is not deleted.
+A new write to a key whose delete is waiting calls the delete off.
+
+**The readiness check** (`GET /api/health/ready`, [docs/api.md](api.md))
+fails when the newest database backup, or the newest mail backup where mail
+is on, is older than `healthBackupMaxAgeSeconds` (two days at first; 0 turns
+that part off). From the host:
+
+```sh
+docker compose exec -T nginx wget -qO- http://backend:3000/api/health/ready
+```
+
+### What a restore needs
+
+A lost machine leaves only what is elsewhere: the backup bucket, the data
+bucket (or its copy) and the secrets below. Everything in this list that is
+marked *offline copy* must be kept off the server, written down once, and
+checked at each restore drill; the rest can be made again.
+
+| What | Where | Without it | Offline copy |
+|---|---|---|---|
+| age identity (`kutup-backup.key`) | never on the server | no backup can be read | **yes** (the only copy is offline) |
+| `OPAQUE_SETUP_KEYS` (or the file `OPAQUE_SETUP_KEYS_FILE` names) | `.env` | no one signs in with a password (everyone recovers with their recovery phrase), and every account data key it wraps is lost with the sealed server fields and the destruction replay (docs/plans/server-personal-data.md, L1) | **yes** |
+| `MAIL_DKIM_KEYS` | `.env` | custom domains' DKIM keys stay sealed; each domain needs new DKIM records | **yes**, with custom domains |
+| `MAIL_FORWARDING_KEYS` | `.env` | end-to-end forwardings stop (Outdated) until re-enabled | **yes**, with forwarding |
+| `FEDERATION_SIGNING_KEY` (only when you set one; otherwise the identity is in the database) | `.env` | other servers no longer recognise this one | **yes**, when set |
+| `CHAT_SEALED_SENDER_POLICY`, `CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY` (offline-root sealed sender only) | `.env` | sealed sender off until re-provisioned from the offline root | **yes**, when set |
+| `JWT_SECRET` | `.env` | every session ends; people sign in again | yes (convenience) |
+| `BACKUP_S3_*` | `.env`, provider console | the backups can't be fetched until a new key is made at the provider | yes, or provider access |
+| `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` | `.env`, provider console | the files can't be reached until a new key is made | yes, or provider access |
+| `KUTUP_BACKUP_AGE_RECIPIENT` | `.env` | made again from the identity (`age-keygen -y kutup-backup.key`) | no |
+| `MAIL_INBOUND_TOKEN`, `STALWART_ADMIN_SECRET`, `MAIL_STALWART_DOMAINS_TOKEN` | `.env`, Stalwart's volume | must match Stalwart's restored settings; set new ones on both sides otherwise | yes (convenience) |
+| `CHAT_TURN_SECRET`, `CHAT_SFU_API_KEY`, `CHAT_SFU_API_SECRET` | `.env` | make new ones (and set them in coturn/LiveKit) | no |
+| `POSTGRES_PASSWORD`, `ADMIN_ACCOUNT` | `.env` | a new password works for an empty database; the admin account is in the dump | no |
+| Server names: `KUTUP_BASE_DOMAIN`, `SERVER_URL`, `CHAT_SERVER_NAME`, `FEDERATION_SERVER_NAME`, `MAIL_HOSTNAME` | `.env` | must be the same as before | yes (the whole `.env`) |
+| Stalwart's DKIM key for the main domain | Stalwart's volume (mail backup) | new DKIM records | in the mail backup |
+| TLS certificates | `nginx/certs` | issued again (ACME) | no |
+
+Simplest: keep a copy of the whole `.env` with the identity, offline, and
+update it whenever `.env` changes.
+
 ## Database backups
 
-The database backups below do not hold `OPAQUE_SETUP_KEYS` (it is in `.env`),
-and must not: back that key up on its own, somewhere else. A database restored
-without it signs no one in (see the security notes).
+The database backups below do not hold `OPAQUE_SETUP_KEYS`, the server key
+list (it is in `.env`), and must not: back it up on its own, somewhere else. A
+database restored without it signs no one in, and the server-side personal
+fields sealed under the account data keys (the authenticator secret, mail
+headers and signatures, docs/plans/server-personal-data.md) can't be read (see
+the security notes).
+
+Each account's data key lives in the schema `account_keys`, which the database
+dump leaves out; so does each shared mailbox's (a mail group's), which its
+messages' headers are sealed under. `scripts/backup-postgres.sh` dumps it apart, under
+`database-backups-keys/`, and keeps those dumps only for **Keep account key
+backups** (Server settings → Privacy and retention, default 7 days). An
+account deleted, or reset, more than that long ago has its key in no backup,
+so what the server sealed for it can't be read from any copy.
+
+The same schema holds the **destruction log** (docs/plans/server-personal-data.md,
+A7): what was deleted, when and by whom, naming each account only by keyed
+hashes of its id under the server key list's entries. A restore takes it
+from the newest key dump, and before serving anything the server finds the
+restored accounts it names, destroys their keys and closes them at once, so
+the closing job deletes them again. Restore the current server key list with
+it, not an older one: the hashes are made under the entries in use when the
+account was deleted. The log is kept **Keep the destruction log** days
+(default 1095), longer than any backup.
+
+## Public links
+
+Whether "anyone with the link" works is yours to set (docs/plans/server-personal-data.md,
+A11). **Server settings → Accounts → Public links**: anyone with the link,
+only people signed in to this server (a test server keeps its links among
+its own accounts), or off. An administrator turns them off for one account
+on its user page. A link that breaks the rules can be blocked from the
+Reports page: under a legal order it answers `451 Unavailable For Legal
+Reasons`, otherwise `410`; the reference you give (an order's number) is
+seen only by administrators, and the block can be lifted.
+
+## Notices, consents and other servers
+
+Publish your terms, privacy notice and consent texts in **Administration →
+Legal documents** (docs/plans/server-personal-data.md, A3 and A4): the text
+stays at its address; the server keeps a fingerprint of the exact text. A
+document required at sign-up is confirmed there, and a new version of it at
+each account's next sign-in. Nothing published, nothing asked. People give
+and withdraw consents in Settings → Privacy.
+
+Whether an account's Chat and Drive talk to other Kutup servers is its own
+switch (Settings → Privacy); new accounts start as **Server settings →
+Accounts → New accounts talk to other servers** says, and an administrator
+can set one account's. Where your law asks for consent before sharing data
+with other servers, turn on **Server settings → Accounts → Ask for consent
+before sharing data with other servers** (`server.federation_consent_required`,
+off by default) and publish a `federation` text: turning the switch on then
+asks each person for that consent (under the text, when one is published),
+new accounts start off, an administrator can't turn it on for someone who
+hasn't given it, and withdrawing the consent turns it off. Mail is email,
+not federation: it isn't covered.
+
+## Closing and deleting accounts
+
+An account's owner deletes it in Settings → Account → Delete account (after
+their password), and an administrator in the admin console (Close account,
+or Delete account at once). A closed account is **closing** for **Wait before
+deleting a closed account** days (Privacy and retention, default 14): its
+sign-ins end, and a sign-in before then is offered to keep it. Then the
+server deletes it with everything in it, its row and its data key, and
+writes a destruction event.
+
+A **legal hold** (admin console → the account → Legal hold, with a
+reference) stops every deletion of the account and of anything of it: the
+closing job waits, an administrator's delete or reset is refused, and the
+retention jobs pass its sessions, security events and admin-log rows by.
+Setting and lifting a hold are in the admin activity log.
 
 The same goes for `MAIL_FORWARDING_KEYS`, when Mail's end-to-end forwarding
 is on (docs/plans/mail-forwarding.md): the proxy factors in the database are
@@ -685,30 +852,23 @@ again:
 - **Chat:** clearing the Chat app's site data removes that browser's Chat
   device too; link it again from another device, as a new browser is.
 
-`scripts/backup-postgres.sh` dumps the database, encrypts the dump on this
-machine, and stores it in the object store Kutup already uses (`S3_*` in
-`.env`), under `database-backups/`. It works with the bundled SeaweedFS and
-with an external store; with an external store the backups survive the loss
-of the server, which is the point.
-
-Set a passphrase in `.env` and **keep a copy of it somewhere else**. Without
-it the backups cannot be read, and it is lost with the server otherwise.
-
-```
-KUTUP_BACKUP_PASSPHRASE=<openssl rand -hex 32>
-# KUTUP_BACKUP_KEEP_DAYS=30
-# KUTUP_BACKUP_PREFIX=database-backups
-```
+`scripts/backup-postgres.sh` dumps the database, encrypts the dump with age
+on this machine, and stores it in the backup bucket (`BACKUP_S3_*`, under
+`database-backups/`); see [Backups](#backups) for the bucket, the key pair
+and installing age first.
 
 ```sh
 scripts/backup-postgres.sh                      # back up, then prune
-scripts/backup-postgres.sh --list               # what is stored
-scripts/backup-postgres.sh --fetch <name> kutup.dump   # download and decrypt
+scripts/backup-postgres.sh --list               # the database dumps
+scripts/backup-postgres.sh --list-keys          # the account data key dumps
+scripts/backup-postgres.sh --fetch <name> kutup.dump kutup-backup.key   # download, check, decrypt
+scripts/backup-postgres.sh --restore <name> kutup-backup.key            # check, decrypt, pg_restore
 ```
 
 Backups older than `KUTUP_BACKUP_KEEP_DAYS` are removed after each run; the
-newest is never removed. To run it nightly with systemd, from the
-deployment's directory (here `/opt/kutup`):
+newest is never removed. Each run also records the backup in the database
+(`backup_runs`), where the readiness check reads its age. To run it nightly
+with systemd, from the deployment's directory (here `/opt/kutup`):
 
 ```ini
 # /etc/systemd/system/kutup-backup.service
@@ -740,21 +900,216 @@ systemctl daemon-reload && systemctl enable --now kutup-backup.timer
 journalctl -u kutup-backup.service      # each run's result
 ```
 
-To restore onto a fresh server: set up `.env` with the same store, the same
-`JWT_SECRET` and server names, and the passphrase, then
+To restore onto a fresh server: set up `.env` from the offline copy (see
+[What a restore needs](#what-a-restore-needs)), bring the identity file, then
 
 ```sh
 docker compose up -d --wait postgres
-scripts/backup-postgres.sh --fetch <name> kutup.dump
-docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < kutup.dump
+scripts/backup-postgres.sh --restore <name> kutup-backup.key
 docker compose up -d --wait
 ```
 
+`--restore` refuses while the backend runs, and decrypts the whole backup
+and checks it before the database is touched: age authenticates every
+chunk, so a backup that was changed or cut fails here, and nothing is
+restored. It prints how long `pg_restore` took.
+
+The account data keys and the destruction log (the schema `account_keys`)
+are dumped apart, under `database-backups-keys/` (`--list-keys`), and kept
+only `server.retention.key_backup_days` (default 7). `--restore` always takes the
+NEWEST key dump, whichever database dump it restores (a fourth argument
+names another). Keys of accounts deleted since are in it no more, so their
+sealed fields stay unreadable; at start the server deletes those accounts
+again (their rows came back with the database dump). It may hold keys of
+accounts made after the database dump: those go before the foreign key is
+added back, which would fail on them (and leave the keys without their
+cascade). By hand, the steps are:
+
+```sh
+scripts/backup-postgres.sh --fetch <name> kutup.dump kutup-backup.key
+docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < kutup.dump
+scripts/backup-postgres.sh --fetch keys:<newest key dump> keys.dump kutup-backup.key
+docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner \
+  --section=pre-data --section=data < keys.dump
+docker compose exec -T postgres psql -U kutup -d kutup -v ON_ERROR_STOP=1 \
+  -c "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM accounts u WHERE u.id = k.account_id)" \
+  -c "DELETE FROM account_keys.mail_group_data_keys k WHERE NOT EXISTS (SELECT 1 FROM mail_groups g WHERE g.id = k.group_id)"
+docker compose exec -T postgres pg_restore -U kutup -d kutup --no-owner --exit-on-error \
+  --section=post-data < keys.dump
+```
+
+The server refuses to start while the account data keys have lost their
+foreign key to the accounts, or a shared mailbox's keys theirs to the mail
+groups (a restore that skipped the key steps): without it, deleting an
+account or a group would no longer destroy its key.
+
 The dump holds accounts, key envelopes and object references; the files'
 ciphertext stays in the object store. A restore therefore returns to the
-moment of the dump: files deleted since then are listed but gone, and files
-added since then are in the store but no longer listed (`kutup-server
-orphan-sweep` finds those).
+moment of the dump. Files added since then are in the store but no longer
+listed (`kutup-server orphan-sweep` finds those). Files deleted since then
+are still in the store as long as the dump is younger than
+`storageDeletedBlobRetentionSeconds` (see [Backups](#backups)); a restore
+from an older dump finds some of them missing.
+
+## Restore drill
+
+A backup is only as good as the last restore that worked. Run this drill
+before the first production data matters, after every change to backups,
+and a few times a year (docs/plans/restore-drill-and-alerting.md). Run it on
+another machine, from nothing but what a lost server would leave: the backup
+bucket, the blob bucket (or its replica) and the offline secrets ([What a
+restore needs](#what-a-restore-needs)). Never copy anything from the running
+server, and never point the drill at the live blob bucket.
+
+On a test machine with lane stacks, `scripts/restore-drill.sh` runs steps 1
+to 4 for you (an empty `kutup-drill-l<lane>` stack from the release images,
+the newest dump, step 3's long wait for deleted blobs, a scratch copy of the
+blob bucket made with rclone, the server started with
+`BACKGROUND_JOBS=false` and then with its jobs on, Stalwart's volume), then
+the readiness, `check-config` and migrations checks, and prints the timings
+and the data-loss window; `--help` lists what it needs, `--dry-run` prints
+every step, and `scripts/test-restore-drill.sh` tests it offline.
+
+The restored apps live at the addresses the `.env` copy names
+(`KUTUP_BASE_DOMAIN` or `KUTUP_<APP>_URL`, and `SERVER_URL`). On a machine
+where those names don't lead to the drill (a test machine; the drill's lane
+ports are the lane's + 100), point them at the drill's own address, or the
+restored apps send the browser to the original server:
+
+```sh
+p=41543   # lane 3: the lane's HTTPS port + 100
+sets=(--set "SERVER_URL=https://account.localhost:$p")
+for app in account drive chat office editor maps photos contacts mail pass calendar; do
+  sets+=(--set "KUTUP_$(echo "$app" | tr a-z A-Z)_URL=https://$app.localhost:$p")
+done
+scripts/restore-drill.sh --env <offline .env copy> --identity kutup-backup.key \
+  --images <tag> --source-bucket <blob bucket or replica> --scratch-bucket <name>-drill \
+  --lane 3 --set S3_ACCESS_KEY=<scratch key> --set S3_SECRET_KEY=<its secret> "${sets[@]}"
+```
+
+Images built here with `scripts/publish-images.sh --no-push` serve as they
+are: Compose finds them locally and skips the pull. `--down` leaves the
+scratch bucket; empty it with its own key once the checks are done. The
+restored stack never delivers anything under the production identity: the
+server runs with `OUTBOUND_DELIVERY=false` (no federation requests, sent
+mail or push notifications) and Stalwart in its recovery mode, so its
+restored queue stays held. A drill by hand should do the same.
+
+1. **Start an empty stack** from the release images
+   ([Running published images](#running-published-images)), with `.env`
+   from the offline copy. Set `S3_*` to a **copy** of the blob bucket (made
+   at the provider, or `rclone sync` from the replica): a purge job in the
+   restored stack must never delete production blobs. Not `aws s3 sync` on
+   Cloudflare R2: the AWS CLI reads tags before every multipart copy (each
+   object over 8 MiB) or sends a tagging directive on the others, and R2
+   implements neither (`NotImplemented`). Start only
+   PostgreSQL: `docker compose up -d --wait postgres`.
+2. **Restore the newest database dump**, timing it:
+   `scripts/backup-postgres.sh --list`, then
+   `scripts/backup-postgres.sh --restore <name> kutup-backup.key`. Write
+   down the time it prints.
+3. **Keep every background job from deleting** until the checks are done:
+   before the backend starts, set a long wait for deleted blobs:
+   ```sh
+   docker compose exec -T postgres psql -U kutup -d kutup -c \
+     "INSERT INTO site_settings (key, value) VALUES ('server.storage.deleted_blob_retention_seconds', '7776000')
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+   ```
+   Then start the stack (`docker compose up -d --wait`); put the setting back
+   (Administration → Server settings) when the drill is over.
+4. **Restore Stalwart's volume**, where mail is on:
+   `scripts/backup-stalwart.sh --list`, then
+   `scripts/backup-stalwart.sh --restore <name> kutup-backup.key`.
+5. **Check, as a user:**
+   - sign in with the password, and with the recovery phrase;
+   - open a file uploaded before the dump, a large one included;
+   - open one uploaded after the dump: expect a clean "missing" state, not a
+     crash;
+   - Chat history comes back from the Chat backup in a new browser: with no
+     other device to link from, Chat offers "Link this device"; choose "I
+     don't have my other devices", then Start over, and the conversations
+     come back;
+   - Mail: old messages open. A new message sends and arrives (the DKIM key
+     came back) only once delivery is on again: in a drill, sending is held
+     (`OUTBOUND_DELIVERY=false`, Stalwart in recovery mode), so check it on
+     the real restore (docs/plans/wipe-final-test.md §6.2);
+   - a Pass vault opens;
+   - a second server still federates with the restored one (its federation
+     identity came back).
+6. **Check, as the operator:**
+   - the migrations table matches the release
+     (`SELECT max(version) FROM _sqlx_migrations`);
+   - `docker compose run --rm --no-deps backend check-config` passes;
+   - `GET /api/health/ready` answers. In a drill it answers 503 with only
+     `backups` (no backup has run from the restored stack) and `mail`
+     (Stalwart in recovery mode) failing; every other check passes. A real
+     restore answers 200 once its first backup has run and Stalwart is out
+     of recovery mode;
+   - with L4, the destruction replay runs, and accounts destroyed after the
+     dump stay destroyed.
+7. **Write it down** in the entry below: the date, the time to restore, the
+   data lost (the time between the dump and the moment of the "loss"), and
+   every step that needed knowledge this runbook does not have. Fix the
+   runbook, not your memory.
+
+### Restore, as last run
+
+| Date | Release | Dump restored | Time to restore | Data lost | Gaps found in this runbook |
+|---|---|---|---|---|---|
+| 2026-11-20 (E1, staging) | a4de4d451eb2 (2026.1120.1) | `kutup-20261120T042227Z.dump.age` with its key dump, `stalwart-20261120T042246Z.tar.gz.age` | 58 s scripted, from an empty scratch bucket (dump fetched, checked and restored 18 s, 20 MB of blobs copied 2 s, Stalwart 8 s, server restarted with jobs on 12 s); the user and operator checks about 5 min more | 3 min: dumped 04:22:27Z, the staging server counted lost at 04:25:33Z; the one file uploaded after the dump (04:23:35Z) is gone, and Drive and the CLI report it as not found | The blob copy failed on R2 (`aws s3 sync`, see step 1: the script now uses rclone); the script skipped step 3 (it now sets the wait); the app addresses for a drill beside the original; Chat's "Start over" path in a new browser; readiness answers 503 in a drill, not 200; Mail's send check can't run in a drill. A file whose blob is missing from the copy shows "This file can't be opened … check your connection" after a 500 from the server, not a "missing" state (docs/roadmap.md, "Backup / restore CLI") |
+
+## Database roles
+
+The server can run as its own database role, apart from the owner that holds
+the tables (docs/plans/server-personal-data.md, A8). Then the security and
+admin logs are **append-only for the server**: it may add rows (and count a
+repeated failed sign-in into one), but not change or delete them, so a
+compromised server can't rewrite what it did. The owner role runs the
+migrations, grants the server's role its rights at each start, and deletes
+log rows past their retention (Server settings → Privacy and retention). The
+admin log is also hash-chained; Activity says whether the chain holds.
+
+With one role, everything works, but those logs are not append-only: the
+server says so at start, in `kutup-server check-config`, and on the admin
+Activity page.
+
+With the bundled compose, name the role in `.env`:
+
+```
+POSTGRES_APP_USER=kutup_app
+POSTGRES_APP_PASSWORD=<openssl rand -hex 32>
+```
+
+A new database gets the role when it is created (`postgres/initdb`). For a
+database that already exists, create it once by hand:
+
+```sh
+docker compose exec -T postgres psql -U kutup -d kutup \
+  -c "CREATE ROLE kutup_app LOGIN PASSWORD '<openssl rand -hex 32>'"
+```
+
+Then `docker compose up -d --wait`: the server connects as `kutup_app`, and
+as `POSTGRES_USER` only for migrations, grants and pruning
+(`DATABASE_OWNER_URL`, set from it). Outside the bundled compose, set
+`DATABASE_URL` to the server's role and `DATABASE_OWNER_URL` to the owner's.
+The owner must own the tables: start with two roles on a fresh database, or
+move an existing database's objects to the owner first (`REASSIGN OWNED BY`).
+
+### A fork's own tables
+
+The core's schema (one baseline migration, in `public` and `account_keys`)
+holds only the core's tables. A fork that needs its own (a hosted edition's
+billing, say) keeps them in the Postgres schema `enterprise`, with its own
+migrations: set `ENTERPRISE_MIGRATIONS` to a directory of sqlx migrations
+(`<version>_<name>.up.sql` / `.down.sql`) in the fork's server image. After
+the core's migrations, the server creates the schema if it is missing and
+runs that directory there, recording it in `enterprise._sqlx_migrations`
+(the core's chain stays in `public._sqlx_migrations`), as the owner role
+when there is one; the server's role is granted the schema's tables at each
+start. In those migrations an unqualified name is the fork's: `enterprise` is
+the whole search path, so a core table is named with its schema
+(`REFERENCES public.accounts (id)`). The core never runs any (unset by
+default), and a core update never touches the schema.
 
 ## Updating
 
@@ -886,6 +1241,15 @@ does not allow fetching the same tiles repeatedly. If your own tile server
 is only reachable from the Kutup server (e.g. on the Docker network), set
 map traffic to **always**.
 
+Browsers may load maps straight from a provider only if its origin is in
+`KUTUP_MAP_DIRECT_ORIGINS` (comma-separated, e.g.
+`https://tile.openstreetmap.org,https://tiles.openfreemap.org`), which both
+the backend and the frontend container read: the apps' Content-Security-Policy
+allows those origins and no others. Blank (the default), every map comes
+through the relay whatever the Maps page says; the page marks providers that
+are relay-only, and **off** is accepted only when every offered provider is
+listed.
+
 The Maps app (`KUTUP_MAPS_URL`, e.g. `maps.example.org`, served by the same
 frontend image) keeps people's place lists. Each list is an encrypted Drive
 file (`.kutupmap`) that counts against its owner's storage, so no separate
@@ -912,10 +1276,11 @@ at the server and add it to the certificate; with `docker-compose.acme.yml`
 the name is requested automatically.
 
 The Calendar app (`KUTUP_CALENDAR_URL`, e.g. `calendar.example.org`, the
-same frontend image) keeps each calendar as Proton Calendar does: its own
-OpenPGP key, the passphrase sealed to each member's mail address key, and
-events encrypted but for their times (`docs/plans/calendar.md`). It needs a
-Mail address key, which the account makes at its first sign-in. Calendars
+same frontend image) keeps each calendar much as Proton Calendar does: its
+own OpenPGP key, the passphrase shared with each member on their account key
+(post-quantum, and kept through renames), and events encrypted but for their
+times (`docs/plans/calendar.md`). It needs a Mail address key, which signs
+the events and which the account makes at its first sign-in. Calendars
 and events count against the owner's storage quota; the calendars per
 account, events per calendar and the changes one sync carries are
 administrators' settings (Server settings). An existing deployment that names
@@ -1025,8 +1390,9 @@ instead of failing, and receiving a message from Gmail checks that part.
 **Mail backups.** Stalwart's `stalwart_data` volume holds its DKIM private
 keys and the mail it has not handed over yet; losing it means publishing new
 DKIM records. `scripts/backup-stalwart.sh` stores it encrypted beside the
-database backups (same `.env` settings and passphrase, under `mail-backups/`,
-`KUTUP_MAIL_BACKUP_PREFIX` to change), stopping Stalwart for the seconds the
+database backups (same backup bucket and age recipient, see
+[Backups](#backups), under `mail-backups/`, `KUTUP_MAIL_BACKUP_PREFIX` to
+change), stopping Stalwart for the seconds the
 copy takes (senders retry). Run it nightly like the database backup:
 
 ```ini
@@ -1059,9 +1425,10 @@ systemctl daemon-reload && systemctl enable --now kutup-mail-backup.timer
 systemctl status kutup-mail-backup.service   # a failed run shows as failed
 ```
 
-To restore: `scripts/backup-stalwart.sh --list`, then `--fetch <name>
-stalwart.tar.gz` and `--restore stalwart.tar.gz` (it stops Stalwart, replaces
-the volume's contents, and starts it again).
+To restore: `scripts/backup-stalwart.sh --list`, then `--restore <name>
+kutup-backup.key` with the offline identity file. It decrypts and checks the
+whole backup first (a changed or cut backup restores nothing), then stops
+Stalwart, replaces the volume's contents, and starts it again.
 
 **Moving MX to Kutup.** Mail starts arriving at Kutup only when the domain's MX
 record points at it, so this is the last step, done once the rest works.
@@ -1145,8 +1512,9 @@ if any.
 - **Change all defaults** in `.env` before first start. The defaults are intentionally weak placeholders.
 - **Firewall:** Only expose ports 80 and 443 (TCP), and UDP 443 for HTTP/3. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet. Without UDP 443 browsers stay on HTTP/2 over TCP; nothing breaks, it is only slower on lossy mobile links.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
-- **OPAQUE_SETUP_KEYS:** the keys sign-in's OPAQUE setups are sealed under
-  (docs/plans/opaque.md). The server keeps each account's OPAQUE record, which
+- **OPAQUE_SETUP_KEYS, the server key list:** the keys sign-in's OPAQUE
+  setups are sealed under (docs/plans/opaque.md), and, below, the group send
+  keys and every account's data key. The server keeps each account's OPAQUE record, which
   is useless for guessing passwords offline as long as the setup's secrets are
   out of reach; they are stored sealed under this key, so a database dump or
   backup alone gives nothing to attack.
@@ -1172,6 +1540,27 @@ if any.
     under the current key, so after adding a key, start the server once
     before you remove the old id; a key whose id is gone stops the server at
     start.
+  - **Every account's data key is wrapped under it too**
+    (docs/plans/server-personal-data.md, A2): the key the server seals that
+    account's server-side personal fields under. Each wrapped key names the
+    entry it is wrapped under. After you add an entry, keys move to it when
+    they are next used and in batches of 500 a minute; an entry can be
+    removed once no key uses it:
+
+    ```sh
+    docker compose exec -T postgres psql -U kutup -d kutup -c \
+      "SELECT sealing_key_id, count(*) FROM (SELECT sealing_key_id FROM account_keys.account_data_keys
+         UNION ALL SELECT sealing_key_id FROM account_keys.mail_group_data_keys) k GROUP BY 1"
+    ```
+
+    The server refuses to start without an entry that still wraps keys,
+    naming each such entry and how many keys it wraps.
+  - **The destruction log names deleted accounts under it** (A7): each event
+    holds a keyed hash of the account under every entry in the list at the
+    time, so a restore can find accounts deleted since its dump. Keep an
+    entry while events made only under it (or older entries) are kept
+    (Keep the destruction log, default 1095 days): the server refuses to
+    start while a kept event names no entry of the list.
 - **Group send endorsement keys:** made on first start when `CHAT_GROUPS`
   and federation are on, stored sealed (above). `kutup-server chat-zk-keys
   rotate` makes a new key that issues from then on; the old one keeps
@@ -1262,13 +1651,10 @@ every byte goes through the backend, so the bucket should stay private (no
 public access, no public custom domain). The bundled SeaweedFS is a default,
 not a requirement.
 
-Two differences between stores are handled by the server, so no client has
-to know which one is behind it: resumable uploads are stored as equal-sized
-parts (Cloudflare R2 refuses parts of different lengths), and objects are
-read and deleted by version only where the store supports that (R2 returns a
-version id for every upload but refuses to read or delete by it, so the
-server reads and deletes those objects by key, which it writes only once).
-`storage-check` reads back by version and says which way the store goes.
+Resumable uploads are stored as equal-sized parts, so a store that refuses
+parts of different lengths (Cloudflare R2) works too, and no client has to
+know which store is behind the server. Every object is written once under a
+key of its own and read and deleted by that key, never by an S3 version id.
 Checked with `storage-check` against SeaweedFS and Cloudflare R2.
 
 To run on a store you already have (Cloudflare R2, Backblaze B2, Hetzner
@@ -1307,6 +1693,18 @@ defaults suit a remote store on a slow link; each is a setting in `.env`:
 A transfer that keeps moving has no total limit, because a whole object can
 be many gigabytes.
 
+**Unfinished multipart uploads.** Resumable uploads are S3 multipart
+uploads. A cancelled or abandoned one is aborted when its upload is removed;
+if that abort fails (the store was unreachable), its parts stay in the
+bucket, unlisted and still taking space. The server's upload sweep lists the
+store's multipart uploads and aborts any that no upload names once they are
+older than the **Abort leftover upload parts after** server setting (a day
+by default). A store that supports it can do the same on its own side: a
+bucket lifecycle rule that aborts incomplete multipart uploads after a day
+(S3's `AbortIncompleteMultipartUpload` with `DaysAfterInitiation: 1`; R2 and
+B2 have the same rule in their bucket settings). Keep the rule's age at
+least as long as the setting, so an upload still running is never cut off.
+
 The admin page cannot ask such a store for its capacity; set
 `STORAGE_TOTAL_BYTES` if you want a capacity readout. The SeaweedFS backup
 steps above do not apply: the store's durability is the provider's, and the
@@ -1314,13 +1712,16 @@ PostgreSQL backup is still yours to take.
 
 ## SeaweedFS bucket versioning and lifecycle
 
-Kutup does not depend on S3 object versioning: every object of a file lives
-under `files/{id}/` (`original`, `versions/{versionId}`, `assets/…`,
-`thumbnails/…`), every file version is an object of its own, and version retention
-is Kutup's job (`docs/plans/drive-versions-v2.md` — the last day whole, then
-hourly for a week, then daily up to each account's setting, 7 days to 10
-years). Deletes remove every stored version of an object, so they are final
-whether or not the bucket is versioned.
+Kutup does not use S3 object versioning and needs none:
+every key holds one revision of something and is never overwritten. Every
+object of a file lives under `files/{id}/` (`revisions/{revisionId}` for the
+first upload and each version, `assets/{assetId}`,
+`thumbnails/{variant}/{objectId}`), and version retention is Kutup's job
+(`docs/plans/drive-versions-v2.md`: the last day whole, then hourly for a
+week, then daily up to each account's setting, 7 days to 10 years). A delete
+is a plain delete of the key. On an unversioned bucket it is final; on a
+versioned one it leaves a noncurrent version, which the lifecycle rule below
+removes a day later.
 
 The `seaweedfs-init` Compose service creates the bucket (without versioning)
 and applies `lifecycle.json`, only a safety net for a bucket that has

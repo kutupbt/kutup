@@ -30,8 +30,8 @@ transport.
 - Chat media, protected history media, and message-history ciphertext count
   against the account's one storage pool. Drive, Photos, Office and Maps use
   the same pool. Its administrator-configured default is 10 GiB per account.
-- The V1 attachment limit is 2 GiB of plaintext-class content plus the exact
-  bounded framing overhead. A server may advertise a lower local limit but not
+- The attachment limit is 2 GiB of plaintext-class content plus the exact
+  bounded framing overhead of the block format. A server may advertise a lower local limit but not
   a larger V1 limit.
 - The server never interprets a filename, MIME type, caption, dimensions,
   duration, conversation ID, message ID or media class. Those values exist
@@ -45,48 +45,61 @@ key.
 
 | Code | Construction | New writes |
 |---:|---|---|
-| `1` | HKDF-SHA256 plus libsodium-compatible XChaCha20-Poly1305 secretstream, 5 MiB plaintext frames | required |
+| `2` | The block format (docs/plans/drive-block-format.md §2): 4 MiB XChaCha20-Poly1305 blocks bound to their index, a sealed manifest of their SHA-256 hashes (`KUTPCM2`) | required |
+
+Code `1`, a secretstream with 5 MiB frames, is gone: it no longer parses
+(slice 7 of the block format).
 
 For each attachment the sender generates a fresh random 32-byte
-`attachmentKey`. HKDF-SHA256 derives the secretstream key using
-`kutup/chat-media/object-key/v1` and the complete object header. The raw key is
-zeroized after use and appears only inside the encrypted logical message and
-the sender's encrypted linked-device transcript.
+`attachmentKey`. HKDF-SHA256 derives the block, nonce and manifest keys from
+it with the `kutup/chat-media/blocks/…` labels and the complete object header.
+The raw key appears only inside the encrypted logical message and the
+sender's encrypted linked-device transcript. The parser refuses any other
+magic or suite: a `KUTPCM2` header naming suite 1 fails.
 
 The attachment ledger's records are account records (`KUTPAR1`, purpose
 `ChatAttachmentLedger`, [`plans/w1-account-record.md`](plans/w1-account-record.md))
 under the recoverable master key, bound to the account's key binding. A Drive
 root, profile key, Signal session key or group sender key never seals one.
 
-## 3. `ChatMediaObjectV1`
+## 3. The attachment object (suite 2)
 
-The object bytes are:
+The object bytes are the block format's (docs/plans/drive-block-format.md §2):
 
 ```text
-[28-byte object header][24-byte secretstream header][one or more frames]
+[28-byte header][block 0]…[block n−1][sealed manifest][12-byte trailer]
 ```
 
-The fixed object header is:
+The fixed header is:
 
 ```text
-magic             8 bytes  "KUTPCM1\0"
-suite             u16      big-endian ChatMediaSuiteId
+magic             8 bytes  "KUTPCM2\0"
+suite             u16      big-endian ChatMediaSuiteId (2)
 purpose           u8       1 = attachment blob
 reserved          u8       must be zero
 attachment_id     16 bytes random UUID
 ```
 
-The complete 28-byte header is both the HKDF context and associated data for
-every secretstream frame. Every object, including an empty object, ends in an
-authenticated final frame. Missing final tags, trailing frames, reordered or
-duplicated frames, wrong IDs, unknown suites/purposes, non-zero reserved bytes,
-oversized objects and noncanonical UUIDs fail closed.
+An attachment is immutable, so the header names no revision. Each 4 MiB
+block is sealed with a synthetic nonce and the header, its index and a
+`last` flag as associated data; the sealed manifest (`u32` block size, `u32`
+count, `u64` plaintext size and each sealed block's SHA-256) ends the object,
+and the trailer gives its length. The manifest is **unsigned**: the E2EE
+descriptor commits to its SHA-256, as Signal's attachment pointer carries its
+incremental MAC. An empty file is one empty last block. Wrong ids, unknown
+suites or purposes, non-zero reserved bytes, a manifest other than the
+committed one, a block whose hash or AEAD fails, reordered, missing or extra
+blocks and bytes after the trailer all fail closed.
 
 The sender computes SHA-256 over the complete object. Storage and federation
 admission bind the attachment UUID, suite, exact ciphertext length and complete
-digest before accepting quota or making the object visible. A digest is an
-integrity/index value, not an access capability, and must not appear in metric
-labels or ordinary logs.
+digest before accepting quota or making the object visible, as before the
+block format. The server also checks the public structure: the header against
+the attachment at the first part, and at finalization the trailer's manifest
+length against the block count the length implies
+(`crates/kutup-server/src/handlers/chat_media.rs`). It cannot check an AEAD.
+A digest is an integrity/index value, not an access capability, and must not
+appear in metric labels or ordinary logs.
 
 ## 4. E2EE attachment descriptor
 
@@ -95,12 +108,14 @@ The outer message protocol changes; the logical attachment body does not.
 
 `ChatAttachmentDescriptorV1` contains:
 
-- version and `ChatMediaSuiteId`;
+- version and `ChatMediaSuiteId` (2);
 - random attachment UUID;
 - canonical origin domain and random origin retrieval token;
-- exact ciphertext length and SHA-256 digest;
+- exact ciphertext length and the whole object's SHA-256 digest (hex);
+- the sealed manifest's SHA-256 (`manifestSha256`, canonical base64): what
+  every reader opens the object against;
 - 32-byte attachment key;
-- plaintext length;
+- plaintext length (the manifest's size must be this);
 - filename, MIME type and optional caption;
 - optional width, height and duration; and
 - an optional bounded inline E2EE preview.
@@ -120,8 +135,10 @@ treated as evidence for the full object.
 
 ## 5. Local upload and send lifecycle
 
-1. The client generates an attachment UUID and key, encrypts the immutable
-   snapshot, and calculates its exact length and digest while streaming.
+1. The client generates an attachment UUID and key, seals the immutable
+   snapshot block by block in Rust/WASM (`chatMediaBlockEncryptor`), and
+   calculates its exact length, its digest and its manifest's digest while
+   streaming. A tus PATCH carries two sealed blocks.
 2. Authenticated tus creation reserves the exact ciphertext bytes against the
    sender's account storage pool and writes only under a random temporary key.
 3. Finalization validates the public object header and framing bounds, then the
@@ -133,13 +150,13 @@ treated as evidence for the full object.
 4. The sender writes the attachment message to its history and asks its own
    server for the destination's copy (an authenticated media-delivery
    request). The message is encrypted and sent only once the answer is
-   `stored` or `already_stored` (Signal's model,
+   `stored` or `alreadyStored` (Signal's model,
    docs/plans/federation-outbox.md): on `queued` it waits, showing as
    sending, in a job the client keeps across restarts, and asks the same
    operation again with backoff (at most five minutes between asks, and when
    the app comes back online or reopens) for at most
    `chatAttachmentSendLifetimeSeconds` (a site setting, one day by default).
-   `storage_full`, a refusal (`404`, `422`) or the end of that lifetime shows
+   `storageFull`, a refusal (`404`, `422`) or the end of that lifetime shows
    the message as not delivered, with a retry; a retry after a refusal asks
    under a new operation. The origin may retain the local sender and
    recipient internally for retry; they never enter a destination
@@ -213,7 +230,7 @@ uploads sweep deletes a stale inbound hand-over and releases its reservation.
 
 When the recipient's storage pool is full, the message descriptor may remain
 in E2EE history while the attachment is visibly unavailable. The destination
-does not partially store it. Sender and recipient receive stable `storage_full` state,
+does not partially store it. Sender and recipient receive stable `storageFull` state,
 and retry requires available quota plus an unexpired origin object.
 
 Normal accepted media remains until the recipient clears it, its disappearing
@@ -236,48 +253,47 @@ The homeserver's quota rows know only recipient, opaque object/reference IDs,
 namespace, byte counts and lifecycle state. Named per-conversation totals are a
 client projection over `ChatAttachmentLedgerV1` encrypted entities.
 
-Each revision of a ledger entity is one chained account record
+Each ledger entity is one account record in the account-records store's
+`chatAttachments` scope ([plans/account-records.md](plans/account-records.md),
+W3 slice 6), kept at its newest revision only
 (`kutup_crypto::chat_attachment_ledger`):
 
 ```text
-header (KUTPAR1)  suite 1, purpose ChatAttachmentLedger (14), master-key
+header (KUTPAR1)  suite 1, purpose ChatAttachmentLedger (17), master-key
                   generation, the account's key binding,
-                  object = account_incarnation_id (32) || entity_id (16),
+                  object = the entity's record id (32 random bytes),
                   revision (non-zero),
-                  previous = SHA-256 of the entity's previous record
-                  (all-zero only at revision 1),
                   key commitment, nonce, ciphertext length
 ciphertext        the entry, padded to a 256-byte bucket, plus the tag
 ```
 
 The whole header is the AEAD's associated data and the record key's input;
-the server checks it (this account's binding, the URL's entity, the account's
-current incarnation, the revision and predecessor) without opening anything.
-An envelope plaintext is capped at 16 KiB and uses the project canonical
-big-endian length-prefixed encoding, not signed JSON. It binds version,
-conversation kind/reference, logical message UUID, attachment UUID, opaque
+the server checks it (this account's binding, the item's record id, the
+revision above the stored one) without opening anything. An envelope
+plaintext is capped at 16 KiB and uses the project canonical big-endian
+length-prefixed encoding, not signed JSON. It binds version, conversation
+kind/reference, logical message UUID, attachment UUID, opaque
 storage-reference UUID, exact logical ciphertext bytes, state, media class,
 bounded display name, update time and an optional promoted Drive file UUID.
-States are `active`, `cleared`, `saved_to_drive` and `expired`. The server
+Conversation kinds are `direct` (the peer's account reference), `group` (the
+pairwise group id, 32 bytes base64url without padding) and `noteToSelf` (the
+account's own reference). States are `active`, `cleared`, `savedToDrive` and `expired`. The server
 cannot classify or join an entry to a sender or conversation.
 
-The server assigns a monotonically increasing account cursor after validating
-an exact revision/predecessor transition. It preserves every opaque encrypted
-revision append-only; a separate current pointer exists only for transactional
-compare-and-swap. Bounded diff pages therefore replay the complete revision
-chain, including authenticated encrypted tombstones. Operation IDs make retries
-idempotent. A missing/skipped revision, stale revision, predecessor mismatch,
-changed replay or unknown suite is rejected rather than last-write-wins.
+Writes are batches of `POST /api/v1/account/records` with the next account head:
+each entity's put names the revision it read, so a retried or raced write is
+refused (`revisionConflict`) and the client reads again and redoes it. The
+account head covers the scope (a count and digest of every `(id, revision)`),
+so a server that rolls an entity back, drops one or brings an old one back is
+caught when the client checks the scope's index against the verified head.
+The private hash chain, the history table, the operation ids and the ledger's
+own cursor are gone: the records feed (`GET /api/v1/account/records/chatAttachments`)
+and the head replace them.
 
-Clients decrypt diff pages and build a disposable in-memory projection. A
-new/recovered device rebuilds from cursor zero. The browser persists only a
-compact identifier-free hash-chain pin over the ordered opaque revision feed;
-it does not persist decrypted conversation or attachment metadata. On reload,
-the client replays from zero and requires the exact pinned cursor and chain
-digest before accepting any later revisions. Server withholding is an
-availability failure; it cannot forge a valid entity. If a browser denies all
-persistent local storage, the authenticated revision chains still verify but
-cross-restart rollback pinning is unavailable on that device.
+Clients decrypt the scope and build a disposable in-memory projection; they
+do not persist decrypted conversation or attachment metadata. The number of
+entities an account keeps is a site setting
+(`chat.records.attachments`).
 
 ## 9. Client behavior
 
@@ -295,6 +311,19 @@ cross-restart rollback pinning is unavailable on that device.
   stream or separate voice endpoint reaches a server.
 - V1 never automatically downloads full attachment bytes to a device. The user
   taps **Download** or **View**.
+- Reading opens the header and the manifest first, against the descriptor,
+  then each block with its hash checked before its AEAD; no plaintext is
+  released before the manifest is the descriptor's. A download into the
+  private cache is authenticated without decrypting (length, whole digest,
+  header and manifest); opening it from the cache reads it twice, the
+  manifest from the end first.
+- A video or song plays without that download: its viewer streams it from the
+  account's own server through Kutup's service worker
+  (`/sw/stream/{id}`, docs/plans/drive-block-format.md §4), the same
+  stateless route Drive uses, with the block reader opened on a Chat source.
+  A seek fetches one block. Without a service worker it opens whole from the
+  private cache, within the viewer's in-memory bound. Voice notes still play
+  from the cache.
 - The recipient server may already hold the durable encrypted copy. Device
   caching is local storage and is not charged again as server quota.
 - The Chat storage screen shows the account pool split into message history,
@@ -318,7 +347,8 @@ The server advertised `ChatMediaCapabilitiesV1` only after all of the
 following passed:
 
 - [x] canonical Rust vectors and WASM parity for object/ledger headers, HKDF,
-  encryption, final-frame validation and descriptor parsing;
+  encryption, manifest validation and descriptor parsing (the block
+  format's in `tests/vectors/blocks-v1.json`);
 - [x] parser fuzzing for objects, descriptors, offers, acknowledgements, ledger
   envelopes and diff pages;
 - [x] transaction-failure and restart tests for upload reservation/finalization,

@@ -37,3 +37,6 @@ specs/111-mail-advanced-search.spec.ts
 specs/112-mail-desktop-notifications.spec.ts
 specs/113-mail-body-search.spec.ts
 specs/163-mail-forwarding.spec.ts
+specs/173-mail-send-checks.spec.ts
+specs/174-mail-sieve.spec.ts
+specs/175-mail-export.spec.ts

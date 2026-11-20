@@ -24,7 +24,7 @@ use crate::account_names::{self, Available};
 use crate::error::{AppError, AppResult};
 use crate::grants::{self, Purpose};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::security_events;
 use crate::AppState;
 
@@ -65,31 +65,32 @@ pub struct CheckView {
     reason: Option<&'static str>,
 }
 
-/// `GET /api/user/rename/check?name=` — whether the caller could rename to
+/// `GET /api/v1/account/rename/check?name=` — whether the caller could rename to
 /// `name` (any spelling of a name in use or held counts as taken).
 #[utoipa::path(
     get,
-    path = "/api/user/rename/check",
-    tag = "user",
+    path = "/api/v1/account/rename/check",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(CheckQuery),
     responses((status = 200, body = CheckView), (status = 429, description = "rateLimited"))
 )]
 pub async fn check(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<CheckQuery>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if !crate::ratelimit::RENAME_CHECKS.allow(&user_id.to_string()) {
         return Err(AppError::too_many_requests("too many requests")
             .with_details(json!({ "code": "rateLimited" })));
     }
-    let incarnation: String =
-        sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let incarnation: String = sqlx::query_scalar(
+        "SELECT COALESCE(encode(account_incarnation_id, 'hex'), '') FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let mut conn = state.pool.acquire().await?;
     let view = match account_names::available(
         &mut conn,
@@ -104,7 +105,7 @@ pub async fn check(
             let keyed: bool = sqlx::query_scalar(
                 "SELECT EXISTS (SELECT 1 FROM mail_addresses a
                                   JOIN mail_address_keys k ON k.address_id = a.id
-                                 WHERE a.user_id = $1 AND a.state <> 'freed'
+                                 WHERE a.account_id = $1 AND a.state <> 'freed'
                                    AND a.folded = kutup_fold($2) || '@' || lower($3))",
             )
             .bind(user_id)
@@ -148,7 +149,7 @@ pub struct RenameRequest {
     #[schema(value_type = Object)]
     rename: AccountRenameV1,
     /// The new address's first key and key list (as `POST
-    /// /api/mail/addresses/{id}/keys` takes them), so mail to it is never
+    /// /api/v1/mail/addresses/{id}/keys` takes them), so mail to it is never
     /// deferred. None only when taking back a held name whose address still
     /// has its keys.
     #[serde(default)]
@@ -179,11 +180,11 @@ fn rename_invalid(why: &str) -> AppError {
         .with_details(json!({ "code": "renameInvalid" }))
 }
 
-/// `POST /api/user/rename` — a new username (docs/plans/username-renames.md).
+/// `POST /api/v1/account/rename` — a new username (docs/plans/username-renames.md).
 #[utoipa::path(
     post,
-    path = "/api/user/rename",
-    tag = "user",
+    path = "/api/v1/account/rename",
+    tag = "account",
     security(("BearerAuth" = [])),
     request_body = RenameRequest,
     responses(
@@ -196,17 +197,18 @@ fn rename_invalid(why: &str) -> AppError {
 )]
 pub async fn rename(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<RenameRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let server = state.config.chat_server_name.to_ascii_lowercase();
     let mut tx = state.pool.begin().await?;
     type Account = (String, String, String, bool, bool);
     let (username, incarnation, authority, first_login, break_glass): Account = sqlx::query_as(
-        "SELECT COALESCE(username, ''), account_incarnation_id, account_authority_public_key,
-                is_first_login, is_break_glass
-           FROM users WHERE id = $1 AND is_active FOR UPDATE",
+        "SELECT COALESCE(username, ''), COALESCE(encode(account_incarnation_id, 'hex'), ''),
+                COALESCE(kutup_b64(account_authority_public_key), ''),
+                keys_set_up_at IS NULL, role = 'breakGlassAdmin'
+           FROM accounts WHERE id = $1 AND state = 'active' FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *tx)
@@ -234,7 +236,7 @@ pub async fn rename(
     let (stored_len, left_before): (i64, bool) = sqlx::query_as(
         "SELECT COUNT(*),
                 COALESCE(bool_or(previous = $2 OR current = $2), false)
-           FROM account_renames WHERE incarnation_id = $1",
+           FROM account_renames WHERE incarnation_id = decode($1, 'hex')",
     )
     .bind(&incarnation)
     .bind(&statement.previous)
@@ -266,8 +268,14 @@ pub async fn rename(
         .ok()
         .and_then(|k| k.try_into().ok())
         .ok_or_else(|| AppError::internal("account authority"))?;
+    // The account's own statement about itself: it names this account's id,
+    // or it is no rename of this account.
+    let account_id = kutup_crypto::account_ref::AccountId::from_bytes(user_id.into_bytes());
+    if statement.account_id != account_id.to_string() {
+        return Err(rename_invalid("another account"));
+    }
     statement
-        .verify(&authority_key)
+        .verify(&authority_key, account_id)
         .map_err(|_| rename_invalid("signature"))?;
     if statement.incarnation_id != incarnation {
         return Err(rename_invalid("another incarnation"));
@@ -275,7 +283,7 @@ pub async fn rename(
     type Stored = (serde_json::Value, bool, time::OffsetDateTime, String);
     let stored: Vec<Stored> = sqlx::query_as(
         "SELECT statement, counted, accepted_at, previous FROM account_renames
-          WHERE incarnation_id = $1 ORDER BY sequence",
+          WHERE incarnation_id = decode($1, 'hex') ORDER BY sequence",
     )
     .bind(&incarnation)
     .fetch_all(&mut *tx)
@@ -297,7 +305,8 @@ pub async fn rename(
         .collect::<Result<_, _>>()
         .map_err(|_| AppError::internal("a stored rename"))?;
     chain.push(statement.clone());
-    let view = verify_chain(&authority_key, &chain).map_err(|_| rename_invalid("the chain"))?;
+    let view = verify_chain(&authority_key, account_id, &chain)
+        .map_err(|_| rename_invalid("the chain"))?;
 
     // The limits: one counted rename per 30 days; going back to the name just
     // left within 7 days of that rename is free, once, and restarts the clock.
@@ -350,7 +359,7 @@ pub async fn rename(
     }
     let held: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM account_names
-          WHERE user_id = $1 AND state = 'held' AND receive_until > now()",
+          WHERE account_id = $1 AND state = 'held' AND receive_until > now()",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -371,7 +380,7 @@ pub async fn rename(
     let free_at = now + time::Duration::days(hold_days);
     sqlx::query(
         "UPDATE account_names SET state = 'held', receive_until = $2, free_at = $3
-          WHERE user_id = $1 AND state = 'current'",
+          WHERE account_id = $1 AND state = 'current'",
     )
     .bind(user_id)
     .bind(receive_until)
@@ -383,7 +392,7 @@ pub async fn rename(
             // As it was spelled: its address, keys and key lists name it so.
             let taken = sqlx::query(
                 "UPDATE account_names SET state = 'current', receive_until = NULL, free_at = NULL
-                  WHERE folded = kutup_fold($2) AND name = $2 AND user_id = $1 AND state = 'held'",
+                  WHERE folded = kutup_fold($2) AND name = $2 AND account_id = $1 AND state = 'held'",
             )
             .bind(user_id)
             .bind(&new_name)
@@ -398,7 +407,7 @@ pub async fn rename(
             account_names::claim(&mut tx, &new_name, user_id, Some(&incarnation)).await?
         }
     }
-    sqlx::query("UPDATE users SET username = $2, updated_at = now() WHERE id = $1")
+    sqlx::query("UPDATE accounts SET username = $2, updated_at = now() WHERE id = $1")
         .bind(user_id)
         .bind(&new_name)
         .execute(&mut *tx)
@@ -406,9 +415,9 @@ pub async fn rename(
         .map_err(crate::handlers::auth::map_insert_conflict)?;
     sqlx::query(
         "INSERT INTO account_renames
-             (incarnation_id, sequence, user_id, authority_public_key, previous, current,
+             (incarnation_id, sequence, account_id, authority_public_key, previous, current,
               counted, statement, digest)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+         VALUES (decode($1, 'hex'), $2, $3, kutup_unb64($4), $5, $6, $7, $8, decode($9, 'hex'))",
     )
     .bind(&incarnation)
     .bind(statement.sequence as i32)
@@ -429,7 +438,7 @@ pub async fn rename(
     // domains stay as they are.
     let place: Option<i32> = sqlx::query_scalar(
         "UPDATE mail_addresses SET state = 'receiving', receive_until = $2
-          WHERE user_id = $1 AND state = 'active' AND domain_id IS NULL
+          WHERE account_id = $1 AND state = 'active' AND domain_id IS NULL
           RETURNING position",
     )
     .bind(user_id)
@@ -438,7 +447,7 @@ pub async fn rename(
     .await?;
     let reused: u64 = sqlx::query(
         "UPDATE mail_addresses SET state = 'active', receive_until = NULL
-          WHERE user_id = $1 AND folded = kutup_fold($2) || '@' || $3 AND state <> 'freed'",
+          WHERE account_id = $1 AND folded = kutup_fold($2) || '@' || $3 AND state <> 'freed'",
     )
     .bind(user_id)
     .bind(&new_name)
@@ -457,7 +466,7 @@ pub async fn rename(
     let (address_id, keyed): (Uuid, bool) = sqlx::query_as(
         "SELECT a.id, EXISTS (SELECT 1 FROM mail_address_keys k WHERE k.address_id = a.id)
            FROM mail_addresses a
-          WHERE a.user_id = $1 AND a.state = 'active' AND a.domain_id IS NULL",
+          WHERE a.account_id = $1 AND a.state = 'active' AND a.domain_id IS NULL",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -488,7 +497,7 @@ pub async fn rename(
     // address; the old one, receiving only, has no identity to send as.
     sqlx::query(
         "UPDATE mail_identities SET address_id = $2
-          WHERE address_id = (SELECT id FROM mail_addresses WHERE user_id = $1 AND state = 'receiving'
+          WHERE address_id = (SELECT id FROM mail_addresses WHERE account_id = $1 AND state = 'receiving'
                                 ORDER BY receive_until DESC LIMIT 1)
             AND NOT EXISTS (SELECT 1 FROM mail_identities WHERE address_id = $2)",
     )
@@ -498,7 +507,7 @@ pub async fn rename(
     .await?;
     sqlx::query(
         "DELETE FROM mail_identities
-          WHERE address_id IN (SELECT id FROM mail_addresses WHERE user_id = $1 AND state <> 'active')",
+          WHERE address_id IN (SELECT id FROM mail_addresses WHERE account_id = $1 AND state <> 'active')",
     )
     .bind(user_id)
     .execute(&mut *tx)
@@ -541,20 +550,20 @@ pub struct HeldName {
     free_at: Option<time::OffsetDateTime>,
 }
 
-/// `GET /api/user/names` — the caller's names: the current one and those it
+/// `GET /api/v1/account/names` — the caller's names: the current one and those it
 /// holds, with when each stops receiving and is freed.
 #[utoipa::path(
     get,
-    path = "/api/user/names",
-    tag = "user",
+    path = "/api/v1/account/names",
+    tag = "account",
     security(("BearerAuth" = [])),
     responses((status = 200, body = [HeldName]))
 )]
-pub async fn names(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn names(State(state): State<AppState>, user: AuthAccount) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<HeldName> = sqlx::query_as(
         "SELECT name, state, receive_until, free_at FROM account_names
-          WHERE user_id = $1 ORDER BY state = 'current' DESC, free_at",
+          WHERE account_id = $1 ORDER BY state = 'current' DESC, free_at",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -569,12 +578,12 @@ pub struct DropName {
     grant: String,
 }
 
-/// `DELETE /api/user/names/{name}` — stop receiving at a held name now. The
+/// `DELETE /api/v1/account/names/{name}` — stop receiving at a held name now. The
 /// name stays held until its date.
 #[utoipa::path(
     delete,
-    path = "/api/user/names/{name}",
-    tag = "user",
+    path = "/api/v1/account/names/{name}",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A name the account holds")),
     request_body = DropName,
@@ -582,13 +591,13 @@ pub struct DropName {
 )]
 pub async fn drop_name(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(name): Path<String>,
     Json(req): Json<DropName>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
@@ -597,7 +606,7 @@ pub async fn drop_name(
     // people may still write to, not something to repeat at will.
     let last: Option<time::OffsetDateTime> = sqlx::query_scalar(
         "SELECT max(at) FROM account_security_events
-          WHERE user_id = $1 AND kind = 'nameDropped' AND admin_user_id IS NULL",
+          WHERE subject_account_id = $1 AND kind = 'nameDropped' AND actor_kind = 'account'",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -615,7 +624,7 @@ pub async fn drop_name(
     }
     let dropped: Option<String> = sqlx::query_scalar(
         "UPDATE account_names SET receive_until = LEAST(COALESCE(receive_until, now()), now())
-          WHERE user_id = $1 AND folded = kutup_fold($2) AND state = 'held'
+          WHERE account_id = $1 AND folded = kutup_fold($2) AND state = 'held'
          RETURNING name",
     )
     .bind(user_id)
@@ -650,7 +659,7 @@ pub(crate) async fn close_address(
 ) -> AppResult<()> {
     sqlx::query(
         "UPDATE mail_addresses SET state = 'closed', receive_until = now()
-          WHERE user_id = $1 AND folded = kutup_fold($2) || '@' || lower($3)
+          WHERE account_id = $1 AND folded = kutup_fold($2) || '@' || lower($3)
             AND state = 'receiving'",
     )
     .bind(user_id)
@@ -672,14 +681,14 @@ enum AdminAction {
 
 async fn admin_name(
     state: &AppState,
-    admin: &crate::middleware::AdminUser,
+    admin: &crate::middleware::AdminAccount,
     name: &str,
     action: AdminAction,
 ) -> AppResult<Response> {
-    let admin_id = trusted_uuid(&admin.user_id)?;
+    let admin_id = trusted_uuid(&admin.account_id)?;
     let mut tx = state.pool.begin().await?;
     let held: Option<(String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT name, user_id FROM account_names
+        "SELECT name, account_id FROM account_names
           WHERE folded = kutup_fold($1) AND state = 'held' FOR UPDATE",
     )
     .bind(name)
@@ -702,7 +711,10 @@ async fn admin_name(
             if let Some(owner) = owner {
                 close_address(&mut tx, owner, &held_name, &state.config.chat_server_name).await?;
             }
-            (security_events::Kind::NameClosed, "name.close")
+            (
+                security_events::Kind::NameClosed,
+                crate::audit_log::AdminAction::NameClose,
+            )
         }
         AdminAction::Free => {
             sqlx::query("DELETE FROM account_names WHERE folded = kutup_fold($1)")
@@ -712,7 +724,7 @@ async fn admin_name(
             if let Some(owner) = owner {
                 sqlx::query(
                     "UPDATE mail_addresses SET state = 'freed', receive_until = NULL
-                      WHERE user_id = $1 AND split_part(folded, '@', 1) = kutup_fold($2)
+                      WHERE account_id = $1 AND split_part(folded, '@', 1) = kutup_fold($2)
                         AND state IN ('receiving', 'closed')",
                 )
                 .bind(owner)
@@ -720,7 +732,10 @@ async fn admin_name(
                 .execute(&mut *tx)
                 .await?;
             }
-            (security_events::Kind::NameFreed, "name.free")
+            (
+                security_events::Kind::NameFreed,
+                crate::audit_log::AdminAction::NameFree,
+            )
         }
     };
     if let Some(owner) = owner {
@@ -730,7 +745,7 @@ async fn admin_name(
     tx.commit().await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
+        &admin.account_id,
         audit_action,
         owner,
         json!({ "name": held_name }),
@@ -739,10 +754,10 @@ async fn admin_name(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/admin/names/{name}/close` — receiving at a held name ends now.
+/// `POST /api/v1/admin/names/{name}/close` — receiving at a held name ends now.
 #[utoipa::path(
     post,
-    path = "/api/admin/names/{name}/close",
+    path = "/api/v1/admin/names/{name}/close",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
@@ -750,17 +765,17 @@ async fn admin_name(
 )]
 pub async fn admin_close(
     State(state): State<AppState>,
-    admin: crate::middleware::AdminUser,
+    admin: crate::middleware::AdminAccount,
     Path(name): Path<String>,
 ) -> AppResult<Response> {
     admin_name(&state, &admin, &name, AdminAction::Close).await
 }
 
-/// `POST /api/admin/names/{name}/free` — a held name is free now: anyone may
+/// `POST /api/v1/admin/names/{name}/free` — a held name is free now: anyone may
 /// take it (a new owner is another incarnation; pins of the old one warn).
 #[utoipa::path(
     post,
-    path = "/api/admin/names/{name}/free",
+    path = "/api/v1/admin/names/{name}/free",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
@@ -768,7 +783,7 @@ pub async fn admin_close(
 )]
 pub async fn admin_free(
     State(state): State<AppState>,
-    admin: crate::middleware::AdminUser,
+    admin: crate::middleware::AdminAccount,
     Path(name): Path<String>,
 ) -> AppResult<Response> {
     admin_name(&state, &admin, &name, AdminAction::Free).await
@@ -781,20 +796,20 @@ pub struct ChainsQuery {
     incarnation_id: Option<String>,
 }
 
-/// `GET /api/users/renames/{address}` — every rename chain that names the
+/// `GET /api/v1/accounts/by-address/{address}/renames` — every rename chain that names the
 /// address (a reused name is in more than one), as `{ version: 1, chains }`,
 /// newest first. Clients verify each chain against their own pins.
 #[utoipa::path(
     get,
-    path = "/api/users/renames/{address}",
-    tag = "user",
+    path = "/api/v1/accounts/by-address/{address}/renames",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(("address" = String, Path, description = "username@server"), ChainsQuery),
     responses((status = 200, description = "The chains (an empty list when none names it)"))
 )]
 pub async fn chains(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(address): Path<String>,
     Query(query): Query<ChainsQuery>,
 ) -> AppResult<Response> {
@@ -806,7 +821,8 @@ pub async fn chains(
     // none is fresh (crate::remote_renames).
     if server != state.config.chat_server_name.to_ascii_lowercase() {
         let mut found =
-            crate::remote_renames::lookup(&state, trusted_uuid(&user.user_id)?, &address).await?;
+            crate::remote_renames::lookup(&state, trusted_uuid(&user.account_id)?, &address)
+                .await?;
         if let (Some(incarnation), Some(chains)) = (
             query.incarnation_id.as_deref(),
             found["chains"].as_array_mut(),
@@ -815,7 +831,12 @@ pub async fn chains(
         }
         return Ok(Json(found).into_response());
     }
-    let found =
-        account_names::chains(&state.pool, &address, query.incarnation_id.as_deref()).await?;
+    let found = account_names::chains(
+        &state.pool,
+        &address,
+        query.incarnation_id.as_deref(),
+        false,
+    )
+    .await?;
     Ok(Json(found).into_response())
 }

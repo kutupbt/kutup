@@ -17,3 +17,11 @@ right file here, not into `.github/workflows/ci.yml`.
 | `office.txt` | Mail browser specs: Office collaboration step (and collab sender verification) |
 | `mail-domains.txt` | Mail custom domains browser specs (`scripts/test-mail-domains-browser.sh`, on the mail gate's stack) |
 | `chat-backup.txt` | Clean-browser Chat backup recovery |
+| `drive.txt` | Drive, Office and Chat browser specs: Drive step |
+| `office-docs.txt` | Drive, Office and Chat browser specs: Office, notes and whiteboards step (114 needs `KUTUP_CLI`) |
+| `chat.txt` | Drive, Office and Chat browser specs: single-server Chat step (groups off; 41/42 need the SFU) |
+| `account-misc.txt` | Drive, Office and Chat browser specs: account and shell step |
+| `webkit.txt` | None: the media streaming specs on WebKit (`scripts/gate.sh browser webkit`), in the pre-release full test |
+
+A suite runs on Chromium unless its file has a `# project: <name>` line naming
+another Playwright project (`webkit.txt` does).

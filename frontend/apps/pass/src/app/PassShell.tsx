@@ -115,7 +115,7 @@ export function PassShell() {
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             // Locked, and what this device kept for offline use forgotten.
-            void lockAndForget(session.userId)
+            void lockAndForget(session.accountId)
               .then(() => signOut())
               .then(() => window.location.assign(appUrl('account', '/login')))
           }}

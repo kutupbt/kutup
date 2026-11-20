@@ -29,8 +29,8 @@ The independently outer-encrypted history-media lifecycle is covered by
 
 | Threat | Control | Outcome |
 |---|---|---|
-| Server substitutes or relocates a blob | Typed header, UUID-bound HKDF/AAD, complete digest and final-frame verification | Recipient rejects before plaintext release. |
-| Truncation, reordering, duplication or trailing bytes | Secretstream tags, fixed frame bounds and mandatory final frame | Decryption fails closed. |
+| Server substitutes or relocates a blob | Typed header, UUID-bound HKDF/AAD, the descriptor's manifest digest and complete-digest verification | Recipient rejects before plaintext release. |
+| Truncation, reordering, duplication or trailing bytes | Blocks bound to their index and the `last` flag, a sealed manifest of block hashes fixing the size and the count, and the exact object length | Decryption fails closed. |
 | Malicious filename/MIME/preview | Encrypted metadata is treated as untrusted presentation input; bounded sanitization and decoder isolation | No path traversal, script execution or unbounded decode. |
 | Client-provided remote URL/SSRF | Descriptor carries a canonical domain and opaque token, never a URL; own homeserver uses unified federation resolution | Arbitrary hosts and rebinding targets are never fetched. |
 | Stolen retrieval token | Recipient, destination, object digest and expiry binding; contacts/group capability; constant-time verifier | Token cannot be moved to another recipient/domain/object. |
@@ -48,6 +48,25 @@ The independently outer-encrypted history-media lifecycle is covered by
 | Save-to-Drive rebinds ciphertext | Client decrypts and re-encrypts under a new Drive file/collection/epoch header | Server cannot promote by metadata substitution. |
 | Delete-for-everyone promises revocation | UI states deletion is best effort after delivery; saved/decrypted copies cannot be revoked | No false cryptographic erasure claim. |
 | Oversized decompression/image/video bomb | Ciphertext and plaintext-class caps plus bounded client decoders | Resource use is bounded; malformed media does not affect crypto state. |
+
+## What the servers check, and what only recipients check
+
+A server holds no attachment key, so it can check only what is visible
+without one. Every server that keeps an object (the origin for a local
+upload, a destination for a peer's hand-over) checks the same things before
+it keeps it: the typed header names this attachment in the block suite, the
+object's length and trailer give a structure that holds (the sealed
+manifest's length fits the block count, and the count the length), and the
+whole object's SHA-256 is the digest it was uploaded or offered under. A
+peer that hands over anything else, a non-Kutup object included, is refused
+with the same 400 a local upload gets, and the refusal is final for that
+offer.
+
+The manifest digest (the descriptor's commitment to the sealed manifest)
+and each block's AEAD are checked only by recipients, who hold the
+descriptor and the key. A server that passes its checks may still hold an
+object whose manifest is not the one the descriptor names; the recipient
+then refuses it before any plaintext is released.
 
 ## Abuse defaults
 

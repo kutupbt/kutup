@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/apps'
 
 // Sending safety (docs/plans/mail.md): an administrator pauses an account's

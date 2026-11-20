@@ -5,7 +5,7 @@
 //! wrapped with that link key, so the stored ciphertext is useless without the fragment.
 //! Read endpoints are anonymous — the token is the capability.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::handlers::files::{canonical_uuid, validate_envelope};
 use crate::handlers::{octet_stream_response, random_token};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 #[derive(Debug, Default, Deserialize)]
@@ -38,22 +38,26 @@ pub struct CreateShareRequest {
     owner_link_key_envelope: String,
 }
 
-/// `POST /api/share` — mirrors `CreatePublicShare`. The link key is never sent here.
+/// `POST /api/v1/drive/public-links` — mirrors `CreatePublicShare`. The link key is never sent here.
 #[utoipa::path(
     post,
-    path = "/api/share",
-    tag = "shares",
+    path = "/api/v1/drive/public-links",
+    tag = "drive",
     security(("BearerAuth" = [])),
     request_body = crate::models::CreateShareRequest,
     responses((status = 201, description = "Share created", body = crate::models::CreateShareResult))
 )]
 pub async fn create_public_share(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(req): Json<CreateShareRequest>,
 ) -> AppResult<Response> {
     let user_id =
-        Uuid::parse_str(&user.user_id).map_err(|_| AppError::internal("invalid user id"))?;
+        Uuid::parse_str(&user.account_id).map_err(|_| AppError::internal("invalid user id"))?;
+    // Public links off, for the site or this account: none is made.
+    crate::public_sharing::ensure_may_share(&state.pool, user_id).await?;
+    let target = canonical_uuid(&req.target_id)?;
+    crate::public_sharing::ensure_target_open(&state.pool, &req.share_type, target).await?;
 
     let target_uuid = canonical_uuid(&req.target_id)?;
     // The key version the wrap is bound to: the folder's epoch, or the file
@@ -61,8 +65,8 @@ pub async fn create_public_share(
     let key_epoch: i32 = match req.share_type.as_str() {
         "collection" => {
             let key_epoch: Option<i32> = sqlx::query_scalar(
-                "SELECT key_epoch FROM collections \
-                 WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL",
+                "SELECT key_epoch FROM drive_collections \
+                 WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL",
             )
             .bind(target_uuid)
             .bind(user_id)
@@ -90,8 +94,8 @@ pub async fn create_public_share(
         // its current key, sealed under the link key.
         "file" => {
             let generation: Option<i32> = sqlx::query_scalar(
-                "SELECT f.key_generation FROM files f JOIN collections c ON c.id = f.collection_id
-                 WHERE f.id = $1 AND c.owner_user_id = $2
+                "SELECT f.key_generation FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
+                 WHERE f.id = $1 AND c.owner_account_id = $2
                    AND f.deleted_at IS NULL AND c.deleted_at IS NULL",
             )
             .bind(target_uuid)
@@ -116,16 +120,11 @@ pub async fn create_public_share(
         _ => return Err(AppError::bad_request("unsupported public share type")),
     };
     let link_id = canonical_uuid(&req.id)?;
+    let drive_generation = crate::account_roots::drive_generation(&state.pool, user_id).await?;
     validate_envelope(
         &req.owner_link_key_envelope,
-        DriveEnvelopeContextV1::new(
-            DriveEnvelopePurpose::PublicLinkKey,
-            1,
-            1,
-            &req.id,
-            &user_id.to_string(),
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        DriveEnvelopeContextV1::owner_link_key(&req.id, &user_id.to_string(), drive_generation)
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
 
     let token = random_token(32);
@@ -140,10 +139,10 @@ pub async fn create_public_share(
     };
 
     let id: Uuid = sqlx::query_scalar(
-        r#"INSERT INTO public_shares (id, share_type, target_id, token,
+        r#"INSERT INTO drive_public_shares (id, share_type, target_id, token,
                                       collection_key_envelope, collection_key_epoch,
-                                      owner_user_id, expires_at, owner_link_key_envelope)
-           VALUES ($9,$1,$2,$3,$4,$5,$6,$7,$8)
+                                      owner_account_id, expires_at, owner_link_key_envelope)
+           VALUES ($9,$1,$2,$3,kutup_unb64($4),$5,$6,$7,kutup_unb64($8))
            RETURNING id"#,
     )
     .bind(&req.share_type)
@@ -168,7 +167,7 @@ const MAX_LINK_HOURS: i64 = 10 * 366 * 24;
 /// Whether a shared folder is live (not trashed, not gone).
 async fn collection_live(state: &AppState, collection_id: Uuid) -> AppResult<bool> {
     sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM collections WHERE id = $1 AND deleted_at IS NULL)",
+        "SELECT EXISTS (SELECT 1 FROM drive_collections WHERE id = $1 AND deleted_at IS NULL)",
     )
     .bind(collection_id)
     .fetch_one(&state.pool)
@@ -179,7 +178,7 @@ async fn collection_live(state: &AppState, collection_id: Uuid) -> AppResult<boo
 /// Whether a linked file is live (it and its folder not trashed, not gone).
 async fn file_live(state: &AppState, file_id: Uuid) -> AppResult<bool> {
     sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
+        "SELECT EXISTS (SELECT 1 FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
                         WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL)",
     )
     .bind(file_id)
@@ -207,7 +206,7 @@ struct PublicShareResponse {
     target_id: Uuid,
     collection_key_envelope: String,
     collection_key_epoch: i32,
-    owner_user_id: Uuid,
+    owner_account_id: Uuid,
     /// The owner's account address (`alice@example.org`): a public page says
     /// who shared it, so a link cannot pass its content off as the server's.
     owner_account: String,
@@ -220,7 +219,7 @@ struct PublicShareResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     file: Option<PublicFileRow>,
     /// A link to a collection: `folder`, or `album` (docs/plans/photos.md),
-    /// whose photos are listed by `GET /api/share/{token}/album`.
+    /// whose photos are listed by `GET /api/v1/drive/public-links/{token}/album`.
     #[serde(skip_serializing_if = "Option::is_none")]
     collection_kind: Option<String>,
     /// A collection's name, sealed under its key (the link page shows it).
@@ -230,20 +229,21 @@ struct PublicShareResponse {
     name_revision: Option<i64>,
 }
 
-/// `GET /api/share/{token}` — mirrors `GetPublicShare`. Anonymous.
+/// `GET /api/v1/drive/public-links/{token}` — mirrors `GetPublicShare`. Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     responses((status = 200, description = "Share metadata + wrapped key", body = crate::models::PublicShareResponse))
 )]
 pub async fn get_public_share(
     State(state): State<AppState>,
+    viewer: crate::middleware::Viewer,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     type ShareRow = (
         Uuid,
         String,
@@ -257,9 +257,9 @@ pub async fn get_public_share(
     );
     let row: Option<ShareRow> = sqlx::query_as(
         r#"SELECT p.id, p.share_type, p.target_id,
-                  p.collection_key_envelope, p.collection_key_epoch, p.owner_user_id, p.expires_at,
-                  u.account_authority_public_key, u.username
-           FROM public_shares p JOIN users u ON u.id = p.owner_user_id WHERE p.token = $1"#,
+                  kutup_b64(p.collection_key_envelope), p.collection_key_epoch, p.owner_account_id,
+                  p.expires_at, kutup_b64(u.account_authority_public_key), u.username
+           FROM drive_public_shares p JOIN accounts u ON u.id = p.owner_account_id WHERE p.token = $1"#,
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -270,7 +270,7 @@ pub async fn get_public_share(
         target_id,
         envelope,
         epoch,
-        owner_user_id,
+        owner_account_id,
         expires_at,
         authority,
         owner_username,
@@ -294,7 +294,7 @@ pub async fn get_public_share(
     };
     let (collection_kind, name_envelope, name_revision) = if share_type == "collection" {
         let row: Option<(String, String, i64)> = sqlx::query_as(
-            "SELECT kind, name_envelope, name_revision FROM collections WHERE id = $1",
+            "SELECT kind, kutup_b64(name_envelope), name_revision FROM drive_collections WHERE id = $1",
         )
         .bind(target_id)
         .fetch_optional(&state.pool)
@@ -312,7 +312,7 @@ pub async fn get_public_share(
         target_id,
         collection_key_envelope: envelope,
         collection_key_epoch: epoch,
-        owner_user_id,
+        owner_account_id,
         owner_account: format!("{owner_username}@{}", state.config.chat_server_name),
         owner_authority_public_key: authority,
         expires_at,
@@ -324,24 +324,25 @@ pub async fn get_public_share(
     .into_response())
 }
 
-/// `GET /api/share/{token}/epochs` — the shared folder's key history, so a
+/// `GET /api/v1/drive/public-links/{token}/epochs` — the shared folder's key history, so a
 /// link holder can open files sealed before the folder's last rotation.
 /// Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/epochs",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/epochs",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     responses((status = 200, description = "Key history, oldest first", body = Vec<crate::handlers::folder_access::EpochLink>))
 )]
 pub async fn public_share_epochs(
     State(state): State<AppState>,
+    viewer: crate::middleware::Viewer,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let meta: Option<(Uuid, Option<OffsetDateTime>)> = sqlx::query_as(
-        "SELECT target_id, expires_at FROM public_shares WHERE token = $1 AND share_type = 'collection'",
+        "SELECT target_id, expires_at FROM drive_public_shares WHERE token = $1 AND share_type = 'collection'",
     )
             .bind(&token)
             .fetch_optional(&state.pool)
@@ -382,22 +383,23 @@ struct PublicFileRow {
     key_history: Vec<crate::models::FileKeyHistoryEntry>,
 }
 
-/// `GET /api/share/{token}/files` — mirrors `ListPublicShareFiles`. Anonymous.
+/// `GET /api/v1/drive/public-links/{token}/files` — mirrors `ListPublicShareFiles`. Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/files",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     responses((status = 200, description = "Files in the shared collection", body = Vec<PublicFileRow>))
 )]
 pub async fn list_public_share_files(
     State(state): State<AppState>,
+    viewer: crate::middleware::Viewer,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
-        "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
+        "SELECT target_id, share_type, expires_at FROM drive_public_shares WHERE token = $1",
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -439,10 +441,11 @@ async fn public_files(state: &AppState, filter: &str, id: Uuid) -> AppResult<Vec
         sqlx::types::Json<Vec<crate::models::FileKeyHistoryEntry>>,
     );
     let rows: Vec<PubFileTuple> = sqlx::query_as(&format!(
-        r#"SELECT f.id, f.collection_id, f.metadata_envelope, f.file_key_envelope,
+        r#"SELECT f.id, f.collection_id, kutup_b64(f.metadata_envelope),
+                  kutup_b64(f.file_key_envelope),
                   f.key_epoch, f.key_generation, f.metadata_revision, f.encrypted_size_bytes,
                   f.created_at, f.original_key_generation, {}, {}
-           FROM files f WHERE {} AND f.deleted_at IS NULL
+           FROM drive_files f WHERE {} AND f.deleted_at IS NULL
            ORDER BY f.created_at DESC"#,
         crate::models::CONTENT_KEY_GENERATION_SQL,
         crate::models::FILE_KEY_HISTORY_SQL,
@@ -491,10 +494,15 @@ async fn public_files(state: &AppState, filter: &str, id: Uuid) -> AppResult<Vec
 
 /// The file `file_id`, when the link `token` reaches it (its folder's file,
 /// or the one file it links to) and is live and unexpired.
-async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult<Uuid> {
-    crate::handlers::link_reports::ensure_link_up(&state.pool, token).await?;
+async fn link_reaches(
+    state: &AppState,
+    token: &str,
+    file_id: &str,
+    signed_in: bool,
+) -> AppResult<Uuid> {
+    crate::handlers::link_reports::ensure_link_up(&state.pool, token, signed_in).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
-        "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
+        "SELECT target_id, share_type, expires_at FROM drive_public_shares WHERE token = $1",
     )
     .bind(token)
     .fetch_optional(&state.pool)
@@ -509,11 +517,12 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
     }
 
     let fid = Uuid::parse_str(file_id).map_err(|_| AppError::not_found("not found"))?;
-    let coll_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
-            .bind(fid)
-            .fetch_optional(&state.pool)
-            .await?;
+    let coll_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT collection_id FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(fid)
+    .fetch_optional(&state.pool)
+    .await?;
     let Some(coll_id) = coll_id else {
         return Err(AppError::not_found("not found"));
     };
@@ -524,7 +533,7 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
         match share_type.as_str() {
             "collection" => coll_id == target_id
                 || sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS(SELECT 1 FROM album_items WHERE album_id = $1 AND file_id = $2)",
+                    "SELECT EXISTS(SELECT 1 FROM photos_album_items WHERE album_id = $1 AND file_id = $2)",
                 )
                 .bind(target_id)
                 .bind(fid)
@@ -543,60 +552,81 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
     Ok(fid)
 }
 
-/// `GET /api/share/{token}/state/{fileId}` — a note's or place list's latest
-/// saved state (a Yjs version, sealed under the file key of the generation in
-/// `X-Kutup-Key-Generation`), for the page to turn back into the file: their
+/// Which saved state a public link reads: `revision`, the one the file's
+/// sealed metadata names (`stateRevisionId`).
+#[derive(Debug, Deserialize)]
+pub struct StateQuery {
+    revision: Option<String>,
+}
+
+/// `GET /api/v1/drive/public-links/{token}/files/{fileId}/state` — a note's or place list's saved
+/// state (a Yjs version, sealed under the file key of the generation in
+/// `X-Kutup-Key-Generation`; `X-Kutup-Revision` names the version and
+/// `X-Kutup-Revision-Content` carries its sealed content record, which the
+/// page opens first), for the page to turn back into the file: their
 /// edits are not whole-file versions, so the download alone would be the
-/// upload. `404` when it has none. Anonymous.
+/// upload. `?revision=` asks for the state the file's sealed metadata names
+/// (the page refuses any other, docs/plans/drive-block-format.md §2);
+/// without it, the latest. `404` when there is no such state. Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/state/{fileId}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files/{fileId}/state",
+    tag = "drive",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
-        ("fileId" = String, Path, description = "File id")
+        ("fileId" = String, Path, description = "File id"),
+        ("revision" = Option<String>, Query, description = "The state's revision (version) id, as the file's metadata names it")
     ),
     responses((status = 200, description = "The sealed state (application/octet-stream)"), (status = 404, description = "No saved state"))
 )]
 pub async fn public_share_state(
     State(state): State<AppState>,
+    viewer: crate::middleware::Viewer,
     Path((token, file_id)): Path<(String, String)>,
+    Query(query): Query<StateQuery>,
 ) -> AppResult<Response> {
-    let fid = link_reaches(&state, &token, &file_id).await?;
-    let latest: Option<(String, i32)> = sqlx::query_as(
-        "SELECT storage_path, key_generation FROM file_versions
-         WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
+    let revision = query
+        .revision
+        .as_deref()
+        .map(|value| Uuid::parse_str(value).map_err(|_| AppError::bad_request("invalid revision")))
+        .transpose()?;
+    let latest: Option<(Uuid, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, key_generation, kutup_b64(revision_content_envelope)
+         FROM drive_file_versions
+         WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0 AND ($2::uuid IS NULL OR id = $2)
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(fid)
+    .bind(revision)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, key_generation)) = latest else {
+    let Some((version_id, key_generation, revision_content)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
+    let path = crate::file_content::revision_path(fid, version_id);
     let (body, size) = state
         .storage
         .get_object(&path)
         .await
         .map_err(|_| AppError::internal("storage"))?;
-    Ok(octet_stream_response(
-        body,
-        size,
-        &[(
-            axum::http::HeaderName::from_static("x-kutup-key-generation"),
-            key_generation.to_string(),
-        )],
-    ))
+    let mut headers =
+        crate::file_content::revision_headers(version_id, revision_content.as_deref());
+    headers.push((
+        axum::http::HeaderName::from_static("x-kutup-key-generation"),
+        key_generation.to_string(),
+    ));
+    Ok(octet_stream_response(body, size, &headers))
 }
 
-/// `GET /api/share/{token}/files/{fileId}/assets/{assetId}` — a picture in a
+/// `GET /api/v1/drive/public-links/{token}/files/{fileId}/assets/{assetId}` — a picture in a
 /// note reached by the link (sealed under the note's file key, the generation
 /// in `X-Kutup-Key-Generation`), so the public page shows the note as its
 /// owner sees it. Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/files/{fileId}/assets/{assetId}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files/{fileId}/assets/{assetId}",
+    tag = "drive",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
         ("fileId" = String, Path, description = "File id"),
@@ -606,13 +636,14 @@ pub async fn public_share_state(
 )]
 pub async fn public_share_asset(
     State(state): State<AppState>,
+    viewer: crate::middleware::Viewer,
     Path((token, file_id, asset_id)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
-    let fid = link_reaches(&state, &token, &file_id).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
     crate::handlers::file_assets::asset_response(&state, fid, &asset_id).await
 }
 
-/// `GET /api/share/{token}/download/{fileId}` — streams the encrypted blob. Anonymous:
+/// `GET /api/v1/drive/public-links/{token}/files/{fileId}/download` — streams the encrypted blob. Anonymous:
 /// the token is the capability, and the content is E2EE (the link key that unwraps it
 /// lives only in the URL fragment, never reaching the server).
 ///
@@ -622,8 +653,8 @@ pub async fn public_share_asset(
 /// matches every other download path.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/download/{fileId}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files/{fileId}/download",
+    tag = "drive",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
         ("fileId" = String, Path, description = "File id")
@@ -636,10 +667,11 @@ pub async fn public_share_asset(
 )]
 pub async fn download_public_share_file(
     State(state): State<AppState>,
+    viewer: crate::middleware::Viewer,
     Path((token, file_id)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let fid = link_reaches(&state, &token, &file_id).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
     // A public link shows the file as it is now, edits included.
     let content = crate::file_content::current_content(&state.pool, fid)
         .await?
@@ -661,23 +693,24 @@ pub struct PublicAlbumItem {
     album_epoch: i32,
 }
 
-/// `GET /api/share/{token}/album` — an album link's photos (docs/plans/photos.md).
+/// `GET /api/v1/drive/public-links/{token}/album` — an album link's photos (docs/plans/photos.md).
 /// Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/album",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/album",
+    tag = "drive",
     params(("token" = String, Path, description = "Share token (the capability)")),
     responses((status = 200, description = "The album's photos", body = Vec<PublicAlbumItem>))
 )]
 pub async fn public_album_items(
     State(state): State<AppState>,
+    viewer: crate::middleware::Viewer,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
-        "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
+        "SELECT target_id, share_type, expires_at FROM drive_public_shares WHERE token = $1",
     )
     .bind(&token)
     .fetch_optional(&state.pool)
@@ -689,7 +722,7 @@ pub async fn public_album_items(
         return Err(AppError::new(StatusCode::GONE, "link expired"));
     }
     let is_album: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM collections WHERE id = $1 AND kind = 'album' AND deleted_at IS NULL)",
+        "SELECT EXISTS(SELECT 1 FROM drive_collections WHERE id = $1 AND kind = 'album' AND deleted_at IS NULL)",
     )
     .bind(album_id)
     .fetch_one(&state.pool)
@@ -699,7 +732,7 @@ pub async fn public_album_items(
     }
     let files = public_files(
         &state,
-        "f.id IN (SELECT file_id FROM album_items WHERE album_id = $1)",
+        "f.id IN (SELECT file_id FROM photos_album_items WHERE album_id = $1)",
         album_id,
     )
     .await?;
@@ -715,12 +748,13 @@ pub async fn public_album_items(
         thumb_lg_generation: Option<i32>,
     }
     let items: Vec<Item> = sqlx::query_as(
-        "SELECT i.file_id, i.file_key_envelope, i.key_generation, i.album_epoch,
+        "SELECT i.file_id, kutup_b64(i.file_key_envelope) AS file_key_envelope,
+                i.key_generation, i.album_epoch,
                 sm.updated_at AS thumb_sm, lg.updated_at AS thumb_lg,
                 sm.key_generation AS thumb_sm_generation, lg.key_generation AS thumb_lg_generation
-         FROM album_items i
-         LEFT JOIN file_thumbnails sm ON sm.file_id = i.file_id AND sm.variant = 'sm'
-         LEFT JOIN file_thumbnails lg ON lg.file_id = i.file_id AND lg.variant = 'lg'
+         FROM photos_album_items i
+         LEFT JOIN drive_file_thumbnails sm ON sm.file_id = i.file_id AND sm.variant = 'sm'
+         LEFT JOIN drive_file_thumbnails lg ON lg.file_id = i.file_id AND lg.variant = 'lg'
          WHERE i.album_id = $1",
     )
     .bind(album_id)
@@ -749,12 +783,12 @@ pub async fn public_album_items(
     Ok(Json(out).into_response())
 }
 
-/// `GET /api/share/{token}/thumbnails/{fileId}/{variant}` — a thumbnail of a
+/// `GET /api/v1/drive/public-links/{token}/files/{fileId}/thumbnails/{variant}` — a thumbnail of a
 /// file the link reaches (sealed; the link's page opens it). Anonymous.
 #[utoipa::path(
     get,
-    path = "/api/share/{token}/thumbnails/{fileId}/{variant}",
-    tag = "shares",
+    path = "/api/v1/drive/public-links/{token}/files/{fileId}/thumbnails/{variant}",
+    tag = "drive",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
         ("fileId" = String, Path, description = "File id"),
@@ -764,10 +798,11 @@ pub async fn public_album_items(
 )]
 pub async fn public_thumbnail(
     State(state): State<AppState>,
+    viewer: crate::middleware::Viewer,
     Path((token, file_id, variant)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token).await?;
-    let fid = link_reaches(&state, &token, &file_id).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
     crate::handlers::file_thumbnails::serve_thumbnail(&state, fid, &variant).await
 }

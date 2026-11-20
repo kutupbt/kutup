@@ -1,194 +1,68 @@
-// Account-private, linked-device attachment accounting. The server sees only
-// opaque entity IDs, revision chains and ciphertext sizes; conversation names
-// and attachment relationships are decoded solely in the browser.
+// Account-private, linked-device attachment accounting: the account-records
+// store's `chatAttachments` scope (docs/plans/account-records.md), one record
+// per entity at its newest revision, its id random. The server sees only
+// opaque record ids, revisions and padded ciphertext; conversation names and
+// attachment relationships are decoded solely in the browser. The account
+// head covers the scope: every read is checked against the verified head, so
+// a server can't roll an entity back, drop it or bring an old one back.
 
-import api from '@kutup/session/client'
-import { toBase64 } from '@kutup/crypto/base64'
-import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
-import { localChainPins, type ChainPin, type LocalChainPins } from '@kutup/crypto/localChainPins'
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import {
-  chatAttachmentLedgerEnvelopeDigest,
   decodeChatAttachmentLedgerEntry,
   encodeChatAttachmentLedgerEntry,
-  inspectChatAttachmentLedgerEnvelope,
   openChatAttachmentLedger,
   sealChatAttachmentLedger,
   type ChatAttachmentLedgerOwner,
 } from '@kutup/crypto/chatMedia'
+import { accountHead } from '@kutup/session/accountHead'
+import { randomRecordId, type ScopeRecords } from '@kutup/session/accountRecords'
 import type { ChatAttachmentLedgerEntryV1 } from './types'
-import { hash as suiteHash } from '@kutup/crypto/hash'
 
-interface LedgerWireEntity {
-  entityId: string
-  revision: string
-  envelopeDigest: string
-  envelope: string
-  cursor: string
-}
-
-interface LedgerDiffPage {
-  entities: LedgerWireEntity[]
-  nextCursor: string
-  more: boolean
-}
-
-interface LedgerPutResponse {
-  entityId: string
-  revision: string
-  envelopeDigest: string
-  cursor: string
-  idempotent: boolean
-}
+const SCOPE = 'chatAttachments'
 
 export interface CurrentLedgerEntity {
   entityId: string
-  revision: bigint
-  envelopeDigest: string
-  cursor: bigint
+  revision: number
+  /** The sealed record as stored: an unchanged one is not opened again. */
+  envelope: string
   entry: ChatAttachmentLedgerEntryV1
 }
 
-const ZERO_DIGEST = '0'.repeat(64)
-const MAX_LEDGER_PAGES = 4096
-// This device's rollback pin: the newest cursor it has replayed and the local
-// chain digest there, a sealed, account-bound record in IndexedDB
-// (`@kutup/crypto/localChainPins`, purpose `LocalChainPin`) named by a keyed
-// hash of the incarnation. A missing pin, or one that does not open, is
-// unseen: the ledger is replayed as on a new device and pinned again.
-const PIN_SCOPE = 'chat-attachment-ledger'
-/** Where pins were kept before they were sealed: removed on the first pin stored. */
-const OLD_PIN_PREFIX = 'kutup.chat.attachment-ledger.pin.v1.'
-const LOCAL_PIN_DOMAIN = new TextEncoder().encode('kutup/chat-attachment-ledger/local-pin/v1\0')
+/** Whose ledger: the signed-in account (`session`). */
+export interface LedgerAccount {
+  accountId: string
+  masterKeys: MasterKeys
+  roots: AccountRoots
+  /** What the account's sealed records are bound to (`session.envelopeBinding`). */
+  envelopeBinding: string
+}
 
 export class ChatAttachmentLedger {
-  private readonly current = new Map<string, CurrentLedgerEntity>()
-  private cursor = 0n
-  private chainDigest: Uint8Array = new Uint8Array(32)
-  private pinVerified: boolean
+  private current = new Map<string, CurrentLedgerEntity>()
 
-  private constructor(
-    /** The account's master key (a copy, wiped on dispose) and key binding. */
-    private readonly owner: ChatAttachmentLedgerOwner,
-    private readonly accountIncarnationId: string,
-    private readonly pins: LocalChainPins,
-    /** `revision` is the cursor, `digest` the local chain digest there. */
-    private readonly localPin: ChainPin | null,
-  ) {
-    this.pinVerified = localPin === null || localPin.revision === 0n
-  }
+  private constructor(private readonly account: LedgerAccount) {}
 
-  static async open(masterKey: Uint8Array, binding: string): Promise<ChatAttachmentLedger> {
-    const identity = await deriveAccountIdentityKeys(toBase64(masterKey))
-    const pins = localChainPins({ masterKey, envelopeBinding: binding })
-    const ledger = new ChatAttachmentLedger(
-      { masterKey: masterKey.slice(), binding },
-      identity.incarnationId,
-      pins,
-      await pins.loadPin(PIN_SCOPE, identity.incarnationId),
-    )
+  static async open(account: LedgerAccount): Promise<ChatAttachmentLedger> {
+    const ledger = new ChatAttachmentLedger(account)
     await ledger.sync()
     return ledger
   }
 
-  /** Replay every unseen revision in cursor order and verify no chain gap. */
+  /** Reads the scope as the verified account head vouches for it. */
   async sync(): Promise<void> {
-    for (let pageNumber = 0; pageNumber < MAX_LEDGER_PAGES; pageNumber++) {
-      const response = await api.get<LedgerDiffPage>('/chat/media/ledger', {
-        params: { after: this.cursor.toString(), limit: 256 },
-      })
-      const page = response.data
-      let pageCursor = this.cursor
-      for (const wire of page.entities) {
-        const cursor = parseCanonicalU64(wire.cursor, 'ledger cursor')
-        const revision = parseCanonicalU64(wire.revision, 'ledger revision')
-        if (cursor <= pageCursor) throw new Error('Chat attachment ledger cursor regressed')
-        const header = await inspectChatAttachmentLedgerEnvelope(wire.envelope)
-        const digest = await chatAttachmentLedgerEnvelopeDigest(wire.envelope)
-        if (header.accountIncarnationId !== this.accountIncarnationId ||
-            header.entityId !== wire.entityId ||
-            parseCanonicalU64(header.revision, 'envelope ledger revision') !== revision ||
-            digest !== wire.envelopeDigest) {
-          throw new Error('Chat attachment ledger response differs from its envelope')
-        }
-        const previous = this.current.get(wire.entityId)
-        if (revision === 1n) {
-          if (previous || header.previousEnvelopeDigest !== ZERO_DIGEST) {
-            throw new Error('Chat attachment ledger replayed an invalid first revision')
-          }
-        } else if (!previous || revision !== previous.revision + 1n ||
-                   header.previousEnvelopeDigest !== previous.envelopeDigest) {
-          throw new Error('Chat attachment ledger has a missing or reordered revision')
-        }
-        const plaintext = await openChatAttachmentLedger(
-          wire.envelope,
-          this.owner,
-          {
-            accountIncarnationId: this.accountIncarnationId,
-            entityId: wire.entityId,
-            revision,
-            ...(revision > 1n
-              ? { previousEnvelopeDigest: header.previousEnvelopeDigest }
-              : {}),
-          },
-        )
-        const entry = await decodeChatAttachmentLedgerEntry<ChatAttachmentLedgerEntryV1>(plaintext)
-        if (entry.version !== 1) throw new Error('unsupported Chat attachment ledger entry')
-        this.chainDigest = await advanceLocalPin(
-          this.chainDigest,
-          cursor,
-          wire.entityId,
-          revision,
-          digest,
-        )
-        this.current.set(wire.entityId, {
-          entityId: wire.entityId,
-          revision,
-          envelopeDigest: digest,
-          cursor,
-          entry,
-        })
-        if (!this.pinVerified && this.localPin) {
-          const pinnedCursor = this.localPin.revision
-          if (cursor > pinnedCursor) {
-            throw new Error('Chat attachment ledger omitted the locally pinned cursor')
-          }
-          if (cursor === pinnedCursor) {
-            if (bytesToHex(this.chainDigest) !== this.localPin.digest) {
-              throw new Error('Chat attachment ledger conflicts with the local rollback pin')
-            }
-            this.pinVerified = true
-          }
-        }
-        pageCursor = cursor
-      }
-      const advertisedCursor = parseCanonicalU64(page.nextCursor, 'ledger next cursor')
-      if (advertisedCursor !== pageCursor) {
-        throw new Error('Chat attachment ledger page cursor is inconsistent')
-      }
-      this.cursor = pageCursor
-      if (!page.more) {
-        if (!this.pinVerified) {
-          throw new Error('Chat attachment ledger stopped before the local rollback pin')
-        }
-        await this.storeLocalPin()
-        return
-      }
-      if (page.entities.length !== 256) {
-        throw new Error('Chat attachment ledger continuation is not a full page')
-      }
-    }
-    throw new Error('Chat attachment ledger exceeded its bounded page count')
+    await this.adopt(await (await this.head()).records(SCOPE))
   }
 
   async create(entry: ChatAttachmentLedgerEntryV1): Promise<string> {
-    const entityId = crypto.randomUUID()
-    await this.put(entityId, entry)
+    const entityId = randomRecordId()
+    await this.put(entityId, entry, true)
     return entityId
   }
 
   async update(entityId: string, entry: ChatAttachmentLedgerEntryV1): Promise<void> {
     if (!this.current.has(entityId)) throw new Error('unknown Chat attachment ledger entity')
-    await this.put(entityId, entry)
+    await this.put(entityId, entry, false)
   }
 
   entries(): ReadonlyArray<CurrentLedgerEntity> {
@@ -243,139 +117,56 @@ export class ChatAttachmentLedger {
   }
 
   dispose(): void {
-    this.owner.masterKey.fill(0)
-    this.chainDigest.fill(0)
     this.current.clear()
-    this.cursor = 0n
   }
 
-  /** Pins the cursor replayed to and its chain digest, never moving back. */
-  private async storeLocalPin(): Promise<void> {
-    try {
-      await this.pins.storePin(PIN_SCOPE, this.accountIncarnationId, this.cursor, bytesToHex(this.chainDigest))
-    } catch {
-      // Browsers may disable persistent storage. The authenticated remote chain
-      // still verifies; only cross-restart rollback pinning is unavailable.
-      return
-    }
-    if (!oldPinsRemoved) {
-      oldPinsRemoved = true
-      removeOldPins()
-    }
+  private head() {
+    return accountHead(this.account)
   }
 
-  private async put(entityId: string, entry: ChatAttachmentLedgerEntryV1): Promise<void> {
-    const previous = this.current.get(entityId)
-    const revision = (previous?.revision ?? 0n) + 1n
+  private owner(): ChatAttachmentLedgerOwner {
+    return { masterKeys: this.account.masterKeys, binding: this.account.envelopeBinding }
+  }
+
+  /**
+   * Takes a verified copy of the scope: each record opened as exactly its id
+   * and the revision the index lists (one already open at that revision is
+   * kept as it is).
+   */
+  private async adopt(copy: ScopeRecords): Promise<void> {
+    const next = new Map<string, CurrentLedgerEntity>()
+    for (const [entityId, stored] of copy.records) {
+      const known = this.current.get(entityId)
+      if (known && known.revision === stored.revision && known.envelope === stored.envelope) {
+        next.set(entityId, known)
+        continue
+      }
+      const { plaintext, revision } = await openChatAttachmentLedger(stored.envelope, this.owner(), entityId)
+      if (revision !== stored.revision) {
+        throw new Error('Chat attachment ledger record differs from its listed revision')
+      }
+      const entry = await decodeChatAttachmentLedgerEntry<ChatAttachmentLedgerEntryV1>(plaintext)
+      if (entry.version !== 1) throw new Error('unsupported Chat attachment ledger entry')
+      next.set(entityId, { entityId, revision, envelope: stored.envelope, entry })
+    }
+    this.current = next
+  }
+
+  /**
+   * Stores `entry` as the entity's next revision with the next account head;
+   * when another device wrote first, read again and stored on top.
+   */
+  private async put(entityId: string, entry: ChatAttachmentLedgerEntryV1, isNew: boolean): Promise<void> {
     const plaintext = await encodeChatAttachmentLedgerEntry(entry)
-    const envelope = await sealChatAttachmentLedger(plaintext, this.owner, {
-      accountIncarnationId: this.accountIncarnationId,
-      entityId,
-      revision,
-      ...(previous ? { previousEnvelopeDigest: previous.envelopeDigest } : {}),
+    const stored = await (await this.head()).recordsWrite(SCOPE, async (copy) => {
+      await this.adopt(copy)
+      const previous = copy.records.get(entityId)
+      if (!isNew && !previous) throw new Error('unknown Chat attachment ledger entity')
+      const revision = (previous?.revision ?? 0) + 1
+      const envelope = await sealChatAttachmentLedger(plaintext, this.owner(), entityId, revision)
+      return { puts: [{ id: entityId, revision, envelope }], deletes: [], done: { revision, envelope } }
     })
-    const digest = await chatAttachmentLedgerEnvelopeDigest(envelope)
-    const operationId = await ledgerOperationId(entityId, revision, digest)
-    const response = await api.put<LedgerPutResponse>(
-      `/chat/media/ledger/${encodeURIComponent(entityId)}`,
-      { operationId, envelope },
-    )
-    const result = response.data
-    const cursor = parseCanonicalU64(result.cursor, 'ledger cursor')
-    if (result.entityId !== entityId ||
-        parseCanonicalU64(result.revision, 'ledger revision') !== revision ||
-        result.envelopeDigest !== digest || cursor <= this.cursor) {
-      throw new Error('Chat attachment ledger acknowledgement is inconsistent')
-    }
-    // Cursor values are account-global. A linked device may have committed
-    // one or more revisions between our last diff and this acknowledgement.
-    // Replay through the acknowledged cursor instead of jumping over them.
-    await this.sync()
-    const stored = this.current.get(entityId)
-    if (!stored || stored.revision !== revision || stored.envelopeDigest !== digest ||
-        stored.cursor !== cursor || stored.entry.attachmentId !== entry.attachmentId) {
-      throw new Error('Chat attachment ledger write was not recovered from its ordered diff')
-    }
+    if (!stored) throw new Error('Chat attachment ledger write was not stored')
+    this.current.set(entityId, { entityId, revision: stored.revision, envelope: stored.envelope, entry })
   }
-}
-
-let oldPinsRemoved = false
-
-/** The plain pins kept before they were sealed: removed, never read (unseen is safe). */
-function removeOldPins(): void {
-  try {
-    const storage = globalThis.localStorage
-    if (!storage) return
-    const old: string[] = []
-    for (let i = 0; i < storage.length; i++) {
-      const key = storage.key(i)
-      if (key?.startsWith(OLD_PIN_PREFIX)) old.push(key)
-    }
-    for (const key of old) storage.removeItem(key)
-  } catch {
-    // Storage may be off: nothing to remove then.
-  }
-}
-
-async function advanceLocalPin(
-  previous: Uint8Array,
-  cursor: bigint,
-  entityId: string,
-  revision: bigint,
-  envelopeDigest: string,
-): Promise<Uint8Array> {
-  const input = new Uint8Array(LOCAL_PIN_DOMAIN.length + 32 + 8 + 16 + 8 + 32)
-  let offset = 0
-  input.set(LOCAL_PIN_DOMAIN, offset)
-  offset += LOCAL_PIN_DOMAIN.length
-  input.set(previous, offset)
-  offset += 32
-  new DataView(input.buffer).setBigUint64(offset, cursor, false)
-  offset += 8
-  input.set(uuidBytes(entityId), offset)
-  offset += 16
-  new DataView(input.buffer).setBigUint64(offset, revision, false)
-  offset += 8
-  input.set(hexBytes(envelopeDigest), offset)
-  return suiteHash(input)
-}
-
-function uuidBytes(value: string): Uint8Array {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)) {
-    throw new Error('ledger entity id is not a canonical UUID')
-  }
-  return hexBytes(value.replaceAll('-', ''))
-}
-
-function hexBytes(value: string): Uint8Array {
-  if (!/^(?:[0-9a-f]{2})+$/.test(value)) throw new Error('ledger digest is not canonical hex')
-  return Uint8Array.from(value.match(/../g) ?? [], byte => Number.parseInt(byte, 16))
-}
-
-function bytesToHex(value: Uint8Array): string {
-  return Array.from(value, byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
-function parseCanonicalU64(value: string, field: string): bigint {
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${field} is not canonical`)
-  const parsed = BigInt(value)
-  if (parsed < 0n || parsed > 0xffff_ffff_ffff_ffffn) {
-    throw new Error(`${field} is outside u64`)
-  }
-  return parsed
-}
-
-async function ledgerOperationId(
-  entityId: string,
-  revision: bigint,
-  digest: string,
-): Promise<string> {
-  const bytes = new TextEncoder().encode(
-    `kutup/chat-attachment-ledger/operation/v1\0${entityId}\0${revision}\0${digest}`,
-  )
-  const hash = (await suiteHash(bytes)).slice(0, 16)
-  hash[6] = (hash[6] & 0x0f) | 0x80
-  hash[8] = (hash[8] & 0x3f) | 0x80
-  const hex = Array.from(hash, byte => byte.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { backFromEditor, createFolder, createNote, item, itemAction, noteLive, noteText, openItem, openNote, typeAtEnd } from '../fixtures/drive'
 
@@ -94,7 +94,7 @@ test('a frame from an unlisted device, or signed by another account, is refused'
   let shared = 0
   drive.on('response', (response) => {
     const path = new URL(response.url()).pathname
-    if (/^\/api\/collections\/[^/]+\/share$/.test(path) && response.request().method() === 'POST') shared = response.status()
+    if (/^\/api\/v1\/drive\/collections\/[^/]+\/share$/.test(path) && response.request().method() === 'POST') shared = response.status()
   })
   await itemAction(drive, folder, 'Share')
   const dialog = drive.getByRole('dialog')

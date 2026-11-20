@@ -6,9 +6,9 @@ import {
   renameOwnedCollectionV1,
   sealNamedShareEnvelope,
   sealPublicLinkCollectionKeyV1,
-  toBase64,
 } from '@kutup/crypto'
 import type { AccountRef } from '@kutup/crypto/accountRef'
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import { sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import { appUrl } from '@kutup/session/apps'
 import api from '@kutup/session/client'
@@ -17,9 +17,11 @@ import { cachedFolderIndex, foldersKey } from './folders'
 import { trashKey } from './trash'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
-import { atTopLevel, inFolder, nameHashIn, randomNameHash, type NamePlace } from './names'
+import { acceptFileMetadata } from './metadataGuard'
+import { atTopLevel, inFolder, nameFieldsIn, nameHashIn, randomNameHash, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
 import { confirmRecipient, lookupAddress } from './identityPins'
+import { encodeLinkFragment } from '@kutup/crypto/linkFragment'
 
 /** Every Drive mutation refreshes folders (names, timestamps) and the files it touched. */
 export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) => Promise<R>) {
@@ -50,8 +52,8 @@ export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) 
 
 export function useCreateFolder() {
   return useDriveMutation(async ({ parent, name }: { parent: Folder; name: string }, me) => {
-    const created = await createOwnedCollectionV1(me.masterKey, me.userId, name.trim(), parent.id)
-    await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(parent), name.trim()) })
+    const created = await createOwnedCollectionV1(me, me.accountId, name.trim(), parent.id)
+    await api.post('/drive/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(parent), name.trim()) })
     return created.payload.id
   })
 }
@@ -60,8 +62,8 @@ export function useCreateFolder() {
  * Where a folder's name lives: in its parent, or at the owner's top level.
  * Null when the parent is not at hand (it cannot be hashed then).
  */
-export function folderNamePlace(folder: Folder, parent: Folder | null | undefined, masterKey: Uint8Array): NamePlace | null {
-  if (!folder.parentId) return atTopLevel(masterKey)
+export function folderNamePlace(folder: Folder, parent: Folder | null | undefined, roots: AccountRoots): NamePlace | null {
+  if (!folder.parentId) return atTopLevel(roots)
   return parent?.key ? inFolder(parent) : null
 }
 
@@ -71,14 +73,14 @@ export function useRenameFolder() {
     if (!folder.key || !folder.canManage) throw new Error('only the owner can rename a folder')
     // The name envelope binds the owner's id; only owners rename, so it is ours.
     const next = await renameOwnedCollectionV1(
-      { id: folder.id, ownerUserId: me.userId, keyEpoch: folder.keyEpoch, nameRevision: folder.nameRevision },
+      { id: folder.id, ownerAccountId: me.accountId, keyEpoch: folder.keyEpoch, nameRevision: folder.nameRevision },
       folder.key,
       name.trim(),
     )
     const parent = folder.parentId ? cachedFolderIndex(queryClient)?.byId.get(folder.parentId) : null
-    const place = folderNamePlace(folder, parent, me.masterKey)
+    const place = folderNamePlace(folder, parent, me.roots)
     if (!place) throw new Error('the parent folder is not loaded')
-    await api.put(`/collections/${folder.id}`, { ...next, nameHash: await nameHashIn(place, name.trim()) })
+    await api.put(`/drive/collections/${folder.id}`, { ...next, ...(await nameFieldsIn(place, name.trim())) })
   })
 }
 
@@ -94,23 +96,25 @@ export function useRenameFile() {
     )
     // A file shared by itself is renamed without its folder's key: a random
     // hash, which no other name has (docs/plans/drive-unique-names.md).
-    await api.put(`/files/${file.id}`, {
+    await api.put(`/drive/files/${file.id}`, {
       ...next,
       nameHash: folder.key ? await nameHashIn(inFolder(folder), name.trim()) : randomNameHash(),
     })
+    // This device's own write: the file's newest metadata.
+    await acceptFileMetadata(file.id, next.metadataRevision).catch(() => undefined)
   })
 }
 
 export function useSetFolderColor() {
   return useDriveMutation(async ({ folder, color }: { folder: Folder; color: string | null }) => {
-    await api.patch(`/collections/${folder.id}/color`, { color })
+    await api.patch(`/drive/collections/${folder.id}/color`, { color })
   })
 }
 
 /** Folders go to trash with everything inside them, as one entry. */
 export function useTrashFolder() {
   return useDriveMutation(async (folder: Folder) => {
-    await api.delete(`/collections/${folder.id}`)
+    await api.delete(`/drive/collections/${folder.id}`)
   })
 }
 
@@ -119,8 +123,8 @@ export function useTrashFile() {
     const location = folderLocation(folder)
     await api.delete(
       location.kind === 'local'
-        ? `/files/${file.id}`
-        : `/drive/federation/shares/${location.shareId}/files/${file.id}`,
+        ? `/drive/files/${file.id}`
+        : `/drive/federation/folder-shares/${location.shareId}/files/${file.id}`,
     )
   })
 }
@@ -129,7 +133,7 @@ export function useTrashFile() {
 export function useLeaveRemoteShare() {
   return useDriveMutation(async (folder: Folder) => {
     if (!folder.remoteShareId) throw new Error('not a remote share')
-    await api.delete(`/drive/federation/shares/${folder.remoteShareId}`)
+    await api.delete(`/drive/federation/folder-shares/${folder.remoteShareId}`)
   })
 }
 
@@ -139,7 +143,7 @@ export function useLeaveRemoteShare() {
  * Photos, a document's on Office.
  */
 export function publicLinkUrl(token: string, linkKey: Uint8Array, app: 'drive' | 'photos' | 'office' = 'drive'): string {
-  return appUrl(app, `/s/${token}#key=${encodeURIComponent(toBase64(linkKey))}`)
+  return appUrl(app, `/s/${token}${encodeLinkFragment(linkKey)}`)
 }
 
 /**
@@ -155,13 +159,13 @@ export function useCreatePublicLink(app: 'drive' | 'photos' = 'drive') {
     const id = crypto.randomUUID().toLowerCase()
     const collectionKeyEnvelope = await sealPublicLinkCollectionKeyV1(folder.key, linkKey, {
       collectionId: folder.id,
-      ownerUserId: me.userId,
+      ownerAccountId: me.accountId,
       epoch: folder.keyEpoch,
     })
     // A copy of the link key for the owner: to list and copy the link later,
     // and to keep it working when the folder key rotates.
-    const ownerLinkKeyEnvelope = await sealOwnerLinkKeyV1(linkKey, me.masterKey, { linkId: id, ownerUserId: me.userId })
-    const { data } = await api.post<{ token: string }>('/share', {
+    const ownerLinkKeyEnvelope = await sealOwnerLinkKeyV1(linkKey, me.roots, { linkId: id, ownerAccountId: me.accountId })
+    const { data } = await api.post<{ token: string }>('/drive/public-links', {
       id,
       shareType: 'collection',
       targetId: folder.id,
@@ -205,7 +209,7 @@ export function useShareFolder() {
     }
     // Sealed to the account the address leads to, never to the address.
     const seal = (publicKey: string, to: AccountRef, incarnationId: string) =>
-      sealNamedShareEnvelope(folder.key!, me.masterKey, publicKey, {
+      sealNamedShareEnvelope(folder.key!, me.roots.identityRoot, publicKey, {
         collectionId: folder.id,
         epoch: folder.keyEpoch,
         sender: me.accountRef,
@@ -227,22 +231,22 @@ export function useShareFolder() {
     if (found.server === me.accountRef.server) {
       const local = found
       const namedShareEnvelope = await seal(
-        local.driveHpkePublicKey,
+        local.driveXwingPublicKey,
         { server: local.server, accountId: local.accountId },
         local.accountIncarnationId,
       )
-      await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.accountId, namedShareEnvelope, ...permissions })
+      await api.post(`/drive/collections/${folder.id}/share`, { recipientAccountId: local.accountId, namedShareEnvelope, ...permissions })
       return { kind: 'local', account: local.account }
     }
 
     // An account on another Kutup server.
     const remote = found
     const namedShareEnvelope = await seal(
-      remote.driveHpkePublicKey,
+      remote.driveXwingPublicKey,
       { server: remote.server, accountId: remote.accountId },
       remote.accountIncarnationId,
     )
-    const { data } = await api.post<{ inviteUrl: string }>(`/collections/${folder.id}/federated-shares`, {
+    const { data } = await api.post<{ inviteUrl: string }>(`/drive/collections/${folder.id}/federated-shares`, {
       recipientServer: server,
       recipientAccountId: remote.accountId,
       namedShareEnvelope,
@@ -290,7 +294,7 @@ export function useAcceptInvite() {
       return { kind: 'file', id: data.id }
     }
     // Folders and albums share one route; the owner's server says which it is.
-    const { data } = await api.post<{ id: string; remoteCollectionId: string; collectionKind: 'folder' | 'album' }>('/drive/federation/shares', {
+    const { data } = await api.post<{ id: string; remoteCollectionId: string; collectionKind: 'folder' | 'album' }>('/drive/federation/folder-shares', {
       server: invite.server,
       capability: invite.capability,
     })

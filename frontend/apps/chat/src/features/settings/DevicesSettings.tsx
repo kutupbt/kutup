@@ -7,6 +7,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Input } from '@kutup/ui/components/input'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
 import { LinkNewDeviceDialog } from './LinkNewDeviceDialog'
@@ -102,10 +103,7 @@ export function DevicesSettings() {
       </div>
       <LinkNewDeviceDialog open={linking} onOpenChange={setLinking} />
       {devices === null ? (
-        <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" aria-hidden />
-          {t('chat.devices.loading')}
-        </p>
+        <ListSkeleton label={t('chat.devices.loading')} rows={3} className="px-0" />
       ) : (
         <ul className="max-w-2xl space-y-2" data-testid="chat-devices-list">
           {devices.map((device) => {

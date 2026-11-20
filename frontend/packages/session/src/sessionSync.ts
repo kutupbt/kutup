@@ -5,11 +5,12 @@
 // Key material never crosses this channel: every tab restores its own keys
 // from the origin's encrypted session blob (see ./persist).
 
-const CHANNEL_NAME = 'kutup-session'
+const CHANNEL_NAME = 'kutup.session'
 
 type Message =
   | { type: 'logout' }
   | { type: 'color-update'; color: string | null }
+  | { type: 'instance-changed' }
 
 let channel: BroadcastChannel | null = null
 
@@ -73,4 +74,26 @@ export function sanitizeNext(next: string | null | undefined): string | null {
     if (code < 0x20 || code === 0x7f) return null
   }
   return next
+}
+
+/**
+ * Tell this origin's other tabs the server was reset (docs/plans/api-surface.md
+ * §5): they let go of their databases by reloading, and their boot finds the
+ * storage already cleared.
+ */
+export function broadcastInstanceChanged(): void {
+  const ch = getChannel()
+  if (!ch) return
+  try { ch.postMessage({ type: 'instance-changed' } satisfies Message) } catch { /* channel closed; nothing to notify */ }
+}
+
+/** Reload this tab when another one says the server was reset. */
+export function startInstanceListener(onChanged: () => void): () => void {
+  const ch = getChannel()
+  if (!ch) return () => {}
+  function onMsg(ev: MessageEvent<Message>) {
+    if (ev.data?.type === 'instance-changed') onChanged()
+  }
+  ch.addEventListener('message', onMsg)
+  return () => ch.removeEventListener('message', onMsg)
 }

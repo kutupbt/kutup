@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 // Remote images (docs/plans/mail-parity.md, P5): Proton's "Auto show remote
@@ -13,7 +13,7 @@ test('remote images: the setting, and senders whose images always load', async (
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } })
   await registerAccount(context, newAccount('rimages', PASSWORD))
   const mail = await context.newPage()
-  const signedIn = mail.waitForRequest((r) => new URL(r.url()).pathname.startsWith('/api/mail/') && !!r.headers().authorization)
+  const signedIn = mail.waitForRequest((r) => new URL(r.url()).pathname.startsWith('/api/v1/mail/') && !!r.headers().authorization)
   await mail.goto(appUrl('mail'))
   await expect(mail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
   const authorization = (await signedIn).headers().authorization

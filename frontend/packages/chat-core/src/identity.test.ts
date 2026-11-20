@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addressString,
   contactUri,
+  parseContactUri,
   conversationKey,
   directAccount,
   directConversation,
@@ -62,10 +63,12 @@ describe('chat identity', () => {
     expect(addressString({ username: 'bob', server: 'remote.example' })).toBe('bob@remote.example')
   })
 
-  it('round-trips a contact link without an alias layer', () => {
-    const address = { username: 'alice', server: 'chat.example' }
-    const uri = contactUri(address)
-    expect(uri).toBe('kutup://contact/alice%40chat.example')
-    expect(parseAddress(uri)).toEqual(address)
+  it('round-trips a contact link by the permanent account id', () => {
+    const account = { server: 'chat.example', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70' }
+    const uri = contactUri(account)
+    expect(uri).toBe('kutup://contact/chat.example/3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70')
+    expect(parseContactUri(uri)).toEqual(account)
+    expect(parseContactUri('kutup://contact/alice%40chat.example')).toBeNull()
+    expect(parseContactUri('kutup://contact/chat.example/not-an-id')).toBeNull()
   })
 })

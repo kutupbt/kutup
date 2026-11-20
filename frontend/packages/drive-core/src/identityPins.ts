@@ -38,14 +38,9 @@ import {
   type PinUpdate,
   type Recorded,
 } from '@kutup/crypto/identityPins'
-import { OlderThanSeenError, revisionGuard, toBase64 } from '@kutup/crypto'
-import {
-  accountHead,
-  HeadBlockedError,
-  IndexMismatchError,
-  NotInVerifiedIndexError,
-  type VerifiedIndex,
-} from '@kutup/session/accountHead'
+import { OlderThanSeenError, revisionGuard } from '@kutup/crypto'
+import { accountHead, HeadBlockedError, IndexMismatchError } from '@kutup/session/accountHead'
+import { ScopeRecords, type RecordsPage } from '@kutup/session/accountRecords'
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 import { driveIdentityOf, type DriveIdentity } from './identity'
@@ -86,7 +81,7 @@ export type IdentityStatus =
 
 /** The keys a share or a lookup put to this person; what is absent is not compared. */
 export interface ClaimedKeys {
-  driveHpkePublicKey?: string
+  driveXwingPublicKey?: string
   driveSigningPublicKey?: string
   incarnationId?: string
   authorityPublicKey?: string
@@ -100,7 +95,7 @@ export interface PublishedIdentity {
   server: string
   accountId: string
   accountAuthorityPublicKey: string
-  driveHpkePublicKey: string
+  driveXwingPublicKey: string
   driveSigningPublicKey: string
   driveKeyBinding?: string | null
   /**
@@ -123,14 +118,14 @@ async function keysBound(person: PublishedIdentity): Promise<boolean> {
   return verifyDriveKeyBinding(
     refOf(person),
     person.accountAuthorityPublicKey,
-    person.driveHpkePublicKey,
+    person.driveXwingPublicKey,
     person.driveSigningPublicKey,
     person.driveKeyBinding,
     person.driveKeyBindingEpoch!,
   ).catch(() => false)
 }
 
-/** An account as a single lookup answers it (`/users/by-address`, `/users/by-id`). */
+/** An account as a single lookup answers it (`/accounts/by-address`, `/accounts/by-id`). */
 export interface AccountAnswer extends PublishedIdentity {
   username: string
   accountIncarnationId: string
@@ -158,7 +153,7 @@ async function fetchIdentity(me: DriveIdentity, account: string): Promise<Publis
     server === me.account.split('@')[1]
       ? await localIdentity(account)
       // Another server's account: the same lookup, through this server.
-      : (await api.get<PublishedIdentity>(`/users/by-address/${encodeURIComponent(account)}`)).data
+      : (await api.get<PublishedIdentity>(`/accounts/by-address/${encodeURIComponent(account)}`)).data
   if (data.account !== account) throw new Error('the lookup answered for another account')
   // An account lives on the server of its address.
   if (data.server !== server) throw new Error('the lookup answered for an account on another server')
@@ -197,7 +192,7 @@ async function flush(): Promise<void> {
   for (let start = 0; start < batch.length; start += BATCH) {
     const part = batch.slice(start, start + BATCH)
     try {
-      const { data } = await api.post<PublishedIdentity[]>('/users/drive-identities', {
+      const { data } = await api.post<PublishedIdentity[]>('/drive/identities', {
         accounts: [...new Set(part.map((entry) => entry.account))],
       })
       const found = new Map(data.map((identity) => [identity.account, identity]))
@@ -220,7 +215,7 @@ interface PinStore {
   pins: PinsText
 }
 
-let store: { userId: string; loaded: Promise<PinStore> } | null = null
+let store: { accountId: string; loaded: Promise<PinStore> } | null = null
 let writes: Promise<unknown> = Promise.resolve()
 
 /** The highest revision this browser has seen: a server cannot quietly hand back an older list. */
@@ -233,71 +228,63 @@ export class PinsRolledBack extends Error {
   }
 }
 
-/** The pin list is one value of the account head's `pins` scope (docs/plans/rollback-protection.md). */
-const HEAD_SCOPE = 'pins'
-const HEAD_ID = 'pins'
+/**
+ * The pin list is the one record of the account-records scope `pins`
+ * (docs/plans/account-records.md), under the account head.
+ */
+const SCOPE = 'pins'
+const RECORD_ID = 'pins'
 
 function headFor(me: DriveIdentity) {
-  return accountHead({ userId: me.userId, masterKey: me.masterKey, envelopeBinding: me.binding })
+  return accountHead({ accountId: me.accountId, masterKeys: me.masterKeys, roots: me.roots, envelopeBinding: me.binding })
 }
 
 /**
- * The account head's index of the pin list, or null when it cannot vouch
- * (this app is blocked on another history: reads go on, held to this
- * browser's own guard only, and the shell's banner says why).
+ * The scope's records, read without the head: only while this app is
+ * blocked on another history (reads go on, held to this browser's own guard
+ * only, and the shell's banner says why).
  */
-async function pinsIndex(me: DriveIdentity): Promise<VerifiedIndex | null> {
+async function unverifiedRecords(): Promise<ScopeRecords> {
+  const copy = new ScopeRecords(SCOPE)
+  for (let pages = 0; pages < 100; pages++) {
+    const page = (await api.get<RecordsPage>(`/account/records/${SCOPE}?after=${copy.cursor}`)).data
+    if (copy.merge(page) === 'done') return copy
+  }
+  throw new Error('the identity pins did not end')
+}
+
+/**
+ * The scope as the head vouches for it (every page's head verified, the
+ * scope checked against it), or read unverified while this app is blocked.
+ * A list the head does not vouch for counts as rolled back.
+ */
+async function pinsRecords(me: DriveIdentity): Promise<{ copy: ScopeRecords; verified: boolean }> {
   try {
-    return await (await headFor(me)).verifiedIndex(HEAD_SCOPE)
+    return { copy: await (await headFor(me)).records(SCOPE), verified: true }
   } catch (error) {
-    if (error instanceof HeadBlockedError) return null
+    if (error instanceof HeadBlockedError) return { copy: await unverifiedRecords(), verified: false }
     if (error instanceof IndexMismatchError) throw new PinsRolledBack()
     throw error
   }
 }
 
-async function readPins(): Promise<{ revision: number; envelope: string } | null> {
-  try {
-    return (await api.get<{ revision: number; envelope: string }>('/user/identity-pins')).data
-  } catch (error) {
-    if (!(isAxiosError(error) && error.response?.status === 404)) throw error
-    return null
-  }
-}
-
 async function fetchPins(me: DriveIdentity): Promise<PinStore> {
-  // The list and the head's index are two reads: a write landing between
-  // them is read again once before it counts as a list the head does not
-  // vouch for.
-  for (let attempt = 0; ; attempt++) {
-    const index = await pinsIndex(me)
-    const data = await readPins()
-    try {
-      return await openPins(me, data, index)
-    } catch (error) {
-      if (error instanceof NotInVerifiedIndexError && attempt === 0) continue
-      if (error instanceof NotInVerifiedIndexError) throw new PinsRolledBack()
-      throw error
-    }
-  }
+  const { copy } = await pinsRecords(me)
+  return openPins(me, copy)
 }
 
-async function openPins(
-  me: DriveIdentity,
-  data: { revision: number; envelope: string } | null,
-  index: VerifiedIndex | null,
-): Promise<PinStore> {
+async function openPins(me: DriveIdentity, copy: ScopeRecords): Promise<PinStore> {
   const guard = revisionGuard({ ...me, envelopeBinding: me.binding })
+  const data = copy.records.get(RECORD_ID)
   if (!data) {
-    // None stored, though this browser has seen one, or the head lists one:
-    // held back by the server.
+    // None stored, though this browser has seen one: held back by the server.
     if ((await guard.seen(PINS_SCOPE, PINS_ID)) > 0) throw new PinsRolledBack()
-    index?.expectListing([])
     return { revision: 0, pins: EMPTY_PINS }
   }
-  // The revision is the one sealed in the list's header, not the server's word.
-  const { pins, revision } = await openIdentityPins(toBase64(me.masterKey), me.binding, data.envelope)
-  index?.expect(HEAD_ID, revision)
+  // The revision is the one sealed in the list's header, not the server's
+  // word: it must be the one the (verified) records name.
+  const { pins, revision } = await openIdentityPins(me.masterKeys, me.binding, data.envelope)
+  if (revision !== data.revision) throw new PinsRolledBack()
   try {
     await guard.accept(PINS_SCOPE, PINS_ID, revision)
   } catch (error) {
@@ -308,9 +295,9 @@ async function openPins(
 }
 
 function pinStore(me: DriveIdentity): Promise<PinStore> {
-  if (!store || store.userId !== me.userId) {
+  if (!store || store.accountId !== me.accountId) {
     const loaded = fetchPins(me)
-    store = { userId: me.userId, loaded }
+    store = { accountId: me.accountId, loaded }
     loaded.catch(() => {
       if (store?.loaded === loaded) store = null
     })
@@ -327,30 +314,20 @@ function pinStore(me: DriveIdentity): Promise<PinStore> {
 function updatePins(me: DriveIdentity, change: (pins: PinsText) => Promise<PinsText | null>): Promise<void> {
   const run = async () => {
     const head = await headFor(me)
-    await head.listedWrite(HEAD_SCOPE, async (_index, attempt) => {
-      // Past the first try another app wrote first: read the list again.
-      if (attempt > 1) store = null
-      const current = await pinStore(me)
+    const stored = await head.recordsWrite(SCOPE, async (copy) => {
+      // Each try reads the verified list again (another app may have
+      // stored one first).
+      const current = await openPins(me, copy)
       const list = await change(current.pins)
       if (!list) return null
       const guard = revisionGuard({ ...me, envelopeBinding: me.binding })
       const revision = await guard.next(PINS_SCOPE, PINS_ID, current.revision)
-      const envelope = await sealIdentityPins(toBase64(me.masterKey), me.binding, revision, list)
-      return {
-        changes: [[HEAD_ID, revision]],
-        send: async (sealedHead) => {
-          try {
-            await api.put('/user/identity-pins', { baseRevision: current.revision, envelope, head: sealedHead })
-          } catch (error) {
-            // Read again on the next try, whatever the conflict was.
-            if (isAxiosError(error) && error.response?.status === 409) store = null
-            throw error
-          }
-          await guard.accept(PINS_SCOPE, PINS_ID, revision)
-          store = { userId: me.userId, loaded: Promise.resolve({ revision, pins: list }) }
-        },
-      }
+      const envelope = await sealIdentityPins(me.masterKeys, me.binding, revision, list)
+      return { puts: [{ id: RECORD_ID, revision, envelope }], deletes: [], done: { revision, pins: list } }
     })
+    if (!stored) return
+    await revisionGuard({ ...me, envelopeBinding: me.binding }).accept(PINS_SCOPE, PINS_ID, stored.revision)
+    store = { accountId: me.accountId, loaded: Promise.resolve(stored) }
   }
   const result = writes.then(run, run)
   writes = result.catch(() => undefined)
@@ -378,7 +355,10 @@ async function recordPin(me: DriveIdentity, person: PublishedIdentity, update: P
 
 // ------------------------------------------------------------- renames
 
-/** One account's rename chain, as `GET /api/users/renames/:address` and `409 renamed` give it. */
+/**
+ * One account's rename chain, as `GET /api/users/renames/:address` and `409
+ * renamed` give it. Whose it is is in every statement (`accountId`, signed).
+ */
 export interface RenameChainEntry {
   incarnationId: string
   authorityPublicKey: string
@@ -401,9 +381,17 @@ export function renamesOf(error: unknown): RenameChains | null {
   return data?.code === 'renamed' && data.renames && Array.isArray(data.renames.chains) ? data.renames : null
 }
 
+/**
+ * The account id a chain's statements sign (all must name the same, which
+ * verifying checks): for a chain of someone the caller knows no id for.
+ */
+function signedAccountId(entry: RenameChainEntry): string {
+  return entry.chain[0]?.accountId ?? ''
+}
+
 /** The rename chains that name `address`. */
 async function fetchRenames(address: string): Promise<RenameChains> {
-  return (await api.get<RenameChains>(`/users/renames/${encodeURIComponent(address)}`)).data
+  return (await api.get<RenameChains>(`/accounts/by-address/${encodeURIComponent(address)}/renames`)).data
 }
 
 /** Where a person known at an address they left is now. */
@@ -449,7 +437,7 @@ export async function followRename(me: DriveIdentity, address: string, renames: 
   for (const entry of renames.chains) {
     if (entry.state !== 'current') continue
     try {
-      const view = await verifyAccountRenameChain(entry.authorityPublicKey, entry.chain)
+      const view = await verifyAccountRenameChain(entry.authorityPublicKey, signedAccountId(entry), entry.chain)
       const folded = await Promise.all(view.addresses.map((a) => foldAddress(a)))
       if (asked !== null && folded.includes(asked) && (await foldAddress(view.current)) !== asked) {
         return { now: view.current, formerly: address, verified: false }
@@ -478,7 +466,7 @@ export interface PendingPin {
  * renames since the first meeting. The list isn't touched; the pin is
  * written in its own time, and then followed as any other.
  */
-async function followPending(pending: PendingPin, current: string): Promise<AccountRename[]> {
+async function followPending(account: AccountRef, pending: PendingPin, current: string): Promise<AccountRename[]> {
   let renames: RenameChains
   try {
     renames = await fetchRenames(current)
@@ -489,7 +477,7 @@ async function followPending(pending: PendingPin, current: string): Promise<Acco
   const entry = renames.chains.find((chain) => chain.authorityPublicKey === pending.authorityPublicKey && chain.state === 'current')
   if (!entry || entry.chain.length === 0 || !(await sameAddress(entry.current, current))) return []
   try {
-    const view = await verifyAccountRenameChain(pending.authorityPublicKey, entry.chain)
+    const view = await verifyAccountRenameChain(pending.authorityPublicKey, account.accountId, entry.chain)
     if (!(await sameAddress(view.current, current))) return []
   } catch {
     return []
@@ -529,7 +517,7 @@ export async function followAccountRenames(
   store = null
   const pins = await pinStore(me)
   const pin = pins.pins.list.pins.find((known) => sameAccount(known.account, account))
-  if (!pin) return pending ? followPending(pending, current) : []
+  if (!pin) return pending ? followPending(account, pending, current) : []
   const label = pinAddress(pin)
   if (label && (await sameAddress(label, current))) return []
   let renames: RenameChains
@@ -651,7 +639,7 @@ export async function currentAddressOf(address: string, authority: string): Prom
   for (const entry of renames.chains) {
     if (entry.authorityPublicKey !== authority || entry.state !== 'current') continue
     try {
-      const view = await verifyAccountRenameChain(authority, entry.chain)
+      const view = await verifyAccountRenameChain(authority, signedAccountId(entry), entry.chain)
       const folded = await Promise.all(view.addresses.map((a) => foldAddress(a)))
       if (asked !== null && folded.includes(asked)) return view.current
     } catch {
@@ -712,7 +700,7 @@ async function checkPublished(
   if (person.server !== account.slice(account.lastIndexOf('@') + 1).toLowerCase()) return { kind: 'invalid' }
   // The keys in use must be the ones the person's server publishes...
   if (
-    (claimed.driveHpkePublicKey && claimed.driveHpkePublicKey !== person.driveHpkePublicKey) ||
+    (claimed.driveXwingPublicKey && claimed.driveXwingPublicKey !== person.driveXwingPublicKey) ||
     (claimed.driveSigningPublicKey && claimed.driveSigningPublicKey !== person.driveSigningPublicKey) ||
     (claimed.authorityPublicKey && claimed.authorityPublicKey !== person.accountAuthorityPublicKey)
   ) {
@@ -728,6 +716,12 @@ async function checkPublished(
   }
   const match = await lookupIdentityPin(pins.pins, refOf(person), account, person.accountAuthorityPublicKey)
   const pin = match.kind === 'pinned' ? match.pin : null
+  // One authority is one account. An authority the list holds for another
+  // account is that account's keys handed out under this one: a mirror (the
+  // same account id minted by another server, docs/plans/identity-rotation.md
+  // §6) or a copy. Refused here, before anything is written, so it holds
+  // when the list can't be written too.
+  if (authorityPinnedElsewhere(pins.pins, refOf(person), person.accountAuthorityPublicKey)) return { kind: 'invalid' }
   // ...and those its authority vouches for. A binding is never withdrawn: a
   // pinned account without one is a server leaving it out. An account not
   // yet on X-Wing keys has none that count until it signs in again.
@@ -755,6 +749,11 @@ async function checkPublished(
   if (recorded.kind === 'addressHadOthers') return someoneElse(recorded.pins[0], account)
   if (match.kind === 'someoneElse') return someoneElse(match.pins[0], account)
   return { kind: 'ok', verified: false }
+}
+
+/** Whether `authority` is pinned for another account than `account` (Rust `Recorded::AuthorityElsewhere`). */
+function authorityPinnedElsewhere(pins: PinsText, account: AccountRef, authority: string): boolean {
+  return pins.list.pins.some((pin) => pin.authorityPublicKey === authority && !sameAccount(pin.account, account))
 }
 
 /**
@@ -962,12 +961,12 @@ export function checkAnswer(me: DriveIdentity, address: string, answer: AccountA
 
 /**
  * The account `address` leads to, here or on another server: one lookup
- * (`/users/by-address`). Not found is `RecipientNotFound`-worthy (null); a
+ * (`/accounts/by-address`). Not found is `RecipientNotFound`-worthy (null); a
  * name its person left is `RecipientRenamed`.
  */
 export async function lookupAddress(me: DriveIdentity, address: string): Promise<AccountAnswer | null> {
   try {
-    return (await api.get<AccountAnswer>(`/users/by-address/${encodeURIComponent(address)}`)).data
+    return (await api.get<AccountAnswer>(`/accounts/by-address/${encodeURIComponent(address)}`)).data
   } catch (error) {
     if ((error as { response?: { status?: number } }).response?.status === 404) return null
     throw await recipientError(me, address, error)
@@ -1068,6 +1067,35 @@ export async function acceptGroup(me: DriveIdentity, server: string, groupId: st
     const result = await recordGroupPin(list, server, groupId, chain, 'accepted', now())
     return result.changed ? result.pins : null
   })
+}
+
+
+/**
+ * The pinned accounts with this permanent id, on any server: what names a
+ * revision's signer (a manifest names an account id and its incarnation,
+ * not a server; the incarnation tells them apart).
+ */
+export async function pinsOfAccountId(me: DriveIdentity, accountId: string): Promise<IdentityPin[]> {
+  return (await pinStore(me)).pins.list.pins.filter((pin) => pin.account.accountId === accountId)
+}
+
+/**
+ * The Drive signing key a pinned account's own authority vouches for now
+ * (its key binding, checked), or null when it can't be had: the account is
+ * known at no address, its server answers for another account or authority,
+ * or the keys published are not bound.
+ */
+export async function boundSigningKeyOf(me: DriveIdentity, pin: IdentityPin): Promise<string | null> {
+  const address = pinAddress(pin)
+  if (!address) return null
+  let person: PublishedIdentity
+  try {
+    person = await publishedIdentity(me, address)
+  } catch {
+    return null
+  }
+  if (!sameAccount(refOf(person), pin.account) || person.accountAuthorityPublicKey !== pin.authorityPublicKey) return null
+  return (await keysBound(person)) ? person.driveSigningPublicKey : null
 }
 
 /** Test seam: forget what this page has looked up and pinned. */

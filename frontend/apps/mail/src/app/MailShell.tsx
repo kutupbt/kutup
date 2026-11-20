@@ -3,9 +3,9 @@ import { feedbackServices } from '@kutup/session/feedback'
 import { AlarmClock, Archive, BookUser, CalendarDays, Clock, FilePen, FileType, HardDrive, Images, Inbox, KeyRound, Mail as MailIcon, Mails, Map as MapIcon, MessagesSquare, OctagonAlert, PenSquare, Search, Send, Settings, SlidersHorizontal, Star, Trash2, UserRound, Users } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Outlet, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
-import { useCounts, type FolderId } from '@kutup/mail-core/api'
+import { useCounts, useMailSettings, useRefetchOpenMail, type FolderId } from '@kutup/mail-core/api'
 import { useContentSearch } from '@kutup/mail-core/contentSearch'
 import { useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { appUrl } from '@kutup/session/apps'
@@ -22,6 +22,7 @@ import { UserMenu } from '@kutup/ui/components/user-menu'
 import { AdvancedSearch } from '../features/AdvancedSearch'
 import { NotificationBanner } from '../features/NotificationBanner'
 import { useNewMailNotifications } from '../features/useNewMailNotifications'
+import { useUnreadFavicon } from '../features/useUnreadFavicon'
 import { useSettleOwedKeyLists } from '@kutup/mail-core/forwardings'
 import { openComposer, useComposer } from '../features/composerState'
 import { MAILTO_HASH, parseMailto } from '../features/mailto'
@@ -70,6 +71,7 @@ const SHARED_NAV: { id: FolderId; icon: ReactNode }[] = [
 function SharedMailbox({ group, open }: { group: MailGroup; open: boolean }) {
   const { t } = useTranslation()
   const counts = useCounts(group.id)
+  const refresh = useRefetchOpenMail()
   const unread = (folder: FolderId) => counts.data?.find((c) => c.folder === folder)?.unread ?? 0
   return (
     <>
@@ -77,6 +79,7 @@ function SharedMailbox({ group, open }: { group: MailGroup; open: boolean }) {
         to={`/g/${group.id}/inbox`}
         icon={<Users />}
         label={group.displayName || group.address}
+        refresh={{ label: t('folders.refresh', { name: group.displayName || group.address }), run: refresh }}
         trailing={unread('inbox') > 0 ? <Count value={unread('inbox')} /> : undefined}
       />
       {open ? (
@@ -88,6 +91,7 @@ function SharedMailbox({ group, open }: { group: MailGroup; open: boolean }) {
                 to={`/g/${group.id}/${id}`}
                 icon={icon}
                 label={t(`folders.${id}`)}
+                refresh={{ label: t('folders.refresh', { name: t(`folders.${id}`) }), run: refresh }}
                 trailing={id === 'spam' && unread(id) > 0 ? <Count value={unread(id)} /> : undefined}
               />
             ))}
@@ -149,6 +153,7 @@ export function MailShell() {
   const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   const counts = useCounts()
+  const refresh = useRefetchOpenMail()
   useNewMailNotifications()
   // An outside forwarding that ended elsewhere: encryption back on (once a session).
   useSettleOwedKeyLists()
@@ -196,6 +201,20 @@ export function MailShell() {
     )
   }, [composeTo, setParams])
 
+  // Proton's unread favicon: the open place's count, your own mailbox's
+  // (a custom folder or label too); elsewhere the Inbox's.
+  const settings = useMailSettings()
+  const { pathname } = useLocation()
+  const { placeId } = useParams()
+  const faviconPlace = groupId
+    ? 'inbox'
+    : pathname.startsWith('/f/') && placeId
+      ? `folder:${placeId}`
+      : pathname.startsWith('/l/') && placeId
+        ? `label:${placeId}`
+        : (openFolder ?? 'inbox')
+  useUnreadFavicon(counts.data?.find((c) => c.folder === faviconPlace)?.unread ?? 0, settings.data?.unreadFavicon ?? false)
+
   useEffect(() => {
     const inbox = unread('inbox')
     document.title = inbox > 0 ? `(${inbox}) ${t('apps.mail')} · Kutup` : `${t('apps.mail')} · Kutup`
@@ -235,6 +254,7 @@ export function MailShell() {
           to={`/${id}`}
           icon={icon}
           label={t(`folders.${id}`)}
+          refresh={{ label: t('folders.refresh', { name: t(`folders.${id}`) }), run: refresh }}
           drop={
             DROPS.has(id)
               ? {

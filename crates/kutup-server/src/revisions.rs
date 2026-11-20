@@ -5,7 +5,7 @@
 //! value (never from a second field) and stores a new one only on top of the
 //! revision the writer started from (`baseRevision`), so two devices editing
 //! at once cannot silently overwrite each other: the second gets a `409`
-//! with `code: "revision_conflict"` and the current revision, reads again and
+//! with `code: "revisionConflict"` and the current revision, reads again and
 //! retries.
 
 use serde_json::json;
@@ -41,7 +41,7 @@ pub fn check_follows(new: u64, base: i64) -> AppResult<i64> {
 /// writer can read it and try again.
 pub fn conflict(message: &'static str, current: i64) -> AppError {
     AppError::conflict(message)
-        .with_details(json!({ "code": "revision_conflict", "revision": current }))
+        .with_details(json!({ "code": "revisionConflict", "revision": current }))
 }
 
 /// The revision of a stored sealed mail folder, label or filter name
@@ -85,10 +85,11 @@ pub async fn key_binding<'e, E>(executor: E, user_id: uuid::Uuid) -> AppResult<S
 where
     E: sqlx::PgExecutor<'e>,
 {
-    let binding: Option<String> = sqlx::query_scalar("SELECT key_binding FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(executor)
-        .await?;
+    let binding: Option<String> =
+        sqlx::query_scalar("SELECT key_binding::text FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(executor)
+            .await?;
     binding.ok_or_else(|| AppError::bad_request("the account has no key binding"))
 }
 

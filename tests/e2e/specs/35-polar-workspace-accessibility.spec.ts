@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount, type App } from '../fixtures/apps'
 
 type ThemePreference = 'light' | 'dark' | 'system'
@@ -11,8 +11,8 @@ const DESKTOP = { width: 1440, height: 900 }
 /** Theme and language are kept per app origin, as each app stores them. */
 async function setPreferences(page: Page, preferences: { theme?: ThemePreference; language?: 'en' | 'tr' }) {
   await page.evaluate(({ theme, language }) => {
-    if (theme) localStorage.setItem('kutup-theme', theme)
-    if (language) localStorage.setItem('kutup-lang', language)
+    if (theme) localStorage.setItem('kutup.ui.theme', theme)
+    if (language) localStorage.setItem('kutup.ui.language', language)
   }, preferences)
   await page.reload()
   await page.waitForLoadState('domcontentloaded')
@@ -95,7 +95,7 @@ test.describe('Responsive and accessibility gate', () => {
     // Theme and language follow the account, which would switch a page back
     // while it is checked: this spec sets them per app, so the account says
     // nothing (account sync has its own spec).
-    await context.route('**/api/account/ui-preferences', (route) =>
+    await context.route('**/api/v1/account/ui-preferences', (route) =>
       route.request().method() === 'GET'
         ? route.fulfill({ json: { theme: null, language: null } })
         : route.fulfill({ status: 204 }),

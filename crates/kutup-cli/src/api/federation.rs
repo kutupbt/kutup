@@ -28,7 +28,7 @@ pub struct IncomingShare {
     #[serde(default)]
     pub epoch_statement_hash: String,
     #[serde(default)]
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     #[serde(default)]
     pub owner_account: String,
     #[serde(default)]
@@ -58,7 +58,7 @@ impl Client {
     /// Lists accepted federated shares. Mirrors `ListIncomingShares`.
     pub fn list_incoming_shares(&self) -> Result<Vec<IncomingShare>> {
         let resp = self
-            .request(Method::GET, "/drive/federation/shares")
+            .request(Method::GET, "/drive/federation/folder-shares")
             .send()?;
         super::decode_json(resp)
     }
@@ -66,7 +66,7 @@ impl Client {
     /// Accepts a parsed canonical-domain/capability invite.
     pub fn add_incoming_share(&self, server: &str, capability: &str) -> Result<IncomingShare> {
         let resp = self
-            .request(Method::POST, "/drive/federation/shares")
+            .request(Method::POST, "/drive/federation/folder-shares")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(&serde_json::json!({ "server": server, "capability": capability }))
             .send()?;
@@ -78,7 +78,7 @@ impl Client {
         let resp = self
             .request(
                 Method::DELETE,
-                &format!("/drive/federation/shares/{share_id}"),
+                &format!("/drive/federation/folder-shares/{share_id}"),
             )
             .send()?;
         super::check_ok(resp)
@@ -89,35 +89,10 @@ impl Client {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/drive/federation/shares/{share_id}/files"),
+                &format!("/drive/federation/folder-shares/{share_id}/files"),
             )
             .send()?;
         super::decode_json(resp)
-    }
-
-    /// Streams the encrypted bytes of a file in a federated share (no total
-    /// timeout), for the bounded-memory download path.
-    pub fn proxy_download_stream(
-        &self,
-        share_id: &str,
-        file_id: &str,
-    ) -> Result<reqwest::blocking::Response> {
-        let resp = self
-            .upload_request(
-                Method::GET,
-                &format!("/drive/federation/shares/{share_id}/files/{file_id}/content"),
-            )
-            .send()?;
-        if resp.status().as_u16() >= 400 {
-            return Err(super::api_error(resp));
-        }
-        Ok(resp)
-    }
-
-    /// Downloads encrypted bytes of a file in a federated share. Mirrors `ProxyDownload`.
-    pub fn proxy_download(&self, share_id: &str, file_id: &str) -> Result<Vec<u8>> {
-        let resp = self.proxy_download_stream(share_id, file_id)?;
-        Ok(resp.bytes()?.to_vec())
     }
 
     /// Uploads an encrypted file through the signed Drive adapter.
@@ -128,9 +103,9 @@ impl Client {
         metadata_envelope: &str,
         file_key_envelope: &str,
         name_hash: &str,
-        encrypted_content: Vec<u8>,
+        revision: &crate::transfer::SealedRevision,
     ) -> Result<ProxyUploadResponse> {
-        let part = Part::bytes(encrypted_content)
+        let part = Part::bytes(revision.bytes.clone())
             .file_name("blob")
             .mime_str("application/octet-stream")?;
         let form = Form::new()
@@ -138,11 +113,19 @@ impl Client {
             .text("metadataEnvelope", metadata_envelope.to_string())
             .text("fileKeyEnvelope", file_key_envelope.to_string())
             .text("nameHash", name_hash.to_string())
+            // The block format: the revision, its record, and the first
+            // metadata revision; the upload commits inline.
+            .text("revisionId", revision.content.revision_id.clone())
+            .text("metadataRevision", "1")
+            .text(
+                "revisionContentEnvelope",
+                revision.revision_content_envelope.clone(),
+            )
             .part("file", part);
         let resp = self
             .request(
                 Method::POST,
-                &format!("/drive/federation/shares/{share_id}/files"),
+                &format!("/drive/federation/folder-shares/{share_id}/files"),
             )
             .multipart(form)
             .send()?;

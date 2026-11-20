@@ -67,7 +67,11 @@ RUN o=apps/editor/public/onlyoffice \
     && sed -i "s#dist/v9/#dist/$client/#g" $o/inner.html \
     && sed -i "s#dist/x2t/#dist/$x2t/#g" $o/x2t.html $o/inner.html \
     && ! grep -n 'dist/v9/\|dist/x2t/' $o/inner.html $o/x2t.html \
-    && grep -q "dist/$client/" $o/inner.html && grep -q "dist/$x2t/" $o/x2t.html
+    && grep -q "dist/$client/" $o/inner.html && grep -q "dist/$x2t/" $o/x2t.html \
+    && grep -q "dist/$client/web-apps/apps/api/documents/api.js" $o/inner.html
+# The release version (scripts/publish-images.sh); `0.0.0-dev` when unset.
+ARG KUTUP_RELEASE
+ENV KUTUP_RELEASE=${KUTUP_RELEASE}
 RUN pnpm run build \
     && mkdir -p /out \
     && for app in account drive chat maps photos office contacts mail pass calendar editor; do cp -r apps/$app/dist /out/$app; done \
@@ -93,7 +97,17 @@ COPY --from=compress /out /usr/share/nginx/html
 COPY frontend/docker/nginx.conf /etc/nginx/nginx.conf
 COPY frontend/docker/40-kutup-hosts.sh /usr/local/bin/kutup-hosts.sh
 COPY frontend/docker/entrypoint.sh /usr/local/bin/kutup-entrypoint.sh
-RUN chmod +x /usr/local/bin/kutup-hosts.sh /usr/local/bin/kutup-entrypoint.sh && nginx -t
+# The sites kutup-hosts.sh writes at start must load: written here for a
+# representative setup, report-only and enforced, and checked with nginx -t
+# (docs/contributing.md has the same check without an image build).
+RUN chmod +x /usr/local/bin/kutup-hosts.sh /usr/local/bin/kutup-entrypoint.sh \
+    && for enforce in 0 1; do \
+         KUTUP_BASE_DOMAIN=example.test CHAT_SFU_URL=wss://sfu.example.test \
+         KUTUP_MAP_DIRECT_ORIGINS=https://tile.example.test,https://tiles.example.test \
+         KUTUP_CSP_ENFORCE=$enforce /usr/local/bin/kutup-hosts.sh >/dev/null \
+         && nginx -t || exit 1; \
+       done \
+    && rm /etc/nginx/conf.d/kutup.conf
 EXPOSE 80
 STOPSIGNAL SIGQUIT
 ENTRYPOINT ["/usr/local/bin/kutup-entrypoint.sh"]

@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
 import { deterministicSeed, openCollabSession, type CollabSession } from '@kutup/collab/session'
+import { stateCommitterOf } from '@kutup/drive-core/metadataCommit'
 import { SenderCheck } from '@kutup/collab/senders'
 import { accountNameOfKey } from '@kutup/drive-core/accountName'
 import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
@@ -67,12 +68,15 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
     // Pictures are drawn by editors of lists on this server, sealed under
     // the folder's current key only (as Drive's are).
     const location = folder ? fileLocation(folder) : ({ kind: 'local' } as const)
-    const pictureTarget = { fileId: file.id, fileKey, keyGeneration: file.keyGeneration }
-    const pictures = !readOnly && location.kind === 'local' && (!folder || file.keyEpoch === folder.keyEpoch)
+    // Bound to the list's current content revision (its metadata's): saved
+    // states do not change it (docs/plans/drive-block-format.md §2).
+    const revisionId = file.content?.revisionId ?? ''
+    const pictureTarget = { fileId: file.id, fileKey, keyGeneration: file.keyGeneration, revisionId }
+    const pictures = !readOnly && Boolean(revisionId) && location.kind === 'local' && (!folder || file.keyEpoch === folder.keyEpoch)
     // An outdated picture is redrawn once the list is up, by someone who
     // may manage it (readers of a shared folder do not spend its owner's
     // quota), as Drive's backfill does.
-    const mayPicture = pictures && (!folder || folder.canManage || file.uploaderUserId === account.userId)
+    const mayPicture = pictures && (!folder || folder.canManage || file.uploaderAccountId === account.accountId)
     let pictured = false
     let replayedThrough: number | null = null
     // The latest saved version, which a picture of the live places is filed
@@ -124,6 +128,8 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
           keyGeneration: file.keyGeneration,
           fileKeyAt: (generation) => fileKeyAt(file, generation),
           readOnly,
+          // Each saved state commits with the list's next metadata naming it.
+          commitState: stateCommitterOf(file),
           username: identity.current.username,
           cursorColor: identity.current.color,
           seed: {

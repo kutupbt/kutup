@@ -1,5 +1,6 @@
 import type { ChatHistoryEntry, ChatReactionV1 } from './types'
 
+/** The reactions the picker offers; any emoji another client sends is shown too. */
 export const CHAT_REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
 
 export type ChatReactionEmoji = ChatReactionV1['emoji']
@@ -34,8 +35,11 @@ export function aggregateLatestReactions(
   }
 
   const reactorsByTargetEmoji = new Map<string, Set<string>>()
+  // The picker's emoji first, then any other in the order first seen.
+  const emojis: string[] = [...CHAT_REACTION_EMOJIS]
   for (const { reaction, reactor } of latestByTargetAndReactor.values()) {
     if (!reaction.active) continue
+    if (!emojis.includes(reaction.emoji)) emojis.push(reaction.emoji)
     const key = `${reaction.targetMessageId}\u0000${reaction.emoji}`
     const reactors = reactorsByTargetEmoji.get(key) ?? new Set<string>()
     reactors.add(reactor)
@@ -44,7 +48,7 @@ export function aggregateLatestReactions(
 
   const result = new Map<string, ReactionAggregate[]>()
   for (const targetMessageId of targetMessageIds) {
-    const aggregates = CHAT_REACTION_EMOJIS.flatMap(emoji => {
+    const aggregates = emojis.flatMap(emoji => {
       const reactors = reactorsByTargetEmoji.get(`${targetMessageId}\u0000${emoji}`)
       return reactors?.size
         ? [{

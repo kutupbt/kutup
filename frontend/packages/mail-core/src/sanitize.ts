@@ -1,11 +1,14 @@
 import DOMPurify from 'dompurify'
+import { styleNonce } from '@kutup/ui/lib/cspNonce'
 import { cleanTrackingLink, type CleanedLink } from './trackingLinks'
 
 // Mail HTML is hostile until proven otherwise (docs/plans/mail.md), as in
 // Proton's `packages/sanitize`: no scripts, forms, frames, embeds or style
 // sheets; remote images, backgrounds and CSS urls blocked until the reader
 // allows them for that message (a remote load tells the sender the mail was
-// read, and from where); `cid:` images shown from the message's own parts;
+// read, and from where), and then shown only as the Kutup image proxy fetched
+// them, never loaded by the browser from the sender's servers; `cid:` images
+// shown from the message's own parts;
 // links open in a new tab without a referrer. The result is shown in a
 // sandboxed iframe with its own CSP, which blocks anything this misses.
 
@@ -27,10 +30,12 @@ export interface SanitizeOptions {
   /** Load remote images and CSS backgrounds. */
   allowRemote: boolean
   /**
-   * With `allowRemote`, through the image proxy: what each remote address
-   * becomes (a `blob:` URL of the proxied image, or the address itself to
-   * load it directly); null leaves it out (a tracker, or not loaded yet).
-   * Without it, remote addresses load directly.
+   * With `allowRemote`, what each remote address becomes: the `blob:` URL of
+   * the image the Kutup image proxy fetched; null leaves it out (a tracker,
+   * one the proxy could not get, or not loaded yet). Nothing else is
+   * accepted: the browser never loads a remote address itself, which the
+   * Mail app's Content-Security-Policy (no remote `img-src`) also enforces.
+   * Without it, nothing remote loads.
    */
   resolveRemote?: (url: string) => string | null
   /** Take tracking parameters out of links (Proton's tracker protection). */
@@ -80,7 +85,6 @@ function rewriteStyle(style: string, options: SanitizeOptions, remote: (url: str
     if (target.toLowerCase().startsWith('data:image/')) return whole
     if (REMOTE.test(target)) {
       const loaded = remote(target)
-      if (loaded === target) return whole
       return loaded ? `url('${loaded.replace(/['"\\]/g, '')}')` : 'none'
     }
     return 'none'
@@ -101,7 +105,6 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
     }
     return blob ?? null
   }
-  let direct = false
   const remoteUrls = new Set<string>()
   const cleanedLinks: CleanedLink[] = []
   // What a remote address becomes in the frame; null leaves it out.
@@ -112,9 +115,9 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
       remoteBlocked = true
       return null
     }
-    const loaded = options.resolveRemote ? options.resolveRemote(url) : url
-    if (loaded && REMOTE.test(loaded)) direct = true
-    return loaded
+    const loaded = options.resolveRemote?.(url) ?? null
+    // Only what the proxy fetched: a local blob: URL.
+    return loaded && loaded.trim().toLowerCase().startsWith('blob:') ? loaded : null
   }
   purify.addHook('uponSanitizeAttribute', (node, data) => {
     const name = data.attrName.toLowerCase()
@@ -138,9 +141,8 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
     if (REMOTE.test(value)) {
       const loaded = remote(value)
       if (loaded) {
-        // A blob: URL passes the URI check; a direct address is kept as it is.
+        // A blob: URL passes the URI check.
         data.attrValue = loaded
-        if (loaded === value) data.forceKeepAttr = true
         return
       }
     }
@@ -175,7 +177,7 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
     WHOLE_DOCUMENT: false,
   })
   purify.removeAllHooks()
-  const images = direct ? 'data: blob: https: http:' : 'data: blob:'
+  const images = 'data: blob:'
   const adapts = !!options.look && paintsNothing(body)
   return {
     document: frame(foldQuote(body, options.look?.quoteLabel), images, adapts ? options.look : undefined),
@@ -308,6 +310,10 @@ function frame(body: string, images: string, look?: FrameLook): string {
     ? { background: '#111318', text: '#e5e7eb', muted: '#9ca3af', link: '#93c5fd', border: '#374151' }
     : { background: '#fff', text: '#111827', muted: '#4b5563', link: '#0b62c4', border: '#e5e7eb' }
   const c = look?.colors ?? fallback
+  // The srcdoc frame also inherits the app's policy, which allows a <style>
+  // element only with the page's nonce (docs/content-security-policy.md).
+  // styleNonce() returns only base64 or hex: nothing to escape.
+  const nonce = styleNonce()
   const theme = look
     ? `html { color-scheme: ${look.dark ? 'dark' : 'light'}; }
   body { color: ${c.text}; background: ${c.background}; }
@@ -317,7 +323,7 @@ function frame(body: string, images: string, look?: FrameLook): string {
     : ''
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${images}; style-src 'unsafe-inline'; font-src data:">
-<style>
+<style${nonce ? ` nonce="${nonce}"` : ''}>
   html { color-scheme: light; }
   body { margin: 0; padding: 4px 2px; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: #111827; background: #fff; overflow-wrap: anywhere; }
   img { max-width: 100%; height: auto; }

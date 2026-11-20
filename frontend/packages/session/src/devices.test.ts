@@ -15,6 +15,7 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
 })
 
 import { listDeviceInManifest, type AccountManifest, type ManifestDevice } from '@kutup/crypto/accountManifest'
+import type { IdentityRoot } from '@kutup/crypto/accountRoots'
 import { toBase64 } from '@kutup/crypto/base64'
 import { generateSigningKey } from '@kutup/crypto/signing'
 
@@ -41,7 +42,13 @@ vi.mock('./client', () => ({
     },
   },
 }))
-vi.mock('./store', () => ({ getSession: () => ({ userId: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b', sessionId: 'session-1', masterKey: MASTER_KEY }) }))
+vi.mock('./store', () => ({
+  getSession: () => ({
+    accountId: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b',
+    sessionId: 'session-1',
+    roots: { identityRoot: toBase64(MASTER_KEY) },
+  }),
+}))
 
 import { publishNextManifest } from './devices'
 import { resetManifestPinsForTesting } from './manifestPins'
@@ -54,7 +61,7 @@ async function editor(deviceId: number): Promise<ManifestDevice> {
 /** Publishes the account's next manifest listing `entry`, as a device does. */
 async function list(entry: ManifestDevice): Promise<AccountManifest | null> {
   return publishNextManifest(ACCOUNT, '1.x', (head) =>
-    listDeviceInManifest(head, entry, new Date().toISOString(), toBase64(MASTER_KEY), ACCOUNT),
+    listDeviceInManifest(head, entry, new Date().toISOString(), toBase64(MASTER_KEY) as IdentityRoot, ACCOUNT),
   )
 }
 

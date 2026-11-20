@@ -106,7 +106,7 @@ describe('tracker protection', () => {
     expect(within(dialog).getByText('Removed: utm_source, fbclid')).toBeTruthy()
   })
 
-  it('loads images through the proxy, never the tracker, and the rest directly only when asked', async () => {
+  it('loads images through the proxy, never the tracker, and never directly', async () => {
     remoteImages = 'always'
     render(<MailBody parsed={newsletter} sender="news@example.org" />)
     await waitFor(() => expect(frameDoc()).toContain('src="blob:'))
@@ -116,20 +116,22 @@ describe('tracker protection', () => {
     expect(fetchMailImage).not.toHaveBeenCalledWith(expect.stringContaining('list-manage'))
     // Only proxied images in the frame: its policy allows no remote loads.
     expect(doc).toContain("img-src data: blob:;")
-    fireEvent.click(await screen.findByRole('button', { name: 'Load' }))
-    await waitFor(() => expect(frameDoc()).toContain('src="https://broken.example.org/a.png"'))
-    expect(frameDoc()).not.toContain('list-manage')
+    // The one the proxy could not get stays out; nothing offers it directly.
+    expect(await screen.findByText('Some images could not be loaded through Kutup, so they are not shown.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Load$/ })).toBeNull()
+    expect(frameDoc()).not.toContain('broken.example.org')
   })
 
-  it('loads directly and leaves links alone when turned off', () => {
+  it('still goes through the proxy, leaving links alone, when turned off', async () => {
     remoteImages = 'always'
     imageProxy = false
     render(<MailBody parsed={newsletter} sender="news@example.org" />)
+    await waitFor(() => expect(frameDoc()).toContain('src="blob:'))
     const doc = frameDoc()
-    expect(doc).toContain('src="https://cdn.example.org/logo.png"')
+    expect(doc).not.toContain('src="https://cdn.example.org/logo.png"')
     expect(doc).toContain('utm_source=news')
     expect(screen.queryByRole('button', { name: /tracker/ })).toBeNull()
-    expect(fetchMailImage).not.toHaveBeenCalled()
+    expect(fetchMailImage).toHaveBeenCalledWith('https://cdn.example.org/logo.png')
   })
 })
 

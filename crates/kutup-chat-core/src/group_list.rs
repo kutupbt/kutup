@@ -36,9 +36,6 @@ use crate::group_engine::GroupSync;
 /// A due write waits a random time up to this long (§5).
 const WRITE_DELAY_MAX_MS: i64 = 10 * 60 * 1000;
 
-/// The list is read again at most this often by a running device.
-const READ_EVERY_MS: i64 = 10 * 60 * 1000;
-
 /// One entry as the list holds it: its revision and what it says (`None`:
 /// an entry of a later version this device can't read, kept as it is and
 /// never overwritten here).
@@ -102,20 +99,24 @@ impl Engine {
         Ok(())
     }
 
-    /// Keeps this account's groups in its group list, under keys from its
-    /// `master_key`, bound to its key `binding`; and takes the account's
-    /// group keys (its self-authority, its pseudonyms) from the same key.
-    pub fn enable_group_list(&mut self, master_key: &[u8; 32], binding: &str) -> Result<()> {
+    /// Keeps this account's groups in its group list, sealed under its
+    /// current master key (of `master_keys`) and named under its object-id key, bound to its key
+    /// `binding`; and takes the account's group keys (its self-authority, its
+    /// pseudonyms) from its `roots`.
+    pub fn enable_group_list(
+        &mut self,
+        master_keys: &kutup_crypto::master_keys::MasterKeys,
+        roots: &kutup_crypto::account_roots::AccountRoots,
+        binding: &str,
+    ) -> Result<()> {
         kutup_crypto::key_binding::check(binding)
             .map_err(|_| ChatError::Invalid("the account's key binding is invalid".into()))?;
-        self.group_keys = Some(crate::group::GroupAccountKeys::derive(master_key)?);
+        self.group_keys = Some(crate::group::GroupAccountKeys::derive(
+            &roots.identity,
+            &roots.pseudonym,
+        )?);
         self.group_list = Some(GroupListSync {
-            // Rotation (docs/plans/w6-key-hierarchy.md) seals at the
-            // account's current generation; until it exists, the first.
-            key: GroupListKey::new(
-                master_key,
-                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
-            ),
+            key: GroupListKey::from_keys(master_keys, &roots.object_id),
             binding: binding.to_string(),
             listed: BTreeMap::new(),
             read_at_ms: 0,
@@ -445,30 +446,6 @@ impl Engine {
             }
             let _ = self.schedule_group_entry(&record.group_id).await;
         }
-        Ok(taken_up)
-    }
-
-    /// [`Self::sync_group_list`] when the last read is a while ago (a running
-    /// device's periodic look), then the writes that are due.
-    pub async fn sync_group_list_if_due<R: Rng + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-    ) -> Result<Vec<String>> {
-        let due = self
-            .group_list
-            .as_ref()
-            .is_some_and(|list| self.now_ms().saturating_sub(list.read_at_ms) >= READ_EVERY_MS);
-        let taken_up = if due {
-            self.sync_group_list(rng).await?
-        } else {
-            Vec::new()
-        };
-        let _ = self.flush_group_list(false).await;
-        // This account's endorsement, once a day whatever its groups (so the
-        // fetch says nothing about them); then each group gets it, and the
-        // members' new ones are read, with this periodic look.
-        let _ = self.refresh_own_group_send_endorsement().await;
-        let _ = self.refresh_all_group_send_endorsements().await;
         Ok(taken_up)
     }
 

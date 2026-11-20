@@ -1,3 +1,6 @@
+import type { ObjectIdKey } from '@kutup/crypto/accountRoots'
+import { fromBase64 } from '@kutup/crypto/base64'
+import { masterKeysBytes, type MasterKeys, type MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import { freshUrl, retryLoad } from '@kutup/crypto/retry'
 
 // Mail's search index module (crates/kutup-mail-search-wasm,
@@ -64,8 +67,8 @@ export interface MailSearchIndex {
 interface MailSearchModule {
   default(input?: unknown): Promise<unknown>
   MailSearch: {
-    new (masterKey: Uint8Array, binding: string, wrappedStoreKey: Uint8Array | undefined): MailSearchIndex
-    storeName(masterKey: Uint8Array): string
+    new (masterKeys: MasterKeysBytes, binding: string, wrappedStoreKey: Uint8Array | undefined): MailSearchIndex
+    storeName(objectIdKey: Uint8Array): string
     matches(query: string, text: string): boolean
   }
 }
@@ -93,19 +96,25 @@ export async function mailSearchMatcher(): Promise<(query: string, text: string)
   return (query, text) => module.MailSearch.matches(query, text)
 }
 
-/** The browser database's name for an account: an HMAC under a key from its master key. */
-export async function mailSearchStoreName(masterKey: Uint8Array): Promise<string> {
+/**
+ * The browser database's name for an account: an HMAC under a key from its
+ * object-id root (`roots.objectIdKey`), so it stays across a master-key
+ * rotation.
+ */
+export async function mailSearchStoreName(objectIdKey: ObjectIdKey): Promise<string> {
   const module = await getModule()
-  return module.MailSearch.storeName(masterKey)
+  return module.MailSearch.storeName(fromBase64(objectIdKey))
 }
 
 /**
  * An account's index under the store key the database keeps (`wrapped`), or
  * under a new one when there is none (then kept from `wrappedStoreKey()`),
- * for the account bound by `binding` (`session.envelopeBinding`). Throws when
- * `wrapped` does not open for this master key and binding.
+ * for the account bound by `binding` (`session.envelopeBinding`). A key
+ * wrapped under an older master key is wrapped again under the current one:
+ * `wrappedStoreKey()` then differs from `wrapped`, and the caller keeps it.
+ * Throws when `wrapped` does not open for these master keys and binding.
  */
-export async function createMailSearch(masterKey: Uint8Array, binding: string, wrapped: Uint8Array | undefined): Promise<MailSearchIndex> {
+export async function createMailSearch(masterKeys: MasterKeys, binding: string, wrapped: Uint8Array | undefined): Promise<MailSearchIndex> {
   const module = await getModule()
-  return new module.MailSearch(masterKey, binding, wrapped)
+  return new module.MailSearch(masterKeysBytes(masterKeys), binding, wrapped)
 }

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Navigate, useLocation } from 'react-router-dom'
+import { administers } from '@kutup/session/api-types'
 import { useSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { PageBody } from '@kutup/ui/components/page'
@@ -20,7 +21,7 @@ export function RequireSession({ children }: { children: ReactNode }) {
 export function RequireAdmin({ children }: { children: ReactNode }) {
   const { t } = useTranslation()
   const session = useSession()
-  if (!session?.isAdmin) {
+  if (!administers(session?.role)) {
     return (
       <PageBody>
         <Alert variant="error" title={t('admin.forbiddenTitle')}>

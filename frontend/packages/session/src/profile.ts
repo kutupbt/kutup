@@ -1,5 +1,7 @@
 // Turn unlocked keys + a live access token into the app's Session.
 
+import { accountHead, HeadBlockedError } from './accountHead'
+import type { AccountRole, TwoFactorState } from './api-types'
 import api from './client'
 import type { SessionKeys } from './keys'
 import { resetSessionVersion, setSessionVersionHandler } from './sessionVersion'
@@ -14,11 +16,13 @@ export interface MeResponse {
   address: string
   envelopeBinding: string
   username: string
-  publicKey: string
-  totpEnabled: boolean
+  /** The account's Drive key (X-Wing). */
+  driveXwingPublicKey: string
+  /** The authenticator app; two-step sign-in is on with it `on` or a security key. */
+  twoFactor: TwoFactorState
   storageQuotaBytes: number
   storageUsedBytes: number
-  isAdmin: boolean
+  role: AccountRole
   color: string
   /**
    * Where the account's rename chain ends (docs/plans/username-renames.md):
@@ -29,7 +33,7 @@ export interface MeResponse {
 
 /** The signed-in account's profile, under `accessToken`. */
 export async function fetchProfile(accessToken: string): Promise<MeResponse> {
-  const { data } = await api.get<MeResponse>('/user/me', { headers: { Authorization: `Bearer ${accessToken}` } })
+  const { data } = await api.get<MeResponse>('/account', { headers: { Authorization: `Bearer ${accessToken}` } })
   return data
 }
 
@@ -58,9 +62,9 @@ export async function activateSession(
 ): Promise<SessionKeys> {
   setAccessToken(accessToken)
   resetSessionVersion()
-  const me = prefetched ?? (await api.get<MeResponse>('/user/me')).data
+  const me = prefetched ?? (await api.get<MeResponse>('/account')).data
   const keys = given
-  if (me.id !== keys.userId) {
+  if (me.id !== keys.accountId) {
     throw new Error('the session belongs to a different account than its keys')
   }
   if (me.envelopeBinding !== keys.keyBinding) {
@@ -72,20 +76,39 @@ export async function activateSession(
     keys.privateKey.fill(0)
     throw new KeyBindingMismatchError()
   }
+  // The account head, checked before the session goes live and before
+  // anything signs or seals with the roots (docs/plans/identity-root.md): a
+  // server can't serve a rolled-back identity or Drive root. A rolled-back
+  // or forked history (a restore from a backup looks the same) goes on to
+  // the shell's banner, which offers to continue with the server's data;
+  // anything else ends the sign-in.
+  try {
+    await (await accountHead({ accountId: keys.accountId, masterKeys: keys.masterKeys, roots: keys.roots, envelopeBinding: keys.keyBinding })).atSignIn()
+  } catch (error) {
+    if (!(error instanceof HeadBlockedError)) {
+      await api.post('/auth/logout').catch(() => undefined)
+      clearSession()
+      keys.masterKey.fill(0)
+      keys.privateKey.fill(0)
+      throw error
+    }
+  }
   setSession(
     {
       sessionId,
-      userId: me.id,
+      accountId: me.id,
       address: me.address,
       envelopeBinding: keys.keyBinding,
       username: me.username || null,
-      isAdmin: me.isAdmin,
+      role: me.role,
       storageQuotaBytes: me.storageQuotaBytes,
       storageUsedBytes: me.storageUsedBytes,
-      totpEnabled: me.totpEnabled,
+      twoFactor: me.twoFactor,
       color: me.color || null,
       publicKey: keys.publicKey,
       masterKey: keys.masterKey,
+      masterKeys: keys.masterKeys,
+      roots: keys.roots,
       privateKey: keys.privateKey,
       currentDeviceId: keys.device?.id ?? null,
       device: keys.device ?? null,
@@ -103,8 +126,8 @@ export async function activateSession(
 export async function recheckAccount(): Promise<void> {
   const session = getSession()
   if (!session) return
-  const { data: me } = await api.get<MeResponse>('/user/me')
-  if (me.id !== session.userId || me.envelopeBinding !== session.envelopeBinding) {
+  const { data: me } = await api.get<MeResponse>('/account')
+  if (me.id !== session.accountId || me.envelopeBinding !== session.envelopeBinding) {
     // As a refused session (KeyBindingMismatchError): ended on the server,
     // the keys dropped here; the app's boot shows "this account's keys
     // changed" on the way back.
@@ -117,8 +140,8 @@ export async function recheckAccount(): Promise<void> {
   updateSession({
     address: me.address,
     username: me.username || null,
-    isAdmin: me.isAdmin,
-    totpEnabled: me.totpEnabled,
+    role: me.role,
+    twoFactor: me.twoFactor,
   })
 }
 

@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
+use crate::format::Extra;
 use crate::identity::{authority_key_id_from_public, incarnation_id_from_authority_public};
 use crate::key_binding;
 
@@ -46,9 +47,19 @@ pub const MAX_LABEL_CHARS: usize = 40;
 pub const MAX_GROUPS: usize = 50;
 pub const MAX_PINNED_KEYS: usize = 20;
 
+/// The newest summary version this reader knows.
+pub const CONTACT_SUMMARY_VERSION: u16 = 1;
+/// The OpenPGP key versions whose fingerprints a reader checks: v4 (20
+/// bytes) and v6 (32 bytes). A pinned key of another version is kept and
+/// shown as unusable (*skip*).
+pub const PINNED_KEY_V4: u8 = 4;
+pub const PINNED_KEY_V6: u8 = 6;
+/// The longest fingerprint of a key version this reader doesn't know.
+const MAX_UNKNOWN_FINGERPRINT_BYTES: usize = 64;
+
 /// One email address of a contact (Proton's `ContactEmail`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ContactEmailV1 {
     /// Lowercase `local@domain`. For a Kutup user this is also their Chat and
     /// Drive address.
@@ -56,37 +67,105 @@ pub struct ContactEmailV1 {
     /// "home", "work", or the person's own word.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Fields a newer writer added, kept and signed as received.
+    #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    pub extra: Extra,
 }
 
 /// An outside OpenPGP key pinned for one of the contact's addresses
 /// (Proton's `KEY` with `X-PM-ENCRYPT` and `X-PM-SIGN`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct PinnedKeyV1 {
     pub address: String,
-    /// Lowercase hex v4 fingerprint.
+    /// The OpenPGP key version: 4 or 6 (or one a newer client pins).
+    pub key_version: u8,
+    /// Lowercase hex fingerprint, as long as its key version's (20 bytes
+    /// for v4, 32 for v6).
     pub fingerprint: String,
     /// Encrypt mail to this address with this key.
     pub encrypt: bool,
     /// Expect mail from this address signed with this key.
     pub sign: bool,
+    #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    pub extra: Extra,
 }
 
-/// What the server may read about a contact. Fields in this order, absent
+impl ContactEmailV1 {
+    pub fn new(address: impl Into<String>, label: Option<String>) -> Self {
+        Self {
+            address: address.into(),
+            label,
+            extra: Extra::new(),
+        }
+    }
+}
+
+impl PinnedKeyV1 {
+    /// A pinned v4 key (a 40-character fingerprint).
+    pub fn v4(
+        address: impl Into<String>,
+        fingerprint: impl Into<String>,
+        encrypt: bool,
+        sign: bool,
+    ) -> Self {
+        Self {
+            address: address.into(),
+            key_version: PINNED_KEY_V4,
+            fingerprint: fingerprint.into(),
+            encrypt,
+            sign,
+            extra: Extra::new(),
+        }
+    }
+
+    /// Whether this reader knows the key's version (and so may use it).
+    pub fn known_version(&self) -> bool {
+        matches!(self.key_version, PINNED_KEY_V4 | PINNED_KEY_V6)
+    }
+
+    fn fingerprint_ok(&self) -> bool {
+        let lower_hex = !self.fingerprint.is_empty()
+            && self.fingerprint.len().is_multiple_of(2)
+            && self
+                .fingerprint
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        lower_hex
+            && match self.key_version {
+                0 => false,
+                PINNED_KEY_V4 => self.fingerprint.len() == 40,
+                PINNED_KEY_V6 => self.fingerprint.len() == 64,
+                _ => self.fingerprint.len() <= 2 * MAX_UNKNOWN_FINGERPRINT_BYTES,
+            }
+    }
+}
+
+/// What the server may read about a contact (docs/plans/format-evolution.md):
+/// `v` (and `min` below it), the known fields, and any a newer writer added.
+/// Signed, so encoded with every object's keys sorted (rule 7): a reader
+/// that doesn't know a field still re-encodes the bytes it verified. Absent
 /// optionals omitted; groups sorted; pinned keys sorted by address then
 /// fingerprint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ContactSummaryV1 {
+    pub v: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u16>,
     pub uid: String,
     pub name: String,
     #[serde(default)]
     pub emails: Vec<ContactEmailV1>,
-    /// Ids (UUIDs) of the account's contact groups.
+    /// The account's contact groups this contact is in, by record id in the
+    /// `contactGroups` scope (`account_records`, `hashed_object` of a random
+    /// id): the server checks each is a group the account keeps.
     #[serde(default)]
     pub groups: Vec<String>,
     #[serde(default)]
     pub pinned_keys: Vec<PinnedKeyV1>,
+    #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    pub extra: Extra,
 }
 
 fn invalid(reason: &str) -> CryptoError {
@@ -122,7 +201,29 @@ pub fn canonical_contact_address(value: &str) -> Result<String> {
 }
 
 impl ContactSummaryV1 {
+    /// A version-1 summary.
+    pub fn new(
+        uid: impl Into<String>,
+        name: impl Into<String>,
+        emails: Vec<ContactEmailV1>,
+        groups: Vec<String>,
+        pinned_keys: Vec<PinnedKeyV1>,
+    ) -> Self {
+        Self {
+            v: CONTACT_SUMMARY_VERSION,
+            min: None,
+            uid: uid.into(),
+            name: name.into(),
+            emails,
+            groups,
+            pinned_keys,
+            extra: Extra::new(),
+        }
+    }
+
     fn validate(&self) -> Result<()> {
+        crate::format::check_version("contact summary", self.v, self.min, CONTACT_SUMMARY_VERSION)?;
+        crate::format::check_extra("contact summary", &self.extra)?;
         if !plain_text(&self.uid, MAX_UID_CHARS) {
             return Err(invalid("uid is invalid"));
         }
@@ -147,10 +248,15 @@ impl ContactSummaryV1 {
             {
                 return Err(invalid("email label is invalid"));
             }
+            crate::format::check_extra("contact email", &email.extra)?;
         }
         if self.groups.len() > MAX_GROUPS
             || !self.groups.windows(2).all(|pair| pair[0] < pair[1])
-            || self.groups.iter().any(|id| !is_canonical_uuid(id))
+            || self.groups.iter().any(|id| {
+                crate::account_records::RecordScope::ContactGroups
+                    .object(id)
+                    .is_err()
+            })
         {
             return Err(invalid("groups are invalid"));
         }
@@ -162,43 +268,32 @@ impl ContactSummaryV1 {
             return Err(invalid("pinned keys are invalid"));
         }
         for key in &self.pinned_keys {
-            if !seen.contains(key.address.as_str())
-                || key.fingerprint.len() != 40
-                || !key
-                    .fingerprint
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            {
+            if !seen.contains(key.address.as_str()) || !key.fingerprint_ok() {
                 return Err(invalid("a pinned key is not for a listed address"));
             }
+            crate::format::check_extra("pinned key", &key.extra)?;
         }
         Ok(())
     }
 }
 
-fn is_canonical_uuid(value: &str) -> bool {
-    value.len() == 36
-        && value.bytes().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => b == b'-',
-            _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
-        })
-}
-
 /// The canonical bytes of a summary, after checking it.
 pub fn encode_summary(summary: &ContactSummaryV1) -> Result<Vec<u8>> {
     summary.validate()?;
-    let bytes = serde_json::to_vec(summary).map_err(|_| invalid("encode"))?;
+    let bytes = crate::format::to_sorted_json(summary).map_err(|_| invalid("encode"))?;
     if bytes.len() > MAX_SUMMARY_BYTES {
         return Err(invalid("summary is too large"));
     }
     Ok(bytes)
 }
 
-/// A summary as stored: strictly checked, and only in its canonical bytes.
+/// A summary as stored: only in its canonical bytes, *newer than me* when
+/// its minimum reader is above this one, unknown fields kept.
 pub fn decode_summary(bytes: &[u8]) -> Result<ContactSummaryV1> {
     if bytes.len() > MAX_SUMMARY_BYTES {
         return Err(invalid("summary is too large"));
     }
+    crate::format::check_json_version("contact summary", bytes, CONTACT_SUMMARY_VERSION)?;
     let summary: ContactSummaryV1 = serde_json::from_slice(bytes).map_err(|_| invalid("decode"))?;
     if encode_summary(&summary)? != bytes {
         return Err(invalid("summary is not canonical"));
@@ -386,33 +481,79 @@ mod tests {
     const OTHER: &str = "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d";
 
     fn summary() -> ContactSummaryV1 {
-        ContactSummaryV1 {
-            uid: "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70".into(),
-            name: "Ayşe Yılmaz".into(),
-            emails: vec![
-                ContactEmailV1 {
-                    address: "ayse@example.com".into(),
-                    label: Some("work".into()),
-                },
-                ContactEmailV1 {
-                    address: "ayse@kutup.dev".into(),
-                    label: None,
-                },
+        ContactSummaryV1::new(
+            "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+            "Ayşe Yılmaz",
+            vec![
+                ContactEmailV1::new("ayse@example.com", Some("work".into())),
+                ContactEmailV1::new("ayse@kutup.dev", None),
             ],
-            groups: vec!["11111111-1111-4111-8111-111111111111".into()],
-            pinned_keys: vec![PinnedKeyV1 {
-                address: "ayse@example.com".into(),
-                fingerprint: "a".repeat(40),
-                encrypt: true,
-                sign: true,
-            }],
-        }
+            vec!["ERERERERERERERERERERERERERERERERERERERERERE".into()],
+            vec![PinnedKeyV1::v4(
+                "ayse@example.com",
+                "a".repeat(40),
+                true,
+                true,
+            )],
+        )
+    }
+
+    #[test]
+    fn summaries_keep_what_a_newer_writer_added() {
+        let identity = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([5u8; 32]),
+        )
+        .unwrap();
+        let authority = identity.authority_public_key();
+        let mut newer = summary();
+        newer
+            .extra
+            .insert("birthday".into(), serde_json::json!("1990-01-01"));
+        newer.pinned_keys.push(PinnedKeyV1 {
+            key_version: 6,
+            fingerprint: "b".repeat(64),
+            ..PinnedKeyV1::v4("ayse@kutup.dev", "", false, true)
+        });
+        newer.pinned_keys.push(PinnedKeyV1 {
+            key_version: 7,
+            fingerprint: "c".repeat(80),
+            ..PinnedKeyV1::v4("ayse@kutup.dev", "", false, false)
+        });
+        newer.emails[1]
+            .extra
+            .insert("pref".into(), serde_json::json!(1));
+        let (bytes, signature) =
+            sign_summary(&newer, ACCOUNT, 7, identity.authority_signing_key()).unwrap();
+        // Signed with sorted keys: the unknown fields sit where any reader
+        // re-encodes them.
+        assert!(std::str::from_utf8(&bytes).unwrap().starts_with(
+            r#"{"birthday":"1990-01-01","emails":[{"address":"ayse@example.com","label":"work"}"#
+        ));
+        let opened = verify_summary(&bytes, &signature, ACCOUNT, 7, &authority).unwrap();
+        assert_eq!(opened, newer);
+        assert!(!opened.pinned_keys[2].known_version());
+        // A minimum reader above this one is newer than me, not corrupt.
+        let mut v2 = summary();
+        v2.v = 2;
+        let text = String::from_utf8(crate::format::to_sorted_json(&v2).unwrap()).unwrap();
+        assert!(decode_summary(text.as_bytes()).unwrap_err().is_newer());
+        assert!(!decode_summary(b"garbage").unwrap_err().is_newer());
+        // A v4 fingerprint of the wrong length is corrupt.
+        let mut bad = summary();
+        bad.pinned_keys[0].fingerprint = "a".repeat(64);
+        assert!(encode_summary(&bad).is_err());
     }
 
     #[test]
     fn summaries_sign_verify_and_refuse_tampering() {
-        let identity = AccountIdentityKeysV1::derive(&[5u8; 32]).unwrap();
-        let other = AccountIdentityKeysV1::derive(&[6u8; 32]).unwrap();
+        let identity = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([5u8; 32]),
+        )
+        .unwrap();
+        let other = AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes(
+            [6u8; 32],
+        ))
+        .unwrap();
         let authority = identity.authority_public_key();
         let (bytes, signature) =
             sign_summary(&summary(), ACCOUNT, 7, identity.authority_signing_key()).unwrap();
@@ -457,7 +598,7 @@ mod tests {
         assert!(encode_summary(&bad).is_err());
         let mut bad = summary();
         bad.groups
-            .insert(0, "22222222-2222-4222-8222-222222222222".into());
+            .insert(0, "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI".into());
         assert!(encode_summary(&bad).is_err());
         assert!(canonical_contact_address("not an address").is_err());
         assert_eq!(

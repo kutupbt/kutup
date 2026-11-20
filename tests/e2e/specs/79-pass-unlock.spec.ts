@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { createVault, openPass } from '../fixtures/pass'
 
@@ -29,8 +29,9 @@ test('pass: a vault not kept with the sign-in asks for its key, refuses a wrong 
   })
   // A slow server: keeping a key takes a while. The vault must not show
   // before its key is kept, or a reload right after would ask for it again.
-  await page.route(/\/api\/pass\/vault-secrets\//, async (route) => {
-    if (route.request().method() === 'PUT') await new Promise((resolve) => setTimeout(resolve, 2_000))
+  // (Kept keys are records: docs/plans/account-records.md.)
+  await page.route(/\/api\/v1\/account\/records$/, async (route) => {
+    if (route.request().method() === 'POST') await new Promise((resolve) => setTimeout(resolve, 2_000))
     await route.continue()
   })
   await openPass(page)

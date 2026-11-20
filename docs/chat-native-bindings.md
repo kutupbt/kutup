@@ -27,7 +27,7 @@ Rust owns:
 Swift/Kotlin owns:
 
 - An authenticated `ChatHttpClient` implemented with URLSession or OkHttp.
-  Its base URL is the selected server's `/api`; Rust supplies relative paths
+  Its base URL is the selected server's `/api/v1`; Rust supplies relative paths
   beginning with `/chat`. The adapter applies bearer authentication, the
   existing single-flight refresh policy, JSON content type, cancellation, and
   the normal TLS policy.
@@ -69,8 +69,14 @@ openNativeChatClient(
   databasePath,
   databaseKey,
   account,            // aci:<uuid>@<server>
-  accountMasterKey,
-  keyBinding,
+  NativeAccountKeys(
+    masterKey,          // the account's current master key, 32 bytes
+    masterKeyGeneration,// its generation (1 until the first rotation)
+    masterKeyring,      // the sign-in's masterKeyring records, base64-decoded
+    rootRecords,        // the sign-in's accountRoots, base64-decoded
+    authorityPublicKey, // the sign-in's accountAuthorityPublicKey, decoded
+    keyBinding
+  ),
   authenticatedHttpClient
 )
 ```
@@ -91,6 +97,14 @@ The HTTP adapter sends `ChatHttpRequest.chatDevice`, when present, as the
 `keyBinding` is the account's key binding (the session's `envelopeBinding`,
 a UUID v4): the account's own seals, such as its synced identity pin list,
 bind it, never the username or address.
+
+`rootRecords` are the account's stored roots (docs/plans/identity-root.md),
+sealed under the master key; the worker opens them, and refuses to open when
+the newest identity root does not derive `authorityPublicKey`
+(`InvalidInput`, message starting `identityRootMismatch`): show that the
+account's keys do not match, and use nothing older. The account's Chat
+authority comes from the identity root, its group pseudonyms from the
+pseudonym root, its list entries' names from the object-id key.
 
 `username` and `serverName` form the client's account, `username@serverName`;
 the client runs as that canonical address (`user()` returns it) and every

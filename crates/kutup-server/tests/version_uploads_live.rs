@@ -1,8 +1,9 @@
 //! Live e2e for new versions over tus (docs/plans/drive-unique-names.md,
 //! "Replace"): resumable at any size, as Proton Drive's revisions; checked
-//! when the upload starts and again when it lands, where the content, the
-//! next metadata revision and the content hash are stored together. One open
-//! version upload per file.
+//! when the upload starts, when it lands as an uploaded revision and at its
+//! commit (docs/plans/drive-block-format.md §10 slice 3), where the content,
+//! the next metadata revision and the content hash are stored together. One
+//! open version upload per file.
 //!
 //! Gated on `KUTUP_LIVE_SERVER` (and `KUTUP_LIVE_DATABASE_URL` for the
 //! table's own check):
@@ -10,7 +11,6 @@
 //!     cargo test -p kutup-server --test version_uploads_live -- --nocapture
 
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use reqwest::blocking::{Client, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -42,7 +42,7 @@ fn create_version(
         .map(|(k, v)| format!("{k} {}", b64(v.as_bytes())))
         .collect::<Vec<_>>()
         .join(",");
-    bearer(c.post(format!("{base}/api/uploads")), token)
+    bearer(c.post(format!("{base}/api/v1/drive/uploads")), token)
         .header("Tus-Resumable", "1.0.0")
         .header("Upload-Length", length.to_string())
         .header("Upload-Metadata", meta)
@@ -78,7 +78,10 @@ fn code(r: Response) -> String {
 
 fn listed(c: &Client, base: &str, token: &str, folder: &Folder, id: &str) -> Value {
     let list: Value = bearer(
-        c.get(format!("{base}/api/collections/{}/files", folder.id)),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{}/files",
+            folder.id
+        )),
         token,
     )
     .send()
@@ -110,17 +113,11 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
     let before = used(&c, &base, &owner.token);
 
     let plain = vec![7u8; PART + 1000];
-    let blob = drive_object::encrypt_file_blob(
-        &plain,
-        &file.key,
-        DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-    )
-    .unwrap();
+    let version = Version::seal(&file.id, &file.key, 1, &plain);
+    let blob = version.blob.clone();
     let hash = "ab".repeat(32);
-    let next = metadata(&file, 2, plain.len());
     let fields = [
-        ("metadataEnvelope", next.as_str()),
-        ("metadataRevision", "2"),
+        ("revisionId", version.revision.as_str()),
         ("contentHash", hash.as_str()),
         ("basedOn", "original"),
     ];
@@ -133,8 +130,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         "{}",
         r.status()
     );
-    // Checked when it starts: a stale revision, a stale basis, too large.
-    let stale = metadata(&file, 3, plain.len());
+    // Checked when it starts: a stale basis, too large.
     let r = create_version(
         &c,
         &base,
@@ -142,50 +138,42 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         &file.id,
         blob.len(),
         &[
-            ("metadataEnvelope", stale.as_str()),
-            ("metadataRevision", "3"),
-        ],
-    );
-    assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert_eq!(code(r), "revision_conflict");
-    let r = create_version(
-        &c,
-        &base,
-        &owner.token,
-        &file.id,
-        blob.len(),
-        &[
-            ("metadataEnvelope", next.as_str()),
-            ("metadataRevision", "2"),
+            ("revisionId", version.revision.as_str()),
             ("basedOn", "00000000-0000-4000-8000-000000000000"),
         ],
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert_eq!(code(r), "version_conflict");
+    assert_eq!(code(r), "versionConflict");
     let r = create_version(&c, &base, &owner.token, &file.id, 1 << 50, &fields);
     assert_eq!(r.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    // A new file's fields are not a version's.
-    let r = create_version(
-        &c,
-        &base,
-        &owner.token,
-        &file.id,
-        blob.len(),
-        &[
-            ("metadataEnvelope", next.as_str()),
-            ("metadataRevision", "2"),
+    // A new file's fields are not a version's, its metadata comes with the
+    // commit, and the revision is named.
+    let next = metadata(&file, 2, plain.len());
+    for refused in [
+        vec![
+            ("revisionId", version.revision.as_str()),
             ("nameHash", hash.as_str()),
         ],
-    );
-    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+        vec![
+            ("revisionId", version.revision.as_str()),
+            ("metadataEnvelope", next.as_str()),
+            ("metadataRevision", "2"),
+        ],
+        vec![("contentHash", hash.as_str())],
+    ] {
+        let r = create_version(&c, &base, &owner.token, &file.id, blob.len(), &refused);
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{refused:?}");
+    }
 
     let r = create_version(&c, &base, &owner.token, &file.id, blob.len(), &fields);
     assert_eq!(r.status(), StatusCode::CREATED);
     let at = location(&r);
     let created: Value = r.json().unwrap();
     let version_id = created["versionId"].as_str().unwrap().to_owned();
-    // The upload's id is the version's: clients address it by `versionId`.
-    assert_eq!(at, format!("/api/uploads/{version_id}"));
+    // The version's id is the revision the client chose, and the upload's:
+    // clients address it by `versionId`.
+    assert_eq!(version_id, version.revision);
+    assert_eq!(at, format!("/api/v1/drive/uploads/{version_id}"));
     // One open version upload per file; the caller is told which is theirs.
     let r = create_version(&c, &base, &owner.token, &file.id, blob.len(), &fields);
     assert_eq!(r.status(), StatusCode::CONFLICT);
@@ -195,12 +183,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
     assert!(body["idleSeconds"].as_i64().unwrap() < 60, "{body}");
 
     // A blob sealed for another file is refused at its first byte.
-    let other = drive_object::encrypt_file_blob(
-        &plain,
-        &file.key,
-        DriveFileBlobContextV1::new(&uuid(), 1).unwrap(),
-    )
-    .unwrap();
+    let other = block_blob(&uuid(), &file.key, &version.revision, 1, &plain);
     assert_eq!(
         patch(&c, &base, &owner.token, &at, 0, &other[..PART]).status(),
         StatusCode::BAD_REQUEST
@@ -228,6 +211,35 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
     assert_eq!(r.headers()["X-Kutup-Version-Id"], version_id.as_str());
 
+    // Uploaded, not yet current: the file still serves its first upload.
+    let (status, body) = download(&c, &base, &owner.token, &file.id);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, file.blob);
+    // The commit's metadata must be the next revision.
+    let r = commit(
+        &c,
+        &base,
+        &owner.token,
+        &file.id,
+        &version_id,
+        &metadata(&file, 3, plain.len()),
+        3,
+        &version.revision_content(),
+    );
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    assert_eq!(code(r), "revisionConflict");
+    let r = commit(
+        &c,
+        &base,
+        &owner.token,
+        &file.id,
+        &version_id,
+        &next,
+        2,
+        &version.revision_content(),
+    );
+    assert!(r.status().is_success(), "commit: {}", r.status());
+
     // Landed together: the content, its metadata, its content hash, the charge.
     let (status, body) = download(&c, &base, &owner.token, &file.id);
     assert_eq!(status, StatusCode::OK);
@@ -237,7 +249,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
     assert_eq!(row["contentHash"], hash.as_str(), "{row}");
     assert_eq!(used(&c, &base, &owner.token), before + blob.len() as i64);
     let versions: Value = bearer(
-        c.get(format!("{base}/api/files/{}/versions", file.id)),
+        c.get(format!("{base}/api/v1/drive/files/{}/versions", file.id)),
         &owner.token,
     )
     .send()
@@ -246,43 +258,52 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
     .unwrap();
     assert!(versions.to_string().contains(&version_id), "{versions}");
 
-    // Checked again when it lands: a rename meanwhile takes revision 3, so
-    // an upload started at 3 is refused at the end and discarded at once.
-    let third = metadata(&file, 3, 4);
-    let small = drive_object::encrypt_file_blob(
-        b"four",
-        &file.key,
-        DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-    )
-    .unwrap();
+    // Checked again at the commit: a rename meanwhile takes revision 3, so
+    // the commit naming 3 is refused, and its uploader cancels it.
+    let small = Version::seal(&file.id, &file.key, 1, b"four");
     let r = create_version(
         &c,
         &base,
         &owner.token,
         &file.id,
-        small.len(),
+        small.blob.len(),
         &[
-            ("metadataEnvelope", third.as_str()),
-            ("metadataRevision", "3"),
+            ("revisionId", small.revision.as_str()),
             ("basedOn", version_id.as_str()),
         ],
     );
     assert_eq!(r.status(), StatusCode::CREATED);
     let late = location(&r);
+    assert_eq!(
+        patch(&c, &base, &owner.token, &late, 0, &small.blob).status(),
+        StatusCode::NO_CONTENT
+    );
     let renamed = metadata(&file, 3, plain.len());
-    let r = bearer(c.put(format!("{base}/api/files/{}", file.id)), &owner.token)
-        .json(&json!({ "metadataEnvelope": renamed, "metadataRevision": 3 }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/v1/drive/files/{}", file.id)),
+        &owner.token,
+    )
+    .json(&json!({ "metadataEnvelope": renamed, "metadataRevision": 3 }))
+    .send()
+    .unwrap();
     assert!(r.status().is_success(), "{}", r.status());
-    let r = patch(&c, &base, &owner.token, &late, 0, &small);
+    let r = commit(
+        &c,
+        &base,
+        &owner.token,
+        &file.id,
+        &small.revision,
+        &metadata(&file, 3, 4),
+        3,
+        &small.revision_content(),
+    );
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert_eq!(code(r), "revision_conflict");
-    let head = bearer(c.head(format!("{base}{late}")), &owner.token)
+    assert_eq!(code(r), "revisionConflict");
+    let r = bearer(c.delete(format!("{base}{late}")), &owner.token)
         .header("Tus-Resumable", "1.0.0")
         .send()
         .unwrap();
-    assert_eq!(head.status(), StatusCode::NOT_FOUND);
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
     assert_eq!(used(&c, &base, &owner.token), before + blob.len() as i64);
     purge_accounts(&c, &base, &[&owner, &stranger]);
 }
@@ -307,11 +328,11 @@ fn upload_rows_are_a_file_or_a_version() {
                   generation: Option<i32>| {
         runtime.block_on(
             sqlx::query(
-                "INSERT INTO uploads (user_id, collection_id, file_id, total_bytes,
-                    metadata_envelope, file_key_envelope, key_epoch, storage_path, s3_upload_id,
-                    name_hash, kind, key_generation)
-                 VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, 'm', $2, 1,
-                    gen_random_uuid()::text, 's', $1, $3, $4)",
+                "INSERT INTO drive_uploads (account_id, collection_id, file_id, total_bytes,
+                    file_key_envelope, key_epoch, s3_upload_id,
+                    name_hash, kind, key_generation, blob_suite)
+                 VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 1, kutup_unb64($2), 1,
+                    's', decode($1, 'hex'), $3, $4, 2)",
             )
             .bind(name_hash)
             .bind(key_envelope)
@@ -323,12 +344,12 @@ fn upload_rows_are_a_file_or_a_version() {
     let hash = "cd".repeat(32);
     for (kind, name_hash, key_envelope, generation) in [
         ("version", Some(hash.as_str()), None, Some(1)),
-        ("version", None, Some("k"), Some(1)),
+        ("version", None, Some("AA=="), Some(1)),
         ("version", None, None, None),
-        ("file", None, Some("k"), None),
+        ("file", None, Some("AA=="), None),
         ("file", Some(hash.as_str()), None, None),
-        ("file", Some(hash.as_str()), Some("k"), Some(1)),
-        ("draft", Some(hash.as_str()), Some("k"), None),
+        ("file", Some(hash.as_str()), Some("AA=="), Some(1)),
+        ("draft", Some(hash.as_str()), Some("AA=="), None),
     ] {
         let error = insert(kind, name_hash, key_envelope, generation).unwrap_err();
         assert!(
@@ -363,38 +384,40 @@ fn a_version_over_tus_stands_at_the_log_head() {
         .unwrap();
     runtime
         .block_on(
-            sqlx::query("UPDATE files SET collab_log_floor = 7 WHERE id = $1::uuid")
+            sqlx::query("UPDATE drive_files SET collab_log_floor = 7 WHERE id = $1::uuid")
                 .bind(&file.id)
                 .execute(&pool),
         )
         .unwrap();
 
-    let blob = drive_object::encrypt_file_blob(
-        b"replaced",
-        &file.key,
-        DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-    )
-    .unwrap();
-    let next = metadata(&file, 2, 8);
+    let version = Version::seal(&file.id, &file.key, 1, b"replaced");
     let r = create_version(
         &c,
         &base,
         &owner.token,
         &file.id,
-        blob.len(),
-        &[
-            ("metadataEnvelope", next.as_str()),
-            ("metadataRevision", "2"),
-        ],
+        version.blob.len(),
+        &[("revisionId", version.revision.as_str())],
     );
     assert_eq!(r.status(), StatusCode::CREATED);
     let at = location(&r);
     assert_eq!(
-        patch(&c, &base, &owner.token, &at, 0, &blob).status(),
+        patch(&c, &base, &owner.token, &at, 0, &version.blob).status(),
         StatusCode::NO_CONTENT
     );
+    let r = commit(
+        &c,
+        &base,
+        &owner.token,
+        &file.id,
+        &version.revision,
+        &metadata(&file, 2, 8),
+        2,
+        &version.revision_content(),
+    );
+    assert!(r.status().is_success(), "commit: {}", r.status());
     let versions: Value = bearer(
-        c.get(format!("{base}/api/files/{}/versions", file.id)),
+        c.get(format!("{base}/api/v1/drive/files/{}/versions", file.id)),
         &owner.token,
     )
     .send()
@@ -435,18 +458,11 @@ fn other_writers_and_the_owner() {
         .status()
         .is_success());
 
-    let plain = vec![3u8; PART + 10];
-    let blob = drive_object::encrypt_file_blob(
-        &plain,
-        &file.key,
-        DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-    )
-    .unwrap();
-    let next = metadata(&file, 2, plain.len());
-    let fields = [
-        ("metadataEnvelope", next.as_str()),
-        ("metadataRevision", "2"),
-    ];
+    // One revision throughout: each upload of it is cancelled or lost
+    // before the next starts, so its id is free again.
+    let version = Version::seal(&file.id, &file.key, 1, &vec![3u8; PART + 10]);
+    let blob = version.blob.clone();
+    let fields = [("revisionId", version.revision.as_str())];
 
     // A read-only recipient cannot start one.
     let r = create_version(&c, &base, &viewer.token, &file.id, blob.len(), &fields);

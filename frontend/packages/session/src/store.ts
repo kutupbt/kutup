@@ -6,13 +6,15 @@
 // across reloads is the job of the encrypted per-origin session blob, not of
 // this module.
 
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { useSyncExternalStore } from 'react'
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
+import type { AccountRole, TwoFactorState } from './api-types'
 import type { DeviceKeys } from './keys'
-
 export interface Session {
   /** The server-side session (auth_sessions.id) this app origin holds. */
   sessionId: string
-  userId: string
+  accountId: string
   /** The account's Kutup address (`username@<domain>`): its identity, shown in menus. */
   address: string
   /**
@@ -21,14 +23,19 @@ export interface Session {
    */
   envelopeBinding: string
   username: string | null
-  isAdmin: boolean
+  role: AccountRole
   storageQuotaBytes: number
   storageUsedBytes: number
-  totpEnabled: boolean
+  /** The authenticator app. */
+  twoFactor: TwoFactorState
   /** Collab presence colour `#rrggbb`, or null for the deterministic default. */
   color: string | null
   publicKey: string
   masterKey: Uint8Array
+  /** The account's master keys: the current one and every older one (docs/plans/mk-rotation-exercise.md). */
+  masterKeys: MasterKeys
+  /** The account's stored roots (docs/plans/identity-root.md), opened at sign-in: its identity derives from `roots.identityRoot`. */
+  roots: AccountRoots
   privateKey: Uint8Array
   currentDeviceId: number | null
   /** This sign-in's device on this origin, once registered (persisted with the keys). */

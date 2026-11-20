@@ -190,6 +190,15 @@ Opaque relays may preserve bytes they are explicitly designed not to
 interpret, but must not advertise, validate, transform, or claim support for an
 unknown suite.
 
+A suite or purpose code a reader doesn't know is reported as
+`CryptoError::NewerThanMe` ("newer format: …"), distinct from a corrupt
+object: the client keeps the bytes and asks for an update, and never runs a
+repair or history-loss path for it. Code point 0 stays corrupt. Adding a
+field or enum value without a new suite follows
+[`plans/format-evolution.md`](plans/format-evolution.md): a `v` and a minimum
+reader version (`min`) per JSON plaintext, unknown fields kept, and each enum
+classed *skip* or *refuse* in `kutup_crypto::format::OPEN_ENUMS`.
+
 ## Migration protocol
 
 A suite change is an explicit authenticated protocol operation, not an error
@@ -274,7 +283,7 @@ purpose-specific Kutup APIs:
   checks; it does not fork the protocol code. (MLS groups and OpenMLS were
   removed.)
 - Kutup-owned account and Drive formats use `dryoc` for libsodium-compatible
-  Argon2id/secretstream, RustCrypto `chacha20poly1305`, `ed25519-dalek`,
+  Argon2id, RustCrypto `chacha20poly1305`, `ed25519-dalek`,
   `hkdf`/`sha2`, and pinned `hpke-rs` for RFC 9180 named-share envelopes.
 
 Dependency versions are locked in Cargo lockfiles. An upstream protocol type

@@ -1,17 +1,18 @@
 //! The Photos app's library (docs/plans/photos.md): which Drive folders it
 //! shows, and where its uploads go. Photos are Drive files; the server keeps
-//! only folder ids here, never anything about the photos.
+//! only folder ids here, never anything about the photos. The account's own
+//! marks on photos are a sealed record in the account-records store
+//! (`photosLibrary` scope, `handlers::account_records`).
 
 use axum::extract::State;
 use axum::Json;
-use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// More folders than anyone arranges photos in; keeps listing bounded.
@@ -27,27 +28,27 @@ pub struct PhotosPreferences {
     pub library_folder_ids: Vec<Uuid>,
 }
 
-/// `GET /api/photos/preferences` — your library's folders.
+/// `GET /api/v1/photos/preferences` — your library's folders.
 #[utoipa::path(
     get,
-    path = "/api/photos/preferences",
+    path = "/api/v1/photos/preferences",
     tag = "photos",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Your photo library's folders", body = PhotosPreferences))
 )]
 pub async fn get_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<PhotosPreferences>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     Ok(Json(preferences_of(&state, user_id).await?))
 }
 
 async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPreferences> {
     let upload: Option<Uuid> = sqlx::query_scalar(
         "SELECT p.upload_folder_id FROM photos_preferences p
-         JOIN collections c ON c.id = p.upload_folder_id
-         WHERE p.user_id = $1 AND c.owner_user_id = $1 AND c.deleted_at IS NULL",
+         JOIN drive_collections c ON c.id = p.upload_folder_id
+         WHERE p.account_id = $1 AND c.owner_account_id = $1 AND c.deleted_at IS NULL",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -55,8 +56,8 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
     .flatten();
     let listed: Vec<Uuid> = sqlx::query_scalar(
         "SELECT f.collection_id FROM photos_library_folders f
-         JOIN collections c ON c.id = f.collection_id
-         WHERE f.user_id = $1 AND c.deleted_at IS NULL
+         JOIN drive_collections c ON c.id = f.collection_id
+         WHERE f.account_id = $1 AND c.deleted_at IS NULL
          ORDER BY f.added_at, f.collection_id",
     )
     .bind(user_id)
@@ -75,11 +76,11 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
     })
 }
 
-/// `PUT /api/photos/preferences` — choose the upload folder (one of your own)
+/// `PUT /api/v1/photos/preferences` — choose the upload folder (one of your own)
 /// and the other folders the library shows.
 #[utoipa::path(
     put,
-    path = "/api/photos/preferences",
+    path = "/api/v1/photos/preferences",
     tag = "photos",
     security(("BearerAuth" = [])),
     request_body = PhotosPreferences,
@@ -90,17 +91,17 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
 )]
 pub async fn put_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<PhotosPreferences>,
 ) -> AppResult<Json<PhotosPreferences>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if request.library_folder_ids.len() > MAX_LIBRARY_FOLDERS {
         return Err(AppError::bad_request("too many folders in the library"));
     }
     if let Some(folder) = request.upload_folder_id {
         let owned: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM collections
-                           WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM drive_collections
+                           WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL)",
         )
         .bind(folder)
         .bind(user_id)
@@ -124,8 +125,8 @@ pub async fn put_preferences(
     }
     let mut tx = state.pool.begin().await?;
     sqlx::query(
-        "INSERT INTO photos_preferences (user_id, upload_folder_id) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET
+        "INSERT INTO photos_preferences (account_id, upload_folder_id) VALUES ($1, $2)
+         ON CONFLICT (account_id) DO UPDATE SET
              upload_folder_id = EXCLUDED.upload_folder_id, updated_at = now()",
     )
     .bind(user_id)
@@ -133,14 +134,14 @@ pub async fn put_preferences(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "DELETE FROM photos_library_folders WHERE user_id = $1 AND NOT (collection_id = ANY($2))",
+        "DELETE FROM photos_library_folders WHERE account_id = $1 AND NOT (collection_id = ANY($2))",
     )
     .bind(user_id)
     .bind(&folders)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO photos_library_folders (user_id, collection_id)
+        "INSERT INTO photos_library_folders (account_id, collection_id)
          SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING",
     )
     .bind(user_id)
@@ -149,223 +150,4 @@ pub async fn put_preferences(
     .await?;
     tx.commit().await?;
     Ok(Json(preferences_of(&state, user_id).await?))
-}
-
-/// The library record as stored: sealed, with its place in the chain.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PhotosLibraryRecord {
-    /// Canonical base64 of the envelope.
-    pub envelope: String,
-    pub revision: u64,
-    /// SHA-256 of the envelope, lowercase hex: the next revision names it.
-    pub envelope_digest: String,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PutPhotosLibrary {
-    /// The next revision, sealed by the client (canonical base64).
-    pub envelope: String,
-}
-
-/// The largest body: the envelope's 4 MiB of marks, base64.
-pub const LIBRARY_BODY_LIMIT: usize = 6 * 1024 * 1024;
-
-async fn stored_library(
-    state: &AppState,
-    user_id: Uuid,
-) -> AppResult<Option<(i64, String, Vec<u8>)>> {
-    Ok(sqlx::query_as(
-        "SELECT revision, envelope_digest, envelope FROM photos_library WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await?)
-}
-
-fn record_of(
-    (revision, digest, envelope): (i64, String, Vec<u8>),
-) -> AppResult<PhotosLibraryRecord> {
-    Ok(PhotosLibraryRecord {
-        envelope: base64::engine::general_purpose::STANDARD.encode(envelope),
-        revision: u64::try_from(revision)
-            .map_err(|_| AppError::internal("stored library revision"))?,
-        envelope_digest: digest,
-    })
-}
-
-/// `GET /api/photos/library` — your marks on photos, sealed; `404` before the first.
-#[utoipa::path(
-    get,
-    path = "/api/photos/library",
-    tag = "photos",
-    security(("BearerAuth" = [])),
-    responses(
-        (status = 200, description = "The latest library record", body = PhotosLibraryRecord),
-        (status = 404, description = "None yet")
-    )
-)]
-pub async fn get_library(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> AppResult<Json<PhotosLibraryRecord>> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let stored = stored_library(&state, user_id)
-        .await?
-        .ok_or_else(|| AppError::not_found("no photos library yet"))?;
-    Ok(Json(record_of(stored)?))
-}
-
-/// `409` for a write that does not follow the stored record: with that
-/// record (which the client opens and merges into) when it is this
-/// incarnation's, else without one.
-async fn library_conflict(
-    state: &AppState,
-    user_id: Uuid,
-    incarnation: &str,
-) -> AppResult<axum::response::Response> {
-    use axum::response::IntoResponse;
-    use kutup_crypto::photos_library;
-    let stored = stored_library(state, user_id)
-        .await?
-        .filter(|(_, _, envelope)| {
-            photos_library::inspect(envelope)
-                .is_ok_and(|header| hex::encode(header.account_incarnation_id) == incarnation)
-        });
-    Ok(match stored {
-        Some(stored) => {
-            (axum::http::StatusCode::CONFLICT, Json(record_of(stored)?)).into_response()
-        }
-        None => AppError::conflict("library revision does not follow").into_response(),
-    })
-}
-
-/// `PUT /api/photos/library` — the next revision of your marks. Accepted only
-/// as the successor of what is stored (its revision plus one, naming its
-/// digest), else `409` with the current record, which the client merges into.
-#[utoipa::path(
-    put,
-    path = "/api/photos/library",
-    tag = "photos",
-    security(("BearerAuth" = [])),
-    request_body = PutPhotosLibrary,
-    responses(
-        (status = 200, description = "Stored", body = PhotosLibraryRecord),
-        (status = 409, description = "Not the successor of the stored record", body = PhotosLibraryRecord)
-    )
-)]
-pub async fn put_library(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Json(request): Json<PutPhotosLibrary>,
-) -> AppResult<axum::response::Response> {
-    use axum::response::IntoResponse;
-    use kutup_crypto::photos_library;
-    let user_id = trusted_uuid(&user.user_id)?;
-    let envelope = photos_library::decode_canonical_b64(&request.envelope)
-        .map_err(|_| AppError::bad_request("envelope must be canonical base64"))?;
-    let incarnation: String =
-        sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
-    let incarnation_id: [u8; 32] = hex::decode(&incarnation)
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| AppError::internal("account incarnation id is not 32 bytes of hex"))?;
-    let binding = crate::revisions::key_binding(&state.pool, user_id).await?;
-    // This account's record (its key binding), for its current incarnation:
-    // another account's, or one from before a reset, is refused.
-    let header = photos_library::validate(&envelope, &binding, &incarnation_id)
-        .map_err(|_| AppError::bad_request("not this account's Photos library record"))?;
-    let digest = photos_library::envelope_digest(&envelope)
-        .map_err(|_| AppError::bad_request("not a Photos library envelope"))?;
-    let revision = i64::try_from(header.revision)
-        .map_err(|_| AppError::bad_request("library revision is too large"))?;
-
-    let mut tx = state.pool.begin().await?;
-    let current: Option<(i64, String, Vec<u8>)> = sqlx::query_as(
-        "SELECT revision, envelope_digest, envelope FROM photos_library WHERE user_id = $1 FOR UPDATE",
-    )
-    .bind(user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    // A record from before the account was reset cannot be opened with the
-    // new master key: a new chain starts over it.
-    let stale_incarnation = current.as_ref().is_some_and(|(_, _, stored)| {
-        photos_library::inspect(stored)
-            .map(|h| hex::encode(h.account_incarnation_id) != incarnation)
-            .unwrap_or(true)
-    });
-    // The record already stored, sent again (a retry after a lost answer):
-    // nothing changes, and it is answered as stored.
-    if let Some((stored_revision, stored_digest, _)) = &current {
-        if !stale_incarnation && *stored_revision == revision && *stored_digest == digest {
-            drop(tx);
-            return Ok(Json(PhotosLibraryRecord {
-                envelope: request.envelope,
-                revision: header.revision,
-                envelope_digest: digest,
-            })
-            .into_response());
-        }
-    }
-    let successor = match &current {
-        None => revision == 1,
-        Some(_) if stale_incarnation => revision == 1,
-        Some((stored_revision, stored_digest, _)) => {
-            revision == stored_revision + 1
-                && hex::encode(header.previous_envelope_digest) == *stored_digest
-        }
-    };
-    if !successor {
-        drop(tx);
-        return library_conflict(&state, user_id, &incarnation).await;
-    }
-    // A compare-and-swap in the statement itself: with no row there is nothing
-    // to lock, so two first writes both get here, and only one inserts; an
-    // update (a successor, or a new chain over a reset's record) matches the
-    // row it was checked against. A write that changes no row lost a race.
-    let written = match &current {
-        None => {
-            sqlx::query(
-                "INSERT INTO photos_library (user_id, revision, envelope_digest, envelope)
-                 VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO NOTHING",
-            )
-            .bind(user_id)
-            .bind(revision)
-            .bind(&digest)
-            .bind(&envelope)
-            .execute(&mut *tx)
-            .await?
-        }
-        Some((stored_revision, stored_digest, _)) => {
-            sqlx::query(
-                "UPDATE photos_library
-                    SET revision = $2, envelope_digest = $3, envelope = $4, updated_at = now()
-                  WHERE user_id = $1 AND revision = $5 AND envelope_digest = $6",
-            )
-            .bind(user_id)
-            .bind(revision)
-            .bind(&digest)
-            .bind(&envelope)
-            .bind(stored_revision)
-            .bind(stored_digest)
-            .execute(&mut *tx)
-            .await?
-        }
-    }
-    .rows_affected();
-    if written != 1 {
-        drop(tx);
-        return library_conflict(&state, user_id, &incarnation).await;
-    }
-    tx.commit().await?;
-    Ok(Json(PhotosLibraryRecord {
-        envelope: request.envelope,
-        revision: header.revision,
-        envelope_digest: digest,
-    })
-    .into_response())
 }

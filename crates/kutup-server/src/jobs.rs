@@ -21,32 +21,34 @@ const UPLOADS_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const UPLOADS_STALE_AFTER_SECS: i64 = 24 * 3600;
 const TRASH_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const CHAT_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
+const GROUP_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const RATE_COUNTER_SWEEP_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// A group link's mailbox nobody has read for this long is abandoned.
 
 #[derive(Clone, Copy)]
 pub struct ChatMaintenancePolicy {
     pub mailbox_retention_days: i64,
     pub media_delivery_retention_days: i64,
-    pub send_retention_days: i64,
     pub device_expiry_days: i64,
 }
 
 /// Spawns the lifetime background jobs (version cleanup, quota reconcile, uploads sweeper,
 /// trash retention). Each runs once immediately, then on its interval.
-/// `trash_retention_days == 0` disables the trash sweeper.
 pub fn spawn_all(
     pool: PgPool,
     storage: StorageService,
-    trash_retention_days: i64,
     chat: ChatMaintenancePolicy,
     chat_hub: ChatHub,
 ) {
+    use crate::job_health::{beat, register};
     let (p1, s1) = (pool.clone(), storage.clone());
+    register("drive.version_retention", VERSION_CLEANUP_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(VERSION_CLEANUP_INTERVAL);
         loop {
             tick.tick().await;
             version_retention_tick(&p1, &s1).await;
+            beat(&p1, "drive.version_retention").await;
         }
     });
     // Group request nonces past their window (docs/plans/pairwise-groups.md §3),
@@ -54,50 +56,91 @@ pub fn spawn_all(
     // blobs an hour past their expiration and endorsement keys past their
     // window (docs/plans/group-send-endorsements.md §3.3, §4).
     let nonces = pool.clone();
+    register("chat.group_sweeps", GROUP_SWEEP_INTERVAL);
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+        let mut tick = tokio::time::interval(GROUP_SWEEP_INTERVAL);
         loop {
             tick.tick().await;
+            let mut ok = true;
             if let Err(error) = crate::chat_groups::gateway::sweep_nonces(&nonces).await {
                 tracing::warn!(error = %error.message, "group nonce sweep failed");
+                ok = false;
             }
             if let Err(error) = crate::chat_groups::gateway::sweep_avatars(&nonces).await {
                 tracing::warn!(error = %error.message, "group avatar sweep failed");
+                ok = false;
             }
             if let Err(error) = crate::chat_groups::gateway::sweep_endorsements(&nonces).await {
                 tracing::warn!(error = %error.message, "group endorsement sweep failed");
+                ok = false;
             }
             if let Err(error) = crate::chat_group_send::sweep_keys(&nonces).await {
                 tracing::warn!(error = %error.message, "group send key sweep failed");
+                ok = false;
+            }
+            if ok {
+                beat(&nonces, "chat.group_sweeps").await;
+            }
+        }
+    });
+    // Database rate counters whose windows are over (crate::ratelimit::counters).
+    let counters = pool.clone();
+    register("server.rate_counters", RATE_COUNTER_SWEEP_INTERVAL);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(RATE_COUNTER_SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            match crate::ratelimit::counters::sweep(&counters).await {
+                Ok(_) => beat(&counters, "server.rate_counters").await,
+                Err(error) => tracing::warn!(%error, "rate counter sweep failed"),
             }
         }
     });
     let p2 = pool.clone();
+    register("quota.reconcile", QUOTA_RECONCILE_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(QUOTA_RECONCILE_INTERVAL);
         loop {
             tick.tick().await;
             quota_reconcile_tick(&p2).await;
+            beat(&p2, "quota.reconcile").await;
         }
     });
-    if trash_retention_days > 0 {
-        let (p3, s3) = (pool.clone(), storage.clone());
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(TRASH_SWEEP_INTERVAL);
-            loop {
-                tick.tick().await;
-                trash_sweep_once(&p3, &s3, trash_retention_days).await;
+    // The trash's retention is read on every pass (`drive.trash_retention_days`),
+    // so an administrator's change applies at the next; 0 keeps the trash.
+    let (p3, s3) = (pool.clone(), storage.clone());
+    register("drive.trash_sweep", TRASH_SWEEP_INTERVAL);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(TRASH_SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            match crate::site_settings::DRIVE_TRASH_RETENTION_DAYS
+                .load(&p3)
+                .await
+            {
+                Ok(0) => {}
+                Ok(days) => {
+                    trash_sweep_once(&p3, &s3, days).await;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "trash sweep: reading its retention failed");
+                    continue;
+                }
             }
-        });
-    }
+            beat(&p3, "drive.trash_sweep").await;
+        }
+    });
     let chat_pool = pool.clone();
+    register("chat.maintenance", CHAT_SWEEP_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(CHAT_SWEEP_INTERVAL);
         loop {
             tick.tick().await;
             chat_maintenance_once(&chat_pool, chat, Some(&chat_hub)).await;
+            beat(&chat_pool, "chat.maintenance").await;
         }
     });
+    register("uploads.sweep", UPLOADS_SWEEP_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(UPLOADS_SWEEP_INTERVAL);
         loop {
@@ -115,6 +158,7 @@ pub fn spawn_all(
             if let Err(error) = crate::grants::sweep(&pool).await {
                 tracing::warn!(%error, "grant sweep failed");
             }
+            beat(&pool, "uploads.sweep").await;
         }
     });
 }
@@ -148,7 +192,7 @@ pub async fn chat_maintenance_once(
         tracing::warn!(%error, "chat maintenance: retention setting unavailable; mailbox cleanup skipped");
         0
     });
-    match sqlx::query("DELETE FROM device_tickets WHERE expires_at <= now()")
+    match sqlx::query("DELETE FROM account_device_tickets WHERE expires_at <= now()")
         .execute(pool)
         .await
     {
@@ -163,17 +207,27 @@ pub async fn chat_maintenance_once(
             Err(error) => tracing::warn!("chat maintenance: mailbox retention failed: {error}"),
         }
     }
-    if policy.send_retention_days > 0 {
-        match sqlx::query(
+    // Send records, after `chat.send_retention_days` (read on every pass; 0
+    // keeps them).
+    match crate::site_settings::CHAT_SEND_RETENTION_DAYS
+        .load(pool)
+        .await
+    {
+        Ok(0) => {}
+        Ok(send_retention_days) => match sqlx::query(
             "DELETE FROM chat_sends
-             WHERE created_at < now() - ($1 * interval '1 day')",
+             WHERE created_at < now() - ($1 * interval '1 day')
+               AND NOT kutup_account_held(sender_account_id)",
         )
-        .bind(policy.send_retention_days)
+        .bind(send_retention_days)
         .execute(pool)
         .await
         {
             Ok(done) => result.send_rows = done.rows_affected(),
             Err(error) => tracing::warn!("chat maintenance: send retention failed: {error}"),
+        },
+        Err(error) => {
+            tracing::warn!("chat maintenance: reading the send retention failed: {error}")
         }
     }
     // Every kind's settled deliveries and answers given, after
@@ -192,10 +246,10 @@ pub async fn chat_maintenance_once(
         // device the account's authority still lists
         // (docs/plans/account-identity-key.md).
         match sqlx::query_as::<_, (Uuid, i32)>(
-            "UPDATE devices SET expired_at = now()
+            "UPDATE account_devices SET expired_at = now()
              WHERE expired_at IS NULL
                AND COALESCE(last_seen_at, created_at) < now() - ($1 * interval '1 day')
-             RETURNING user_id, device_id",
+             RETURNING account_id, device_id",
         )
         .bind(policy.device_expiry_days)
         .fetch_all(pool)
@@ -251,11 +305,14 @@ pub async fn sweep_chat_mailboxes_before(
     pool: &PgPool,
     cutoff: OffsetDateTime,
 ) -> anyhow::Result<u64> {
-    Ok(sqlx::query("DELETE FROM chat_mailbox WHERE server_ts < $1")
-        .bind(cutoff)
-        .execute(pool)
-        .await?
-        .rows_affected())
+    Ok(sqlx::query(
+        "DELETE FROM chat_mailbox
+          WHERE server_ts < $1 AND NOT kutup_account_held(recipient_account_id)",
+    )
+    .bind(cutoff)
+    .execute(pool)
+    .await?
+    .rows_affected())
 }
 
 /// Applies version retention (docs/plans/drive-versions-v2.md,
@@ -265,25 +322,28 @@ pub async fn sweep_chat_mailboxes_before(
 /// objects for good and releases their bytes. Returns what was removed.
 pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> usize {
     let now = OffsetDateTime::now_utc();
-    type Row = (Uuid, Uuid, OffsetDateTime, bool, String, Uuid, i64, i32);
+    type Row = (Uuid, Uuid, OffsetDateTime, bool, Uuid, i64, i32, String);
     let mut removed = 0;
     // Every file with thinnable versions, a page at a time (keyed on the
     // file id, so a file whose versions all stay never hides the rest).
     let mut after = Uuid::nil();
     loop {
         let rows: Vec<Row> = match sqlx::query_as(
-            r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path,
-                  v.author_user_id, v.size_bytes, u.version_retention_days
-           FROM file_versions v
-           JOIN files f ON f.id = v.file_id
-           JOIN collections c ON c.id = f.collection_id
-           JOIN users u ON u.id = c.owner_user_id
+            r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever,
+                  v.author_account_id, v.size_bytes, u.version_retention_days, v.kind
+           FROM drive_file_versions v
+           JOIN drive_files f ON f.id = v.file_id
+           JOIN drive_collections c ON c.id = f.collection_id
+           JOIN accounts u ON u.id = c.owner_account_id
            WHERE v.file_id IN (
-             SELECT DISTINCT file_id FROM file_versions
-             WHERE NOT keep_forever AND created_at < now() - interval '1 day' AND file_id > $1
-             ORDER BY file_id
+             SELECT DISTINCT tv.file_id FROM drive_file_versions tv
+               JOIN drive_files tf ON tf.id = tv.file_id
+               JOIN drive_collections tc ON tc.id = tf.collection_id
+             WHERE NOT tv.keep_forever AND tv.created_at < now() - interval '1 day'
+               AND tv.file_id > $1 AND NOT kutup_account_held(tc.owner_account_id)
+             ORDER BY tv.file_id
              LIMIT 500)
-           ORDER BY v.file_id, v.created_at DESC"#,
+           ORDER BY v.file_id, v.kind, v.created_at DESC"#,
         )
         .bind(after)
         .fetch_all(pool)
@@ -299,8 +359,10 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
             break;
         };
         after = last.1;
-        for file in rows.chunk_by(|a, b| a.1 == b.1) {
-            let retention = i64::from(file[0].7);
+        // Each kind on its own: a note's newest state stays, whatever
+        // whole-file version came after it (its metadata names that state).
+        for file in rows.chunk_by(|a, b| a.1 == b.1 && a.7 == b.7) {
+            let retention = i64::from(file[0].6);
             let candidates: Vec<crate::version_retention::Candidate> = file
                 .iter()
                 .map(|r| crate::version_retention::Candidate {
@@ -311,7 +373,8 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
                 .collect();
             let doomed = crate::version_retention::doomed(&candidates, now, retention);
             for row in file.iter().filter(|r| doomed.contains(&r.0)) {
-                let (id, _, _, _, path, _, _, _) = row;
+                let (id, file_id, ..) = row;
+                let path = &crate::file_content::revision_path(*file_id, *id);
                 // Row and charge go together, and only if this pass removed the
                 // row (a purge of the file may have raced it). The object goes
                 // after: a failed delete leaves an orphan for the sweep, never a
@@ -334,20 +397,21 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
 
     // The original is version zero: superseded by a whole-file version and
     // older than the owner's retention, it goes like any other old version.
-    let originals: Vec<(Uuid, String, i64, Uuid)> = sqlx::query_as(
-        r#"SELECT f.id, f.storage_path, f.encrypted_size_bytes, f.uploader_user_id
-           FROM files f
-           JOIN collections c ON c.id = f.collection_id
-           JOIN users u ON u.id = c.owner_user_id
+    let originals: Vec<(Uuid, Uuid, i64, Uuid)> = sqlx::query_as(
+        r#"SELECT f.id, f.content_revision_id, f.encrypted_size_bytes, f.uploader_account_id
+           FROM drive_files f
+           JOIN drive_collections c ON c.id = f.collection_id
+           JOIN accounts u ON u.id = c.owner_account_id
            WHERE NOT f.original_pruned AND f.deleted_at IS NULL
              AND f.created_at < now() - make_interval(days => u.version_retention_days)
-             AND EXISTS (SELECT 1 FROM file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
+             AND EXISTS (SELECT 1 FROM drive_file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
            LIMIT 200"#,
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default();
-    for (file_id, path, size, uploader) in originals {
+    for (file_id, revision, size, uploader) in originals {
+        let path = crate::file_content::revision_path(file_id, revision);
         let marked: anyhow::Result<bool> = async {
             let mut tx = pool.begin().await?;
             let marked = mark_original_removed(&mut tx, file_id, size, uploader).await?;
@@ -367,9 +431,12 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     // dropped connection (joiners open the saved file and skip the backlog),
     // and no save truncates them: keep a day's worth.
     match sqlx::query_scalar::<_, i64>(&crate::handlers::collab::trimming(
-        "DELETE FROM file_update_log l
+        "DELETE FROM collab_update_log l
           WHERE l.kind IN ($1, $2, $3) AND l.created_at < now() - interval '1 day'
-         RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
+            AND NOT kutup_account_held((SELECT c.owner_account_id FROM drive_files f
+                                          JOIN drive_collections c ON c.id = f.collection_id
+                                         WHERE f.id = l.file_id))
+         RETURNING l.file_id, l.sender_server, l.sender_account_id, l.sender_device_id, l.sender_seq",
     ))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_OP))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_LOCK))
@@ -402,7 +469,7 @@ pub(crate) async fn mark_original_removed(
     uploader: Uuid,
 ) -> sqlx::Result<bool> {
     let marked = sqlx::query(
-        "UPDATE files SET original_pruned = true WHERE id = $1 AND NOT original_pruned",
+        "UPDATE drive_files SET original_pruned = true WHERE id = $1 AND NOT original_pruned",
     )
     .bind(file_id)
     .execute(&mut **tx)
@@ -444,7 +511,7 @@ pub(crate) async fn remove_version(
 async fn release_version(pool: &PgPool, version_id: Uuid) -> anyhow::Result<bool> {
     let mut tx = pool.begin().await?;
     let removed: Option<(Uuid, i64)> = sqlx::query_as(
-        "DELETE FROM file_versions WHERE id = $1 RETURNING author_user_id, size_bytes",
+        "DELETE FROM drive_file_versions WHERE id = $1 RETURNING author_account_id, size_bytes",
     )
     .bind(version_id)
     .fetch_optional(&mut *tx)
@@ -475,7 +542,7 @@ async fn account_quota_reconcile(pool: &PgPool) -> usize {
     // updates that row, so none can land between the sum and the write (a
     // single UPDATE … FROM would write sums from before a charge it waited on).
     let drifted: Vec<Uuid> = match sqlx::query_scalar(&format!(
-        "SELECT u.id FROM users u, LATERAL ({}) e
+        "SELECT u.id FROM accounts u, LATERAL ({}) e
          WHERE u.storage_used_bytes <> e.drive_bytes + e.chat_bytes + e.contacts_bytes + e.mail_bytes + e.calendar_bytes",
         reconcile_sums("u.id")
     ))
@@ -492,7 +559,7 @@ async fn account_quota_reconcile(pool: &PgPool) -> usize {
     for uid in drifted {
         let fixed: anyhow::Result<Option<Reconciled>> = async {
             let mut tx = pool.begin().await?;
-            sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+            sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
                 .bind(uid)
                 .execute(&mut *tx)
                 .await?;
@@ -507,7 +574,7 @@ async fn account_quota_reconcile(pool: &PgPool) -> usize {
                 .saturating_add(mail)
                 .saturating_add(calendar);
             let row: Option<i64> = sqlx::query_scalar(
-                "UPDATE users SET storage_used_bytes = $2
+                "UPDATE accounts SET storage_used_bytes = $2
                  WHERE id = $1 AND storage_used_bytes <> $2
                  RETURNING storage_used_bytes",
             )
@@ -546,7 +613,7 @@ fn mail_group_sums(group: &str) -> String {
     format!(
         r#"SELECT (
     COALESCE((SELECT SUM(size_bytes) FROM mail_messages
-               WHERE owner = {group} AND user_id IS NULL AND key_packet IS NULL), 0)
+               WHERE mailbox_owner = {group} AND account_id IS NULL AND key_packet IS NULL), 0)
   + COALESCE((SELECT SUM(size_bytes) FROM mail_group_objects WHERE group_id = {group}), 0)
 )::bigint"#
     )
@@ -622,38 +689,131 @@ async fn mail_group_quota_reconcile(pool: &PgPool) -> usize {
 fn reconcile_sums(user: &str) -> String {
     format!(
         r#"SELECT
-    (COALESCE((SELECT SUM(CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END) FROM files WHERE uploader_user_id = {user}), 0)
-   + COALESCE((SELECT SUM(size_bytes) FROM file_assets WHERE uploader_user_id = {user}), 0)
-   + COALESCE((SELECT SUM(size_bytes) FROM file_thumbnails WHERE uploader_user_id = {user}), 0)
-   + COALESCE((SELECT SUM(size_bytes) FROM file_versions WHERE author_user_id = {user}), 0))::bigint AS drive_bytes,
-    (COALESCE((SELECT SUM(logical_bytes) FROM chat_media_references WHERE user_id = {user}), 0)
-   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_segments WHERE user_id = {user}), 0)
-   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE user_id = {user}), 0)
-   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE user_id = {user}), 0))::bigint AS chat_bytes,
-    COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE user_id = {user}), 0)::bigint AS contacts_bytes,
-    (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = {user} AND key_packet IS NULL), 0)
-   + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE user_id = {user}), 0))::bigint AS mail_bytes,
-    (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_id = {user}), 0)
+    (COALESCE((SELECT SUM(CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END) FROM drive_files WHERE uploader_account_id = {user}), 0)
+   + COALESCE((SELECT SUM(size_bytes) FROM drive_file_assets WHERE uploader_account_id = {user}), 0)
+   + COALESCE((SELECT SUM(size_bytes) FROM drive_file_thumbnails WHERE uploader_account_id = {user}), 0)
+   + COALESCE((SELECT SUM(size_bytes) FROM drive_file_versions WHERE author_account_id = {user}), 0))::bigint AS drive_bytes,
+    (COALESCE((SELECT SUM(logical_bytes) FROM chat_media_references WHERE account_id = {user}), 0)
+   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_segments WHERE account_id = {user}), 0)
+   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_bases WHERE account_id = {user}), 0)
+   + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE account_id = {user}), 0))::bigint AS chat_bytes,
+    COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE account_id = {user}), 0)::bigint AS contacts_bytes,
+    (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE account_id = {user} AND key_packet IS NULL), 0)
+   + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE account_id = {user}), 0))::bigint AS mail_bytes,
+    (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_account_id = {user}), 0)
    + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e JOIN calendars c ON c.id = e.calendar_id
-                WHERE c.owner_id = {user}), 0))::bigint AS calendar_bytes"#
+                WHERE c.owner_account_id = {user}), 0)
+   + COALESCE((SELECT SUM(se.bytes) FROM calendar_shared_events se
+                 JOIN calendars c ON c.id = se.home_calendar_id
+                WHERE c.owner_account_id = {user}), 0))::bigint AS calendar_bytes"#
     )
+}
+
+/// Removes one abandoned upload's row, if it is still stale and nothing holds
+/// it, and gives what it held in storage (path, multipart id, whether the
+/// object is complete) to free after the transaction commits.
+async fn take_stale_upload(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<(String, String, bool)>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let row: Option<(Uuid, Uuid, String, bool)> = sqlx::query_as(
+        "SELECT file_id, revision_id, s3_upload_id, uploaded_at IS NOT NULL FROM drive_uploads
+         WHERE id = $1 AND updated_at < NOW() - $2 * interval '1 second'
+           AND NOT kutup_account_held((SELECT c.owner_account_id FROM drive_collections c
+                                        WHERE c.id = drive_uploads.collection_id))
+         FOR UPDATE SKIP LOCKED",
+    )
+    .bind(id)
+    .bind(UPLOADS_STALE_AFTER_SECS)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((file_id, revision, upload, uploaded)) = row else {
+        return Ok(None);
+    };
+    sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Some((
+        crate::file_content::revision_path(file_id, revision),
+        upload,
+        uploaded,
+    )))
+}
+
+/// Most incomplete multipart uploads one sweep looks at.
+const INCOMPLETE_MULTIPART_PER_SWEEP: usize = 1000;
+
+/// Aborts the store's multipart uploads that were started longer ago than
+/// `server.storage.incomplete_multipart_max_age_seconds` (a day by default) and that
+/// no upload row (`drive_uploads`, `chat_media_uploads`) names: the parts an abort
+/// left behind when it failed after its row was removed (a cancel, the
+/// stale-upload sweep above). A bucket lifecycle rule for incomplete
+/// multipart uploads does the same on the store's side
+/// (docs/self-hosting.md). Returns how many it aborted.
+pub(crate) async fn sweep_incomplete_multipart(
+    pool: &PgPool,
+    storage: &StorageService,
+) -> anyhow::Result<usize> {
+    let max_age = crate::site_settings::STORAGE_INCOMPLETE_MULTIPART_MAX_AGE_SECONDS
+        .load(pool)
+        .await?;
+    let before = OffsetDateTime::now_utc().unix_timestamp() - max_age;
+    let uploads = storage
+        .list_multipart_uploads_before(before, INCOMPLETE_MULTIPART_PER_SWEEP)
+        .await?;
+    let mut aborted = 0;
+    for (key, upload_id) in uploads {
+        // An upload a row still names goes on (a long one), or goes with
+        // its row when that is swept.
+        let named: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM drive_uploads WHERE s3_upload_id = $1)
+                 OR EXISTS (SELECT 1 FROM chat_media_uploads WHERE s3_upload_id = $1)",
+        )
+        .bind(&upload_id)
+        .fetch_one(pool)
+        .await?;
+        if named {
+            continue;
+        }
+        match storage.abort_multipart(&key, &upload_id).await {
+            Ok(()) => aborted += 1,
+            Err(error) => tracing::warn!(%error, "incomplete multipart abort failed"),
+        }
+    }
+    Ok(aborted)
 }
 
 /// A corrected account: its new counter, then the Drive, Chat, Contacts,
 /// Mail and Calendar bytes it adds up from.
 type Reconciled = (i64, i64, i64, i64, i64, i64);
 
-/// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h): aborts the S3
-/// multipart, then drops the row (freeing soft-reserved quota) — mirrors
-/// `UploadsSweeper.once`. Returns the number reaped.
+/// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h):
+/// drops the row (freeing soft-reserved quota), then aborts the S3 multipart.
+/// An uploaded revision never committed (docs/plans/drive-block-format.md §10
+/// slice 3) goes the same way, a day after its last part: with its row go the
+/// reservation and a new file's id, then its object is deleted.
+///
+/// The row goes first, in its own transaction, and only if nothing holds it
+/// (`FOR UPDATE SKIP LOCKED`, the staleness test repeated under the lock): a
+/// commit or a last part holds the row, so the sweep can never delete the
+/// object of a revision that is being made current, and a commit that comes
+/// later finds no row. Bytes whose removal then fails are left without a row
+/// (logged; an object is found by the orphan sweep). Returns the number
+/// reaped.
 pub async fn uploads_sweep_once(
     pool: &PgPool,
     storage: &StorageService,
     media_delivery_retention_days: i64,
 ) -> usize {
-    let stale: Vec<(Uuid, String, String)> = match sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id FROM uploads \
-         WHERE updated_at < NOW() - $1 * interval '1 second'",
+    let stale: Vec<Uuid> = match sqlx::query_scalar(
+        // A held account's uploads stay (docs/plans/server-personal-data.md,
+        // A5): its collection's owner is the account.
+        "SELECT id FROM drive_uploads WHERE updated_at < NOW() - $1 * interval '1 second'
+           AND NOT kutup_account_held((SELECT c.owner_account_id FROM drive_collections c
+                                        WHERE c.id = drive_uploads.collection_id))",
     )
     .bind(UPLOADS_STALE_AFTER_SECS)
     .fetch_all(pool)
@@ -666,26 +826,29 @@ pub async fn uploads_sweep_once(
         }
     };
     let mut reaped = 0;
-    for (id, path, s3_upload_id) in &stale {
-        // Abort first; a failure leaves the row for the next sweep.
-        if let Err(e) = storage.abort_multipart(path, s3_upload_id).await {
-            tracing::warn!("uploads-sweeper: abort {id}: {e}");
-            continue;
-        }
-        if sqlx::query("DELETE FROM uploads WHERE id = $1")
-            .bind(id)
-            .execute(pool)
-            .await
-            .is_err()
+    for id in &stale {
+        let (path, s3_upload_id, uploaded) = match take_stale_upload(pool, *id).await {
+            Ok(Some(row)) => row,
+            // Held by a commit or a part, or no longer stale: not abandoned.
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!("uploads-sweeper: take {id}: {e}");
+                continue;
+            }
+        };
+        // The row is gone for good: nothing can commit these bytes any more.
+        if let Err(e) =
+            crate::drive_blob::drop_upload_bytes(storage, &path, &s3_upload_id, uploaded).await
         {
-            continue;
+            tracing::warn!("uploads-sweeper: bytes of upload={id} path={path} left behind: {e}");
         }
         tracing::info!("uploads-sweeper: reaped upload={id} path={path}");
         reaped += 1;
     }
     let stale_media: Vec<(Uuid, String, String)> = match sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id FROM chat_media_uploads \
-         WHERE updated_at < NOW() - $1 * interval '1 second'",
+        "SELECT id, storage_path, s3_upload_id FROM chat_media_uploads
+         WHERE updated_at < NOW() - $1 * interval '1 second'
+           AND NOT kutup_account_held(account_id)",
     )
     .bind(UPLOADS_STALE_AFTER_SECS)
     .fetch_all(pool)
@@ -734,6 +897,17 @@ pub async fn uploads_sweep_once(
         Ok(_) => {}
         Err(error) => tracing::warn!(error = %error, "Chat-media hand-over sweep failed"),
     }
+    match sweep_incomplete_multipart(pool, storage).await {
+        Ok(0) => {}
+        Ok(aborted) => {
+            tracing::info!(
+                aborted,
+                "aborted incomplete multipart uploads no upload names"
+            );
+            reaped += aborted;
+        }
+        Err(error) => tracing::warn!(error = %error, "incomplete multipart sweep failed"),
+    }
     if let Err(error) = sweep_chat_media_orphans(pool, storage).await {
         tracing::warn!(error = %error, "Chat-media orphan sweep failed");
     }
@@ -780,22 +954,22 @@ async fn sweep_expired_chat_backup_staging(
 ) -> anyhow::Result<()> {
     let mut transaction = pool.begin().await?;
     let expired: Vec<(Uuid, Uuid, i64, i64, String)> = sqlx::query_as(
-        "SELECT user_id,object_id,generation,ciphertext_bytes,storage_path
+        "SELECT account_id,object_id,generation,ciphertext_bytes,storage_path
          FROM chat_backup_bases
-         WHERE state='staged' AND expires_at<=NOW()
+         WHERE state='staged' AND expires_at<=NOW() AND NOT kutup_account_held(account_id)
          ORDER BY expires_at LIMIT 64 FOR UPDATE SKIP LOCKED",
     )
     .fetch_all(&mut *transaction)
     .await?;
     for (user_id, object_id, generation, bytes, _) in &expired {
-        sqlx::query("DELETE FROM chat_backup_bases WHERE user_id=$1 AND object_id=$2")
+        sqlx::query("DELETE FROM chat_backup_bases WHERE account_id=$1 AND object_id=$2")
             .bind(user_id)
             .bind(object_id)
             .execute(&mut *transaction)
             .await?;
         sqlx::query(
             "DELETE FROM chat_backup_media_reconciliations
-             WHERE user_id=$1 AND target_generation=$2",
+             WHERE account_id=$1 AND target_generation=$2",
         )
         .bind(user_id)
         .bind(generation)
@@ -829,9 +1003,9 @@ pub async fn sweep_chat_delivery_media_before(
 ) -> anyhow::Result<()> {
     let mut transaction = pool.begin().await?;
     let expired: Vec<(Uuid, Uuid, Uuid, i64)> = sqlx::query_as(
-        "SELECT id,user_id,attachment_id,logical_bytes
+        "SELECT id,account_id,attachment_id,logical_bytes
          FROM chat_media_references
-         WHERE created_at < $1
+         WHERE created_at < $1 AND NOT kutup_account_held(account_id)
          ORDER BY created_at
          LIMIT 512 FOR UPDATE SKIP LOCKED",
     )
@@ -1040,8 +1214,8 @@ pub async fn purge_file_root(
     // An open upload of a new version is locked before the file, the order
     // its last part takes them in (`tus::patch`: the upload row, then the
     // file), so the two never deadlock.
-    let open_versions: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id FROM uploads
+    let open_versions: Vec<(Uuid, Uuid, String, bool)> = sqlx::query_as(
+        "SELECT id, revision_id, s3_upload_id, uploaded_at IS NOT NULL FROM drive_uploads
          WHERE file_id = $1 AND kind = 'version' FOR UPDATE",
     )
     .bind(file_id)
@@ -1050,8 +1224,8 @@ pub async fn purge_file_root(
     let row: Option<(i64, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
         // A pruned original was released already.
         "SELECT (CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END),
-                uploader_user_id, collection_id, trash_root_id
-         FROM files WHERE id = $1 FOR UPDATE",
+                uploader_account_id, collection_id, trash_root_id
+         FROM drive_files WHERE id = $1 FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
@@ -1065,7 +1239,7 @@ pub async fn purge_file_root(
         PurgeGuard::InTrashedFolder(root) => {
             // FOR SHARE: a restore of the folder (an UPDATE) waits for us.
             sqlx::query_scalar::<_, bool>(
-                "SELECT trash_root_id IS NOT DISTINCT FROM $2 FROM collections WHERE id = $1 FOR SHARE",
+                "SELECT trash_root_id IS NOT DISTINCT FROM $2 FROM drive_collections WHERE id = $1 FOR SHARE",
             )
             .bind(collection_id)
             .bind(root)
@@ -1084,11 +1258,11 @@ pub async fn purge_file_root(
     // rows in the same order and never deadlock.
     let charged: Vec<(Uuid, i64)> = sqlx::query_as(
         r#"SELECT payer, SUM(size_bytes)::bigint FROM (
-               SELECT uploader_user_id AS payer, size_bytes FROM file_assets WHERE file_id = $1
+               SELECT uploader_account_id AS payer, size_bytes FROM drive_file_assets WHERE file_id = $1
                UNION ALL
-               SELECT uploader_user_id, size_bytes FROM file_thumbnails WHERE file_id = $1
+               SELECT uploader_account_id, size_bytes FROM drive_file_thumbnails WHERE file_id = $1
                UNION ALL
-               SELECT author_user_id, size_bytes FROM file_versions WHERE file_id = $1
+               SELECT author_account_id, size_bytes FROM drive_file_versions WHERE file_id = $1
                UNION ALL
                SELECT $2::uuid, $3::bigint) AS charged
            GROUP BY payer
@@ -1104,19 +1278,19 @@ pub async fn purge_file_root(
             .await?;
     }
     // Links to the file itself (no FK ties them down).
-    sqlx::query("DELETE FROM public_shares WHERE share_type = 'file' AND target_id = $1")
+    sqlx::query("DELETE FROM drive_public_shares WHERE share_type = 'file' AND target_id = $1")
         .bind(file_id)
         .execute(&mut *tx)
         .await?;
     // The open upload of a new version goes with it (its reservation and
     // the file's one upload slot); its parts are aborted after commit.
-    for (upload_id, _, _) in &open_versions {
-        sqlx::query("DELETE FROM uploads WHERE id = $1")
+    for (upload_id, _, _, _) in &open_versions {
+        sqlx::query("DELETE FROM drive_uploads WHERE id = $1")
             .bind(upload_id)
             .execute(&mut *tx)
             .await?;
     }
-    sqlx::query("DELETE FROM files WHERE id = $1")
+    sqlx::query("DELETE FROM drive_files WHERE id = $1")
         .bind(file_id)
         .execute(&mut *tx)
         .await?;
@@ -1124,8 +1298,9 @@ pub async fn purge_file_root(
 
     // Best-effort S3 GC (post-commit): everything the file has lives under
     // files/{id}/ — the original, versions, assets and thumbnails.
-    for (_, path, upload) in &open_versions {
-        let _ = storage.abort_multipart(path, upload).await;
+    for (_, revision, upload, uploaded) in &open_versions {
+        let path = crate::file_content::revision_path(file_id, *revision);
+        let _ = crate::drive_blob::drop_upload_bytes(storage, &path, upload, *uploaded).await;
     }
     let _ = storage.delete_prefix(&format!("files/{file_id}/")).await;
     Ok(())
@@ -1142,23 +1317,24 @@ pub async fn purge_collection_root(
     root_id: Uuid,
 ) -> anyhow::Result<()> {
     let colls: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM collections WHERE trash_root_id = $1")
+        sqlx::query_scalar("SELECT id FROM drive_collections WHERE trash_root_id = $1")
             .bind(root_id)
             .fetch_all(pool)
             .await?;
     if colls.is_empty() {
         return Ok(());
     }
-    let files: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM files WHERE collection_id = ANY($1)")
-        .bind(&colls)
-        .fetch_all(pool)
-        .await?;
+    let files: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM drive_files WHERE collection_id = ANY($1)")
+            .bind(&colls)
+            .fetch_all(pool)
+            .await?;
     for fid in files {
         purge_file_root(pool, storage, fid, PurgeGuard::InTrashedFolder(root_id)).await?;
     }
     // Only folders still in this trash entry: one restored meanwhile keeps
     // its rows (and its files, which the guard above left alone).
-    sqlx::query("DELETE FROM collections WHERE id = ANY($1) AND trash_root_id = $2")
+    sqlx::query("DELETE FROM drive_collections WHERE id = ANY($1) AND trash_root_id = $2")
         .bind(&colls)
         .bind(root_id)
         .execute(pool)
@@ -1176,8 +1352,9 @@ pub async fn trash_sweep_once(
     let mut purged = 0;
 
     let coll_roots: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM collections WHERE trash_root_id = id \
-         AND deleted_at < NOW() - make_interval(days => $1::int)",
+        "SELECT id FROM drive_collections WHERE trash_root_id = id \
+         AND deleted_at < NOW() - make_interval(days => $1::int) \
+         AND NOT kutup_account_held(owner_account_id)",
     )
     .bind(retention_days)
     .fetch_all(pool)
@@ -1194,8 +1371,10 @@ pub async fn trash_sweep_once(
     }
 
     let file_roots: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM files WHERE trash_root_id = id \
-         AND deleted_at < NOW() - make_interval(days => $1::int)",
+        "SELECT f.id FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id \
+         WHERE f.trash_root_id = f.id \
+         AND f.deleted_at < NOW() - make_interval(days => $1::int) \
+         AND NOT kutup_account_held(c.owner_account_id)",
     )
     .bind(retention_days)
     .fetch_all(pool)
@@ -1248,7 +1427,7 @@ fn canonical_uuid(seg: &str) -> Option<Uuid> {
 }
 
 /// The file a Drive object belongs to: Drive keeps everything of a file
-/// under `files/{file}/…` (its original, versions, assets, thumbnails).
+/// under `files/{file}/…` (its revisions, assets, thumbnails).
 /// Anything else (Chat's keys, Mail's, foreign objects) is not the sweep's
 /// business.
 fn drive_file_of_key(key: &str) -> Option<Uuid> {
@@ -1261,11 +1440,59 @@ fn drive_file_of_key(key: &str) -> Option<Uuid> {
     }
 }
 
+/// Every object key the rows of `files` name: each file's original revision
+/// (while kept), its versions, open uploads, thumbnails and assets, derived
+/// from the ids the way their writers derive them.
+async fn drive_keys_in_use(
+    pool: &PgPool,
+    files: &[Uuid],
+) -> anyhow::Result<std::collections::HashSet<String>> {
+    use crate::file_content::revision_path;
+    let revisions: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT id, content_revision_id FROM drive_files WHERE id = ANY($1) AND NOT original_pruned
+         UNION ALL
+         SELECT file_id, id FROM drive_file_versions WHERE file_id = ANY($1)
+         UNION ALL
+         SELECT file_id, revision_id FROM drive_uploads WHERE file_id = ANY($1)",
+    )
+    .bind(files)
+    .fetch_all(pool)
+    .await?;
+    let thumbnails: Vec<(Uuid, String, Uuid)> = sqlx::query_as(
+        "SELECT file_id, variant, object_id FROM drive_file_thumbnails WHERE file_id = ANY($1)",
+    )
+    .bind(files)
+    .fetch_all(pool)
+    .await?;
+    let assets: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT file_id, asset_id FROM drive_file_assets WHERE file_id = ANY($1)")
+            .bind(files)
+            .fetch_all(pool)
+            .await?;
+    let mut keys: std::collections::HashSet<String> = revisions
+        .into_iter()
+        .map(|(file, revision)| revision_path(file, revision))
+        .collect();
+    for (file, variant, object) in thumbnails {
+        let variant = kutup_crypto::thumbnail::ThumbnailVariant::try_from(variant.as_str())
+            .map_err(|_| anyhow::anyhow!("thumbnail variant {variant}"))?;
+        keys.insert(crate::handlers::file_thumbnails::thumbnail_storage_path(
+            file, variant, object,
+        ));
+    }
+    keys.extend(
+        assets
+            .into_iter()
+            .map(|(file, asset)| crate::handlers::file_assets::asset_storage_path(file, &asset)),
+    );
+    Ok(keys)
+}
+
 /// Walks the bucket under `prefix`, deleting (or, in dry-run, just reporting) Drive
 /// objects that no row references any more and that are older than `age_floor`: a
 /// crash between storing and committing, a purge whose object delete failed, a
-/// pruned original or retired version left behind. Every stored version of an
-/// orphan goes (on a versioned bucket too).
+/// pruned original, retired version or replaced thumbnail left behind. Deletes
+/// wait the deleted-blob time when `storage` defers them (`crate::blob_purge`).
 pub async fn run_orphan_sweep(
     pool: &PgPool,
     storage: &StorageService,
@@ -1297,29 +1524,11 @@ pub async fn run_orphan_sweep(
         }
 
         if !cands.is_empty() {
-            let keys: Vec<String> = cands.iter().map(|(k, _, _)| k.clone()).collect();
             let mut fids: Vec<Uuid> = cands.iter().map(|(_, f, _)| *f).collect();
             fids.sort();
             fids.dedup();
             // Every key a row still points at (a pruned original's no longer does).
-            let referenced: Vec<String> = sqlx::query_scalar(
-                r#"SELECT storage_path FROM files WHERE storage_path = ANY($1) AND NOT original_pruned
-                   UNION ALL
-                   SELECT storage_path FROM file_versions WHERE storage_path = ANY($1)
-                   UNION ALL
-                   SELECT 'files/' || file_id::text || '/thumbnails/' || variant
-                     FROM file_thumbnails WHERE file_id = ANY($2)
-                   UNION ALL
-                   SELECT 'files/' || file_id::text || '/assets/' || asset_id
-                     FROM file_assets WHERE file_id = ANY($2)
-                   UNION ALL
-                   SELECT storage_path FROM uploads WHERE storage_path = ANY($1)"#,
-            )
-            .bind(&keys)
-            .bind(&fids)
-            .fetch_all(pool)
-            .await?;
-            let referenced: std::collections::HashSet<String> = referenced.into_iter().collect();
+            let referenced = drive_keys_in_use(pool, &fids).await?;
 
             for (key, _, size) in &cands {
                 if referenced.contains(key) {
@@ -1364,15 +1573,13 @@ mod tests {
         let other = "11111111-2222-4333-8444-555555555555";
         let file = Some(uuid::Uuid::parse_str(uuid).unwrap());
         // Everything of a file is under files/{id}/…
-        assert_eq!(drive_file_of_key(&format!("files/{uuid}/original")), file);
         assert_eq!(
             drive_file_of_key(&format!("files/{uuid}/revisions/{other}")),
             file
         );
-        assert_eq!(drive_file_of_key(&format!("files/{uuid}/snapshot")), file);
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/assets/x")), file);
         assert_eq!(
-            drive_file_of_key(&format!("files/{uuid}/versions/{other}")),
+            drive_file_of_key(&format!("files/{uuid}/thumbnails/sm/{other}")),
             file
         );
         // Not Drive's: the retired upload shapes, no trailing part, Chat
@@ -1433,17 +1640,12 @@ mod tests {
         // (counted), and a member holds a list copy with a key packet
         // (counted nowhere: its object is one of the group's above).
         let member = uuid::Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
-                public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '')",
-        )
-        .bind(member)
-        .bind(format!("member{}", &tag[..12]))
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(member)
+            .bind(format!("member{}", &tag[..12]))
+            .execute(&pool)
+            .await
+            .unwrap();
         let address: uuid::Uuid = sqlx::query_scalar(
             "INSERT INTO mail_addresses (address, group_id) VALUES ($1, $2) RETURNING id",
         )
@@ -1458,8 +1660,8 @@ mod tests {
         ] {
             sqlx::query(
                 "INSERT INTO mail_messages (address_id, thread_id, direction, folder,
-                    protection, object_key, size_bytes, user_id, group_id, key_packet)
-                 VALUES ($1, $2, 'inbound', 'inbox', 'end_to_end', $3, $4, $5, $6, $7)",
+                    protection, object_key, size_bytes, account_id, group_id, key_packet)
+                 VALUES ($1, $2, 'inbound', 'inbox', 'endToEnd', $3, $4, $5, $6, $7)",
             )
             .bind(address)
             .bind(uuid::Uuid::new_v4())
@@ -1505,7 +1707,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM users WHERE id = $1")
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(member)
             .execute(&pool)
             .await
@@ -1539,14 +1741,17 @@ mod tests {
         let direct_id: uuid::Uuid = sqlx::query_scalar(
             "SELECT m.id
                FROM chat_mailbox m
-               JOIN devices d ON d.user_id = m.recipient_user_id
+               JOIN account_devices d ON d.account_id = m.recipient_account_id
                                   AND d.device_id = m.recipient_device_id
               ORDER BY m.server_ts DESC LIMIT 1",
         )
         .fetch_one(&pool)
         .await
         .expect("live Direct mailbox fixture");
-        let cutoff = time::OffsetDateTime::now_utc();
+        // A cutoff long before any live row: the sweep is server-wide, so a
+        // cutoff of now would also take the rows parallel live tests are
+        // still reading. Only this test's row is moved before it.
+        let cutoff = time::macros::datetime!(2000-01-01 0:00 UTC);
         let set_time = |pool: sqlx::PgPool, at: time::OffsetDateTime| async move {
             sqlx::query("UPDATE chat_mailbox SET server_ts=$1 WHERE id=$2")
                 .bind(at)
@@ -1555,8 +1760,7 @@ mod tests {
                 .await
                 .unwrap();
         };
-        // The sweep is server-wide (other live tests leave mail behind):
-        // what matters is that a row at the cutoff stays and an older one goes.
+        // A row at the cutoff stays and an older one goes.
         let alive = |pool: sqlx::PgPool| async move {
             sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (SELECT 1 FROM chat_mailbox WHERE id = $1)",
@@ -1571,7 +1775,7 @@ mod tests {
         assert!(alive(pool.clone()).await);
         set_time(pool.clone(), cutoff - time::Duration::SECOND).await;
         let swept = sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
-        assert!(swept >= 1, "{swept}");
+        assert_eq!(swept, 1, "only this test's row is older than the cutoff");
         assert!(!alive(pool.clone()).await);
         pool.close().await;
     }
@@ -1598,13 +1802,14 @@ mod tests {
             .connect(&database_url)
             .await
             .unwrap();
-        let user_id: uuid::Uuid =
-            sqlx::query_scalar("SELECT user_id FROM devices ORDER BY created_at DESC LIMIT 1")
-                .fetch_one(&pool)
-                .await
-                .expect("live Chat user fixture");
+        let user_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT account_id FROM account_devices ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("live Chat user fixture");
         let original_used: i64 =
-            sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE id=$1")
+            sqlx::query_scalar("SELECT storage_used_bytes FROM accounts WHERE id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1639,11 +1844,12 @@ mod tests {
             (expired_attachment, &expired_path, &expired_bytes),
             (boundary_attachment, &boundary_path, &boundary_bytes),
         ] {
+            // Suite 2, the block format: the only suite a new row may name.
             sqlx::query(
                 "INSERT INTO chat_media_objects
-                 (attachment_id,origin_user_id,origin_domain,suite,ciphertext_bytes,
+                 (attachment_id,origin_account_id,origin_server,suite,ciphertext_bytes,
                   ciphertext_sha256,retrieval_token_hash,storage_path,created_at)
-                 VALUES ($1,$2,'retention.test',1,$3,$4,$5,$6,$7)",
+                 VALUES ($1,$2,'retention.test',2,$3,decode($4, 'hex'),$5,$6,$7)",
             )
             .bind(attachment_id)
             .bind(user_id)
@@ -1660,7 +1866,7 @@ mod tests {
             .unwrap();
             sqlx::query(
                 "INSERT INTO chat_media_references
-                 (user_id,attachment_id,logical_bytes,created_at) VALUES ($1,$2,$3,$4)",
+                 (account_id,attachment_id,logical_bytes,created_at) VALUES ($1,$2,$3,$4)",
             )
             .bind(user_id)
             .bind(attachment_id)
@@ -1672,9 +1878,9 @@ mod tests {
         }
         sqlx::query(
             "INSERT INTO chat_backups
-             (user_id,backup_incarnation_id,suite,protection_domain,root_envelope,
+             (account_id,backup_incarnation_id,suite,protection_domain,root_envelope,
               signer_authorization,signer_authorization_digest)
-             VALUES ($1,$2,1,1,'retention-envelope','{}',repeat('0',64))",
+             VALUES ($1,$2,1,1,'\\x00'::bytea,'{}',decode(repeat('00', 32), 'hex'))",
         )
         .bind(user_id)
         .bind(backup_incarnation)
@@ -1683,8 +1889,8 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO chat_backup_media_objects
-             (user_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path,created_at)
-             VALUES ($1,$2,$3,$4,$5,$6)",
+             (account_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path,created_at)
+             VALUES ($1,$2,$3,decode($4, 'hex'),$5,$6)",
         )
         .bind(user_id)
         .bind(&protected_media_id)
@@ -1699,7 +1905,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO chat_backup_media_references (user_id,media_id,reference_id,created_at)
+            "INSERT INTO chat_backup_media_references (account_id,media_id,reference_id,created_at)
              VALUES ($1,$2,$3,$4)",
         )
         .bind(user_id)
@@ -1725,7 +1931,7 @@ mod tests {
             .await
             .unwrap();
         let at_boundary: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM chat_media_references WHERE user_id=$1")
+            sqlx::query_scalar("SELECT COUNT(*) FROM chat_media_references WHERE account_id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1742,7 +1948,7 @@ mod tests {
             .await
             .unwrap();
         let used_after_expiry: i64 =
-            sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE id=$1")
+            sqlx::query_scalar("SELECT storage_used_bytes FROM accounts WHERE id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1761,7 +1967,7 @@ mod tests {
             i64::try_from(protected_bytes.len()).unwrap()
         );
         let protected_rows: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM chat_backup_media_objects WHERE user_id=$1 AND media_id=$2",
+            "SELECT COUNT(*) FROM chat_backup_media_objects WHERE account_id=$1 AND media_id=$2",
         )
         .bind(user_id)
         .bind(&protected_media_id)
@@ -1771,14 +1977,14 @@ mod tests {
         assert_eq!(protected_rows, 1);
 
         // Reconciliation derives the exact total from both delivery and protected ledgers.
-        sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+123 WHERE id=$1")
+        sqlx::query("UPDATE accounts SET storage_used_bytes=storage_used_bytes+123 WHERE id=$1")
             .bind(user_id)
             .execute(&pool)
             .await
             .unwrap();
         assert!(quota_reconcile_tick(&pool).await >= 1);
         let reconciled: i64 =
-            sqlx::query_scalar("SELECT storage_used_bytes FROM users WHERE id=$1")
+            sqlx::query_scalar("SELECT storage_used_bytes FROM accounts WHERE id=$1")
                 .bind(user_id)
                 .fetch_one(&pool)
                 .await
@@ -1795,13 +2001,13 @@ mod tests {
         sweep_chat_delivery_media_before(&pool, &storage, cutoff)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM chat_backups WHERE user_id=$1")
+        sqlx::query("DELETE FROM chat_backups WHERE account_id=$1")
             .bind(user_id)
             .execute(&pool)
             .await
             .unwrap();
         storage.delete(&protected_path).await.unwrap();
-        sqlx::query("UPDATE users SET storage_used_bytes=$1 WHERE id=$2")
+        sqlx::query("UPDATE accounts SET storage_used_bytes=$1 WHERE id=$2")
             .bind(original_used)
             .bind(user_id)
             .execute(&pool)

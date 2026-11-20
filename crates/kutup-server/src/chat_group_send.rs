@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationDirection;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::opaque_setup::OpaqueSetupKeys;
 use crate::AppState;
 
@@ -328,13 +328,13 @@ fn enabled(state: &AppState) -> AppResult<&GroupSendKeys> {
     }
 }
 
-/// `GET /api/chat/group-send/endorsement` (§3.2): today's endorsement of
+/// `GET /api/v1/chat/group-send/endorsement` (§3.2): today's endorsement of
 /// the signed-in account, by this server's issuing key. It says nothing
 /// about groups: every account fetches one a day.
 #[utoipa::path(
     get,
-    path = "/api/chat/group-send/endorsement",
-    tag = "chat groups",
+    path = "/api/v1/chat/group-send/endorsement",
+    tag = "chat.groups",
     security(("BearerAuth" = [])),
     responses(
         (status = 200, body = GroupSendEndorsementResponseV1, description = "Sent with `Cache-Control: no-store`"),
@@ -344,11 +344,11 @@ fn enabled(state: &AppState) -> AppResult<&GroupSendKeys> {
 )]
 pub(crate) async fn endorsement(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<impl axum::response::IntoResponse> {
     let keys = enabled(&state)?;
     let account =
-        Uuid::parse_str(&user.user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+        Uuid::parse_str(&user.account_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     let allowed = crate::site_settings::CHAT_GROUP_SEND_ENDORSEMENTS_PER_DAY
         .load(&state.pool)
         .await?;
@@ -362,9 +362,14 @@ pub(crate) async fn endorsement(
     )
     .into();
     let mut tx = state.pool.begin().await?;
-    let used =
-        crate::handlers::chat::anonymous_count(&mut tx, "group_send_issue", &digest, 1, 86_400)
-            .await?;
+    let used = crate::handlers::chat::anonymous_count(
+        &mut tx,
+        crate::ratelimit::counters::Scope::AnonymousGroupSendIssue,
+        &digest,
+        1,
+        86_400,
+    )
+    .await?;
     tx.commit().await?;
     if used > allowed {
         return Err(AppError::too_many_requests(
@@ -408,7 +413,7 @@ fn params_of(keys: Vec<FederationGroupSendKeyV1>) -> GroupSendParamsV1 {
     }
 }
 
-/// `GET /api/chat/group-send/params?server=` (§4): the endorsement keys of
+/// `GET /api/v1/chat/group-send/params?server=` (§4): the endorsement keys of
 /// this server, or of `server` from its signed discovery, verified and
 /// cached by this server's federation. A sender checks a recipient's
 /// endorsement with its server's key; a wrong one costs only that check
@@ -416,8 +421,8 @@ fn params_of(keys: Vec<FederationGroupSendKeyV1>) -> GroupSendParamsV1 {
 /// its own secret.
 #[utoipa::path(
     get,
-    path = "/api/chat/group-send/params",
-    tag = "chat groups",
+    path = "/api/v1/chat/group-send/params",
+    tag = "chat.groups",
     security(("BearerAuth" = [])),
     params(ParamsQuery),
     responses(
@@ -428,7 +433,7 @@ fn params_of(keys: Vec<FederationGroupSendKeyV1>) -> GroupSendParamsV1 {
 )]
 pub(crate) async fn params(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _user: AuthAccount,
     Query(query): Query<ParamsQuery>,
 ) -> AppResult<Json<GroupSendParamsV1>> {
     let keys = enabled(&state)?;

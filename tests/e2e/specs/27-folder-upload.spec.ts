@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { item, openItem } from '../fixtures/drive'
 
@@ -32,8 +32,8 @@ test('uploading a folder recreates its tree in Drive', async ({ browser }) => {
     page.on('response', (response) => {
       if (response.request().method() !== 'POST' || !response.ok()) return
       const pathname = new URL(response.url()).pathname
-      if (/^\/api\/collections\/?$/.test(pathname)) folders.push(pathname)
-      if (/^\/api\/uploads\/?$/.test(pathname)) uploads.push(pathname)
+      if (/^\/api\/v1\/drive\/collections\/?$/.test(pathname)) folders.push(pathname)
+      if (/^\/api\/v1\/drive\/uploads\/?$/.test(pathname)) uploads.push(pathname)
     })
 
     await page.getByRole('button', { name: 'New' }).first().click()

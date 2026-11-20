@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Alert } from '@kutup/ui/components/alert'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { Button } from '@kutup/ui/components/button'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -13,7 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@kutup/ui/components/dropdown-menu'
-import { LoadingPanel } from '@kutup/ui/components/states'
+
 import {
   AccessChanged,
   openLinkKey,
@@ -53,7 +54,7 @@ export function AccessList({ folder }: { folder: Folder }) {
   // A removal that would also take people not yet upgraded: asked again.
   const [upgrade, setUpgrade] = useState<{ removal: Removal; error: MembersPendingUpgrade } | null>(null)
 
-  if (access.isPending) return <LoadingPanel label={t('dialogs.access.loading')} />
+  if (access.isPending) return <ListSkeleton label={t('dialogs.access.loading')} rows={3} avatar="round" />
   if (access.isError || !access.data) return <Alert variant="error">{t('dialogs.access.loadFailed')}</Alert>
   const data: FolderAccess = access.data
   const date = (iso: string) => new Date(iso).toLocaleDateString(i18n.language, { dateStyle: 'medium' })
@@ -134,20 +135,20 @@ export function AccessList({ folder }: { folder: Folder }) {
           const person = personOf(people.data, m.account)
           return (
             <Row
-              key={m.userId}
+              key={m.accountId}
               icon={person.profile ? <PersonAvatar {...person} /> : <User className="size-4" aria-hidden />}
               name={person.name}
               detail={person.profile ? m.account : ''}
               control={
                 <>
-                  <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                  <VerifyPersonButton account={m.account} claimed={{ driveXwingPublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                   <RoleMenu
                     name={person.name}
                     canUpload={m.canUpload}
                     canDelete={m.canDelete}
                     busy={busy}
                     onChange={(canUpload, canDelete) => change(m, person.name, canUpload, canDelete)}
-                    onRemove={() => setPending({ label: person.name, removal: { ...none, members: [m.userId] } })}
+                    onRemove={() => setPending({ label: person.name, removal: { ...none, members: [m.accountId] } })}
                   />
                 </>
               }
@@ -182,11 +183,14 @@ export function AccessList({ folder }: { folder: Folder }) {
             key={l.id}
             icon={<Link2 className="size-4" aria-hidden />}
             name={t('dialogs.access.link')}
-            detail={
+            detail={[
               l.expiresAt
                 ? t('dialogs.access.linkExpires', { created: date(l.createdAt), expires: date(l.expiresAt) })
-                : t('dialogs.access.linkCreated', { created: date(l.createdAt) })
-            }
+                : t('dialogs.access.linkCreated', { created: date(l.createdAt) }),
+              l.blockedReason ? t(`publicSharing.blocked.${l.blockedReason}`) : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
             onCopy={() => void copy(l.id)}
             control={
               <Button

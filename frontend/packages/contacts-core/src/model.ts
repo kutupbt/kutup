@@ -21,7 +21,7 @@ export interface ContactEmailPgp {
   /** Sign mail to it; unset: the account's "Sign outside mail". Encrypting signs anyway. */
   sign?: boolean
   /** PGP/MIME or Inline; unset: the account's default scheme. */
-  scheme?: 'pgp_mime' | 'inline'
+  scheme?: 'pgpMime' | 'inline'
 }
 
 export interface ContactPhone {
@@ -111,13 +111,23 @@ export interface Contact {
   revision: number
   draft: ContactDraft
   updatedAt: string
+  /**
+   * What the signed summary holds besides the fields the draft edits: its
+   * version and a newer client's fields (docs/plans/format-evolution.md),
+   * signed again on every save so no edit here drops them.
+   */
+  summaryRest?: Record<string, unknown>
 }
 
 export interface ContactGroup {
+  /** Its record id in the account's `contactGroups` scope. */
   id: string
   name: string
   color: string
+  /** How many of the loaded contacts are in it. */
   members: number
+  /** The opened record, kept so a rename seals a newer client's fields again. */
+  record?: Record<string, unknown>
 }
 
 /** Initials for an avatar without a photo. */

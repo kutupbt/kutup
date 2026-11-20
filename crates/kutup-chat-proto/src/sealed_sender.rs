@@ -544,8 +544,10 @@ mod tests {
             .parse()
             .unwrap();
         let first = derive_delivery_capability(&[7; 32], &alice).unwrap();
-        assert_eq!(hex::encode(first), "9f3d6f8cbc54ea934735e039f6b4f37b");
-        // Another account on the same server, or the same id on another server.
+        assert_eq!(hex::encode(first), "20cec5e38fe7f1a2a362ee02d739ce38");
+        // Another account is another capability; the same id under another
+        // server name is the same one (the server is routing,
+        // identity-rotation.md §6).
         let bob: AccountRef = "aci:5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b@example.com"
             .parse()
             .unwrap();
@@ -553,7 +555,7 @@ mod tests {
         let elsewhere: AccountRef = "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.org"
             .parse()
             .unwrap();
-        assert_ne!(
+        assert_eq!(
             first,
             derive_delivery_capability(&[7; 32], &elsewhere).unwrap()
         );

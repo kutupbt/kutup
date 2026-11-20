@@ -83,7 +83,7 @@ fn now() -> u64 {
 /// the key its `params` publishes, as a client receives it.
 fn endorse(c: &Client, base: &str, user: &User) -> Endorsement {
     let r = bearer(
-        c.get(format!("{base}/api/chat/group-send/endorsement")),
+        c.get(format!("{base}/api/v1/chat/group-send/endorsement")),
         &user.token,
     )
     .send()
@@ -91,7 +91,7 @@ fn endorse(c: &Client, base: &str, user: &User) -> Endorsement {
     assert_eq!(r.status(), StatusCode::OK, "fetch the endorsement");
     let issued: Value = r.json().unwrap();
     let params: Value = bearer(
-        c.get(format!("{base}/api/chat/group-send/params")),
+        c.get(format!("{base}/api/v1/chat/group-send/params")),
         &user.token,
     )
     .send()
@@ -151,7 +151,7 @@ fn sent(recipients: &[SentRecipient], shared: &[u8]) -> Vec<u8> {
 
 fn post(c: &Client, base: &str, body: Value) -> (StatusCode, Value) {
     let r = c
-        .post(format!("{base}/api/chat/anonymous/messages/multi"))
+        .post(format!("{base}/api/v1/chat/anonymous/messages/multi"))
         .json(&body)
         .send()
         .unwrap();
@@ -172,7 +172,7 @@ fn drain(c: &Client, base: &str, member: &Member, device: u32) -> Vec<Value> {
     let page: Value = bearer(
         member
             .device(device)
-            .auth(c.get(format!("{base}/api/chat/messages?deviceId={device}"))),
+            .auth(c.get(format!("{base}/api/v1/chat/messages?deviceId={device}"))),
         &member.user.token,
     )
     .send()
@@ -190,7 +190,7 @@ fn ack(c: &Client, base: &str, member: &Member, device: u32, envelopes: &[Value]
     let r = bearer(
         member
             .device(device)
-            .auth(c.post(format!("{base}/api/chat/messages/ack?deviceId={device}"))),
+            .auth(c.post(format!("{base}/api/v1/chat/messages/ack?deviceId={device}"))),
         &member.user.token,
     )
     .json(&json!({ "ids": ids }))
@@ -395,7 +395,7 @@ fn the_token_then_devices_answer_each_account() {
 
 fn server_name(c: &Client, base: &str) -> String {
     let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()
@@ -422,7 +422,7 @@ fn federation() -> Option<(String, String)> {
 fn post_to(c: &Client, base: &str, server: &str, body: Value) -> (StatusCode, Value) {
     let r = c
         .post(format!(
-            "{base}/api/chat/anonymous/messages/multi?server={server}"
+            "{base}/api/v1/chat/anonymous/messages/multi?server={server}"
         ))
         .json(&body)
         .send()
@@ -501,7 +501,7 @@ fn a_send_to_another_servers_members_is_forwarded_and_answered() {
     assert_eq!(answer["code"], "groupSendTokenInvalid");
     // B's discovery publishes its keys, and A serves them to its client.
     let params: Value = bearer(
-        c.get(format!("{a}/api/chat/group-send/params?server={b_name}")),
+        c.get(format!("{a}/api/v1/chat/group-send/params?server={b_name}")),
         &alice.user.token,
     )
     .send()
@@ -509,7 +509,7 @@ fn a_send_to_another_servers_members_is_forwarded_and_answered() {
     .json()
     .unwrap();
     let theirs: Value = bearer(
-        c.get(format!("{b}/api/chat/group-send/params")),
+        c.get(format!("{b}/api/v1/chat/group-send/params")),
         &bob.user.token,
     )
     .send()
@@ -559,7 +559,7 @@ fn admin_session(c: &Client, base: &str, variable: &str) -> Option<String> {
 }
 
 fn settings(c: &Client, base: &str, token: &str, body: Value) {
-    let r = bearer(c.put(format!("{base}/api/admin/settings")), token)
+    let r = bearer(c.put(format!("{base}/api/v1/admin/settings")), token)
         .json(&body)
         .send()
         .unwrap();
@@ -615,7 +615,7 @@ fn shared_parts_go_with_the_last_row_naming_them() {
     // first acks.
     let r = bearer(
         bob.device(bob.devices[0].0)
-            .auth(c.delete(format!("{base}/api/chat/device/{}", bob.devices[1].0))),
+            .auth(c.delete(format!("{base}/api/v1/chat/devices/{}", bob.devices[1].0))),
         &bob.user.token,
     )
     .send()
@@ -724,10 +724,10 @@ fn limits_and_inactive_accounts_answer_as_set() {
     settings(&c, &base, &admin, json!({ "chatMultiMaxRecipients": null }));
 
     let r = bearer(
-        c.put(format!("{base}/api/admin/users/{}", carol.user.id)),
+        c.put(format!("{base}/api/v1/admin/accounts/{}", carol.user.id)),
         &admin,
     )
-    .json(&json!({ "isActive": false }))
+    .json(&json!({ "state": "suspended" }))
     .send()
     .unwrap();
     assert!(r.status().is_success(), "deactivate: {}", r.status());
@@ -807,7 +807,7 @@ fn the_server_issues_endorsements_and_publishes_its_keys() {
     assert!(endorsement.expiration > now() + 25 * 3_600 - 60);
 
     let params: Value = bearer(
-        c.get(format!("{base}/api/chat/group-send/params")),
+        c.get(format!("{base}/api/v1/chat/group-send/params")),
         &user.token,
     )
     .send()
@@ -830,7 +830,9 @@ fn the_server_issues_endorsements_and_publishes_its_keys() {
     assert_eq!(discovery["chatGroupSend"], params["keys"]);
     let name = server_name(&c, &base);
     let named: Value = bearer(
-        c.get(format!("{base}/api/chat/group-send/params?server={name}")),
+        c.get(format!(
+            "{base}/api/v1/chat/group-send/params?server={name}"
+        )),
         &user.token,
     )
     .send()
@@ -841,7 +843,7 @@ fn the_server_issues_endorsements_and_publishes_its_keys() {
     // Both routes need a signed-in account.
     for path in ["endorsement", "params"] {
         let r = c
-            .get(format!("{base}/api/chat/group-send/{path}"))
+            .get(format!("{base}/api/v1/chat/group-send/{path}"))
             .send()
             .unwrap();
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "{path}");
@@ -855,7 +857,7 @@ fn the_server_issues_endorsements_and_publishes_its_keys() {
             json!({ "chatGroupSendEndorsementsPerDay": 1 }),
         );
         let r = bearer(
-            c.get(format!("{base}/api/chat/group-send/endorsement")),
+            c.get(format!("{base}/api/v1/chat/group-send/endorsement")),
             &user.token,
         )
         .send()

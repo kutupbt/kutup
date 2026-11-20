@@ -1,0 +1,10 @@
+# project: webkit
+# WebKit: Drive and Photos media streamed through the service worker, where
+# Safari differs (docs/plans/drive-block-format.md §4): some WebKit builds
+# give a media element an empty `destination`, the worker refuses it, and the
+# player falls back to a Blob. The specs pass by either path and record which
+# one each player took ("playback path" annotations). Not in PR CI: run it
+# with `scripts/gate.sh browser webkit` (tests/e2e/README.md, "WebKit").
+specs/190-stream-worker-stopped.spec.ts
+specs/191-stream-worker-swapped.spec.ts
+specs/192-stream-long-video.spec.ts

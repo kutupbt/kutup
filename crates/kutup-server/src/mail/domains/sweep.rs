@@ -56,13 +56,15 @@ pub fn spawn(state: AppState) {
     if !configured(&state) {
         return;
     }
+    let every = Duration::from_secs(state.config.mail_domains_sweep_seconds);
+    crate::job_health::register("mail.domains_sweep", every);
     tokio::spawn(async move {
-        let mut tick =
-            tokio::time::interval(Duration::from_secs(state.config.mail_domains_sweep_seconds));
+        let mut tick = tokio::time::interval(every);
         loop {
             tick.tick().await;
-            if let Err(error) = run(&state).await {
-                tracing::warn!(error = %error, "mail: custom domains sweep failed");
+            match run(&state).await {
+                Ok(()) => crate::job_health::beat(&state.pool, "mail.domains_sweep").await,
+                Err(error) => tracing::warn!(error = %error, "mail: custom domains sweep failed"),
             }
         }
     });
@@ -267,8 +269,8 @@ async fn reconcile_stalwart(state: &AppState, settings: &Settings) -> AppResult<
 
 /// The site setting holding the last fingerprint of Stalwart's objects
 /// outside Kutup's tag, and the one holding when it last changed.
-pub const UNTAGGED_FINGERPRINT: &str = "mail_domains_untagged_fingerprint";
-pub const UNTAGGED_CHANGED_AT: &str = "mail_domains_untagged_changed_at";
+pub const UNTAGGED_FINGERPRINT: &str = "mail.untagged_domains_fingerprint";
+pub const UNTAGGED_CHANGED_AT: &str = "mail.untagged_domains_changed_at";
 
 /// Alerts when `MAIL_DOMAIN`'s objects in Stalwart (anything outside Kutup's
 /// tag) change: the reconcile never touches them, so a change means someone

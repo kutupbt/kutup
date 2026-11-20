@@ -34,29 +34,29 @@ const forwarding = (state: MailForwarding['state'], kind: MailForwarding['kind']
 describe('what each side may do, by state (Proton’s table)', () => {
   it('lets the forwarder edit, pause, resume, re-enable and send again where Proton does', () => {
     expect(forwarderActions(forwarding('pending', 'outside'))).toEqual(['edit', 'reinvite', 'delete'])
-    expect(forwarderActions(forwarding('pending', 'end_to_end'))).toEqual(['edit', 'delete'])
-    expect(forwarderActions(forwarding('active', 'end_to_end'))).toEqual(['edit', 'pause', 'delete'])
+    expect(forwarderActions(forwarding('pending', 'endToEnd'))).toEqual(['edit', 'delete'])
+    expect(forwarderActions(forwarding('active', 'endToEnd'))).toEqual(['edit', 'pause', 'delete'])
     expect(forwarderActions(forwarding('paused', 'outside'))).toEqual(['resume', 'delete'])
-    expect(forwarderActions(forwarding('outdated', 'end_to_end'))).toEqual(['renew', 'delete'])
+    expect(forwarderActions(forwarding('outdated', 'endToEnd'))).toEqual(['renew', 'delete'])
     expect(forwarderActions(forwarding('rejected', 'outside'))).toEqual(['reinvite', 'delete'])
-    expect(forwarderActions(forwarding('rejected', 'end_to_end'))).toEqual(['renew', 'delete'])
+    expect(forwarderActions(forwarding('rejected', 'endToEnd'))).toEqual(['renew', 'delete'])
   })
 
   it('asks for the code first while a forwarding is unverified, whatever its state', () => {
     for (const state of ['pending', 'active', 'paused'] as const) {
-      for (const kind of ['outside', 'end_to_end'] as const) {
+      for (const kind of ['outside', 'endToEnd'] as const) {
         expect(forwarderActions(forwarding(state, kind, false))).toEqual(['verify', 'edit', 'delete'])
       }
     }
     // Rejected and outdated ones are asked again (a new code goes with it).
     expect(forwarderActions(forwarding('rejected', 'outside', false))).toEqual(['reinvite', 'delete'])
-    expect(forwarderActions(forwarding('outdated', 'end_to_end', false))).toEqual(['renew', 'delete'])
+    expect(forwarderActions(forwarding('outdated', 'endToEnd', false))).toEqual(['renew', 'delete'])
   })
 
   it('lets the forwardee accept or decline a pending one, and delete any other', () => {
-    expect(forwardeeActions(forwarding('pending', 'end_to_end'))).toEqual(['accept', 'decline'])
+    expect(forwardeeActions(forwarding('pending', 'endToEnd'))).toEqual(['accept', 'decline'])
     for (const state of ['active', 'paused', 'outdated'] as const) {
-      expect(forwardeeActions(forwarding(state, 'end_to_end'))).toEqual(['delete'])
+      expect(forwardeeActions(forwarding(state, 'endToEnd'))).toEqual(['delete'])
     }
   })
 })
@@ -70,7 +70,7 @@ describe('which kind a forwarding is', () => {
   }
 
   it('is end to end to a person here, outside elsewhere', async () => {
-    expect((await forwardingKindOf(account, 'bob@kutup.test')).kind).toBe('end_to_end')
+    expect((await forwardingKindOf(account, 'bob@kutup.test')).kind).toBe('endToEnd')
     expect((await forwardingKindOf(account, 'carol@other.test')).kind).toBe('outside')
     expect((await forwardingKindOf(account, 'dave@example.com')).kind).toBe('outside')
   })
@@ -86,9 +86,9 @@ describe('which kind a forwarding is', () => {
     const pinned = (address: string) => (address === 'eve@work.test' ? { keys: [{ fingerprint: 'fp' }], pgp: {} } : undefined)
     await expect(forwardingKindOf(account, 'eve@work.test', pinned as never)).rejects.toEqual(new ForwardeeRefused('pinnedConflict'))
     // Without pins it's a Kutup user's; its own domain is the server's to say.
-    expect((await forwardingKindOf(account, 'eve@work.test')).kind).toBe('end_to_end')
+    expect((await forwardingKindOf(account, 'eve@work.test')).kind).toBe('endToEnd')
     const ownPinned = () => ({ keys: [{ fingerprint: 'fp' }], pgp: {} })
-    expect((await forwardingKindOf(account, 'bob@kutup.test', ownPinned as never)).kind).toBe('end_to_end')
+    expect((await forwardingKindOf(account, 'bob@kutup.test', ownPinned as never)).kind).toBe('endToEnd')
   })
 
   it("refuses the account's own addresses", async () => {

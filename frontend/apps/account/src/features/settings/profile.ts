@@ -41,7 +41,7 @@ export function useAccountAddress(): string | null {
 export function useProfileAccount(): string | null {
   const session = useRequiredSession()
   const server = useServerName()
-  return server ? accountKeyOf({ server, accountId: session.userId }) : null
+  return server ? accountKeyOf({ server, accountId: session.accountId }) : null
 }
 
 async function fetchSealed(): Promise<unknown> {
@@ -69,7 +69,7 @@ export function useOwnProfile() {
     queryFn: async (): Promise<OwnProfile> => {
       const sealed = await fetchSealed()
       if (!sealed) return { sealed: null, view: null }
-      return { sealed, view: await accountProfileOpen(session.masterKey, sealed, account!, session.envelopeBinding) }
+      return { sealed, view: await accountProfileOpen(session.masterKeys, sealed, account!, session.envelopeBinding) }
     },
   })
 }
@@ -84,7 +84,7 @@ export function useSaveProfile() {
       // Seal over what the server holds now, so another device's edit is
       // not lost to a stale copy.
       const current = await fetchSealed()
-      const upload = await accountProfileSeal(session.masterKey, current, update, account, session.envelopeBinding)
+      const upload = await accountProfileSeal(session.masterKeys, current, update, account, session.envelopeBinding)
       await api.put('/chat/profile', upload)
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: profileKey }),

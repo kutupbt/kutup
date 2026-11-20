@@ -10,6 +10,7 @@ use crate::primitives::{Aead, Hasher, Kdf, Suite};
 use base64::Engine as _;
 use zeroize::Zeroizing;
 
+use crate::account_roots::{DriveRoot, RootGeneration};
 use crate::drive_object::{parse_canonical_uuid, DriveObjectSuiteId};
 use crate::error::{CryptoError, Result};
 use crate::padding::Length;
@@ -24,12 +25,16 @@ const KEY_LEN: usize = 32;
 pub const MAX_COLLECTION_NAME_BYTES: usize = 1024;
 /// A file's metadata, in bytes: the metadata format's own cap.
 pub const MAX_FILE_METADATA_BYTES: usize = crate::file_metadata::MAX_METADATA_BYTES;
+/// A revision's content commitment, in bytes (`crate::revision_content`).
+pub const MAX_REVISION_CONTENT_BYTES: usize = crate::revision_content::MAX_ENCODED_BYTES;
+/// A sealed revision commitment's exact length: the purpose pads to one size.
+pub const REVISION_CONTENT_ENVELOPE_BYTES: usize =
+    HEADER_LEN + MAX_REVISION_CONTENT_BYTES + 1 + TAG_LEN;
 /// Names and metadata are padded to a multiple of this many bytes.
 const NAME_BUCKET: usize = 256;
 const KEY_DERIVATION_SALT: &[u8] = crate::labels::DRIVE_ENVELOPE_KEY_V1;
 const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_WHITEBOARD_ASSET_V2;
-const THUMBNAIL_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_THUMBNAIL_V1;
-const THUMBNAIL_REVISION_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_THUMBNAIL_V2;
+const THUMBNAIL_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_THUMBNAIL_V2;
 pub const MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES: usize =
     HEADER_LEN + MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES + TAG_LEN;
@@ -43,6 +48,10 @@ pub const fn max_thumbnail_envelope_bytes(variant: ThumbnailVariant) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum DriveEnvelopePurpose {
+    /// An owned folder's key, sealed for its owner under their Drive root:
+    /// object = folder, parent = owner, epoch = the folder key's epoch,
+    /// revision = the Drive root's generation
+    /// ([`DriveEnvelopeContextV1::owner_collection_key`]).
     CollectionKey = 1,
     CollectionName = 2,
     FileKey = 3,
@@ -56,9 +65,10 @@ pub enum DriveEnvelopePurpose {
     /// the current key walk down to every older one
     /// (docs/plans/drive-share-revocation.md).
     PreviousCollectionKey = 8,
-    /// A public link's key, sealed for the folder owner under their master
-    /// key: object = link id, parent = owner, epoch 1. Lets the owner list,
-    /// copy and re-wrap the link.
+    /// A public link's key, sealed for the folder owner under their Drive
+    /// root: object = link id, parent = owner, epoch 1, revision = the Drive
+    /// root's generation. Lets the owner list, copy and re-wrap the link
+    /// ([`DriveEnvelopeContextV1::owner_link_key`]).
     PublicLinkKey = 9,
     /// A file key of generation `g − 1` sealed under the key of generation
     /// `g` (the context's epoch): object = parent = file. Holders of the
@@ -74,6 +84,13 @@ pub enum DriveEnvelopePurpose {
     /// object = file, parent = album, epoch = the album's key epoch, revision
     /// = the file key's generation. An album holds references, not files.
     AlbumFileKey = 12,
+    /// What one content revision of a file is (`crate::revision_content`):
+    /// its revision id, its sealed manifest's SHA-256 and its size, under the
+    /// file key. object = file, parent = the revision id, epoch = the
+    /// generation of the file key that seals the revision's object, revision
+    /// = 1. History versions, note snapshots and the original upload open
+    /// against it (docs/plans/drive-block-format.md §2).
+    RevisionContent = 13,
 }
 
 impl DriveEnvelopePurpose {
@@ -97,6 +114,7 @@ impl DriveEnvelopePurpose {
             Self::WhiteboardAsset => 1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES,
             // The per-variant cap is the container's to enforce; this is the largest.
             Self::Thumbnail => 1..=MAX_THUMBNAIL_PLAINTEXT_BYTES,
+            Self::RevisionContent => 1..=MAX_REVISION_CONTENT_BYTES,
         }
     }
 
@@ -107,6 +125,8 @@ impl DriveEnvelopePurpose {
     pub const fn padding(self) -> Option<Length> {
         match self {
             Self::CollectionName | Self::FileMetadata => Some(Length::Bucket(NAME_BUCKET)),
+            // Always one length: the size's digits never show.
+            Self::RevisionContent => Some(Length::Fixed(MAX_REVISION_CONTENT_BYTES + 1)),
             Self::WhiteboardAsset | Self::Thumbnail => None,
             _ => Some(Length::Exact(KEY_LEN)),
         }
@@ -117,7 +137,7 @@ impl DriveEnvelopePurpose {
     fn validate_sealed_len(self, len: usize) -> Result<()> {
         let range = self.plaintext_range();
         let valid = match self.padding() {
-            Some(policy @ Length::Bucket(_)) => {
+            Some(policy @ (Length::Bucket(_) | Length::Fixed(_))) => {
                 policy.allows_padded_len(len)
                     && policy
                         .padded_len(*range.end())
@@ -163,7 +183,10 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             10 => Ok(Self::PreviousFileKey),
             11 => Ok(Self::PublicLinkFileKey),
             12 => Ok(Self::AlbumFileKey),
-            _ => Err(CryptoError::InvalidInput(format!(
+            13 => Ok(Self::RevisionContent),
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Drive envelope purpose {value}"
             ))),
         }
@@ -247,6 +270,19 @@ impl DriveEnvelopeContextV1 {
         )
     }
 
+    /// One content revision's commitment (`crate::revision_content`), under
+    /// the file key of `generation`, the generation that seals the
+    /// revision's object: bound to the file and the revision.
+    pub fn revision_content(file_id: &str, revision_id: &str, generation: u32) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::RevisionContent,
+            generation,
+            1,
+            file_id,
+            revision_id,
+        )
+    }
+
     /// A file's key of `generation`, under a public link's key: bound to the
     /// file, its owner and the generation.
     pub fn public_link_file_key(file_id: &str, owner_id: &str, generation: u32) -> Result<Self> {
@@ -311,21 +347,112 @@ impl DriveEnvelopeContextV1 {
 }
 
 impl DriveEnvelopeContextV1 {
-    /// A file's thumbnail. Bound to the file and its key generation; the variant
-    /// takes the parent slot as a derived id (as whiteboard assets do), so a
-    /// small preview never opens as a large one. The revision is fixed at 1:
-    /// without signed file revisions it could not protect freshness anyway
-    /// (docs/plans/drive-thumbnails.md, "Security notes").
-    pub fn thumbnail(file_id: &str, variant: ThumbnailVariant, generation: u32) -> Result<Self> {
+    /// An owned folder's key at `epoch`, sealed for its owner under their
+    /// Drive root of `root_generation` (docs/plans/identity-rotation.md §3).
+    /// The revision slot carries the generation, so a reader finds the root
+    /// that opens it after the Drive root rotates.
+    pub fn owner_collection_key(
+        collection_id: &str,
+        owner_id: &str,
+        epoch: u32,
+        root_generation: RootGeneration,
+    ) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::CollectionKey,
+            epoch,
+            u64::from(root_generation.get()),
+            collection_id,
+            owner_id,
+        )
+    }
+
+    /// A public link's key, sealed for its owner under their Drive root of
+    /// `root_generation` (epoch 1, the generation in the revision slot).
+    pub fn owner_link_key(
+        link_id: &str,
+        owner_id: &str,
+        root_generation: RootGeneration,
+    ) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::PublicLinkKey,
+            1,
+            u64::from(root_generation.get()),
+            link_id,
+            owner_id,
+        )
+    }
+
+    /// The Drive root generation an owner envelope of this context is
+    /// sealed under, for the purposes sealed under the Drive root.
+    pub fn drive_root_generation(&self) -> Result<RootGeneration> {
+        if !self.purpose.is_under_drive_root() {
+            return Err(CryptoError::InvalidInput(format!(
+                "Drive envelope purpose {} is not sealed under the Drive root",
+                self.purpose.as_u8()
+            )));
+        }
+        let generation = u32::try_from(self.revision)
+            .map_err(|_| CryptoError::InvalidInput("a Drive root generation is a u32".into()))?;
+        RootGeneration::new(generation)
+    }
+}
+
+impl DriveEnvelopePurpose {
+    /// The purposes sealed for the account itself under its Drive root
+    /// (owned folder keys and link owner copies); nothing else is.
+    pub const fn is_under_drive_root(self) -> bool {
+        matches!(self, Self::CollectionKey | Self::PublicLinkKey)
+    }
+}
+
+/// Seals a key for its owner under their Drive root: `context` is an
+/// [`DriveEnvelopeContextV1::owner_collection_key`] or
+/// [`DriveEnvelopeContextV1::owner_link_key`] at the root's generation.
+pub fn seal_under_drive_root(
+    key: &[u8],
+    drive_root: &DriveRoot,
+    context: DriveEnvelopeContextV1,
+) -> Result<String> {
+    context.drive_root_generation()?;
+    seal_b64(key, drive_root.as_bytes(), context)
+}
+
+/// Opens an owner envelope sealed under `drive_root`; `expected` names the
+/// root's generation, which must be the one the envelope names.
+pub fn open_under_drive_root(
+    envelope_b64: &str,
+    drive_root: &DriveRoot,
+    expected: DriveEnvelopeContextV1,
+) -> Result<Zeroizing<Vec<u8>>> {
+    expected.drive_root_generation()?;
+    open_b64(envelope_b64, drive_root.as_bytes(), expected).map(Zeroizing::new)
+}
+
+impl DriveEnvelopeContextV1 {
+    /// A file's thumbnail of one content revision. Bound to the file and its
+    /// key generation; the parent slot commits to `SHA-256(label ‖ variant ‖
+    /// revision id)` (as whiteboard assets derive theirs), so a small preview
+    /// never opens as a large one and a thumbnail of older content no longer
+    /// opens once the file's metadata names a newer revision, and is drawn
+    /// again (docs/plans/drive-block-format.md §2). The envelope's revision
+    /// is fixed at 1: freshness comes from the content revision.
+    pub fn thumbnail(
+        file_id: &str,
+        revision_id: &str,
+        variant: ThumbnailVariant,
+        generation: u32,
+    ) -> Result<Self> {
         if generation == 0 {
             return Err(CryptoError::InvalidInput(
                 "Drive thumbnail key generation must be non-zero".into(),
             ));
         }
         let file_id = parse_canonical_uuid(file_id, "thumbnail file")?;
+        let revision_id = parse_canonical_uuid(revision_id, "thumbnail revision")?;
         let mut digest = Hasher::new(Suite::V1);
         digest.update(THUMBNAIL_BINDING_LABEL);
         digest.update(variant.as_str().as_bytes());
+        digest.update(revision_id);
         let digest = digest.finish();
         Ok(Self {
             purpose: DriveEnvelopePurpose::Thumbnail,
@@ -334,27 +461,6 @@ impl DriveEnvelopeContextV1 {
             object_id: file_id,
             parent_id: digest[..16].try_into().expect("sixteen-byte digest prefix"),
         })
-    }
-
-    /// A thumbnail of one content revision (docs/plans/drive-block-format.md
-    /// §2): the parent slot commits to `SHA-256(label ‖ variant ‖ revision
-    /// id)`, so a thumbnail of older content no longer opens once the file's
-    /// metadata names a newer revision, and is drawn again.
-    pub fn thumbnail_of_revision(
-        file_id: &str,
-        revision_id: &str,
-        variant: ThumbnailVariant,
-        generation: u32,
-    ) -> Result<Self> {
-        let mut context = Self::thumbnail(file_id, variant, generation)?;
-        let revision_id = parse_canonical_uuid(revision_id, "thumbnail revision")?;
-        let mut digest = Hasher::new(Suite::V1);
-        digest.update(THUMBNAIL_REVISION_BINDING_LABEL);
-        digest.update(variant.as_str().as_bytes());
-        digest.update(revision_id);
-        let digest = digest.finish();
-        context.parent_id = digest[..16].try_into().expect("sixteen-byte digest prefix");
-        Ok(context)
     }
 }
 
@@ -647,6 +753,53 @@ mod tests {
                 .as_str(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn an_owner_key_opens_only_under_its_drive_root_and_generation() {
+        let folder = "11111111-1111-4111-8111-111111111111";
+        let owner = "22222222-2222-4222-8222-222222222222";
+        let root = DriveRoot::from_bytes([0x21; 32]);
+        let first = RootGeneration::FIRST;
+        let second = RootGeneration::new(2).unwrap();
+        let scope = DriveEnvelopeContextV1::owner_collection_key(folder, owner, 3, first).unwrap();
+        assert_eq!(scope.revision, 1);
+        assert_eq!(scope.drive_root_generation().unwrap(), first);
+        let sealed = seal_under_drive_root(&[0x55; 32], &root, scope).unwrap();
+        assert_eq!(
+            inspect(
+                &base64::engine::general_purpose::STANDARD
+                    .decode(&sealed)
+                    .unwrap()
+            )
+            .unwrap()
+            .context
+            .drive_root_generation()
+            .unwrap(),
+            first
+        );
+        assert_eq!(
+            open_under_drive_root(&sealed, &root, scope)
+                .unwrap()
+                .as_slice(),
+            &[0x55; 32]
+        );
+        // Another root, another generation, another epoch: refused.
+        assert!(open_under_drive_root(&sealed, &DriveRoot::from_bytes([0x22; 32]), scope).is_err());
+        let later = DriveEnvelopeContextV1::owner_collection_key(folder, owner, 3, second).unwrap();
+        assert!(open_under_drive_root(&sealed, &root, later).is_err());
+        let rotated =
+            DriveEnvelopeContextV1::owner_collection_key(folder, owner, 4, first).unwrap();
+        assert!(open_under_drive_root(&sealed, &root, rotated).is_err());
+        // A link's owner copy is a different thing.
+        let link = DriveEnvelopeContextV1::owner_link_key(folder, owner, first).unwrap();
+        assert_eq!((link.epoch, link.revision), (1, 1));
+        assert!(open_under_drive_root(&sealed, &root, link).is_err());
+        // Only the owner purposes go under the Drive root.
+        let name =
+            DriveEnvelopeContextV1::new(DriveEnvelopePurpose::CollectionName, 1, 1, folder, owner)
+                .unwrap();
+        assert!(seal_under_drive_root(b"x", &root, name).is_err());
     }
 
     #[test]

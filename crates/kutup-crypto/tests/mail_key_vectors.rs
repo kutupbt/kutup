@@ -80,7 +80,7 @@ fn lists(
         },
         second,
     ];
-    keys.sort_by_key(|key| key.fingerprint);
+    keys.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
     let two = MailKeyListV1 {
         sequence: 2,
         previous_hash: Some(one.hash()),
@@ -117,13 +117,17 @@ fn write_vectors() {
     // change).
     if std::env::var("KUTUP_WRITE_MAIL_VECTORS").as_deref() == Ok("lists") {
         let mut v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
-        let identity =
-            AccountIdentityKeysV1::derive(&b64(&v.master_key).try_into().unwrap()).unwrap();
-        let entry = |fingerprint: &str, sha256: &str| MailKeyEntryV1 {
-            fingerprint: hex::decode(fingerprint).unwrap().try_into().unwrap(),
-            sha256_fingerprint: hex::decode(sha256).unwrap().try_into().unwrap(),
-            primary: true,
-            flags: DEFAULT_FLAGS,
+        let identity = AccountIdentityKeysV1::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_slice(&b64(&v.master_key)).unwrap(),
+        )
+        .unwrap();
+        let entry = |fingerprint: &str, sha256: &str| {
+            MailKeyEntryV1::v4(
+                hex::decode(fingerprint).unwrap().try_into().unwrap(),
+                hex::decode(sha256).unwrap().try_into().unwrap(),
+                true,
+                DEFAULT_FLAGS,
+            )
         };
         let chain = lists(
             &identity,
@@ -159,22 +163,20 @@ fn write_vectors() {
         &nonce,
     )
     .unwrap();
-    let identity = AccountIdentityKeysV1::derive(&master).unwrap();
+    let identity = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes(master),
+    )
+    .unwrap();
     let chain = lists(
         &identity,
         address,
-        MailKeyEntryV1 {
-            fingerprint: key.fingerprint,
-            sha256_fingerprint: key.sha256_fingerprint,
-            primary: true,
-            flags: DEFAULT_FLAGS,
-        },
-        MailKeyEntryV1 {
-            fingerprint: second.fingerprint,
-            sha256_fingerprint: second.sha256_fingerprint,
-            primary: true,
-            flags: DEFAULT_FLAGS,
-        },
+        MailKeyEntryV1::v4(key.fingerprint, key.sha256_fingerprint, true, DEFAULT_FLAGS),
+        MailKeyEntryV1::v4(
+            second.fingerprint,
+            second.sha256_fingerprint,
+            true,
+            DEFAULT_FLAGS,
+        ),
     );
     let vectors = Vectors {
         address: address.into(),
@@ -245,22 +247,20 @@ fn checked_in_vectors_hold() {
 
     // The key lists re-sign to the same bytes (Ed25519 is deterministic),
     // verify against the account authority, and chain.
-    let identity = AccountIdentityKeysV1::derive(&master.clone().try_into().unwrap()).unwrap();
+    let identity = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_slice(&master).unwrap(),
+    )
+    .unwrap();
     let chain = lists(
         &identity,
         &v.address,
-        MailKeyEntryV1 {
-            fingerprint,
-            sha256_fingerprint: arr(&v.sha256_fingerprint),
-            primary: true,
-            flags: DEFAULT_FLAGS,
-        },
-        MailKeyEntryV1 {
-            fingerprint: arr(&v.second_key_fingerprint),
-            sha256_fingerprint: arr(&v.second_key_sha256_fingerprint),
-            primary: true,
-            flags: DEFAULT_FLAGS,
-        },
+        MailKeyEntryV1::v4(fingerprint, arr(&v.sha256_fingerprint), true, DEFAULT_FLAGS),
+        MailKeyEntryV1::v4(
+            arr(&v.second_key_fingerprint),
+            arr(&v.second_key_sha256_fingerprint),
+            true,
+            DEFAULT_FLAGS,
+        ),
     );
     let mut previous: Option<SignedMailKeyListV1> = None;
     for (expected, signed) in v.key_lists.iter().zip(&chain) {

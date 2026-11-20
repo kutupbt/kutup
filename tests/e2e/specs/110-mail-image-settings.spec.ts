@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { openWhenArrived } from '../fixtures/mail'
 
@@ -27,7 +27,7 @@ test('embedded images wait when turned off; metadata removal starts as set', asy
   const metadata = mail.getByRole('checkbox', { name: /Remove image metadata/ })
   await expect(embedded).toBeChecked({ timeout: 120_000 })
   await expect(metadata).toBeChecked()
-  const saved = () => mail.waitForResponse((r) => r.request().method() === 'PATCH' && new URL(r.url()).pathname === '/api/mail/settings' && r.ok())
+  const saved = () => mail.waitForResponse((r) => r.request().method() === 'PATCH' && new URL(r.url()).pathname === '/api/v1/mail/settings' && r.ok())
   let save = saved()
   await embedded.click()
   await save
@@ -52,7 +52,7 @@ test('embedded images wait when turned off; metadata removal starts as set', asy
   // send waits for it (the button says Sending at once) instead of being lost.
   let release: () => void = () => undefined
   const held = new Promise<void>((resolve) => (release = resolve))
-  await mail.route(/\/api\/mail\/drafts\/[^/]+\/attachments$/, async (route) => {
+  await mail.route(/\/api\/v1\/mail\/drafts\/[^/]+\/attachments$/, async (route) => {
     if (route.request().method() === 'POST') await held
     await route.continue()
   })
@@ -65,7 +65,7 @@ test('embedded images wait when turned off; metadata removal starts as set', asy
   await expect(named.getByRole('button', { name: 'Sending…' })).toBeVisible()
   setTimeout(release, 3_000)
   await expect(mail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
-  await mail.unroute(/\/api\/mail\/drafts\/[^/]+\/attachments$/)
+  await mail.unroute(/\/api\/v1\/mail\/drafts\/[^/]+\/attachments$/)
 
   // Received: the image waits until loaded.
   await openWhenArrived(mail, new RegExp(subject))

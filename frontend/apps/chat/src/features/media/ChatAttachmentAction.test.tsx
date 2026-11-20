@@ -6,12 +6,13 @@ import { ChatAttachmentAction } from './ChatAttachmentAction'
 
 const attachment: ChatAttachmentDescriptorV1 = {
   version: 1,
-  suite: 1,
+  suite: 2,
   attachmentId: '11111111-1111-4111-8111-111111111111',
   originDomain: 'a.test',
   retrievalToken: 'opaque',
   ciphertextBytes: 100,
   ciphertextSha256: 'ab'.repeat(32),
+  manifestSha256: 'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM=',
   attachmentKey: 'opaque-key',
   plaintextBytes: 24,
   filename: 'report.pdf',

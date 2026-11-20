@@ -19,13 +19,12 @@ fn editor(device_id: u32, seed: u8) -> AccountManifestDeviceV3 {
     let key = SigningKey::from_seed(Suite::V1, &[seed; 32])
         .verifying_key()
         .to_array::<32>();
-    AccountManifestDeviceV3 {
+    AccountManifestDeviceV3::editing(
         device_id,
-        kind: DeviceKind::Editor,
-        chat: None,
-        frame_key: Some(STANDARD.encode(key)),
-        session: "ab".repeat(32),
-    }
+        DeviceKind::Editor,
+        STANDARD.encode(key),
+        "ab".repeat(32),
+    )
 }
 
 fn chain(
@@ -113,7 +112,10 @@ fn unknown<'a>() -> AuthorityCheck<'a> {
 /// sender's real frames still count.
 #[test]
 fn forged_frames_are_skipped_and_counted() {
-    let keys = AccountIdentityKeysV1::derive(&[5; 32]).unwrap();
+    let keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([5; 32]),
+    )
+    .unwrap();
     let source = Source {
         chain: chain(
             &keys,
@@ -136,7 +138,10 @@ fn forged_frames_are_skipped_and_counted() {
 /// checks it.
 #[test]
 fn an_unreadable_server_fails_the_file_not_the_sender() {
-    let keys = AccountIdentityKeysV1::derive(&[5; 32]).unwrap();
+    let keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([5; 32]),
+    )
+    .unwrap();
     let source = Source {
         chain: chain(&keys, &[vec![editor(1, 1)]]),
         down: Cell::new(true),
@@ -154,8 +159,14 @@ fn an_unreadable_server_fails_the_file_not_the_sender() {
 /// but its pin is of another incarnation.
 #[test]
 fn a_reset_account_is_refused_with_its_way_out() {
-    let old = AccountIdentityKeysV1::derive(&[5; 32]).unwrap();
-    let new = AccountIdentityKeysV1::derive(&[6; 32]).unwrap();
+    let old = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([5; 32]),
+    )
+    .unwrap();
+    let new = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([6; 32]),
+    )
+    .unwrap();
     let first = chain(&old, &[vec![editor(1, 1)]]);
     let pins = Pins::default();
     pins.put_sender_pin(&AccountManifestPinV1::of(&first[0]).unwrap())

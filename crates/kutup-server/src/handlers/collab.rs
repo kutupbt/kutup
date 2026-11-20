@@ -2,7 +2,7 @@
 //!
 //! The server is a blind relay: it verifies each frame's Ed25519 signature (never decrypts)
 //! against the frame key the sender's account manifest lists for its device
-//! (docs/plans/one-device-list.md), persists the durable kinds to `file_update_log`, and fans
+//! (docs/plans/one-device-list.md), persists the durable kinds to `collab_update_log`, and fans
 //! frames out to the other peers in the file's room, each named by its sender account
 //! (`envelope::deliver`). Auth (a device ticket or token + device credential, file access)
 //! happens before the upgrade; `handle_connection` is the per-connection coroutine: hello →
@@ -25,7 +25,7 @@ use crate::AppState;
 use kutup_crypto::account_ref::AccountRef;
 
 /// Query params on the WS URL. Browsers can't set headers on `new WebSocket(url)`, so a
-/// device ticket (`POST /api/device-ticket`) arrives here; a native client sends its token
+/// device ticket (`POST /api/v1/account/devices/tickets`) arrives here; a native client sends its token
 /// and `X-Kutup-Device` instead.
 #[derive(Debug, Deserialize)]
 pub struct CollabQuery {
@@ -69,8 +69,8 @@ pub(crate) struct PeerSummary {
     /// The tab's id (see `CollabQuery::tab`); omitted for an older client.
     #[serde(skip_serializing_if = "String::is_empty")]
     tab: String,
-    #[serde(rename = "userId")]
-    user_id: String,
+    #[serde(rename = "accountId")]
+    account_id: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     username: String,
 }
@@ -100,13 +100,13 @@ struct PeersMsg {
     kind: &'static str,
 }
 
-/// `GET /api/files/{fileId}/collab/ws` — authenticates, then upgrades. Mirrors
+/// `GET /api/v1/drive/files/{fileId}/collab/ws` — authenticates, then upgrades. Mirrors
 /// `PreUpgrade` + `Upgrade`: all access checks run here so the upgraded connection trusts
 /// the resolved identity.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/collab/ws",
-    tag = "collab",
+    path = "/api/v1/drive/files/{fileId}/collab/ws",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(
         ("fileId" = String, Path, description = "File id"),
@@ -124,7 +124,7 @@ pub async fn ws(
     let device = authenticate_socket(&state, &headers, &q).await?;
     // Anyone who may read the file joins; only editors' edits are kept.
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    let access = file_access(&state.pool, device.user_id, file_uuid)
+    let access = file_access(&state.pool, device.account_id, file_uuid)
         .await?
         .ok_or_else(|| AppError::not_found("file not found"))?;
     if access == Access::None {
@@ -184,14 +184,14 @@ async fn file_access(
 ) -> Result<Option<Access>, sqlx::Error> {
     // A folder share or a share of the file itself; either may allow edits.
     let row: Option<(bool, Option<bool>)> = sqlx::query_as(&format!(
-        r#"SELECT c.owner_user_id = $2,
+        r#"SELECT c.owner_account_id = $2,
                   (SELECT bool_or(can) FROM (
-                       SELECT cs.can_upload AS can FROM collection_shares cs
-                        WHERE cs.collection_id = c.id AND cs.recipient_user_id = $2
+                       SELECT cs.can_upload AS can FROM drive_collection_shares cs
+                        WHERE cs.collection_id = c.id AND cs.recipient_account_id = $2
                        UNION ALL
-                       SELECT fs.can_edit AND {current} FROM file_shares fs
-                        WHERE fs.file_id = f.id AND fs.recipient_user_id = $2) shares)
-           FROM files f JOIN collections c ON c.id = f.collection_id
+                       SELECT fs.can_edit AND {current} FROM drive_file_shares fs
+                        WHERE fs.file_id = f.id AND fs.recipient_account_id = $2) shares)
+           FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id
            WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL"#,
         current = crate::drive_writes::FILE_SHARE_CURRENT,
     ))
@@ -268,11 +268,11 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
     let hub = state.hub.clone();
     let (file_id, file_uuid) = (conn.file_id.clone(), conn.file_uuid);
     let device = &conn.device;
-    let user_uuid = device.user_id;
+    let user_uuid = device.account_id;
 
     // Username + color for the peer-list (best-effort).
     let (username, color): (String, String) = sqlx::query_as(
-        "SELECT COALESCE(username, ''), COALESCE(color, '') FROM users WHERE id = $1",
+        "SELECT COALESCE(username, ''), COALESCE(color, '') FROM accounts WHERE id = $1",
     )
     .bind(user_uuid)
     .fetch_one(&state.pool)
@@ -281,7 +281,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
 
     // Stamp last_seen_at on every successful upgrade.
     let _ = sqlx::query(
-        "UPDATE devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2",
+        "UPDATE account_devices SET last_seen_at = now() WHERE account_id = $1 AND device_id = $2",
     )
     .bind(user_uuid)
     .bind(device.device_id as i32)
@@ -293,7 +293,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
     // dropped as replays, so a failed read closes the socket before hello.
     let read = async {
         let doc_key_id: i64 =
-            sqlx::query_scalar("SELECT current_doc_key_id FROM files WHERE id = $1")
+            sqlx::query_scalar("SELECT current_doc_key_id FROM drive_files WHERE id = $1")
                 .bind(file_uuid)
                 .fetch_one(&state.pool)
                 .await?;
@@ -406,7 +406,7 @@ pub(crate) fn peer_summaries(hub: &Hub, file_id: &str) -> Vec<PeerSummary> {
             color: p.color.clone(),
             device_id: p.device_id,
             tab: p.tab.clone(),
-            user_id: p.user_id.clone(),
+            account_id: p.account_id.clone(),
             username: p.username.clone(),
         })
         .collect()
@@ -476,7 +476,7 @@ async fn claim_base(
         Some(v) => {
             let Ok(vid) = Uuid::parse_str(v) else { return };
             let row: Option<i64> = sqlx::query_scalar(
-                "SELECT doc_key_id FROM file_versions
+                "SELECT doc_key_id FROM drive_file_versions
                  WHERE id = $1 AND file_id = $2 AND kind = 'file' AND seq_at_snapshot = $3",
             )
             .bind(vid)
@@ -539,24 +539,24 @@ async fn trim_log(
     tx.commit().await
 }
 
-/// Deletes the rows of `delete` (a `DELETE FROM file_update_log l ...
+/// Deletes the rows of `delete` (a `DELETE FROM collab_update_log l ...
 /// RETURNING l.*` statement) and raises each sender's floor
-/// (`file_sender_floors`) to the highest counter it took, in one statement,
+/// (`collab_sender_floors`) to the highest counter it took, in one statement,
 /// so a trimmed frame stays a replay. Every deletion of log rows goes
 /// through here. The number of rows deleted.
 pub(crate) fn trimming(delete: &str) -> String {
     format!(
         "WITH gone AS ({delete}),
               floors AS (
-                INSERT INTO file_sender_floors
-                       (file_id, sender_domain, sender_account, sender_device, seq_prefix, sender_seq)
-                SELECT file_id, sender_domain, sender_account, sender_device, sender_seq >> 32,
+                INSERT INTO collab_sender_floors
+                       (file_id, sender_server, sender_account_id, sender_device_id, seq_prefix, sender_seq)
+                SELECT file_id, sender_server, sender_account_id, sender_device_id, sender_seq >> 32,
                        MAX(sender_seq)
                   FROM gone
-                 GROUP BY file_id, sender_domain, sender_account, sender_device, sender_seq >> 32
-                ON CONFLICT (file_id, sender_domain, sender_account, sender_device, seq_prefix)
+                 GROUP BY file_id, sender_server, sender_account_id, sender_device_id, sender_seq >> 32
+                ON CONFLICT (file_id, sender_server, sender_account_id, sender_device_id, seq_prefix)
                 DO UPDATE SET sender_seq =
-                    GREATEST(file_sender_floors.sender_seq, EXCLUDED.sender_seq)
+                    GREATEST(collab_sender_floors.sender_seq, EXCLUDED.sender_seq)
                 RETURNING 1)
          SELECT COUNT(*) FROM gone"
     )
@@ -572,9 +572,9 @@ pub(crate) async fn trim_log_through(
     doc_key_id: i64,
 ) -> sqlx::Result<()> {
     sqlx::query_scalar::<_, i64>(&trimming(
-        "DELETE FROM file_update_log l USING files f
+        "DELETE FROM collab_update_log l USING drive_files f
           WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2
-         RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
+         RETURNING l.file_id, l.sender_server, l.sender_account_id, l.sender_device_id, l.sender_seq",
     ))
     .bind(file_uuid)
     .bind(seq)
@@ -582,7 +582,7 @@ pub(crate) async fn trim_log_through(
     .fetch_one(&mut **tx)
     .await?;
     sqlx::query(
-        "UPDATE files SET collab_log_floor = GREATEST(collab_log_floor, $2)
+        "UPDATE drive_files SET collab_log_floor = GREATEST(collab_log_floor, $2)
          WHERE id = $1 AND current_doc_key_id = $3",
     )
     .bind(file_uuid)
@@ -665,7 +665,7 @@ pub(crate) async fn accept_frame(
     // started with: the device listed itself again since, or the frame lies.
     if f.manifest_sequence > device.manifest_sequence {
         let now =
-            crate::account_devices::frame_device(state, device.user_id, device.device_id as i32)
+            crate::account_devices::frame_device(state, device.account_id, device.device_id as i32)
                 .await;
         if !now.is_ok_and(|now| {
             now.frame_key == device.frame_key && f.manifest_sequence <= now.manifest_sequence
@@ -701,7 +701,7 @@ pub(crate) async fn accept_frame(
     // (a share can be narrowed while the socket is open).
     // A failed check never lets the edit through: it closes the socket, as
     // a definite "no" does (the client reconnects).
-    match file_access(&state.pool, device.user_id, file_uuid).await {
+    match file_access(&state.pool, device.account_id, file_uuid).await {
         Ok(Some(Access::Write)) => {}
         Ok(Some(Access::Read)) => return FrameOutcome::Dropped,
         _ => return FrameOutcome::Close,
@@ -738,7 +738,7 @@ pub(crate) async fn accept_frame(
     // client knows every frame up to a position it has seen is applied.
     let log_sender = LogSender {
         domain: None,
-        account: device.user_id,
+        account: device.account_id,
         device: device.device_id,
     };
     let Ok(seq) = persist_frame(state, file_uuid, log_sender, &f, data).await else {
@@ -777,7 +777,7 @@ pub(crate) fn is_presence(kind: u8) -> bool {
 pub(crate) async fn frame_binding(state: &AppState, file_uuid: Uuid, f: &Frame) -> Option<bool> {
     let binding: (i64, i32, i32, i32) = sqlx::query_as(
         "SELECT f.current_doc_key_id, f.key_generation, f.key_epoch, c.key_epoch \
-         FROM files f JOIN collections c ON c.id = f.collection_id \
+         FROM drive_files f JOIN drive_collections c ON c.id = f.collection_id \
          WHERE f.id = $1 AND f.deleted_at IS NULL",
     )
     .bind(file_uuid)
@@ -832,15 +832,15 @@ async fn sender_seq_high(
 ) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT GREATEST(
-             COALESCE((SELECT MAX(sender_seq) FROM file_update_log
-                        WHERE file_id = $1 AND sender_domain = '' AND sender_account = $2
-                          AND sender_device = $3), 0),
-             COALESCE((SELECT MAX(sender_seq) FROM file_sender_floors
-                        WHERE file_id = $1 AND sender_domain = '' AND sender_account = $2
-                          AND sender_device = $3), 0))",
+             COALESCE((SELECT MAX(sender_seq) FROM collab_update_log
+                        WHERE file_id = $1 AND sender_server = '' AND sender_account_id = $2
+                          AND sender_device_id = $3), 0),
+             COALESCE((SELECT MAX(sender_seq) FROM collab_sender_floors
+                        WHERE file_id = $1 AND sender_server = '' AND sender_account_id = $2
+                          AND sender_device_id = $3), 0))",
     )
     .bind(file_uuid)
-    .bind(device.user_id)
+    .bind(device.account_id)
     .bind(device.device_id as i32)
     .fetch_one(pool)
     .await
@@ -871,8 +871,8 @@ pub(crate) async fn log_head<'e, E: sqlx::PgExecutor<'e>>(
 ) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT GREATEST(
-             COALESCE((SELECT MAX(seq) FROM file_update_log WHERE file_id = $1), 0),
-             COALESCE((SELECT collab_log_floor FROM files WHERE id = $1), 0))",
+             COALESCE((SELECT MAX(seq) FROM collab_update_log WHERE file_id = $1), 0),
+             COALESCE((SELECT collab_log_floor FROM drive_files WHERE id = $1), 0))",
     )
     .bind(file_uuid)
     .fetch_one(executor)
@@ -885,7 +885,7 @@ pub(crate) fn log_lock_key(file_uuid: Uuid) -> i64 {
     (file_uuid.as_u128() >> 64) as u64 as i64
 }
 
-/// Inserts a frame into `file_update_log`, assigning the next per-file seq — mirrors
+/// Inserts a frame into `collab_update_log`, assigning the next per-file seq — mirrors
 /// `persistFrame`. Sequence allocation is serialized per file so simultaneous frames from
 /// different devices cannot both select the same `MAX(seq) + 1`; the sender's
 /// `(domain, account, device, sender_seq)` unique index still rejects exact replays.
@@ -909,9 +909,9 @@ pub(crate) async fn persist_frame(
     // A counter a trim took (see `trimming`) is a replay as much as one
     // still in the log.
     let trimmed: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM file_sender_floors
-                         WHERE file_id = $1 AND sender_domain = $2 AND sender_account = $3
-                           AND sender_device = $4 AND seq_prefix = $5 >> 32
+        "SELECT EXISTS (SELECT 1 FROM collab_sender_floors
+                         WHERE file_id = $1 AND sender_server = $2 AND sender_account_id = $3
+                           AND sender_device_id = $4 AND seq_prefix = $5 >> 32
                            AND sender_seq >= $5)",
     )
     .bind(file_uuid)
@@ -928,13 +928,13 @@ pub(crate) async fn persist_frame(
     }
 
     let seq = sqlx::query_scalar(
-        r#"INSERT INTO file_update_log (file_id, seq, sender_account, sender_seq, doc_key_id, kind,
-                                       frame, sender_domain, sender_device)
+        r#"INSERT INTO collab_update_log (file_id, seq, sender_account_id, sender_seq, doc_key_id, kind,
+                                       frame, sender_server, sender_device_id)
            VALUES (
              $1,
              GREATEST(
-               COALESCE((SELECT MAX(seq) FROM file_update_log WHERE file_id = $1), 0),
-               (SELECT collab_log_floor FROM files WHERE id = $1)
+               COALESCE((SELECT MAX(seq) FROM collab_update_log WHERE file_id = $1), 0),
+               (SELECT collab_log_floor FROM drive_files WHERE id = $1)
              ) + 1,
              $2, $3, $4, $5, $6, $7, $8
            )
@@ -958,7 +958,7 @@ pub(crate) async fn persist_frame(
 /// Streams every frame with `seq > since_seq` to the joining client — mirrors `replayLog`.
 async fn replay_log(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, since_seq: i64) {
     let rows: Vec<(i64, Vec<u8>, String, Uuid)> = match sqlx::query_as(
-        "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
+        "SELECT seq, frame, sender_server, sender_account_id FROM collab_update_log
           WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC",
     )
     .bind(file_uuid)
@@ -981,7 +981,7 @@ async fn replay_log(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, since_s
     }
     // Everything up to `through` has now been sent. A client that was behind
     // the floor (a saved version trimmed past it) also needs that version.
-    let floor: i64 = sqlx::query_scalar("SELECT collab_log_floor FROM files WHERE id = $1")
+    let floor: i64 = sqlx::query_scalar("SELECT collab_log_floor FROM drive_files WHERE id = $1")
         .bind(file_uuid)
         .fetch_optional(&state.pool)
         .await
@@ -1044,12 +1044,12 @@ pub struct FramesPage {
     pub more: bool,
 }
 
-/// `GET /api/files/{fileId}/collab/frames` — the collaboration log after a
+/// `GET /api/v1/drive/files/{fileId}/collab/frames` — the collaboration log after a
 /// position, for a reader of the file (as the socket's replay).
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/collab/frames",
-    tag = "collab",
+    path = "/api/v1/drive/files/{fileId}/collab/frames",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id"), FramesQuery),
     responses((status = 200, description = "Frames after `after`, oldest first", body = FramesPage))
@@ -1062,7 +1062,7 @@ pub async fn get_frames(
 ) -> AppResult<Response> {
     let device = crate::account_devices::frame_device_of_request(&state, &headers).await?;
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    match file_access(&state.pool, device.user_id, file_uuid).await? {
+    match file_access(&state.pool, device.account_id, file_uuid).await? {
         None => return Err(AppError::not_found("file not found")),
         Some(Access::None) => return Err(AppError::forbidden("forbidden")),
         Some(_) => {}
@@ -1072,7 +1072,7 @@ pub async fn get_frames(
         .unwrap_or(MAX_FRAMES_PER_READ)
         .clamp(1, MAX_FRAMES_PER_READ);
     let rows: Vec<(i64, Vec<u8>, String, Uuid)> = sqlx::query_as(
-        "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
+        "SELECT seq, frame, sender_server, sender_account_id FROM collab_update_log
           WHERE file_id = $1 AND seq > $2
           ORDER BY seq ASC LIMIT $3",
     )
@@ -1082,11 +1082,12 @@ pub async fn get_frames(
     .fetch_all(&state.pool)
     .await?;
     let more = rows.len() as i64 > limit;
-    let (floor, current_doc_key_id): (i64, i64) =
-        sqlx::query_as("SELECT collab_log_floor, current_doc_key_id FROM files WHERE id = $1")
-            .bind(file_uuid)
-            .fetch_one(&state.pool)
-            .await?;
+    let (floor, current_doc_key_id): (i64, i64) = sqlx::query_as(
+        "SELECT collab_log_floor, current_doc_key_id FROM drive_files WHERE id = $1",
+    )
+    .bind(file_uuid)
+    .fetch_one(&state.pool)
+    .await?;
     let head_seq = log_head(&state.pool, file_uuid).await?;
     let my_sender_seq_high = sender_seq_high(&state.pool, file_uuid, &device).await?;
     use base64::Engine as _;
@@ -1127,15 +1128,15 @@ pub struct FrameKept {
     pub seq: i64,
 }
 
-/// `POST /api/files/{fileId}/collab/frames` — one sealed edit frame
+/// `POST /api/v1/drive/files/{fileId}/collab/frames` — one sealed edit frame
 /// (`application/octet-stream`) from a registered device: kept and sent to
 /// the room, as from a socket. `409 frameRefused` when the gate drops it (not
 /// this device's, a stale key or document key, a replayed sequence): read the
 /// log again and rebuild. `403` without write access; `429` past the limit.
 #[utoipa::path(
     post,
-    path = "/api/files/{fileId}/collab/frames",
-    tag = "collab",
+    path = "/api/v1/drive/files/{fileId}/collab/frames",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
     request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "One sealed collaboration frame"),
@@ -1152,13 +1153,13 @@ pub async fn post_frame(
 ) -> AppResult<Response> {
     let device = crate::account_devices::frame_device_of_request(&state, &headers).await?;
     if !crate::ratelimit::COLLAB_FRAME_POSTS
-        .allow(&format!("{}/{}", device.user_id, device.device_id))
+        .allow(&format!("{}/{}", device.account_id, device.device_id))
     {
         return Err(AppError::too_many_requests("too many requests")
             .with_details(serde_json::json!({ "code": "rateLimited" })));
     }
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    match file_access(&state.pool, device.user_id, file_uuid).await? {
+    match file_access(&state.pool, device.account_id, file_uuid).await? {
         None => return Err(AppError::not_found("file not found")),
         Some(Access::Write) => {}
         Some(_) => return Err(AppError::forbidden("forbidden")),

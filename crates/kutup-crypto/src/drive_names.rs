@@ -9,7 +9,10 @@
 //! rotated to since, so a rotation rehashes nothing. From it:
 //!
 //! An account's top-level folders, with no folder above them, use one hash
-//! key derived from the account master key.
+//! key derived from the account's current Drive root. Each top-level
+//! folder records the Drive-root generation its hash was made under, so a
+//! reader knows which key made it; a Drive-root rotation rehashes the top
+//! level under the new root (the rotation flow, after the wipe).
 //!
 //! - a **name hash**, `HMAC-SHA256(hash key, "name" ‖ 0 ‖ canonical name)`,
 //!   stored with every file and folder; the server keeps them unique in a
@@ -28,6 +31,7 @@
 use crate::primitives::{hash, Kdf, Mac, Suite};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::account_roots::DriveRoot;
 use crate::error::{CryptoError, Result};
 
 /// The family every name hash key comes from (the HKDF salt).
@@ -61,14 +65,10 @@ pub fn folder_hash_key(first_folder_key: &[u8], collection_id: &str) -> Result<[
 }
 
 /// The hash key for an account's top-level folders, which have no folder
-/// above them: from the account master key.
-pub fn top_level_hash_key(master_key: &[u8]) -> Result<[u8; 32]> {
-    if master_key.len() != 32 {
-        return Err(CryptoError::InvalidInput(
-            "master key must be 32 bytes".into(),
-        ));
-    }
-    let hkdf = Kdf::new(Suite::V1, NAMES_SALT, master_key);
+/// above them: from the account's Drive root. The folder records the root's
+/// generation next to its hash (`collections.name_hash_generation`).
+pub fn top_level_hash_key(drive_root: &DriveRoot) -> Result<[u8; 32]> {
+    let hkdf = Kdf::new(Suite::V1, NAMES_SALT, drive_root.as_bytes());
     let mut key = [0u8; 32];
     hkdf.expand(TOP_LEVEL_INFO, &mut key)
         .map_err(|_| CryptoError::InvalidInput("top-level hash key derivation failed".into()))?;
@@ -135,10 +135,12 @@ mod tests {
             folder_hash_key(&[7u8; 32], "22222222-2222-4222-8222-222222222222").unwrap()
         );
         assert!(folder_hash_key(&[7u8; 31], ID).is_err());
-        let top = top_level_hash_key(&[7u8; 32]).unwrap();
+        let top = top_level_hash_key(&DriveRoot::from_bytes([7u8; 32])).unwrap();
         assert_ne!(top, key);
-        assert_ne!(top, top_level_hash_key(&[8u8; 32]).unwrap());
-        assert!(top_level_hash_key(&[7u8; 31]).is_err());
+        assert_ne!(
+            top,
+            top_level_hash_key(&DriveRoot::from_bytes([8u8; 32])).unwrap()
+        );
     }
 
     #[test]

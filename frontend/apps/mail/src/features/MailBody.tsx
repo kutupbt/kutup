@@ -33,10 +33,12 @@ function themeColors(): FrameLook['colors'] {
 /**
  * A message's body in a sandboxed iframe: no scripts, its own CSP, sized to
  * its content. Remote images stay blocked until the reader loads them for
- * this message, as Proton offers. With tracker protection (on unless turned
- * off) they come through the Kutup image proxy, known tracking pixels never
- * load, and links lose their tracking parameters; an image the proxy cannot
- * get loads directly only when the reader asks.
+ * this message, as Proton offers, and then always through the Kutup image
+ * proxy: the browser never loads them from the sender's servers (the Mail
+ * app's Content-Security-Policy allows no remote images; an image the proxy
+ * cannot get stays out). With tracker protection (on unless turned off),
+ * known tracking pixels are counted and never asked for, and links lose
+ * their tracking parameters.
  */
 export function MailBody({ parsed, suspicious = false, sender }: { parsed: ParsedMessage; suspicious?: boolean; sender?: string }) {
   const { t } = useTranslation()
@@ -88,8 +90,7 @@ export function MailBody({ parsed, suspicious = false, sender }: { parsed: Parse
   // The message's remote addresses, read from the last rendering (they do not
   // depend on what loaded).
   const [remoteUrls, setRemoteUrls] = useState<string[]>([])
-  const proxy = useImageProxy(remoteUrls, { enabled: protect, load: allowRemote })
-  const [direct, setDirect] = useState(false)
+  const proxy = useImageProxy(remoteUrls, { enabled: true, trackers: protect, load: allowRemote })
   const [showingTrackers, setShowingTrackers] = useState(false)
   const [askingImages, setAskingImages] = useState(false)
   const [always, setAlways] = useState(false)
@@ -110,19 +111,12 @@ export function MailBody({ parsed, suspicious = false, sender }: { parsed: Parse
 
   const rendered = useMemo<SanitizedHtml>(() => {
     const look: FrameLook = { dark: darkTheme, colors: themeColors(), quoteLabel: t('read.showQuoted') }
-    const resolveRemote = protect
-      ? (url: string) => {
-          if (proxy.trackers.has(url)) return null
-          const image = proxy.images.get(url)
-          if (image) return image
-          return image === null && direct ? url : null
-        }
-      : undefined
+    const resolveRemote = (url: string) => (proxy.trackers.has(url) ? null : (proxy.images.get(url) ?? null))
     if (parsed.html) return sanitizeMailHtml(parsed.html, { allowRemote, resolveRemote, cleanLinks: protect, inlineImages: inline, holdEmbedded, look })
     const cleanedLinks: CleanedLink[] = []
     const document = plainTextDocument(parsed.text ?? '', look, protect ? cleanedLinks : undefined)
     return { document, remoteBlocked: false, embeddedBlocked: false, remoteUrls: [], cleanedLinks, dark: darkTheme, themed: true }
-  }, [parsed, allowRemote, protect, proxy, direct, inline, holdEmbedded, darkTheme, t])
+  }, [parsed, allowRemote, protect, proxy, inline, holdEmbedded, darkTheme, t])
   const remoteKey = rendered.remoteUrls.join('\n')
   useEffect(() => {
     setRemoteUrls(remoteKey ? remoteKey.split('\n') : [])
@@ -175,13 +169,10 @@ export function MailBody({ parsed, suspicious = false, sender }: { parsed: Parse
           </Button>
         </div>
       ) : null}
-      {protect && allowRemote && proxy.failed.length > 0 && !direct ? (
+      {allowRemote && proxy.failed.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-sm">
           <ImageOff className="size-4 text-muted-foreground" aria-hidden />
           <span className="flex-1">{t('tracking.proxyFailed')}</span>
-          <Button variant="outline" size="sm" title={t('tracking.loadDirectHint')} onClick={() => setDirect(true)}>
-            {t('tracking.loadDirect')}
-          </Button>
         </div>
       ) : null}
       {protect && (trackerCount > 0 || cleanedCount > 0) ? (
@@ -250,7 +241,7 @@ export function MailBody({ parsed, suspicious = false, sender }: { parsed: Parse
             <DialogHeader>
               <DialogTitle>{t('remoteImages.title')}</DialogTitle>
               <DialogDescription>
-                {t('remoteImages.body')} {protect ? t('remoteImages.bodyProxy') : null}
+                {t('remoteImages.body')} {t('remoteImages.bodyProxy')}
               </DialogDescription>
             </DialogHeader>
             {sender && !suspicious ? (

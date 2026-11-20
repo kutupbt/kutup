@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::ratelimit::{self, FirstFrom, Per, Section, Spec, Unit};
 use crate::AppState;
 
@@ -98,18 +99,18 @@ pub(crate) fn entry(spec: &Spec, stored: &HashMap<String, String>) -> RateLimitE
     }
 }
 
-/// `GET /api/admin/rate-limits` — every rate limit, read fresh (this backend
+/// `GET /api/v1/admin/rate-limits` — every rate limit, read fresh (this backend
 /// takes the stored values at once).
 #[utoipa::path(
     get,
-    path = "/api/admin/rate-limits",
+    path = "/api/v1/admin/rate-limits",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Every rate limit", body = RateLimitsResponse))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<RateLimitsResponse>> {
     let stored = ratelimit::reload(&state.pool).await?;
     Ok(Json(RateLimitsResponse {
@@ -120,12 +121,12 @@ pub async fn list(
     }))
 }
 
-/// `PUT /api/admin/rate-limits/{key}` — sets one limit, or resets it to its
+/// `PUT /api/v1/admin/rate-limits/{key}` — sets one limit, or resets it to its
 /// first value. It applies at once on this backend and within 30 seconds on
-/// the others; audited as `settings.rate_limit`.
+/// the others; audited as `settings.setRateLimit`.
 #[utoipa::path(
     put,
-    path = "/api/admin/rate-limits/{key}",
+    path = "/api/v1/admin/rate-limits/{key}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("key" = String, Path, description = "The limit's key")),
@@ -138,7 +139,7 @@ pub async fn list(
 )]
 pub async fn update(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(key): Path<String>,
     Json(request): Json<UpdateRateLimitRequest>,
 ) -> AppResult<Json<RateLimitEntry>> {
@@ -156,21 +157,21 @@ pub async fn update(
         }
     }
     let previous = ratelimit::value(spec.limit);
-    let setting = format!("{}{}", ratelimit::SETTING_PREFIX, spec.key);
+    let setting = spec.key;
     match request.value {
         Some(value) => {
             sqlx::query(
                 "INSERT INTO site_settings (key, value) VALUES ($1, $2) \
                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             )
-            .bind(&setting)
+            .bind(setting)
             .bind(value.to_string())
             .execute(&state.pool)
             .await?;
         }
         None => {
             sqlx::query("DELETE FROM site_settings WHERE key = $1")
-                .bind(&setting)
+                .bind(setting)
                 .execute(&state.pool)
                 .await?;
         }
@@ -178,8 +179,8 @@ pub async fn update(
     let stored = ratelimit::reload(&state.pool).await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
-        "settings.rate_limit",
+        &admin.account_id,
+        AdminAction::SettingsSetRateLimit,
         None,
         json!({
             "key": spec.key,

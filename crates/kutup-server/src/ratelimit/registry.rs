@@ -75,7 +75,9 @@ pub enum Unit {
 /// One limit's entry.
 pub struct Spec {
     pub limit: Limit,
-    /// Its name in settings and the admin API (`rate_limit.<key>`).
+    /// Its key in settings and the admin API: `<app>.rate.<name>`, the app
+    /// the limit belongs to (`site_settings` for the site's value,
+    /// `account_entitlements` for an account's own).
     pub key: &'static str,
     /// The environment variable that may set its first value.
     pub env: Option<&'static str>,
@@ -247,6 +249,7 @@ pub enum Limit {
     AccountPeerFetches,
     RenameAnnounces,
     // Administration.
+    CspReports,
     Admin,
 }
 
@@ -278,7 +281,7 @@ const MIB: u64 = 1024 * 1024;
 pub static SPECS: &[Spec] = &[
     spec!(
         Login,
-        "login",
+        "account.rate.login",
         Some("RATE_LIMIT_LOGIN_PER_MIN"),
         10,
         Events(MINUTE),
@@ -288,7 +291,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         LoginLockoutThreshold,
-        "login_lockout_threshold",
+        "account.rate.login_lockout_threshold",
         Some("LOGIN_LOCKOUT_THRESHOLD"),
         5,
         Attempts,
@@ -298,7 +301,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         LoginLockoutMinutes,
-        "login_lockout_minutes",
+        "account.rate.login_lockout_minutes",
         Some("LOGIN_LOCKOUT_MINUTES"),
         15,
         Minutes,
@@ -308,7 +311,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         LoginAccountCeiling,
-        "login_account_ceiling",
+        "account.rate.login_account_ceiling",
         Some("LOGIN_ACCOUNT_CEILING"),
         20,
         EventsPerLockout,
@@ -318,7 +321,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         LoginAccountDailyCeiling,
-        "login_account_daily_ceiling",
+        "account.rate.login_account_daily_ceiling",
         Some("LOGIN_ACCOUNT_DAILY_CEILING"),
         200,
         Events(DAY),
@@ -328,7 +331,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         LoginSourceDailyCeiling,
-        "login_source_daily_ceiling",
+        "account.rate.login_source_daily_ceiling",
         Some("LOGIN_SOURCE_DAILY_CEILING"),
         20,
         Events(DAY),
@@ -338,7 +341,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         TotpAttempts,
-        "totp_attempts",
+        "account.rate.totp_attempts",
         None,
         5,
         Attempts,
@@ -348,7 +351,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         TotpBlockMinutes,
-        "totp_block_minutes",
+        "account.rate.totp_block_minutes",
         None,
         15,
         Minutes,
@@ -358,7 +361,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         Fork,
-        "fork",
+        "account.rate.fork",
         Some("RATE_LIMIT_FORK_PER_MIN"),
         120,
         Events(MINUTE),
@@ -368,7 +371,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         Register,
-        "register",
+        "account.rate.register",
         Some("RATE_LIMIT_REGISTER_PER_HOUR"),
         10,
         Events(HOUR),
@@ -378,7 +381,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         RegistrationCodeChecks,
-        "registration_code_checks",
+        "account.rate.registration_code_checks",
         Some("RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR"),
         30,
         Events(HOUR),
@@ -388,7 +391,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         RegistrationCodeFailures,
-        "registration_code_failures",
+        "account.rate.registration_code_failures",
         Some("RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR"),
         20,
         Events(HOUR),
@@ -398,7 +401,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         Recovery,
-        "recovery",
+        "account.rate.recovery",
         Some("RATE_LIMIT_RECOVERY_PER_HOUR"),
         5,
         Events(HOUR),
@@ -408,7 +411,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         UserLookup,
-        "user_lookup",
+        "account.rate.user_lookup",
         Some("RATE_LIMIT_USER_LOOKUP_PER_MIN"),
         30,
         Events(MINUTE),
@@ -418,7 +421,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         DeviceRegistrations,
-        "device_registrations",
+        "account.rate.device_registrations",
         Some("RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN"),
         20,
         Events(MINUTE),
@@ -428,7 +431,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         AccountHeadReads,
-        "account_head_reads",
+        "account.rate.head_reads",
         Some("RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN"),
         300,
         Events(MINUTE),
@@ -438,7 +441,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         RenameChecks,
-        "rename_checks",
+        "account.rate.rename_checks",
         Some("RATE_LIMIT_RENAME_CHECKS_PER_15_MIN"),
         30,
         Events(QUARTER_HOUR),
@@ -448,7 +451,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         RenameLookups,
-        "rename_lookups",
+        "account.rate.rename_lookups",
         Some("RATE_LIMIT_RENAME_LOOKUPS_PER_15_MIN"),
         60,
         Events(QUARTER_HOUR),
@@ -458,7 +461,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         Feedback,
-        "feedback",
+        "account.rate.feedback",
         Some("RATE_LIMIT_FEEDBACK_PER_HOUR"),
         10,
         Events(HOUR),
@@ -468,7 +471,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         AvailableHashes,
-        "available_hashes",
+        "drive.rate.available_hashes",
         Some("RATE_LIMIT_AVAILABLE_HASHES_PER_MIN"),
         120,
         Events(MINUTE),
@@ -478,7 +481,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         CollabFramePosts,
-        "collab_frame_posts",
+        "drive.rate.collab_frame_posts",
         Some("RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN"),
         600,
         Events(MINUTE),
@@ -488,7 +491,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         CollabFramesPerSecond,
-        "collab_frames_per_second",
+        "drive.rate.collab_frames_per_second",
         None,
         50,
         Events(SECOND),
@@ -498,7 +501,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         CollabFrameBurst,
-        "collab_frame_burst",
+        "drive.rate.collab_frame_burst",
         None,
         500,
         AtOnce,
@@ -508,7 +511,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         CollabBytesPerSecond,
-        "collab_bytes_per_second",
+        "drive.rate.collab_bytes_per_second",
         None,
         MIB,
         Bytes(SECOND),
@@ -518,7 +521,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         CollabByteBurst,
-        "collab_byte_burst",
+        "drive.rate.collab_byte_burst",
         None,
         16 * MIB,
         BytesAtOnce,
@@ -528,7 +531,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         Reports,
-        "reports",
+        "drive.rate.reports",
         Some("RATE_LIMIT_REPORT_PER_HOUR"),
         20,
         Events(HOUR),
@@ -538,7 +541,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ChatKeysAccount,
-        "chat_keys_account",
+        "chat.rate.keys_account",
         Some("RATE_LIMIT_CHAT_KEYS_PER_MIN"),
         30,
         Events(MINUTE),
@@ -548,7 +551,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ChatLinkTokens,
-        "chat_link_tokens",
+        "chat.rate.link_tokens",
         None,
         20,
         Events(HOUR),
@@ -558,7 +561,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ChatProvisioningSockets,
-        "chat_provisioning_sockets",
+        "chat.rate.provisioning_sockets",
         None,
         10,
         Events(MINUTE),
@@ -568,7 +571,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ChatProvisioningRelays,
-        "chat_provisioning_relays",
+        "chat.rate.provisioning_relays",
         None,
         10,
         Events(MINUTE),
@@ -578,7 +581,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ChatIdentityDistributions,
-        "chat_identity_distributions",
+        "chat.rate.identity_distributions",
         None,
         5,
         Events(DAY),
@@ -588,7 +591,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ChatKeysAddress,
-        "chat_keys_address",
+        "chat.rate.keys_address",
         Some("RATE_LIMIT_CHAT_KEYS_IP_PER_MIN"),
         120,
         Events(MINUTE),
@@ -598,7 +601,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ChatAnonymousAddress,
-        "chat_anonymous_address",
+        "chat.rate.anonymous_address",
         Some("RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN"),
         60,
         Events(MINUTE),
@@ -608,7 +611,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         SealedCapabilityBundles,
-        "sealed_capability_bundles",
+        "chat.rate.sealed_capability_bundles",
         None,
         30,
         Events(MINUTE),
@@ -618,7 +621,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         SealedCapabilityMinute,
-        "sealed_capability_minute",
+        "chat.rate.sealed_capability_minute",
         None,
         120,
         Events(MINUTE),
@@ -628,7 +631,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         SealedCapabilityDay,
-        "sealed_capability_day",
+        "chat.rate.sealed_capability_day",
         None,
         10_000,
         Events(DAY),
@@ -638,7 +641,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         SealedRecipient,
-        "sealed_recipient",
+        "chat.rate.sealed_recipient",
         None,
         120,
         Events(MINUTE),
@@ -648,7 +651,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         SealedOrigin,
-        "sealed_origin",
+        "chat.rate.sealed_origin",
         None,
         600,
         Events(MINUTE),
@@ -658,7 +661,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MediaCapabilityMinute,
-        "media_capability_minute",
+        "chat.rate.media_capability_minute",
         None,
         120,
         Events(MINUTE),
@@ -668,7 +671,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MediaCapabilityDay,
-        "media_capability_day",
+        "chat.rate.media_capability_day",
         None,
         10_000,
         Events(DAY),
@@ -678,7 +681,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MediaRecipient,
-        "media_recipient",
+        "chat.rate.media_recipient",
         None,
         120,
         Events(MINUTE),
@@ -688,7 +691,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MediaOrigin,
-        "media_origin",
+        "chat.rate.media_origin",
         None,
         600,
         Events(MINUTE),
@@ -698,7 +701,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         LinkPreviews,
-        "link_previews",
+        "chat.rate.link_previews",
         None,
         30,
         Events(MINUTE),
@@ -708,7 +711,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         LiveLocationStreams,
-        "live_location_streams",
+        "chat.rate.live_location_streams",
         None,
         60,
         Events(HOUR),
@@ -718,7 +721,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         LiveLocationReads,
-        "live_location_reads",
+        "chat.rate.live_location_reads",
         None,
         600,
         Events(MINUTE),
@@ -728,7 +731,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupRelay,
-        "group_relay",
+        "chat.rate.group_relay",
         Some("RATE_LIMIT_CHAT_GROUP_RELAY_PER_MIN"),
         240,
         Events(MINUTE),
@@ -738,7 +741,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupGatewayRelay,
-        "group_gateway_relay",
+        "chat.rate.group_gateway_relay",
         Some("RATE_LIMIT_CHAT_GROUP_GATEWAY_RELAY_PER_MIN"),
         6000,
         Events(MINUTE),
@@ -748,7 +751,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupPseudonym,
-        "group_pseudonym",
+        "chat.rate.group_pseudonym",
         Some("RATE_LIMIT_CHAT_GROUP_PSEUDONYM_PER_MIN"),
         240,
         Events(MINUTE),
@@ -758,7 +761,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupChangesPseudonym,
-        "group_changes_pseudonym",
+        "chat.rate.group_changes_pseudonym",
         Some("RATE_LIMIT_CHAT_GROUP_CHANGES_PSEUDONYM_PER_MIN"),
         30,
         Events(MINUTE),
@@ -768,7 +771,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupChangesGroup,
-        "group_changes_group",
+        "chat.rate.group_changes_group",
         Some("RATE_LIMIT_CHAT_GROUP_CHANGES_GROUP_PER_MIN"),
         60,
         Events(MINUTE),
@@ -778,7 +781,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupLink,
-        "group_link",
+        "chat.rate.group_link",
         Some("RATE_LIMIT_CHAT_GROUP_LINK_PER_MIN"),
         30,
         Events(MINUTE),
@@ -788,7 +791,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupFailuresRelay,
-        "group_failures_relay",
+        "chat.rate.group_failures_relay",
         Some("RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN"),
         600,
         Events(MINUTE),
@@ -798,7 +801,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupCreatesRelay,
-        "group_creates_relay",
+        "chat.rate.group_creates_relay",
         Some("RATE_LIMIT_CHAT_GROUP_CREATES_RELAY_PER_HOUR"),
         600,
         Events(HOUR),
@@ -808,7 +811,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupCallAccountTokens,
-        "group_call_account_tokens",
+        "chat.rate.group_call_account_tokens",
         None,
         30,
         Events(MINUTE),
@@ -818,7 +821,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         GroupCallOriginTokens,
-        "group_call_origin_tokens",
+        "chat.rate.group_call_origin_tokens",
         None,
         300,
         Events(MINUTE),
@@ -828,7 +831,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MailDomainChecks,
-        "mail_domain_checks",
+        "mail.rate.domain_checks",
         Some("RATE_LIMIT_MAIL_DOMAIN_CHECKS_PER_HOUR"),
         30,
         Events(HOUR),
@@ -838,7 +841,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MailImages,
-        "mail_images",
+        "mail.rate.images",
         None,
         120,
         Events(MINUTE),
@@ -848,7 +851,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MailImageBytes,
-        "mail_image_bytes",
+        "mail.rate.image_bytes",
         None,
         64 * MIB,
         Bytes(MINUTE),
@@ -858,7 +861,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MailImagesAtOnce,
-        "mail_images_at_once",
+        "mail.rate.images_at_once",
         None,
         6,
         AtOnce,
@@ -868,7 +871,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MailImagesServerAtOnce,
-        "mail_images_server_at_once",
+        "mail.rate.images_server_at_once",
         None,
         32,
         AtOnce,
@@ -878,7 +881,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingConfirmations,
-        "forwarding_confirmations",
+        "mail.rate.forwarding_confirmations",
         None,
         30,
         Events(MINUTE),
@@ -888,7 +891,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingsCreated,
-        "forwardings_created",
+        "mail.rate.forwardings_created",
         None,
         10,
         Events(HOUR),
@@ -898,7 +901,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingConfirmationsSent,
-        "forwarding_confirmations_sent",
+        "mail.rate.forwarding_confirmations_sent",
         None,
         10,
         Events(DAY),
@@ -908,7 +911,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingInvites,
-        "forwarding_invites",
+        "mail.rate.forwarding_invites",
         None,
         10,
         Events(DAY),
@@ -918,7 +921,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingCodeMinutes,
-        "forwarding_code_minutes",
+        "mail.rate.forwarding_code_minutes",
         None,
         15,
         Minutes,
@@ -928,7 +931,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingCodeAttempts,
-        "forwarding_code_attempts",
+        "mail.rate.forwarding_code_attempts",
         None,
         5,
         Attempts,
@@ -938,7 +941,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingCodeResends,
-        "forwarding_code_resends",
+        "mail.rate.forwarding_code_resends",
         None,
         1,
         Events(MINUTE),
@@ -948,7 +951,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingCodesPerDestination,
-        "forwarding_codes_per_destination",
+        "mail.rate.forwarding_codes_per_destination",
         None,
         10,
         Events(DAY),
@@ -958,7 +961,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingUnverifiedPending,
-        "forwarding_unverified_pending",
+        "mail.rate.forwarding_unverified_pending",
         None,
         5,
         AtOnce,
@@ -968,7 +971,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingUnverifiedMinutes,
-        "forwarding_unverified_minutes",
+        "mail.rate.forwarding_unverified_minutes",
         None,
         1440,
         Minutes,
@@ -978,7 +981,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingBounces,
-        "forwarding_bounces",
+        "mail.rate.forwarding_bounces",
         None,
         5,
         Events(DAY),
@@ -988,7 +991,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingOutside,
-        "forwarding_outside",
+        "mail.rate.forwarding_outside",
         None,
         200,
         Events(DAY),
@@ -998,7 +1001,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         ForwardingOutsideAccount,
-        "forwarding_outside_account",
+        "mail.rate.forwarding_outside_account",
         None,
         500,
         Events(DAY),
@@ -1008,7 +1011,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         CalendarWrites,
-        "calendar_writes",
+        "calendar.rate.writes",
         None,
         600,
         Events(MINUTE),
@@ -1018,7 +1021,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         CallLinks,
-        "call_links",
+        "chat.rate.call_links",
         Some("RATE_LIMIT_CALL_LINK_PER_MIN"),
         60,
         Events(MINUTE),
@@ -1028,7 +1031,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         CallLinkPolls,
-        "call_link_polls",
+        "chat.rate.call_link_polls",
         Some("RATE_LIMIT_CALL_LINK_POLL_PER_MIN"),
         600,
         Events(MINUTE),
@@ -1038,7 +1041,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         TurnCredentials,
-        "turn_credentials",
+        "chat.rate.turn_credentials",
         None,
         60,
         Events(MINUTE),
@@ -1048,7 +1051,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         MapTiles,
-        "map_tiles",
+        "server.rate.map_tiles",
         None,
         1200,
         Events(MINUTE),
@@ -1058,7 +1061,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         PassIcons,
-        "pass_icons",
+        "pass.rate.icons",
         None,
         600,
         Events(MINUTE),
@@ -1068,7 +1071,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         PassIconFetches,
-        "pass_icon_fetches",
+        "pass.rate.icon_fetches",
         None,
         120,
         Events(MINUTE),
@@ -1078,7 +1081,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         PassPinAttempts,
-        "pass_pin_attempts",
+        "pass.rate.pin_attempts",
         None,
         3,
         Attempts,
@@ -1088,7 +1091,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         FedUsers,
-        "fed_users",
+        "server.rate.fed_users",
         Some("RATE_LIMIT_FED_USERS_PER_MIN"),
         60,
         Events(MINUTE),
@@ -1098,7 +1101,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         FedMultiFailures,
-        "fed_multi_failures",
+        "server.rate.fed_multi_failures",
         Some("RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN"),
         60,
         Events(MINUTE),
@@ -1108,7 +1111,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         RenamePeerFetches,
-        "rename_peer_fetches",
+        "server.rate.rename_peer_fetches",
         Some("RATE_LIMIT_RENAME_PEER_FETCHES_PER_MIN"),
         120,
         Events(MINUTE),
@@ -1118,7 +1121,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         AccountPeerFetches,
-        "account_peer_fetches",
+        "server.rate.account_peer_fetches",
         Some("RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN"),
         120,
         Events(MINUTE),
@@ -1128,7 +1131,7 @@ pub static SPECS: &[Spec] = &[
     ),
     spec!(
         RenameAnnounces,
-        "rename_announces",
+        "server.rate.rename_announces",
         Some("RATE_LIMIT_RENAME_ANNOUNCES_PER_MIN"),
         600,
         Events(MINUTE),
@@ -1137,8 +1140,18 @@ pub static SPECS: &[Spec] = &[
         "Rename announces taken from one peer."
     ),
     spec!(
+        CspReports,
+        "server.rate.csp_reports",
+        Some("RATE_LIMIT_CSP_REPORTS_PER_MIN"),
+        60,
+        Events(MINUTE),
+        Address,
+        Administration,
+        "Content-Security-Policy violation reports, which need no account."
+    ),
+    spec!(
         Admin,
-        "admin",
+        "server.rate.admin",
         Some("RATE_LIMIT_ADMIN_PER_MIN"),
         120,
         Events(MINUTE),
@@ -1185,16 +1198,25 @@ mod tests {
             if spec.guards_guessing() {
                 assert_eq!(spec.ceiling(true), spec.default * 100, "{}", spec.key);
             }
-            assert!(spec
-                .key
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b == b'_'));
+            let (app, name) = spec.key.split_once(".rate.").expect("<app>.rate.<name>");
+            assert!(
+                crate::site_settings::NAMESPACES.contains(&app),
+                "{}",
+                spec.key
+            );
+            assert!(
+                !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{}",
+                spec.key
+            );
         }
         assert_eq!(Limit::Admin as usize + 1, SPECS.len());
     }
 
     /// Administration → Rate limits names every limit and says what it
-    /// stops, in each language.
+    /// stops, in each language: the strings are nested by the key's parts
+    /// (`chat.rate.link_tokens` is `chat` → `rate` → `link_tokens`), as the
+    /// page looks a dotted key up.
     #[test]
     fn the_admin_page_names_every_limit() {
         for language in ["en", "tr"] {
@@ -1207,16 +1229,20 @@ mod tests {
             for part in ["limit", "about"] {
                 let texts = &strings["admin"]["rateLimits"][part];
                 for spec in SPECS {
+                    let pointer = format!("/{}", spec.key.replace('.', "/"));
                     assert!(
-                        texts[spec.key].is_string(),
+                        texts.pointer(&pointer).is_some_and(|text| text.is_string()),
                         "{language} {part}: {}",
                         spec.key
                     );
                 }
-                assert_eq!(
-                    texts.as_object().map(|texts| texts.len()),
-                    Some(SPECS.len())
-                );
+                fn leaves(value: &serde_json::Value) -> usize {
+                    match value {
+                        serde_json::Value::Object(map) => map.values().map(leaves).sum(),
+                        _ => 1,
+                    }
+                }
+                assert_eq!(leaves(texts), SPECS.len(), "{language} {part}");
             }
         }
     }

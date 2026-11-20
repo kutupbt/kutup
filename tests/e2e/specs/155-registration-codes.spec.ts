@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, finishNewKeys, newAccount, signInAsAdmin } from '../fixtures/apps'
 
 // Registration modes and referral codes (docs/plans/registration-codes.md):
@@ -14,7 +14,8 @@ async function setMode(page: Page, label: 'Open to anyone' | 'With a referral co
   await page.goto(appUrl('account', '/admin/settings'))
   await page.getByRole('combobox', { name: 'Registration' }).click()
   await page.getByRole('option', { name: label }).click()
-  await page.getByRole('button', { name: 'Save' }).click()
+  // The page has a Save per section; this one is the Accounts form's.
+  await page.locator('form').filter({ has: page.getByRole('combobox', { name: 'Registration' }) }).getByRole('button', { name: 'Save' }).click()
   await expect(page.getByText('Settings saved').first()).toBeVisible({ timeout: 30_000 })
 }
 
@@ -50,7 +51,7 @@ test('registration codes: closed to codes, a code made once, a sign-up through i
     const signup = await visitor.newPage()
     let checks = 0
     signup.on('request', (request) => {
-      if (request.url().includes('/api/auth/registration-code/check')) checks += 1
+      if (request.url().includes('/api/v1/auth/registration-code/check')) checks += 1
     })
     await signup.goto(appUrl('account', '/register'))
     const account = newAccount('ref155', PASSWORD)

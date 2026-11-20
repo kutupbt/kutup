@@ -4,7 +4,7 @@
 // The keys are sealed into a WebSession local-state envelope (profile
 // `<client>:<session id>`) under a random 32-byte local key. The envelope is
 // stored in localStorage; the local key is stored only on the server
-// (`/api/auth/sessions/current/local-key`) and released only to this live
+// (`/api/v1/auth/sessions/current/local-key`) and released only to this live
 // session. Neither half is useful alone, and revoking the session — sign-out,
 // "sign out everywhere", a password reset — makes the blob useless.
 
@@ -18,6 +18,7 @@ import { activateSession, fetchProfile, KeyBindingMismatchError } from './profil
 import { getSession, updateSession } from './store'
 import { clearPersisted, readPersisted, writePersisted } from './persistedStore'
 import { randomBytes } from '@kutup/crypto/random'
+import { ensureInstance } from './instance'
 
 function profileFor(sessionId: string): string {
   return `${getClientType()}:${sessionId}`
@@ -34,7 +35,7 @@ export async function persistKeys(sessionId: string, keys: SessionKeys): Promise
       LocalStatePurpose.WebSession,
       profileFor(sessionId),
     )
-    writePersisted({ v: 1, sessionId, userId: keys.userId, blob })
+    writePersisted({ v: 1, sessionId, accountId: keys.accountId, blob })
   } finally {
     localKey.fill(0)
   }
@@ -53,8 +54,10 @@ export async function persistDevice(device: DeviceKeys | null): Promise<void> {
   // Only a sign-in this origin keeps is sealed again (never starts keeping one).
   if (readPersisted()?.sessionId !== session.sessionId) return
   const keys: SessionKeys = {
-    userId: session.userId,
+    accountId: session.accountId,
     masterKey: session.masterKey,
+    masterKeys: session.masterKeys,
+    roots: session.roots,
     privateKey: session.privateKey,
     publicKey: session.publicKey,
     keyBinding: session.envelopeBinding,
@@ -88,6 +91,9 @@ function ended(): RestoreResult {
  * with the blob intact, so it never costs anybody their sign-in.
  */
 export async function restoreSession(): Promise<RestoreResult> {
+  // Before any local state is read: the data here may be a wiped server's
+  // (docs/plans/api-surface.md §5).
+  await ensureInstance()
   const persisted = readPersisted()
   if (!persisted) return 'none'
 

@@ -108,7 +108,9 @@ needs to. A file is also re-keyed before it moves out of a rotated folder.
 ### Public links
 
 A link's key now also goes to the owner: `PublicLinkKey = 9`, sealed under
-the owner's master key, with object = link id and parent = owner. This lets
+the owner's Drive root (docs/plans/identity-rotation.md §3; the master key
+before it), with object = link id, parent = owner and the Drive root's
+generation as the revision. This lets
 the owner list links, copy them again, and re-wrap each link at the new
 epoch when rotating, so a kept link keeps working. Deleting a link rotates.
 Every link has an owner copy (`public_shares.owner_link_key_envelope` is required).

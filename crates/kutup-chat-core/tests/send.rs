@@ -306,7 +306,10 @@ impl MockServer {
             }
         }
         let next = sign(
-            &AccountAuthority::derive(&[11; 32]).unwrap(),
+            &AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+                [11; 32],
+            ))
+            .unwrap(),
             account,
             chain.last().map_or(1, |last| last.sequence + 1),
             chain.last().map(|last| last.manifest_hash().unwrap()),
@@ -425,8 +428,11 @@ impl ChatTransport for MockServer {
         Ok(self.respond(username, devices, manifest, Some(current)))
     }
 
-    async fn fetch_device_session(&self) -> Result<String> {
-        Ok(DEVICE_SESSION.into())
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+        Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+            session: DEVICE_SESSION.into(),
+            next_device_id: 1,
+        })
     }
 
     async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV3>> {
@@ -640,7 +646,11 @@ impl ChatTransport for MockServer {
             .collect();
         let more = envelopes.len() > limit as usize;
         envelopes.truncate(limit as usize);
-        Ok(MailboxPage { envelopes, more })
+        Ok(MailboxPage {
+            envelopes,
+            more,
+            unsupported: Vec::new(),
+        })
     }
 
     async fn ack(&self, _device_id: u32, ids: &[String]) -> Result<()> {
@@ -670,7 +680,10 @@ fn signed_manifest(account: &str, bundle: &DevicePreKeyBundle) -> AccountManifes
     signed_manifest_with_authority(
         account,
         bundle,
-        &AccountAuthority::derive(&[11; 32]).unwrap(),
+        &AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+            [11; 32],
+        ))
+        .unwrap(),
     )
 }
 
@@ -704,7 +717,10 @@ fn signed_manifest_with_authority(
 fn local_devices_extend_only_the_prior_account_signed_manifest() {
     let mut rng = test_rng();
     let server = Rc::new(MockServer::default());
-    let authority = AccountAuthority::derive(&[12; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([12; 32]),
+    )
+    .unwrap();
     let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
 
     let first_session = device(account, 1, &mut rng);
@@ -767,54 +783,6 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
         block_on(stranger.sync_own_manifest(&authority, "2026-07-15T12:03:00Z")),
         Err(ChatError::Trust(_))
     ));
-}
-
-#[test]
-fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
-    use base64::Engine as _;
-    let mut rng = test_rng();
-    let server = Rc::new(MockServer::default());
-    let master = [12; 32];
-    let authority = AccountAuthority::derive(&master).unwrap();
-    let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
-    let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-    let session = device_in(db.clone(), account, 1, &mut rng);
-    let local = session.manifest_device(DEVICE_SESSION.into());
-    // The account's manifest from before its upgrade: this very device, and
-    // the old X25519 Drive key (suite 1).
-    let mut before = sign(
-        &authority,
-        account,
-        1,
-        None,
-        session.account_identity_key(),
-        vec![local],
-        "2026-07-15T12:00:00Z",
-    );
-    before.drive.suite = kutup_chat_proto::AccountIdentitySuiteId::X25519Ed25519V1;
-    before.drive.hpke_public_key = base64::engine::general_purpose::STANDARD.encode([5u8; 32]);
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
-    before.signature = base64::engine::general_purpose::STANDARD.encode(
-        identity
-            .authority_signing_key()
-            .sign(&before.signing_bytes().unwrap()),
-    );
-    before.verify().unwrap();
-    *server.own_manifest.borrow_mut() = Some(before.clone());
-    server.manifest_history.borrow_mut().push(before.clone());
-
-    let mut engine = Engine::new(session, server);
-    let next = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:01:00Z")).unwrap();
-    assert_eq!(next.sequence, 2);
-    assert_eq!(
-        next.previous_hash.as_deref(),
-        Some(before.manifest_hash().unwrap().as_str())
-    );
-    assert_eq!(next.drive, authority.drive_keys());
-    assert_eq!(next.devices, before.devices);
-    // Then nothing more to publish.
-    let again = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:02:00Z")).unwrap();
-    assert_eq!(again.sequence, 2);
 }
 
 #[test]
@@ -1126,7 +1094,10 @@ fn production_engine_rejects_a_bundle_device_not_in_the_manifest() {
 #[test]
 fn first_contact_safety_number_authenticates_and_pins_the_remote_manifest() {
     let mut rng = test_rng();
-    let peer_authority = AccountAuthority::derive(&[40; 32]).unwrap();
+    let peer_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([40; 32]),
+    )
+    .unwrap();
     let bob = device(
         "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
         1,
@@ -1173,8 +1144,14 @@ fn a_forged_authority_over_a_real_identity_is_never_verified_by_a_scan() {
     let mut rng = test_rng();
     let bob_account = "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test";
     let alice_account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
-    let real_authority = AccountAuthority::derive(&[41; 32]).unwrap();
-    let forged_authority = AccountAuthority::derive(&[66; 32]).unwrap();
+    let real_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([41; 32]),
+    )
+    .unwrap();
+    let forged_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([66; 32]),
+    )
+    .unwrap();
     let bob = device(bob_account, 1, &mut rng);
     let bob_bundle = bundle_of(&bob, 1);
     let devices = vec![AccountManifestDeviceV3::chat(
@@ -1223,7 +1200,7 @@ fn a_forged_authority_over_a_real_identity_is_never_verified_by_a_scan() {
         incarnation_id: String::new(),
         authority_key_id: String::new(),
         self_authority_key: String::new(),
-        drive_hpke_public_key: String::new(),
+        drive_xwing_public_key: String::new(),
         drive_share_signing_public_key: String::new(),
         highest_sequence: 1,
         manifest_hash: String::new(),
@@ -1288,9 +1265,18 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
         "kutup-chat-account-reset-{}.db",
         OsRng.unwrap_err().try_next_u64().unwrap()
     ));
-    let local_authority = AccountAuthority::derive(&[31; 32]).unwrap();
-    let old_authority = AccountAuthority::derive(&[41; 32]).unwrap();
-    let new_authority = AccountAuthority::derive(&[42; 32]).unwrap();
+    let local_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([31; 32]),
+    )
+    .unwrap();
+    let old_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([41; 32]),
+    )
+    .unwrap();
+    let new_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([42; 32]),
+    )
+    .unwrap();
     let bob_old = device(
         "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
         1,
@@ -1432,7 +1418,7 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
         incarnation_id: String::new(),
         authority_key_id: String::new(),
         self_authority_key: local_authority.public_key_base64(),
-        drive_hpke_public_key: String::new(),
+        drive_xwing_public_key: String::new(),
         drive_share_signing_public_key: String::new(),
         highest_sequence: 1,
         manifest_hash: String::new(),
@@ -3286,8 +3272,11 @@ fn explicit_contact_state_converges_over_authenticated_linked_device_sync() {
     let local = block_on(
         first.block_contact(
             "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
-            &kutup_chat_core::profile_owner_key(&[0; 32], "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
-                .unwrap(),
+            &kutup_chat_core::profile_owner_key(
+                &kutup_crypto::master_keys::MasterKeys::first(&[0; 32]),
+                "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+            )
+            .unwrap(),
             "2026-07-16T10:05:00Z",
             &mut rng,
         ),
@@ -3337,7 +3326,11 @@ fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
         ),
         server.clone(),
     );
-    let wrapping = kutup_chat_core::profile_owner_key(&[42; 32], ALICE_BINDING).unwrap();
+    let wrapping = kutup_chat_core::profile_owner_key(
+        &kutup_crypto::master_keys::MasterKeys::first(&[42; 32]),
+        ALICE_BINDING,
+    )
+    .unwrap();
     assert!(block_on(alice.initialize_profile(&wrapping, "Alice", &mut rng)).is_err());
 
     let first = ChatContent::text_with_id(
@@ -3595,8 +3588,14 @@ fn pin_of(
 fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
     use kutup_crypto::identity_pins::PinState;
     let master = [30u8; 32];
-    let bob_authority = AccountAuthority::derive(&[40; 32]).unwrap();
-    let other_authority = AccountAuthority::derive(&[41; 32]).unwrap();
+    let bob_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([40; 32]),
+    )
+    .unwrap();
+    let other_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([41; 32]),
+    )
+    .unwrap();
     let open = |pins: Option<kutup_chat_core::IdentityPinsRecord>| {
         let mut rng = test_rng();
         let bob = device(
@@ -3620,7 +3619,12 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
             ),
             server.clone(),
         );
-        alice.enable_identity_pins(&master, ALICE_BINDING).unwrap();
+        alice
+            .enable_identity_pins(
+                &kutup_crypto::master_keys::MasterKeys::first(&master),
+                ALICE_BINDING,
+            )
+            .unwrap();
         (alice, server)
     };
 

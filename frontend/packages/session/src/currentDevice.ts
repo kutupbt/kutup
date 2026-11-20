@@ -13,7 +13,7 @@
 // the head lists it.
 
 import { toBase64, toBase64Url } from '@kutup/crypto/base64'
-import { listDeviceInManifest, type AccountManifest } from '@kutup/crypto/accountManifest'
+import { deviceCapabilities, listDeviceInManifest, type AccountManifest } from '@kutup/crypto/accountManifest'
 import { randomBytes } from '@kutup/crypto/random'
 import { generateSigningKey } from '@kutup/crypto/signing'
 import {
@@ -102,6 +102,12 @@ async function standing(device: DeviceKeys, account: string): Promise<Standing |
   const entry = head?.devices.find((d) => d.deviceId === device.id)
   if (!head || !entry) return { state: 'unlisted', session: row.session }
   if (entry.frameKey !== toBase64(device.publicKey) || entry.session !== row.session) return { state: 'gone' }
+  // An update that reads something new lists itself again with it (rule 8).
+  const own = await deviceCapabilities('editor', false)
+  const listedCodes = entry.capabilities ?? []
+  if (listedCodes.length !== own.length || listedCodes.some((code, i) => code !== own[i])) {
+    return { state: 'unlisted', session: row.session }
+  }
   return { state: 'listed', sequence: BigInt(head.sequence) }
 }
 
@@ -112,12 +118,12 @@ async function standing(device: DeviceKeys, account: string): Promise<Standing |
  * registers another.
  */
 async function listed(session: Session, device: DeviceKeys, account: string, sessionHash: string): Promise<DeviceKeys | null> {
-  const masterKey = toBase64(session.masterKey)
+  const identityRoot = session.roots.identityRoot
   const entry = { deviceId: device.id, kind: 'editor' as const, frameKey: toBase64(device.publicKey), session: sessionHash }
   let head: AccountManifest | null
   try {
     head = await publishNextManifest(account, deviceHeader(device), (current) =>
-      listDeviceInManifest(current, entry, new Date().toISOString(), masterKey, account),
+      listDeviceInManifest(current, entry, new Date().toISOString(), identityRoot, account),
     )
   } catch (error) {
     if (isDeviceLimit(error)) throw new TooManyDevicesError()

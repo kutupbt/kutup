@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from '@playwright/test'
+import { expect, test, type Locator } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { seedDrafts } from '../fixtures/mail'
 import { recordSafeCheckpoint } from '../safe-diagnostics'

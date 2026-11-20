@@ -18,12 +18,12 @@ gate record and explicitly labels completed slices.
 The bar for the first `v*` tag:
 
 1. **No silent stubs in admin-facing UI.** Every clickable action that exists in the UI must work end-to-end. No "wire-up pending" toasts in shipped builds.
-2. **Deletion is recoverable.** ✅ Shipped: owner-scoped trash with restore + permanent delete, and an hourly retention sweeper (`TRASH_RETENTION_DAYS`, default 30). See `docs/api.md` → Trash.
+2. **Deletion is recoverable.** ✅ Shipped: owner-scoped trash with restore + permanent delete, and an hourly retention sweeper (site setting `drive.trash_retention_days`, default 30). See `docs/api.md` → Trash.
 3. **Self-hosters can recover broken users without SSH.** ✅ Shipped: force-disable 2FA (lost authenticator), re-enable account (accidental disable), rotate temp password (first-login accounts), and the destructive wipe for users who lost both password and recovery phrase — all from the responsive web admin UI. `docs/research/10-admin-password-reset.md` records why "reset password" is two actions under E2EE.
 4. **Builds are signed.** Unsigned binaries trigger macOS Gatekeeper and Windows SmartScreen warnings that look like malware to non-technical users.
 5. **Admin actions leave an audit trail.** ✅ Shipped: every mutating admin endpoint writes an `admin_audit_log` row; `GET /admin/activity` serves the feed and the Recent-activity cards render it in both responsive web layouts. See `docs/api.md` → Admin.
 6. **Basic abuse protection.** ✅ Shipped: per-IP limits on login/preflight/register/recovery/federation/admin (env-overridable `RATE_LIMIT_*`), per-account login lockout (`LOGIN_LOCKOUT_*`), per-token TOTP blocking, and proxy-aware client-IP resolution (X-Real-IP). See `docs/self-hosting.md`.
-7. **Documentation tracks reality.** ✅ Shipped: full docs sweep against the shipped code (stale Go-stack references scrubbed, env vars + endpoints verified), and every HTTP operation is annotated with `#[utoipa::path]` so `GET /api-docs/openapi.json` lists the complete API (a coverage test in `openapi.rs` keeps it honest). Interactive Swagger UI remains deferred (see below).
+7. **Documentation tracks reality.** ✅ Shipped: full docs sweep against the shipped code (stale Go-stack references scrubbed, env vars + endpoints verified), and every HTTP operation is annotated with `#[utoipa::path]` so `GET /api/v1/openapi.json` lists the complete API (a coverage test in `openapi.rs` keeps it honest). Interactive Swagger UI remains deferred (see below).
 
 Items below are organized by **whether they block v1** vs. whether they can ship in a subsequent release.
 
@@ -53,13 +53,19 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 7. Native apps: mobile first, then desktop.
 8. Signed builds.
 9. The admin app at `admin.<domain>`.
-10. A strict Content-Security-Policy for every app. Today's policy (set by
-    `frontend/docker/40-kutup-hosts.sh`) allows `'unsafe-inline'` and
+10. A strict Content-Security-Policy for every app. The enforced policy (set
+    by `frontend/docker/40-kutup-hosts.sh`) still allows `'unsafe-inline'` and
     `'unsafe-eval'` scripts and WebSockets to any host (`connect-src … wss:`).
     In an end-to-end encrypted app any injected script could read keys and
-    send them anywhere, so the goal is nonce- or hash-based scripts, no
-    `unsafe-eval` outside the office-editor sandbox origin, and `connect-src`
-    limited to Kutup's own hosts (the edge review, 2026-10-22).
+    send them anywhere (the edge review, 2026-10-22). **Report-only shipped**
+    ([`content-security-policy.md`](content-security-policy.md)): every app
+    sends a strict policy (no inline or eval'd script, `connect-src` its own
+    host plus Chat's SFU and listed map origins, no remote images in Mail)
+    as `Content-Security-Policy-Report-Only`, reported to
+    `POST /api/csp-report`. Left: read the reports from real use and the
+    e2e suites under `E2E_CSP_STRICT=1`, fix what they show (Excalidraw's
+    font subsetting first), then enforce (`KUTUP_CSP_ENFORCE=1`, later the
+    default) and drop the old policy.
 
 ### Shipped in the clean-slate release (2d26c64eb60d, live 2026-10-17)
 
@@ -149,18 +155,17 @@ Left before the tag:
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
-  browser still uses libsodium for secretstream chunks (`streamEncryptor.ts`),
-  collaboration Ed25519 device keys and frame signatures (`sign.ts`,
-  `devices.ts`, `cryptoFrame.ts`), random bytes, and SHA-256 in Chat's
+  browser still uses libsodium for collaboration Ed25519 device keys and frame signatures (`sign.ts`,
+  `account_devices.ts`, `cryptoFrame.ts`), random bytes, and SHA-256 in Chat's
   `backup.ts` and `media.ts`. Each gets a written 10× justification in
   [`docs/cryptographic-dependencies.md`](cryptographic-dependencies.md) or
   moves to WASM. The Android Worker benchmark is still open; with OPAQUE's
   KSF it may be moot.
 - **Block format for large objects, so films and long recordings stream with
   seeking** ([`plans/drive-block-format.md`](plans/drive-block-format.md),
-  approved 2026-10-22; slice 1, the crypto core, and slice 2, the server's
-  ranges, revision ids, upload checks and settings, built; clients switch
-  in slices 3–6). It follows Proton Drive's block format:
+  approved 2026-10-22; slices 1–7 built: the crypto core, the server, the
+  clients, Chat, and the removal of the streaming suite 1, shipping with the
+  clean-slate wipe). It follows Proton Drive's block format:
   - 4 MiB blocks, each AEAD-sealed on its own and bound to its index and
     the file's revision;
   - a sealed manifest of block hashes signed by the uploader;
@@ -168,8 +173,8 @@ Left before the tag:
     requests while the page decrypts only the blocks needed.
 
   One framing serves Drive files, snapshots, Chat attachments and Chat
-  backup media, and secretstream and the browser's libsodium stream code
-  then go. The same change binds the sealed metadata and thumbnails to the
+  backup media; secretstream and the browser's libsodium stream code are
+  gone. The same change binds the sealed metadata and thumbnails to the
   current revision, so the server cannot serve an older version as the
   current one. The plan recommends shipping it with a wipe of kutup.dev,
   together with the Chat identity change, rather than converting files in
@@ -246,6 +251,54 @@ log for remote lookups. Needs no format change: it logs the already-signed
 account ids, key bindings and `AccountRenameV1` chains
 (docs/plans/account-ids.md).
 
+### Split the crypto WASM (after the wipe)
+
+The crypto runtime is one module every app loads, and it is close to its size
+budget (`frontend/wasm-budgets.json`, raised 2026-11-16 for the identity root,
+the block format and the master-key rotation). Split it so each app loads only
+what it uses: a core (account records, master keys, roots, the account head)
+plus parts loaded on demand for Drive blocks, account and identity work, and
+Chat. It changes no stored format, so it waits until after the wipe; each
+part then gets its own budget.
+
+### Chat backup: the reducer and content schema in Rust (after the wipe)
+
+The format already carries what this needs (docs/plans/format-evolution.md,
+"Chat backup records"): every record has a `type` (skip class: a type a
+client doesn't know is kept and carried through reduction and compaction),
+a newer version is "newer than me", and the tie-break compares UTF-8 bytes.
+Still open: the reducer (`applyRecords`, `preferBackupRecord` in
+`frontend/packages/chat-core/src/backup.ts`) and the display records'
+content schema move into `kutup-chat-proto` with checked-in vectors, so the
+browser, the CLI and the native apps reduce a backup identically.
+
+### Chat backup: a chunked base as the next version (after the wipe)
+
+The base is one object of up to 128 MiB. A chunked base comes as the next
+version of the backup object: its suite (u16) and purpose (u8) sit right
+after the magic in the authenticated header (`kutup_crypto::chat_backup`),
+and a reader refuses a suite or purpose it doesn't know as "newer than me"
+before it looks at the header's length, so today's readers ask for an
+update instead of reporting a corrupt backup. Needs: the chunk layout (the
+block format's, as Drive and Chat media), a server route for a chunked
+base and its manifest field, and the client upload and restore.
+
+### Chat groups: gate new actions by capability (after the wipe)
+
+The account manifest carries each device's capabilities
+(docs/plans/format-evolution.md, rule 8; `kutup_chat_proto::Capability`),
+every group action names the one its readers need
+(`GroupActionV1::capability`, all `GroupChangesV1` at the wipe), and
+`kutup_chat_proto::group::missing_capabilities` checks a change against the
+member accounts' manifests. Nothing calls the check yet, since every action
+of the wipe's release is readable by every device that takes Chat. With the
+first new action (its own capability code, added to the registry), the Chat
+core checks the members' verified manifests before submitting a change that
+carries it and refuses it (or offers the old way) while a member's device
+doesn't list the code. The same applies to Drive: a share of a format newer
+than `DriveBlocksV2` checks the recipient's editing devices
+(`AccountManifestV3::editing_devices_list`).
+
 ### Rotate document keys when a device is removed (after W5)
 
 Signal's practice: new sender keys after a member or device leaves. When a
@@ -264,7 +317,7 @@ position doesn't count.
 
 ### Security log: sign-ins and 2FA events (Proton parity)
 
-`account_security_events` (`GET /api/user/security-events`) records what
+`account_security_events` (`GET /api/v1/account/security-events`) records what
 changes an account's sign-in: password changes, recoveries, setup rotations
 and admin resets. Proton's security log also lists sign-ins (successful and
 failed) and two-step changes. Next kinds: `signIn`, `totpOn`, `totpOff`,
@@ -349,16 +402,31 @@ their own plans. See [`mobile-build.md`](mobile-build.md) and
 [`chat-native-bindings.md`](chat-native-bindings.md).
 
 **The account head in native clients** (docs/plans/rollback-protection.md):
-`kutup-client-ffi`'s HTTP transport stores Chat's identity pin list without
-the account head today. On an account that keeps one, the server refuses the
-write (409), and Chat's pin sync, which is best effort, keeps to its own
-pins. Before a native app ships, its transport writes and reads pins through
-Rust `account_head`, the way the web Chat transport goes through the web head
+`kutup-client-ffi`'s HTTP transport stores Chat's identity pin list (the
+`pins` record of the account-records store, docs/plans/account-records.md)
+without the account head today, and reads it unverified. On an account that
+keeps one, the server refuses the write (409 `headRequired`), and Chat's pin
+sync, which is best effort, keeps to its own pins. Before a native app ships,
+its transport reads the records with every page's head verified and writes
+them with the next head, through Rust `account_head` and
+`kutup_crypto::account_records` (the CLI's `CliHead::records` and
+`records_write`), the way the web Chat transport goes through the web head
 client:
 - a `LocalHeadStateV1` kept in its SQLite store, one device per app;
 - the verified index checked on reads;
 - the chain started on the index basis;
 - a blocked state shown in the app.
+
+`start_client` also does not check the account head yet. The web and the
+CLI check it at sign-in (docs/plans/identity-root.md, "After review"), and
+`start_client` must do the same before a native app ships: read the head
+fresh, check it with the roots' generations before anything signs or seals
+with them, start the chain when there is none, and give a typed blocked
+error plus a "continue with the server's data" call. The intended way is to
+move the IO-free core of the CLI's `CliHead` (verify with segments, too-old
+re-anchoring, continuing) into `kutup-crypto` and share it, rather than
+write a third copy. The head format is already fixed, so this needs no
+format change.
 
 ### Native desktop apps
 
@@ -437,9 +505,28 @@ account recovery; it does not claim that an authenticated session can display
 or rotate the stored phrase. A future phrase-rotation product needs a separate
 security design, backend contract, and word-by-word confirmation flow.
 
+### CI · browser specs on the server's own database role
+
+CI's single-server browser jobs (Mail, and Drive, Office and Chat) start the
+stack without `POSTGRES_APP_USER`, so they run with one database role. The
+app role, which makes the security and admin logs append-only for the
+server (self-hosting.md, "Database roles"), is exercised only by the backup
+gate (`tests/chat-backup/compose.yml`) and the isolated e2e stack, and by
+the full test before a release (docs/plans/wipe-final-test.md). Setting it
+in those jobs' env covers it on every master run.
+
+### Mail · bounces of shared-mailbox sends
+
+A bounce is matched to the message it answers by the Message-ID's keyed hash
+under the sender's own mailbox key (docs/plans/server-personal-data.md, As
+built L7). A message sent as a shared mailbox is sealed under the group's
+key, so a bounce of it matches nothing and is filed as ordinary mail.
+Matching it needs the bounce check to hash under the keys of the groups the
+account sends for as well.
+
 ### Backup / restore CLI
 
-The database half exists: `scripts/backup-postgres.sh` stores encrypted dumps in the object store and restores them (`docs/self-hosting.md`, "Database backups"). Still open: copying the object store's blobs elsewhere (a second copy of the ciphertext), a point-in-time-consistent pair of database and blobs, and `kutup backup` / `kutup restore` subcommands in the Rust CLI (`crates/kutup-cli`) to wrap both.
+The database half exists: `scripts/backup-postgres.sh` and `scripts/backup-stalwart.sh` store age-encrypted backups (to an offline key) in a bucket of their own and restore them after checking them (`docs/self-hosting.md`, "Backups"). Deleted blobs stay in the store for `storageDeletedBlobRetentionSeconds` (two days at first), so a dump younger than that restores with every blob it names, and `GET /api/health/ready` reports the newest backup's age. Still open: the blob bucket's second copy is the provider's versioning or replica (not set up by Kutup), the restore drill ran before the wipe on staging (E1, 2026-11-20, "Restore, as last run") and runs again on production after it, a blob that a restored dump names but the store lacks is answered with a 500 (`storage::get_object` turns `NoSuchKey` into a storage error) and shown as "can't be opened … check your connection" instead of a "missing" state (a 404-class answer with its own message), the watcher that alerts on readiness (docs/plans/restore-drill-and-alerting.md, Part 2 B) is deferred, and `kutup backup` / `kutup restore` subcommands in the Rust CLI (`crates/kutup-cli`) to wrap both.
 
 ---
 
@@ -479,7 +566,7 @@ names unambiguous):
 | # | Slice | Gate |
 |---|---|---|
 | 1 | **Spike**: `libsignal-protocol` + `spqr` on wasm32 | ✅ **GO** (2026-07-12, `spikes/libsignal-wasm/`) — compiles for the browser target on stable, full PQXDH+Triple-Ratchet round-trip executes in wasm; web client shares `kutup-chat-core` |
-| 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
+| 2 | Server slice: `kutup-chat-proto` + prekey directory, per-device mailboxes, WSS drain | ✅ landed — `crates/kutup-chat-proto`, migration 021, `handlers/chat.rs`, `chat_hub.rs`, nginx `/api/v1/chat/ws`; full REST + WS contract smoke-verified against the live stack (incl. one-time-prekey consumption, last-resort fallback, the 409 missing/stale/extra device contract, live envelope push). Playwright chat spec lands with phase 2b |
 | 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
 | 4 | Web contact privacy and trust | **Implemented and two-server verified.** Account-signed complete manifest history, durable gray-TOFU/green-QR/red-quarantine state, explicit account-incarnation replacement, message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block, no identified fallback, and the shared typed XChaCha profile envelope are restart- and two-server-browser verified. |
@@ -842,7 +929,7 @@ albums) is the second reference.
   Storage pages in both apps show the shared total. **Done (2026-10-09):**
   Chat joined the same pool; there is no separate Chat quota any more
   (migration `081_one_storage_pool` folded Chat usage into it). The Account
-  app's Settings → Storage page (`GET /api/user/storage`) shows the pool as a
+  app's Settings → Storage page (`GET /api/v1/account/storage`) shows the pool as a
   ring, largest category first (file kinds worked out in the browser from
   decrypted names, then trash, earlier versions, previews, Chat attachments,
   Chat history, uploads in progress). "Free up space" empties the trash,
@@ -935,7 +1022,7 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   of the same file and merges them instead of making conflict copies
   (`scripts/verify-pass-sync.sh`).
 - **K2a** ✅: vault secrets sealed under the account key
-  (`kutup_crypto::pass_vault`, `/api/pass/vault-secrets`); `kutup sync`
+  (`kutup_crypto::pass_vault`; since W3 the account-records scope `passSecrets`); `kutup sync`
   opens vaults with the sign-in, `kutup pass keep|ls|forget`.
 - **K2b** ✅: vault editing in `kutup-pass` (KeePass semantics: history,
   recycle bin, deletions recorded) and `kutup-pass-wasm`.
@@ -1194,7 +1281,7 @@ its offset there.
 
 ### Drive · resumable new versions (Replace above 2 GiB)
 
-Done (October 2026): a version goes over tus (`POST /api/uploads` with
+Done (October 2026): a version goes over tus (`POST /api/v1/drive/uploads` with
 `versionOf`, docs/api.md), resumable and of any size, as Proton Drive's
 revisions; its metadata and content hash land with it. Still by multipart
 (2 GiB): versions into folders on other servers.
@@ -1237,8 +1324,8 @@ Done (October 2026): each person in the file and folder share dialogs has a
 role menu on their row (file: Can view, Can edit; folder: Can view, Can add
 and edit, Can delete files they added) with Remove in the same menu. A
 change re-seals that person's access at the current key and the server
-updates their permission in place (`POST /api/files/:id/share`,
-`POST /api/collections/:id/share`); nobody is re-added and no key rotates.
+updates their permission in place (`POST /api/v1/drive/files/:id/share`,
+`POST /api/v1/drive/collections/:id/share`); nobody is re-added and no key rotates.
 Lowering someone stops their writes; they keep the key they already had, as
 a viewer does. The file dialog takes the role beside the address. Browser
 spec 47 covers both.
@@ -1378,6 +1465,11 @@ its fix is in the lockfile. Recorded 2026-10-17.
   bindings generator, only with `kutup-client-ffi`'s `bindgen` feature; no
   shipped binary links it; uniffi 0.32.2 still uses askama 0.16, so revisit
   at the next uniffi release).
+- **`chrono`** (RUSTSEC-2026-0543, 2026-11: unmaintained, not a
+  vulnerability, no fixed release): it reaches Pass's vendored `keepass`
+  0.15.2 (`kutup-pass`, `kutup-pass-wasm`, `kutup-cli`) and `kutup-cli`
+  directly. **To do:** move the vendored `keepass` and the CLI from `chrono`
+  to `time` (as the server already uses), then drop the ignore.
 - **`libcrux-chacha20poly1305` 0.0.7** (fixed in 0.0.8; a panic on an
   overlong ciphertext buffer, a crash rather than a disclosure). Not in RustSec,
   so `cargo deny` doesn't see it. It reached `kutup-chat-core` and
@@ -1450,8 +1542,8 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   "do when we touch the server" decision):
   - `latestVersionId` on the `GET /collections/:id/files` rows (one
     `LEFT JOIN LATERAL`) — kills the sync engine's per-file `list_versions`
-    polling (its remote-change signal; `files.updated_at` is never bumped).
-  - `trashRetentionDays` in `GET /api/auth/settings` — lets `kutup trash ls`
+    polling (its remote-change signal; `drive_files.updated_at` is never bumped).
+  - `trashRetentionDays` in `GET /api/v1/auth/settings` — lets `kutup trash ls`
     show an accurate EXPIRES column on any server config (currently omitted
     rather than hardcoding 30).
 - **Web: seeding after a lost claim.** An editor that loses `claim-seed`
@@ -1471,11 +1563,11 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   buffers the whole encrypted file in memory (`Part::bytes`); switch to
   `Part::reader` with an encrypting reader for large-file parity with tus.
 - **`kutup versions restore` vs collab snapshots.** CLI restore re-encrypts
-  with the file key in secretstream framing, while web collab snapshots are
+  with the file key in the block format, while web collab snapshots are
   AEAD envelopes under a derived content key — CLI restore round-trips
   CLI/sync-created files, not live-collab documents. Needs the collab
   content-key path if full parity is wanted.
-- **`kutup admin` command group.** The full `/api/admin/*` surface (users,
+- **`kutup admin` command group.** The full `/api/v1/admin/*` surface (users,
   quotas, stats, activity, settings, 2FA reset, wipe) has no CLI coverage;
   useful for self-hosters. Deliberately deferred from the improvements batch.
 
@@ -1483,7 +1575,7 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
 
 The Rust `kutup-server` (`crates/kutup-server`)
 generates its OpenAPI spec with `utoipa` and serves the machine-readable document at
-`GET /api-docs/openapi.json`. The Go server served an **interactive Swagger UI** at
+`GET /api/v1/openapi.json`. The Go server served an **interactive Swagger UI** at
 `/swagger/*` (`swaggo/fiber-swagger`). That route is not yet restored in Rust: the
 `utoipa-swagger-ui` crate downloads the Swagger UI bundle from GitHub in its build
 script, which breaks offline/sandboxed builds (and the rule that the server compiles

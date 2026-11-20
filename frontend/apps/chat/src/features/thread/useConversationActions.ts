@@ -39,7 +39,7 @@ export function useConversationActions(
    */
   const timerFor = useCallback(async (): Promise<number | undefined> => {
     if (timerSeconds !== undefined) return timerSeconds
-    const userId = self?.userId ?? ''
+    const userId = self?.accountId ?? ''
     const key = conversationKey(conversation)
     const owed = pendingDefaultTimer(userId, key)
     if (owed !== undefined) return owed

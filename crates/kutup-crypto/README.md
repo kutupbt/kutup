@@ -12,8 +12,9 @@ does not duplicate headers, parsers, KDF labels or AEAD constructions.
 | `kdf` | Argon2id + HKDF-SHA256 | `dryoc`, `hkdf`/`sha2` | account protection and purpose subkeys |
 | `account_record` | `KUTPAR1`: per-record HKDF key and key commitment, XChaCha20-Poly1305 | primitives (`Kdf`, `Aead`) | every account-private record: password/recovery wraps, secrets under the master key, contact cards, mail names, identity pins |
 | `identity` / `collection_epoch` | deterministic account keys and signed epoch chains | `ed25519-dalek`, `hkdf`/`sha2` | account authority and collection continuity |
-| `drive_envelope` / `asset` | purpose-bound XChaCha20-Poly1305 | `chacha20poly1305` | Drive records, public links and whiteboard assets |
-| `drive_object` / `stream` | context-bound XChaCha20 secretstream, 5 MiB frames | `dryoc` | originals and version snapshots |
+| `account_roots` | random stored roots (account records under the master key) | primitives | the identity root, the Drive root (owned folder keys, link owner copies, the top-level name hash key), pseudonym and call-link roots, the object-id key |
+| `drive_envelope` / `asset` | purpose-bound XChaCha20-Poly1305 | `chacha20poly1305` | Drive records, public links and whiteboard assets; the account's own folder and link keys under its Drive root (`seal_under_drive_root`) |
+| `blocks` / `drive_blocks` / `chat_media_blocks` / `chat_backup_media_blocks` | 4 MiB XChaCha20-Poly1305 blocks bound to their index and revision, a sealed (Drive: signed) manifest of block hashes | primitives (`Kdf`, `Aead`, `mac`, `hash`), `ed25519-dalek` | Drive originals and versions, Chat attachments, Chat backup media |
 | `named_share` | RFC 9180 X25519 HPKE + Ed25519 | `hpke-rs`, `ed25519-dalek` | authenticated local/federated collection shares |
 | `envelope` | XChaCha20-Poly1305 + Ed25519 | RustCrypto, `ed25519-dalek` | canonical collaboration frames |
 | `local_state` | profile-bound XChaCha20-Poly1305 | `chacha20poly1305` | CLI session cache |
@@ -41,6 +42,6 @@ implementation rather than maintaining a second browser construction.
 - **`envelope::verify` uses `verify_strict`**, rejecting non-canonical /
   small-order signatures. This is a security hardening over Go's
   `ed25519.Verify`; honest, canonical frames verify identically under both.
-- The committed secretstream vectors are single-chunk (< 5 MiB) to keep the repo
-  light; multi-chunk framing is covered by a Rust round-trip test
-  (`stream_multichunk_roundtrip`).
+- The committed block-format vectors (`blocks-v1.json`) are small objects to
+  keep the repo light; multi-block objects are covered by the Rust round-trip
+  and negative tests in `blocks.rs` and `drive_blocks.rs`.

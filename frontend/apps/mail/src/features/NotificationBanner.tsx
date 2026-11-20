@@ -6,7 +6,7 @@ export function NotificationBanner() {
   const { t } = useTranslation()
   return (
     <Banner
-      storageKey="kutup.mail.notificationBanner.dismissed"
+      storageKey="kutup.mail.notificationBannerDismissed"
       message={t('notifications.banner')}
       label={t('notifications.bannerLabel')}
       enable={t('notifications.enable')}

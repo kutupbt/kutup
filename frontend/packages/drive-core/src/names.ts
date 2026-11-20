@@ -1,4 +1,5 @@
 import { isAxiosError } from 'axios'
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import { hashBlob } from '@kutup/crypto/contentHash'
 import {
   contentHash as contentHashOf,
@@ -6,7 +7,7 @@ import {
   nameHash as nameHashOf,
   topLevelHashKey,
 } from '@kutup/crypto/driveNames'
-import { UploadNameTaken } from '@kutup/files/upload/streamUpload'
+import { UploadNameTaken, type FreeName } from '@kutup/files/upload/streamUpload'
 import api from '@kutup/session/client'
 import { folderKeyAt, type KeyringFolder } from './keyring'
 import { folderLocation, type DriveFile, type Folder } from './model'
@@ -22,14 +23,18 @@ import { randomBytes } from '@kutup/crypto/random'
  */
 
 /** Where a name lives: in a folder, or at the account's top level. */
-export type NamePlace = { kind: 'folder'; folder: KeyringFolder } | { kind: 'top'; masterKey: Uint8Array }
+export type NamePlace = { kind: 'folder'; folder: KeyringFolder } | { kind: 'top'; roots: TopLevelRoots }
+
+/** What the top-level hash key comes from: the account's current Drive root. */
+type TopLevelRoots = Pick<AccountRoots, 'driveRoot' | 'driveGeneration'>
 
 const folderKeys = new Map<string, Promise<Uint8Array>>()
-let topKey: { masterKey: Uint8Array; key: Promise<Uint8Array> } | null = null
+let topKey: { driveRoot: string; key: Promise<Uint8Array> } | null = null
 
 function hashKey(place: NamePlace): Promise<Uint8Array> {
   if (place.kind === 'top') {
-    if (topKey?.masterKey !== place.masterKey) topKey = { masterKey: place.masterKey, key: topLevelHashKey(place.masterKey) }
+    const { roots } = place
+    if (topKey?.driveRoot !== roots.driveRoot) topKey = { driveRoot: roots.driveRoot, key: topLevelHashKey(roots) }
     return topKey.key
   }
   const { folder } = place
@@ -45,11 +50,25 @@ function hashKey(place: NamePlace): Promise<Uint8Array> {
 }
 
 export const inFolder = (folder: KeyringFolder): NamePlace => ({ kind: 'folder', folder })
-export const atTopLevel = (masterKey: Uint8Array): NamePlace => ({ kind: 'top', masterKey })
+export const atTopLevel = (roots: TopLevelRoots): NamePlace => ({ kind: 'top', roots })
 
 /** The hash `name` is kept unique by in `place`. */
 export async function nameHashIn(place: NamePlace, name: string): Promise<string> {
   return nameHashOf(await hashKey(place), name)
+}
+
+/**
+ * What a write naming something in `place` sends besides its hash: at the
+ * top level, the Drive-root generation the hash key came from, which the
+ * server records (docs/plans/identity-rotation.md §3); in a folder, nothing.
+ */
+export function hashGenerationOf(place: NamePlace): { nameHashGeneration?: number } {
+  return place.kind === 'top' ? { nameHashGeneration: place.roots.driveGeneration } : {}
+}
+
+/** A write's name fields for `name` in `place`: its hash and, at the top level, the hash key's generation. */
+export async function nameFieldsIn(place: NamePlace, name: string): Promise<{ nameHash: string; nameHashGeneration?: number }> {
+  return { nameHash: await nameHashIn(place, name), ...hashGenerationOf(place) }
 }
 
 /**
@@ -85,18 +104,18 @@ export interface NameHolder {
   contentHash: string | null
 }
 
-/** The name is taken in that place (`409 name_taken`). */
+/** The name is taken in that place (`409 nameTaken`). */
 export class NameTaken extends Error {
   constructor(readonly holder: NameHolder | null) {
     super('an item with this name is already here')
   }
 }
 
-/** The holder of a `409 name_taken` from a response body; null if it is not one. */
+/** The holder of a `409 nameTaken` from a response body; null if it is not one. */
 export function nameTakenFromBody(status: number, body: unknown): NameTaken | null {
   if (status !== 409 || !body || typeof body !== 'object') return null
   const { code, holder } = body as { code?: unknown; holder?: Partial<NameHolder> }
-  if (code !== 'name_taken') return null
+  if (code !== 'nameTaken') return null
   const valid = holder && (holder.kind === 'file' || holder.kind === 'folder') && typeof holder.id === 'string'
   return new NameTaken(valid ? { kind: holder.kind!, id: holder.id!, contentHash: holder.contentHash ?? null } : null)
 }
@@ -152,7 +171,7 @@ const MAX_BATCHES = 100
 
 /** Which of `hashes` (at most 10) are free in `place`, as the server says. */
 export async function availableHashes(place: NamePlace, hashes: string[]): Promise<Set<string>> {
-  const path = place.kind === 'top' ? '/drive/top-level-available-hashes' : `/collections/${place.folder.id}/available-hashes`
+  const path = place.kind === 'top' ? '/drive/top-level-available-hashes' : `/drive/collections/${place.folder.id}/available-hashes`
   const { data } = await api.post<{ available: string[] }>(path, { hashes })
   return new Set(data.available)
 }
@@ -177,6 +196,18 @@ export async function findAvailableName(
     if (at >= 0) return { name: names[at], hash: hashes[at] }
   }
   throw new Error('no free name found')
+}
+
+/**
+ * A new file whose name was taken while it uploaded commits under the next
+ * free one in `folder`, as "Keep both" names it (`streamUpload`'s and
+ * `resumeUpload`'s `freeName`): nothing is sent again.
+ */
+export function freeNameIn(folder: KeyringFolder): FreeName {
+  return async (taken) => {
+    const free = await findAvailableName(inFolder(folder), taken, { skipName: true })
+    return { name: free.name, nameHash: free.hash }
+  }
 }
 
 /** `name` without the ` (n)` `freeName` adds before its extension. */
@@ -238,7 +269,7 @@ export async function planUpload(folder: Folder, file: File, listing: FolderList
 export async function recordContentHash(folder: Folder, fileId: string, contentSha256: string | null): Promise<void> {
   if (!contentSha256 || !folder.key || folderLocation(folder).kind !== 'local') return
   try {
-    await api.put(`/files/${fileId}/content-hash`, { contentHash: await contentHashIn(folder, contentSha256) })
+    await api.put(`/drive/files/${fileId}/content-hash`, { contentHash: await contentHashIn(folder, contentSha256) })
   } catch (error) {
     console.warn('names: could not record a content hash', error)
   }

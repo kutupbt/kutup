@@ -13,10 +13,11 @@ disagrees with current behavior.
 | Feature overview and first Compose start | [`../README.md`](../README.md) |
 | Production deployment, TLS, quotas, retention, and backups | [`self-hosting.md`](self-hosting.md) |
 | System boundaries, keys, storage, and federation | [`architecture.md`](architecture.md) |
-| HTTP operations and payloads | [`api.md`](api.md) and `GET /api-docs/openapi.json` |
+| HTTP operations and payloads | [`api.md`](api.md) and `GET /api/v1/openapi.json` |
 | Keeping local copies current (change feeds) | [`sync-feeds.md`](sync-feeds.md) |
 | Local development and required test gates | [`contributing.md`](contributing.md) and [`../tests/e2e/README.md`](../tests/e2e/README.md) |
 | Web UI architecture, themes, and responsive rules | [`frontend.md`](frontend.md) |
+| The web apps' Content-Security-Policy and its reports | [`content-security-policy.md`](content-security-policy.md) |
 | Which settings follow the account and which stay on a device | [`settings-model.md`](settings-model.md) |
 | Remaining release work | [`roadmap.md`](roadmap.md) |
 

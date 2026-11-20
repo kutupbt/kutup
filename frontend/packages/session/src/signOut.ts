@@ -1,10 +1,10 @@
 import { removeDevicesFromManifest } from '@kutup/crypto/accountManifest'
-import { toBase64 } from '@kutup/crypto/base64'
 import api from './client'
 import { deviceHeader, ownAccount, publishNextManifest } from './devices'
 import { clearPersisted } from './persistedStore'
 import { broadcastLogout } from './sessionSync'
-import { clearSession, getSession } from './store'
+import { clearSession, getSession, type Session } from './store'
+import { forgetAccountRecords } from './accountHead'
 
 /** How long a sign-out waits for its device's removal. */
 const REVOKE_WAIT_MS = 2000
@@ -21,10 +21,10 @@ async function revokeOwnDevice(): Promise<void> {
   const session = getSession()
   const device = session?.device
   if (!session || !device || device.manifestSequence === 0n) return
-  const masterKey = toBase64(session.masterKey)
+  const identityRoot = session.roots.identityRoot
   await publishNextManifest(await ownAccount(session), deviceHeader(device), async (head) => {
     if (!head?.devices.some((d) => d.deviceId === device.id) || head.devices.length < 2) return null
-    return removeDevicesFromManifest(head, [device.id], new Date().toISOString(), masterKey)
+    return removeDevicesFromManifest(head, [device.id], new Date().toISOString(), identityRoot)
   })
 }
 
@@ -47,17 +47,95 @@ export async function signOut(): Promise<boolean> {
   } catch {
     // Unreachable or already ended: the local sign-out still happens.
   }
+  // What this origin keeps for the account goes with the sign-in
+  // (docs/plans/api-surface.md §6, decision 10): its names are computed
+  // while the session still holds the keys they derive from.
+  const session = getSession()
+  const forgetting = session ? clearAccountData(session) : Promise.resolve()
   broadcastLogout()
   clearPersisted()
   clearSession()
   clearAccountLists()
+  await forgetting
   return confirmed
+}
+
+/** What a package that keeps per-account data on this origin removes at sign-out. */
+export type SignOutCleanup = (session: Session) => Promise<void>
+
+const cleanups: SignOutCleanup[] = []
+
+/**
+ * Registers a package's per-account cleanup (the Drive upload resumes, the
+ * ciphertext cache, Mail's search index), run by every sign-out. Each app
+ * registers the ones of the packages it uses at boot, since a sign-out must
+ * clear what an earlier page load left even when this one never opened it.
+ */
+export function registerSignOutCleanup(cleanup: SignOutCleanup): void {
+  if (!cleanups.includes(cleanup)) cleanups.push(cleanup)
+}
+
+/**
+ * Everything this origin keeps for `session`'s account but the
+ * anti-rollback anchors: its records copies, its `kutup.…:<accountId>` keys
+ * and databases, and what the registered cleanups own. Best effort per
+ * part: one failing never keeps the others.
+ */
+export async function clearAccountData(session: Session): Promise<void> {
+  const parts: Promise<unknown>[] = [
+    forgetAccountRecords(session),
+    clearAccountStorage(session.accountId),
+    ...cleanups.map((cleanup) => cleanup(session)),
+  ]
+  await Promise.all(parts.map((part) => part.catch(() => undefined)))
+}
+
+/**
+ * The anti-rollback anchors (docs/plans/api-surface.md §5): kept across a
+ * sign-out, so a server can't roll the account back under a later sign-in
+ * on this browser. They go only with the account itself.
+ */
+const ANCHOR = /^kutup\.account\.manifestPins:/
+
+/** This origin's databases named by the account (docs/plans/api-surface.md §6). */
+const ACCOUNT_DATABASES = ['kutup.chat.store', 'kutup.chat.backup', 'kutup.pass.outbox']
+
+/**
+ * What this origin keeps for `accountId` (docs/plans/api-surface.md §6, the
+ * user's decision 10): every `kutup.…:<accountId>` key and database. The
+ * anchors stay unless `withAnchors` (the account is being deleted). A
+ * database another tab still holds open is deleted once that tab lets go.
+ */
+export async function clearAccountStorage(accountId: string, withAnchors = false): Promise<void> {
+  try {
+    const doomed: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key?.startsWith('kutup.') || !key.endsWith(`:${accountId}`)) continue
+      if (!withAnchors && ANCHOR.test(key)) continue
+      doomed.push(key)
+    }
+    for (const key of doomed) localStorage.removeItem(key)
+  } catch {
+    // Storage blocked: nothing kept to clear.
+  }
+  if (typeof indexedDB === 'undefined') return
+  await Promise.all(
+    ACCOUNT_DATABASES.map(
+      (prefix) =>
+        new Promise<void>((resolve) => {
+          const request = indexedDB.deleteDatabase(`${prefix}:${accountId}`)
+          request.onsuccess = () => resolve()
+          request.onerror = () => resolve()
+          request.onblocked = () => resolve()
+        }),
+    ),
+  )
 }
 
 /**
  * Lists this origin keeps per account in localStorage (the Chat and Mail
- * "not in contacts" dismissals): gone with the sign-in, and the old
- * unkeyed copies with them.
+ * "not in contacts" dismissals): gone with the sign-in.
  */
 const ACCOUNT_LISTS = /^kutup\.(chat|mail)\.notInContactsDismissed(:|$)/
 

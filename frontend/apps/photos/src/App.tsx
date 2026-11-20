@@ -10,6 +10,7 @@ import { useRequiredSession } from '@kutup/session/store'
 import { useResumePhotos } from './features/upload/useUploadPhotos'
 import { setUnauthenticatedHandler } from '@kutup/session/client'
 import { requestFork } from '@kutup/session/fork'
+import { ManifestSignerWarnings } from '@kutup/drive-ui/ManifestSignerWarnings'
 import { Toaster } from '@kutup/ui/components/sonner'
 import { TooltipProvider } from '@kutup/ui/components/tooltip'
 import { Boot } from './app/Boot'
@@ -63,7 +64,7 @@ function DriveUpkeep() {
 function PhotosUploadPanel() {
   const session = useRequiredSession()
   const onResume = useResumePhotos()
-  return <UploadPanel resume={{ owner: session.userId, onResume }} />
+  return <UploadPanel resume={{ owner: session.accountId, onResume }} />
 }
 
 /** Everything behind the session: the library and its pages. */
@@ -103,6 +104,7 @@ export function App() {
           <Route path="*" element={<SignedIn />} />
         </Routes>
         <Toaster />
+        <ManifestSignerWarnings />
       </TooltipProvider>
     </BrowserRouter>
   )

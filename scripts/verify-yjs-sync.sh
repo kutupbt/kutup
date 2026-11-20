@@ -182,20 +182,32 @@ same "$(jq -r '[.places[].name] | sort | join(",")' "$TMP/$A/coast.kutupmap")" "
 find "$TMP/$A" "$TMP/$B" -name '*conflict*' | grep -q . && fail "no conflict copies"
 pass "a list with a byte-order mark, missing ids and odd fields syncs as one list"
 
-# --- devices: one signed device per machine; a revoked one is replaced ---
+# --- devices: one listed device per machine; a removed one is replaced ---
+# The account's devices (W5, AccountDeviceV1): `listed` when the account's
+# manifest lists it, `expired` when idle too long, `thisSignIn` for the
+# caller's own. Each machine's sync registers and lists one `cli` device.
+live='[.[] | select(.listed and (.expired | not))]'
 DEVICES="$("$BIN" --profile "$A" --json devices list)"
-same "$(jq '[.[] | select(.trusted)] | length' <<<"$DEVICES")" 2 "trusted devices"
-B_DEVICE="$("$BIN" --profile "$B" --json devices list | jq -r '[.[] | select(.trusted)] | sort_by(.createdAt) | last | .deviceId')"
-"$BIN" --profile "$A" devices revoke "$B_DEVICE" --yes >/dev/null
+same "$(jq "$live | length" <<<"$DEVICES")" 2 "listed devices"
+same "$(jq -r "$live | map(.kind) | unique | join(\",\")" <<<"$DEVICES")" "cli" "their kind"
+# A device is its id and when it was made: the server gives a new device the
+# lowest free id (account_devices.rs), so a removed device's id comes back.
+B_SELF="$("$BIN" --profile "$B" --json devices list | jq -c '[.[] | select(.thisSignIn)] | if length == 1 then .[0] | {deviceId, createdAt} else null end')"
+[ "$B_SELF" != null ] || fail "B's own device is in the list"
+B_DEVICE="$(jq -r .deviceId <<<"$B_SELF")"
+"$BIN" --profile "$A" devices remove "$B_DEVICE" --yes >/dev/null
 tick
 printf 'yeni satır\n' >>"$TMP/$B/notes/todo.md"
 sync_on "$B"
 sync_on "$A"
-grep -q "yeni satır" "$TMP/$A/notes/todo.md" || fail "B's edit after the revocation reached A"
-same "$("$BIN" --profile "$A" --json devices list | jq '[.[] | select(.trusted)] | length')" 2 "trusted devices after"
-"$BIN" --profile "$A" --json devices list | jq -e --argjson d "$B_DEVICE" '.[] | select(.deviceId == $d) | .isActive == false' >/dev/null ||
-  fail "the revoked device stays revoked"
-pass "a revoked device is replaced by a newly signed one on the next run"
+grep -q "yeni satır" "$TMP/$A/notes/todo.md" || fail "B's edit after the removal reached A"
+AFTER="$("$BIN" --profile "$A" --json devices list)"
+same "$(jq "$live | length" <<<"$AFTER")" 2 "listed devices after"
+jq -e --argjson d "$B_SELF" 'all(.[]; {deviceId, createdAt} != $d)' <<<"$AFTER" >/dev/null ||
+  fail "the removed device stays out of the list (removed $B_DEVICE; before: $(jq -c 'map({deviceId, kind, listed, expired, thisSignIn, createdAt})' <<<"$DEVICES"); after: $(jq -c 'map({deviceId, kind, listed, expired, thisSignIn, createdAt})' <<<"$AFTER"))"
+B_NOW="$("$BIN" --profile "$B" --json devices list | jq -c '[.[] | select(.thisSignIn and .listed)] | if length == 1 then .[0] | {deviceId, createdAt} else null end')"
+[ "$B_NOW" != null ] && [ "$B_NOW" != "$B_SELF" ] || fail "B listed a new device of its own (got $B_NOW, removed $B_SELF)"
+pass "a removed device is replaced by a newly listed one on the next run"
 
 # --- delete on one machine, edit on the other: the edit wins ---
 tick

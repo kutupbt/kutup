@@ -91,6 +91,7 @@
     "loading": "Opening…",
     "loadingVideo": "Downloading the video…",
     "videoTooLarge": "This video is too large to play here. Download it to watch it.",
+    "tooManyStreams": "Too many videos are playing in this tab. Close one to play this.",
     "failed": "This could not be opened. Try again, or download it.",
     "cannotDraw": "This browser cannot show this format. Showing its preview; download the original.",
     "showingPreview": "Showing a preview: the original is too large to open here.",
@@ -318,9 +319,14 @@
       "notFound": "The link does not exist, or the album was deleted or the link removed.",
       "expired": "The link has expired.",
       "removed": "The server's administrators removed this link.",
+      "blocked": "The server's operators blocked this link.",
+      "blockedLegal": "This link is unavailable for legal reasons: the server's operators blocked it under a legal order.",
+      "sharingOff": "Public links are turned off on this server at the moment.",
+      "signInRequired": "On this server, public links open only for people signed in to it. Sign in, then open the link again.",
       "badKey": "The link's key does not open this album. Ask for the whole link.",
       "notAlbum": "This link is not to an album.",
-      "other": "Something went wrong. Try again."
+      "other": "Something went wrong. Try again.",
+      "newerLink": "This link needs a newer Kutup. It was made by a newer version of Kutup than this server runs."
     }
   }
 }

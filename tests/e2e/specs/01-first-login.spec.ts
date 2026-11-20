@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { ADMIN_USERNAME, appUrl, finishNewKeys, newAccount, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
 
 const PASSWORD = 'Deneme123*FirstLoginPassword'

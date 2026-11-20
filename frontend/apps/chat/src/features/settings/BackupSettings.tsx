@@ -6,6 +6,7 @@ import type { ChatMediaStorageView } from '@kutup/chat-core/service'
 import { appUrl } from '@kutup/session/apps'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { useChat } from '../../app/chatStore'
@@ -110,9 +111,7 @@ export function StorageSettings() {
       description={retention === 0 ? t('chat.backup.storageDescriptionUnlimited') : t('chat.backup.storageDescription', { days: retention ?? 45 })}
     >
       {!storage ? (
-        <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" aria-hidden /> {t('chat.backup.loading')}
-        </p>
+        <FormSkeleton label={t('chat.backup.loading')} rows={3} className="px-0" />
       ) : (
         <div className="max-w-2xl space-y-4" data-testid="chat-storage-summary">
           <div className="rounded-lg border border-border p-4">

@@ -1,4 +1,4 @@
-//! `GET /api/mail/notifications` — new mail to tell the reader about
+//! `GET /api/v1/mail/notifications` — new mail to tell the reader about
 //! (docs/plans/mail-parity.md, P6), as Proton's `useNewEmailNotification`:
 //! unread mail that arrived, or snoozed mail that came back, in the Inbox,
 //! Starred, or a folder with notifications on (never Spam or Trash). Mail
@@ -13,10 +13,11 @@ use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
+use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// At most this many in one answer; the reader then sees one grouped notice.
@@ -28,7 +29,10 @@ pub struct NotificationsQuery {
     pub after: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+/// Id, thread, folder, custom folder, sealed headers.
+type NewMailRow = (Uuid, Uuid, String, Option<Uuid>, Option<Vec<u8>>);
+
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NewMail {
     pub id: String,
@@ -54,7 +58,7 @@ pub struct NewMailPage {
 
 #[utoipa::path(
     get,
-    path = "/api/mail/notifications",
+    path = "/api/v1/mail/notifications",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(NotificationsQuery),
@@ -65,10 +69,10 @@ pub struct NewMailPage {
 )]
 pub async fn new_mail(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<NotificationsQuery>,
 ) -> AppResult<Json<NewMailPage>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let now: OffsetDateTime = sqlx::query_scalar("SELECT now()")
         .fetch_one(&state.pool)
         .await?;
@@ -89,18 +93,17 @@ pub async fn new_mail(
     };
     let after = OffsetDateTime::parse(after, &Rfc3339)
         .map_err(|_| AppError::bad_request("after is an RFC 3339 time"))?;
-    let mut messages: Vec<NewMail> = sqlx::query_as(
-        "SELECT m.id::text, m.thread_id::text, m.folder, m.custom_folder::text, m.subject,
-                m.from_address, m.from_name
+    let rows: Vec<NewMailRow> = sqlx::query_as(
+        "SELECT m.id, m.thread_id, m.folder, m.custom_folder, m.headers
            FROM mail_messages m
-          WHERE m.owner = $1 AND m.user_id = $1
+          WHERE m.mailbox_owner = $1 AND m.account_id = $1
             AND m.notify_at > $2 - interval '1 minute' AND m.notify_at <= $3
             AND m.direction = 'inbound' AND NOT m.seen
             AND (m.folder = 'inbox'
                  OR (m.starred AND m.folder NOT IN ('spam', 'trash'))
                  OR (m.folder = 'custom' AND EXISTS (
                         SELECT 1 FROM mail_folders f
-                         WHERE f.user_id = m.user_id AND f.id = m.custom_folder AND f.notify)))
+                         WHERE f.account_id = m.account_id AND f.id = m.custom_folder AND f.notify)))
           ORDER BY m.notify_at, m.id
           LIMIT $4",
     )
@@ -110,6 +113,28 @@ pub async fn new_mail(
     .bind(MAX_NEW + 1)
     .fetch_all(&state.pool)
     .await?;
+    let opener = crate::handlers::mail::Mailbox::Own(user_id)
+        .opener(&state)
+        .await?;
+    let mut messages: Vec<NewMail> = rows
+        .into_iter()
+        .map(|(id, thread_id, folder, custom_folder, sealed)| {
+            let headers = opener.open(id, sealed.as_deref());
+            let (from_address, from_name) = headers
+                .from
+                .map(|m| (m.address, m.name))
+                .unwrap_or_default();
+            NewMail {
+                id: id.to_string(),
+                thread_id: thread_id.to_string(),
+                folder,
+                custom_folder: custom_folder.map(|id| id.to_string()),
+                subject: headers.subject,
+                from_address,
+                from_name,
+            }
+        })
+        .collect();
     let more = messages.len() as i64 > MAX_NEW;
     messages.truncate(MAX_NEW as usize);
     Ok(Json(NewMailPage {

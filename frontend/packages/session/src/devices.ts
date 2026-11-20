@@ -9,7 +9,7 @@
 import axios from 'axios'
 import { accountKeyOf, accountOfKey } from '@kutup/crypto/accountRef'
 import { checkOwnManifestHead, type AccountManifest, type DeviceKind } from '@kutup/crypto/accountManifest'
-import { toBase64, toBase64Url } from '@kutup/crypto/base64'
+import { toBase64Url } from '@kutup/crypto/base64'
 import { loadServerSettings } from './apps'
 import api from './client'
 import type { DeviceKeys } from './keys'
@@ -19,7 +19,7 @@ import { getSession, type Session } from './store'
 /** The device credential beside the sign-in: `<deviceId>.<credential, base64url>`. */
 export const DEVICE_HEADER = 'X-Kutup-Device'
 
-/** One device of the account, as `GET /api/devices` lists it. */
+/** One device of the account, as `GET /api/v1/account/devices` lists it. */
 export interface AccountDevice {
   deviceId: number
   kind: DeviceKind
@@ -52,11 +52,11 @@ function asDevice(header: string) {
  * what its frames are signed under. The server's name comes from its public
  * settings (fetched once per page).
  */
-export async function ownAccount(session: Pick<Session, 'userId'>): Promise<string> {
+export async function ownAccount(session: Pick<Session, 'accountId'>): Promise<string> {
   const settings = await loadServerSettings<{ chat?: { serverName?: string } }>()
   const server = settings.chat?.serverName
   if (!server) throw new Error('the server did not publish its name')
-  return accountKeyOf({ server, accountId: session.userId })
+  return accountKeyOf({ server, accountId: session.accountId })
 }
 
 function errorCode(error: unknown, status: number): string | undefined {
@@ -90,12 +90,12 @@ export function isDevicesMismatch(error: unknown): boolean {
 }
 
 export async function listAccountDevices(): Promise<AccountDevice[]> {
-  return (await api.get<{ devices: AccountDevice[] }>('/devices')).data.devices
+  return (await api.get<{ devices: AccountDevice[] }>('/account/devices')).data.devices
 }
 
 /**
- * Registers an editing device of this sign-in: its row, under the lowest
- * free id. It then lists itself ({@link publishNextManifest}); until then
+ * Registers an editing device of this sign-in: its row, under the account's
+ * next device id (a removed device's id comes back last). It then lists itself ({@link publishNextManifest}); until then
  * its frames are refused. `409 deviceLimit` at the cap.
  */
 export async function registerDevice(request: {
@@ -106,7 +106,7 @@ export async function registerDevice(request: {
   /** Unpadded base64url of 32 random bytes. */
   credential: string
 }): Promise<{ deviceId: number; session: string }> {
-  return (await api.post<{ deviceId: number; session: string }>('/devices', request)).data
+  return (await api.post<{ deviceId: number; session: string }>('/account/devices', request)).data
 }
 
 /** The account's head manifest; null when it has none yet (`404 noManifest`). */
@@ -167,7 +167,7 @@ export async function fetchManifestHistory(account: string, from: number, to: nu
 async function keepPin(account: string, head: AccountManifest | null): Promise<void> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  const pin = await checkOwnManifestHead(await manifestPin(account), head, toBase64(session.masterKey), account)
+  const pin = await checkOwnManifestHead(await manifestPin(account), head, session.roots.identityRoot, account)
   if (pin) await keepManifestPin(pin)
 }
 
@@ -221,5 +221,5 @@ export async function publishNextManifest(
  * can't set headers on a WebSocket): the Chat socket and the collab sockets.
  */
 export async function deviceTicket(header: string): Promise<string> {
-  return (await api.post<{ ticket: string }>('/device-ticket', null, asDevice(header))).data.ticket
+  return (await api.post<{ ticket: string }>('/account/devices/tickets', null, asDevice(header))).data.ticket
 }

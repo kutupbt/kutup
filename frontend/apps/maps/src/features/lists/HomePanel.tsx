@@ -8,7 +8,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { listTitle } from '@kutup/map/list'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatFileDate } from '@kutup/ui/lib/format'
 import { useMapScene } from '../../app/stage'
@@ -153,7 +153,7 @@ export function HomePanel({ settings = false }: { settings?: boolean }) {
       ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain border-t border-border">
         {loading && sorted.length === 0 ? (
-          <LoadingPanel label={t('home.loading')} />
+          <ListSkeleton label={t('home.loading')} rows={5} />
         ) : sorted.length === 0 ? (
           <div className="space-y-1 px-6 py-10 text-center">
             <p className="text-sm font-medium">{t('home.emptyTitle')}</p>

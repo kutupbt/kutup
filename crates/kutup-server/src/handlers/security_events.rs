@@ -1,4 +1,4 @@
-//! `GET /api/user/security-events`: what changed the caller's sign-in, for
+//! `GET /api/v1/account/security-events`: what changed the caller's sign-in, for
 //! Account → Security (`crate::security_events`).
 
 use axum::extract::{Query, State};
@@ -9,7 +9,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const DEFAULT_LIMIT: i64 = 50;
@@ -39,7 +39,10 @@ pub struct SecurityEventView {
     /// What made it, as the session list shows a session (none for a
     /// recovery or an administrator's).
     client: Option<String>,
-    user_agent: Option<String>,
+    /// Its browser: family, major version and system (never the raw
+    /// `User-Agent`).
+    #[serde(flatten)]
+    family: crate::client_family::ClientFamily,
     /// For a name event: the name it was about (the old one, for a rename);
     /// for a security key's event: the key's name.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,8 +50,12 @@ pub struct SecurityEventView {
     /// For a rename: the new name.
     #[serde(skip_serializing_if = "Option::is_none")]
     new_name: Option<String>,
-    /// An administrator's reset of this account.
+    /// Done by an administrator (a reset, a closed or freed name, two-factor
+    /// turned off, a closing account kept, or the account's data opened).
     by_admin: bool,
+    /// How many times it happened: a failed sign-in's repeats within ten
+    /// minutes are one event.
+    count: i32,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -57,24 +64,27 @@ pub struct SecurityEventsPage {
     events: Vec<SecurityEventView>,
     /// The cursor for older events; none when there are no more.
     next: Option<Uuid>,
+    /// How many days events are kept (the newest 500 at most): the server's
+    /// Privacy and retention setting.
+    retention_days: i64,
 }
 
-/// `GET /api/user/security-events` — the caller's account security events,
+/// `GET /api/v1/account/security-events` — the caller's account security events,
 /// newest first.
 #[utoipa::path(
     get,
-    path = "/api/user/security-events",
-    tag = "user",
+    path = "/api/v1/account/security-events",
+    tag = "account",
     security(("BearerAuth" = [])),
     params(SecurityEventsQuery),
     responses((status = 200, body = SecurityEventsPage))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<SecurityEventsQuery>,
 ) -> AppResult<Response> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
     if !(1..=MAX_LIMIT).contains(&limit) {
         return Err(AppError::bad_request("limit is 1 to 100"));
@@ -82,7 +92,7 @@ pub async fn list(
     // A cursor is one of the caller's own events, as a page handed it out.
     if let Some(cursor) = query.cursor {
         let known: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM account_security_events WHERE id = $1 AND user_id = $2)",
+            "SELECT EXISTS (SELECT 1 FROM account_security_events WHERE id = $1 AND subject_account_id = $2)",
         )
         .bind(cursor)
         .bind(user_id)
@@ -118,11 +128,20 @@ pub async fn list(
                 .acting_session_id
                 .is_some_and(|s| s == own || s == own_root),
             client: e.acting_client,
-            user_agent: e.acting_user_agent,
+            family: e.client,
             by_admin: e.by_admin,
             old_name: e.old_name,
             new_name: e.new_name,
+            count: e.count,
         })
         .collect();
-    Ok(Json(SecurityEventsPage { events, next }).into_response())
+    let retention_days = crate::site_settings::SECURITY_EVENT_RETENTION_DAYS
+        .load(&state.pool)
+        .await?;
+    Ok(Json(SecurityEventsPage {
+        events,
+        next,
+        retention_days,
+    })
+    .into_response())
 }

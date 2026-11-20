@@ -2,7 +2,7 @@
 //!
 //! Builds an owned folder and a file the way a client does (Rust crypto),
 //! then checks the thumbnail contract over HTTP: header validation without a
-//! key (variant, file, epoch, size), replace-in-place with exact quota
+//! key (variant, file, content revision, epoch, size), replace-in-place with exact quota
 //! accounting, ciphertext-only caching headers, the listing's thumbnail
 //! fields and staleness against the latest version, access control, and
 //! deletion releasing the bytes.
@@ -31,7 +31,6 @@ fn bearer(req: RequestBuilder, token: &str) -> RequestBuilder {
 
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::thumbnail::{self, Thumbnail, ThumbnailFormat, ThumbnailVariant};
 
 fn uuid() -> String {
@@ -47,7 +46,7 @@ fn token_of(c: &Client, base: &str, a: &User) -> String {
 }
 
 fn me(c: &Client, base: &str, token: &str) -> Value {
-    bearer(c.get(format!("{base}/api/user/me")), token)
+    bearer(c.get(format!("{base}/api/v1/account")), token)
         .send()
         .unwrap()
         .json()
@@ -69,6 +68,8 @@ fn picture(fill: u8, len: usize) -> Thumbnail {
     }
 }
 
+/// Stores a thumbnail envelope bound to content revision `revision`.
+#[allow(clippy::too_many_arguments)]
 fn put_thumb(
     c: &Client,
     base: &str,
@@ -76,11 +77,13 @@ fn put_thumb(
     file_id: &str,
     variant: &str,
     body: Vec<u8>,
+    revision: &str,
     source: Option<&str>,
 ) -> StatusCode {
-    let mut url = format!("{base}/api/files/{file_id}/thumbnails/{variant}");
+    let mut url =
+        format!("{base}/api/v1/drive/files/{file_id}/thumbnails/{variant}?revision={revision}");
     if let Some(s) = source {
-        url.push_str(&format!("?source={s}"));
+        url.push_str(&format!("&source={s}"));
     }
     bearer(c.put(url), token)
         .header("content-type", "application/octet-stream")
@@ -92,7 +95,9 @@ fn put_thumb(
 
 fn listed(c: &Client, base: &str, token: &str, collection_id: &str, file_id: &str) -> Value {
     let rows: Vec<Value> = bearer(
-        c.get(format!("{base}/api/collections/{collection_id}/files")),
+        c.get(format!(
+            "{base}/api/v1/drive/collections/{collection_id}/files"
+        )),
         token,
     )
     .send()
@@ -115,7 +120,7 @@ fn thumbnails_contract() {
     let token = token_of(&c, &base, &owner);
     let user_id = me(&c, &base, &token)["id"].as_str().unwrap().to_string();
     let identity =
-        kutup_crypto::identity::AccountIdentityKeysV1::derive(&owner.master_key).unwrap();
+        kutup_crypto::identity::AccountIdentityKeysV1::derive(&owner.roots.identity).unwrap();
 
     // An owned folder, as createOwnedCollectionV1 makes it.
     let collection_id = uuid();
@@ -123,14 +128,15 @@ fn thumbnails_contract() {
     let ctx = |purpose, object: &str, parent: &str| {
         DriveEnvelopeContextV1::new(purpose, 1, 1, object, parent).unwrap()
     };
-    let created = bearer(c.post(format!("{base}/api/collections")), &token)
+    let created = bearer(c.post(format!("{base}/api/v1/drive/collections")), &token)
         .json(&json!({
             "id": collection_id,
-            "ownerKeyEnvelope": drive_envelope::seal_b64(&collection_key, &owner.master_key, ctx(DriveEnvelopePurpose::CollectionKey, &collection_id, &user_id)).unwrap(),
+            "ownerKeyEnvelope": common::owner_collection_key(&collection_key, &owner, &collection_id, 1),
             "nameEnvelope": drive_envelope::seal_b64(b"Thumbs", &collection_key, ctx(DriveEnvelopePurpose::CollectionName, &collection_id, &user_id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&collection_id, &user_id, 1, None, &collection_key, identity.authority_signing_key()).unwrap().encode_b64(),
             "parentCollectionId": null,
             "nameHash": collection_id.replace('-', "").repeat(2),
+            "nameHashGeneration": owner.roots.drive_generation.get(),
         }))
         .send()
         .unwrap();
@@ -143,15 +149,17 @@ fn thumbnails_contract() {
     // A file in it, as the upload path makes it.
     let file_id = uuid();
     let file_key = [0x61u8; 32];
-    let blob = drive_object::encrypt_file_blob(
-        b"hello thumbnails",
-        &file_key,
-        DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
-    )
-    .unwrap();
+    let revision = uuid();
+    let blob = common::block_blob(&file_id, &file_key, &revision, 1, b"hello thumbnails");
     let form = reqwest::blocking::multipart::Form::new()
         .text("fileId", file_id.clone())
         .text("collectionId", collection_id.clone())
+        .text("revisionId", revision.clone())
+        .text("metadataRevision", "1")
+        .text(
+            "revisionContentEnvelope",
+            common::sealed_revision_content(&file_id, &file_key, &revision, 1),
+        )
         .text("nameHash", file_id.replace('-', "").repeat(2))
         .text(
             "fileKeyEnvelope",
@@ -175,7 +183,7 @@ fn thumbnails_contract() {
             "file",
             reqwest::blocking::multipart::Part::bytes(blob).file_name("encrypted"),
         );
-    let uploaded = bearer(c.post(format!("{base}/api/files/upload")), &token)
+    let uploaded = bearer(c.post(format!("{base}/api/v1/drive/files")), &token)
         .multipart(form)
         .send()
         .unwrap();
@@ -196,6 +204,7 @@ fn thumbnails_contract() {
         ThumbnailVariant::Small,
         &file_key,
         &file_id,
+        &revision,
         1,
     )
     .unwrap();
@@ -207,13 +216,14 @@ fn thumbnails_contract() {
             &file_id,
             "sm",
             first.clone(),
+            &revision,
             Some("original")
         ),
         StatusCode::NO_CONTENT
     );
     assert_eq!(used(&c, &base, &token), baseline + first.len() as i64);
     let got = bearer(
-        c.get(format!("{base}/api/files/{file_id}/thumbnails/sm")),
+        c.get(format!("{base}/api/v1/drive/files/{file_id}/thumbnails/sm")),
         &token,
     )
     .send()
@@ -226,7 +236,15 @@ fn thumbnails_contract() {
     let bytes = got.bytes().unwrap().to_vec();
     assert_eq!(bytes, first);
     assert_eq!(
-        thumbnail::open(&bytes, ThumbnailVariant::Small, &file_key, &file_id, 1).unwrap(),
+        thumbnail::open(
+            &bytes,
+            ThumbnailVariant::Small,
+            &file_key,
+            &file_id,
+            &revision,
+            1
+        )
+        .unwrap(),
         picture(1, 2000)
     );
     let row = listed(&c, &base, &token, &collection_id, &file_id);
@@ -239,12 +257,22 @@ fn thumbnails_contract() {
         ThumbnailVariant::Small,
         &file_key,
         &file_id,
+        &revision,
         1,
     )
     .unwrap();
     assert_ne!(first.len(), second.len(), "padding buckets differ");
     assert_eq!(
-        put_thumb(&c, &base, &token, &file_id, "sm", second.clone(), None),
+        put_thumb(
+            &c,
+            &base,
+            &token,
+            &file_id,
+            "sm",
+            second.clone(),
+            &revision,
+            None
+        ),
         StatusCode::NO_CONTENT
     );
     assert_eq!(used(&c, &base, &token), baseline + second.len() as i64);
@@ -255,11 +283,12 @@ fn thumbnails_contract() {
         ThumbnailVariant::Small,
         &file_key,
         &file_id,
+        &revision,
         1,
     )
     .unwrap();
     assert_eq!(
-        put_thumb(&c, &base, &token, &file_id, "lg", as_small, None),
+        put_thumb(&c, &base, &token, &file_id, "lg", as_small, &revision, None),
         StatusCode::BAD_REQUEST,
         "variant bound"
     );
@@ -268,11 +297,12 @@ fn thumbnails_contract() {
         ThumbnailVariant::Small,
         &file_key,
         &uuid(),
+        &revision,
         1,
     )
     .unwrap();
     assert_eq!(
-        put_thumb(&c, &base, &token, &file_id, "sm", other_file, None),
+        put_thumb(&c, &base, &token, &file_id, "sm", other_file, &revision, None),
         StatusCode::BAD_REQUEST,
         "file bound"
     );
@@ -281,11 +311,21 @@ fn thumbnails_contract() {
         ThumbnailVariant::Small,
         &file_key,
         &file_id,
+        &revision,
         2,
     )
     .unwrap();
     assert_eq!(
-        put_thumb(&c, &base, &token, &file_id, "sm", other_epoch, None),
+        put_thumb(
+            &c,
+            &base,
+            &token,
+            &file_id,
+            "sm",
+            other_epoch,
+            &revision,
+            None
+        ),
         StatusCode::BAD_REQUEST,
         "epoch bound"
     );
@@ -296,13 +336,90 @@ fn thumbnails_contract() {
             &token,
             &file_id,
             "sm",
+            second.clone(),
+            &uuid(),
+            None
+        ),
+        StatusCode::BAD_REQUEST,
+        "revision bound"
+    );
+    // Sealed and named consistently, but not a revision of this file.
+    let made_up = uuid();
+    let made_up_revision = thumbnail::seal(
+        &picture(3, 100),
+        ThumbnailVariant::Small,
+        &file_key,
+        &file_id,
+        &made_up,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        put_thumb(
+            &c,
+            &base,
+            &token,
+            &file_id,
+            "sm",
+            made_up_revision,
+            &made_up,
+            None
+        ),
+        StatusCode::BAD_REQUEST,
+        "unknown revision"
+    );
+    let mut unnamed = bearer(
+        c.put(format!("{base}/api/v1/drive/files/{file_id}/thumbnails/sm")),
+        &token,
+    )
+    .header("content-type", "application/octet-stream")
+    .body(second.clone())
+    .send()
+    .unwrap();
+    assert_eq!(
+        unnamed.status(),
+        StatusCode::BAD_REQUEST,
+        "no revision named: {}",
+        unnamed.text().unwrap_or_default()
+    );
+    unnamed = bearer(
+        c.put(format!(
+            "{base}/api/v1/drive/files/{file_id}/thumbnails/sm?revision=x"
+        )),
+        &token,
+    )
+    .body(second.clone())
+    .send()
+    .unwrap();
+    assert_eq!(
+        unnamed.status(),
+        StatusCode::BAD_REQUEST,
+        "not a revision id"
+    );
+    assert_eq!(
+        put_thumb(
+            &c,
+            &base,
+            &token,
+            &file_id,
+            "sm",
             vec![0u8; 70 * 1024],
+            &revision,
             None
         ),
         StatusCode::PAYLOAD_TOO_LARGE
     );
     assert_eq!(
-        put_thumb(&c, &base, &token, &file_id, "xl", second.clone(), None),
+        put_thumb(
+            &c,
+            &base,
+            &token,
+            &file_id,
+            "xl",
+            second.clone(),
+            &revision,
+            None
+        ),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
@@ -313,6 +430,7 @@ fn thumbnails_contract() {
             &file_id,
             "sm",
             second.clone(),
+            &revision,
             Some(&uuid())
         ),
         StatusCode::BAD_REQUEST,
@@ -324,31 +442,23 @@ fn thumbnails_contract() {
         "refusals charge nothing"
     );
 
-    // A new version makes it stale; one drawn from that version is current.
-    let snap = drive_object::encrypt_file_blob(
-        b"edited",
-        &file_key,
-        DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
-    )
-    .unwrap();
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("kind", "file")
-        .text("seqAtSnapshot", "0")
-        .text("docKeyId", "1")
-        .part(
-            "file",
-            reqwest::blocking::multipart::Part::bytes(snap.clone()).file_name("version"),
-        );
-    let version: Value = bearer(
-        c.post(format!("{base}/api/files/{file_id}/versions")),
-        &token,
-    )
-    .multipart(form)
-    .send()
-    .unwrap()
-    .json()
-    .unwrap();
+    // A new version makes it stale; one drawn from that version (bound to
+    // its revision) is current.
+    let snap = common::Version::seal(&file_id, &file_key, 1, b"edited");
+    let version: Value = common::save_version(&c, &base, &token, &snap, &common::WHOLE_FILE)
+        .json()
+        .unwrap();
     let version_id = version["id"].as_str().unwrap().to_string();
+    assert_eq!(version_id, snap.revision);
+    let redrawn = thumbnail::seal(
+        &picture(2, 9000),
+        ThumbnailVariant::Small,
+        &file_key,
+        &file_id,
+        &version_id,
+        1,
+    )
+    .unwrap();
     assert_eq!(
         listed(&c, &base, &token, &collection_id, &file_id)["thumbnailStale"],
         true,
@@ -361,7 +471,8 @@ fn thumbnails_contract() {
             &token,
             &file_id,
             "sm",
-            second.clone(),
+            redrawn.clone(),
+            &version_id,
             Some(&version_id)
         ),
         StatusCode::NO_CONTENT
@@ -377,7 +488,7 @@ fn thumbnails_contract() {
     let stranger_token = token_of(&c, &base, &stranger);
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/files/{file_id}/thumbnails/sm")),
+            c.get(format!("{base}/api/v1/drive/files/{file_id}/thumbnails/sm")),
             &stranger_token
         )
         .send()
@@ -386,7 +497,16 @@ fn thumbnails_contract() {
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        put_thumb(&c, &base, &stranger_token, &file_id, "sm", second, None),
+        put_thumb(
+            &c,
+            &base,
+            &stranger_token,
+            &file_id,
+            "sm",
+            second,
+            &revision,
+            None
+        ),
         StatusCode::FORBIDDEN
     );
 
@@ -397,13 +517,14 @@ fn thumbnails_contract() {
         ThumbnailVariant::Small,
         &file_key,
         &file_id,
+        &revision,
         1,
     )
     .unwrap()
     .len() as i64;
     assert_eq!(
         bearer(
-            c.delete(format!("{base}/api/files/{file_id}/thumbnails")),
+            c.delete(format!("{base}/api/v1/drive/files/{file_id}/thumbnails")),
             &token
         )
         .send()
@@ -414,7 +535,7 @@ fn thumbnails_contract() {
     assert_eq!(used(&c, &base, &token), with_version - second_len);
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/files/{file_id}/thumbnails/sm")),
+            c.get(format!("{base}/api/v1/drive/files/{file_id}/thumbnails/sm")),
             &token
         )
         .send()

@@ -2,15 +2,15 @@ import { Plus, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
-import type { UserRow } from '@kutup/session/api-types'
+import { administers, type UserRow } from '@kutup/session/api-types'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
 import { Button } from '@kutup/ui/components/button'
 import { Card } from '@kutup/ui/components/card'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { Skeleton } from '@kutup/ui/components/skeleton'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton, Skeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
@@ -28,8 +28,9 @@ function Stat({ label, value, detail }: { label: string; value: string | null; d
 
 export function UserStatus({ user }: { user: UserRow }) {
   const { t } = useTranslation()
-  if (!user.isActive) return <Badge variant="neutral">{t('admin.users.disabled')}</Badge>
-  if (user.isFirstLogin) return <Badge variant="warn">{t('admin.users.awaitingSetup')}</Badge>
+  if (user.state === 'closing') return <Badge variant="warn">{t('admin.users.closing')}</Badge>
+  if (user.state !== 'active') return <Badge variant="neutral">{t('admin.users.disabled')}</Badge>
+  if (!user.keysSetUp) return <Badge variant="warn">{t('admin.users.awaitingSetup')}</Badge>
   return <Badge variant="ok">{t('admin.users.active')}</Badge>
 }
 
@@ -71,8 +72,8 @@ export function UsersPage() {
       />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={t('admin.overview.users')} value={stats.data ? String(stats.data.totalUsers) : null}
-          detail={stats.data ? t('admin.overview.activeUsers', { count: stats.data.activeUsers }) : null} />
+        <Stat label={t('admin.overview.users')} value={stats.data ? String(stats.data.totalAccounts) : null}
+          detail={stats.data ? t('admin.overview.activeUsers', { count: stats.data.activeAccounts }) : null} />
         <Stat label={t('admin.overview.storage')} value={stats.data ? formatBytes(stats.data.totalStorageUsedBytes, lang) : null} detail={capacity} />
         <Stat label={t('admin.overview.files')} value={stats.data ? stats.data.totalFiles.toLocaleString(lang) : null} />
         <Stat label={t('admin.overview.folders')} value={stats.data ? stats.data.totalCollections.toLocaleString(lang) : null} />
@@ -89,7 +90,7 @@ export function UsersPage() {
             className="max-w-xs"
           />
         </div>
-        {users.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+        {users.isPending ? <ListSkeleton label={t('common.loading')} /> : null}
         {users.isError ? (
           <div className="p-4">
             <Alert variant="error">{apiErrorMessage(users.error, t('common.tryAgain'))}</Alert>
@@ -125,7 +126,7 @@ export function UsersPage() {
                       </Link>
                       <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
                         {addressOf(u)}
-                        {u.isAdmin ? (
+                        {administers(u.role) ? (
                           <span className="inline-flex items-center gap-0.5 text-xs text-primary">
                             <ShieldCheck className="size-3" />
                             {t('admin.users.admin')}
@@ -137,7 +138,7 @@ export function UsersPage() {
                     <TableCell className="whitespace-nowrap text-sm">
                       {formatBytes(u.storageUsedBytes, lang)} / {formatBytes(u.storageQuotaBytes, lang)}
                     </TableCell>
-                    <TableCell className="text-sm">{u.totpEnabled ? t('admin.users.on') : t('admin.users.off')}</TableCell>
+                    <TableCell className="text-sm">{t(`admin.users.twoFactor.${u.twoFactor}`)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

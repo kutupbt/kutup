@@ -9,7 +9,8 @@
 #                                       (rust-workspace + rust-standalone)
 #   scripts/gate.sh web                 frontend install, WASM builds and tests, build
 #   scripts/gate.sh browser <suite>...  browser specs from tests/e2e/suites/<suite>.txt,
-#                                       against an already running stack
+#                                       against an already running stack (Chromium;
+#                                       `browser webkit` runs the WebKit suite)
 #   scripts/gate.sh live <name>...      live gates: mail, mail-domains, backup, federation, and pass
 #                                       (pass: against a running stack, KUTUP_LIVE_SERVER
 #                                       and KUTUP_LIVE_DATABASE_URL set)
@@ -35,6 +36,8 @@ step() {
 static() {
   step "Compose S3 credential wiring"
   python3 scripts/test-compose-s3-credentials.py
+  step "Restore drill script (offline dry runs)"
+  scripts/test-restore-drill.sh
   step "Migrations (applied ones unchanged, new ones newer than the base)"
   scripts/check-migrations.sh "${KUTUP_MIGRATION_BASE:-origin/master}"
   step "Documentation checks"
@@ -44,6 +47,10 @@ static() {
   python3 scripts/check-crypto-exceptions.py
   step "Labels in the registry (docs/plans/w6-key-hierarchy.md §3)"
   scripts/check-labels.sh
+  step "API names (docs/plans/api-surface.md §8)"
+  python3 scripts/check-api-names.py
+  step "Byte columns compared on their bytes (docs/plans/w7-schema.md §2)"
+  python3 scripts/check-sql-boundary.py
   step "Frontend lockfile (runtime singletons resolve once)"
   python3 scripts/test-check-lockfile-singletons.py
   python3 scripts/check-lockfile-singletons.py frontend/pnpm-lock.yaml
@@ -144,6 +151,23 @@ suite_specs() {
   done
 }
 
+# The Playwright project of one or more suites: a suite file's
+# `# project: <name>` line, else chromium. Suites run together only when
+# they name the same one.
+suite_project() {
+  local suite project='' named
+  for suite in "$@"; do
+    named="$(sed -n 's/^#[[:space:]]*project:[[:space:]]*\([a-z0-9-]*\).*/\1/p' "tests/e2e/suites/$suite.txt" | head -n 1)"
+    named="${named:-chromium}"
+    if [ -n "$project" ] && [ "$named" != "$project" ]; then
+      echo "gate: suites '$*' run in different browsers ($project, $named); run them one at a time" >&2
+      return 2
+    fi
+    project="$named"
+  done
+  echo "$project"
+}
+
 browser() {
   if [ "$#" -eq 0 ]; then
     echo "gate: browser needs a suite: $(ls tests/e2e/suites | sed 's/\.txt$//' | tr '\n' ' ')" >&2
@@ -155,10 +179,12 @@ browser() {
     echo "gate: suite '$*' lists no specs" >&2
     return 2
   fi
-  step "Browser specs: $*"
+  local project
+  project="$(suite_project "$@")"
+  step "Browser specs: $* ($project)"
   # One spec path per word: spec paths never contain spaces.
   # shellcheck disable=SC2086
-  (cd tests/e2e && npm exec -- playwright test $specs --project=chromium)
+  (cd tests/e2e && npm exec -- playwright test $specs --project="$project")
 }
 
 live() {

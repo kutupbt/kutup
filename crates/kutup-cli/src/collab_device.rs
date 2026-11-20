@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountManifestDeviceV3, AccountManifestPinV1, AccountManifestV3, DeviceKind,
+    AccountManifestDeviceV3, AccountManifestPinV1, AccountManifestV3, Capability, DeviceKind,
     RegisterDeviceRequestV1,
 };
 use kutup_crypto::account_ref::AccountRef;
@@ -101,20 +101,15 @@ impl<'a> Signer<'a> {
                 "this session holds no account keys; sign in again to edit notes and lists"
             ));
         }
-        let master_key: [u8; 32] = sess
-            .master_key_bytes()?
-            .as_slice()
-            .try_into()
-            .context("master key must be 32 bytes")?;
         let server = client.settings()?.chat.server_name;
         Ok(Signer {
             client,
             store,
             sess,
-            account: AccountRef::new(&server, &sess.user_id)
+            account: AccountRef::new(&server, &sess.account_id)
                 .map_err(|_| anyhow!("this session's account is malformed"))?,
             server,
-            identity: AccountIdentityKeysV1::derive(&master_key)?,
+            identity: sess.identity()?,
         })
     }
 
@@ -142,7 +137,7 @@ impl<'a> Signer<'a> {
     /// lists it with its key; else a new one registered and listed now.
     pub fn device(&self) -> Result<Device> {
         if let Some(kept) = self.store.collab_device()? {
-            if kept.server == self.server && kept.user_id == self.sess.user_id {
+            if kept.server == self.server && kept.account_id == self.sess.account_id {
                 if let Some(device) = self.listed(&kept)? {
                     return Ok(device);
                 }
@@ -170,16 +165,36 @@ impl<'a> Signer<'a> {
             return Ok(None);
         };
         let key = STANDARD.encode(frame_key(&seed));
-        let listed = head
+        let Some(entry) = head
             .device(kept.device_id)
-            .is_some_and(|entry| entry.frame_key.as_deref() == Some(key.as_str()));
-        Ok(listed.then(|| Device {
+            .filter(|entry| entry.frame_key.as_deref() == Some(key.as_str()))
+        else {
+            return Ok(None);
+        };
+        let mut device = Device {
             id: kept.device_id,
             seed: Zeroizing::new(seed),
             credential: Zeroizing::new(credential),
             account: self.account.clone(),
             manifest_sequence: head.sequence,
-        }))
+        };
+        // An update that reads something new lists itself again with it
+        // (docs/plans/format-evolution.md, rule 8).
+        let own = Capability::of_this_build(&entry.kind, entry.chat.is_some());
+        if entry.capabilities != own {
+            let id = device.id;
+            device.manifest_sequence = self
+                .publish(&device.header(), |devices| {
+                    let entry = devices
+                        .iter_mut()
+                        .find(|listed| listed.device_id == id)
+                        .ok_or_else(|| anyhow!("the account no longer lists this CLI"))?;
+                    entry.capabilities = own.clone();
+                    Ok(())
+                })
+                .context("list this CLI's capabilities in the account's manifest")?;
+        }
+        Ok(Some(device))
     }
 
     /// Registers a new device, lists it in the account's manifest, and keeps
@@ -206,13 +221,8 @@ impl<'a> Signer<'a> {
             account: self.account.clone(),
             manifest_sequence: 0,
         };
-        let entry = AccountManifestDeviceV3 {
-            device_id: device.id,
-            kind: DeviceKind::Cli,
-            chat: None,
-            frame_key: Some(key),
-            session: registered.session,
-        };
+        let entry =
+            AccountManifestDeviceV3::editing(device.id, DeviceKind::Cli, key, registered.session);
         let id = device.id;
         device.manifest_sequence = self
             .publish(&device.header(), |devices| {
@@ -223,7 +233,7 @@ impl<'a> Signer<'a> {
             .context("list this CLI in the account's manifest")?;
         self.store.put_collab_device(Some(&CollabDevice {
             server: self.server.clone(),
-            user_id: self.sess.user_id.clone(),
+            account_id: self.sess.account_id.clone(),
             device_id: device.id,
             seed: STANDARD.encode(device.seed.as_ref()),
             credential: STANDARD.encode(device.credential.as_ref()),
@@ -289,20 +299,22 @@ mod tests {
     use super::*;
 
     fn editor(device_id: u32, byte: u8) -> AccountManifestDeviceV3 {
-        AccountManifestDeviceV3 {
+        AccountManifestDeviceV3::editing(
             device_id,
-            kind: DeviceKind::Cli,
-            chat: None,
-            frame_key: Some(STANDARD.encode(frame_key(&[byte; 32]))),
-            session: "ab".repeat(32),
-        }
+            DeviceKind::Cli,
+            STANDARD.encode(frame_key(&[byte; 32])),
+            "ab".repeat(32),
+        )
     }
 
     /// The heads a server could serve the CLI to have it sign their
     /// successor: each is refused before anything is signed.
     #[test]
     fn a_forged_or_stale_head_is_refused() {
-        let keys = AccountIdentityKeysV1::derive(&[3; 32]).unwrap();
+        let keys = AccountIdentityKeysV1::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([3; 32]),
+        )
+        .unwrap();
         let account =
             AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
         let mut first = AccountManifestV3::first(
@@ -332,7 +344,10 @@ mod tests {
         assert!(checked_head(Some(&pin), Some(&forged), &account, &keys).is_err());
         assert!(checked_head(None, Some(&forged), &account, &keys).is_err());
         // The same, signed under an authority of the server's.
-        let other = AccountIdentityKeysV1::derive(&[4; 32]).unwrap();
+        let other = AccountIdentityKeysV1::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([4; 32]),
+        )
+        .unwrap();
         let mut theirs = AccountManifestV3::first(
             account.clone(),
             &other,

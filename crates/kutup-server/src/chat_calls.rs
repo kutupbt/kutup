@@ -1,7 +1,6 @@
 //! Calls hosted on this server's SFU: meeting links (`call_link*`) and the
 //! group calls' LiveKit tokens (docs/chat-calls.md).
 
-pub(crate) mod call_link_history;
 pub(crate) mod call_link_moderation;
 pub(crate) mod call_link_waiting;
 pub(crate) mod call_links;

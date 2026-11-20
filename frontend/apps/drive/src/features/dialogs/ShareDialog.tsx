@@ -87,7 +87,7 @@ export function ShareDialog({
   }
 
   const errorText = share.error && !(share.error instanceof IdentityNotConfirmed) && !(share.error instanceof RecipientRenamed)
-    ? share.error instanceof RecipientNotFound || apiErrorCode(share.error) === 'not_found'
+    ? share.error instanceof RecipientNotFound || apiErrorCode(share.error) === 'notFound'
       ? t('dialogs.share.notFound')
       : apiErrorMessage(share.error, t('dialogs.share.failed'))
     : null

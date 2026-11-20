@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { newAccount, registerAccount } from '../fixtures/apps'
 import { addEntry, createVault, expectSaved, openPass } from '../fixtures/pass'
 
@@ -54,7 +54,8 @@ test('pass: a new vault gets a random key kept in the account, shown for KeePass
 
   // A new key that could not be kept is shown, and the dialog stays until it
   // is kept or saved.
-  await page.route('**/api/pass/vault-secrets/*', (route) => (route.request().method() === 'PUT' ? route.fulfill({ status: 503, body: '' }) : route.continue()))
+  // (Kept keys are records: docs/plans/account-records.md.)
+  await page.route('**/api/v1/account/records', (route) => (route.request().method() === 'POST' ? route.fulfill({ status: 503, body: '' }) : route.continue()))
   await page.getByRole('button', { name: 'New vault' }).first().click()
   const create = page.getByRole('dialog', { name: 'New vault' })
   await create.getByLabel('Vault name').fill('Saklanamayan')
@@ -64,7 +65,7 @@ test('pass: a new vault gets a random key kept in the account, shown for KeePass
   await expect(create.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(create).toBeVisible()
-  await page.unroute('**/api/pass/vault-secrets/*')
+  await page.unroute('**/api/v1/account/records')
   await create.getByRole('button', { name: 'Try keeping it again' }).click()
   await expect(page.getByRole('heading', { name: 'Saklanamayan', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
   await page.reload()

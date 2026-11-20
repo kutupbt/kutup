@@ -1,5 +1,6 @@
 import { Zip, ZipPassThrough } from 'fflate'
 import { fetchDecryptedChunks } from './download/fetchDecrypt'
+import type { DriveObjectToOpen } from '@kutup/crypto'
 import { resolveApiBase } from '@kutup/session/apiBase'
 
 // 2 GB — ZIP32 max; Windows Explorer and most real-world readers cap here.
@@ -16,11 +17,16 @@ export class FsaRequiredError extends Error {
 
 export interface ZipFile {
   id: string
-  /** The generation of the file key its content is sealed under. */
-  keyGeneration: number
+  /**
+   * What the object must be: the current content its metadata commits to, or
+   * a version by its id (and the key generation it is sealed under). Absent
+   * only for `plain` content, which is never fetched or opened.
+   */
+  expected?: DriveObjectToOpen
   name: string
   size: number
-  fileKey: Uint8Array
+  /** The key `expected` opens under; absent only for `plain` content. */
+  fileKey?: Uint8Array
   isRemote?: boolean
   remoteShareId?: string
   /** Where the encrypted blob is, under the API base, when it is not the
@@ -73,16 +79,19 @@ async function pumpFileIntoZip(
     await flush()
     return
   }
+  // Fetched content opens only against what it must be: never without it.
+  if (!f.expected || !f.fileKey) throw new Error('a fetched ZIP entry needs its committed content')
+  const { expected, fileKey } = f
   const url = f.contentPath
     ? `${base}${f.contentPath}`
     : f.isRemote
-      ? `${base}/drive/federation/shares/${f.remoteShareId}/files/${f.id}/content`
-      : `${base}/files/${f.id}/download`
+      ? `${base}/drive/federation/folder-shares/${f.remoteShareId}/files/${f.id}/content`
+      : `${base}/drive/files/${f.id}/download`
   let pushed = false
   for await (const { plain, isFinal } of fetchDecryptedChunks(
     url,
-    f.fileKey,
-    { fileId: f.id, generation: f.keyGeneration },
+    fileKey,
+    expected,
     accessToken,
     signal,
   )) {

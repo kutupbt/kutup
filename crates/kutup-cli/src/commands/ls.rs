@@ -35,10 +35,10 @@ fn is_false(v: &bool) -> bool {
 
 pub fn run(profile: &str, json: bool, tree: bool, folder_id: Option<&str>) -> Result<()> {
     let ctx = require_session(profile)?;
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
 
     let cols = ctx.client.list_collections()?;
-    let cols = decrypt_collections(cols, &master_key, &ctx.session);
+    let cols = decrypt_collections(cols, &roots, &ctx.session);
 
     let filter_parent = folder_id.map(|s| s.to_string());
 
@@ -69,7 +69,7 @@ pub fn run(profile: &str, json: bool, tree: bool, folder_id: Option<&str>) -> Re
 
     if let Some(parent) = &filter_parent {
         if let Some(col) = find_collection(&cols, parent) {
-            if let Ok(keys) = folder_keyring(&ctx.client, col, &master_key, &ctx.session) {
+            if let Ok(keys) = folder_keyring(&ctx.client, col, &roots, &ctx.session) {
                 let files = ctx.client.list_files(&col.id).unwrap_or_default();
                 for f in &files {
                     let (name, size) = decrypt_file_meta(f, &keys);

@@ -41,7 +41,7 @@ export function useDocuments() {
   // Every folder's files in one request (one per folder before;
   // docs/research/18-web-performance.md), opened once the folders are.
   const listing = useQuery({
-    queryKey: [...allFilesKey, identity.data?.userId],
+    queryKey: [...allFilesKey, identity.data?.accountId],
     enabled: Boolean(folders.data),
     queryFn: () => loadAllFiles(folders.data!.all, queryClient),
   })

@@ -4,9 +4,14 @@
 // the master key derives. Rust (kutup-chat-proto) builds, signs and checks
 // the chain; this is its typed browser face.
 
+import type { MasterKeys } from './masterKeys'
+import type { IdentityRoot } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
 
-/** What kind of app instance a device is. */
+/**
+ * What kind of app instance a device is. A manifest may list a kind a newer
+ * client added (without Chat keys); Rust keeps it and the browser ignores it.
+ */
 export type DeviceKind = 'chat' | 'editor' | 'cli'
 
 /** One device as the manifest lists it (`AccountManifestDeviceV3`). */
@@ -20,6 +25,11 @@ export interface ManifestDevice {
   frameKey?: string
   /** The hash of the sign-in it belongs to, lowercase hex. */
   session: string
+  /**
+   * What it reads: capability codes, ascending (docs/plans/format-evolution.md,
+   * rule 8). Rust sets this device's own when it lists it; unknown codes are kept.
+   */
+  capabilities?: number[]
 }
 
 /**
@@ -38,17 +48,22 @@ export interface AccountManifest {
 /**
  * The next manifest after `head` with `entry` listed (in place of any entry
  * of its id); `head` null makes the account's first, naming `account`. The
- * head must name the authority `masterKeyBase64` derives, and the result is
+ * head must name the authority `identityRoot` derives, and the result is
  * checked to follow it.
  */
 export async function listDeviceInManifest(
   head: AccountManifest | null,
   entry: ManifestDevice,
   issuedAt: string,
-  masterKeyBase64: string,
+  identityRoot: IdentityRoot,
   account: string,
 ): Promise<AccountManifest> {
-  return (await getCryptoWasm()).listDeviceInManifest(head, entry, issuedAt, masterKeyBase64, account) as AccountManifest
+  return (await getCryptoWasm()).listDeviceInManifest(head, entry, issuedAt, identityRoot, account) as AccountManifest
+}
+
+/** The capability codes a device of `kind` of this build lists (`chat`: it takes Chat). */
+export async function deviceCapabilities(kind: DeviceKind, chat: boolean): Promise<number[]> {
+  return Array.from((await getCryptoWasm()).deviceCapabilities(kind, chat))
 }
 
 /**
@@ -65,17 +80,17 @@ export interface AccountManifestPin {
 
 /**
  * Checks `head` as the server gave it (null: none) against `pin` (null:
- * none seen) for `account` and the incarnation `masterKeyBase64` derives;
+ * none seen) for `account` and the incarnation `identityRoot` derives;
  * the pin to keep. Throws on a head that doesn't verify or is older than the
  * pin, and on no head once there is a pin.
  */
 export async function checkOwnManifestHead(
   pin: AccountManifestPin | null,
   head: AccountManifest | null,
-  masterKeyBase64: string,
+  identityRoot: IdentityRoot,
   account: string,
 ): Promise<AccountManifestPin | null> {
-  return (await getCryptoWasm()).checkOwnManifestHead(pin, head, masterKeyBase64, account) as AccountManifestPin | null
+  return (await getCryptoWasm()).checkOwnManifestHead(pin, head, identityRoot, account) as AccountManifestPin | null
 }
 
 /** What a page does with a collab frame (`SenderVerdict`). */
@@ -114,14 +129,14 @@ export async function deliveredFrameSender(delivered: Uint8Array): Promise<strin
   return (await getCryptoWasm()).deliveredFrameSender(delivered)
 }
 
-/** `pins` sealed under the key `masterKeyBase64` derives, for `profile` (`<client type>:<user id>`). */
-export async function sealManifestPins(pins: AccountManifestPin[], masterKeyBase64: string, profile: string): Promise<string> {
-  return (await getCryptoWasm()).sealManifestPins(pins, masterKeyBase64, profile)
+/** `pins` sealed under the key `masterKeys` derives, for `profile` (`<client type>:<user id>`). */
+export async function sealManifestPins(pins: AccountManifestPin[], masterKeys: MasterKeys, profile: string): Promise<string> {
+  return (await getCryptoWasm()).sealManifestPins(pins, masterKeys, profile)
 }
 
 /** The pins {@link sealManifestPins} sealed; throws on another key, profile, or a changed envelope. */
-export async function openManifestPins(envelope: string, masterKeyBase64: string, profile: string): Promise<AccountManifestPin[]> {
-  return (await getCryptoWasm()).openManifestPins(envelope, masterKeyBase64, profile) as AccountManifestPin[]
+export async function openManifestPins(envelope: string, masterKeys: MasterKeys, profile: string): Promise<AccountManifestPin[]> {
+  return (await getCryptoWasm()).openManifestPins(envelope, masterKeys, profile) as AccountManifestPin[]
 }
 
 /** The next manifest after `head` without `deviceIds`. Throws when it would list no device. */
@@ -129,12 +144,12 @@ export async function removeDevicesFromManifest(
   head: AccountManifest,
   deviceIds: readonly number[],
   issuedAt: string,
-  masterKeyBase64: string,
+  identityRoot: IdentityRoot,
 ): Promise<AccountManifest> {
   return (await getCryptoWasm()).removeDevicesFromManifest(
     head,
     Uint32Array.from(deviceIds),
     issuedAt,
-    masterKeyBase64,
+    identityRoot,
   ) as AccountManifest
 }

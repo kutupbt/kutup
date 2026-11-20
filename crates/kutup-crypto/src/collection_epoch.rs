@@ -30,7 +30,9 @@ impl TryFrom<u16> for CollectionEpochSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::Ed25519Sha256V1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown collection epoch suite {value}"
             ))),
         }
@@ -41,7 +43,7 @@ impl TryFrom<u16> for CollectionEpochSuiteId {
 pub struct CollectionEpochStatementV1 {
     pub suite: CollectionEpochSuiteId,
     pub collection_id: [u8; 16],
-    pub owner_user_id: [u8; 16],
+    pub owner_account_id: [u8; 16],
     pub epoch: u32,
     pub previous_statement_hash: [u8; 32],
     pub collection_key_commitment: [u8; 32],
@@ -52,7 +54,7 @@ pub struct CollectionEpochStatementV1 {
 impl CollectionEpochStatementV1 {
     pub fn create(
         collection_id: &str,
-        owner_user_id: &str,
+        owner_account_id: &str,
         epoch: u32,
         previous_statement_hash: Option<&str>,
         collection_key: &[u8],
@@ -65,14 +67,14 @@ impl CollectionEpochStatementV1 {
         }
         let previous_statement_hash = parse_previous_hash(epoch, previous_statement_hash)?;
         let collection_id = parse_canonical_uuid(collection_id, "collection")?;
-        let owner_user_id = parse_canonical_uuid(owner_user_id, "owner")?;
+        let owner_account_id = parse_canonical_uuid(owner_account_id, "owner")?;
         let collection_key_commitment =
             collection_key_commitment(collection_id, epoch, collection_key);
         let authority_key_id = hash(Suite::V1, authority.verifying_key().to_bytes()).to_array();
         let mut statement = Self {
             suite: CollectionEpochSuiteId::Ed25519Sha256V1,
             collection_id,
-            owner_user_id,
+            owner_account_id,
             epoch,
             previous_statement_hash,
             collection_key_commitment,
@@ -89,7 +91,7 @@ impl CollectionEpochStatementV1 {
         bytes.extend_from_slice(&self.suite.as_u16().to_be_bytes());
         bytes.extend_from_slice(&0u16.to_be_bytes());
         bytes.extend_from_slice(&self.collection_id);
-        bytes.extend_from_slice(&self.owner_user_id);
+        bytes.extend_from_slice(&self.owner_account_id);
         bytes.extend_from_slice(&self.epoch.to_be_bytes());
         bytes.extend_from_slice(&self.previous_statement_hash);
         bytes.extend_from_slice(&self.collection_key_commitment);
@@ -129,7 +131,7 @@ impl CollectionEpochStatementV1 {
         let statement = Self {
             suite,
             collection_id: bytes[12..28].try_into().expect("sixteen-byte slice"),
-            owner_user_id: bytes[28..44].try_into().expect("sixteen-byte slice"),
+            owner_account_id: bytes[28..44].try_into().expect("sixteen-byte slice"),
             epoch,
             previous_statement_hash: bytes[48..80].try_into().expect("32-byte slice"),
             collection_key_commitment: bytes[80..112].try_into().expect("32-byte slice"),
@@ -185,7 +187,7 @@ impl CollectionEpochStatementV1 {
         expected_previous_statement_hash: Option<&str>,
     ) -> Result<()> {
         if self.collection_id != parse_canonical_uuid(expected_collection_id, "collection")?
-            || self.owner_user_id != parse_canonical_uuid(expected_owner_user_id, "owner")?
+            || self.owner_account_id != parse_canonical_uuid(expected_owner_user_id, "owner")?
             || self.epoch != expected_epoch
             || self.previous_statement_hash
                 != parse_previous_hash(expected_epoch, expected_previous_statement_hash)?
@@ -207,7 +209,7 @@ impl CollectionEpochStatementV1 {
         expected_epoch: u32,
     ) -> Result<()> {
         if self.collection_id != parse_canonical_uuid(expected_collection_id, "collection")?
-            || self.owner_user_id != parse_canonical_uuid(expected_owner_user_id, "owner")?
+            || self.owner_account_id != parse_canonical_uuid(expected_owner_user_id, "owner")?
             || self.epoch != expected_epoch
         {
             return Err(CryptoError::InvalidInput(

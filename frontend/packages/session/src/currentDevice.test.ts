@@ -11,7 +11,9 @@ const fetchManifest = vi.fn()
 const registerDevice = vi.fn()
 const published: unknown[] = []
 /** The head the next publication follows, and what it becomes. */
-let head: { sequence: number; devices: { deviceId: number; frameKey?: string; session: string }[] } | null = null
+let head: { sequence: number; devices: { deviceId: number; frameKey?: string; session: string; capabilities?: number[] }[] } | null = null
+/** What this build's editor lists (`deviceCapabilities`). */
+const OWN_CAPABILITIES = [2]
 let publishError: unknown = null
 vi.mock('./devices', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./devices')>()
@@ -31,9 +33,11 @@ vi.mock('./devices', async (importOriginal) => {
   }
 })
 vi.mock('@kutup/crypto/accountManifest', () => ({
+  deviceCapabilities: async () => OWN_CAPABILITIES,
+  // As Rust does: the entry lists what this build reads.
   listDeviceInManifest: async (current: typeof head, entry: { deviceId: number }) => ({
     sequence: (current?.sequence ?? 0) + 1,
-    devices: [...(current?.devices ?? []).filter((d) => d.deviceId !== entry.deviceId), entry],
+    devices: [...(current?.devices ?? []).filter((d) => d.deviceId !== entry.deviceId), { ...entry, capabilities: OWN_CAPABILITIES }],
   }),
 }))
 vi.mock('@kutup/crypto/signing', () => ({
@@ -41,7 +45,7 @@ vi.mock('@kutup/crypto/signing', () => ({
 }))
 const persistDevice = vi.fn()
 vi.mock('./persist', () => ({ persistDevice: (d: unknown) => persistDevice(d) }))
-let session: { userId: string; masterKey: Uint8Array; device: DeviceKeys | null } | null = null
+let session: { accountId: string; masterKey: Uint8Array; roots: { identityRoot: string }; device: DeviceKeys | null } | null = null
 vi.mock('./store', () => ({ getSession: () => session }))
 
 import {
@@ -88,7 +92,12 @@ beforeEach(() => {
   published.length = 0
   publishError = null
   head = { sequence: 4, devices: [{ deviceId: 1, session: 'cd'.repeat(32) }] }
-  session = { userId: '00000000-0000-4000-8000-000000000001', masterKey: new Uint8Array(32), device: null }
+  session = {
+    accountId: '00000000-0000-4000-8000-000000000001',
+    masterKey: new Uint8Array(32),
+    roots: { identityRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' },
+    device: null,
+  }
   // What persistDevice does to the session.
   persistDevice.mockImplementation(async (d: DeviceKeys | null) => {
     if (session) session.device = d
@@ -122,13 +131,26 @@ describe('currentDevice', () => {
 
   it('reuses the kept device the head lists, checked once per page', async () => {
     session!.device = kept()
-    head = { sequence: 9, devices: [{ deviceId: 5, frameKey: KEPT_KEY, session: SESSION_HASH }] }
+    head = { sequence: 9, devices: [{ deviceId: 5, frameKey: KEPT_KEY, session: SESSION_HASH, capabilities: OWN_CAPABILITIES }] }
     listAccountDevices.mockResolvedValue([row()])
     expect(await currentDevice()).toMatchObject({ deviceId: 5, manifestSequence: 9n })
     expect(await currentDevice()).toMatchObject({ deviceId: 5, manifestSequence: 9n })
     expect(listAccountDevices).toHaveBeenCalledTimes(1)
     expect(registerDevice).not.toHaveBeenCalled()
     expect(published).toHaveLength(0)
+  })
+
+  it('lists the kept device again when this build reads something its entry does not list', async () => {
+    session!.device = kept()
+    head = { sequence: 9, devices: [{ deviceId: 5, frameKey: KEPT_KEY, session: SESSION_HASH, capabilities: [] }] }
+    listAccountDevices.mockResolvedValue([row()])
+    expect(await currentDevice()).toMatchObject({ deviceId: 5, manifestSequence: 10n })
+    expect(registerDevice).not.toHaveBeenCalled()
+    expect(published).toEqual([
+      expect.objectContaining({
+        manifest: expect.objectContaining({ devices: [expect.objectContaining({ deviceId: 5, capabilities: OWN_CAPABILITIES })] }),
+      }),
+    ])
   })
 
   it('goes on with the kept device when the list cannot be read', async () => {

@@ -6,6 +6,7 @@ import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
 import { OpaqueWorkerClosed } from '@kutup/crypto/opaqueWorker'
 import { useSession } from '@kutup/session/store'
+import { takeServerResetNotice } from '@kutup/session/instance'
 import { sanitizeNext } from '@kutup/session/sessionSync'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -14,7 +15,19 @@ import { Input } from '@kutup/ui/components/input'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { AuthLayout } from './AuthLayout'
 import { authErrorMessage, bodyCode } from './errors'
-import { abandonTotp, completeTotp, signIn, type TotpChallenge } from './flows'
+import { formatInstant } from '@kutup/ui/lib/format'
+import {
+  abandonClosing,
+  abandonTotp,
+  completeTotp,
+  keepAccount,
+  signIn,
+  type ClosingOffer,
+  type SignInResult,
+  type TotpChallenge,
+} from './flows'
+import { documentsToConfirm, type LegalDocument } from './legal'
+import { LegalUpdates } from './LegalUpdates'
 import { setPendingSetup } from './pendingSetup'
 
 /**
@@ -23,17 +36,24 @@ import { setPendingSetup } from './pendingSetup'
  * identically; the form does not try to tell them apart.
  */
 export function LoginPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const next = sanitizeNext(params.get('next')) ?? '/'
   const session = useSession()
   const [challenge, setChallenge] = useState<TotpChallenge | null>(null)
+  // A closing account's offer to keep it (after every step; docs/plans/server-personal-data.md, A5).
+  const [closing, setClosing] = useState<ClosingOffer | null>(null)
+  // A required document with a new version, shown once after the sign-in.
+  const [updates, setUpdates] = useState<LegalDocument[] | null>(null)
   const [code, setCode] = useState('')
   // A recovery code in place of the authenticator's (Proton's "use a
   // recovery code"): the server takes either in the same field.
   const [recovery, setRecovery] = useState(false)
   const [pending, setPending] = useState(false)
+  // This server was reset since this browser last saw it, and its local
+  // data was removed (docs/plans/api-surface.md §5): said once.
+  const [serverReset] = useState(takeServerResetNotice)
   const [error, setError] = useState<string | null>(
     // Sent back from a first sign-in whose setup token ran out.
     () => (params.get('setup') === 'expired' ? t('auth.errors.setupExpired') : null),
@@ -44,6 +64,9 @@ export function LoginPage() {
   useEffect(() => () => {
     if (challenge) abandonTotp(challenge)
   }, [challenge])
+  useEffect(() => () => {
+    if (closing) abandonClosing(closing)
+  }, [closing])
 
   const schema = z.object({
     name: z.string().trim().min(1, t('auth.validation.usernameRequired')),
@@ -58,10 +81,13 @@ export function LoginPage() {
     defaultValues: { name: '', password: '' },
   })
 
+  if (updates) return <LegalUpdates documents={updates} onDone={() => void navigate(next, { replace: true })} />
   if (session && !pending) return <Navigate to={next} replace />
 
-  const signedIn = () => {
-    void navigate(next, { replace: true })
+  const signedIn = async () => {
+    const documents = await documentsToConfirm()
+    if (documents.length > 0) setUpdates(documents)
+    else void navigate(next, { replace: true })
   }
 
   const onCredentials = handleSubmit(async ({ name, password }) => {
@@ -74,8 +100,10 @@ export function LoginPage() {
         void navigate(`/first-login?next=${encodeURIComponent(next)}`, { replace: true })
       } else if (result.kind === 'totp') {
         setChallenge(result.challenge)
+      } else if (result.kind === 'closing') {
+        setClosing(result.offer)
       } else {
-        signedIn()
+        await signedIn()
       }
     } catch (err) {
       setError(authErrorMessage(err, t, 'auth.errors.signInFailed'))
@@ -90,8 +118,10 @@ export function LoginPage() {
     setError(null)
     setPending(true)
     try {
-      const result = await completeTotp(challenge, code.trim())
-      if (result.kind === 'signedIn') signedIn()
+      const result: SignInResult = await completeTotp(challenge, code.trim())
+      // The challenge stays until the offer is answered: they share the open sign-in.
+      if (result.kind === 'closing') setClosing(result.offer)
+      else if (result.kind === 'signedIn') await signedIn()
     } catch (err) {
       if (err instanceof OpaqueWorkerClosed || bodyCode(err) === 'preAuthInvalid') {
         // The sign-in itself ended (it failed after the code, its first step
@@ -105,6 +135,51 @@ export function LoginPage() {
     } finally {
       setPending(false)
     }
+  }
+
+  function startOver(message: string | null) {
+    if (closing) abandonClosing(closing)
+    if (challenge) abandonTotp(challenge)
+    setClosing(null)
+    setChallenge(null)
+    setCode('')
+    setRecovery(false)
+    setError(message)
+  }
+
+  async function onKeep() {
+    if (!closing) return
+    setError(null)
+    setPending(true)
+    try {
+      const result = await keepAccount(closing)
+      if (result.kind === 'signedIn') await signedIn()
+    } catch (err) {
+      // The offer ran out (it lasts minutes), or was used: sign in again.
+      if (err instanceof OpaqueWorkerClosed || bodyCode(err) === 'grantInvalid') startOver(t('auth.errors.signInAgain'))
+      else setError(authErrorMessage(err, t, 'login.closing.keepFailed'))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  if (closing) {
+    return (
+      <AuthLayout
+        title={t('login.closing.title')}
+        description={t('login.closing.description', { date: formatInstant(closing.closesAt, i18n.language) ?? '' })}
+      >
+        <div className="space-y-4">
+          {error ? <Alert variant="error">{error}</Alert> : null}
+          <Button type="button" className="w-full" loading={pending} onClick={() => void onKeep()}>
+            {t('login.closing.keep')}
+          </Button>
+          <Button type="button" variant="link" className="w-full" disabled={pending} onClick={() => startOver(null)}>
+            {t('login.useAnotherAccount')}
+          </Button>
+        </div>
+      </AuthLayout>
+    )
   }
 
   if (challenge) {
@@ -168,6 +243,7 @@ export function LoginPage() {
   return (
     <AuthLayout title={t('login.title')} description={t('login.description')}>
       <form className="space-y-4" onSubmit={(e) => void onCredentials(e)} noValidate>
+        {serverReset ? <Alert variant="info">{t('login.serverReset')}</Alert> : null}
         <Field label={t('auth.fields.username')} error={errors.name?.message} description={t('login.nameHint')} required>
           {(field) => (
             <Input {...field} {...register('name')} autoComplete="username" autoCapitalize="off" spellCheck={false} autoFocus />

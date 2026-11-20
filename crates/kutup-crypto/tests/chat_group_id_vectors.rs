@@ -1,7 +1,8 @@
 //! Checked-in vector for a group's id (docs/plans/pairwise-groups.md §3):
-//! HKDF over the master key, bound to the group's home (its server and the
-//! federation identity it was pinned at), so the same master key at another
-//! home is another group. Every client must derive the same id.
+//! HKDF over the master key, bound to the group's home (the federation
+//! identity it was pinned at, never the server's name: identity-rotation.md
+//! §6), so the same master key at another home is another group and a renamed
+//! home keeps its groups. Every client must derive the same id.
 //! Regenerate only for a deliberate format change:
 //! `KUTUP_WRITE_GROUP_ID_VECTORS=1 cargo test -p kutup-crypto --test chat_group_id_vectors -- --ignored`.
 
@@ -37,7 +38,9 @@ fn computed() -> Vectors {
     let homes = [
         ("home.example", 1, "0f".repeat(32)),
         ("home.example", 2, "0f".repeat(32)),
-        ("elsewhere.example", 1, "0f".repeat(32)),
+        ("elsewhere.example", 1, "1f".repeat(32)),
+        // The first home under another name: the same group.
+        ("renamed.example", 1, "0f".repeat(32)),
     ];
     let cases = homes
         .into_iter()
@@ -68,10 +71,11 @@ fn computed() -> Vectors {
 fn the_group_id_matches_its_vector() {
     let stored: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
     assert_eq!(computed(), stored);
-    // Three homes, three groups.
+    // Three homes, three groups; the renamed home is the first one.
     let ids: std::collections::BTreeSet<_> =
         stored.cases.iter().map(|case| &case.group_id).collect();
     assert_eq!(ids.len(), 3);
+    assert_eq!(stored.cases[3].group_id, stored.cases[0].group_id);
 }
 
 #[test]

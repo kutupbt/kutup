@@ -1,3 +1,4 @@
+import './zodConfig'
 import '@kutup/crypto/polyfills'
 import '@kutup/ui/styles/fonts'
 import '@kutup/ui/styles/tokens.css'
@@ -24,7 +25,7 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem storageKey="kutup-theme">
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem storageKey="kutup.ui.theme">
       <QueryClientProvider client={queryClient}>
         <WebAssemblyGate>
           <App />

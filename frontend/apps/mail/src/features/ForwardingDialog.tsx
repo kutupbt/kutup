@@ -155,10 +155,10 @@ export function ForwardingDialog({
           <div className="space-y-4" data-testid="forwarding-confirm">
             <p className="flex flex-wrap items-center gap-2 text-sm">
               {t('forwarding.summary', { from: from.address, to: to.trim() })}
-              <Badge variant={kind === 'end_to_end' ? 'ok' : 'warn'}>{t(`forwarding.kind.${kind}`)}</Badge>
+              <Badge variant={kind === 'endToEnd' ? 'ok' : 'warn'}>{t(`forwarding.kind.${kind}`)}</Badge>
             </p>
             <p className="rounded-md border border-border bg-muted/40 p-3 text-sm">{describeForwarding(conditions, t)}</p>
-            {kind === 'end_to_end' ? (
+            {kind === 'endToEnd' ? (
               // With post-quantum mail (POST_QUANTUM_MAIL), this is where the
               // address staying on classic encryption is said.
               <p className="text-sm">{t('forwarding.endToEndExplained', { to: to.trim() })}</p>

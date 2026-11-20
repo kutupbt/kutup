@@ -81,10 +81,11 @@ HKDF-SHA256 subkeys cover:
 
 Contexts bind the canonical account, account incarnation, backup incarnation,
 suite, and standard-Chat protection domain. Segment keys additionally bind the
-source device, device sequence, operation ID, and predecessor digest. Media
-keys bind the opaque media ID, source digest, padded length, and format.
+source device, device sequence, operation ID, and predecessor digest.
 
-V1 archives are canonical, bounded, and uncompressed. Unknown compression
+Media keys bind the opaque media ID, source length, padded length and
+format (backup media suite 2, the block format). V1 archives are canonical,
+bounded, and uncompressed. Unknown compression
 wrappers, suites, purposes, domains, declared lengths, trailing bytes, missing
 final tags, and noncanonical record sequences fail closed.
 
@@ -219,17 +220,39 @@ rule must admit everything a correct device can emit.
 ## Protected media
 
 Eligible media receives a backup-specific opaque ID and padded outer
-encryption. Normally the homeserver copies and outer-encrypts an existing
-account-owned Chat-media ciphertext without learning its inner key or
-plaintext. If the ordinary object is already gone but the encrypted source is
-still in the client's private cache, the client can upload the verified outer
-ciphertext directly.
+encryption in the block format (docs/plans/drive-block-format.md §2), backup
+media suite 2:
 
-Media is restored lazily when the user opens it. The client verifies the typed
-header, exact digest and length, final authentication tag, source length, and
-zero padding before making the inner Chat-media ciphertext available to the
-normal decrypt/cache path. Missing or corrupt media produces an unavailable
-item without invalidating verified text history.
+```text
+[107-byte header "KUTPBM2\0"][4 MiB blocks][sealed manifest][trailer]
+```
+
+The header names the protection domain, the account and backup
+incarnations, the media id, the source's length and its padded length; the
+blocks carry the Chat-media ciphertext and zeros up to the padded length.
+The manifest is unsigned: the backup's own sealed records commit to its
+SHA-256 (`backupMediaManifestSha256` beside `backupMediaId` in the
+attachment a display record carries). Suite 1 (a secretstream, `KUTPBM1`)
+is gone: its header no longer parses, and a `KUTPBM2` header naming another
+suite fails.
+
+Normally the homeserver copies an existing account-owned Chat-media
+ciphertext and seals it with the outer key the client sends for that copy
+(it never learns the inner key or the plaintext); its receipt names the
+manifest's digest, which the client writes into the record. A retry of the
+same copy gets the same digest, read from the stored object. If the ordinary
+object is already gone but the encrypted source is still in the client's
+private cache, the client seals the copy itself and uploads it; the server
+checks its header, length and structure and that its manifest is the one the
+request names.
+
+Media is restored lazily when the user opens it. The client reads the copy by
+Range: the header and the manifest first, opened against the digest the
+record commits to, then each block, its hash checked against the manifest
+before its AEAD and its padding checked to be zeros, before the inner
+Chat-media ciphertext goes to the normal verify/cache path. Missing or
+corrupt media, or a record without the manifest's digest, produces an
+unavailable item without invalidating verified text history.
 
 Ordinary delivery media and history media are separate references. The
 administrator's temporary-delivery retention defaults to 45 days and can be

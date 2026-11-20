@@ -46,13 +46,24 @@ pub const FLAG_EMAIL_NO_ENCRYPT: u32 = 4;
 pub const FLAG_EMAIL_NO_SIGN: u32 = 8;
 /// A new key's flags: usable for everything.
 pub const DEFAULT_FLAGS: u32 = FLAG_NOT_COMPROMISED | FLAG_NOT_OBSOLETE;
-const KNOWN_FLAGS: u32 =
-    FLAG_NOT_COMPROMISED | FLAG_NOT_OBSOLETE | FLAG_EMAIL_NO_ENCRYPT | FLAG_EMAIL_NO_SIGN;
+
+/// An OpenPGP v4 key in a key list: a 20-byte fingerprint.
+pub const KEY_VERSION_V4: u8 = 4;
+/// An OpenPGP v6 key: a 32-byte fingerprint (RFC 9580). Listed and kept;
+/// this reader encrypts to and verifies with v4 keys only.
+pub const KEY_VERSION_V6: u8 = 6;
+/// The longest fingerprint of a key version this reader doesn't know.
+const MAX_UNKNOWN_FINGERPRINT_LEN: usize = 64;
 
 /// A v4 fingerprint.
 pub const FINGERPRINT_LEN: usize = 20;
-/// Keys one address may list at once (current and older ones kept to decrypt).
+/// Keys one address lists by default (current and older ones kept to
+/// decrypt): what a writer keeps to. The server's working limit is its own;
+/// the parser only refuses more than [`MAX_LIST_KEYS`].
 pub const MAX_KEYS_PER_ADDRESS: usize = 16;
+/// The most entries one key list may hold at all: a bound on the parser,
+/// not a policy (docs/plans/format-evolution.md, mail key list row).
+pub const MAX_LIST_KEYS: usize = 256;
 const MAX_PUBLIC_KEY_LEN: usize = 16 * 1024;
 const MAX_SECRET_KEY_LEN: usize = 3 * 1024;
 const MAX_ISSUED_AT_LEN: usize = 64;
@@ -382,7 +393,7 @@ fn group_share_aad(
     member: &AccountRef,
     incarnation: &[u8; 32],
 ) -> Vec<u8> {
-    let account = member.bytes();
+    let account = member.id_bytes();
     let mut aad = Vec::with_capacity(domain.len() + 16 + bound.len() + account.len() + 32);
     aad.extend_from_slice(domain);
     aad.extend_from_slice(group_id);
@@ -403,14 +414,14 @@ pub(crate) fn seal_group_secret(
     group_id: &str,
     bound: &[u8],
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
+    member_xwing_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
     let incarnation =
         crate::named_share::parse_hex_32(member.incarnation_id, "member incarnation")?;
     let aad = group_share_aad(domain, &group_id, bound, member.account, &incarnation);
     let (encapsulated, ciphertext) =
-        crate::primitives::hpke_seal(Suite::V1, member_hpke_public_key, domain, &aad, secret)
+        crate::primitives::hpke_seal(Suite::V1, member_xwing_public_key, domain, &aad, secret)
             .map(|sealed| (sealed.encapsulated, sealed.ciphertext))
             .map_err(|error| CryptoError::Backend(format!("group share HPKE seal: {error}")))?;
     if encapsulated.len() != crate::hpke_xwing::ENCAPSULATED_KEY_LEN {
@@ -465,7 +476,7 @@ pub fn seal_group_key_share(
     group_secret_key: &[u8],
     group_id: &str,
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
+    member_xwing_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     let group_fingerprint = secret_key_fingerprint(group_secret_key)?;
     seal_group_secret(
@@ -474,7 +485,7 @@ pub fn seal_group_key_share(
         group_id,
         &group_fingerprint,
         member,
-        member_hpke_public_key,
+        member_xwing_public_key,
     )
 }
 
@@ -1445,13 +1456,55 @@ pub(crate) fn read_decrypted(
     })
 }
 
-/// One key in an address's signed key list.
+/// One key in an address's signed key list. Encoded as its key version,
+/// its fingerprint with a one-byte length, the SHA-256 imprint, primary and
+/// flags. A key version this reader doesn't know, and flags it doesn't know,
+/// are kept (*skip*): such a key is listed, never used.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MailKeyEntryV1 {
-    pub fingerprint: [u8; FINGERPRINT_LEN],
+    /// The OpenPGP key version ([`KEY_VERSION_V4`], [`KEY_VERSION_V6`], or
+    /// one a newer client lists).
+    pub key_version: u8,
+    /// As long as the key version's fingerprint (20 bytes for v4).
+    pub fingerprint: Vec<u8>,
     pub sha256_fingerprint: [u8; 32],
     pub primary: bool,
     pub flags: u32,
+}
+
+impl MailKeyEntryV1 {
+    /// A v4 key's entry.
+    pub fn v4(
+        fingerprint: [u8; FINGERPRINT_LEN],
+        sha256_fingerprint: [u8; 32],
+        primary: bool,
+        flags: u32,
+    ) -> Self {
+        Self {
+            key_version: KEY_VERSION_V4,
+            fingerprint: fingerprint.to_vec(),
+            sha256_fingerprint,
+            primary,
+            flags,
+        }
+    }
+
+    /// Whether this reader may encrypt to or verify with the key: a v4 key.
+    pub fn usable_version(&self) -> bool {
+        self.key_version == KEY_VERSION_V4
+    }
+
+    fn fingerprint_fits(&self) -> bool {
+        match self.key_version {
+            0 => false,
+            KEY_VERSION_V4 => self.fingerprint.len() == FINGERPRINT_LEN,
+            KEY_VERSION_V6 => self.fingerprint.len() == 32,
+            _ => {
+                !self.fingerprint.is_empty()
+                    && self.fingerprint.len() <= MAX_UNKNOWN_FINGERPRINT_LEN
+            }
+        }
+    }
 }
 
 /// An address's signed key list (Proton's `SignedKeyList`): the keys it may
@@ -1494,8 +1547,11 @@ impl MailKeyListV1 {
         {
             return invalid("issuedAt is invalid");
         }
-        if self.keys.is_empty() || self.keys.len() > MAX_KEYS_PER_ADDRESS {
+        if self.keys.is_empty() || self.keys.len() > MAX_LIST_KEYS {
             return invalid("key count is invalid");
+        }
+        if self.keys.iter().any(|key| !key.fingerprint_fits()) {
+            return invalid("a fingerprint does not fit its key version");
         }
         if !self
             .keys
@@ -1504,9 +1560,7 @@ impl MailKeyListV1 {
         {
             return invalid("keys are not strictly ordered by fingerprint");
         }
-        if self.keys.iter().any(|key| key.flags & !KNOWN_FLAGS != 0) {
-            return invalid("unknown key flag");
-        }
+        // Flags this reader doesn't know are kept as they are (*skip*).
         let mut primaries = self.keys.iter().filter(|key| key.primary);
         // A disabled address's list (Proton's): no key is encrypted to, and
         // its primary is still trusted for what it signed.
@@ -1544,6 +1598,8 @@ impl MailKeyListV1 {
         push_str(&mut out, &self.issued_at)?;
         out.extend_from_slice(&(self.keys.len() as u32).to_be_bytes());
         for key in &self.keys {
+            out.push(key.key_version);
+            out.push(key.fingerprint.len() as u8);
             out.extend_from_slice(&key.fingerprint);
             out.extend_from_slice(&key.sha256_fingerprint);
             out.push(u8::from(key.primary));
@@ -1570,14 +1626,14 @@ impl MailKeyListV1 {
         };
         let issued_at = take_str(&mut rest)?.to_owned();
         let count = u32::from_be_bytes(take(&mut rest, 4)?.try_into().expect("4 bytes")) as usize;
-        if count > MAX_KEYS_PER_ADDRESS {
+        if count > MAX_LIST_KEYS {
             return Err(refused());
         }
         let mut keys = Vec::with_capacity(count);
         for _ in 0..count {
-            let fingerprint = take(&mut rest, FINGERPRINT_LEN)?
-                .try_into()
-                .expect("20 bytes");
+            let key_version = take(&mut rest, 1)?[0];
+            let length = take(&mut rest, 1)?[0] as usize;
+            let fingerprint = take(&mut rest, length)?.to_vec();
             let sha256_fingerprint = take(&mut rest, 32)?.try_into().expect("32 bytes");
             let primary = match take(&mut rest, 1)?[0] {
                 0 => false,
@@ -1586,6 +1642,7 @@ impl MailKeyListV1 {
             };
             let flags = u32::from_be_bytes(take(&mut rest, 4)?.try_into().expect("4 bytes"));
             keys.push(MailKeyEntryV1 {
+                key_version,
                 fingerprint,
                 sha256_fingerprint,
                 primary,
@@ -1764,12 +1821,12 @@ pub fn first_address_key(
         sequence: 1,
         previous_hash: None,
         issued_at: issued_at.to_owned(),
-        keys: vec![MailKeyEntryV1 {
-            fingerprint: key.fingerprint,
-            sha256_fingerprint: key.sha256_fingerprint,
-            primary: true,
-            flags: DEFAULT_FLAGS,
-        }],
+        keys: vec![MailKeyEntryV1::v4(
+            key.fingerprint,
+            key.sha256_fingerprint,
+            true,
+            DEFAULT_FLAGS,
+        )],
     }
     .sign(identity.authority_signing_key())?;
     Ok(FirstAddressKey {
@@ -1906,6 +1963,50 @@ mod tests {
         .is_err());
     }
 
+    /// docs/plans/format-evolution.md, mail key list row: key versions and
+    /// flags this reader doesn't know are kept, and the parser has no
+    /// 16-key cap.
+    #[test]
+    fn key_lists_keep_what_a_newer_writer_listed() {
+        let identity = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([3u8; 32]),
+        )
+        .unwrap();
+        let mut keys: Vec<MailKeyEntryV1> = (1..=20u8).map(|b| entry(b, b == 1)).collect();
+        keys[1].flags |= 1 << 20;
+        keys.push(MailKeyEntryV1 {
+            key_version: KEY_VERSION_V6,
+            fingerprint: vec![0xf0; 32],
+            sha256_fingerprint: [0xf0; 32],
+            primary: false,
+            flags: DEFAULT_FLAGS,
+        });
+        keys.push(MailKeyEntryV1 {
+            key_version: 9,
+            fingerprint: vec![0xf1; 48],
+            sha256_fingerprint: [0xf1; 32],
+            primary: false,
+            flags: DEFAULT_FLAGS,
+        });
+        let signed = list(&identity, 1, None, keys)
+            .sign(identity.authority_signing_key())
+            .unwrap();
+        let verified = SignedMailKeyListV1::verify(
+            &signed.data,
+            &signed.signature,
+            &identity.authority_public_key(),
+        )
+        .unwrap();
+        assert_eq!(verified.list, signed.list);
+        assert_eq!(verified.list.keys.len(), 22);
+        assert!(!verified.list.keys[21].usable_version());
+        assert_eq!(verified.list.keys[1].flags & (1 << 20), 1 << 20);
+        // A v4 key with a 32-byte fingerprint does not fit.
+        let mut bad = list(&identity, 1, None, vec![entry(1, true)]);
+        bad.keys[0].fingerprint = vec![1; 32];
+        assert!(bad.to_bytes().is_err());
+    }
+
     fn list(
         identity: &AccountIdentityKeysV1,
         sequence: u64,
@@ -1930,18 +2031,19 @@ mod tests {
     }
 
     fn entry(byte: u8, primary: bool) -> MailKeyEntryV1 {
-        MailKeyEntryV1 {
-            fingerprint: [byte; 20],
-            sha256_fingerprint: [byte; 32],
-            primary,
-            flags: DEFAULT_FLAGS,
-        }
+        MailKeyEntryV1::v4([byte; 20], [byte; 32], primary, DEFAULT_FLAGS)
     }
 
     #[test]
     fn key_lists_sign_verify_and_chain() {
-        let identity = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
-        let other = AccountIdentityKeysV1::derive(&[4u8; 32]).unwrap();
+        let identity = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([3u8; 32]),
+        )
+        .unwrap();
+        let other = AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes(
+            [4u8; 32],
+        ))
+        .unwrap();
         let authority = identity.authority_public_key();
         let first = list(&identity, 1, None, vec![entry(1, true)])
             .sign(identity.authority_signing_key())
@@ -1983,7 +2085,10 @@ mod tests {
 
     #[test]
     fn key_lists_refuse_invalid_shapes() {
-        let identity = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
+        let identity = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([3u8; 32]),
+        )
+        .unwrap();
         let bad = [
             list(&identity, 1, None, vec![]),
             list(&identity, 1, None, vec![entry(1, false)]),

@@ -23,7 +23,7 @@ use kutup_crypto::named_share::NamedShareEnvelopeV1;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Member {
-    user_id: String,
+    account_id: String,
     account: String,
     account_incarnation_id: String,
     drive_public_key: String,
@@ -64,7 +64,7 @@ struct Access {
 fn load_access(ctx: &Ctx, collection_id: &str) -> Result<Access> {
     let resp = ctx
         .client
-        .get(&format!("/collections/{collection_id}/access"))?;
+        .get(&format!("/drive/collections/{collection_id}/access"))?;
     crate::api::decode_json(resp).context("load folder access (owner only)")
 }
 
@@ -109,12 +109,8 @@ pub fn list(profile: &str, json: bool, collection_id: &str) -> Result<()> {
 /// public link's id.
 pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bool) -> Result<()> {
     let ctx = require_session(profile)?;
-    let master_key = ctx.session.master_key_bytes()?;
-    let master: &[u8; 32] = master_key
-        .as_slice()
-        .try_into()
-        .context("master key must be 32 bytes")?;
-    let identity = AccountIdentityKeysV1::derive(master)?;
+    let roots = ctx.session.roots()?;
+    let identity = AccountIdentityKeysV1::derive(&roots.identity)?;
     let cols = ctx.client.list_collections()?;
     let col: &Collection = cols
         .iter()
@@ -123,7 +119,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     if col.is_shared {
         bail!("only the owner can remove access to a folder");
     }
-    let key = crate::cryptohelpers::decrypt_collection_key(col, &master_key, &ctx.session)?;
+    let key = crate::cryptohelpers::decrypt_collection_key(col, &roots, &ctx.session)?;
     let name = crate::collection_crypto::open_name(col, &key)?;
     let access = load_access(&ctx, collection_id)?;
     if access.key_epoch != col.key_epoch || access.epoch_statement_hash != col.epoch_statement_hash
@@ -135,8 +131,8 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     let removed_member: Vec<String> = access
         .members
         .iter()
-        .filter(|m| m.account.to_lowercase() == who_lower || m.user_id == who)
-        .map(|m| m.user_id.clone())
+        .filter(|m| m.account.to_lowercase() == who_lower || m.account_id == who)
+        .map(|m| m.account_id.clone())
         .collect();
     let removed_federated: Vec<String> = access
         .federated_shares
@@ -165,7 +161,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     let next = col.key_epoch + 1;
     let mut new_key = [0u8; 32];
     kutup_crypto::primitives::random(&mut new_key);
-    let owner = &col.owner_user_id;
+    let owner = &col.owner_account_id;
     let context =
         |purpose, revision| DriveEnvelopeContextV1::new(purpose, next, revision, &col.id, owner);
     let statement = CollectionEpochStatementV1::create(
@@ -176,10 +172,10 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         &new_key,
         identity.authority_signing_key(),
     )?;
-    let owner_key_envelope = drive_envelope::seal_b64(
+    let owner_key_envelope = drive_envelope::seal_under_drive_root(
         &new_key,
-        master,
-        context(DriveEnvelopePurpose::CollectionKey, 1)?,
+        &roots.drive,
+        DriveEnvelopeContextV1::owner_collection_key(&col.id, owner, next, roots.drive_generation)?,
     )?;
     let previous_key_envelope =
         collection_keyring::seal_previous_key(&key, &new_key, &col.id, owner, next)?;
@@ -208,13 +204,13 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     let members = access
         .members
         .iter()
-        .filter(|m| !removed_member.contains(&m.user_id))
+        .filter(|m| !removed_member.contains(&m.account_id))
         .map(|m| {
             Ok(serde_json::json!({
-                "userId": m.user_id,
+                "accountId": m.account_id,
                 "namedShareEnvelope": seal(
                     &m.drive_public_key,
-                    &AccountRef::new(&sender.server, &m.user_id).context("member")?,
+                    &AccountRef::new(&sender.server, &m.account_id).context("member")?,
                     &m.account_incarnation_id,
                 )?,
             }))
@@ -225,16 +221,10 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         .iter()
         .filter(|l| !removed_links.contains(&l.id))
         .map(|l| {
-            let link_key = drive_envelope::open_b64(
+            let link_key = drive_envelope::open_under_drive_root(
                 &l.owner_link_key_envelope,
-                master,
-                DriveEnvelopeContextV1::new(
-                    DriveEnvelopePurpose::PublicLinkKey,
-                    1,
-                    1,
-                    &l.id,
-                    owner,
-                )?,
+                &roots.drive,
+                DriveEnvelopeContextV1::owner_link_key(&l.id, owner, roots.drive_generation)?,
             )?;
             Ok(serde_json::json!({
                 "id": l.id,
@@ -265,13 +255,13 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
             remote.require_sealable()?;
             Ok(serde_json::json!({
                 "id": f.id,
-                "namedShareEnvelope": seal(&remote.drive_hpke_public_key, &person, &remote.account_incarnation_id)?,
+                "namedShareEnvelope": seal(&remote.drive_xwing_public_key, &person, &remote.account_incarnation_id)?,
             }))
         })
         .collect::<Result<Vec<_>>>()?;
 
     let resp = ctx.client.post_json(
-        &format!("/collections/{}/rotate", col.id),
+        &format!("/drive/collections/{}/rotate", col.id),
         &serde_json::json!({
             "fromEpoch": col.key_epoch,
             "epochStatement": statement.encode_b64(),

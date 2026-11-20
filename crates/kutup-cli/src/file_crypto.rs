@@ -14,25 +14,23 @@ use kutup_crypto::file_keyring;
 /// The generation of a newly uploaded file's key.
 pub const FIRST_GENERATION: u32 = 1;
 
+/// A new file's id and key, before its content and metadata: the metadata
+/// is sealed when its first revision commits (it commits to the content).
 pub struct CreatedFileRecord {
     pub id: String,
     pub file_key: [u8; 32],
-    pub metadata_envelope: String,
     pub file_key_envelope: String,
     pub key_epoch: u32,
     pub key_generation: u32,
-    pub metadata_revision: u64,
 }
 
 /// A new file record in `collection_id`: a random file key wrapped under the
-/// folder key at `key_epoch`, and the metadata sealed under the file key.
+/// folder key at `key_epoch`.
 pub fn create(
     collection_id: &str,
     key_epoch: u32,
     collection_key: &[u8],
-    metadata: &FileMetadata,
 ) -> Result<CreatedFileRecord> {
-    validate_metadata(metadata)?;
     let id = Uuid::new_v4().to_string();
     let mut file_key = [0u8; 32];
     kutup_crypto::primitives::random(&mut file_key);
@@ -44,15 +42,12 @@ pub fn create(
         FIRST_GENERATION,
         collection_key,
     )?;
-    let metadata_envelope = seal_metadata(metadata, &file_key, &id, FIRST_GENERATION, 1)?;
     Ok(CreatedFileRecord {
         id,
         file_key,
-        metadata_envelope,
         file_key_envelope,
         key_epoch,
         key_generation: FIRST_GENERATION,
-        metadata_revision: 1,
     })
 }
 
@@ -75,8 +70,13 @@ pub fn open_metadata(file: &File, file_key: &[u8]) -> Result<FileMetadata> {
         )
         .context("invalid file envelope context")?,
     )?;
-    let metadata = kutup_crypto::file_metadata::decode(&metadata)
-        .map_err(|_| anyhow!("invalid file metadata"))?;
+    let metadata = kutup_crypto::file_metadata::decode(&metadata).map_err(|error| {
+        if error.is_newer() {
+            anyhow!("this file's details were written by a newer Kutup: update kutup to open it")
+        } else {
+            anyhow!("invalid file metadata")
+        }
+    })?;
     Ok(metadata)
 }
 
@@ -157,7 +157,9 @@ fn seal_file_key(
     )?)
 }
 
-fn seal_metadata(
+/// `metadata` sealed for `file_id` under its key of `generation`, as
+/// metadata revision `revision`.
+pub fn seal_metadata(
     metadata: &FileMetadata,
     file_key: &[u8],
     file_id: &str,
@@ -195,7 +197,7 @@ pub fn key_at(file: &File, file_key: &[u8; 32], wanted: u32) -> Result<[u8; 32]>
         .map_err(|_| anyhow!("file key has wrong length"))
 }
 
-/// The file key and generation what `/files/{id}/download` serves was
+/// The file key and generation what `/drive/files/{id}/download` serves was
 /// sealed at.
 pub fn content_key(file: &File, file_key: &[u8; 32]) -> Result<([u8; 32], u32)> {
     let generation = file.content_key_generation;
@@ -283,36 +285,49 @@ mod tests {
     use super::*;
     use crate::keyring::tests_support::keyring;
     use crate::keyring::Keyring;
-    use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
+    use kutup_crypto::drive_blocks::{self, DriveBlobContextV2};
 
     const FOLDER: &str = "11111111-1111-4111-8111-111111111111";
     const OTHER_FOLDER: &str = "22222222-2222-4222-8222-222222222222";
+
+    const REVISION: &str = "33333333-3333-4333-8333-333333333333";
 
     fn metadata() -> FileMetadata {
         FileMetadata {
             name: "notes.md".into(),
             mime_type: "text/markdown".into(),
             size: 42,
+            content: kutup_crypto::file_metadata::ContentCommitmentV1::new(
+                *Uuid::parse_str(REVISION).unwrap().as_bytes(),
+                [1; 32],
+            ),
+            original_revision_id: Some(REVISION.into()),
+            state_revision_id: None,
             sha256: None,
             media: None,
+            v: kutup_crypto::file_metadata::FILE_METADATA_VERSION,
+            min: None,
+            extra: Default::default(),
         }
     }
 
     /// A new file in FOLDER at epoch 1, as the server lists it.
     fn uploaded(folder_key: &[u8; 32]) -> (File, [u8; 32]) {
-        let created = create(FOLDER, 1, folder_key, &metadata()).unwrap();
+        let created = create(FOLDER, 1, folder_key).unwrap();
         assert_eq!(created.key_generation, FIRST_GENERATION);
+        let metadata_envelope =
+            seal_metadata(&metadata(), &created.file_key, &created.id, 1, 1).unwrap();
         (
             File {
                 content_hash: None,
                 name_hash: None,
                 id: created.id,
                 collection_id: FOLDER.into(),
-                metadata_envelope: created.metadata_envelope,
+                metadata_envelope,
                 file_key_envelope: created.file_key_envelope,
                 key_epoch: created.key_epoch,
                 key_generation: created.key_generation,
-                metadata_revision: created.metadata_revision,
+                metadata_revision: 1,
                 encrypted_size_bytes: 0,
                 created_at: String::new(),
                 content_key_generation: 1,
@@ -415,15 +430,55 @@ mod tests {
         assert_eq!(reopened.media, photo.media);
     }
 
+    /// docs/plans/format-evolution.md, rule 3: a field a newer client wrote
+    /// survives `kutup mv` from this one.
+    #[test]
+    fn rename_keeps_fields_a_newer_client_added() {
+        let folder_key = [7u8; 32];
+        let (file, file_key) = uploaded(&folder_key);
+        let mut newer = metadata();
+        newer
+            .extra
+            .insert("futureField".into(), serde_json::json!({"kept": [1, 2]}));
+        let request = rename_request(&file, &file_key, &newer).unwrap();
+        let file = File {
+            metadata_envelope: request.metadata_envelope,
+            metadata_revision: 2,
+            ..file
+        };
+        let mut opened = open_metadata(&file, &file_key).unwrap();
+        opened.name = "renamed.md".into();
+        let request = rename_request(&file, &file_key, &opened).unwrap();
+        let file = File {
+            metadata_envelope: request.metadata_envelope,
+            metadata_revision: 3,
+            ..file
+        };
+        let reopened = open_metadata(&file, &file_key).unwrap();
+        assert_eq!(reopened.name, "renamed.md");
+        assert_eq!(reopened.extra, newer.extra);
+    }
+
     #[test]
     fn rekey_adds_a_generation_reachable_from_the_new_key() {
         let old_folder_key = [7u8; 32];
         let (file, first_key) = uploaded(&old_folder_key);
         // Content sealed under generation 1.
-        let blob = drive_object::encrypt_file_blob(
+        let signing = kutup_crypto::primitives::SigningKey::from_seed(
+            kutup_crypto::primitives::Suite::V1,
+            &[2; 32],
+        );
+        let signer = kutup_crypto::blocks::SignerIdentity {
+            account_id: [3; 16],
+            incarnation_id: [4; 32],
+        };
+        let sealed = crate::transfer::seal_revision(
             b"hello",
             &first_key,
-            DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
+            &file.id,
+            REVISION,
+            1,
+            (&signing, signer),
         )
         .unwrap();
 
@@ -457,13 +512,15 @@ mod tests {
         // The upload still opens: served content is at generation 1.
         let (content, generation) = content_key(&file, &third_key).unwrap();
         assert_eq!(generation, 1);
-        let plain = drive_object::decrypt_file_blob(
-            &blob,
+        let (plain, _) = drive_blocks::open_file(
+            &sealed.bytes,
             &content,
-            DriveFileBlobContextV1::new(&file.id, generation).unwrap(),
+            DriveBlobContextV2::new(&file.id, REVISION, generation).unwrap(),
+            &sealed.content,
+            5,
         )
         .unwrap();
-        assert_eq!(plain, b"hello");
+        assert_eq!(*plain, b"hello");
 
         // A history with a gap is refused, not skipped over.
         let broken = File {

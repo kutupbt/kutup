@@ -2,7 +2,7 @@
 // the account's Photos library record (an account record of this account,
 // docs/plans/w1-account-record.md) and comes back after a reload, and the next
 // mark is that record's successor.
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 const PASSWORD = 'correct horse battery staple 121'
@@ -28,7 +28,7 @@ test('a favourite is kept in the library record and survives a reload', async ({
   const heart = (name: string) => tile(name).locator('xpath=..').getByLabel('Favourite', { exact: true })
   const favourite = async (name: string) => {
     await page.getByRole('checkbox', { name: `Select ${name}` }).click()
-    const stored = page.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/photos/library')
+    const stored = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/account/records')
     await page.getByRole('button', { name: 'Favourite', exact: true }).click()
     expect((await stored).status()).toBe(200)
     await expect(page.getByText('Added to favourites')).toBeVisible()

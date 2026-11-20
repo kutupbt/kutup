@@ -18,6 +18,7 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { isAxiosError } from 'axios'
 import { AccessChanged, RecipientChanged } from '@kutup/drive-core/access'
 import { CannotShareWithSelf, OnlyOwnersShareAcross, fileLinkUrl, useCreateFileLink, useFileAccess, useRemoveFileAccess, useSetEditorsCanShare, useSetFileRole, useShareFile, type FileAccessMember, type ShareRole } from '@kutup/drive-core/fileShares'
+import { isTargetBlocked, sharingOffScope, usePublicSharing } from '@kutup/drive-core/publicSharing'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
@@ -179,10 +180,11 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const setRole = useSetFileRole()
   const people = usePeople()
   // Someone, or a link, about to be removed (either moves the file to a new key).
-  const [pending, setPending] = useState<{ userId?: string; linkId?: string; federatedId?: string; name: string } | null>(null)
+  const [pending, setPending] = useState<{ accountId?: string; linkId?: string; federatedId?: string; name: string } | null>(null)
   // A removal that would also take people not yet upgraded: asked again.
   const [upgrade, setUpgrade] = useState<{ removal: Removal; error: MembersPendingUpgrade } | null>(null)
   const createLink = useCreateFileLink()
+  const sharingOff = usePublicSharing().data ?? null
   const identity = useDriveIdentity()
   const [newLink, setNewLink] = useState<string | null>(null)
 
@@ -221,7 +223,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   function confirm() {
     if (!pending) return
     removeNow({
-      removed: pending.userId ? [pending.userId] : [],
+      removed: pending.accountId ? [pending.accountId] : [],
       removedLinks: pending.linkId ? [pending.linkId] : [],
       removedFederated: pending.federatedId ? [pending.federatedId] : [],
     })
@@ -263,20 +265,20 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
             const behind = m.keyGeneration < access.data.keyGeneration ? t('fileShare.updating') : null
             return (
               <Row
-                key={m.userId}
+                key={m.accountId}
                 icon={person.profile ? <PersonAvatar {...person} /> : <User className="size-4" aria-hidden />}
                 name={person.name}
                 detail={[person.profile ? m.account : null, owner ? null : permission, behind].filter(Boolean).join(' · ')}
                 control={
                   <>
-                    <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                    <VerifyPersonButton account={m.account} claimed={{ driveXwingPublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                     {owner ? (
                       <RoleMenu
                         name={person.name}
                         canEdit={m.canEdit}
                         busy={busy}
                         onRole={(canEdit) => changeRole(m, person.name, canEdit)}
-                        onRemove={() => setPending({ userId: m.userId, name: person.name })}
+                        onRemove={() => setPending({ accountId: m.accountId, name: person.name })}
                       />
                     ) : null}
                   </>
@@ -340,6 +342,7 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                       {[
                         t('fileShare.linkCreated', { date: new Date(link.createdAt).toLocaleDateString() }),
                         link.keyGeneration < access.data.keyGeneration ? t('fileShare.updating') : null,
+                        link.blockedReason ? t(`publicSharing.blocked.${link.blockedReason}`) : null,
                       ]
                         .filter(Boolean)
                         .join(' · ')}
@@ -373,6 +376,8 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
                 {t('fileShare.copy')}
               </Button>
             </div>
+          ) : sharingOff ? (
+            <p className="text-sm text-muted-foreground">{t(`publicSharing.off.${sharingOff}`)}</p>
           ) : (
             <Button
               type="button"
@@ -388,7 +393,15 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
               <Link2 /> {t('fileShare.createLink')}
             </Button>
           )}
-          {createLink.error ? <Alert variant="error">{t('fileShare.linkFailed')}</Alert> : null}
+          {createLink.error ? (
+            <Alert variant="error">
+              {sharingOffScope(createLink.error)
+                ? t(`publicSharing.off.${sharingOffScope(createLink.error)}`)
+                : isTargetBlocked(createLink.error)
+                  ? t('publicSharing.targetBlocked')
+                  : t('fileShare.linkFailed')}
+            </Alert>
+          ) : null}
         </div>
       ) : null}
       {upgrade ? (

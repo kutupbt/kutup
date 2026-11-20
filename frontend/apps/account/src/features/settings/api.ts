@@ -2,8 +2,8 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import api from '@kutup/session/client'
 import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import { broadcastColor } from '@kutup/session/sessionSync'
+import type { AccountRole, TwoFactorState } from '@kutup/session/api-types'
 import { getSession, updateSession } from '@kutup/session/store'
-import { toBase64 } from '@kutup/crypto/base64'
 import { removeDevicesFromManifest } from '@kutup/crypto/accountManifest'
 import { listAccountDevices, ownAccount, publishNextManifest, type AccountDevice } from '@kutup/session/devices'
 
@@ -14,20 +14,22 @@ export const meKey = ['me'] as const
 export interface Me {
   id: string
   username: string
-  totpEnabled: boolean
+  twoFactor: TwoFactorState
   storageQuotaBytes: number
   storageUsedBytes: number
-  isAdmin: boolean
+  role: AccountRole
   color: string
   /** How long file versions are kept, in days (docs/plans/drive-versions-v2.md). */
   versionRetentionDays: number
+  /** Whether Chat and Drive talk to other servers (docs/plans/server-personal-data.md, A4). */
+  federation: 'on' | 'off'
 }
 
 
 export function useMe() {
   return useQuery({
     queryKey: meKey,
-    queryFn: async () => (await api.get<Me>('/user/me')).data,
+    queryFn: async () => (await api.get<Me>('/account')).data,
   })
 }
 
@@ -36,7 +38,7 @@ export function useUpdateColor() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (color: string) => {
-      await api.patch('/user/me', { color })
+      await api.patch('/account', { color })
       return color || null
     },
     onSuccess: async (color) => {
@@ -57,7 +59,7 @@ export interface TotpEnrolment {
 
 export function useStartTotp() {
   return useMutation({
-    mutationFn: async () => (await api.post<TotpEnrolment>('/user/2fa/setup')).data,
+    mutationFn: async () => (await api.post<TotpEnrolment>('/account/2fa/setup')).data,
   })
 }
 
@@ -73,11 +75,11 @@ export function useVerifyTotp() {
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/verify', { code, grant })
+      const { data } = await api.post<{ recoveryCodes: string[] }>('/account/2fa/verify', { code, grant })
       return data.recoveryCodes
     },
     onSuccess: async () => {
-      updateSession({ totpEnabled: true })
+      updateSession({ twoFactor: 'on' })
       await queryClient.invalidateQueries({ queryKey: meKey })
       await queryClient.invalidateQueries({ queryKey: recoveryCodesKey })
     },
@@ -90,7 +92,7 @@ export const recoveryCodesKey = ['recoveryCodes'] as const
 export function useRecoveryCodesLeft(enabled: boolean) {
   return useQuery({
     queryKey: recoveryCodesKey,
-    queryFn: async () => (await api.get<{ remaining: number }>('/user/2fa/recovery-codes')).data.remaining,
+    queryFn: async () => (await api.get<{ remaining: number }>('/account/2fa/recovery-codes')).data.remaining,
     enabled,
   })
 }
@@ -105,7 +107,7 @@ export function useRenewRecoveryCodes() {
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/recovery-codes', { code, grant })
+      const { data } = await api.post<{ recoveryCodes: string[] }>('/account/2fa/recovery-codes', { code, grant })
       return data.recoveryCodes
     },
     onSuccess: async () => {
@@ -119,10 +121,10 @@ export function useDisableTotp() {
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      await api.delete('/user/2fa', { data: { code, grant } })
+      await api.delete('/account/2fa', { data: { code, grant } })
     },
     onSuccess: async () => {
-      updateSession({ totpEnabled: false })
+      updateSession({ twoFactor: 'off' })
       await queryClient.invalidateQueries({ queryKey: meKey })
       await queryClient.invalidateQueries({ queryKey: recoveryCodesKey })
     },
@@ -137,7 +139,10 @@ export interface SessionView {
   id: string
   clientType: string
   parentId: string | null
-  userAgent: string | null
+  /** The browser, parsed at sign-in: family, major version, system. */
+  browser?: string
+  browserMajor?: number
+  os?: string
   createdAt: string
   lastUsedAt: string
   current: boolean
@@ -205,12 +210,12 @@ export function useRevokeDevice() {
     mutationFn: async (device: EditorDevice) => {
       const session = getSession()
       if (!session) throw new Error('not signed in')
-      const masterKey = toBase64(session.masterKey)
+      const identityRoot = session.roots.identityRoot
       await publishNextManifest(await ownAccount(session), null, async (head) =>
         // Listed: the next manifest leaves it out. Not listed (yet, or any
         // more): nothing to sign; the next publication drops its row.
         head?.devices.some((listed) => listed.deviceId === device.deviceId)
-          ? removeDevicesFromManifest(head, [device.deviceId], new Date().toISOString(), masterKey)
+          ? removeDevicesFromManifest(head, [device.deviceId], new Date().toISOString(), identityRoot)
           : null,
       )
     },
@@ -244,20 +249,26 @@ export interface SecurityEvent {
   thisSession: boolean
   /** The kind of session that made it (`web-account`, `cli`, …), as the session list has it; null for a recovery or an administrator's reset. */
   client: string | null
-  /** That session's User-Agent; null as `client` is. */
-  userAgent: string | null
+  /** That session's browser: family, major version, system; absent as `client` is, or when unknown. */
+  browser?: string
+  browserMajor?: number
+  os?: string
   /** Done by an administrator. */
   byAdmin: boolean
   /** For a name event: the name it was about (the old one, for a rename). */
   oldName?: string
   /** For a rename: the new name. */
   newName?: string
+  /** How many times it happened: repeats within ten minutes (a failed sign-in, an administrator's view) are one event. */
+  count: number
 }
 
 interface SecurityEventsPage {
   events: SecurityEvent[]
   /** Older events; null when there are none. */
   next: string | null
+  /** How many days events are kept (the newest 500 at most). */
+  retentionDays: number
 }
 
 export const securityEventsKey = ['security-events'] as const
@@ -269,7 +280,7 @@ export function useSecurityEvents() {
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) =>
       (
-        await api.get<SecurityEventsPage>('/user/security-events', {
+        await api.get<SecurityEventsPage>('/account/security-events', {
           params: { limit: 50, ...(pageParam ? { cursor: pageParam } : {}) },
         })
       ).data,

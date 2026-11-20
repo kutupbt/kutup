@@ -25,14 +25,15 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
 
+use crate::audit_log::AdminAction;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::middleware::{AdminUser, AuthUser};
+use crate::middleware::{AdminAccount, AuthAccount};
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
-const SETTING_KEY: &str = "maps";
-const PROXY_PREFIX: &str = "/api/maps/proxy";
+const SETTING_KEY: &str = "server.maps";
+const PROXY_PREFIX: &str = "/api/v1/maps/proxy";
 const MAX_UPSTREAM_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PATH_CHARS: usize = 512;
 const MAX_CACHE_MEGABYTES: u32 = 102_400;
@@ -106,7 +107,7 @@ pub struct CustomProvider {
     pub attribution: String,
 }
 
-/// The administrator's map settings (`site_settings.maps`).
+/// The administrator's map settings (`site_settings` key `server.maps`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MapSettings {
@@ -133,6 +134,34 @@ impl Default for MapSettings {
 }
 
 impl MapSettings {
+    /// Whether browsers may load `id` from the provider itself: its origin
+    /// is in `direct_origins` (`KUTUP_MAP_DIRECT_ORIGINS`), the list the
+    /// apps' Content-Security-Policy allows.
+    fn direct(&self, id: ProviderId, direct_origins: &[String]) -> bool {
+        Upstream::resolve(id, self)
+            .is_some_and(|upstream| direct_origins.contains(&upstream.origin))
+    }
+
+    /// [`Self::validate`], and the relay off only when browsers may load
+    /// every offered provider directly.
+    pub fn validate_with(&self, direct_origins: &[String]) -> Result<(), String> {
+        self.validate()?;
+        if self.enabled
+            && self.proxy == ProxyMode::Off
+            && !self
+                .providers
+                .iter()
+                .all(|id| self.direct(*id, direct_origins))
+        {
+            return Err(
+                "the relay can be off only when every offered provider's origin is in \
+                        KUTUP_MAP_DIRECT_ORIGINS"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         let mut seen = Vec::new();
         for provider in &self.providers {
@@ -242,6 +271,8 @@ impl Upstream {
 
 pub struct MapService {
     client: reqwest::Client,
+    /// `KUTUP_MAP_DIRECT_ORIGINS`: the providers browsers may load directly.
+    direct_origins: Vec<String>,
     cache_dir: PathBuf,
     settings: RwLock<(MapSettings, Instant)>,
     cache: Mutex<CacheIndex>,
@@ -263,7 +294,12 @@ struct CacheMeta {
 }
 
 impl MapService {
-    pub async fn start(pool: &PgPool, cache_dir: &str, server_url: &str) -> anyhow::Result<Self> {
+    pub async fn start(
+        pool: &PgPool,
+        cache_dir: &str,
+        server_url: &str,
+        direct_origins: Vec<String>,
+    ) -> anyhow::Result<Self> {
         let cache_dir = if cache_dir.is_empty() {
             std::env::temp_dir().join("kutup-maps-cache")
         } else {
@@ -289,6 +325,7 @@ impl MapService {
         );
         Ok(Self {
             client,
+            direct_origins,
             cache_dir,
             settings: RwLock::new((settings, Instant::now())),
             cache: Mutex::new(index),
@@ -443,6 +480,9 @@ pub struct MapProviderView {
     pub url: String,
     /// The same through this server's relay; absent when the relay is off.
     pub proxy_url: Option<String>,
+    /// Whether browsers may load it from the provider itself (its origin is
+    /// in `KUTUP_MAP_DIRECT_ORIGINS`); otherwise only through the relay.
+    pub direct: bool,
     pub attribution: String,
 }
 
@@ -471,7 +511,7 @@ pub struct MapConfigResponse {
 async fn preferences_of(pool: &PgPool, user_id: uuid::Uuid) -> AppResult<MapPreferences> {
     let row: Option<(bool, Option<String>, bool, Option<uuid::Uuid>)> = sqlx::query_as(
         "SELECT enabled, provider, via_proxy, save_folder_id
-         FROM user_map_preferences WHERE user_id = $1",
+         FROM account_map_preferences WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -492,19 +532,33 @@ async fn preferences_of(pool: &PgPool, user_id: uuid::Uuid) -> AppResult<MapPref
     })
 }
 
-fn config_response(settings: &MapSettings, preferences: MapPreferences) -> MapConfigResponse {
+/// What browsers are offered: each provider through the relay unless it is
+/// off, and directly only when its origin is in `direct_origins`. A provider
+/// that can be reached neither way (the relay off, its origin not listed) is
+/// left out.
+fn config_response(
+    settings: &MapSettings,
+    preferences: MapPreferences,
+    direct_origins: &[String],
+) -> MapConfigResponse {
     let providers = if settings.enabled {
         settings
             .providers
             .iter()
             .filter_map(|id| Upstream::resolve(*id, settings))
-            .map(|upstream| MapProviderView {
-                proxy_url: (settings.proxy != ProxyMode::Off).then(|| upstream.proxied_entry()),
-                id: upstream.id,
-                name: upstream.name,
-                kind: upstream.kind,
-                url: upstream.entry,
-                attribution: upstream.attribution,
+            .filter_map(|upstream| {
+                let direct = direct_origins.contains(&upstream.origin);
+                let proxy_url =
+                    (settings.proxy != ProxyMode::Off).then(|| upstream.proxied_entry());
+                (direct || proxy_url.is_some()).then_some(MapProviderView {
+                    proxy_url,
+                    direct,
+                    id: upstream.id,
+                    name: upstream.name,
+                    kind: upstream.kind,
+                    url: upstream.entry,
+                    attribution: upstream.attribution,
+                })
             })
             .collect()
     } else {
@@ -518,28 +572,32 @@ fn config_response(settings: &MapSettings, preferences: MapPreferences) -> MapCo
     }
 }
 
-/// `GET /api/maps` — the providers on offer and your own choices.
+/// `GET /api/v1/maps` — the providers on offer and your own choices.
 #[utoipa::path(
     get,
-    path = "/api/maps",
+    path = "/api/v1/maps",
     tag = "maps",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Map providers and your choices", body = MapConfigResponse))
 )]
 pub async fn get_config(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<MapConfigResponse>> {
     let settings = state.maps.settings(&state.pool).await?;
-    let preferences = preferences_of(&state.pool, trusted_uuid(&user.user_id)?).await?;
-    Ok(Json(config_response(&settings, preferences)))
+    let preferences = preferences_of(&state.pool, trusted_uuid(&user.account_id)?).await?;
+    Ok(Json(config_response(
+        &settings,
+        preferences,
+        &state.maps.direct_origins,
+    )))
 }
 
-/// `PUT /api/maps/preferences` — turn maps on or off for yourself and choose
+/// `PUT /api/v1/maps/preferences` — turn maps on or off for yourself and choose
 /// among the administrator's providers.
 #[utoipa::path(
     put,
-    path = "/api/maps/preferences",
+    path = "/api/v1/maps/preferences",
     tag = "maps",
     security(("BearerAuth" = [])),
     request_body = MapPreferences,
@@ -547,7 +605,7 @@ pub async fn get_config(
 )]
 pub async fn put_preferences(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<MapPreferences>,
 ) -> AppResult<Json<MapConfigResponse>> {
     let settings = state.maps.settings(&state.pool).await?;
@@ -556,11 +614,11 @@ pub async fn put_preferences(
             return Err(AppError::bad_request("that map provider is not offered"));
         }
     }
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     if let Some(folder) = request.save_folder_id {
         let owned: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM collections
-                           WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM drive_collections
+                           WHERE id = $1 AND owner_account_id = $2 AND deleted_at IS NULL)",
         )
         .bind(folder)
         .bind(user_id)
@@ -573,9 +631,9 @@ pub async fn put_preferences(
         }
     }
     sqlx::query(
-        "INSERT INTO user_map_preferences (user_id, enabled, provider, via_proxy, save_folder_id)
+        "INSERT INTO account_map_preferences (account_id, enabled, provider, via_proxy, save_folder_id)
          VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (user_id) DO UPDATE SET
+         ON CONFLICT (account_id) DO UPDATE SET
              enabled = EXCLUDED.enabled,
              provider = EXCLUDED.provider,
              via_proxy = EXCLUDED.via_proxy,
@@ -589,41 +647,62 @@ pub async fn put_preferences(
     .bind(request.save_folder_id)
     .execute(&state.pool)
     .await?;
-    Ok(Json(config_response(&settings, request)))
+    Ok(Json(config_response(
+        &settings,
+        request,
+        &state.maps.direct_origins,
+    )))
 }
 
-/// `GET /api/admin/maps` — the administrator's map settings.
+/// The administrator's map settings as `GET` and `PUT /api/v1/admin/maps`
+/// answer: the settings and the origins the server was started with.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MapSettingsView {
+    #[serde(flatten)]
+    pub settings: MapSettings,
+    /// `KUTUP_MAP_DIRECT_ORIGINS`: the providers' origins browsers may load
+    /// from directly. Set at start, not here.
+    pub direct_origins: Vec<String>,
+}
+
+/// `GET /api/v1/admin/maps` — the administrator's map settings.
 #[utoipa::path(
     get,
-    path = "/api/admin/maps",
+    path = "/api/v1/admin/maps",
     tag = "admin",
     security(("BearerAuth" = [])),
-    responses((status = 200, description = "Map settings", body = MapSettings))
+    responses((status = 200, description = "Map settings", body = MapSettingsView))
 )]
 pub async fn admin_get(
     State(state): State<AppState>,
-    _admin: AdminUser,
-) -> AppResult<Json<MapSettings>> {
+    _admin: AdminAccount,
+) -> AppResult<Json<MapSettingsView>> {
     let settings = load_settings(&state.pool).await?;
     state.maps.replace_settings(settings.clone());
-    Ok(Json(settings))
+    Ok(Json(MapSettingsView {
+        settings,
+        direct_origins: state.maps.direct_origins.clone(),
+    }))
 }
 
-/// `PUT /api/admin/maps` — replace the map settings.
+/// `PUT /api/v1/admin/maps` — replace the map settings.
 #[utoipa::path(
     put,
-    path = "/api/admin/maps",
+    path = "/api/v1/admin/maps",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = MapSettings,
-    responses((status = 200, description = "Saved", body = MapSettings))
+    responses((status = 200, description = "Saved", body = MapSettingsView))
 )]
 pub async fn admin_put(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(settings): Json<MapSettings>,
-) -> AppResult<Json<MapSettings>> {
-    settings.validate().map_err(AppError::bad_request)?;
+) -> AppResult<Json<MapSettingsView>> {
+    settings
+        .validate_with(&state.maps.direct_origins)
+        .map_err(AppError::bad_request)?;
     let value = serde_json::to_string(&settings)
         .map_err(|error| AppError::internal(format!("map settings: {error}")))?;
     sqlx::query(
@@ -636,8 +715,8 @@ pub async fn admin_put(
     .await?;
     crate::handlers::admin::audit(
         &state.pool,
-        &admin.user_id,
-        "maps.settings.update",
+        &admin.account_id,
+        AdminAction::MapsUpdateSettings,
         None,
         serde_json::json!({
             "enabled": settings.enabled,
@@ -648,7 +727,10 @@ pub async fn admin_put(
     )
     .await;
     state.maps.replace_settings(settings.clone());
-    Ok(Json(settings))
+    Ok(Json(MapSettingsView {
+        settings,
+        direct_origins: state.maps.direct_origins.clone(),
+    }))
 }
 
 // ----- the relay -----
@@ -761,12 +843,12 @@ fn relay_response(body: Vec<u8>, content_type: &str, upstream: &Upstream) -> Res
     response
 }
 
-/// `GET /api/maps/proxy/{provider}/{path}` — a map resource (style, tile,
+/// `GET /api/v1/maps/proxy/{provider}/{path}` — a map resource (style, tile,
 /// glyphs, sprite) fetched from the provider by this server and cached, so
 /// the provider never sees the person's address.
 #[utoipa::path(
     get,
-    path = "/api/maps/proxy/{provider}/{path}",
+    path = "/api/v1/maps/proxy/{provider}/{path}",
     tag = "maps",
     security(("BearerAuth" = [])),
     params(
@@ -781,10 +863,10 @@ fn relay_response(body: Vec<u8>, content_type: &str, upstream: &Upstream) -> Res
 )]
 pub async fn proxy(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((provider, path)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    if !PROXY_LIMIT.allow(&user.user_id) {
+    if !PROXY_LIMIT.allow(&user.account_id) {
         return Err(AppError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "too many map requests",
@@ -948,6 +1030,48 @@ mod tests {
     }
 
     #[test]
+    fn direct_loading_only_for_listed_origins() {
+        let listed = vec!["https://tile.openstreetmap.org".to_owned()];
+        let mut settings = MapSettings {
+            proxy: ProxyMode::Off,
+            ..MapSettings::default()
+        };
+        // OpenFreeMap is offered but not listed: the relay may not be off.
+        assert!(settings.validate_with(&listed).is_err());
+        settings.providers = vec![ProviderId::Openstreetmap];
+        assert!(settings.validate_with(&listed).is_ok());
+        assert!(settings.validate_with(&[]).is_err());
+
+        let preferences = MapPreferences {
+            enabled: true,
+            provider: None,
+            via_proxy: false,
+            save_folder_id: None,
+        };
+        let available = MapSettings::default();
+        let offered = config_response(&available, preferences.clone(), &listed).providers;
+        let direct: Vec<(ProviderId, bool)> = offered.iter().map(|p| (p.id, p.direct)).collect();
+        assert_eq!(
+            direct,
+            vec![
+                (ProviderId::Openfreemap, false),
+                (ProviderId::Openstreetmap, true)
+            ]
+        );
+        assert!(offered.iter().all(|p| p.proxy_url.is_some()));
+        // The relay off (a setting saved before the list): an unlisted
+        // provider is reachable no way, so it is not offered.
+        let off = MapSettings {
+            proxy: ProxyMode::Off,
+            ..MapSettings::default()
+        };
+        let offered = config_response(&off, preferences, &listed).providers;
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].id, ProviderId::Openstreetmap);
+        assert!(offered[0].proxy_url.is_none());
+    }
+
+    #[test]
     fn relay_paths_stay_on_the_provider() {
         for good in [
             "styles/liberty",
@@ -994,15 +1118,15 @@ mod tests {
         let style = br#"{"sources":{"openmaptiles":{"url":"https://tiles.openfreemap.org/planet"}},"glyphs":"https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf"}"#;
         let rewritten = String::from_utf8(rewrite_json(style, &upstream)).unwrap();
         assert!(!rewritten.contains("tiles.openfreemap.org"));
-        assert!(rewritten.contains(r#""url":"/api/maps/proxy/openfreemap/planet""#));
+        assert!(rewritten.contains(r#""url":"/api/v1/maps/proxy/openfreemap/planet""#));
         assert_eq!(
             upstream.proxied_entry(),
-            "/api/maps/proxy/openfreemap/styles/liberty"
+            "/api/v1/maps/proxy/openfreemap/styles/liberty"
         );
         let osm = Upstream::resolve(ProviderId::Openstreetmap, &settings).unwrap();
         assert_eq!(
             osm.proxied_entry(),
-            "/api/maps/proxy/openstreetmap/{z}/{x}/{y}.png"
+            "/api/v1/maps/proxy/openstreetmap/{z}/{x}/{y}.png"
         );
     }
 

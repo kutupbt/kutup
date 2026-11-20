@@ -15,7 +15,7 @@ use common::*;
 
 fn lookup(c: &Client, base: &str, token: &str, account: &str) -> Value {
     bearer(
-        c.get(format!("{base}/api/users/by-address/{account}")),
+        c.get(format!("{base}/api/v1/accounts/by-address/{account}")),
         token,
     )
     .send()
@@ -49,7 +49,7 @@ fn drive_key_bindings() {
         &alice.person,
         &key("accountAuthorityPublicKey"),
         found["driveKeyBindingEpoch"].as_u64().unwrap() as u32,
-        &base64_decode(found["driveHpkePublicKey"].as_str().unwrap())
+        &base64_decode(found["driveXwingPublicKey"].as_str().unwrap())
             .try_into()
             .unwrap(),
         &key("driveSigningPublicKey"),
@@ -59,7 +59,7 @@ fn drive_key_bindings() {
     assert!(lookup(&c, &base, &alice.token, &bob_account)["driveKeyBinding"].is_string());
 
     // Many people at once: the ones here, by exact address.
-    let found: Value = bearer(c.post(format!("{base}/api/users/drive-identities")), &alice.token)
+    let found: Value = bearer(c.post(format!("{base}/api/v1/drive/identities")), &alice.token)
         .json(&json!({ "accounts": [alice_account, bob_account, format!("nobody@{}", server_domain(&c, &base)), "x@elsewhere.example"] }))
         .send()
         .unwrap()
@@ -83,7 +83,7 @@ fn drive_key_bindings() {
     let too_many: Vec<String> = (0..101).map(|i| format!("u{i}@kutup.localhost")).collect();
     assert_eq!(
         bearer(
-            c.post(format!("{base}/api/users/drive-identities")),
+            c.post(format!("{base}/api/v1/drive/identities")),
             &alice.token
         )
         .json(&json!({ "accounts": too_many }))
@@ -94,10 +94,13 @@ fn drive_key_bindings() {
     );
 
     // Registration refuses a binding that does not match the keys sent.
-    let mallory = AccountIdentityKeysV1::derive(&[9u8; 32]).unwrap();
+    let mallory = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([9u8; 32]),
+    )
+    .unwrap();
     let forged = drive_key_binding::sign(&mallory, &alice.person, 1).unwrap();
     let r = c
-        .post(format!("{base}/api/auth/register"))
+        .post(format!("{base}/api/v1/auth/register"))
         .json(&json!({ "username": "forged", "driveKeyBinding": b64(&forged) }))
         .send()
         .unwrap();
@@ -114,7 +117,10 @@ fn identity_pins_sync_by_revision() {
     let owner = register(&c, &base);
     let binding = owner.binding.clone();
     let key = owner.master_key;
-    let friend = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
+    let friend = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([3u8; 32]),
+    )
+    .unwrap();
     let list = IdentityPinsV2 {
         pins: vec![IdentityPinV2 {
             account: AccountRef::new("kutup.localhost", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
@@ -133,9 +139,11 @@ fn identity_pins_sync_by_revision() {
         }],
         ..Default::default()
     };
+    // The one record of the account-records scope `pins`
+    // (docs/plans/account-records.md).
     let get = || {
         bearer(
-            c.get(format!("{base}/api/user/identity-pins")),
+            c.get(format!("{base}/api/v1/account/records/pins/pins")),
             &owner.token,
         )
         .send()
@@ -143,10 +151,11 @@ fn identity_pins_sync_by_revision() {
     };
     let put = |base_revision: i64, envelope: String| {
         bearer(
-            c.put(format!("{base}/api/user/identity-pins")),
+            c.post(format!("{base}/api/v1/account/records")),
             &owner.token,
         )
-        .json(&json!({ "baseRevision": base_revision, "envelope": envelope }))
+        .json(&json!({ "puts": [{ "scope": "pins", "id": "pins",
+                "baseRevision": base_revision, "envelope": envelope }] }))
         .send()
         .unwrap()
     };
@@ -167,15 +176,15 @@ fn identity_pins_sync_by_revision() {
     // refused with the current revision.
     const T: u64 = 1_791_633_600_000;
     assert_eq!(put(5, seal(T)).status(), StatusCode::CONFLICT);
-    assert_eq!(put(0, seal(T)).status(), StatusCode::NO_CONTENT);
+    assert_eq!(put(0, seal(T)).status(), StatusCode::OK);
     let again = put(0, seal(T + 1));
     assert_eq!(again.status(), StatusCode::CONFLICT);
     let body: Value = again.json().unwrap();
-    assert_eq!(body["code"], "revision_conflict");
-    assert_eq!(body["revision"], T);
+    assert_eq!(body["code"], "revisionConflict");
+    assert_eq!(body["conflicts"][0]["revision"], T);
     // Not newer than its base: refused.
     assert_eq!(put(T as i64, seal(T)).status(), StatusCode::BAD_REQUEST);
-    assert_eq!(put(T as i64, seal(T + 7)).status(), StatusCode::NO_CONTENT);
+    assert_eq!(put(T as i64, seal(T + 7)).status(), StatusCode::OK);
     assert_eq!(put(T as i64, seal(T + 8)).status(), StatusCode::CONFLICT);
 
     // What comes back carries its revision in its header, for its owner's key binding.
@@ -199,7 +208,7 @@ fn identity_pins_sync_by_revision() {
     let other = register(&c, &base);
     assert_eq!(
         bearer(
-            c.get(format!("{base}/api/user/identity-pins")),
+            c.get(format!("{base}/api/v1/account/records/pins/pins")),
             &other.token
         )
         .send()

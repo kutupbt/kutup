@@ -1,3 +1,4 @@
+import { firstMasterKeys, masterKeysBytes } from '@kutup/crypto/masterKeys'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { SealedStorage } from './sealedStorage'
 
@@ -19,25 +20,24 @@ describe('SealedStorage', () => {
   beforeEach(() => window.localStorage.clear())
 
   it('keeps values sealed, per account scope and name', () => {
-    const storage = new SealedStorage(wasm, key, 'scope-a')
+    const storage = new SealedStorage(wasm, masterKeysBytes(firstMasterKeys(key)), 'scope-a')
     storage.write('drafts', { 'direct:bob': { text: 'half a thought' } })
     expect(storage.read('drafts')).toEqual({ 'direct:bob': { text: 'half a thought' } })
     expect(window.localStorage.getItem(storage.key('drafts'))).not.toContain('half a thought')
-    expect(new SealedStorage(wasm, key, 'scope-b').read('drafts')).toBeUndefined()
+    expect(new SealedStorage(wasm, masterKeysBytes(firstMasterKeys(key)), 'scope-b').read('drafts')).toBeUndefined()
     storage.write('drafts', undefined)
     expect(window.localStorage.getItem(storage.key('drafts'))).toBeNull()
   })
 
   it('never takes over a plaintext value', () => {
-    const storage = new SealedStorage(wasm, key, 'scope-a')
+    const storage = new SealedStorage(wasm, masterKeysBytes(firstMasterKeys(key)), 'scope-a')
     // Plaintext where the sealed value belongs, or under an older key: absent.
-    window.localStorage.setItem(storage.key('read-marks'), JSON.stringify({ 'direct:bob': 5 }))
-    window.localStorage.setItem('kutup:chat:read:u1', JSON.stringify({ 'direct:bob': 5 }))
-    expect(storage.read('read-marks')).toBeUndefined()
+    window.localStorage.setItem(storage.key('readMarks'), JSON.stringify({ 'direct:bob': 5 }))
+    expect(storage.read('readMarks')).toBeUndefined()
   })
 
   it('reads a value it cannot open as absent', () => {
-    const storage = new SealedStorage(wasm, key, 'scope-a')
+    const storage = new SealedStorage(wasm, masterKeysBytes(firstMasterKeys(key)), 'scope-a')
     window.localStorage.setItem(storage.key('drafts'), 'not sealed at all')
     expect(storage.read('drafts')).toBeUndefined()
   })

@@ -400,7 +400,7 @@ pub struct ManifestTrust {
     pub incarnation_id: String,
     pub authority_key_id: String,
     pub self_authority_key: String,
-    pub drive_hpke_public_key: String,
+    pub drive_xwing_public_key: String,
     pub drive_share_signing_public_key: String,
     pub highest_sequence: u64,
     pub manifest_hash: String,

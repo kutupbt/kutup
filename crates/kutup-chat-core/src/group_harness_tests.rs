@@ -50,6 +50,9 @@ use crate::transport::{ChatTransport, GroupGatewayAnswer, GroupRelayOutcome, Sen
 use crate::{AccountAuthority, ChatContent, SqliteChatDb};
 
 pub(crate) const SERVER: &str = "example.test";
+/// A hostile server that serves the real home's identity history and
+/// gateway key as its own (a mirror of the home).
+pub(crate) const MIRROR_HOME: &str = "mirror-home.test";
 /// The `session` hash the test server gives every device.
 pub(crate) const DEVICE_SESSION: &str =
     "5151515151515151515151515151515151515151515151515151515151515151";
@@ -104,6 +107,9 @@ impl HostedDevice {
 #[derive(Default)]
 struct HostedAccount {
     devices: BTreeMap<u32, HostedDevice>,
+    /// The account's device counter (`accounts.next_device_id`; 0 counts
+    /// from 1), as the server keeps it.
+    next_device_id: u32,
     manifests: Vec<AccountManifestV3>,
     profile: Option<PutChatProfileRequest>,
 }
@@ -155,6 +161,8 @@ pub(crate) struct World {
     pub(crate) identity_pins: RefCell<BTreeMap<String, (u64, String)>>,
     /// How many pin lists were written.
     pub(crate) pin_writes: Cell<usize>,
+    /// Every group request relayed to any home (signed requests included).
+    pub(crate) relays: Cell<usize>,
     /// How many sealed batches were sent.
     pub(crate) batches: Cell<usize>,
     /// Multi-recipient requests taken (slice 2).
@@ -328,6 +336,7 @@ impl World {
             contact_list_down: Cell::new(false),
             identity_pins: RefCell::new(BTreeMap::new()),
             pin_writes: Cell::new(0),
+            relays: Cell::new(0),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
             provisioning: RefCell::new(BTreeMap::new()),
@@ -343,7 +352,10 @@ impl World {
         let mut rng = rng();
         let client = self.client(&account);
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-        let authority = AccountAuthority::derive(&[n; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([n; 32]),
+        )
+        .unwrap();
         let engine = block_on(Engine::reregister(
             db,
             client.clone(),
@@ -371,6 +383,32 @@ impl World {
             .expect("a manifest to roll back")
     }
 
+    /// A hostile server's mirror of `account` (docs/plans/identity-rotation.md
+    /// §6): the same account id under `server`, serving the account's whole
+    /// public identity, its manifests re-labelled with `server`. The
+    /// signatures still verify, since the server's name is not signed.
+    pub(crate) fn mirror(&self, account: &str, server: &str) -> String {
+        let source: kutup_chat_proto::AccountRef = account.parse().unwrap();
+        let mirror = kutup_chat_proto::AccountRef::new(server, &source.account_id).unwrap();
+        let manifests = self.accounts.borrow()[account]
+            .manifests
+            .iter()
+            .cloned()
+            .map(|mut manifest| {
+                manifest.account = mirror.clone();
+                manifest
+            })
+            .collect();
+        self.accounts.borrow_mut().insert(
+            mirror.to_string(),
+            HostedAccount {
+                manifests,
+                ..HostedAccount::default()
+            },
+        );
+        mirror.to_string()
+    }
+
     pub(crate) fn link_device(self: &Rc<Self>, person: &mut Person) -> Person {
         self.link_device_into(person, Rc::new(SqliteChatDb::open_in_memory().unwrap()))
     }
@@ -382,7 +420,10 @@ impl World {
         db: Rc<dyn crate::db::ChatDb>,
     ) -> Person {
         let account = person.account.clone();
-        let authority = AccountAuthority::derive(&[person.authority_seed; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([person.authority_seed; 32]),
+        )
+        .unwrap();
         let linking = crate::LinkingDevice::new();
         let settings = crate::ProvisionedSettings {
             read_receipts: true,
@@ -413,7 +454,10 @@ impl World {
         linking: &crate::LinkingDevice,
         settings: crate::ProvisionedSettings,
     ) -> kutup_chat_proto::ProvisionEnvelopeV1 {
-        let authority = AccountAuthority::derive(&[person.authority_seed; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([person.authority_seed; 32]),
+        )
+        .unwrap();
         let address = STANDARD_NO_PAD_URL.encode(uuid::Uuid::new_v4().as_bytes());
         self.provisioning
             .borrow_mut()
@@ -444,23 +488,31 @@ impl World {
             .strip_suffix(&format!("@{SERVER}"))
             .and_then(|id| u8::from_str_radix(&id[id.len() - 2..], 16).ok())
             .unwrap();
-        let authority = AccountAuthority::derive(&[authority_seed; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([authority_seed; 32]),
+        )
+        .unwrap();
         client.device.set(engine.session().device_id());
         engine.set_sealed_sender_enabled(true);
         block_on(engine.sync_own_manifest(&authority, ISSUED_AT)).unwrap();
         // The account's master key (its authority's, as above) and key
         // binding, as the app hands them over.
         let binding = format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}");
-        let profile_owner =
-            crate::profile::profile_owner_key(&[authority_seed; 32], &binding).unwrap();
+        let master_keys = kutup_crypto::master_keys::MasterKeys::first(&[authority_seed; 32]);
+        let profile_owner = crate::profile::profile_owner_key(&master_keys, &binding).unwrap();
         block_on(engine.initialize_profile(&profile_owner, "Someone", &mut rng)).unwrap();
         engine
-            .enable_group_list(&[authority_seed; 32], &binding)
+            .enable_group_list(
+                &master_keys,
+                &kutup_crypto::account_roots::AccountRoots::same_for_tests([authority_seed; 32]),
+                &binding,
+            )
             .unwrap();
         // Timed as the web is: a block is written at once.
         engine
             .enable_contact_list(
-                &[authority_seed; 32],
+                &master_keys,
+                &kutup_crypto::account_roots::ObjectIdKey::from_bytes([authority_seed; 32]),
                 &binding,
                 crate::contact_list::ContactListTiming {
                     block: crate::contact_list::BlockTiming::Immediate,
@@ -1209,13 +1261,24 @@ impl ChatTransport for Client {
                 manifest
                     .verify_successor(hosted.manifests.last())
                     .map_err(ChatError::Transport)?;
-                hosted.devices.clear();
-                hosted.manifests.push((**manifest).clone());
-                manifest
+                let id = manifest
                     .chat_devices()
                     .map(|(id, _)| id)
                     .next()
-                    .expect("validated: one Chat device")
+                    .expect("validated: one Chat device");
+                // The account's next id the kept entries leave free.
+                let kept: Vec<u32> = manifest
+                    .devices
+                    .iter()
+                    .map(|device| device.device_id)
+                    .filter(|other| *other != id)
+                    .collect();
+                if kutup_chat_proto::next_device_id(hosted.next_device_id, &kept) != Some(id) {
+                    return Err(ChatError::Transport("devicesMismatch".into()));
+                }
+                hosted.devices.clear();
+                hosted.manifests.push((**manifest).clone());
+                id
             }
             kutup_chat_proto::DeviceRegistrationV1::Link { link_token } => {
                 let owner = self.world.link_tokens.borrow_mut().remove(link_token);
@@ -1230,9 +1293,12 @@ impl ChatTransport for Client {
                 {
                     return Err(ChatError::Transport("not the account's identity".into()));
                 }
-                (1..).find(|id| !hosted.devices.contains_key(id)).unwrap()
+                let taken: Vec<u32> = hosted.devices.keys().copied().collect();
+                kutup_chat_proto::next_device_id(hosted.next_device_id, &taken)
+                    .ok_or_else(|| ChatError::Transport("deviceLimit".into()))?
             }
         };
+        hosted.next_device_id = kutup_chat_proto::device_id_after(device_id);
         hosted.devices.insert(
             device_id,
             HostedDevice {
@@ -1373,8 +1439,17 @@ impl ChatTransport for Client {
         self.world.bundles(account, Some(current_device_id))
     }
 
-    async fn fetch_device_session(&self) -> Result<String> {
-        Ok(DEVICE_SESSION.into())
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+        let next_device_id = self
+            .world
+            .accounts
+            .borrow()
+            .get(&self.account)
+            .map_or(1, |hosted| hosted.next_device_id);
+        Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+            session: DEVICE_SESSION.into(),
+            next_device_id,
+        })
     }
 
     async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV3>> {
@@ -1991,6 +2066,7 @@ impl ChatTransport for Client {
         Ok(MailboxPage {
             envelopes: pending.into_iter().take(limit as usize).collect(),
             more,
+            unsupported: Vec::new(),
         })
     }
 
@@ -2003,7 +2079,7 @@ impl ChatTransport for Client {
     }
 
     async fn fetch_group_gateway(&self, home: &str, _from: u64) -> Result<GroupGatewayAnswer> {
-        if home != SERVER {
+        if home != SERVER && home != MIRROR_HOME {
             return Err(ChatError::Transport("unknown home".into()));
         }
         Ok(GroupGatewayAnswer {
@@ -2013,6 +2089,7 @@ impl ChatTransport for Client {
     }
 
     async fn relay_group_request(&self, home: &str, sealed: &[u8]) -> Result<GroupRelayOutcome> {
+        self.world.relays.set(self.world.relays.get() + 1);
         if home != SERVER || self.world.home_down.get() {
             return Ok(GroupRelayOutcome::Unreachable);
         }
@@ -3667,9 +3744,9 @@ fn group_multi_an_undefined_status_goes_pairwise() {
 fn group_multi_the_own_endorsement_is_fetched_on_its_own_schedule() {
     let world = World::new();
     let mut loner = world.person(0xe5);
-    block_on(loner.engine.sync_group_list_if_due(&mut rng())).unwrap();
+    block_on(loner.engine.sync_account_records_if_due(&mut rng())).unwrap();
     assert_eq!(world.endorsements_issued.get(), 1, "with no group at all");
-    block_on(loner.engine.sync_group_list_if_due(&mut rng())).unwrap();
+    block_on(loner.engine.sync_account_records_if_due(&mut rng())).unwrap();
     assert_eq!(world.endorsements_issued.get(), 1, "once a day");
     let (mut alice, _bob, _carol, _dave, group_id) = exchanged_group(&world);
     let issued = world.endorsements_issued.get();
@@ -4734,7 +4811,10 @@ fn group_list_a_member_who_replaces_their_only_device_keeps_the_group() {
 
     // Bob's only device is gone; a new one is set up and the old one revoked.
     let mut bob2 = world.link_device(&mut bob);
-    let authority = AccountAuthority::derive(&[0xb2; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0xb2; 32]),
+    )
+    .unwrap();
     block_on(
         bob2.engine
             .revoke_manifest_device(&authority, bob.device(), ISSUED_AT),
@@ -4783,7 +4863,10 @@ fn group_list_a_member_who_replaces_their_only_device_keeps_the_group() {
 /// and the old one revoked. Nothing in his list.
 fn bob_replaced_before_his_list_write(world: &Rc<World>, mut bob: Person) -> Person {
     let mut bob2 = world.link_device(&mut bob);
-    let authority = AccountAuthority::derive(&[bob.authority_seed; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([bob.authority_seed; 32]),
+    )
+    .unwrap();
     block_on(
         bob2.engine
             .revoke_manifest_device(&authority, bob.device(), ISSUED_AT),
@@ -4845,7 +4928,11 @@ fn context_of(person: &Person, group_id: &str) -> GroupContextV1 {
 
 /// `person`'s account's pseudonym in `group_id` at `epoch`, as its key gives it.
 fn derived_pseudonym(person: &Person, group_id: &str, epoch: u32) -> String {
-    let keys = crate::group::GroupAccountKeys::derive(&[person.authority_seed; 32]).unwrap();
+    let keys = crate::group::GroupAccountKeys::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([person.authority_seed; 32]),
+        &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes([person.authority_seed; 32]),
+    )
+    .unwrap();
     let group = kutup_chat_proto::group::decode_group_id(group_id).unwrap();
     kutup_chat_proto::group::encode(&keys.pseudonyms.pseudonym(&group, epoch).public_key())
 }
@@ -4958,8 +5045,11 @@ fn group_recover_a_made_up_state_without_his_binding_is_not_joined() {
     let record = block_on(mallory.engine.load_group_record(&group_id)).unwrap();
     let bobs = derived_pseudonym(&bob, &group_id, 0);
     let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
-    let mallory_keys =
-        crate::group::GroupAccountKeys::derive(&[mallory.authority_seed; 32]).unwrap();
+    let mallory_keys = crate::group::GroupAccountKeys::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([mallory.authority_seed; 32]),
+        &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes([mallory.authority_seed; 32]),
+    )
+    .unwrap();
     let entry = crate::group::seal_member_entry(
         &record.master().unwrap().state_key(),
         &group,
@@ -4998,12 +5088,22 @@ fn group_recover_a_home_of_a_former_members_is_another_group() {
     let bobs = derived_pseudonym(&bob, &group_id, 0);
     let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
     // Mallory, removed long ago, kept the key and saw Bob's binding; she
-    // names a home of her own for the real group id. The id binds the home,
-    // so that is another group: refused before anything is asked.
+    // names a home of her own for the real group id. The id binds the home's
+    // identity (its document hash and sequence; the server's name is only
+    // routing, identity-rotation.md §6), so another identity is another
+    // group: refused before anything is asked.
     let mut context = context_of(&alice, &group_id);
-    context.home.server = "mallory.test".into();
+    context.home.identity_document_hash = "6d".repeat(32);
     let probes = world.state_requests.get();
+    let relays = world.relays.get();
     assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    // Her own server with the true document: the same id, but the server
+    // must serve the home's history from the pinned document, which names
+    // the real home: it doesn't follow there, and nothing signed is sent.
+    let mut context = context_of(&alice, &group_id);
+    context.home.server = MIRROR_HOME.into();
+    assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    assert_eq!(world.relays.get(), relays);
     let mut context = context_of(&alice, &group_id);
     context.home.identity_sequence += 1;
     assert!(!recover(&mut bob2, &context, &alice, &bobs));
@@ -5312,7 +5412,11 @@ fn group_claim_from_a_later_epoch_still_stops_at_the_last_one() {
     bob.receive();
     // The invitation came at epoch 10 (the account's eleventh join).
     let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
-    let keys = crate::group::GroupAccountKeys::derive(&[bob.authority_seed; 32]).unwrap();
+    let keys = crate::group::GroupAccountKeys::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([bob.authority_seed; 32]),
+        &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes([bob.authority_seed; 32]),
+    )
+    .unwrap();
     let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
     record.join_epoch = 10;
     record.pseudonym_seed = crate::group::SecretText(kutup_chat_proto::group::encode(
@@ -6745,4 +6849,100 @@ fn group_multi_a_conflict_naming_no_leg_waits_and_counts() {
         assert_eq!(leg.mismatches, 1);
         assert!(leg.retry_at_ms.is_some() && !leg.delivered);
     }
+}
+
+/// A mirror account (docs/plans/identity-rotation.md §6): a hostile server
+/// mints a pinned person's account id and serves their whole public identity
+/// as its own account. It verifies, and its safety number is theirs; what
+/// refuses it is the synced pins' rule that one authority is one account
+/// (`identity_pins::record`'s `AuthorityElsewhere`), on every path that takes
+/// a peer's manifest: a fetched manifest (here the safety number's), and the
+/// group member check.
+#[test]
+fn a_mirror_of_a_pinned_account_on_another_server_is_refused() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let seed = alice.authority_seed;
+    let binding = format!("{seed:08x}-0000-4000-8000-{seed:012x}");
+    alice
+        .engine
+        .enable_identity_pins(
+            &kutup_crypto::master_keys::MasterKeys::first(&[seed; 32]),
+            &binding,
+        )
+        .unwrap();
+    befriend(&mut alice, &mut bob);
+    block_on(alice.engine.flush_identity_pins(true)).unwrap();
+    let writes = world.pin_writes.get();
+    assert!(writes > 0, "Bob is pinned");
+
+    // Someone who never met Bob can't tell: the mirror verifies, with
+    // Bob's very safety number (as with any first contact).
+    let mirror = world.mirror(&bob.account, "mirror.test");
+    let mut carol = world.person(0xc3);
+    let real = block_on(carol.engine.safety_number(&bob.account)).unwrap();
+    let mirrored = block_on(carol.engine.safety_number(&mirror)).unwrap();
+    assert_eq!(mirrored.fingerprint, real.fingerprint);
+
+    // A fetched manifest: refused where Bob is pinned.
+    let error = block_on(alice.engine.safety_number(&mirror)).expect_err("a mirror is refused");
+    assert!(
+        error
+            .to_string()
+            .contains(crate::identity_sync::DIFFERS_FROM_SYNCED),
+        "{error}"
+    );
+
+    // The group member check: Bob's binding checks against Bob's
+    // authority; the mirror's account gets none.
+    let bob_ref: kutup_chat_proto::AccountRef = bob.account.parse().unwrap();
+    let other: kutup_chat_proto::AccountRef =
+        world.mirror(&bob.account, "mirror2.test").parse().unwrap();
+    let (keys, unconfirmed, _) = block_on(
+        alice
+            .engine
+            .authority_keys(&[bob_ref.clone(), other.clone()], &[]),
+    )
+    .unwrap();
+    assert!(keys.contains_key(&bob_ref));
+    assert!(!keys.contains_key(&other));
+    assert!(unconfirmed.is_empty());
+    // Nothing about the mirrors was written to the pins.
+    assert_eq!(world.pin_writes.get(), writes);
+}
+
+/// An invitation naming another server than the group's home with the true
+/// identity document (docs/plans/identity-rotation.md §6): the group id is
+/// the same, since the name is not in it, but the home's history fetched from
+/// that server doesn't follow from the pin (the pinned document names the
+/// real home), so nothing signed goes there and the claim fails.
+#[test]
+fn an_invitation_naming_another_server_with_the_true_document_sends_nothing_signed() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    assert!(matches!(bob.status(&group_id), GroupStatus::Invited { .. }));
+    let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.home.server, SERVER);
+    record.home.server = MIRROR_HOME.into();
+    record.gateway = Default::default();
+    // The key is still the group's at that pin: the name isn't in the id.
+    assert!(record.master().is_ok());
+    block_on(bob.engine.save_group(&record)).unwrap();
+    let relays = world.relays.get();
+    assert!(block_on(bob.engine.accept_group_invite(&group_id, &mut rng())).is_err());
+    assert_eq!(world.relays.get(), relays);
+    assert!(matches!(bob.status(&group_id), GroupStatus::Invited { .. }));
 }

@@ -475,17 +475,12 @@ mod tests {
             p.extend_from_slice(&[0, 0]);
             assert!(open(&p).is_err(), "empty, flags {flags}");
         }
-        // Another vault's id, or the v1 domain.
+        // Another vault's id.
         let mut other = DOMAIN.to_vec();
         other.extend_from_slice(&[2; 16]);
         other.push(HAS_PASSWORD_HASH);
         other.extend_from_slice(&[3; 32]);
         assert!(open(&other).is_err());
-        let mut v1 = crate::labels::PASS_VAULT_SECRET_V1.to_vec();
-        v1.extend_from_slice(&VAULT);
-        v1.push(1);
-        v1.extend_from_slice(&[0, 1, b'p']);
-        assert!(open(&v1).is_err());
     }
 
     #[test]

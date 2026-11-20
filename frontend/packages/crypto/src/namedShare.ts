@@ -1,3 +1,4 @@
+import type { IdentityRoot } from './accountRoots'
 import { fromBase64, toBase64 } from './base64'
 import type { AccountRef } from './accountRef'
 import { getCryptoWasm } from './rustWasm'
@@ -14,15 +15,15 @@ export interface NamedShareContextV1 {
 
 export async function sealNamedShareEnvelope(
   collectionKey: Uint8Array,
-  senderMasterKey: Uint8Array,
-  recipientHpkePublicKeyBase64: string,
+  senderIdentityRoot: IdentityRoot,
+  recipientXwingPublicKeyBase64: string,
   context: NamedShareContextV1,
 ): Promise<string> {
   const module = await getCryptoWasm()
   return module.sealNamedShareEnvelope(
     toBase64(collectionKey),
-    toBase64(senderMasterKey),
-    recipientHpkePublicKeyBase64,
+    senderIdentityRoot,
+    recipientXwingPublicKeyBase64,
     context.collectionId,
     context.epoch,
     context.sender,
@@ -64,15 +65,15 @@ export interface ProfileKeyPartiesV1 {
 /** Your profile key, sealed to someone you share folders with and signed by you. */
 export async function sealProfileKeyEnvelope(
   profileKey: Uint8Array,
-  senderMasterKey: Uint8Array,
-  recipientHpkePublicKeyBase64: string,
+  senderIdentityRoot: IdentityRoot,
+  recipientXwingPublicKeyBase64: string,
   parties: ProfileKeyPartiesV1,
 ): Promise<string> {
   const module = await getCryptoWasm()
   return module.sealProfileKeyEnvelope(
     toBase64(profileKey),
-    toBase64(senderMasterKey),
-    recipientHpkePublicKeyBase64,
+    senderIdentityRoot,
+    recipientXwingPublicKeyBase64,
     parties.sender,
     parties.senderIncarnationId,
     parties.recipient,
@@ -114,15 +115,15 @@ export interface FileShareContextV1 {
 /** A single file's current key, sealed to someone and signed by the owner. */
 export async function sealFileShareEnvelope(
   fileKey: Uint8Array,
-  senderMasterKey: Uint8Array,
-  recipientHpkePublicKeyBase64: string,
+  senderIdentityRoot: IdentityRoot,
+  recipientXwingPublicKeyBase64: string,
   context: FileShareContextV1,
 ): Promise<string> {
   const module = await getCryptoWasm()
   return module.sealFileShareEnvelope(
     toBase64(fileKey),
-    toBase64(senderMasterKey),
-    recipientHpkePublicKeyBase64,
+    senderIdentityRoot,
+    recipientXwingPublicKeyBase64,
     context.fileId,
     context.generation,
     context.sender,
