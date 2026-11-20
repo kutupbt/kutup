@@ -197,6 +197,9 @@ jobs:
     env:
       KUTUP_E2E_SAFE_ARTIFACTS: "1"
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+      # Numbers-only Chat diagnostics pass the sanitized reporter (spec 169's
+      # restore facts: tests/e2e/safe-reporter.ts).
+      KUTUP_E2E_CHAT_DIAGNOSTICS: "1"
       POSTGRES_PASSWORD: chat-backup-ci-postgres
       JWT_SECRET: chat-backup-ci-jwt-secret-at-least-32-bytes
       OPAQUE_SETUP_KEYS: "1:0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dE="
