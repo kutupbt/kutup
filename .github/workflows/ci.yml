@@ -197,6 +197,10 @@ jobs:
     env:
       KUTUP_E2E_SAFE_ARTIFACTS: "1"
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+      # The stack's certificate is self-signed (generated below): Chromium
+      # must accept it for service-worker scripts too, which Playwright's
+      # ignoreHTTPSErrors does not cover (media streaming, ONLYOFFICE).
+      E2E_TRUST_LOCAL_CERT: "1"
       # Numbers-only Chat diagnostics pass the sanitized reporter (spec 169's
       # restore facts: tests/e2e/safe-reporter.ts).
       KUTUP_E2E_CHAT_DIAGNOSTICS: "1"
@@ -319,6 +323,10 @@ jobs:
     env:
       KUTUP_E2E_SAFE_ARTIFACTS: "1"
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+      # The stack's certificate is self-signed (generated below): Chromium
+      # must accept it for service-worker scripts too, which Playwright's
+      # ignoreHTTPSErrors does not cover (media streaming, ONLYOFFICE).
+      E2E_TRUST_LOCAL_CERT: "1"
       POSTGRES_PASSWORD: mail-browser-ci-postgres
       JWT_SECRET: mail-browser-ci-jwt-secret-at-least-32-bytes
       OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
@@ -365,6 +373,10 @@ jobs:
         run: npm ci --prefix tests/e2e
       - name: Install Chromium
         run: npx --prefix tests/e2e playwright install --with-deps chromium
+      # Spec 192 makes its two-hour test video with ffmpeg (libvpx for
+      # Chromium); without it the long-video test skips.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
       - name: Generate ephemeral browser-test TLS certificate
         run: |
           mkdir -p nginx/certs
@@ -460,6 +472,13 @@ jobs:
     env:
       KUTUP_E2E_SAFE_ARTIFACTS: "1"
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+      # The stack's certificate is self-signed (generated below): Chromium
+      # must accept it for service-worker scripts too, which Playwright's
+      # ignoreHTTPSErrors does not cover (media streaming, ONLYOFFICE).
+      E2E_TRUST_LOCAL_CERT: "1"
+      # Numbers-only Drive diagnostics pass the sanitized reporter (spec 30's
+      # page after its reload: tests/e2e/safe-reporter.ts).
+      KUTUP_E2E_DRIVE_DIAGNOSTICS: "1"
       POSTGRES_PASSWORD: workspace-browser-ci-postgres
       JWT_SECRET: workspace-browser-ci-jwt-secret-at-least-32-bytes
       OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
