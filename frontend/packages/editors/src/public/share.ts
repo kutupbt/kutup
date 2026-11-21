@@ -3,18 +3,33 @@
 // from the link's fragment; the server only ever serves ciphertext. Drive
 // lists a folder's link, Office shows a document reached by one.
 
-import { fromBase64, openFileMetadataV1, openFileRecordV1, openPublicLinkCollectionKeyV1, openPublicLinkFileKeyV1 } from '@kutup/crypto'
+import {
+  openDriveObject,
+  openFileMetadataV1,
+  openFileRecordV1,
+  openPublicLinkCollectionKeyV1,
+  openPublicLinkFileKeyV1,
+  resolveServed,
+  REVISION_CONTENT_HEADER,
+  REVISION_HEADER,
+  type ContentCommitment,
+  type DriveObjectExpected,
+} from '@kutup/crypto'
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
-import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
 import { editorKindFor } from '@kutup/drive-core/editorKind'
+import { openPublicPlayback, type Playback, type PlaybackFallback } from '@kutup/drive-core/playback'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
 import { streamDownload } from '@kutup/files/download/streamDownload'
+import { driveStreamLimits } from '@kutup/files/stream/limits'
 import { isListName, stateToListJson } from '@kutup/map/list'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
 import api from '@kutup/session/client'
+import { getAccessToken } from '@kutup/session/store'
 import { apiErrorCode } from '@kutup/ui/lib/apiError'
+import { parseLinkFragment } from '@kutup/crypto/linkFragment'
+import { goToLinkHome } from '@kutup/session/apps'
 
 interface ShareInfo {
   /** 'collection': a folder's files; 'file': one file (docs/plans/drive-file-sharing.md). */
@@ -22,7 +37,7 @@ interface ShareInfo {
   targetId: string
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
-  ownerUserId: string
+  ownerAccountId: string
   /** Who shared it (`alice@example.org`): the page says so. */
   ownerAccount: string
   /** Signs the folder's key history. */
@@ -30,6 +45,8 @@ interface ShareInfo {
   expiresAt?: string | null
   /** A link to one file: the file (its key is `collectionKeyEnvelope`, of generation `collectionKeyEpoch`). */
   file?: PublicFileRow
+  /** A collection's kind: `album` is Photos'. */
+  collectionKind?: string
 }
 
 export interface PublicFileRow {
@@ -55,6 +72,10 @@ export interface PublicFile {
   name: string | null
   mimeType: string
   size: number
+  /** The current content its metadata commits to (docs/plans/drive-block-format.md §2); null when it did not open. */
+  content: ContentCommitment | null
+  /** A note's or place list's latest saved state, as its metadata names it; null when none (or it did not open). */
+  stateRevisionId: string | null
 }
 
 export interface PublicShare {
@@ -65,7 +86,19 @@ export interface PublicShare {
   files: PublicFile[]
 }
 
-export type PublicFailure = 'missingKey' | 'notFound' | 'expired' | 'removed' | 'badKey' | 'waiting' | 'other'
+export type PublicFailure =
+  | 'missingKey'
+  | 'newerLink'
+  | 'notFound'
+  | 'expired'
+  | 'removed'
+  | 'blocked'
+  | 'blockedLegal'
+  | 'sharingOff'
+  | 'signInRequired'
+  | 'badKey'
+  | 'waiting'
+  | 'other'
 
 export class PublicLinkError extends Error {
   constructor(readonly failure: PublicFailure) {
@@ -78,29 +111,39 @@ export function publicFailure(error: unknown): PublicFailure {
   return error instanceof PublicLinkError ? error.failure : 'other'
 }
 
-/** The key lives only in the fragment (`#key=…`), which browsers never send to a server. */
+/** The key lives only in the fragment (`#v1.…`), which browsers never send to a server. */
 export function linkKey(): Uint8Array | null {
-  try {
-    const key = new URLSearchParams(window.location.hash.slice(1)).get('key')
-    const bytes = key ? fromBase64(key) : null
-    return bytes && bytes.length === 32 ? bytes : null
-  } catch {
-    return null
-  }
+  const fragment = parseLinkFragment(window.location.hash)
+  if (fragment.kind === 'newer') throw new PublicLinkError('newerLink')
+  return fragment.kind === 'key' ? fragment.key : null
 }
 
 /**
  * Why the server refused a link: unknown, expired, or taken down (by an
- * administrator, or with its owner's account: `410` `link_removed`).
+ * administrator, or with its owner's account: `410` `linkRemoved`).
  */
 export function linkFailure(error: unknown): PublicFailure {
-  if (apiErrorCode(error) === 'not_found') return 'notFound'
   const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
+  // The server's controls on public links (docs/plans/server-personal-data.md, A11).
+  const code = response?.data?.code
+  if (code === 'linkBlocked') return response?.status === 451 ? 'blockedLegal' : 'blocked'
+  if (code === 'sharingOff') return 'sharingOff'
+  if (code === 'signInRequired') return 'signInRequired'
+  if (apiErrorCode(error) === 'notFound') return 'notFound'
   if (response?.status !== 410) return 'other'
-  return response.data?.code === 'link_removed' ? 'removed' : 'expired'
+  return response.data?.code === 'linkRemoved' ? 'removed' : 'expired'
 }
 
-const shareBase = (token: string) => `/share/${encodeURIComponent(token)}`
+const shareBase = (token: string) => `/drive/public-links/${encodeURIComponent(token)}`
+
+/**
+ * The viewer's own sign-in, when they have one here: a server whose links
+ * open only for signed-in viewers asks for it on every request
+ * (docs/plans/server-personal-data.md, A11). Anyone else is anonymous.
+ */
+export function viewerToken(): string {
+  return getAccessToken() ?? ''
+}
 
 export async function loadShare(token: string): Promise<PublicShare> {
   const key = linkKey()
@@ -112,6 +155,12 @@ export async function loadShare(token: string): Promise<PublicShare> {
     throw new PublicLinkError(linkFailure(error))
   }
   if (share.expiresAt && Date.parse(share.expiresAt) < Date.now()) throw new PublicLinkError('expired')
+  // An album's link shows in Photos: opened on Drive or Office, it goes
+  // there (docs/plans/api-surface.md §7). Office's documents in a shared
+  // folder (`/s/<token>/<fileId>`) stay where they are.
+  if (share.collectionKind === 'album' && (await goToLinkHome('photos', token))) {
+    return new Promise<PublicShare>(() => undefined)
+  }
   const files = share.shareType === 'file' ? [await loadFile(share, key)] : await loadFolder(token, share, key)
   return { shareType: share.shareType, ownerAccount: share.ownerAccount, files }
 }
@@ -121,7 +170,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
   try {
     collectionKey = await openPublicLinkCollectionKeyV1(share.collectionKeyEnvelope, key, {
       collectionId: share.targetId,
-      ownerUserId: share.ownerUserId,
+      ownerAccountId: share.ownerAccountId,
       epoch: share.collectionKeyEpoch,
     })
   } catch {
@@ -136,7 +185,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
       .get<EpochLinkV1[]>(`${shareBase(token)}/epochs`)
       .then(({ data: chain }) => {
         if (chain.length !== share.collectionKeyEpoch) throw new Error('incomplete folder key history')
-        return unlockCollectionKeyring(collectionKey, share.targetId, share.ownerUserId, share.ownerAuthorityPublicKey, chain)
+        return unlockCollectionKeyring(collectionKey, share.targetId, share.ownerAccountId, share.ownerAuthorityPublicKey, chain)
       })
     return keyring.then((keys) => {
       const key = keys[epoch - 1]
@@ -163,6 +212,8 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
         name: opened?.metadata.name ?? null,
         mimeType: opened?.metadata.mimeType ?? 'application/octet-stream',
         size: opened?.metadata.size ?? 0,
+        content: opened?.metadata.content ?? null,
+        stateRevisionId: opened?.metadata.stateRevisionId ?? null,
       }
     }),
   )
@@ -176,7 +227,7 @@ async function loadFile(share: ShareInfo, key: Uint8Array): Promise<PublicFile> 
   try {
     fileKey = await openPublicLinkFileKeyV1(share.collectionKeyEnvelope, key, {
       fileId: share.targetId,
-      ownerUserId: share.ownerUserId,
+      ownerAccountId: share.ownerAccountId,
       generation: share.collectionKeyEpoch,
     })
   } catch {
@@ -193,7 +244,15 @@ async function loadFile(share: ShareInfo, key: Uint8Array): Promise<PublicFile> 
     name: metadata?.name ?? null,
     mimeType: metadata?.mimeType ?? 'application/octet-stream',
     size: metadata?.size ?? 0,
+    content: metadata?.content ?? null,
+    stateRevisionId: metadata?.stateRevisionId ?? null,
   }
+}
+
+/** What the file's current content must be: the revision and digest its metadata commits to, and its size. */
+function currentExpected(file: PublicFile): DriveObjectExpected {
+  if (!file.content) throw new Error('file is not open')
+  return { fileId: file.row.id, generation: file.row.contentKeyGeneration, content: file.content, size: file.size }
 }
 
 /** The file key of `generation`, through the file's own key chain. */
@@ -211,21 +270,34 @@ export function publicFileBase(token: string, fileId: string): string {
  * A note's text or a place list's places as last saved. Their edits are Yjs
  * state, not whole-file versions, so the download alone is the upload. Null
  * for other files, or when nothing was saved since the upload.
+ *
+ * The state read is the one the file's sealed metadata names
+ * (`stateRevisionId`, committed with each saved state): the page asks for
+ * it by id and refuses any other the server serves, so it can't be handed
+ * an older genuine state under the current metadata
+ * (docs/plans/drive-block-format.md §8).
  */
 export async function editedContent(token: string, file: PublicFile): Promise<Uint8Array | null> {
   const name = file.name ?? ''
   const list = isListName(name)
   if (!file.currentKey || (!list && editorKindFor(name) !== 'text')) return null
-  let response
-  try {
-    response = await api.get<ArrayBuffer>(`${shareBase(token)}/state/${file.row.id}`, { responseType: 'arraybuffer' })
-  } catch (error) {
-    if ((error as { response?: { status?: number } }).response?.status === 404) return null
-    throw error
-  }
+  // Nothing saved since the upload, as the metadata says: the upload is it.
+  const stateRevisionId = file.stateRevisionId
+  if (!stateRevisionId) return null
+  // A state the metadata names but the server doesn't serve is refused (a 404 too).
+  const response = await api.get<ArrayBuffer>(`${shareBase(token)}/files/${file.row.id}/state`, {
+    params: { revision: stateRevisionId },
+    responseType: 'arraybuffer',
+  })
   const generation = Number(response.headers['x-kutup-key-generation'])
   const key = await publicFileKeyAt(file, generation)
-  const state = await decryptFileBlobV1(new Uint8Array(response.data), key, { fileId: file.row.id, generation })
+  // That state, opened against the sealed record served with it.
+  const expected = await resolveServed(key, { fileId: file.row.id, generation, revisionId: stateRevisionId, served: true }, {
+    revisionId: typeof response.headers[REVISION_HEADER] === 'string' ? response.headers[REVISION_HEADER] : null,
+    revisionContentEnvelope:
+      typeof response.headers[REVISION_CONTENT_HEADER] === 'string' ? response.headers[REVISION_CONTENT_HEADER] : null,
+  })
+  const state = await openDriveObject(new Uint8Array(response.data), key, expected)
   if (list) return stateToListJson(state)
   const Y = await import('yjs')
   const doc = new Y.Doc()
@@ -242,10 +314,10 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
   if (!file.fileKey) throw new Error('file is not open')
   const edited = await editedContent(token, file)
   if (edited) return edited
-  const url = `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`
+  const url = `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`
   const parts: Uint8Array[] = []
   let length = 0
-  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, { fileId: file.row.id, generation: file.row.contentKeyGeneration }, '', signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, currentExpected(file), viewerToken(), signal)) {
     parts.push(plain)
     length += plain.length
   }
@@ -258,6 +330,36 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
   return bytes
 }
 
+/**
+ * A video or song through the link, for its player: streamed by block
+ * through the service worker (docs/plans/drive-block-format.md §4) with the
+ * link's key and the default limits, or read whole where no worker controls
+ * the page.
+ */
+export async function openPublicFilePlayback(
+  token: string,
+  file: PublicFile,
+  signal?: AbortSignal,
+  onProgress?: (read: number) => void,
+  onFallback?: (next: PlaybackFallback) => void,
+): Promise<Playback> {
+  const fileKey = file.fileKey
+  if (!fileKey) throw new Error('file is not open')
+  return openPublicPlayback(
+    {
+      url: `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`,
+      size: file.size,
+      mimeType: file.mimeType,
+      content: () => Promise.resolve({ fileKey, expected: currentExpected(file) }),
+      accessToken: viewerToken(),
+      readWhole: (readSignal) => readPublicFile(token, file, readSignal),
+    },
+    signal,
+    onProgress,
+    onFallback,
+  )
+}
+
 /** Save the file as it is now (a note or list with its edits) to this device. */
 export async function downloadPublicFile(token: string, file: PublicFile): Promise<void> {
   if (!file.fileKey || !file.name) return
@@ -268,13 +370,14 @@ export async function downloadPublicFile(token: string, file: PublicFile): Promi
     return
   }
   await streamDownload({
-    url: `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`,
+    url: `${await resolveApiBase()}${shareBase(token)}/files/${file.row.id}/download`,
     fileKey: file.fileKey,
-    context: { fileId: file.row.id, generation: file.row.contentKeyGeneration },
+    context: currentExpected(file),
     filename: file.name,
     mimeType: file.mimeType,
     expectedPlainSize: file.size,
-    accessToken: '',
+    blobFallbackMaxBytes: async () => (await driveStreamLimits({ anonymous: true })).blobFallbackMaxBytes,
+    accessToken: viewerToken(),
   })
 }
 

@@ -1,25 +1,52 @@
-// A Drive file blob, encrypted as tus asks for it (tus-js-client's
-// `fileReader`): any byte range of the ciphertext, produced from the
-// plaintext on demand. tus's own stream source keeps everything it reads
-// until the range it wants, which on resuming a 9 GB upload means 9 GB in
-// memory; this keeps two encrypted messages at most.
+// A Drive revision, sealed as tus asks for it (tus-js-client's
+// `fileReader`): any byte range of the object, produced from the plaintext
+// on demand. tus's own stream source keeps everything it reads until the
+// range it wants, which on resuming a 9 GB upload means 9 GB in memory; this
+// keeps a few blocks at most.
 //
-// The ciphertext is the 56-byte prefix (Drive header, secretstream header)
-// and then one message per 5 MiB of plaintext, each 17 bytes longer. tus
-// sends ranges of one message's length, which the prefix shifts across two
-// messages. A range already sent is asked for again when a request is
-// retried: the last two messages stay at hand. A range further on (an
-// upload resumed after a reload) is reached by encrypting the messages
-// before it again and dropping them; the encryptor only moves forward, so
-// one earlier than that starts the stream over from its header.
+// The object is the block format (docs/plans/drive-block-format.md §2): the
+// 48-byte header, one sealed block per 4 MiB of plaintext (40 bytes longer),
+// then the sealed manifest and the trailer (the tail), whose digest the
+// file's metadata commits to. Its length is known before anything is sealed.
+//
+// Block nonces are synthetic: sealing the same plaintext again gives the
+// same bytes, so a range already sent (a retried request, an upload resumed
+// after a reload, from wherever the server stopped, even inside a block) is
+// produced again by sealing from the block it falls in. The encryptor only
+// moves forward and the manifest needs every block's hash, so reaching a
+// block seals the ones before it again and drops them; one earlier than the
+// encryptor stands starts it over. The manifest's own nonce is random: the
+// tail is made once, kept (`onTail` persists it before any of it is sent),
+// and never made again.
 
-import {
-  DRIVE_FILE_BLOB_CIPHER_CHUNK,
-  DRIVE_FILE_BLOB_PREFIX_BYTES,
-  fileBlobCipherSize,
-  type FileBlobStreamEncryptorV1,
-} from '@kutup/crypto/fileBlob'
-import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
+import { DRIVE_BLOCK_SIZE, type ContentCommitment, type DriveBlockEncryptor, type ManifestSigner } from '@kutup/crypto'
+import { fromBase64, toBase64 } from '@kutup/crypto/base64'
+import { newContentHasher, type ContentHasher } from '@kutup/crypto/contentHash'
+import { hash } from '@kutup/crypto/hash'
+
+/** The file chosen to resume an upload is not the one it started with. */
+export class NotTheSameFile extends Error {
+  constructor() {
+    super('this is not the file the upload started with')
+  }
+}
+
+/**
+ * The sealed blocks an upload has made so far, by index: what a resumed
+ * upload compares the blocks it seals again with. A block's nonce is
+ * synthetic, so the same plaintext seals to the same bytes; each entry is
+ * the first 16 bytes of the sealed block's SHA-256 (base64).
+ */
+export interface SealedBlockLog {
+  /** The blocks sealed before (a resumed upload's, from its record). */
+  known: string[]
+  /** Keeps a block's entry, before the block is handed out. */
+  record: (index: number, hash: string) => Promise<void>
+}
+
+async function sealedBlockHash(sealed: Uint8Array): Promise<string> {
+  return toBase64((await hash(sealed)).subarray(0, 16))
+}
 
 /** The plaintext, read in pieces (a `File` from disk). */
 export interface PlaintextSource {
@@ -45,23 +72,102 @@ export interface TusFileSource {
   close(): void
 }
 
+/** A revision's tail once made: the sealed manifest and trailer, and what the metadata commits to. */
+export interface SealedTail {
+  tail: Uint8Array
+  content: ContentCommitment
+}
+
+/** A tail as the browser keeps it with a pending upload (`pendingUploads`). */
+export interface StoredTail {
+  tail: string
+  content: ContentCommitment
+}
+
+export function storeTail(tail: SealedTail): StoredTail {
+  return { tail: toBase64(tail.tail), content: tail.content }
+}
+
+export function loadTail(stored: StoredTail): SealedTail {
+  return { tail: fromBase64(stored.tail), content: stored.content }
+}
+
+export interface EncryptedSourceOptions {
+  /** A new encryptor for the revision, from its start: the same bytes every time. */
+  open: () => Promise<DriveBlockEncryptor>
+  /** Who signs the manifest. */
+  signer: ManifestSigner
+  /** The tail made before (an upload resumed after a reload). */
+  tail?: SealedTail
+  /** Called once the tail is made, before any of it is handed out: keep it. */
+  onTail?: (tail: SealedTail) => Promise<void>
+  /**
+   * The plaintext's SHA-256 (base64) the file's metadata will carry. It is
+   * worked out again as the blocks are sealed, and the last block is not
+   * handed out (so the upload never completes or commits) unless it is the
+   * same: a file that changed, or another file chosen to resume with, is
+   * refused (`NotTheSameFile`, and `wrongFile` is `sent`: blocks of it may
+   * have gone out already).
+   */
+  sha256?: string
+  /**
+   * For an upload whose metadata carries no SHA-256: the blocks sealed so
+   * far. A block sealed again must be the one sealed before, or it is not
+   * handed out (`NotTheSameFile`, `wrongFile` is `caught`: nothing of the
+   * other file was sent).
+   */
+  blocks?: SealedBlockLog
+}
+
+/** How many sealed blocks stay at hand for ranges asked again (a PATCH spans up to three). */
+const KEEP_BLOCKS = 4
+
 export class EncryptedFileSource implements TusFileSource {
   readonly size: number
-  private readonly messages: number
-  private encryptor: FileBlobStreamEncryptorV1 | null = null
-  /** The message the encryptor produces next. */
+  private readonly blockCount: number
+  private readonly header: Uint8Array
+  /** A full block's sealed length, and where the tail starts. */
+  private readonly stride: number
+  private readonly tailStart: number
+  private encryptor: DriveBlockEncryptor | null
+  /** The block the encryptor seals next. */
   private next = 0
   private readonly kept = new Map<number, Uint8Array>()
+  private tail: SealedTail | null
+  /** The plaintext's hash so far, when it is checked (`options.sha256`). */
+  private hasher: ContentHasher | null = null
+  private wrong: 'caught' | 'sent' | null = null
 
   constructor(
     private readonly plaintext: PlaintextSource,
-    /** The stream from its start: the same prefix, the same bytes every time. */
-    private readonly openStream: () => Promise<FileBlobStreamEncryptorV1>,
-    private readonly prefix: Uint8Array,
+    /** An encryptor for the revision, not yet used: its layout is the object's. */
+    first: DriveBlockEncryptor,
+    private readonly options: EncryptedSourceOptions,
   ) {
-    if (prefix.length !== DRIVE_FILE_BLOB_PREFIX_BYTES) throw new Error('Drive file-blob prefix has the wrong length')
-    this.size = fileBlobCipherSize(plaintext.size)
-    this.messages = Math.max(1, Math.ceil(plaintext.size / PLAIN_CHUNK))
+    if (first.size !== plaintext.size) throw new Error('the encryptor is for another size')
+    this.encryptor = first
+    this.size = first.objectLength
+    this.blockCount = first.blockCount
+    this.header = first.header
+    this.stride = first.sealedOffset(1) - first.sealedOffset(0)
+    const last = this.blockCount - 1
+    this.tailStart = first.sealedOffset(last) + first.plainLength(last) + (this.stride - DRIVE_BLOCK_SIZE)
+    this.tail = options.tail ?? null
+    if (this.tail && this.tail.tail.length !== this.size - this.tailStart) throw new Error('the kept tail is for another object')
+  }
+
+  /**
+   * Set once the plaintext is found not to be the file the upload started
+   * with: `caught` before any of it was handed out, `sent` when blocks of
+   * it may have been. Nothing more is handed out after.
+   */
+  get wrongFile(): 'caught' | 'sent' | null {
+    return this.wrong
+  }
+
+  /** What the metadata commits to, once the tail is made. */
+  get content(): ContentCommitment | null {
+    return this.tail?.content ?? null
   }
 
   async slice(start: number, end: number): Promise<{ value: Blob; done: boolean }> {
@@ -69,25 +175,31 @@ export class EncryptedFileSource implements TusFileSource {
     return { value: new Blob([bytes as Uint8Array<ArrayBuffer>]), done }
   }
 
-  /** The ciphertext at [start, end), as bytes. */
+  /** The object at [start, end), as bytes. */
   async bytes(start: number, end: number): Promise<{ bytes: Uint8Array; done: boolean }> {
+    if (this.wrong) throw new NotTheSameFile()
     const stop = Math.min(end, this.size)
     if (start >= stop) return { bytes: new Uint8Array(0), done: true }
     const out = new Uint8Array(stop - start)
     let at = start
     while (at < stop) {
-      if (at < DRIVE_FILE_BLOB_PREFIX_BYTES) {
-        const upTo = Math.min(DRIVE_FILE_BLOB_PREFIX_BYTES, stop)
-        out.set(this.prefix.subarray(at, upTo), at - start)
-        at = upTo
-        continue
+      let piece: Uint8Array
+      let from: number
+      if (at < this.header.length) {
+        piece = this.header
+        from = 0
+      } else if (at >= this.tailStart) {
+        piece = (await this.sealedTail()).tail
+        from = this.tailStart
+      } else {
+        const index = Math.min(this.blockCount - 1, Math.floor((at - this.header.length) / this.stride))
+        piece = await this.block(index)
+        from = this.header.length + index * this.stride
       }
-      const index = Math.floor((at - DRIVE_FILE_BLOB_PREFIX_BYTES) / DRIVE_FILE_BLOB_CIPHER_CHUNK)
-      const message = await this.message(index)
-      const within = at - DRIVE_FILE_BLOB_PREFIX_BYTES - index * DRIVE_FILE_BLOB_CIPHER_CHUNK
-      const take = Math.min(message.length - within, stop - at)
-      if (take <= 0) throw new Error('encrypted message is shorter than its place in the file')
-      out.set(message.subarray(within, within + take), at - start)
+      const within = at - from
+      const take = Math.min(piece.length - within, stop - at)
+      if (take <= 0) throw new Error('a sealed piece is shorter than its place in the object')
+      out.set(piece.subarray(within, within + take), at - start)
       at += take
     }
     return { bytes: out, done: stop >= this.size }
@@ -95,30 +207,82 @@ export class EncryptedFileSource implements TusFileSource {
 
   close(): void {
     this.kept.clear()
+    this.encryptor?.free()
     this.encryptor = null
+    this.dropHasher()
   }
 
-  private async message(index: number): Promise<Uint8Array> {
-    const kept = this.kept.get(index)
-    if (kept) return kept
-    if (index >= this.messages) throw new Error('range beyond the end of the file')
-    if (!this.encryptor || index < this.next) {
-      this.encryptor = await this.openStream()
+  private dropHasher(): void {
+    // Finishing frees it.
+    this.hasher?.finish()
+    this.hasher = null
+  }
+
+  private async block(index: number): Promise<Uint8Array> {
+    return this.kept.get(index) ?? this.sealUpTo(index)
+  }
+
+  /** Seals on to block `index` (from the start again when it is behind) and gives that block. */
+  private async sealUpTo(index: number): Promise<Uint8Array> {
+    if (!this.encryptor || this.next > index) {
+      this.encryptor?.free()
+      this.encryptor = await this.options.open()
       this.next = 0
-      this.kept.clear()
     }
-    let message: Uint8Array = new Uint8Array(0)
+    if (this.next === 0 && this.options.sha256) {
+      // From the start: the plaintext is hashed again as it is sealed.
+      this.dropHasher()
+      this.hasher = await newContentHasher()
+    }
+    const encryptor = this.encryptor
+    let sealed: Uint8Array = new Uint8Array(0)
     while (this.next <= index) {
       const at = this.next
-      const from = at * PLAIN_CHUNK
-      const to = Math.min(from + PLAIN_CHUNK, this.plaintext.size)
-      const plain = from < to ? await this.plaintext.read(from, to) : new Uint8Array(0)
-      if (plain.length !== to - from) throw new Error('the file changed while it was being read')
-      message = this.encryptor.push(plain, at === this.messages - 1)
-      this.kept.set(at, message)
-      this.kept.delete(at - 2)
+      const length = encryptor.plainLength(at)
+      const from = at * DRIVE_BLOCK_SIZE
+      const plain = length > 0 ? await this.plaintext.read(from, from + length) : new Uint8Array(0)
+      if (plain.length !== length) throw new Error('the file changed while it was being read')
+      this.hasher?.update(plain)
+      sealed = encryptor.sealNext(plain)
+      const log = this.options.blocks
+      if (log) {
+        const hash = await sealedBlockHash(sealed)
+        const known = log.known[at]
+        if (known === undefined) await log.record(at, hash)
+        else if (known !== hash) {
+          this.wrong = 'caught'
+          throw new NotTheSameFile()
+        }
+      }
+      if (at === this.blockCount - 1 && this.hasher) {
+        // Every byte was read: it must be the content the metadata names.
+        const digest = this.hasher.finish()
+        this.hasher = null
+        if (digest !== this.options.sha256) {
+          this.wrong = 'sent'
+          throw new NotTheSameFile()
+        }
+      }
+      this.kept.set(at, sealed)
+      this.kept.delete(at - KEEP_BLOCKS)
       this.next = at + 1
     }
-    return message
+    return sealed
+  }
+
+  /** The tail: kept, or made once one encryptor has sealed every block. */
+  private async sealedTail(): Promise<SealedTail> {
+    if (this.tail) return this.tail
+    const last = this.blockCount - 1
+    if (this.next !== this.blockCount) await this.sealUpTo(last)
+    const encryptor = this.encryptor
+    if (!encryptor || this.next !== this.blockCount) throw new Error('the revision is not sealed to its end')
+    const made = encryptor.finish(this.options.signer)
+    if (made.tail.length !== this.size - this.tailStart) throw new Error('the tail is not the length the layout gives')
+    // Kept before any of it goes out: the manifest's nonce is random, so it
+    // can never be made the same again.
+    await this.options.onTail?.(made)
+    this.tail = made
+    return made
   }
 }

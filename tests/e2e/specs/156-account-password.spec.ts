@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount, submitThroughRateLimit } from '../fixtures/apps'
 
 // The password through OPAQUE (docs/plans/opaque.md): changing it in Account
@@ -12,17 +12,35 @@ const FIRST = 'Deneme123*FirstOpaquePassword'
 const SECOND = 'Deneme123*SecondOpaquePassword'
 const THIRD = 'Deneme123*ThirdOpaquePassword'
 
-/** The current TOTP code for a base32 secret (RFC 6238: SHA-1, 30 s, 6 digits). */
-function totp(secret: string): string {
+/** The current time step (30 s). */
+const stepNow = () => Math.floor(Date.now() / 30_000)
+
+/** The TOTP code for a base32 secret at a time step (RFC 6238: SHA-1, 30 s, 6 digits). */
+function totp(secret: string, step = stepNow()): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
   let bits = ''
   for (const char of secret.replace(/=+$/, '').toUpperCase()) bits += alphabet.indexOf(char).toString(2).padStart(5, '0')
   const key = Buffer.from(bits.match(/.{8}/g)!.map((byte) => parseInt(byte, 2)))
   const counter = Buffer.alloc(8)
-  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)))
+  counter.writeBigUInt64BE(BigInt(step))
   const mac = createHmac('sha1', key).update(counter).digest()
   const offset = mac[mac.length - 1] & 0x0f
   return String((mac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0')
+}
+
+const takenSteps = new Map<string, number>()
+
+/** A code the server takes now: each code is taken once (RFC 6238 §5.2), within a step either side of now, so the next step not used yet, waiting for the clock once both are used. */
+async function freshTotp(secret: string): Promise<string> {
+  for (;;) {
+    const now = stepNow()
+    const step = Math.max(now, (takenSteps.get(secret) ?? -1) + 1)
+    if (step <= now + 1) {
+      takenSteps.set(secret, step)
+      return totp(secret, step)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
 }
 
 async function signIn(page: Page, username: string, password: string, outcome: 'Welcome' | 'failed' | 'code') {
@@ -66,14 +84,15 @@ test('the password is changed, guarded by a second factor, and reset with the re
   const manual = (await page.getByText('Or enter this key manually:').textContent()) ?? ''
   const secret = manual.replace('Or enter this key manually:', '').trim()
   expect(secret).toMatch(/^[A-Z2-7]+=*$/)
-  // Turning it on asks for the password too (a totp grant); a wrong one is refused.
+  // Turning it on asks for the password too (a totp grant); a wrong one is
+  // refused (before the code is taken, so the code now will do).
   await submitThroughRateLimit(page, 'Verify and turn on', page.getByText('That is not your Kutup password.'), async () => {
     await page.getByLabel('6-digit code').fill(totp(secret))
     await page.getByLabel('Your Kutup password').fill('Not*MyPassword12345')
   })
   const saved = page.getByRole('button', { name: 'I have saved them' })
   await submitThroughRateLimit(page, 'Verify and turn on', saved, async () => {
-    await page.getByLabel('6-digit code').fill(totp(secret))
+    await page.getByLabel('6-digit code').fill(await freshTotp(secret))
     await page.getByLabel('Your Kutup password').fill(SECOND)
   })
   // Its recovery codes are shown once, then put away.
@@ -90,7 +109,8 @@ test('the password is changed, guarded by a second factor, and reset with the re
   const tab = await other.newPage()
   await signIn(tab, account.username, FIRST, 'failed')
   await signIn(tab, account.username, SECOND, 'code')
-  await tab.getByLabel('Authentication code').fill(totp(secret))
+  // The code that turned it on was taken: a fresh one.
+  await tab.getByLabel('Authentication code').fill(await freshTotp(secret))
   await submitThroughRateLimit(tab, 'Verify', tab.getByRole('heading', { name: /^Welcome/ }))
   await other.close()
   const another = await browser.newContext()

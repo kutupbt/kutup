@@ -16,7 +16,10 @@ impl Client {
             .mime_str("application/octet-stream")?;
         let form = Form::new().part("file", part);
         let resp = self
-            .request(Method::PUT, &format!("/files/{file_id}/assets/{asset_id}"))
+            .request(
+                Method::PUT,
+                &format!("/drive/files/{file_id}/assets/{asset_id}"),
+            )
             .multipart(form)
             .send()?;
         super::check_ok(resp)
@@ -26,7 +29,10 @@ impl Client {
     /// The asset envelope and the file key generation it was sealed at.
     pub fn download_asset(&self, file_id: &str, asset_id: &str) -> Result<(Vec<u8>, u32)> {
         let resp = self
-            .request(Method::GET, &format!("/files/{file_id}/assets/{asset_id}"))
+            .request(
+                Method::GET,
+                &format!("/drive/files/{file_id}/assets/{asset_id}"),
+            )
             .send()?;
         if resp.status().as_u16() >= 400 {
             return Err(super::api_error(resp));

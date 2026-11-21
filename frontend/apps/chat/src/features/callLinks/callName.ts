@@ -2,7 +2,7 @@
 // the next call opens with it filled in. It is only a convenience: nothing
 // else reads it.
 
-const KEY = 'kutup-call-name'
+const KEY = 'kutup.chat.callName'
 /** What the join form accepts (the sealed name holds 124 bytes of UTF-8). */
 export const MAX_CALL_NAME_LENGTH = 40
 

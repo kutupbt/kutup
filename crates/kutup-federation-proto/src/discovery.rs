@@ -11,7 +11,10 @@ use crate::{
     MAX_DISCOVERY_LIFETIME_SECONDS,
 };
 
-const DISCOVERY_SIGNING_DOMAIN: &[u8] = b"kutup-federation-discovery-v2\0";
+/// The federation protocol versions this build serves.
+pub const SERVED_VERSIONS: &[u16] = &[crate::FEDERATION_VERSION];
+
+const DISCOVERY_SIGNING_DOMAIN: &[u8] = kutup_crypto::labels::FEDERATION_DISCOVERY_V2;
 
 /// URL policy used while producing or verifying a signed discovery document.
 ///
@@ -128,6 +131,10 @@ impl FederationGroupSendKeyV1 {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FederationDiscoveryV2 {
     pub fed_version: FederationProtocolVersion,
+    /// Every protocol version this server serves, each under
+    /// `/api/fed/v{n}/` (docs/plans/api-surface.md §1.6): a peer sends with
+    /// the highest both list. Sorted, unique, and holding `fedVersion`.
+    pub fed_versions: Vec<u16>,
     pub server: String,
     pub api_base: String,
     pub capabilities: Vec<FederationCapabilityId>,
@@ -184,6 +191,7 @@ impl FederationDiscoveryV2 {
         capabilities.sort();
         let mut discovery = Self {
             fed_version: FederationProtocolVersion::V2,
+            fed_versions: SERVED_VERSIONS.to_vec(),
             server: server.into(),
             api_base: api_base.into(),
             capabilities,
@@ -290,6 +298,10 @@ impl FederationDiscoveryV2 {
         let mut output = Vec::with_capacity(512);
         output.extend_from_slice(DISCOVERY_SIGNING_DOMAIN);
         output.extend_from_slice(&u16::from(self.fed_version).to_be_bytes());
+        output.extend_from_slice(&(self.fed_versions.len() as u16).to_be_bytes());
+        for version in &self.fed_versions {
+            output.extend_from_slice(&version.to_be_bytes());
+        }
         push_string(&mut output, "server", &self.server)?;
         push_string(&mut output, "apiBase", &self.api_base)?;
         let count = u16::try_from(self.capabilities.len()).map_err(|_| {
@@ -327,6 +339,16 @@ impl FederationDiscoveryV2 {
         transport_policy: FederationDiscoveryTransportPolicy,
     ) -> Result<(), FederationProtocolError> {
         validate_server_name(&self.server)?;
+        if self.fed_versions.is_empty()
+            || self.fed_versions.len() > 16
+            || self.fed_versions.windows(2).any(|pair| pair[0] >= pair[1])
+            || !self.fed_versions.contains(&u16::from(self.fed_version))
+        {
+            return Err(crate::error::invalid_field(
+                "fedVersions",
+                "must be sorted, unique and include fedVersion",
+            ));
+        }
         let canonical_api_base = normalize_api_base(&self.api_base, transport_policy)?;
         if canonical_api_base != self.api_base {
             return Err(crate::error::invalid_field(

@@ -55,7 +55,7 @@ pub fn probe_vault(contents: &[u8]) -> Result<JsValue, JsValue> {
 #[wasm_bindgen(js_name = resealKeptKey)]
 pub fn reseal_kept_key(
     envelope: &str,
-    master_key: &[u8],
+    master_keys: &[u8],
     binding: &str,
     from: &str,
     to: &str,
@@ -66,7 +66,7 @@ pub fn reseal_kept_key(
         .map_err(|_| js_error("the kept key is not base64"))?;
     let sealed = kutup_pass::kept::reseal(
         &envelope,
-        master_key,
+        &master_keys_of(master_keys)?,
         binding,
         &vault_id(from)?,
         &vault_id(to)?,
@@ -307,7 +307,7 @@ impl Vault {
     #[wasm_bindgen(js_name = keepKey)]
     pub fn keep_key(
         &self,
-        master_key: &[u8],
+        master_keys: &[u8],
         binding: &str,
         file_id: &str,
         revision: f64,
@@ -318,8 +318,10 @@ impl Vault {
                 "save the vault with its new key before keeping it",
             ));
         }
+        let keys = master_keys_of(master_keys)?;
         let sealed = kutup_pass::kept::seal(
-            master_key,
+            keys.current(),
+            keys.generation(),
             binding,
             &vault_id(file_id)?,
             revision_arg(revision)?,
@@ -342,11 +344,15 @@ impl Vault {
     pub fn kept_key_is_mine(
         &self,
         envelope: &str,
-        master_key: &[u8],
+        master_keys: &[u8],
         binding: &str,
         file_id: &str,
     ) -> Result<bool, JsValue> {
         let Ok(envelope) = STANDARD.decode(envelope) else {
+            return Ok(false);
+        };
+        let keys = master_keys_of(master_keys)?;
+        let Ok(master_key) = keys.key_for(&envelope) else {
             return Ok(false);
         };
         Ok(
@@ -452,6 +458,13 @@ fn revision_arg(revision: f64) -> Result<u64, JsValue> {
     Ok(revision as u64)
 }
 
+/// The account's master keys as the page passes them (`session.masterKeys`,
+/// `MasterKeys::encode`): sealed under the current one, opened under the one
+/// a record names (docs/plans/mk-rotation-exercise.md).
+fn master_keys_of(encoded: &[u8]) -> Result<kutup_pass::kept::MasterKeys, JsValue> {
+    kutup_pass::kept::MasterKeys::decode(encoded).map_err(js_error)
+}
+
 fn vault_id(file_id: &str) -> Result<[u8; 16], JsValue> {
     Ok(*uuid::Uuid::parse_str(file_id)
         .map_err(|_| js_error("a vault's file id is a UUID"))?
@@ -476,13 +489,15 @@ struct KeptView {
 #[wasm_bindgen(js_name = openKept)]
 pub fn open_kept(
     envelope: &str,
-    master_key: &[u8],
+    master_keys: &[u8],
     binding: &str,
     file_id: &str,
 ) -> Result<JsValue, JsValue> {
     let envelope = STANDARD
         .decode(envelope)
         .map_err(|_| js_error("a kept key is base64"))?;
+    let keys = master_keys_of(master_keys)?;
+    let master_key = keys.key_for(&envelope).map_err(js_error)?;
     let kept = kutup_pass::kept::open(&envelope, master_key, binding, &vault_id(file_id)?)
         .map_err(js_error)?;
     to_js(&KeptView {

@@ -65,17 +65,12 @@ fn recipient(c: &Client, base: &str, seed: u8) -> Recipient {
         ),
         avatar: None,
         about: None,
-        wrapped_key: opaque_profile_envelope(
-            &user.person,
-            &version,
-            ProfileEnvelopePurpose::WrappedProfileKey,
-            48,
-        ),
+        wrapped_key: common::wrapped_profile_key(&user.master_key, &user.binding, &version, 1),
         access_key_verifier: "72".repeat(32),
         delivery_capability_verifier: hex::encode(hash(Suite::V1, capability)),
     };
     let r = bearer(
-        device.auth(c.put(format!("{base}/api/chat/profile"))),
+        device.auth(c.put(format!("{base}/api/v1/chat/profile"))),
         &user.token,
     )
     .json(&profile)
@@ -113,7 +108,7 @@ fn send(account_id: &str, send_id: &str, capability: &[u8], device: (u32, u32)) 
 fn batch(c: &Client, base: &str, server: &str, recipients: Vec<Value>) -> Vec<Value> {
     let r = c
         .post(format!(
-            "{base}/api/chat/anonymous/messages/batch?server={server}"
+            "{base}/api/v1/chat/anonymous/messages/batch?server={server}"
         ))
         .json(&json!({ "recipients": recipients }))
         .send()
@@ -126,7 +121,7 @@ fn batch(c: &Client, base: &str, server: &str, recipients: Vec<Value>) -> Vec<Va
 
 fn server_name(c: &Client, base: &str) -> String {
     let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
+        .get(format!("{base}/api/v1/auth/settings"))
         .send()
         .unwrap()
         .json()
@@ -243,7 +238,7 @@ fn a_batch_answers_each_recipient_on_its_own() {
 
     // Malformed batches are refused whole.
     let r = c
-        .post(format!("{base}/api/chat/anonymous/messages/batch"))
+        .post(format!("{base}/api/v1/chat/anonymous/messages/batch"))
         .json(&json!({ "recipients": [] }))
         .send()
         .unwrap();

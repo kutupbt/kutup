@@ -1268,7 +1268,7 @@ impl ChatContent {
 /// Body of a `groupRemoval`: the group, and the log entry that removed the
 /// recipient (its change and the home's notary), as `GetLogs` serves it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupRemovalBody {
     pub group_id: String,
     pub entry: crate::group_route::GroupLogEntryV1,
@@ -1281,10 +1281,28 @@ pub struct TextBody {
     pub text: String,
 }
 
+/// The reactions the pickers offer first. Any emoji is a reaction
+/// (docs/plans/format-evolution.md, "Chat content bodies"): a reader shows
+/// whatever emoji a newer client sent.
 pub const CHAT_REACTION_EMOJIS_V1: [&str; 6] = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+/// The longest reaction, in bytes: one emoji, however many code points its
+/// sequence takes (skin tones, ZWJ families, flags, keycaps).
+pub const MAX_REACTION_EMOJI_BYTES: usize = 64;
+
+/// Whether `emoji` can be a reaction: a short run of printable characters
+/// with at least one outside ASCII, so text and blanks can't pose as one.
+pub fn is_reaction_emoji(emoji: &str) -> bool {
+    !emoji.is_empty()
+        && emoji.len() <= MAX_REACTION_EMOJI_BYTES
+        && emoji.chars().count() <= 16
+        && !emoji.is_ascii()
+        && !emoji.chars().any(|c| {
+            c.is_control() || (c.is_whitespace() && c != '\u{200d}') || c.is_ascii_alphabetic()
+        })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ReactionBody {
     pub target_message_id: String,
     pub emoji: String,
@@ -1298,8 +1316,8 @@ impl ReactionBody {
         if target.is_nil() || target.to_string() != self.target_message_id {
             return Err("Chat reaction target must be a canonical non-nil UUID".into());
         }
-        if !CHAT_REACTION_EMOJIS_V1.contains(&self.emoji.as_str()) {
-            return Err("Chat reaction emoji is not in the V1 set".into());
+        if !is_reaction_emoji(&self.emoji) {
+            return Err("Chat reaction is not an emoji".into());
         }
         Ok(())
     }
@@ -1313,7 +1331,7 @@ pub enum MessageMutationOperation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageMutationBody {
     pub target_message_id: String,
     pub operation: MessageMutationOperation,
@@ -1353,7 +1371,7 @@ pub enum ReceiptState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ReceiptBody {
     pub message_ids: Vec<String>,
     pub state: ReceiptState,
@@ -1369,7 +1387,7 @@ pub const GROUP_CONTEXT_FIELD: &str = "group";
 /// Body of a [`kind::SENDER_KEY_DISTRIBUTION`]: libsignal's
 /// `SenderKeyDistributionMessage` for one group's distribution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct SenderKeyDistributionBody {
     pub group_id: String,
     /// The sender's distribution id for the group (a UUID).
@@ -1398,7 +1416,7 @@ impl SenderKeyDistributionBody {
 /// read (docs/plans/pairwise-groups.md §2). The answer carries the sender's
 /// current key, so no distribution needs naming.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionControlGroupV1 {
     pub group_id: String,
 }
@@ -1462,7 +1480,7 @@ pub struct ResendBody {
 /// Body of a local [`kind::PEER_RENAMED`] line: one step of the peer's own
 /// verified rename chain. The addresses are labels shown, never keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct PeerRenamedBody {
     /// The address before, `username@server`.
     pub previous: String,
@@ -1505,13 +1523,13 @@ pub struct UndecryptableBody {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct TypingBody {
     pub active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct DisappearingTimerBody {
     /// `None` disables the timer for future messages. Already-authenticated
     /// messages retain their own duration and cannot be resurrected.
@@ -1520,7 +1538,7 @@ pub struct DisappearingTimerBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct DisappearingExpiryStartBody {
     pub conversation: ConversationId,
     pub target_message_id: String,
@@ -1568,7 +1586,7 @@ pub const MAX_SAFE_CLOCK_MS: i64 = (1 << 53) - 1;
 /// conversation; equal revisions from two devices tie-break by
 /// `source_device_id`, so every device converges on the same record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationStateBody {
     pub conversation: ConversationId,
     pub revision: u32,
@@ -1616,7 +1634,7 @@ impl ConversationStateBody {
 /// `read_through_ms` (the reading device's clock for that message) places the
 /// position when the anchor is missing here (not arrived yet, or deleted).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadPositionBody {
     pub conversation: ConversationId,
     pub through_message_id: String,
@@ -1638,7 +1656,7 @@ impl ReadPositionBody {
 /// change from its home's log). Members are accounts, never
 /// addresses or pseudonyms.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", tag = "type")]
 pub enum GroupUpdateChange {
     #[serde(rename_all = "camelCase")]
     NameChanged {
@@ -1749,7 +1767,7 @@ pub enum GroupUpdateChange {
 
 /// Who made an applied group change, and what it changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupUpdateBody {
     /// Who made the change.
     pub actor: AccountRef,
@@ -1760,7 +1778,7 @@ pub struct GroupUpdateBody {
 /// and the image (WebP or PNG, at most 48 KiB, inline so it syncs and is
 /// backed up with the account's other state).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StickerSavedBody {
     pub sticker_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1796,7 +1814,7 @@ impl StickerSavedBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StickerRemovedBody {
     pub sticker_id: String,
 }
@@ -1806,7 +1824,7 @@ pub struct StickerRemovedBody {
 /// shows in its place: who sent it, when (the opening device's clock), and
 /// whether it was a photo or a video.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ViewOnceOpenedBody {
     pub conversation: ConversationId,
     pub message_id: String,
@@ -1830,7 +1848,7 @@ impl ViewOnceOpenedBody {
 /// Remove these messages from this account's history on every one of its
 /// devices. Nobody else's copy changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteForMeBody {
     pub conversation: ConversationId,
     pub message_ids: Vec<String>,
@@ -2049,7 +2067,7 @@ mod tests {
             "t",
             1,
             target,
-            "🔥",
+            "ok",
             true,
         )
         .is_err());
@@ -2108,7 +2126,7 @@ mod tests {
     }
 
     #[test]
-    fn typing_is_strict_typed_ephemeral_content() {
+    fn typing_is_typed_ephemeral_content() {
         let typing = ChatContent::typing_with_id(
             "018f8ad5-d7db-7c7c-8c4b-4f53467f4432",
             "2026-08-10T11:00:00Z",
@@ -2117,9 +2135,10 @@ mod tests {
         );
         assert_eq!(typing.as_typing(), Some(TypingBody { active: true }));
 
-        let mut malformed = typing;
-        malformed.body["future"] = serde_json::json!(true);
-        assert_eq!(malformed.as_typing(), None);
+        // A field a newer client added is ignored, not a failure.
+        let mut newer = typing;
+        newer.body["future"] = serde_json::json!(true);
+        assert_eq!(newer.as_typing(), Some(TypingBody { active: true }));
     }
 
     #[test]
@@ -2334,7 +2353,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_state_rejects_unknown_fields_and_a_missing_message_id() {
+    fn conversation_state_ignores_unknown_fields_and_rejects_a_missing_message_id() {
         let mut content = ChatContent::conversation_state_with_id(
             MESSAGE,
             "t",
@@ -2351,10 +2370,10 @@ mod tests {
             },
         )
         .unwrap();
+        // A field a newer client added is ignored (format-evolution, rule 3).
         let mut unknown = content.clone();
         unknown.body["colour"] = serde_json::json!("red");
-        assert_eq!(unknown.as_conversation_state(), None);
-        assert_eq!(unknown.account_control_is_valid(), Some(false));
+        assert!(unknown.as_conversation_state().is_some());
         let mut missing = serde_json::to_value(&content).unwrap();
         missing.as_object_mut().unwrap().remove("messageId");
         assert!(serde_json::from_value::<ChatContent>(missing).is_err());
@@ -2419,5 +2438,34 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    /// docs/plans/format-evolution.md, "Chat content bodies": a body field a
+    /// newer client added does not make the message unreadable, and any
+    /// emoji is a reaction.
+    #[test]
+    fn bodies_tolerate_newer_fields_and_any_emoji() {
+        let target = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff";
+        for emoji in ["👍", "🫠", "👩‍👩‍👧", "🇹🇷", "1️⃣", "👍🏽"] {
+            assert!(is_reaction_emoji(emoji), "{emoji}");
+        }
+        for not_emoji in ["", "a", "ok", " ", "👍 ", "\n", &"😀".repeat(17)] {
+            assert!(!is_reaction_emoji(not_emoji), "{not_emoji:?}");
+        }
+        let body: ReactionBody = serde_json::from_value(serde_json::json!({
+            "targetMessageId": target,
+            "emoji": "🫠",
+            "active": true,
+            "superReaction": {"level": 3}
+        }))
+        .unwrap();
+        body.validate().unwrap();
+        let mutation: MessageMutationBody = serde_json::from_value(serde_json::json!({
+            "targetMessageId": target,
+            "operation": "delete",
+            "reason": "later field"
+        }))
+        .unwrap();
+        mutation.validate().unwrap();
     }
 }

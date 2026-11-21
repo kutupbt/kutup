@@ -8,15 +8,14 @@ use base64::Engine;
 use serde::Deserialize;
 
 use kutup_crypto::{
-    account_envelope::{self, AccountEnvelopePurpose},
+    account_record::{self, AccountRecordPurpose},
+    account_roots::{DriveRoot, RootGeneration},
     asset,
     drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose},
-    drive_object::{self, DriveFileBlobContextV1},
     envelope,
     identity::AccountIdentityKeysV1,
     kdf,
     local_state::{self, LocalStatePurpose},
-    stream,
 };
 
 fn b64(s: &str) -> Vec<u8> {
@@ -27,18 +26,14 @@ fn b64(s: &str) -> Vec<u8> {
 
 #[derive(Deserialize)]
 struct CryptoVectors {
-    kdf: Vec<KdfVec>,
     #[serde(rename = "recoveryAuth")]
     recovery_auth: RecoveryAuthVec,
     #[serde(rename = "accountIdentity")]
     account_identity: AccountIdentityVec,
-    #[serde(rename = "accountEnvelope")]
-    account_envelope: AccountEnvelopeVec,
+    #[serde(rename = "accountRecord")]
+    account_record: AccountRecordVec,
     #[serde(rename = "driveEnvelope")]
     drive_envelope: DriveEnvelopeVec,
-    #[serde(rename = "driveFileBlob")]
-    drive_file_blob: DriveFileBlobVec,
-    stream: Vec<StreamVec>,
     asset: AssetVec,
     thumbnail: ThumbnailVec,
     #[serde(rename = "collectionKeyring")]
@@ -62,6 +57,7 @@ struct CryptoVectors {
 struct FileMetadataVec {
     canonical: Vec<FileMetadataCase>,
     invalid: Vec<String>,
+    newer: Vec<String>,
     content_hash: ContentHashVec,
 }
 
@@ -69,8 +65,9 @@ struct FileMetadataVec {
 #[serde(rename_all = "camelCase")]
 struct PhotosLibraryVec {
     master_key: String,
-    library_key: String,
-    account_incarnation_id: String,
+    binding: String,
+    /// The record's id, unpadded base64url of its 32 bytes.
+    record_id: String,
     first: PhotosLibraryRecordVec,
     second: PhotosLibraryRecordVec,
 }
@@ -79,10 +76,6 @@ struct PhotosLibraryVec {
 #[serde(rename_all = "camelCase")]
 struct PhotosLibraryRecordVec {
     revision: u64,
-    #[serde(default)]
-    previous_digest: Option<String>,
-    #[serde(default)]
-    digest: Option<String>,
     plaintext: String,
     nonce: String,
     envelope: String,
@@ -127,6 +120,18 @@ struct LocalStateVecs {
     session_fork: LocalStateVec,
     #[serde(rename = "webSession")]
     web_session: LocalStateVec,
+    #[serde(rename = "manifestPins")]
+    manifest_pins: ManifestPinsVec,
+}
+
+#[derive(Deserialize)]
+struct ManifestPinsVec {
+    #[serde(rename = "masterKey")]
+    master_key: String,
+    profile: String,
+    nonce: String,
+    plaintext: String,
+    envelope: String,
 }
 
 #[derive(Deserialize)]
@@ -137,17 +142,6 @@ struct LocalStateVec {
     envelope: String,
 }
 
-#[derive(Deserialize)]
-struct KdfVec {
-    password: String,
-    salt: String,
-    #[serde(rename = "expectedRoot")]
-    expected_root: String,
-    #[serde(rename = "expectedKek")]
-    expected_kek: String,
-    #[serde(rename = "expectedLoginKey")]
-    expected_login_key: String,
-}
 #[derive(Deserialize)]
 struct RecoveryAuthVec {
     entropy: String,
@@ -164,18 +158,18 @@ struct AccountIdentityVec {
     authority_key_id: String,
     #[serde(rename = "incarnationId")]
     incarnation_id: String,
-    #[serde(rename = "driveHpkePublicKey")]
-    drive_hpke_public_key: String,
-    #[serde(rename = "driveHpkePrivateKey")]
-    drive_hpke_private_key: String,
+    #[serde(rename = "driveXwingPublicKey")]
+    drive_xwing_public_key: String,
+    #[serde(rename = "driveXwingPrivateKey")]
+    drive_xwing_private_key: String,
     #[serde(rename = "driveSigningPublicKey")]
     drive_signing_public_key: String,
 }
 #[derive(Deserialize)]
-struct AccountEnvelopeVec {
+struct AccountRecordVec {
     plaintext: String,
     key: String,
-    purpose: u8,
+    purpose: u16,
     binding: String,
     #[serde(rename = "objectId", default)]
     object_id: String,
@@ -216,24 +210,6 @@ struct DriveEnvelopeLimit {
     sealed_len: Option<usize>,
 }
 #[derive(Deserialize)]
-struct DriveFileBlobVec {
-    #[serde(rename = "fileKey")]
-    file_key: String,
-    #[serde(rename = "fileId")]
-    file_id: String,
-    generation: u32,
-    #[serde(rename = "objectHeader")]
-    object_header: String,
-    #[serde(rename = "derivedStreamKey")]
-    derived_stream_key: String,
-}
-#[derive(Deserialize)]
-struct StreamVec {
-    key: String,
-    plaintext: String,
-    ciphertext: String,
-}
-#[derive(Deserialize)]
 struct AssetVec {
     #[serde(rename = "fileKey")]
     file_key: String,
@@ -252,6 +228,8 @@ struct ThumbnailVec {
     file_key: String,
     #[serde(rename = "fileId")]
     file_id: String,
+    #[serde(rename = "revisionId")]
+    revision_id: String,
     generation: u32,
     variant: String,
     nonce: String,
@@ -265,7 +243,7 @@ struct ThumbnailVec {
 #[serde(rename_all = "camelCase")]
 struct KeyringVec {
     collection_id: String,
-    owner_user_id: String,
+    owner_account_id: String,
     authority_public_key: String,
     keys: Vec<String>,
     chain: Vec<KeyringLinkVec>,
@@ -305,8 +283,13 @@ struct CollabFrameVec {
     doc_key_id: u32,
     #[serde(rename = "fileId")]
     file_id: String,
-    #[serde(rename = "senderDeviceId")]
-    sender_device_id: u64,
+    /// The sender account, beside the frame (`aci:<uuid>@<server>`).
+    #[serde(rename = "senderAccount")]
+    sender_account: String,
+    #[serde(rename = "deviceId")]
+    device_id: u32,
+    #[serde(rename = "manifestSequence")]
+    manifest_sequence: u64,
     sequence: u64,
     nonce: String,
     plaintext: String,
@@ -316,34 +299,6 @@ struct CollabFrameVec {
 fn load_crypto() -> CryptoVectors {
     let raw = include_str!("vectors/crypto.json");
     serde_json::from_str(raw).expect("parse crypto.json")
-}
-
-#[test]
-fn kdf_matches_go() {
-    for v in load_crypto().kdf {
-        let salt = b64(&v.salt);
-        let keys = kdf::derive_account_protection_keys(
-            &v.password,
-            &salt,
-            kdf::AccountProtectionParameters::V1,
-        )
-        .unwrap();
-        assert_eq!(
-            keys.key_encryption_key.as_slice(),
-            &b64(&v.expected_kek),
-            "account KEK mismatch for root {}",
-            v.expected_root
-        );
-        assert_eq!(
-            keys.login_key.as_slice(),
-            &b64(&v.expected_login_key),
-            "account login key mismatch"
-        );
-        assert_ne!(
-            keys.key_encryption_key.as_slice(),
-            keys.login_key.as_slice()
-        );
-    }
 }
 
 #[test]
@@ -357,7 +312,10 @@ fn recovery_auth_proof_vector() {
 fn account_identity_vector() {
     let vector = load_crypto().account_identity;
     let master_key: [u8; 32] = b64(&vector.master_key).try_into().unwrap();
-    let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
+    let identity = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes(master_key),
+    )
+    .unwrap();
     assert_eq!(
         identity.authority_public_key().as_slice(),
         b64(&vector.authority_public_key)
@@ -365,12 +323,12 @@ fn account_identity_vector() {
     assert_eq!(identity.authority_key_id(), vector.authority_key_id);
     assert_eq!(identity.incarnation_id(), vector.incarnation_id);
     assert_eq!(
-        identity.drive_hpke_public_key().as_slice(),
-        b64(&vector.drive_hpke_public_key)
+        identity.drive_xwing_public_key().as_slice(),
+        b64(&vector.drive_xwing_public_key)
     );
     assert_eq!(
-        identity.drive_hpke_private_key().as_slice(),
-        b64(&vector.drive_hpke_private_key)
+        identity.drive_xwing_private_key().as_slice(),
+        b64(&vector.drive_xwing_private_key)
     );
     assert_eq!(
         identity.drive_signing_public_key().as_slice(),
@@ -379,16 +337,17 @@ fn account_identity_vector() {
 }
 
 #[test]
-fn account_envelope_vector() {
-    let vector = load_crypto().account_envelope;
-    let purpose = AccountEnvelopePurpose::try_from(vector.purpose).unwrap();
+fn account_record_vector() {
+    let vector = load_crypto().account_record;
+    let purpose = AccountRecordPurpose::try_from(vector.purpose).unwrap();
     // A key binding, an object, a key derived for them.
     let object = b64(&vector.object_id);
-    let envelope = account_envelope::seal_suite(
-        account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
+    let envelope = account_record::seal_suite(
+        account_record::AccountRecordSuiteId::V1,
         &b64(&vector.plaintext),
         &b64(&vector.key),
         purpose,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         &vector.binding,
         &object,
         purpose.policy().mutable.then_some(1),
@@ -400,7 +359,7 @@ fn account_envelope_vector() {
         vector.envelope
     );
     assert_eq!(
-        account_envelope::open_revision(
+        account_record::open_revision(
             &envelope,
             &b64(&vector.key),
             purpose,
@@ -412,22 +371,15 @@ fn account_envelope_vector() {
     );
     // The per-envelope key, pinned.
     assert_eq!(
-        base64::engine::general_purpose::STANDARD.encode(
-            account_envelope::v2_aead_key_for_vectors(
-                &b64(&vector.key),
-                purpose,
-                &vector.binding,
-                &object
-            )
-            .unwrap()
-        ),
+        base64::engine::general_purpose::STANDARD
+            .encode(account_record::aead_key_for_vectors(&b64(&vector.key), &envelope).unwrap()),
         vector.aead_key
     );
-    // Refused: another object, binding or purpose; the suite byte turned to
-    // the retired 1; the object id in the header changed.
+    // Refused: another object, binding or purpose; an unknown suite; the
+    // object id in the header changed.
     let key = b64(&vector.key);
     let refused = |envelope: &[u8], purpose, binding: &str, object: &[u8]| {
-        account_envelope::open_revision(envelope, &key, purpose, binding, object).is_err()
+        account_record::open_revision(envelope, &key, purpose, binding, object).is_err()
     };
     assert!(refused(&envelope, purpose, &vector.binding, &[0; 16]));
     assert!(refused(
@@ -438,15 +390,15 @@ fn account_envelope_vector() {
     ));
     assert!(refused(
         &envelope,
-        AccountEnvelopePurpose::PasswordMasterKey,
+        AccountRecordPurpose::PasswordMasterKey,
         &vector.binding,
         &object
     ));
     let mut downgraded = envelope.clone();
-    downgraded[9] = 1;
+    downgraded[9] = 2;
     assert!(refused(&downgraded, purpose, &vector.binding, &object));
     assert!(refused(&downgraded, purpose, &vector.binding, &[]));
-    let object_at = 14 + vector.binding.len() + 1;
+    let object_at = 18 + vector.binding.len() + 1;
     let mut moved = envelope.clone();
     moved[object_at] ^= 0x01;
     let mut moved_object = object.clone();
@@ -522,31 +474,6 @@ fn drive_envelope_vector() {
 }
 
 #[test]
-fn drive_file_blob_header_and_key_vector() {
-    let vector = load_crypto().drive_file_blob;
-    let context = DriveFileBlobContextV1::new(&vector.file_id, vector.generation).unwrap();
-    assert_eq!(
-        drive_object::file_blob_header(context).as_slice(),
-        b64(&vector.object_header)
-    );
-    assert_eq!(
-        drive_object::derive_file_blob_key(&b64(&vector.file_key), context)
-            .unwrap()
-            .as_slice(),
-        b64(&vector.derived_stream_key)
-    );
-    drive_object::validate_file_blob_header(&b64(&vector.object_header), context).unwrap();
-}
-
-#[test]
-fn stream_decrypts_go_output() {
-    for v in load_crypto().stream {
-        let dec = stream::decrypt_stream(&b64(&v.ciphertext), &b64(&v.key)).unwrap();
-        assert_eq!(dec, b64(&v.plaintext), "stream plaintext mismatch");
-    }
-}
-
-#[test]
 fn whiteboard_asset_matches_canonical_vector() {
     let v = load_crypto().asset;
     let context =
@@ -573,33 +500,6 @@ fn whiteboard_asset_matches_canonical_vector() {
 // --- Rust-only round-trips that complement the Go-cross vectors -------------
 
 #[test]
-fn stream_multichunk_roundtrip() {
-    // Exercise the 5 MiB chunk boundary (intermediate TAG_MESSAGE + final).
-    let key = [0x33u8; 32];
-    let plain: Vec<u8> = (0..stream::CHUNK_SIZE + 1)
-        .map(|i| (i % 251) as u8)
-        .collect();
-    let ct = stream::encrypt_stream(&plain, &key).unwrap();
-    // header + 2 chunks: (CHUNK_SIZE + 1) plaintext + 2*ABYTES overhead.
-    assert_eq!(
-        ct.len(),
-        stream::HEADER_BYTES + plain.len() + 2 * stream::ABYTES,
-        "expected exactly two chunks",
-    );
-    let dec = stream::decrypt_stream(&ct, &key).unwrap();
-    assert_eq!(dec, plain);
-}
-
-#[test]
-fn stream_tamper_fails() {
-    let key = [0x33u8; 32];
-    let mut ct = stream::encrypt_stream(b"sensitive content", &key).unwrap();
-    let n = ct.len();
-    ct[n / 2] ^= 0xff;
-    assert!(stream::decrypt_stream(&ct, &key).is_err());
-}
-
-#[test]
 fn asset_tamper_and_aad_fail() {
     let file_key = [0xCDu8; 32];
     let file_id = "11111111-1111-4111-8111-111111111111";
@@ -620,15 +520,17 @@ fn asset_tamper_and_aad_fail() {
 #[test]
 fn collaboration_frame_matches_canonical_vector() {
     let v = load_crypto().collab_frame;
-    let context = envelope::CollabFrameContextV1::new(
+    let context = envelope::CollabFrameContextV3::new(
         v.kind,
         v.key_generation,
         v.doc_key_id,
         &v.file_id,
-        v.sender_device_id,
+        v.device_id,
+        v.manifest_sequence,
         v.sequence,
     )
     .unwrap();
+    let sender: kutup_crypto::account_ref::AccountRef = v.sender_account.parse().unwrap();
     let unsigned = envelope::seal_unsigned_with_nonce(
         &b64(&v.plaintext),
         &b64(&v.file_key),
@@ -638,11 +540,12 @@ fn collaboration_frame_matches_canonical_vector() {
     .unwrap();
     let signed = envelope::sign(
         &envelope::Frame::unpack(&unsigned).unwrap(),
+        &sender,
         &b64(&v.signing_seed),
     )
     .unwrap();
     assert_eq!(signed, b64(&v.frame));
-    envelope::verify(&signed, &b64(&v.signing_public_key)).unwrap();
+    envelope::verify(&signed, &sender, &b64(&v.signing_public_key)).unwrap();
     let (parsed, plaintext) =
         envelope::open(&signed, &b64(&v.file_key), &v.file_id, v.key_generation).unwrap();
     assert_eq!(parsed.context(), context);
@@ -650,7 +553,7 @@ fn collaboration_frame_matches_canonical_vector() {
 
     let mut tampered = signed;
     tampered[100] ^= 0x01;
-    assert!(envelope::verify(&tampered, &b64(&v.signing_public_key)).is_err());
+    assert!(envelope::verify(&tampered, &sender, &b64(&v.signing_public_key)).is_err());
 }
 
 #[test]
@@ -669,6 +572,55 @@ fn local_state_fork_and_web_session_match_canonical_vectors() {
         let opened = local_state::open(&sealed, &key, purpose, &vec.profile).unwrap();
         assert_eq!(opened, b64(&vec.plaintext));
     }
+}
+
+/// A web app's manifest pins, sealed under the key its master key derives:
+/// another account's master key, another profile or purpose opens nothing.
+#[test]
+fn manifest_pins_match_the_canonical_vector() {
+    let v = load_crypto().local_state.manifest_pins;
+    let master: [u8; 32] = b64(&v.master_key).try_into().expect("32-byte master key");
+    let key = local_state::manifest_pins_key(&master).unwrap();
+    let nonce: [u8; 24] = b64(&v.nonce).try_into().expect("24-byte nonce");
+    let sealed = local_state::seal_with_nonce(
+        &b64(&v.plaintext),
+        key.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        &v.profile,
+        &nonce,
+    )
+    .unwrap();
+    assert_eq!(sealed, b64(&v.envelope));
+    let opened = local_state::open(
+        &sealed,
+        key.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        &v.profile,
+    )
+    .unwrap();
+    assert_eq!(opened, b64(&v.plaintext));
+    let other = local_state::manifest_pins_key(&[0x41; 32]).unwrap();
+    assert!(local_state::open(
+        &sealed,
+        other.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        &v.profile
+    )
+    .is_err());
+    assert!(local_state::open(
+        &sealed,
+        key.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        "web-drive:x"
+    )
+    .is_err());
+    assert!(local_state::open(
+        &sealed,
+        key.as_slice(),
+        LocalStatePurpose::WebSession,
+        &v.profile
+    )
+    .is_err());
 }
 
 #[test]
@@ -705,17 +657,19 @@ fn thumbnail_matches_canonical_vector() {
         variant,
         &b64(&v.file_key),
         &v.file_id,
+        &v.revision_id,
         v.generation,
         &b64(&v.nonce),
     )
     .unwrap();
     assert_eq!(envelope, b64(&v.envelope));
-    thumbnail::validate(&envelope, variant, &v.file_id, v.generation).unwrap();
+    thumbnail::validate(&envelope, variant, &v.file_id, &v.revision_id, v.generation).unwrap();
     let opened = thumbnail::open(
         &envelope,
         variant,
         &b64(&v.file_key),
         &v.file_id,
+        &v.revision_id,
         v.generation,
     )
     .unwrap();
@@ -725,6 +679,16 @@ fn thumbnail_matches_canonical_vector() {
         ThumbnailVariant::Large,
         &b64(&v.file_key),
         &v.file_id,
+        &v.revision_id,
+        v.generation
+    )
+    .is_err());
+    // A thumbnail of another revision of the file.
+    assert!(thumbnail::validate(
+        &envelope,
+        variant,
+        &v.file_id,
+        "44444444-4444-4444-8444-444444444444",
         v.generation
     )
     .is_err());
@@ -747,7 +711,7 @@ fn collection_keyring_matches_canonical_vector() {
     let keys = collection_keyring::unlock(
         &current,
         &v.collection_id,
-        &v.owner_user_id,
+        &v.owner_account_id,
         &b64(&v.authority_public_key),
         &chain,
     )
@@ -760,7 +724,7 @@ fn collection_keyring_matches_canonical_vector() {
     assert!(collection_keyring::unlock(
         &b64(&v.keys[1]),
         &v.collection_id,
-        &v.owner_user_id,
+        &v.owner_account_id,
         &b64(&v.authority_public_key),
         &chain,
     )
@@ -790,7 +754,7 @@ fn file_keyring_matches_canonical_vector() {
     assert!(file_keyring::key_at(&b64(&v.keys[1]), &v.file_id, generation, &chain, 1).is_err());
 }
 
-/// Prints the vectors that bind Drive file objects to their file and key
+/// Prints the vectors that bind Drive file values to their file and key
 /// generation, for `tests/vectors/crypto.json`:
 /// `cargo test -p kutup-crypto --test vectors print_file_bound_vectors -- --ignored --nocapture`.
 #[test]
@@ -798,16 +762,6 @@ fn file_keyring_matches_canonical_vector() {
 fn print_file_bound_vectors() {
     let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
     let file_id = "11111111-1111-4111-8111-111111111111";
-
-    let file_key = [0x42u8; 32];
-    let context = DriveFileBlobContextV1::new(file_id, 7).unwrap();
-    let blob = serde_json::json!({
-        "fileKey": e(&file_key),
-        "fileId": file_id,
-        "generation": 7,
-        "objectHeader": e(&drive_object::file_blob_header(context)),
-        "derivedStreamKey": e(drive_object::derive_file_blob_key(&file_key, context).unwrap().as_slice()),
-    });
 
     let asset_key = [0x41u8; 32];
     let asset_plain = b"data:image/png;base64,iVBORw0KGgo=";
@@ -851,10 +805,13 @@ fn print_file_bound_vectors() {
     let seed = [0x55u8; 32];
     let plaintext = b"canonical collaboration update";
     let nonce = [0x66u8; 24];
-    let context = envelope::CollabFrameContextV1::new(1, 3, 7, file_id, 42, 9).unwrap();
+    let sender_account = "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.test";
+    let sender: kutup_crypto::account_ref::AccountRef = sender_account.parse().unwrap();
+    let context = envelope::CollabFrameContextV3::new(1, 3, 7, file_id, 42, 5, 9).unwrap();
     let unsigned =
         envelope::seal_unsigned_with_nonce(plaintext, &frame_key, context, &nonce).unwrap();
-    let signed = envelope::sign(&envelope::Frame::unpack(&unsigned).unwrap(), &seed).unwrap();
+    let signed =
+        envelope::sign(&envelope::Frame::unpack(&unsigned).unwrap(), &sender, &seed).unwrap();
     let public = ed25519_dalek::SigningKey::from_bytes(&seed)
         .verifying_key()
         .to_bytes();
@@ -866,7 +823,9 @@ fn print_file_bound_vectors() {
         "keyGeneration": 3,
         "docKeyId": 7,
         "fileId": file_id,
-        "senderDeviceId": 42,
+        "senderAccount": sender_account,
+        "deviceId": 42,
+        "manifestSequence": 5,
         "sequence": 9,
         "nonce": e(&nonce),
         "plaintext": e(plaintext),
@@ -876,7 +835,6 @@ fn print_file_bound_vectors() {
     println!(
         "{}",
         serde_json::json!({
-            "driveFileBlob": blob,
             "asset": asset,
             "fileKeyring": keyring,
             "collabFrame": frame,
@@ -925,7 +883,19 @@ fn file_metadata_matches_canonical_vector() {
         );
     }
     for bad in &v.invalid {
-        assert!(file_metadata::decode(bad.as_bytes()).is_err(), "{bad}");
+        assert!(
+            !file_metadata::decode(bad.as_bytes())
+                .unwrap_err()
+                .is_newer(),
+            "{bad}"
+        );
+    }
+    for newer in &v.newer {
+        let error = file_metadata::decode(newer.as_bytes()).unwrap_err();
+        assert!(error.is_newer(), "{newer}");
+        assert!(error
+            .to_string()
+            .starts_with(kutup_crypto::error::NEWER_FORMAT_PREFIX));
     }
     let mut hasher = ContentHasher::new();
     for chunk in &v.content_hash.chunks {
@@ -934,37 +904,75 @@ fn file_metadata_matches_canonical_vector() {
     assert_eq!(hasher.finish(), v.content_hash.hash);
 }
 
+fn photos_library_record_id(v: &PhotosLibraryVec) -> [u8; 32] {
+    use base64::Engine as _;
+    let id = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&v.record_id)
+        .unwrap();
+    assert_eq!(
+        kutup_crypto::account_records::RecordScope::PhotosLibrary
+            .object(&v.record_id)
+            .unwrap(),
+        id
+    );
+    id.try_into().unwrap()
+}
+
 #[test]
 fn photos_library_matches_canonical_vector() {
-    use kutup_crypto::photos_library::{self, PhotosLibraryContextV1};
+    use kutup_crypto::photos_library;
     let v = load_crypto().photos_library;
-    let key = photos_library::derive_photos_library_key(&b64(&v.master_key)).unwrap();
-    assert_eq!(key.to_vec(), b64(&v.library_key));
+    let key: [u8; 32] = b64(&v.master_key).try_into().unwrap();
+    let id = photos_library_record_id(&v);
+    let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
     for record in [&v.first, &v.second] {
-        let context = PhotosLibraryContextV1::new(
-            &v.account_incarnation_id,
-            record.revision,
-            record.previous_digest.as_deref(),
-        )
-        .unwrap();
         let sealed = photos_library::seal_with_nonce(
             record.plaintext.as_bytes(),
-            key.as_slice(),
-            context,
-            &b64(&record.nonce),
+            &key,
+            first,
+            &v.binding,
+            &id,
+            record.revision,
+            &b64(&record.nonce).try_into().unwrap(),
         )
         .unwrap();
         assert_eq!(sealed, b64(&record.envelope));
-        assert_eq!(photos_library::inspect(&sealed).unwrap(), context);
-        let opened = photos_library::open(&sealed, key.as_slice(), context).unwrap();
+        let (opened, revision) = photos_library::open(&sealed, &key, &v.binding, &id).unwrap();
+        assert_eq!(revision, record.revision);
         assert_eq!(opened, record.plaintext.as_bytes());
         photos_library::decode_library(&opened).unwrap();
     }
-    assert_eq!(
-        photos_library::envelope_digest(&b64(&v.first.envelope)).unwrap(),
-        v.first.digest.clone().unwrap()
-    );
-    assert_eq!(v.second.previous_digest, v.first.digest);
+}
+
+/// Prints the `photosLibrary` envelopes for the plaintexts and nonces in
+/// `tests/vectors/crypto.json`:
+/// `cargo test -p kutup-crypto --test vectors print_photos_library_vectors -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_photos_library_vectors() {
+    use base64::Engine as _;
+    use kutup_crypto::photos_library;
+    let v = load_crypto().photos_library;
+    let key: [u8; 32] = b64(&v.master_key).try_into().unwrap();
+    let id = photos_library_record_id(&v);
+    let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
+    for record in [&v.first, &v.second] {
+        let sealed = photos_library::seal_with_nonce(
+            record.plaintext.as_bytes(),
+            &key,
+            first,
+            &v.binding,
+            &id,
+            record.revision,
+            &b64(&record.nonce).try_into().unwrap(),
+        )
+        .unwrap();
+        println!(
+            "revision {} envelope {}",
+            record.revision,
+            base64::engine::general_purpose::STANDARD.encode(&sealed),
+        );
+    }
 }
 
 /// Prints the `driveNames` vectors for `tests/vectors/crypto.json`:
@@ -1012,8 +1020,8 @@ fn print_drive_names_vectors() {
         "firstFolderKey": e(&first),
         "collectionId": collection_id,
         "hashKey": e(&hash_key),
-        "masterKey": e(&[0x62u8; 32]),
-        "topLevelHashKey": e(&drive_names::top_level_hash_key(&[0x62u8; 32]).unwrap()),
+        "driveRoot": e(&[0x62u8; 32]),
+        "topLevelHashKey": e(&drive_names::top_level_hash_key(&DriveRoot::from_bytes([0x62u8; 32])).unwrap()),
         "names": names,
         "content": { "plaintext": e(b"kutup"), "sha256": e(&digest), "hash": drive_names::content_hash(&hash_key, &digest).unwrap() },
     });
@@ -1030,7 +1038,7 @@ fn drive_names_vector() {
         drive_names::folder_hash_key(&b64(&s("firstFolderKey")), &s("collectionId")).unwrap();
     assert_eq!(hash_key.as_slice(), b64(&s("hashKey")).as_slice());
     assert_eq!(
-        drive_names::top_level_hash_key(&b64(&s("masterKey")))
+        drive_names::top_level_hash_key(&DriveRoot::from_slice(&b64(&s("driveRoot"))).unwrap())
             .unwrap()
             .as_slice(),
         b64(&s("topLevelHashKey")).as_slice()
@@ -1055,6 +1063,96 @@ fn drive_names_vector() {
     assert_eq!(
         drive_names::content_hash(&hash_key, &digest).unwrap(),
         content["hash"].as_str().unwrap()
+    );
+}
+
+/// Prints the `driveOwnerKeys` vectors for `tests/vectors/crypto.json`: an
+/// owned folder's key and a link's owner copy, sealed under the Drive root
+/// at its generation (docs/plans/identity-rotation.md §3).
+/// `cargo test -p kutup-crypto --test vectors print_drive_owner_key_vectors -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_drive_owner_key_vectors() {
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let root = [0x63u8; 32];
+    let generation = RootGeneration::new(2).unwrap();
+    let (folder, owner, link) = (
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333",
+    );
+    let collection =
+        DriveEnvelopeContextV1::owner_collection_key(folder, owner, 3, generation).unwrap();
+    let link_scope = DriveEnvelopeContextV1::owner_link_key(link, owner, generation).unwrap();
+    let v = serde_json::json!({
+        "description": "An owned folder's key and a link's owner copy under the Drive root; the revision slot is the root's generation (kutup-crypto/src/drive_envelope.rs).",
+        "driveRoot": e(&root),
+        "driveRootGeneration": generation.get(),
+        "ownerAccountId": owner,
+        "collectionId": folder,
+        "collectionEpoch": 3,
+        "collectionKey": e(&[0x64; 32]),
+        "collectionNonce": e(&[0x65; 24]),
+        "collectionKeyEnvelope": e(&drive_envelope::seal_with_nonce(&[0x64; 32], &root, collection, &[0x65; 24]).unwrap()),
+        "linkId": link,
+        "linkKey": e(&[0x66; 32]),
+        "linkNonce": e(&[0x67; 24]),
+        "linkKeyEnvelope": e(&drive_envelope::seal_with_nonce(&[0x66; 32], &root, link_scope, &[0x67; 24]).unwrap()),
+    });
+    println!("{}", serde_json::to_string_pretty(&v).unwrap());
+}
+
+#[test]
+fn drive_owner_key_vector() {
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["driveOwnerKeys"];
+    let s = |key: &str| v[key].as_str().unwrap().to_owned();
+    let root = DriveRoot::from_slice(&b64(&s("driveRoot"))).unwrap();
+    let generation =
+        RootGeneration::new(v["driveRootGeneration"].as_u64().unwrap() as u32).unwrap();
+    let epoch = v["collectionEpoch"].as_u64().unwrap() as u32;
+    let collection = DriveEnvelopeContextV1::owner_collection_key(
+        &s("collectionId"),
+        &s("ownerAccountId"),
+        epoch,
+        generation,
+    )
+    .unwrap();
+    let link =
+        DriveEnvelopeContextV1::owner_link_key(&s("linkId"), &s("ownerAccountId"), generation)
+            .unwrap();
+    for (scope, key, nonce, envelope) in [
+        (
+            collection,
+            "collectionKey",
+            "collectionNonce",
+            "collectionKeyEnvelope",
+        ),
+        (link, "linkKey", "linkNonce", "linkKeyEnvelope"),
+    ] {
+        let sealed =
+            drive_envelope::seal_with_nonce(&b64(&s(key)), root.as_bytes(), scope, &b64(&s(nonce)))
+                .unwrap();
+        assert_eq!(sealed, b64(&s(envelope)));
+        let header = drive_envelope::inspect(&sealed).unwrap();
+        assert_eq!(header.context.drive_root_generation().unwrap(), generation);
+        assert_eq!(
+            drive_envelope::open_under_drive_root(&s(envelope), &root, scope)
+                .unwrap()
+                .as_slice(),
+            b64(&s(key)).as_slice()
+        );
+    }
+    // The generation is bound: the same root at another generation fails.
+    let first = DriveEnvelopeContextV1::owner_collection_key(
+        &s("collectionId"),
+        &s("ownerAccountId"),
+        epoch,
+        RootGeneration::FIRST,
+    )
+    .unwrap();
+    assert!(
+        drive_envelope::open_under_drive_root(&s("collectionKeyEnvelope"), &root, first).is_err()
     );
 }
 
@@ -1104,93 +1202,6 @@ fn print_drive_envelope_negatives() {
     println!(
         "{}",
         serde_json::json!({ "invalidPadding": invalid_padding, "invalidSealedLength": invalid_sealed_length })
-    );
-}
-
-/// Collaboration devices (kutup-crypto/src/device_registration.rs): the
-/// account authority's statement for a device key (over a server challenge
-/// and a time) and its revocation, kept together.
-#[test]
-fn device_registration_vector() {
-    use kutup_crypto::device_registration as dr;
-    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
-    let v = &all["deviceRegistration"];
-    let key32 = |field: &str| -> [u8; 32] { b64(v[field].as_str().unwrap()).try_into().unwrap() };
-    let identity =
-        kutup_crypto::identity::AccountIdentityKeysV1::derive(&key32("masterKey")).unwrap();
-    let authority = identity.authority_public_key();
-    let (device, challenge) = (key32("devicePublicKey"), key32("challenge"));
-    let server = v["server"].as_str().unwrap();
-    let statement = dr::DeviceStatement {
-        server,
-        user_id: v["userId"].as_str().unwrap(),
-        device_public: &device,
-        purpose: dr::PURPOSE_COLLAB_FRAMES,
-        challenge: &challenge,
-        issued_at_ms: v["issuedAtMs"].as_i64().unwrap(),
-    };
-    let signature = dr::sign(&identity, &statement).unwrap();
-    assert_eq!(signature, v["signature"].as_str().unwrap());
-    assert_eq!(
-        hex::encode(dr::signing_bytes(&identity.incarnation_id(), &statement).unwrap()),
-        v["signingBytes"].as_str().unwrap()
-    );
-    dr::verify(&authority, &statement, &signature).unwrap();
-    let other = key32("otherAuthorityPublicKey");
-    assert!(dr::verify(&other, &statement, &signature).is_err());
-    let later = dr::DeviceStatement {
-        issued_at_ms: statement.issued_at_ms + 1,
-        ..statement
-    };
-    assert!(dr::verify(&authority, &later, &signature).is_err());
-    let r = &v["revocation"];
-    let revoked_at = r["revokedAtMs"].as_i64().unwrap();
-    let revocation = dr::sign_revocation(&identity, server, &device, revoked_at).unwrap();
-    assert_eq!(revocation, r["signature"].as_str().unwrap());
-    assert_eq!(
-        hex::encode(
-            dr::revocation_bytes(&identity.incarnation_id(), server, &device, revoked_at).unwrap()
-        ),
-        r["signingBytes"].as_str().unwrap()
-    );
-    dr::verify_revocation(&authority, server, &device, revoked_at, &revocation).unwrap();
-    assert!(dr::verify_revocation(&other, server, &device, revoked_at, &revocation).is_err());
-}
-
-#[test]
-#[ignore]
-fn print_device_registration_vector() {
-    use base64::Engine as _;
-    use kutup_crypto::device_registration as dr;
-    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x33; 32]).unwrap();
-    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x44; 32]).unwrap();
-    let (server, user) = ("kutup.dev", "11111111-1111-4111-8111-111111111111");
-    let (device, challenge, at) = ([0x55u8; 32], [0x66u8; 32], 1_790_000_000_000i64);
-    let statement = dr::DeviceStatement {
-        server,
-        user_id: user,
-        device_public: &device,
-        purpose: dr::PURPOSE_COLLAB_FRAMES,
-        challenge: &challenge,
-        issued_at_ms: at,
-    };
-    println!(
-        "{}",
-        serde_json::json!({
-            "description": "Collaboration devices signed by their account (kutup-crypto/src/device_registration.rs): the authority signs the incarnation, the server, the account, the device key, its purpose (1: collaboration frames), the server's one-time challenge and the time; and, to revoke it, the incarnation, server, key and time.",
-            "masterKey": e(&[0x33; 32]),
-            "otherAuthorityPublicKey": e(&other.authority_public_key()),
-            "server": server, "userId": user,
-            "devicePublicKey": e(&device), "challenge": e(&challenge), "issuedAtMs": at,
-            "signingBytes": hex::encode(dr::signing_bytes(&identity.incarnation_id(), &statement).unwrap()),
-            "signature": dr::sign(&identity, &statement).unwrap(),
-            "revocation": {
-                "revokedAtMs": at + 1000,
-                "signingBytes": hex::encode(dr::revocation_bytes(&identity.incarnation_id(), server, &device, at + 1000).unwrap()),
-                "signature": dr::sign_revocation(&identity, server, &device, at + 1000).unwrap(),
-            },
-        })
     );
 }
 
@@ -1314,17 +1325,23 @@ fn account_rename_vector() {
     let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
     let v = &all["accountRename"];
     let master: [u8; 32] = b64(v["masterKey"].as_str().unwrap()).try_into().unwrap();
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes(master),
+    )
+    .unwrap();
     let authority = identity.authority_public_key();
     assert_eq!(
         base64::engine::general_purpose::STANDARD.encode(authority),
         v["authorityPublicKey"]
     );
+    let account_id: kutup_crypto::account_ref::AccountId =
+        v["accountId"].as_str().unwrap().parse().unwrap();
     let chain: Vec<AccountRenameV1> = serde_json::from_value(v["chain"].clone()).unwrap();
     // Signatures are deterministic (Ed25519): the same chain signs again.
     for statement in &chain {
         let again = account_rename::sign(
             &identity,
+            account_id,
             statement.sequence,
             &statement.previous,
             &statement.current,
@@ -1337,6 +1354,7 @@ fn account_rename_vector() {
         hex::encode(
             account_rename::signing_bytes(
                 &chain[0].incarnation_id,
+                &chain[0].account_id,
                 chain[0].sequence,
                 &chain[0].previous,
                 &chain[0].current,
@@ -1346,16 +1364,16 @@ fn account_rename_vector() {
         ),
         v["firstSigningBytes"].as_str().unwrap()
     );
-    let view = account_rename::verify_chain(&authority, &chain).unwrap();
+    let view = account_rename::verify_chain(&authority, account_id, &chain).unwrap();
     assert_eq!(view.first, v["first"].as_str().unwrap());
     assert_eq!(view.current, v["current"].as_str().unwrap());
-    let shorter = account_rename::verify_chain(&authority, &chain[..1]).unwrap();
+    let shorter = account_rename::verify_chain(&authority, account_id, &chain[..1]).unwrap();
     assert!(view.extends(&shorter) && !shorter.extends(&view));
     for bad in v["invalidChains"].as_array().unwrap() {
         let parsed: Result<Vec<AccountRenameV1>, _> = serde_json::from_value(bad["chain"].clone());
         if let Ok(parsed) = parsed {
             assert!(
-                account_rename::verify_chain(&authority, &parsed).is_err(),
+                account_rename::verify_chain(&authority, account_id, &parsed).is_err(),
                 "{}",
                 bad["why"]
             );
@@ -1364,7 +1382,11 @@ fn account_rename_vector() {
     let other: [u8; 32] = b64(v["otherAuthorityPublicKey"].as_str().unwrap())
         .try_into()
         .unwrap();
-    assert!(account_rename::verify_chain(&other, &chain).is_err());
+    assert!(account_rename::verify_chain(&other, account_id, &chain).is_err());
+    // The genuine chain, looked up for another account id.
+    let other_account: kutup_crypto::account_ref::AccountId =
+        v["otherAccountId"].as_str().unwrap().parse().unwrap();
+    assert!(account_rename::verify_chain(&authority, other_account, &chain).is_err());
 }
 
 #[test]
@@ -1373,34 +1395,98 @@ fn print_account_rename_vector() {
     use base64::Engine as _;
     use kutup_crypto::account_rename;
     let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x11; 32]).unwrap();
-    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x22; 32]).unwrap();
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x11; 32]),
+    )
+    .unwrap();
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x22; 32]),
+    )
+    .unwrap();
     let t = 1_790_000_000_000i64;
-    let first =
-        account_rename::sign(&identity, 1, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
-    let second =
-        account_rename::sign(&identity, 2, "alicia@kutup.dev", "ali@kutup.dev", t + 1000).unwrap();
-    let gap = account_rename::sign(&identity, 2, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
-    let unlinked =
-        account_rename::sign(&identity, 2, "bob@kutup.dev", "ali@kutup.dev", t + 1000).unwrap();
-    let backwards =
-        account_rename::sign(&identity, 2, "alicia@kutup.dev", "ali@kutup.dev", t - 1000).unwrap();
+    let account_id: kutup_crypto::account_ref::AccountId =
+        "00000000-0000-4000-8000-0000000000a1".parse().unwrap();
+    let other_account: kutup_crypto::account_ref::AccountId =
+        "00000000-0000-4000-8000-0000000000b2".parse().unwrap();
+    let sign = |who, account, sequence, previous: &str, current: &str, at| {
+        account_rename::sign(who, account, sequence, previous, current, at).unwrap()
+    };
+    let first = sign(
+        &identity,
+        account_id,
+        1,
+        "alice@kutup.dev",
+        "alicia@kutup.dev",
+        t,
+    );
+    let second = sign(
+        &identity,
+        account_id,
+        2,
+        "alicia@kutup.dev",
+        "ali@kutup.dev",
+        t + 1000,
+    );
+    let gap = sign(
+        &identity,
+        account_id,
+        2,
+        "alice@kutup.dev",
+        "alicia@kutup.dev",
+        t,
+    );
+    let unlinked = sign(
+        &identity,
+        account_id,
+        2,
+        "bob@kutup.dev",
+        "ali@kutup.dev",
+        t + 1000,
+    );
+    let backwards = sign(
+        &identity,
+        account_id,
+        2,
+        "alicia@kutup.dev",
+        "ali@kutup.dev",
+        t - 1000,
+    );
     let mut tampered = second.clone();
     tampered.current = "mallory@kutup.dev".into();
-    let mut foreign =
-        account_rename::sign(&other, 1, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
+    let mut foreign = sign(
+        &other,
+        account_id,
+        1,
+        "alice@kutup.dev",
+        "alicia@kutup.dev",
+        t,
+    );
     foreign.incarnation_id = identity.incarnation_id();
+    // The same authority's statement about another account id, and one
+    // relabelled to it after signing.
+    let mixed = sign(
+        &identity,
+        other_account,
+        2,
+        "alicia@kutup.dev",
+        "ali@kutup.dev",
+        t + 1000,
+    );
+    let mut relabelled = second.clone();
+    relabelled.account_id = other_account.to_string();
     let mut moved = first.clone();
     moved.current = "alicia@other.dev".into();
     println!(
         "{}",
         serde_json::json!({
-            "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, chained 1, 2, …; a client accepts only chains that verify and extend what it saw.",
+            "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, binding the account id, chained 1, 2, …; a client accepts only chains that verify for the account id it looked up and extend what it saw.",
             "masterKey": e(&[0x11; 32]),
+            "accountId": account_id.to_string(),
+            "otherAccountId": other_account.to_string(),
             "authorityPublicKey": e(&identity.authority_public_key()),
             "otherAuthorityPublicKey": e(&other.authority_public_key()),
             "chain": [first, second],
-            "firstSigningBytes": hex::encode(account_rename::signing_bytes(&first.incarnation_id, 1, &first.previous, &first.current, t).unwrap()),
+            "firstSigningBytes": hex::encode(account_rename::signing_bytes(&first.incarnation_id, &first.account_id, 1, &first.previous, &first.current, t).unwrap()),
             "first": "alice@kutup.dev",
             "current": "ali@kutup.dev",
             "invalidChains": [
@@ -1410,6 +1496,8 @@ fn print_account_rename_vector() {
                 { "why": "tampered", "chain": [first, tampered] },
                 { "why": "signed by another authority", "chain": [foreign] },
                 { "why": "another server", "chain": [moved] },
+                { "why": "names another account id", "chain": [first, mixed] },
+                { "why": "account id relabelled", "chain": [first, relabelled] },
                 { "why": "empty", "chain": [] }
             ]
         })
@@ -1428,7 +1516,14 @@ fn account_ref_vector() {
         assert_eq!(person.server, case["server"].as_str().unwrap());
         assert_eq!(person.account_id, case["accountId"].as_str().unwrap());
         assert_eq!(person.to_string(), string);
-        assert_eq!(hex::encode(person.bytes()), case["bytes"].as_str().unwrap());
+        assert_eq!(
+            hex::encode(person.id_bytes()),
+            case["idBytes"].as_str().unwrap()
+        );
+        assert_eq!(
+            hex::encode(person.routing_bytes()),
+            case["routingBytes"].as_str().unwrap()
+        );
         let json = serde_json::json!({ "server": case["server"], "accountId": case["accountId"] });
         assert_eq!(serde_json::from_value::<AccountRef>(json).unwrap(), person);
     }

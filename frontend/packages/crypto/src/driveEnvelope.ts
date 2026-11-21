@@ -5,17 +5,16 @@ import { getCryptoWasm } from './rustWasm'
  * The purposes whose context is two plain UUIDs. Whiteboard assets (6),
  * thumbnails (7), previous folder keys (8) and previous file keys (10) have
  * their own typed wrappers (whiteboardAsset.ts, thumbnail.ts,
- * collectionKeyring.ts, fileKeyring.ts); the generic WASM export refuses them.
- * File keys (3) and metadata (4) are built only in fileRecord.ts.
+ * collectionKeyring.ts, fileKeyring.ts); so do the owner copies under the
+ * Drive root, owned folder keys (1) and link keys (9) (ownedCollection.ts,
+ * publicLink.ts). The generic WASM export refuses them all. File keys (3)
+ * and metadata (4) are built only in fileRecord.ts.
  */
 export const DRIVE_ENVELOPE_PURPOSE = {
-  collectionKey: 1,
   collectionName: 2,
   fileKey: 3,
   fileMetadata: 4,
   publicLinkCollectionKey: 5,
-  /** A public link's key, sealed for the folder owner (object = link id). */
-  publicLinkKey: 9,
   /** A file's key of one generation, under a link to that file (object = file, parent = owner). */
   publicLinkFileKey: 11,
   /** A photo's file key under an album's key (object = file, parent = album, epoch = album epoch, revision = generation). */

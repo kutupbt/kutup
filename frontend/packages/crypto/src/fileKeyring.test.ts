@@ -13,7 +13,7 @@ vi.mock('./rustWasm', async () => {
 import vectors from '../../../../crates/kutup-crypto/tests/vectors/crypto.json'
 import { fromBase64 } from './base64'
 import { fileKeyAtV1, sealPreviousFileKeyV1 } from './fileKeyring'
-import { createFileRecordV1, openFileRecordV1, rekeyFileRecordV1, wrapFileKeyForV1 } from './fileRecord'
+import { createFileRecordV1, openFileRecordV1, rekeyFileRecordV1, renameFileRecordV1, wrapFileKeyForV1 } from './fileRecord'
 
 describe('file key chain', () => {
   const ring = vectors.fileKeyring
@@ -39,7 +39,12 @@ describe('file key chain', () => {
 })
 
 describe('file records across a re-key and a move', () => {
-  const metadata = { name: 'notes.md', mimeType: 'text/markdown', size: 5 }
+  const metadata = {
+    name: 'notes.md',
+    mimeType: 'text/markdown',
+    size: 5,
+    content: { revisionId: '55555555-5555-4555-8555-555555555555', manifestSha256: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=' },
+  }
   const folderA = '22222222-2222-4222-8222-222222222222'
   const folderB = '44444444-4444-4444-8444-444444444444'
 
@@ -47,17 +52,19 @@ describe('file records across a re-key and a move', () => {
     const keyA = new Uint8Array(32).fill(0x0a)
     const keyA2 = new Uint8Array(32).fill(0x0b)
     const keyB = new Uint8Array(32).fill(0x0c)
-    const created = await createFileRecordV1(folderA, 1, keyA, metadata)
+    const created = await createFileRecordV1(folderA, 1, keyA)
+    const first = await renameFileRecordV1({ id: created.fileId, keyGeneration: 1, metadataRevision: 0 }, created.fileKey, metadata)
+    expect(first.metadataRevision).toBe(1)
     const row = {
       id: created.fileId,
       collectionId: folderA,
-      metadataEnvelope: created.metadataEnvelope,
+      metadataEnvelope: first.metadataEnvelope,
       fileKeyEnvelope: created.fileKeyEnvelope,
       keyEpoch: 1,
       keyGeneration: 1,
       metadataRevision: 1,
     }
-    expect((await openFileRecordV1(row, keyA)).metadata).toEqual(metadata)
+    expect((await openFileRecordV1(row, keyA)).metadata).toEqual({ v: 2, ...metadata })
 
     // Folder A rotated to epoch 2: the file takes generation 2 there.
     const rekeyed = await rekeyFileRecordV1(row, created.fileKey, 2, keyA2, metadata)
@@ -75,7 +82,7 @@ describe('file records across a re-key and a move', () => {
     const envelope = await wrapFileKeyForV1(atA, rekeyed.fileKey, folderB, 1, keyB)
     const atB = { ...atA, collectionId: folderB, keyEpoch: 1, fileKeyEnvelope: envelope }
     const opened = await openFileRecordV1(atB, keyB)
-    expect(opened.metadata).toEqual(metadata)
+    expect(opened.metadata).toEqual({ v: 2, ...metadata })
     // The upload's key is still reachable from B.
     expect(await fileKeyAtV1(opened.fileKey, atB.id, 2, [
       { generation: 2, previousKeyEnvelope: rekeyed.previousKeyEnvelope },

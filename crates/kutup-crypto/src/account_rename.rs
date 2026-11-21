@@ -5,6 +5,14 @@
 //! a chain: statement n+1 starts where statement n ended. The chain is signed
 //! by the authority whose hash is the incarnation id it names, so it moves
 //! data (conversations, pins, shares) only *to* the account that signed it.
+//!
+//! A rename is the account's statement about itself, so it binds the account's
+//! permanent id (16 bytes, [`crate::account_ref::AccountId`];
+//! docs/plans/identity-rotation.md §6) next to the incarnation, and a reader
+//! checks it against the account it looked the chain up for
+//! ([`verify_chain`]'s `account_id`): a server cannot hang one account's
+//! genuine chain onto another account id. The server's name stays out, as
+//! everywhere: it is routing.
 //! It cannot be used to claim the old name: a later holder of it is another
 //! incarnation with another authority. It cannot claim the new name for anyone
 //! else: the name must match the signer's current manifest. A client keeps the
@@ -18,11 +26,12 @@ use crate::primitives::{Hasher, Suite, VerifyingKey};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 
+use crate::account_ref::{AccountId, ACCOUNT_ID_LEN};
 use crate::error::{CryptoError, Result};
 use crate::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
 use crate::named_share::canonical_account;
 
-const DOMAIN: &[u8] = b"kutup/account-rename/v1\0";
+const DOMAIN: &[u8] = crate::labels::ACCOUNT_RENAME_V2;
 /// The most renames one chain holds.
 pub const MAX_CHAIN: usize = 1000;
 /// 2020-01-01T00:00:00Z and 2200-01-01T00:00:00Z, in milliseconds.
@@ -35,6 +44,9 @@ const MAX_ISSUED_AT_MS: i64 = 7_258_118_400_000;
 pub struct AccountRenameV1 {
     /// The signer's incarnation id (lowercase hex of the authority's hash).
     pub incarnation_id: String,
+    /// The account's permanent id (lowercase hyphenated UUID): every
+    /// statement of one chain names the same.
+    pub account_id: String,
     /// 1 for the first rename, one more for each after it.
     pub sequence: u64,
     /// The address before, canonical `username@server`.
@@ -55,9 +67,12 @@ fn server_of(account: &str) -> &str {
     account.split_once('@').map_or("", |(_, server)| server)
 }
 
-/// The bytes the authority signs.
+/// The bytes the authority signs: the label, the incarnation id (32 bytes),
+/// the account id (16), the sequence (u64 BE), `previous` and `current` (each
+/// a u16 BE length and UTF-8), and `issued_at_ms` (i64 BE).
 pub fn signing_bytes(
     incarnation_id: &str,
+    account_id: &str,
     sequence: u64,
     previous: &str,
     current: &str,
@@ -67,6 +82,7 @@ pub fn signing_bytes(
         .ok()
         .filter(|bytes| bytes.len() == 32 && hex::encode(bytes) == incarnation_id)
         .ok_or_else(|| invalid("incarnation id"))?;
+    let account_id: AccountId = account_id.parse().map_err(|_| invalid("account id"))?;
     let previous = canonical_account(previous).map_err(|_| invalid("previous address"))?;
     let current = canonical_account(current).map_err(|_| invalid("current address"))?;
     if sequence == 0 || sequence > MAX_CHAIN as u64 {
@@ -81,10 +97,12 @@ pub fn signing_bytes(
     if !(MIN_ISSUED_AT_MS..=MAX_ISSUED_AT_MS).contains(&issued_at_ms) {
         return Err(invalid("issuedAtMs"));
     }
-    let mut out =
-        Vec::with_capacity(DOMAIN.len() + 32 + 8 + 4 + previous.len() + current.len() + 8);
+    let mut out = Vec::with_capacity(
+        DOMAIN.len() + 32 + ACCOUNT_ID_LEN + 8 + 4 + previous.len() + current.len() + 8,
+    );
     out.extend_from_slice(DOMAIN);
     out.extend_from_slice(&incarnation);
+    out.extend_from_slice(account_id.as_bytes());
     out.extend_from_slice(&sequence.to_be_bytes());
     for address in [&previous, &current] {
         let len = u16::try_from(address.len()).map_err(|_| invalid("address is too long"))?;
@@ -95,18 +113,28 @@ pub fn signing_bytes(
     Ok(out)
 }
 
-/// A rename signed by `identity`'s authority.
+/// A rename of the account `account_id`, signed by `identity`'s authority.
 pub fn sign(
     identity: &AccountIdentityKeysV1,
+    account_id: AccountId,
     sequence: u64,
     previous: &str,
     current: &str,
     issued_at_ms: i64,
 ) -> Result<AccountRenameV1> {
     let incarnation_id = identity.incarnation_id();
-    let bytes = signing_bytes(&incarnation_id, sequence, previous, current, issued_at_ms)?;
+    let account_id = account_id.to_string();
+    let bytes = signing_bytes(
+        &incarnation_id,
+        &account_id,
+        sequence,
+        previous,
+        current,
+        issued_at_ms,
+    )?;
     Ok(AccountRenameV1 {
         incarnation_id,
+        account_id,
         sequence,
         previous: previous.to_owned(),
         current: current.to_owned(),
@@ -120,6 +148,7 @@ impl AccountRenameV1 {
     fn bytes(&self) -> Result<Vec<u8>> {
         signing_bytes(
             &self.incarnation_id,
+            &self.account_id,
             self.sequence,
             &self.previous,
             &self.current,
@@ -127,12 +156,16 @@ impl AccountRenameV1 {
         )
     }
 
-    /// Checks the statement alone against `authority_public`: its form, that
-    /// it names this authority's incarnation, and the signature.
-    pub fn verify(&self, authority_public: &[u8; 32]) -> Result<()> {
+    /// Checks the statement alone against `authority_public` and the
+    /// account it is expected to be about: its form, that it names this
+    /// authority's incarnation and `account_id`, and the signature.
+    pub fn verify(&self, authority_public: &[u8; 32], account_id: AccountId) -> Result<()> {
         let bytes = self.bytes()?;
         if self.incarnation_id != incarnation_id_from_authority_public(authority_public) {
             return Err(invalid("signed for another incarnation"));
+        }
+        if self.account_id != account_id.to_string() {
+            return Err(invalid("signed for another account"));
         }
         let signature: [u8; 64] = STANDARD
             .decode(&self.signature)
@@ -159,6 +192,8 @@ impl AccountRenameV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenameChainView {
     pub incarnation_id: String,
+    /// The account id every statement names.
+    pub account_id: String,
     /// The address the account had first.
     pub first: String,
     /// The address it has now.
@@ -177,6 +212,7 @@ impl RenameChainView {
     /// back or rewrite one.
     pub fn extends(&self, earlier: &RenameChainView) -> bool {
         self.incarnation_id == earlier.incarnation_id
+            && self.account_id == earlier.account_id
             && self.digests.len() >= earlier.digests.len()
             && self.digests[..earlier.digests.len()] == earlier.digests[..]
     }
@@ -187,11 +223,13 @@ impl RenameChainView {
     }
 }
 
-/// Verifies an account's whole rename chain against its authority: every
-/// statement signed by it and naming its incarnation, numbered 1, 2, …, each
+/// Verifies an account's whole rename chain against its authority and the
+/// account id it was looked up for: every statement signed by the authority
+/// and naming its incarnation and `account_id`, numbered 1, 2, …, each
 /// starting at the address the one before ended at, in time order.
 pub fn verify_chain(
     authority_public: &[u8; 32],
+    account_id: AccountId,
     chain: &[AccountRenameV1],
 ) -> Result<RenameChainView> {
     if chain.is_empty() {
@@ -204,7 +242,7 @@ pub fn verify_chain(
     let mut digests = Vec::with_capacity(chain.len());
     let mut last_issued = i64::MIN;
     for (index, statement) in chain.iter().enumerate() {
-        statement.verify(authority_public)?;
+        statement.verify(authority_public, account_id)?;
         if statement.sequence != index as u64 + 1 {
             return Err(invalid("sequence is not consecutive"));
         }
@@ -222,6 +260,7 @@ pub fn verify_chain(
     }
     Ok(RenameChainView {
         incarnation_id: chain[0].incarnation_id.clone(),
+        account_id: account_id.to_string(),
         first: addresses[0].clone(),
         current: addresses.last().expect("one address at least").clone(),
         addresses,
@@ -237,25 +276,42 @@ mod tests {
     const T: i64 = 1_790_000_000_000;
 
     fn identity(seed: u8) -> AccountIdentityKeysV1 {
-        AccountIdentityKeysV1::derive(&[seed; 32]).unwrap()
+        AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes([seed; 32]))
+            .unwrap()
+    }
+
+    fn account(n: u8) -> AccountId {
+        AccountId::from_bytes([n; ACCOUNT_ID_LEN])
+    }
+
+    fn rename(
+        id: &AccountIdentityKeysV1,
+        sequence: u64,
+        previous: &str,
+        current: &str,
+        at: i64,
+    ) -> AccountRenameV1 {
+        sign(id, account(1), sequence, previous, current, at).unwrap()
     }
 
     fn chain(id: &AccountIdentityKeysV1) -> Vec<AccountRenameV1> {
         vec![
-            sign(id, 1, "alice@kutup.dev", "alicia@kutup.dev", T).unwrap(),
-            sign(id, 2, "alicia@kutup.dev", "ali@kutup.dev", T + 1).unwrap(),
+            rename(id, 1, "alice@kutup.dev", "alicia@kutup.dev", T),
+            rename(id, 2, "alicia@kutup.dev", "ali@kutup.dev", T + 1),
         ]
     }
 
     #[test]
     fn a_chain_verifies_and_says_where_the_account_is() {
         let id = identity(1);
-        let view = verify_chain(&id.authority_public_key(), &chain(&id)).unwrap();
+        let view = verify_chain(&id.authority_public_key(), account(1), &chain(&id)).unwrap();
         assert_eq!(view.first, "alice@kutup.dev");
         assert_eq!(view.current, "ali@kutup.dev");
         assert_eq!(view.sequence, 2);
+        assert_eq!(view.account_id, account(1).to_string());
         assert!(view.had("alicia@kutup.dev"));
-        let shorter = verify_chain(&id.authority_public_key(), &chain(&id)[..1]).unwrap();
+        let shorter =
+            verify_chain(&id.authority_public_key(), account(1), &chain(&id)[..1]).unwrap();
         assert!(view.extends(&shorter));
         assert!(
             !shorter.extends(&view),
@@ -268,35 +324,75 @@ mod tests {
         let (id, newcomer) = (identity(1), identity(2));
         // The old name's next holder cannot use the old owner's chain, nor
         // sign one that names the old owner's incarnation.
-        assert!(verify_chain(&newcomer.authority_public_key(), &chain(&id)).is_err());
+        assert!(verify_chain(&newcomer.authority_public_key(), account(1), &chain(&id)).is_err());
         let mut forged = chain(&id);
-        forged[0] = sign(&newcomer, 1, "alice@kutup.dev", "alicia@kutup.dev", T).unwrap();
+        forged[0] = rename(&newcomer, 1, "alice@kutup.dev", "alicia@kutup.dev", T);
         forged[0].incarnation_id = id.incarnation_id();
-        assert!(verify_chain(&id.authority_public_key(), &forged).is_err());
+        assert!(verify_chain(&id.authority_public_key(), account(1), &forged).is_err());
+    }
+
+    #[test]
+    fn a_chain_proves_nothing_about_another_account_id() {
+        let id = identity(1);
+        let key = id.authority_public_key();
+        // A server cannot hang this account's genuine chain onto another id.
+        assert!(verify_chain(&key, account(2), &chain(&id)).is_err());
+        // Nor relabel a statement: the id is signed.
+        let mut relabelled = chain(&id);
+        for statement in &mut relabelled {
+            statement.account_id = account(2).to_string();
+        }
+        assert!(verify_chain(&key, account(2), &relabelled).is_err());
+        // Nor mix statements about two ids in one chain.
+        let mut mixed = chain(&id);
+        mixed[1] = sign(
+            &id,
+            account(2),
+            2,
+            "alicia@kutup.dev",
+            "ali@kutup.dev",
+            T + 1,
+        )
+        .unwrap();
+        assert!(verify_chain(&key, account(1), &mixed).is_err());
+        assert!(verify_chain(&key, account(2), &mixed).is_err());
+        // The id is the canonical (lowercase) text form.
+        let mut upper = vec![sign(
+            &id,
+            account(0xab),
+            1,
+            "alice@kutup.dev",
+            "alicia@kutup.dev",
+            T,
+        )
+        .unwrap()];
+        upper[0].account_id = upper[0].account_id.to_uppercase();
+        assert!(verify_chain(&key, account(0xab), &upper).is_err());
     }
 
     #[test]
     fn broken_chains_are_refused() {
         let id = identity(1);
         let key = id.authority_public_key();
-        let gap = vec![sign(&id, 2, "alice@kutup.dev", "alicia@kutup.dev", T).unwrap()];
-        assert!(verify_chain(&key, &gap).is_err());
+        let a = account(1);
+        let gap = vec![rename(&id, 2, "alice@kutup.dev", "alicia@kutup.dev", T)];
+        assert!(verify_chain(&key, a, &gap).is_err());
         let unlinked = vec![
-            sign(&id, 1, "alice@kutup.dev", "alicia@kutup.dev", T).unwrap(),
-            sign(&id, 2, "bob@kutup.dev", "ali@kutup.dev", T + 1).unwrap(),
+            rename(&id, 1, "alice@kutup.dev", "alicia@kutup.dev", T),
+            rename(&id, 2, "bob@kutup.dev", "ali@kutup.dev", T + 1),
         ];
-        assert!(verify_chain(&key, &unlinked).is_err());
+        assert!(verify_chain(&key, a, &unlinked).is_err());
         let backwards = vec![
-            sign(&id, 1, "alice@kutup.dev", "alicia@kutup.dev", T).unwrap(),
-            sign(&id, 2, "alicia@kutup.dev", "ali@kutup.dev", T - 1).unwrap(),
+            rename(&id, 1, "alice@kutup.dev", "alicia@kutup.dev", T),
+            rename(&id, 2, "alicia@kutup.dev", "ali@kutup.dev", T - 1),
         ];
-        assert!(verify_chain(&key, &backwards).is_err());
-        assert!(sign(&id, 1, "alice@kutup.dev", "alice@other.dev", T).is_err());
-        assert!(sign(&id, 1, "alice@kutup.dev", "alice@kutup.dev", T).is_err());
-        assert!(sign(&id, 1, "Alice@kutup.dev", "bob@kutup.dev", T).is_err());
+        assert!(verify_chain(&key, a, &backwards).is_err());
+        assert!(sign(&id, a, 1, "alice@kutup.dev", "alice@other.dev", T).is_err());
+        assert!(sign(&id, a, 1, "alice@kutup.dev", "alice@kutup.dev", T).is_err());
+        assert!(sign(&id, a, 1, "Alice@kutup.dev", "bob@kutup.dev", T).is_err());
         let mut tampered = chain(&id);
         tampered[1].current = "mallory@kutup.dev".into();
-        assert!(verify_chain(&key, &tampered).is_err());
-        assert!(verify_chain(&key, &[]).is_err());
+        assert!(verify_chain(&key, a, &tampered).is_err());
+        assert!(verify_chain(&key, a, &[]).is_err());
     }
 }

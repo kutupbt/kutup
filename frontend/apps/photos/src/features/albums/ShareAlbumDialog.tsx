@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { openLinkKey, useFolderAccess, type AccessLink, type Removal } from '@kutup/drive-core/access'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { publicLinkUrl, RecipientNotFound, useCreatePublicLink, useShareFolder } from '@kutup/drive-core/mutations'
+import { isTargetBlocked, sharingOffScope, usePublicSharing } from '@kutup/drive-core/publicSharing'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -58,6 +59,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
   const [email, setEmail] = useState('')
   const [canAdd, setCanAdd] = useState(false)
   const createLink = useCreatePublicLink('photos')
+  const sharingOff = usePublicSharing().data ?? null
   const [created, setCreated] = useState<string | null>(null)
   useEffect(() => {
     if (open) {
@@ -167,19 +169,19 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
           {access.data && members.length + federated.length === 0 ? <p className="text-sm text-muted-foreground">{t('share.nobody')}</p> : null}
           <ul className="divide-y divide-border rounded-lg border border-border empty:hidden">
             {members.map((m) => (
-              <li key={m.userId} className="flex items-center gap-2 px-3 py-2">
+              <li key={m.accountId} className="flex items-center gap-2 px-3 py-2">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm">{m.account}</p>
                   <p className="text-xs text-muted-foreground">{m.canUpload ? t('share.canAddShort') : t('share.viewOnly')}</p>
                 </div>
-                <VerifyPersonButton account={m.account} claimed={{ driveHpkePublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
+                <VerifyPersonButton account={m.account} claimed={{ driveXwingPublicKey: m.drivePublicKey, incarnationId: m.accountIncarnationId }} />
                 <Button
                   variant="ghost"
                   size="icon"
                   disabled={removeAccess.isPending}
                   aria-label={t('share.remove', { account: m.account })}
                   onClick={() =>
-                    removeFromAlbum({ members: [m.userId], publicLinks: [], federatedShares: [] }, () => toast.success(t('share.removed', { account: m.account })))
+                    removeFromAlbum({ members: [m.accountId], publicLinks: [], federatedShares: [] }, () => toast.success(t('share.removed', { account: m.account })))
                   }
                 >
                   <UserMinus />
@@ -236,7 +238,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
             <Button
               variant="outline"
               size="sm"
-              disabled={createLink.isPending}
+              disabled={createLink.isPending || sharingOff !== null}
               onClick={() =>
                 createLink.mutate(album.folder, {
                   onSuccess: (url) => {
@@ -244,7 +246,12 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
                     void queryClient.invalidateQueries({ queryKey: ['folder-access', album.id] })
                     void copy(url)
                   },
-                  onError: () => toast.error(t('share.failed')),
+                  onError: (error) => {
+                    const off = sharingOffScope(error)
+                    toast.error(
+                      off ? t(`publicSharing.off.${off}`) : isTargetBlocked(error) ? t('publicSharing.targetBlocked') : t('share.failed'),
+                    )
+                  },
                 })
               }
             >
@@ -252,7 +259,9 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
               {t('share.createLink')}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">{t('share.linksHint')}</p>
+          <p className="text-xs text-muted-foreground">
+            {sharingOff ? t(`publicSharing.off.${sharingOff}`) : t('share.linksHint')}
+          </p>
           {created ? (
             <Field label={t('share.newLink')}>
               {(field) => <Input {...field} readOnly value={created} onFocus={(e) => e.currentTarget.select()} />}
@@ -262,7 +271,10 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
           <ul className="divide-y divide-border rounded-lg border border-border empty:hidden">
             {links.map((link) => (
               <li key={link.id} className="flex items-center gap-2 px-3 py-2">
-                <p className="min-w-0 flex-1 truncate text-sm">{t('share.linkMade', { date: new Date(link.createdAt).toLocaleDateString(i18n.language, { dateStyle: 'medium' }) })}</p>
+                <p className="min-w-0 flex-1 truncate text-sm">
+                  {t('share.linkMade', { date: new Date(link.createdAt).toLocaleDateString(i18n.language, { dateStyle: 'medium' }) })}
+                  {link.blockedReason ? ` · ${t(`publicSharing.blocked.${link.blockedReason}`)}` : ''}
+                </p>
                 <Button variant="ghost" size="icon" aria-label={t('share.copyLink')} onClick={() => void copyLink(link)}>
                   <Copy />
                 </Button>

@@ -19,7 +19,8 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
@@ -71,7 +72,7 @@ export function MailGroupsPage() {
         }
       />
       {groups.isPending ? (
-        <LoadingPanel label={t('common.loading')} />
+        <ListSkeleton label={t('common.loading')} />
       ) : groups.isError ? (
         <Alert variant="error">{apiErrorMessage(groups.error, t('common.tryAgain'))}</Alert>
       ) : groups.data.length === 0 ? (
@@ -225,7 +226,7 @@ function CreateGroupDialog({ onClose }: { onClose: () => void }) {
         kind,
         postPolicy,
         storageQuotaBytes: Math.round(Number(gib) * GIB),
-        owners: owners.map((owner) => owner.userId),
+        owners: owners.map((owner) => owner.accountId),
         ...(groupKey ? { groupKey } : {}),
       })
     },
@@ -249,7 +250,7 @@ function CreateGroupDialog({ onClose }: { onClose: () => void }) {
       setProblem(t('mailGroups.noAccount', { address }))
       return
     }
-    if (!owners.some((owner) => owner.userId === account.userId)) setOwners([...owners, account])
+    if (!owners.some((owner) => owner.accountId === account.accountId)) setOwners([...owners, account])
     setOwnerText('')
   }
 
@@ -314,14 +315,14 @@ function CreateGroupDialog({ onClose }: { onClose: () => void }) {
             {owners.length > 0 ? (
               <ul className="flex flex-wrap gap-1">
                 {owners.map((owner) => (
-                  <li key={owner.userId}>
+                  <li key={owner.accountId}>
                     <Badge variant="neutral">
                       {owner.address}
                       <button
                         type="button"
                         className="ml-1"
                         aria-label={t('mailGroups.remove', { address: owner.address })}
-                        onClick={() => setOwners(owners.filter((o) => o.userId !== owner.userId))}
+                        onClick={() => setOwners(owners.filter((o) => o.accountId !== owner.accountId))}
                       >
                         ×
                       </button>

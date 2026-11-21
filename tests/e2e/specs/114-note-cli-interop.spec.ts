@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync, appendFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appOrigin, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { noteLive, noteText, openItem, typeAtEnd, waitForFilePage } from '../fixtures/drive'
 

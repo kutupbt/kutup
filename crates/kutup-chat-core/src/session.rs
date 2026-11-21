@@ -37,7 +37,7 @@ use crate::manifest::{verify_bundle_trust, verify_manifest_evidence, ManifestPol
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    AccountManifestDeviceV2, AccountManifestV2, AccountPreKeyBundlesResponse, ChatContent,
+    AccountManifestDeviceV3, AccountManifestV3, AccountPreKeyBundlesResponse, ChatContent,
     ContactControlBody, ContactState, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
     DirectChatSuiteId, DisappearingExpiryStartBody, OutgoingEnvelope, RegisterChatDeviceRequestV2,
     ReplenishKeysRequest, SealedOutgoingEnvelopeV1,
@@ -528,12 +528,18 @@ impl Session {
                 "manifest history contradicts the current trust pin".into(),
             ));
         }
-        // Every listed device has the account's identity.
-        if history.manifest.device(device_id).is_none() {
+        // Every listed Chat device has the account's identity.
+        if history.manifest.chat_device(device_id).is_none() {
             return Ok(None);
         }
         Ok(Some(
-            *decode_identity_key(&history.manifest.identity_key)?.public_key(),
+            *decode_identity_key(
+                history
+                    .manifest
+                    .chat_identity_key()
+                    .map_err(ChatError::Trust)?,
+            )?
+            .public_key(),
         ))
     }
 
@@ -562,8 +568,10 @@ impl Session {
         self.store.local_identity_key_base64()
     }
 
-    pub fn manifest_device(&self) -> AccountManifestDeviceV2 {
-        self.store.local_manifest_device(self.device_id())
+    /// This device's manifest entry, under its sign-in's `session` hash
+    /// ([`crate::ChatTransport::fetch_device_session`]).
+    pub fn manifest_device(&self, session: String) -> AccountManifestDeviceV3 {
+        self.store.local_manifest_device(self.device_id(), session)
     }
 
     pub(crate) fn db(&self) -> &Rc<dyn ChatDb> {
@@ -2510,8 +2518,8 @@ impl Session {
     pub(crate) async fn accept_manifest_evidence(
         &mut self,
         account: &str,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestV3> {
         let prior_manifest = self.store.db().load_manifest_trust(account).await?;
         let trust = verify_manifest_evidence(account, manifest, prior_manifest.as_ref())?;
         if trust.continuity_gap {
@@ -2540,10 +2548,10 @@ impl Session {
     pub(crate) async fn accept_manifest_evidence_with_history(
         &mut self,
         account: &str,
-        pending: &AccountManifestV2,
+        pending: &AccountManifestV3,
         trust: ManifestTrust,
         history: Vec<AccountManifestHistoryRecord>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         let last = history.last().ok_or_else(|| {
             ChatError::Trust("manifest history recovery returned no complete history".into())
         })?;
@@ -2615,9 +2623,8 @@ impl Session {
             devices.extend(
                 record
                     .manifest
-                    .devices
-                    .iter()
-                    .map(|device| device.device_id),
+                    .chat_devices()
+                    .map(|(device_id, _)| device_id),
             );
         }
         for device_id in devices {
@@ -4206,12 +4213,11 @@ fn now() -> SystemTime {
 }
 
 /// Unix-epoch millis, saturating to 0 before the epoch (never in practice).
-/// The devices a manifest lists.
-fn device_ids(manifest: &AccountManifestV2) -> Vec<u32> {
+/// The Chat devices a manifest lists: the ones messages go to.
+fn device_ids(manifest: &AccountManifestV3) -> Vec<u32> {
     manifest
-        .devices
-        .iter()
-        .map(|device| device.device_id)
+        .chat_devices()
+        .map(|(device_id, _)| device_id)
         .collect()
 }
 
@@ -4234,7 +4240,7 @@ fn contact_sync_send_id(
     source_device_id: u32,
 ) -> String {
     let mut hash = Sha256::new();
-    hash.update(b"kutup/contact-control/v1\0");
+    hash.update(kutup_crypto::labels::CONTACT_CONTROL_V1);
     hash.update(peer.as_bytes());
     hash.update([0]);
     hash.update(match state {

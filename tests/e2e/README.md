@@ -23,6 +23,9 @@ installed by `playwright install chromium` and avoids the standalone legacy
 headless shell, which can SIGTRAP under OnlyOffice's repeated nested
 canvas/worker load.
 
+The WebKit project runs only the specs in `suites/webkit.txt` (see "WebKit"
+below); every other spec is Chromium's.
+
 ## Install
 
 ```sh
@@ -31,6 +34,16 @@ npx --prefix tests/e2e playwright install chromium
 ```
 
 CI uses `playwright install --with-deps chromium` on a fresh Ubuntu runner.
+
+For the WebKit suite, also:
+
+```sh
+npx --prefix tests/e2e playwright install --with-deps webkit
+```
+
+`--with-deps` installs WebKit's system libraries (GTK, GStreamer and its
+codec plugins) through the package manager, so it needs root; without them
+WebKit doesn't start. On a host where it can't, run the suite on one that can.
 
 ## Start an isolated single-server stack
 
@@ -52,7 +65,7 @@ for app in account drive chat office maps photos contacts mail pass calendar; do
 done
 export E2E_APP_ORIGIN='https://{app}.localhost:39443'
 docker compose up --detach --build --wait
-curl --fail --insecure https://localhost:39443/api/auth/settings
+curl --fail --insecure https://localhost:39443/api/v1/auth/settings
 ```
 
 The Nginx health check and bounded `curl` probe are the readiness boundary. Do
@@ -89,6 +102,64 @@ registers one); `E2E_TRUST_LOCAL_CERT=1` makes Chromium accept it.
 Normal local runs write the HTML report to `playwright-report/` and per-test
 artifacts to `test-results/`; both are ignored by Git.
 
+## WebKit
+
+`suites/webkit.txt` lists the media streaming specs (190, 191, 192), which run
+on WebKit as well as in the Chromium account suite, because Safari differs
+there: some WebKit builds give a media element an empty `destination`, the
+service worker refuses the request (it serves only media elements), and the
+player falls back to a whole download into a Blob
+(docs/plans/drive-block-format.md §4). From the workspace root, against a
+running stack:
+
+```sh
+scripts/gate.sh browser webkit
+```
+
+The suite file's `# project: webkit` line picks the Playwright project; a
+suite without one runs on Chromium, and suites of different browsers can't
+share one gate call. The `webkit` project itself also matches only those
+specs, so `npm exec -- playwright test` (every project) runs them on WebKit
+too, and nothing else. It is not in PR or master CI: it belongs to the
+pre-release full test.
+
+On WebKit the players may stream or fall back. The specs assert that each one
+plays (its `currentTime` advances, then after a seek), and record the path it
+took as a `playback path` annotation (`stream` or `fallback`, also printed to
+the log), so a run shows whether this WebKit streamed. On Chromium the path
+must be the stream. Specifically:
+
+- spec 190 is skipped: stopping a service worker needs the DevTools protocol;
+- spec 191 swaps the worker script mid-playback; playback must go on by
+  either path;
+- spec 192 makes an H.264 MP4 (`ffmpeg` with `libx264`) instead of the
+  Chromium run's VP8 WebM, which WebKit may not play, and is skipped with a
+  message when that encoder is missing. The block-count checks apply only to
+  a player that streamed. The song with service workers blocked must play
+  from a Blob in both browsers.
+
+Playwright reports service-worker answers on Chromium only, so on WebKit the
+specs check playback through the elements, not the worker's `206`s. If the
+stack's self-signed certificate keeps WebKit from registering the worker at
+all, every player falls back; the annotations show that, and spec 191 fails
+on the registration.
+
+### Content-Security-Policy violations
+
+Specs import `test` and `expect` from `fixtures/test.ts`, not from
+`@playwright/test`. Its fixture listens for `securitypolicyviolation` in
+every page and frame of every context (the `context` fixture's and those a
+spec makes with `browser.newContext()`), report-only violations included,
+and attaches what a test saw as `csp-violations` (page, directive, blocked
+origin, disposition; no query strings). By default that is all. With
+`E2E_CSP_STRICT=1` a test that saw any violation fails after its body, which
+is how the strict policy is checked before it is enforced
+([`docs/content-security-policy.md`](../../docs/content-security-policy.md)):
+
+```sh
+E2E_CSP_STRICT=1 npm exec -- playwright test specs/18-rename.spec.ts
+```
+
 ## Mail and outside sending
 
 The isolated stack starts with `MAIL_OUTSIDE_SENDING=on` (no Stalwart, so
@@ -117,24 +188,11 @@ tracing: the keys would be printed into the log.
 
 ## Server rollbacks
 
-Two specs need what only the stack's owner can do: spec 157's rollback test
-makes the server show an older account history
-(`docs/plans/rollback-protection.md`), and spec 162 makes an account from
-before X-Wing Drive keys (`docs/plans/pq-shares.md`). They run when
-`E2E_PSQL` holds a command that runs the SQL on its stdin against the
-stack's database (CI's single-server browser job sets it); otherwise they
-are skipped. Spec 162 also needs `E2E_SUITE1_ACCOUNT`: a command that runs
-the dev tool turning the account named by `KUTUP_SUITE1_USERNAME` and
-`KUTUP_SUITE1_PASSWORD` (the spec sets both) into a real suite-1 one, Chat
-manifests included. It reaches the backend and the database directly, so
-the stack exposes both to this machine:
-
-```sh
-E2E_SUITE1_ACCOUNT='KUTUP_SUITE1_SERVER=http://127.0.0.1:<backend port> \
-  KUTUP_SUITE1_DATABASE_URL=postgres://kutup:<password>@127.0.0.1:<db port>/kutup \
-  cargo test -q --manifest-path <repo>/Cargo.toml -p kutup-server \
-    --test identity_suite_live make_a_suite_1_account -- --ignored --exact'
-```
+Spec 157's rollback test needs what only the stack's owner can do: it makes
+the server show an older account history
+(`docs/plans/rollback-protection.md`). It runs when `E2E_PSQL` holds a
+command that runs the SQL on its stdin against the stack's database (CI's
+single-server browser job sets it); otherwise it is skipped.
 
 For `E2E_PSQL`, with a Compose stack:
 
@@ -203,6 +261,8 @@ reproduce locally; do not enable secret-bearing raw artifacts.
   selection.
 - `safe-reporter.ts`, `safe-diagnostics.ts`: allow-listed output for sensitive
   Chat/backup runs.
+- `fixtures/test.ts`: `test` and `expect` for every spec, recording
+  Content-Security-Policy violations (`E2E_CSP_STRICT=1` fails on them).
 - `fixtures/apps.ts`: app origins, account registration, first sign-in and
   administrator sign-in through the account app, and opening Drive.
 - `fixtures/chat.ts`: Chat helpers (open, settings, conversations, messages,
@@ -212,6 +272,9 @@ reproduce locally; do not enable secret-bearing raw artifacts.
 - `fixtures/office.ts`: ONLYOFFICE files, readiness from the bridge's log,
   sent and applied changes, and the cross-origin editor frame.
 - `fixtures/whiteboard.ts`: whiteboards through Excalidraw's API.
+- `fixtures/stream.ts`: media streamed through the service worker: a long
+  WAV, Quick Look playback, seeks, and which path a player took (stream or
+  Blob fallback).
 - spec 01: an administrator-created account's first sign-in; wrong password
   and unknown email read the same.
 - spec 02: note collaboration: a single seed, simultaneous opening, several
@@ -264,5 +327,9 @@ reproduce locally; do not enable secret-bearing raw artifacts.
   co-host, and a new link replaces the old one. Needs the same SFU as spec
   42, with its API reachable from the server (`CHAT_SFU_API_URL`).
 - spec 36: a group chat on a server with no federation settings.
+- specs 190, 191, 192: media streamed through the service worker: the worker
+  stopped (Chromium only) and swapped mid-playback, and a two-hour video and a
+  song in Photos and Drive, with the Blob fallback. In the account suite and,
+  on WebKit, in `suites/webkit.txt`.
 - `screenshots.spec.ts`: refreshes the README images; runs only with
   `KUTUP_README_SCREENSHOTS=1`.

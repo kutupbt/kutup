@@ -1,8 +1,24 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import axios from 'axios'
 import api from '@kutup/session/client'
 import { resolveApiBase } from '@kutup/session/apiBase'
-import { ApiChatTransport } from './transport'
+import { ApiChatTransport, FederationOffError, forgetFederationState } from './transport'
+
+// A custom-domain address: this server's Chat name is another than its domain.
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ accountId: 'u1', address: 'me@custom.example' }) }))
+vi.mock('@kutup/session/apps', () => ({ loadServerSettings: () => Promise.resolve({ chat: { serverName: 'home.test' } }) }))
+
+/** This account's switch, as `/account` says it. */
+let federation: 'on' | 'off' = 'on'
+const realGet = api.get.bind(api)
+beforeEach(() => {
+  federation = 'on'
+  forgetFederationState()
+  vi.spyOn(api, 'get').mockImplementation(((url: string, ...rest: unknown[]) =>
+    url === '/account'
+      ? Promise.resolve({ data: { federation } })
+      : (realGet as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest)) as typeof api.get)
+})
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -24,11 +40,11 @@ describe('ApiChatTransport', () => {
     const transport = new ApiChatTransport()
 
     await expect(transport.listDevices()).resolves.toEqual(devices)
-    expect(get).toHaveBeenCalledWith('/chat/device')
+    expect(get).toHaveBeenCalledWith('/chat/devices')
     await expect(transport.renameDevice(2, 'Work laptop')).resolves.toBeUndefined()
-    expect(patch).toHaveBeenCalledWith('/chat/device/2', { name: 'Work laptop' })
+    expect(patch).toHaveBeenCalledWith('/chat/devices/2', { name: 'Work laptop' })
     await expect(transport.revokeDevice(2)).resolves.toBeUndefined()
-    expect(remove).toHaveBeenCalledWith('/chat/device/2')
+    expect(remove).toHaveBeenCalledWith('/chat/devices/2')
   })
 
   it('links, relays and distributes with their refusals said as outcomes', async () => {
@@ -352,13 +368,27 @@ describe('ApiChatTransport', () => {
       [429, 'rateLimited'],
       [502, 'unreachable'],
       [404, 'groupsOff'],
+      [403, 'groupsOff'],
     ] as const) {
-      const failure = new axios.AxiosError('refused', String(status), undefined, undefined, { status } as never)
+      const data = status === 403 ? { code: 'federationOff' } : undefined
+      const failure = new axios.AxiosError('refused', String(status), undefined, undefined, { status, data } as never)
       vi.spyOn(api, 'post').mockRejectedValueOnce(failure)
       await expect(transport.relayGroupRequest('home.example', new Uint8Array([1]))).resolves.toEqual({ kind })
     }
     const other = new axios.AxiosError('boom', '500', undefined, undefined, { status: 500 } as never)
     vi.spyOn(api, 'post').mockRejectedValueOnce(other)
     await expect(transport.relayGroupRequest('home.example', new Uint8Array([1]))).rejects.toBe(other)
+  })
+
+  it('reaches no other server while this account talks to none', async () => {
+    federation = 'off'
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ data: { results: [] } } as never)
+    const transport = new ApiChatTransport()
+    await expect(transport.fetchSealedBundles(ALICE, 'cap')).rejects.toBeInstanceOf(FederationOffError)
+    await expect(transport.sendSealedBatch('remote.example', { messages: [] })).rejects.toBeInstanceOf(FederationOffError)
+    expect(post).not.toHaveBeenCalled()
+    // This server's own accounts are still reached.
+    await transport.sendSealedBatch('home.test', { messages: [] }).catch(() => undefined)
+    expect(post).toHaveBeenCalled()
   })
 })

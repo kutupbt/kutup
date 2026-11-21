@@ -9,7 +9,10 @@
 //! rotated to since, so a rotation rehashes nothing. From it:
 //!
 //! An account's top-level folders, with no folder above them, use one hash
-//! key derived from the account master key.
+//! key derived from the account's current Drive root. Each top-level
+//! folder records the Drive-root generation its hash was made under, so a
+//! reader knows which key made it; a Drive-root rotation rehashes the top
+//! level under the new root (the rotation flow, after the wipe).
 //!
 //! - a **name hash**, `HMAC-SHA256(hash key, "name" ‖ 0 ‖ canonical name)`,
 //!   stored with every file and folder; the server keeps them unique in a
@@ -28,10 +31,13 @@
 use crate::primitives::{hash, Kdf, Mac, Suite};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::account_roots::DriveRoot;
 use crate::error::{CryptoError, Result};
 
-const HASH_KEY_INFO: &[u8] = b"kutup/drive/folder-hash-key/v1";
-const TOP_LEVEL_INFO: &[u8] = b"kutup/drive/top-level-names/v1";
+/// The family every name hash key comes from (the HKDF salt).
+const NAMES_SALT: &[u8] = crate::labels::DRIVE_NAMES_V1;
+const HASH_KEY_INFO: &[u8] = crate::labels::DRIVE_FOLDER_HASH_KEY_V1;
+const TOP_LEVEL_INFO: &[u8] = crate::labels::DRIVE_TOP_LEVEL_NAMES_V1;
 const NAME_LABEL: &[u8] = b"name\0";
 const CONTENT_LABEL: &[u8] = b"content\0";
 
@@ -45,22 +51,24 @@ pub fn folder_hash_key(first_folder_key: &[u8], collection_id: &str) -> Result<[
     if collection_id.is_empty() {
         return Err(CryptoError::InvalidInput("folder id is empty".into()));
     }
-    let hkdf = Kdf::new(Suite::V1, collection_id.as_bytes(), first_folder_key);
+    let id_len = u16::try_from(collection_id.len())
+        .map_err(|_| CryptoError::InvalidInput("folder id is too long".into()))?;
+    let mut info = Vec::with_capacity(HASH_KEY_INFO.len() + 2 + collection_id.len());
+    info.extend_from_slice(HASH_KEY_INFO);
+    info.extend_from_slice(&id_len.to_be_bytes());
+    info.extend_from_slice(collection_id.as_bytes());
+    let hkdf = Kdf::new(Suite::V1, NAMES_SALT, first_folder_key);
     let mut key = [0u8; 32];
-    hkdf.expand(HASH_KEY_INFO, &mut key)
+    hkdf.expand(&info, &mut key)
         .map_err(|_| CryptoError::InvalidInput("folder hash key derivation failed".into()))?;
     Ok(key)
 }
 
 /// The hash key for an account's top-level folders, which have no folder
-/// above them: from the account master key.
-pub fn top_level_hash_key(master_key: &[u8]) -> Result<[u8; 32]> {
-    if master_key.len() != 32 {
-        return Err(CryptoError::InvalidInput(
-            "master key must be 32 bytes".into(),
-        ));
-    }
-    let hkdf = Kdf::new(Suite::V1, &[], master_key);
+/// above them: from the account's Drive root. The folder records the root's
+/// generation next to its hash (`collections.name_hash_generation`).
+pub fn top_level_hash_key(drive_root: &DriveRoot) -> Result<[u8; 32]> {
+    let hkdf = Kdf::new(Suite::V1, NAMES_SALT, drive_root.as_bytes());
     let mut key = [0u8; 32];
     hkdf.expand(TOP_LEVEL_INFO, &mut key)
         .map_err(|_| CryptoError::InvalidInput("top-level hash key derivation failed".into()))?;
@@ -127,10 +135,12 @@ mod tests {
             folder_hash_key(&[7u8; 32], "22222222-2222-4222-8222-222222222222").unwrap()
         );
         assert!(folder_hash_key(&[7u8; 31], ID).is_err());
-        let top = top_level_hash_key(&[7u8; 32]).unwrap();
+        let top = top_level_hash_key(&DriveRoot::from_bytes([7u8; 32])).unwrap();
         assert_ne!(top, key);
-        assert_ne!(top, top_level_hash_key(&[8u8; 32]).unwrap());
-        assert!(top_level_hash_key(&[7u8; 31]).is_err());
+        assert_ne!(
+            top,
+            top_level_hash_key(&DriveRoot::from_bytes([8u8; 32])).unwrap()
+        );
     }
 
     #[test]

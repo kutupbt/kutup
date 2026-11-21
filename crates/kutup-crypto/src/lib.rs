@@ -6,8 +6,7 @@
 //! labels, validation and suite policy live here rather than in each client.
 //!
 //! Backing libraries:
-//! - [`dryoc`] — pure-Rust, libsodium-compatible `crypto_pwhash` (Argon2id)
-//!   and `crypto_secretstream_xchacha20poly1305`.
+//! - [`dryoc`] — pure-Rust, libsodium-compatible `crypto_pwhash` (Argon2id).
 //! - [`hkdf`] + [`sha2`] — purpose-separated HKDF-SHA256 subkeys.
 //! - [`chacha20poly1305`] — XChaCha20-Poly1305-IETF AEAD for typed envelopes.
 //! - [`ed25519_dalek`] — Ed25519 collab-frame signatures.
@@ -15,20 +14,24 @@
 //! ## Modules
 //! - [`kdf`] — one-root Argon2id account protection and recovery proof.
 //! - [`mnemonic`] — BIP39 recovery-phrase encode/decode (registration).
-//! - [`account_envelope`] — suite-bearing, purpose- and account-bound XChaCha account wraps.
+//! - [`account_record`] — suite-bearing, purpose- and account-bound XChaCha account wraps.
 //! - [`key_binding`] — the account's permanent random key binding, which its own seals bind.
 //! - [`chat_attachment_ledger`] — account-private attachment-index envelopes.
-//! - [`chat_media`] — immutable typed Chat-media secretstream objects.
+//! - [`chat_media`] — Chat-media suite, purpose and attachment context.
+//! - [`blocks`] — the block format of large objects: 4 MiB AEAD blocks bound to
+//!   their index and revision, with a sealed manifest of block hashes
+//!   ([`drive_blocks`], [`chat_media_blocks`], [`chat_backup_media_blocks`]).
 //! - [`drive_envelope`] — suite-bearing, purpose/key-separated and UUID/epoch/revision-bound Drive values.
-//! - [`drive_object`] — the Drive suite registry and typed, file-bound file-blob framing.
+//! - [`drive_object`] — the Drive suite and purpose registry.
+//! - [`format`] — how formats grow: `v`, the minimum reader, kept unknown fields, open enums.
 //! - [`file_metadata`] — a Drive file's metadata (name, type, size, photo details), canonical JSON.
 //! - [`file_keyring`] — a file's key generations, each sealing the one before.
 //! - [`photos_library`] — an account's own marks on photos (favourites, archived, hidden).
 //! - [`named_share`] — authenticated HPKE named-recipient collection sharing.
-//! - [`stream`] — XChaCha20-Poly1305 secretstream (file content, 5 MiB chunks).
 //! - [`asset`] — whiteboard asset envelopes under the file key.
 //! - [`envelope`] — collab-edit frame wire format + Ed25519 sign/verify.
 //! - [`local_state`] — typed XChaCha client-local state such as CLI sessions.
+//! - [`local_chain_pin`] — a device's newest seen state of an account-private chain.
 //! - [`contact_card`] — signed contact summaries and sealed contact cards.
 //! - [`mail_names`] — sealed names of mail folders, labels and filters.
 //! - [`mail_search`] — the browser's Mail search index at rest.
@@ -38,10 +41,12 @@
 //! - [`calendar_recurrence`] — Proton's RRULE subset and the expansion of a series.
 //! - [`pass_vault`] — Kutup Pass vault secrets sealed under the master key.
 
-pub mod account_envelope;
 pub mod account_head;
+pub mod account_record;
+pub mod account_records;
 pub mod account_ref;
 pub mod account_rename;
+pub mod account_roots;
 pub mod asset;
 pub mod blocks;
 #[cfg(feature = "calendar")]
@@ -50,6 +55,7 @@ pub mod calendar;
 pub mod calendar_event;
 #[cfg(feature = "calendar")]
 pub mod calendar_recurrence;
+pub mod calendar_settings;
 pub mod chat_attachment_ledger;
 pub mod chat_backup;
 pub mod chat_backup_media;
@@ -65,7 +71,7 @@ pub mod chat_store;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
-pub mod device_registration;
+pub mod contact_group;
 #[cfg(feature = "mail")]
 pub mod dkim_key;
 pub mod drive_blocks;
@@ -77,13 +83,16 @@ pub mod envelope;
 pub mod error;
 pub mod file_keyring;
 pub mod file_metadata;
+pub mod format;
 // The HPKE suite's backend (hpke-rs, X-Wing), which primitives::hpke calls.
 pub mod hpke_xwing;
 pub mod identity;
 pub mod identity_pins;
 pub mod kdf;
 pub mod key_binding;
+pub mod labels;
 pub mod live_location;
+pub mod local_chain_pin;
 pub mod local_state;
 pub mod mail_address;
 #[cfg(feature = "mail")]
@@ -95,6 +104,9 @@ pub mod mail_group;
 pub mod mail_key;
 pub mod mail_names;
 pub mod mail_search;
+pub mod master_keys;
+#[cfg(feature = "mnemonic")]
+pub mod mk_rotation;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;
@@ -104,6 +116,7 @@ pub mod oblivious;
 // Adapter: OPAQUE (RFC 9807, opaque-ke) and its ciphersuite.
 pub mod opaque;
 pub mod opaque_login_state;
+pub mod organization;
 pub mod padding;
 // Adapter: KeePass KDBX's composite key.
 pub mod pass_vault;
@@ -114,12 +127,13 @@ pub mod primitives;
 pub mod profile_key_share;
 // Adapter: Signal's ProvisioningCipher (AES-256-CBC + HMAC-SHA256).
 pub mod provisioning;
+pub mod revision_content;
 pub mod revision_guard;
 // Adapter: Signal's safety number (iterated SHA-512).
 pub mod safety_number;
-// Legacy: libsodium's secretstream, until the block format replaces it
-// (docs/plans/drive-block-format.md).
-pub mod stream;
+// Server-held: account data keys and the personal fields they seal
+// (docs/plans/server-personal-data.md, A2).
+pub mod server_data;
 pub mod thumbnail;
 #[cfg(feature = "webauthn")]
 pub mod webauthn;

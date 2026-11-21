@@ -8,8 +8,10 @@ import type { Session } from '@kutup/session/store'
 vi.mock('@kutup/crypto', async () => {
   const guard = await vi.importActual<typeof import('@kutup/crypto/revisionGuard')>('@kutup/crypto/revisionGuard')
   const base64 = await vi.importActual<typeof import('@kutup/crypto/base64')>('@kutup/crypto/base64')
+  const contactCard = await vi.importActual<typeof import('@kutup/crypto/contactCard')>('@kutup/crypto/contactCard')
   return {
     ...base64,
+    contactSummaryRest: contactCard.contactSummaryRest,
     revisionGuard: guard.revisionGuard,
     deriveAccountIdentityKeys: () => Promise.resolve({ authorityPublicKey: 'A' }),
     describeExternalMailKey: () => Promise.reject(new Error('no keys here')),
@@ -57,7 +59,7 @@ vi.mock('@kutup/session/accountHead', async () => {
           return await change.send(`head-${attempt}`)
         } catch (error) {
           const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code
-          if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < 5) continue
+          if ((code === 'headConflict' || code === 'revisionConflict') && attempt < 5) continue
           throw error
         }
       }
@@ -70,8 +72,9 @@ import { resetRevisionGuardsForTesting } from '@kutup/crypto/revisionGuard'
 import { NotInVerifiedIndexError } from '@kutup/session/accountHead'
 import { ContactChangedError, createContact, deleteContacts, loadContacts, putContact } from './api'
 import { emptyDraft } from './model'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
-const session = { userId: 'u1', masterKey: new Uint8Array(32), envelopeBinding: 'b' } as unknown as Session
+const session = { accountId: 'u1', masterKey: new Uint8Array(32), roots: testRoots(0), envelopeBinding: 'b' } as unknown as Session
 const draft = (name: string) => ({ ...emptyDraft(), name })
 const conflict = (code: string) => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code } } })
 
@@ -143,7 +146,7 @@ describe('writing contacts', () => {
   })
 
   it('saves an edit with the next head; sends it again when only another value moved', async () => {
-    http.put.mockRejectedValueOnce(conflict('head_conflict')).mockResolvedValue({ data: {} })
+    http.put.mockRejectedValueOnce(conflict('headConflict')).mockResolvedValue({ data: {} })
     head.index = () => [['u-1', 5]]
     await putContact(session, { id: 'r1', uid: 'u-1', revision: 5 }, draft('Ada'))
     expect(http.put).toHaveBeenCalledTimes(2)
@@ -151,7 +154,7 @@ describe('writing contacts', () => {
   })
 
   it('does not lay a form over a contact another device changed', async () => {
-    http.put.mockRejectedValueOnce(conflict('revision_conflict'))
+    http.put.mockRejectedValueOnce(conflict('revisionConflict'))
     head.index = (attempt) => [['u-1', attempt > 1 ? 6 : 5]]
     await expect(putContact(session, { id: 'r1', uid: 'u-1', revision: 5 }, draft('Ada'))).rejects.toBeInstanceOf(ContactChangedError)
     expect(http.put).toHaveBeenCalledTimes(1)

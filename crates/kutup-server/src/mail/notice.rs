@@ -22,8 +22,9 @@ pub enum DomainLost {
 pub async fn domain_lost(state: &AppState, user: Uuid, name: &str, why: DomainLost) {
     let reason = match why {
         DomainLost::Transferred => format!(
-            "Another account proved that it controls {name}: its DNS now carries that \
-             account's verification record and no longer yours. The domain moved to it."
+            "Another organization proved that it controls {name}: its DNS now carries \
+             that organization's verification record and no longer yours. The domain \
+             moved to it."
         ),
         DomainLost::Lapsed => format!(
             "{name}'s DNS records stopped pointing to this server for longer than the \
@@ -43,6 +44,23 @@ pub async fn domain_lost(state: &AppState, user: Uuid, name: &str, why: DomainLo
     }
 }
 
+/// The domain-lost notice to each of an organization's owners.
+pub async fn domain_lost_to_owners(
+    state: &AppState,
+    organization: Uuid,
+    name: &str,
+    why: DomainLost,
+) {
+    match crate::organizations::owners(&state.pool, organization).await {
+        Ok(owners) => {
+            for owner in owners {
+                domain_lost(state, owner, name, why).await;
+            }
+        }
+        Err(error) => tracing::warn!(error = %error, "mail: the domain's owners were not read"),
+    }
+}
+
 /// A notice to `user`'s own address (a calendar reminder, …): errors are
 /// the caller's to log.
 pub async fn to_account(
@@ -58,7 +76,7 @@ async fn deliver(state: &AppState, user: Uuid, subject: &str, body: &str) -> any
     // The account's own address on the server's domain, the oldest first.
     let address: Option<String> = sqlx::query_scalar(
         "SELECT address FROM mail_addresses
-          WHERE user_id = $1 AND domain_id IS NULL AND state = 'active'
+          WHERE account_id = $1 AND domain_id IS NULL AND state = 'active'
           ORDER BY created_at LIMIT 1",
     )
     .bind(user)

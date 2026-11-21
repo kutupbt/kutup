@@ -272,7 +272,7 @@ function EmailSettingsDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="default">{t('keys.useDefault')}</SelectItem>
-                  <SelectItem value="pgp_mime">PGP/MIME</SelectItem>
+                  <SelectItem value="pgpMime">PGP/MIME</SelectItem>
                   <SelectItem value="inline">{t('keys.inline')}</SelectItem>
                 </SelectContent>
               </Select>

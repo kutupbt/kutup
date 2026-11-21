@@ -40,8 +40,11 @@ pub struct RegisterRequest {
     pub opaque_server_key_id: u16,
     pub master_key_envelope: String,
     pub recovery_key_envelope: String,
-    pub drive_private_key_envelope: String,
-    pub public_key: String,
+    /// The account's root records, sealed under its master key
+    /// (docs/plans/identity-root.md).
+    pub account_roots: Vec<String>,
+    /// The account's Drive key (X-Wing).
+    pub drive_xwing_public_key: String,
     pub account_authority_public_key: String,
     pub account_authority_key_id: String,
     pub account_incarnation_id: String,
@@ -61,21 +64,32 @@ pub struct LoginResponse {
     #[serde(default)]
     pub refresh_token: String,
     #[serde(default)]
-    pub user_id: String,
+    pub account_id: String,
     #[serde(default)]
     pub username: String,
+    /// `member`, `admin` or `breakGlassAdmin`; none on the setup/2FA steps.
     #[serde(default)]
-    pub is_admin: bool,
+    pub role: Option<String>,
     #[serde(default)]
     pub storage_quota_bytes: i64,
     #[serde(default)]
     pub storage_used_bytes: i64,
     #[serde(default)]
     pub master_key_envelope: String,
+    /// The account's root records and the authority its newest identity
+    /// root must derive (docs/plans/identity-root.md); with the session.
     #[serde(default)]
-    pub drive_private_key_envelope: String,
+    pub account_roots: Vec<String>,
     #[serde(default)]
-    pub public_key: String,
+    pub account_authority_public_key: String,
+    /// The master key's generation and every older key's keyring record
+    /// (docs/plans/mk-rotation-exercise.md); with the session.
+    #[serde(default)]
+    pub master_key_generation: u32,
+    #[serde(default)]
+    pub master_keyring: Vec<String>,
+    #[serde(default)]
+    pub drive_xwing_public_key: String,
     /// What the account's sealed keys are bound to; only with a session.
     #[serde(default, rename = "keyBinding")]
     pub envelope_binding: String,
@@ -85,10 +99,6 @@ pub struct LoginResponse {
     pub rotate: bool,
     #[serde(default)]
     pub grant: Option<String>,
-    /// 1: the account's Drive key is still X25519 and this sign-in upgrades
-    /// it (docs/plans/pq-shares.md).
-    #[serde(default)]
-    pub identity_suite: Option<i16>,
     #[serde(default)]
     pub requires_totp: bool,
     /// The second steps the account has: `securityKey`, `totp`,
@@ -99,6 +109,19 @@ pub struct LoginResponse {
     pub pre_auth_token: String,
     #[serde(default)]
     pub requires_setup: bool,
+    /// The account is closing: no session, but a grant (purpose `keep`)
+    /// that keeps it (docs/plans/server-personal-data.md, A5).
+    #[serde(default)]
+    pub closing: Option<Closing>,
+}
+
+/// A closing account's sign-in answer.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Closing {
+    /// When the account is deleted (RFC 3339).
+    pub closes_at: String,
+    pub grant: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,15 +131,22 @@ pub struct TotpRequest {
     pub code: String,
 }
 
-/// `GET /auth/recover/preflight` — encrypted recovery-key material. The
-/// server answers unknown names with deterministic fake data, so a wrong
-/// phrase/name only ever fails client-side at unwrap time.
+/// `GET /auth/recover/preflight` — the key binding a recovery proof is
+/// derived with (a fake one for an unknown name). The recovery envelope comes
+/// only with the grant, after the proof.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverPreflightResponse {
     #[serde(default)]
     pub envelope_binding: String,
-    #[serde(default)]
+}
+
+/// `POST /auth/recover/grant` — a recovery grant, and the master key under
+/// the recovery phrase.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverGranted {
+    pub grant: String,
     pub recovery_key_envelope: String,
 }
 
@@ -146,7 +176,7 @@ pub struct SetupTotpResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserMe {
+pub struct AccountMe {
     pub id: String,
     /// The account's permanent id and its server.
     pub account_id: String,
@@ -158,10 +188,12 @@ pub struct UserMe {
     /// What the account's envelopes are bound to now.
     #[serde(default)]
     pub envelope_binding: String,
+    /// `member`, `admin` or `breakGlassAdmin`.
     #[serde(default)]
-    pub is_admin: bool,
+    pub role: String,
+    /// The authenticator app: `on`, `pending` (not confirmed yet) or `off`.
     #[serde(default)]
-    pub totp_enabled: bool,
+    pub two_factor: String,
     /// Security keys the account has: two-step sign-in is on with them too.
     #[serde(default)]
     pub security_keys: i64,
@@ -178,7 +210,7 @@ pub struct UserMe {
 pub struct Collection {
     pub id: String,
     #[serde(default)]
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     #[serde(default)]
     pub name_envelope: String,
     #[serde(default)]
@@ -193,7 +225,7 @@ pub struct Collection {
     pub epoch_statement: String,
     #[serde(default)]
     pub epoch_statement_hash: String,
-    /// A shared folder's owner's server; with `owner_user_id`, the owner.
+    /// A shared folder's owner's server; with `owner_account_id`, the owner.
     #[serde(default)]
     pub owner_server: Option<String>,
     /// Shown only: the owner's address now.
@@ -239,6 +271,10 @@ pub struct CreateCollectionRequest {
     /// The name's hash in its place (docs/plans/drive-unique-names.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_hash: Option<String>,
+    /// At the top level, the Drive-root generation its hash key came from
+    /// (docs/plans/identity-rotation.md §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash_generation: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -254,6 +290,10 @@ pub struct RenameCollectionRequest {
     pub name_revision: u64,
     /// The new name's hash in the folder's place; none clears it.
     pub name_hash: Option<String>,
+    /// At the top level, the Drive-root generation its hash key came from
+    /// (docs/plans/identity-rotation.md §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash_generation: Option<u32>,
 }
 
 // --- Files ---
@@ -284,7 +324,7 @@ pub struct File {
     pub encrypted_size_bytes: i64,
     #[serde(default)]
     pub created_at: String,
-    /// The key generation of what `/files/{id}/download` serves (its latest
+    /// The key generation of what `/drive/files/{id}/download` serves (its latest
     /// whole-file version, else the upload).
     pub content_key_generation: u32,
     /// The key generation the original upload was sealed at.
@@ -344,6 +384,10 @@ pub struct MoveCollectionRequest {
     /// Its name's hash in the new place (docs/plans/drive-unique-names.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_hash: Option<String>,
+    /// At the top level, the Drive-root generation its hash key came from
+    /// (docs/plans/identity-rotation.md §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash_generation: Option<u32>,
 }
 
 /// One generation of a file's key history: the key of `generation − 1`
@@ -357,7 +401,7 @@ pub struct FileKeyHistoryEntry {
 
 /// A file's metadata: the canonical format in `kutup-crypto` (name, type,
 /// size and a photo's details), so a rename keeps what it does not change.
-pub use kutup_crypto::file_metadata::FileMetadataV1 as FileMetadata;
+pub use kutup_crypto::file_metadata::FileMetadata;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -379,7 +423,7 @@ pub struct UploadResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareRequest {
-    pub recipient_user_id: String,
+    pub recipient_account_id: String,
     pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
@@ -431,7 +475,7 @@ pub struct PublicShareResponse {
     pub token: String,
 }
 
-/// An account and its keys, as `/users/by-address` and `/users/by-id` both
+/// An account and its keys, as `/accounts/by-address` and `/accounts/by-id` both
 /// answer it, here or on its server.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -443,7 +487,7 @@ pub struct AccountLookup {
     #[serde(default)]
     pub account: String,
     #[serde(default)]
-    pub drive_hpke_public_key: String,
+    pub drive_xwing_public_key: String,
     #[serde(default)]
     pub account_incarnation_id: String,
     #[serde(default)]
@@ -476,25 +520,4 @@ impl AccountLookup {
         }
         Ok(())
     }
-}
-
-/// The account's sealed identity pin list (`GET/PUT /api/user/identity-pins`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IdentityPinsRecord {
-    /// The revision in the sealed list's header, as the server read it.
-    pub revision: u64,
-    pub envelope: String,
-}
-
-/// A new sealed list, stored only if the server still holds `base_revision`
-/// (0: none yet); its own revision is in the envelope's header.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IdentityPinsWrite {
-    pub base_revision: u64,
-    pub envelope: String,
-    /// The next sealed account head (docs/plans/rollback-protection.md).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub head: Option<String>,
 }

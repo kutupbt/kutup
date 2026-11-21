@@ -15,6 +15,8 @@
 // account and incarnation, so two accounts in one browser, or an account
 // before and after a reset, never share or compare anchors.
 
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { isAxiosError } from 'axios'
 import {
   AccountHead,
@@ -26,12 +28,24 @@ import {
   type LocalHeadState,
   type Reanchored,
 } from '@kutup/crypto/accountHead'
-import { fromBase64, toBase64 } from '@kutup/crypto/base64'
+import { fromBase64 } from '@kutup/crypto/base64'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import { indexedDbRevisionStore, type RevisionStore } from '@kutup/crypto/revisionGuard'
 import api from './client'
 import { getSession, subscribe } from './store'
 import { hash } from '@kutup/crypto/hash'
+import {
+  batchBody,
+  changesOf,
+  cloneRecords,
+  indexedDbRecordsStore,
+  memoryRecordsStore,
+  ScopeRecords,
+  type RecordScopeName,
+  type RecordsEdit,
+  type RecordsPage,
+  type RecordsStore,
+} from './accountRecords'
 
 /** A verified head (`@kutup/crypto/accountHead` `VerifiedHead`): each holder its own, freed when done. */
 export interface VerifiedHeadLike {
@@ -183,6 +197,8 @@ interface Http {
 const VERIFIED_FOR_MS = 30_000
 /** Every listed write is tried at most this many times (another device writing first). */
 const WRITE_TRIES = 5
+/** The most pages one records read takes (a server answering "more" forever). */
+const MOST_RECORD_PAGES = 100_000
 
 function conflictCode(error: unknown): string | null {
   if (!isAxiosError(error) || error.response?.status !== 409) return null
@@ -211,7 +227,7 @@ function applied(values: HeadIndex, changes: ListedEdit<unknown>['changes']): He
 /** Runs `task` under this origin's lock of `name` (other tabs wait), where the browser has locks. */
 function locked<T>(name: string, task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  return locks ? (locks.request(`kutup-account-head:${name}`, task) as Promise<T>) : task()
+  return locks ? (locks.request(`kutup.account.head:${name}`, task) as Promise<T>) : task()
 }
 
 /** What one check of a head found. */
@@ -229,11 +245,15 @@ export class AccountHeadClient {
   private writes: Promise<unknown> = Promise.resolve()
   private readonly listeners = new Set<HeadListener>()
 
+  /** Each records scope as this page last verified it. */
+  private readonly copies = new Map<RecordScopeName, ScopeRecords>()
+
   constructor(
     private readonly engine: HeadEngine,
     private readonly store: RevisionStore,
     private readonly http: Http = api,
     private readonly now: () => number = Date.now,
+    private readonly recordsStore: RecordsStore = memoryRecordsStore(),
   ) {}
 
   private get entry(): string {
@@ -382,6 +402,49 @@ export class AccountHeadClient {
   }
 
   /**
+   * The check a sign-in makes before its session goes live and before
+   * anything is signed or sealed with the roots: the server's head read
+   * fresh (a cached check doesn't count) and checked, roots' generations
+   * included, so a rolled-back identity or Drive root never reaches use.
+   * With no head yet, the chain is started on what the account holds, with
+   * the generations it registered (in line with the listed writes).
+   */
+  atSignIn(): Promise<void> {
+    const run = () => this.signInCheck()
+    const result = this.writes.then(run, run)
+    this.writes = result.catch(() => undefined)
+    return result
+  }
+
+  private async signInCheck(): Promise<void> {
+    this.verifiedAt = 0
+    for (let attempt = 1; ; attempt++) {
+      const { data: basis, verified } = await this.checked(async () => {
+        // Any scope's index answers with the head and, before the first, the basis.
+        const { data } = await this.http.get<{ head: string | null; basis: string | null }>('/account/index/contacts')
+        return { current: data.head, data: data.basis }
+      })
+      if (verified) {
+        verified.free()
+        return
+      }
+      if (basis === null) throw new Error('no account head and no basis to start one on')
+      try {
+        const first = this.engine.first(this.engine.writer((await this.load()).deviceId), [])
+        await this.http.post('/account/head', { head: first, basis })
+        const started = this.engine.committed(null, first)
+        await this.remember(started)
+        started.free()
+        return
+      } catch (error) {
+        // Another device started it (or a listed write landed): check that one.
+        if (conflictCode(error) === 'headConflict' && attempt < WRITE_TRIES) continue
+        throw error
+      }
+    }
+  }
+
+  /**
    * A scope's index checked against the head it was read with (one
    * snapshot), and that verified head (the caller owns it). A scope the
    * server keeps no index of (404) is read as an empty index and checked like
@@ -471,7 +534,163 @@ export class AccountHeadClient {
         return result
       } catch (error) {
         const code = conflictCode(error)
-        if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < WRITE_TRIES) continue
+        if ((code === 'headConflict' || code === 'revisionConflict') && attempt < WRITE_TRIES) continue
+        throw error
+      } finally {
+        base?.free()
+        if (verified && verified !== base) verified.free()
+      }
+    }
+  }
+
+  /**
+   * A records scope (docs/plans/account-records.md), read from the start:
+   * every page's head verified as it comes, and once caught up the scope's
+   * index checked against the last one (decision 5: a page alone is never
+   * trusted). A mismatch is `IndexMismatchError`.
+   */
+  async records(scope: RecordScopeName): Promise<ScopeRecords> {
+    const { copy, verified } = await this.readRecords(scope)
+    verified?.free()
+    return copy
+  }
+
+  /** What every copy of this account's records is named with (sign-out drops them). */
+  copyPrefix(): string {
+    return `${this.engine.localStateName()}:`
+  }
+
+  private copyName(scope: RecordScopeName): string {
+    return `${this.engine.localStateName()}:${scope}`
+  }
+
+  /** The copy this device kept of `scope`, from this page or an earlier one (not yet trusted). */
+  private async keptCopy(scope: RecordScopeName): Promise<ScopeRecords | null> {
+    const cached = this.copies.get(scope)
+    if (cached) return cached
+    const kept = await this.recordsStore.load(this.copyName(scope))
+    if (!kept) return null
+    const copy = new ScopeRecords(scope)
+    copy.cursor = kept.cursor
+    for (const [id, record] of kept.records) copy.records.set(id, record)
+    return copy
+  }
+
+  /** Keeps `copy` (verified) as this device's, writing only what changed since `before`. */
+  private async keepCopy(scope: RecordScopeName, before: ScopeRecords | null, copy: ScopeRecords): Promise<void> {
+    this.copies.set(scope, copy)
+    await this.recordsStore.save(this.copyName(scope), copy.cursor, changesOf(before, copy))
+  }
+
+  /**
+   * A records scope as the head vouches for it: the copy this device kept,
+   * brought up to date from its cursor (every page's head verified as it
+   * comes), and then the whole scope checked against the last head. A kept
+   * copy that fails the check (altered, or left stale) is never used: it is
+   * dropped and the scope read again from the start; a second failure is
+   * `IndexMismatchError`.
+   */
+  private async readRecords(scope: RecordScopeName): Promise<{ copy: ScopeRecords; basis: string | null; verified: VerifiedHeadLike | null }> {
+    let kept = await this.keptCopy(scope)
+    for (;;) {
+      const copy = kept ? cloneRecords(kept) : new ScopeRecords(scope)
+      const { page, verified } = await this.caughtUp(copy)
+      if (verified) {
+        try {
+          this.engine.checkIndex(verified, scope, copy.index())
+        } catch {
+          verified.free()
+          if (kept) {
+            // Not what the head lists: start over, trusting nothing kept.
+            kept = null
+            this.copies.delete(scope)
+            continue
+          }
+          throw new IndexMismatchError(scope)
+        }
+      }
+      await this.keepCopy(scope, kept, copy)
+      return { copy, basis: page.head === null ? page.basis : null, verified }
+    }
+  }
+
+  /** Reads `copy`'s scope on from its cursor to the end; the last page's head, verified. */
+  private async caughtUp(copy: ScopeRecords): Promise<{ page: RecordsPage; verified: VerifiedHeadLike | null }> {
+    let resyncs = 0
+    // Each page starts past the one before; the bound only stops a server
+    // that keeps answering "more".
+    for (let pages = 0; pages < MOST_RECORD_PAGES; pages++) {
+      const { data: page, verified } = await this.checked(async () => {
+        const { data } = await this.http.get<RecordsPage>(`/account/records/${encodeURIComponent(copy.scope)}?after=${copy.cursor}`)
+        return { current: data.head, data }
+      })
+      let merged: ReturnType<ScopeRecords['merge']>
+      try {
+        merged = copy.merge(page)
+      } catch (error) {
+        verified?.free()
+        throw error
+      }
+      if (merged === 'done') return { page, verified }
+      verified?.free()
+      if (merged === 'resync' && ++resyncs > 3) throw new Error(`${copy.scope}: the server kept sending this device back to the start`)
+    }
+    throw new Error(`${copy.scope}: the server's records did not end`)
+  }
+
+  /**
+   * A batch of `scope`'s records with the next head: `edit` makes the puts
+   * and deletes on the verified copy (`attempt` counts from 1), redone (up
+   * to five times) when another device wrote first. The chain starts first
+   * when there is none. An edit returning null, or nothing to change, sends
+   * nothing. Queued with the listed writes.
+   */
+  recordsWrite<T>(scope: RecordScopeName, edit: (copy: ScopeRecords, attempt: number) => Promise<RecordsEdit<T> | null>): Promise<T | undefined> {
+    const run = () => this.writeRecords(scope, edit)
+    const result = this.writes.then(run, run)
+    this.writes = result.catch(() => undefined)
+    return result
+  }
+
+  private async writeRecords<T>(scope: RecordScopeName, edit: (copy: ScopeRecords, attempt: number) => Promise<RecordsEdit<T> | null>): Promise<T | undefined> {
+    for (let attempt = 1; ; attempt++) {
+      if (this.condition.kind === 'blocked') throw new HeadBlockedError(this.condition.reason)
+      const { copy, basis, verified } = await this.readRecords(scope)
+      let base = verified
+      try {
+        const writer = this.engine.writer((await this.load()).deviceId)
+        const change = await edit(copy, attempt)
+        if (change === null) return undefined
+        const batch = copy.plan(change)
+        if (batch.puts.length === 0 && batch.deletes.length === 0) return change.done
+        if (basis !== null) {
+          const first = this.engine.first(writer, [this.engine.scope(scope, copy.index())])
+          await this.http.post('/account/head', { head: first, basis })
+          base = this.engine.committed(null, first)
+          await this.remember(base)
+        }
+        if (!base) throw new Error('no verified account head to write on')
+        const head = this.engine.next(base, writer, [this.engine.scope(scope, copy.indexAfter(batch))])
+        const { data: stored } = await this.http.post<{ seq: number }>('/account/records', batchBody(batch, head))
+        // The batch followed the head this copy was caught up at, so nothing
+        // else was written in between: the copy is the scope at `seq`.
+        const after = cloneRecords(copy)
+        for (const put of batch.puts) after.records.set(put.id, { revision: put.revision, envelope: put.envelope })
+        for (const gone of batch.deletes) after.records.delete(gone.id)
+        if (Number.isSafeInteger(stored?.seq) && stored.seq > after.cursor) after.cursor = stored.seq
+        await this.keepCopy(scope, copy, after)
+        try {
+          const after = this.engine.committed(base, head)
+          await this.remember(after)
+          after.free()
+        } catch {
+          // Stored, but not taken as verified here: the next read checks it.
+          this.verifiedAt = 0
+        }
+        return change.done
+      } catch (error) {
+        const code = conflictCode(error)
+        if ((code === 'headConflict' || code === 'revisionConflict') && attempt < WRITE_TRIES) continue
         throw error
       } finally {
         base?.free()
@@ -529,35 +748,43 @@ export class AccountHeadClient {
   }
 }
 
-/** An engine that opens the Rust head on first use (the master key crosses once). */
-function lazyEngine(masterKey: Uint8Array, binding: string): Promise<HeadEngine> {
+/** An engine that opens the Rust head on first use. */
+function lazyEngine(masterKeys: MasterKeys, roots: AccountRoots, binding: string): Promise<HeadEngine> {
   return (async () => {
-    const { incarnationId } = await deriveAccountIdentityKeys(toBase64(masterKey))
-    return AccountHead.open(masterKey, binding, incarnationId)
+    const { incarnationId } = await deriveAccountIdentityKeys(roots.identityRoot)
+    return AccountHead.open(masterKeys, binding, incarnationId, roots)
   })()
 }
 
 let shared: RevisionStore | null = null
-const clients = new Map<string, { masterKey: string; client: Promise<AccountHeadClient> }>()
+let sharedRecords: RecordsStore | null = null
+const clients = new Map<string, { masterKeys: MasterKeys; client: Promise<AccountHeadClient> }>()
 
 /**
  * The account's head client for this page: one per signed-in account (made
  * again when the master key changes), over this origin's store.
  */
-export function accountHead(session: { userId: string; masterKey: Uint8Array; envelopeBinding: string }): Promise<AccountHeadClient> {
-  const masterKey = toBase64(session.masterKey)
-  const known = clients.get(session.userId)
-  if (known?.masterKey === masterKey) return known.client
+export function accountHead(session: {
+  accountId: string
+  masterKeys: MasterKeys
+  roots: AccountRoots
+  envelopeBinding: string
+}): Promise<AccountHeadClient> {
+  const masterKeys = session.masterKeys
+  const known = clients.get(session.accountId)
+  if (known?.masterKeys === masterKeys) return known.client
   if (known) void known.client.then((client) => client.close(), () => undefined)
   watchSignOut()
   shared ??= indexedDbRevisionStore()
   const store = shared
-  const client = lazyEngine(session.masterKey, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store))
+  sharedRecords ??= indexedDbRecordsStore()
+  const records = sharedRecords
+  const client = lazyEngine(masterKeys, session.roots, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store, api, Date.now, records))
   // Not kept when it failed: the next call tries again.
   client.catch(() => {
-    if (clients.get(session.userId)?.client === client) clients.delete(session.userId)
+    if (clients.get(session.accountId)?.client === client) clients.delete(session.accountId)
   })
-  clients.set(session.userId, { masterKey, client })
+  clients.set(session.accountId, { masterKeys, client })
   return client
 }
 
@@ -565,6 +792,9 @@ export function accountHead(session: { userId: string; masterKey: Uint8Array; en
 export function closeAccountHeads(): void {
   for (const { client } of clients.values()) void client.then((c) => c.close(), () => undefined)
   clients.clear()
+  // The records copies go with the session (they are read again at the
+  // next sign-in).
+  void sharedRecords?.clear()
 }
 
 // Signed out (any path: a sign-out, a refused refresh, another tab's): the
@@ -576,4 +806,14 @@ function watchSignOut(): void {
   subscribe(() => {
     if (!getSession() && clients.size > 0) closeAccountHeads()
   })
+}
+
+/**
+ * Drops this origin's copies of `session`'s records (sign-out,
+ * docs/plans/api-surface.md §6): the head's anchors stay.
+ */
+export async function forgetAccountRecords(session: Parameters<typeof accountHead>[0]): Promise<void> {
+  const client = await accountHead(session)
+  sharedRecords ??= indexedDbRecordsStore()
+  await sharedRecords.clearPrefix(client.copyPrefix())
 }

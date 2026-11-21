@@ -1,8 +1,9 @@
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
 import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
-import type { FileBlobContextV1 } from '@kutup/crypto/fileBlob'
+import type { DriveObjectExpected, DriveObjectToOpen } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { folderLocation, type DriveFile, type Folder } from './model'
+import { claimRevisionAuthor, versionAuthor } from './revisionAuthors'
 
 /**
  * Keys across a folder's epochs (docs/plans/drive-share-revocation.md). A
@@ -18,7 +19,7 @@ import { folderLocation, type DriveFile, type Folder } from './model'
 /** What finding a folder's keys needs: its current key and where its history is. */
 export type KeyringFolder = Pick<
   Folder,
-  'id' | 'source' | 'remoteShareId' | 'key' | 'keyEpoch' | 'ownerUserId' | 'ownerAuthorityPublicKey' | 'epochStatementHash'
+  'id' | 'source' | 'remoteShareId' | 'key' | 'keyEpoch' | 'ownerAccountId' | 'ownerAuthorityPublicKey' | 'epochStatementHash'
 >
 
 const keyrings = new Map<string, Promise<Uint8Array[]>>()
@@ -27,8 +28,8 @@ async function history(folder: KeyringFolder): Promise<EpochLinkV1[]> {
   const location = folderLocation(folder)
   const { data } = await api.get<EpochLinkV1[]>(
     location.kind === 'local'
-      ? `/collections/${location.collectionId}/epochs`
-      : `/drive/federation/shares/${location.shareId}/epochs`,
+      ? `/drive/collections/${location.collectionId}/epochs`
+      : `/drive/federation/folder-shares/${location.shareId}/epochs`,
   )
   return data
 }
@@ -44,7 +45,7 @@ function keyring(folder: KeyringFolder): Promise<Uint8Array[]> {
       if (chain.length !== folder.keyEpoch || chain.at(-1)?.epochStatementHash !== folder.epochStatementHash) {
         throw new Error('folder key history does not end at the current epoch')
       }
-      return unlockCollectionKeyring(key, folder.id, folder.ownerUserId, folder.ownerAuthorityPublicKey, chain)
+      return unlockCollectionKeyring(key, folder.id, folder.ownerAccountId, folder.ownerAuthorityPublicKey, chain)
     })
     pending.catch(() => keyrings.delete(cacheKey))
     keyrings.set(cacheKey, pending)
@@ -86,13 +87,96 @@ export async function fileKeyAt(file: DriveFile, generation: number): Promise<Ui
   return pending
 }
 
-/** A key and the binding context for a blob of `file` sealed under `generation`. */
+/** What a Drive object of a file is sealed for: the file and its key generation. */
+export interface DriveFileBinding {
+  fileId: string
+  generation: number
+}
+
+/** A key and the binding of an object of `file` sealed under `generation`. */
 export async function sealedAt(
   file: DriveFile,
   generation: number,
-): Promise<{ fileKey: Uint8Array; context: FileBlobContextV1 }> {
+): Promise<{ fileKey: Uint8Array; context: DriveFileBinding }> {
   return {
     fileKey: await fileKeyAt(file, generation),
     context: { fileId: file.id, generation },
+  }
+}
+
+/**
+ * The file's current content: the key of the generation it was sealed under
+ * and what it must be, the revision and manifest digest its metadata commits
+ * to and the metadata's size (docs/plans/drive-block-format.md §2).
+ */
+export async function currentContentOf(file: DriveFile): Promise<{ fileKey: Uint8Array; expected: DriveObjectExpected }> {
+  if (!file.content) throw new Error('file is not open')
+  const generation = file.contentKeyGeneration
+  // Still the original upload: its uploader wrote it.
+  if (file.content.revisionId === file.originalRevisionId && file.uploaderAccountId) {
+    claimRevisionAuthor(file.id, file.content.revisionId, { accountId: file.uploaderAccountId })
+  }
+  return {
+    fileKey: await fileKeyAt(file, generation),
+    expected: { fileId: file.id, generation, content: file.content, size: file.size },
+  }
+}
+
+/**
+ * A version from the file's history (or a note's snapshot), by its id (its
+ * revision) and its sealed content record from the listing: it opens
+ * against the digest and size the record commits to
+ * (docs/plans/drive-block-format.md §2).
+ */
+export async function versionContentOf(
+  file: DriveFile,
+  version: {
+    id: string
+    keyGeneration: number
+    revisionContentEnvelope: string | null
+    /** Who the history says saved it: its signer must be the same account (`manifestSigners`). */
+    authorAccountId?: string | null
+    remoteAuthor?: string | null
+  },
+): Promise<{ fileKey: Uint8Array; expected: DriveObjectExpected }> {
+  claimRevisionAuthor(file.id, version.id, versionAuthor(version))
+  return {
+    fileKey: await fileKeyAt(file, version.keyGeneration),
+    expected: {
+      fileId: file.id,
+      generation: version.keyGeneration,
+      revisionId: version.id,
+      revisionContentEnvelope: version.revisionContentEnvelope,
+    },
+  }
+}
+
+/** A note's or place list's saved state, relayed from the server the file is on. */
+export interface RelayedState {
+  keyGeneration: number
+  /** Base64. */
+  state: string
+  /** The version the state is, and its sealed content record. */
+  versionId: string
+  revisionContentEnvelope: string | null
+}
+
+/** A relayed state as the version it is. */
+export function relayedVersion(saved: RelayedState): { id: string; keyGeneration: number; revisionContentEnvelope: string | null } {
+  return { id: saved.versionId, keyGeneration: saved.keyGeneration, revisionContentEnvelope: saved.revisionContentEnvelope }
+}
+
+/**
+ * The file's original upload (`/drive/files/{id}/original`), which no listing
+ * names: the revision its sealed metadata names (`originalRevisionId`), and
+ * nothing else the server might serve, opened against the sealed record
+ * served with it.
+ */
+export async function originalContentOf(file: DriveFile): Promise<{ fileKey: Uint8Array; expected: DriveObjectToOpen }> {
+  if (!file.originalRevisionId) throw new Error("the file's metadata names no original upload")
+  claimRevisionAuthor(file.id, file.originalRevisionId, file.uploaderAccountId ? { accountId: file.uploaderAccountId } : null)
+  return {
+    fileKey: await fileKeyAt(file, file.originalKeyGeneration),
+    expected: { fileId: file.id, generation: file.originalKeyGeneration, revisionId: file.originalRevisionId, served: true },
   }
 }

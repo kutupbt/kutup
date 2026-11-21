@@ -13,16 +13,13 @@ use common::*;
 const T: u64 = 1_791_633_600_000;
 
 fn summary(name: &str) -> ContactSummaryV1 {
-    ContactSummaryV1 {
-        uid: "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70".into(),
-        name: name.into(),
-        emails: vec![ContactEmailV1 {
-            address: "ayse@example.com".into(),
-            label: None,
-        }],
-        groups: vec![],
-        pinned_keys: vec![],
-    }
+    ContactSummaryV1::new(
+        "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        name,
+        vec![ContactEmailV1::new("ayse@example.com", None)],
+        vec![],
+        vec![],
+    )
 }
 
 /// A contact body at `card_revision`, its summary signed for `signed_revision`.
@@ -35,13 +32,13 @@ fn body(user: &User, name: &str, card_revision: u64, signed_revision: u64) -> Va
         user.identity.authority_signing_key(),
     )
     .unwrap();
-    let key = contact_card::derive_contacts_key(&user.master_key).unwrap();
     let vcard = format!(
         "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:{}\r\nFN:{name}\r\nEND:VCARD\r\n",
         summary.uid
     );
     let card = contact_card::seal_card(
-        &key,
+        &user.master_key,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         &user.binding,
         &summary.uid,
         card_revision,
@@ -64,7 +61,7 @@ fn contact_revisions() {
     let c = crate::common::client();
     let user = register(&c, &base);
     let post = |body: Value| {
-        bearer(c.post(format!("{base}/api/contacts")), &user.token)
+        bearer(c.post(format!("{base}/api/v1/contacts")), &user.token)
             .json(&body)
             .send()
             .unwrap()
@@ -83,7 +80,7 @@ fn contact_revisions() {
 
     let put = |mut body: Value, base_revision: u64| {
         body["baseRevision"] = json!(base_revision);
-        bearer(c.put(format!("{base}/api/contacts/{id}")), &user.token)
+        bearer(c.put(format!("{base}/api/v1/contacts/{id}")), &user.token)
             .json(&body)
             .send()
             .unwrap()
@@ -100,7 +97,7 @@ fn contact_revisions() {
     let late = put(body(&user, "Ayşe Yılmaz", T + 6, T + 6), T);
     assert_eq!(late.status(), StatusCode::CONFLICT);
     let late: Value = late.json().unwrap();
-    assert_eq!(late["code"], "revision_conflict");
+    assert_eq!(late["code"], "revisionConflict");
     assert_eq!(late["revision"], T + 5);
     // Started from the current one, it is stored.
     assert_eq!(
@@ -109,16 +106,15 @@ fn contact_revisions() {
     );
 
     // What comes back opens at the revision the list names.
-    let page: Value = bearer(c.get(format!("{base}/api/contacts")), &user.token)
+    let page: Value = bearer(c.get(format!("{base}/api/v1/contacts")), &user.token)
         .send()
         .unwrap()
         .json()
         .unwrap();
     let row = &page["contacts"][0];
     assert_eq!(row["revision"], T + 6);
-    let key = contact_card::derive_contacts_key(&user.master_key).unwrap();
     let (_, revision) = contact_card::open_card(
-        &key,
+        &user.master_key,
         &user.binding,
         &summary("x").uid,
         &b64_decode(row["card"].as_str().unwrap()),

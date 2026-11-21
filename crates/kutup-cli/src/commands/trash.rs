@@ -16,6 +16,7 @@ use crate::errors::NotFound;
 use crate::keyring::Keyring;
 use crate::output::{format_bytes, format_time, header, print_json};
 use crate::session::Session;
+use kutup_crypto::account_roots::AccountRoots;
 
 #[derive(Subcommand)]
 pub enum TrashCmd {
@@ -74,10 +75,10 @@ struct TrashEntry {
 
 /// master key → folder's own collection key → name. `[encrypted]` on failure
 /// so one bad row never aborts the listing.
-fn folder_name(f: &TrashFolder, master_key: &[u8], session: &Session) -> String {
+fn folder_name(f: &TrashFolder, roots: &AccountRoots, session: &Session) -> String {
     let inner = || -> Result<String> {
         let collection = folder_collection(f);
-        let col_key = crate::collection_crypto::open_key(&collection, master_key, session)?;
+        let col_key = crate::collection_crypto::open_key(&collection, roots, session)?;
         crate::collection_crypto::open_name(&collection, &col_key)
     };
     inner().unwrap_or_else(|_| "[encrypted]".to_string())
@@ -88,7 +89,7 @@ fn folder_collection(f: &TrashFolder) -> crate::api::Collection {
     crate::api::Collection {
         name_hash: None,
         id: f.id.clone(),
-        owner_user_id: f.owner_user_id.clone(),
+        owner_account_id: f.owner_account_id.clone(),
         name_envelope: f.name_envelope.clone(),
         owner_key_envelope: Some(f.owner_key_envelope.clone()),
         named_share_envelope: None,
@@ -116,14 +117,14 @@ fn folder_collection(f: &TrashFolder) -> crate::api::Collection {
 fn file_meta(
     client: &crate::api::Client,
     f: &TrashFile,
-    master_key: &[u8],
+    roots: &AccountRoots,
     session: &Session,
 ) -> (String, Option<i64>) {
     let inner = || -> Result<FileMetadata> {
         let collection = crate::api::Collection {
             name_hash: None,
             id: f.collection_id.clone(),
-            owner_user_id: f.collection_owner_user_id.clone(),
+            owner_account_id: f.collection_owner_account_id.clone(),
             name_envelope: String::new(),
             owner_key_envelope: Some(f.collection_owner_key_envelope.clone()),
             named_share_envelope: None,
@@ -145,13 +146,13 @@ fn file_meta(
             upload_quota_bytes: None,
             name: String::new(),
         };
-        let col_key = crate::collection_crypto::open_key(&collection, master_key, session)?;
+        let col_key = crate::collection_crypto::open_key(&collection, roots, session)?;
         let file = trashed_file(f);
         // Older keys only if the file predates the folder's last rotation.
         let keys = if f.key_epoch == f.collection_key_epoch {
             crate::keyring::Keyring::current_only(&col_key, f.collection_key_epoch)
         } else {
-            crate::keyring::Keyring::load(client, &collection, &col_key, master_key)?
+            crate::keyring::Keyring::load(client, &collection, &col_key, session)?
         };
         let (_, metadata) = crate::file_crypto::open(&file, &keys)?;
         Ok(metadata)
@@ -185,7 +186,7 @@ fn trashed_file(f: &TrashFile) -> crate::api::File {
 
 fn ls(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let trash = ctx.client.list_trash()?;
 
     let mut entries: Vec<TrashEntry> = Vec::new();
@@ -193,7 +194,7 @@ fn ls(profile: &str, json: bool) -> Result<()> {
         entries.push(TrashEntry {
             id: f.id.clone(),
             entry_type: "folder",
-            name: folder_name(f, &master_key, &ctx.session),
+            name: folder_name(f, &roots, &ctx.session),
             deleted_at: f.deleted_at.clone(),
             size: None,
             items: Some(f.items),
@@ -201,7 +202,7 @@ fn ls(profile: &str, json: bool) -> Result<()> {
         });
     }
     for f in &trash.files {
-        let (name, size) = file_meta(&ctx.client, f, &master_key, &ctx.session);
+        let (name, size) = file_meta(&ctx.client, f, &roots, &ctx.session);
         entries.push(TrashEntry {
             id: f.id.clone(),
             entry_type: "file",
@@ -258,7 +259,7 @@ fn restore(profile: &str, json: bool, id: &str, name: Option<&str>) -> Result<()
                     .downcast_ref::<ApiError>()
                     .filter(|e| e.status == 409)
                     .and_then(|e| e.code.as_deref())
-                    .filter(|code| matches!(*code, "name_taken" | "nameNeeded"))
+                    .filter(|code| matches!(*code, "nameTaken" | "nameNeeded"))
                     .is_some();
                 if !needs_name {
                     // The server 409s a file whose parent folder is itself still trashed.
@@ -286,7 +287,7 @@ fn restore(profile: &str, json: bool, id: &str, name: Option<&str>) -> Result<()
 /// lands. Returns the name it came back under
 /// (docs/plans/drive-unique-names.md).
 fn restore_renamed(ctx: &crate::context::Ctx, id: &str, wanted: Option<&str>) -> Result<String> {
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let trash = ctx.client.list_trash()?;
     let cols = ctx.client.list_collections()?;
     if let Some(f) = trash.files.iter().find(|f| f.id == id) {
@@ -294,8 +295,8 @@ fn restore_renamed(ctx: &crate::context::Ctx, id: &str, wanted: Option<&str>) ->
             .iter()
             .find(|c| c.id == f.collection_id)
             .context("restore the parent folder first (it is still in the trash)")?;
-        let col_key = decrypt_collection_key(col, &master_key, &ctx.session)?;
-        let keys = Keyring::load(&ctx.client, col, &col_key, &master_key)?;
+        let col_key = decrypt_collection_key(col, &roots, &ctx.session)?;
+        let keys = Keyring::load(&ctx.client, col, &col_key, &ctx.session)?;
         let hash_key = crate::names::folder_hash_key(&keys, &col.id)?;
         let file = trashed_file(f);
         let (file_key, mut meta) = crate::file_crypto::open(&file, &keys)?;
@@ -319,7 +320,7 @@ fn restore_renamed(ctx: &crate::context::Ctx, id: &str, wanted: Option<&str>) ->
         .find(|f| f.id == id)
         .ok_or_else(|| NotFound(format!("{id} is not in the trash")))?;
     let collection = folder_collection(f);
-    let col_key = crate::collection_crypto::open_key(&collection, &master_key, &ctx.session)?;
+    let col_key = crate::collection_crypto::open_key(&collection, &roots, &ctx.session)?;
     let own = crate::collection_crypto::open_name(&collection, &col_key)?;
     // Where it lands, as the trash listing says.
     let place = f.parent_collection_id.clone();
@@ -329,11 +330,11 @@ fn restore_renamed(ctx: &crate::context::Ctx, id: &str, wanted: Option<&str>) ->
                 .iter()
                 .find(|c| &c.id == parent)
                 .context("the folder it goes back to is not listed")?;
-            let key = decrypt_collection_key(parent, &master_key, &ctx.session)?;
-            let keys = Keyring::load(&ctx.client, parent, &key, &master_key)?;
+            let key = decrypt_collection_key(parent, &roots, &ctx.session)?;
+            let keys = Keyring::load(&ctx.client, parent, &key, &ctx.session)?;
             crate::names::folder_hash_key(&keys, &parent.id)?
         }
-        None => crate::names::top_level_hash_key(&master_key)?,
+        None => crate::names::top_level_hash_key(&roots)?,
     };
     let (name, hash) = pick_name(ctx, place.as_deref(), &hash_key, &own, wanted)?;
     let sealed = crate::collection_crypto::rename_request(&collection, &col_key, &name)?;
@@ -341,6 +342,7 @@ fn restore_renamed(ctx: &crate::context::Ctx, id: &str, wanted: Option<&str>) ->
         id,
         Some(&RestoreRequest {
             name_hash: hash,
+            name_hash_generation: crate::names::hash_generation(&roots, place.as_deref()),
             name_envelope: Some(sealed.name_envelope),
             name_revision: Some(sealed.name_revision),
             ..Default::default()

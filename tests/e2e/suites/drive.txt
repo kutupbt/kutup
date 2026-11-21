@@ -1,0 +1,12 @@
+# Drive: renames, folders, trash, sharing roles, uploads and downloads,
+# versions, public links and the Drive identity.
+specs/18-rename.spec.ts
+specs/26-streaming-download.spec.ts
+specs/27-folder-upload.spec.ts
+specs/30-trash.spec.ts
+specs/47-drive-share-roles.spec.ts
+specs/49-resumable-uploads.spec.ts
+specs/50-drive-unique-names.spec.ts
+specs/53-delete-versions.spec.ts
+specs/70-public-links.spec.ts
+specs/71-drive-identity.spec.ts

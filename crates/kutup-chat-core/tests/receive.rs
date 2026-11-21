@@ -23,6 +23,9 @@ use kutup_chat_proto::{
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
 
+/// The `session` hash test servers give every device.
+const DEVICE_SESSION: &str = "5151515151515151515151515151515151515151515151515151515151515151";
+
 // ----- helpers -----
 
 fn test_rng() -> impl Rng + CryptoRng {
@@ -81,7 +84,10 @@ fn authority_of(user: &str) -> AccountAuthority {
     let seed = user
         .bytes()
         .fold(7u8, |acc, b| acc.wrapping_mul(31).wrapping_add(b));
-    AccountAuthority::derive(&[seed; 32]).unwrap()
+    AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+        [seed; 32],
+    ))
+    .unwrap()
 }
 
 /// `user`'s signed manifest and bundles, from the devices a test made: the
@@ -102,15 +108,17 @@ fn published(user: &str) -> AccountPreKeyBundlesResponse {
             user.parse().unwrap(),
             1,
             None,
-            identity_key.clone(),
-            binding,
+            Some(identity_key.clone()),
+            Some(binding),
             devices
                 .iter()
-                .map(|bundle| kutup_chat_proto::AccountManifestDeviceV2 {
-                    device_id: bundle.device_id,
-                    direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-                    registration_id: bundle.registration_id,
-                    mls: None,
+                .map(|bundle| {
+                    kutup_chat_proto::AccountManifestDeviceV3::chat(
+                        bundle.device_id,
+                        kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                        bundle.registration_id,
+                        "51".repeat(32),
+                    )
                 })
                 .collect(),
             "2026-10-15T10:00:00Z",
@@ -195,9 +203,9 @@ struct Mailbox {
     acked: RefCell<Vec<String>>,
     /// The manifest this account's device published (its own, signed with
     /// its own authority).
-    own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV2>>,
+    own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV3>>,
     /// Every manifest of this account's chain, as the server keeps them.
-    own_history: RefCell<Vec<kutup_chat_proto::AccountManifestV2>>,
+    own_history: RefCell<Vec<kutup_chat_proto::AccountManifestV3>>,
     /// The accounts whose current manifest was asked for, in order.
     manifest_fetches: RefCell<Vec<String>>,
 }
@@ -228,20 +236,27 @@ impl ChatTransport for Mailbox {
         // What this server claims about the account's own devices.
         Ok(published(account))
     }
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+        Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+            session: DEVICE_SESSION.into(),
+            next_device_id: 1,
+        })
+    }
+
     async fn fetch_manifest(
         &self,
         account: &str,
-    ) -> Result<Option<kutup_chat_proto::AccountManifestV2>> {
+    ) -> Result<Option<kutup_chat_proto::AccountManifestV3>> {
         self.manifest_fetches.borrow_mut().push(account.to_string());
         Ok(self.own_manifest.borrow().clone())
     }
     async fn publish_manifest(
         &self,
-        manifest: &kutup_chat_proto::AccountManifestV2,
-    ) -> Result<kutup_chat_proto::AccountManifestPublicationV2> {
+        manifest: &kutup_chat_proto::AccountManifestV3,
+    ) -> Result<kutup_chat_proto::AccountManifestPublicationV3> {
         *self.own_manifest.borrow_mut() = Some(manifest.clone());
         self.own_history.borrow_mut().push(manifest.clone());
-        Ok(kutup_chat_proto::AccountManifestPublicationV2 {
+        Ok(kutup_chat_proto::AccountManifestPublicationV3 {
             manifest: manifest.clone(),
         })
     }
@@ -251,7 +266,7 @@ impl ChatTransport for Mailbox {
         _from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<kutup_chat_proto::AccountManifestHistoryPageV2> {
+    ) -> Result<kutup_chat_proto::AccountManifestHistoryPageV3> {
         let manifests: Vec<_> = self
             .own_history
             .borrow()
@@ -261,7 +276,7 @@ impl ChatTransport for Mailbox {
             })
             .cloned()
             .collect();
-        Ok(kutup_chat_proto::AccountManifestHistoryPageV2 {
+        Ok(kutup_chat_proto::AccountManifestHistoryPageV3 {
             account: account.parse().unwrap(),
             from_sequence: page_from_sequence,
             to_sequence,
@@ -285,6 +300,7 @@ impl ChatTransport for Mailbox {
         Ok(MailboxPage {
             envelopes: items,
             more,
+            unsupported: Vec::new(),
         })
     }
     async fn ack(&self, _device_id: u32, ids: &[String]) -> Result<()> {
@@ -1048,12 +1064,18 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
         ContactState::PendingIncoming
     );
 
-    let blocked = block_on(bob.block_contact(
-        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
-        &[0; 32],
-        "2026-07-16T12:02:00Z",
-        &mut rng,
-    ))
+    let blocked = block_on(
+        bob.block_contact(
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            &kutup_chat_core::profile_owner_key(
+                &kutup_crypto::master_keys::MasterKeys::first(&[0; 32]),
+                "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+            )
+            .unwrap(),
+            "2026-07-16T12:02:00Z",
+            &mut rng,
+        ),
+    )
     .unwrap();
     assert_eq!(blocked.state, ContactState::Blocked);
     assert_eq!(blocked.previous_state, Some(ContactState::PendingIncoming));
@@ -1089,7 +1111,12 @@ fn bob_device<R: Rng + CryptoRng>(rng: &mut R) -> (TempDb, DevicePreKeyBundle, S
     let mut bob = block_on(Session::generate(db.open(), BOB, 1, 10, rng)).unwrap();
     let bundle = serve_bundle(bob.published_keys().unwrap(), 1);
     let binding = bob
-        .identity_binding(&AccountAuthority::derive(&[42u8; 32]).unwrap())
+        .identity_binding(
+            &AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+                [42u8; 32],
+            ))
+            .unwrap(),
+        )
         .unwrap();
     block_on(bob.complete_registration(1)).unwrap();
     (db, bundle, binding)
@@ -1225,20 +1252,23 @@ fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manife
 
     // Bob's own manifest under his own authority (as his re-registration
     // published it): his identity, device 1 only.
-    let authority = AccountAuthority::derive(&[42u8; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([42u8; 32]),
+    )
+    .unwrap();
     let first = authority
         .sign_manifest_with_binding(
             BOB.parse().unwrap(),
             1,
             None,
-            bundle.identity_key.clone(),
-            bob_binding.clone(),
-            vec![kutup_chat_proto::AccountManifestDeviceV2 {
-                device_id: 1,
-                direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: bundle.registration_id,
-                mls: None,
-            }],
+            Some(bundle.identity_key.clone()),
+            Some(bob_binding.clone()),
+            vec![kutup_chat_proto::AccountManifestDeviceV3::chat(
+                1,
+                kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                bundle.registration_id,
+                "51".repeat(32),
+            )],
             "2026-10-16T10:00:00Z",
         )
         .unwrap();

@@ -5,6 +5,10 @@ import { resolveApiBase } from './apiBase'
 import { clearPersisted } from './persistedStore'
 import { clearSession, getAccessToken, setAccessToken } from './store'
 import { noteSessionVersion, SESSION_VERSION_HEADER } from './sessionVersion'
+import { CLIENT_HEADER, ClientTooOldError, clientVersionValue, isClientTooOld, isTooOldAnswer, latchClientTooOld, setClientType } from './clientVersion'
+import { ensureInstance, INSTANCE_HEADER, noteInstance } from './instance'
+import { startInstanceListener } from './sessionSync'
+import { setStorageGate } from '@kutup/crypto/storageGate'
 
 /** The server-side session types a web app can hold (X-Kutup-Client). */
 export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps' | 'web-photos' | 'web-office' | 'web-contacts' | 'web-mail' | 'web-pass' | 'web-calendar'
@@ -18,12 +22,31 @@ let clientType: WebClientType | null = null
  */
 export function configureClient(opts: { clientType: WebClientType }): void {
   clientType = opts.clientType
-  api.defaults.headers.common['X-Kutup-Client'] = opts.clientType
+  setClientType(opts.clientType)
+  api.defaults.headers.common[CLIENT_HEADER] = clientVersionValue()
+  // Nothing reads this origin's storage before the instance check
+  // (docs/plans/api-surface.md §5); another tab's reset reloads this one.
+  setStorageGate(ensureInstance)
+  if (typeof window !== 'undefined') startInstanceListener(() => window.location.reload())
 }
 
 export function getClientType(): WebClientType {
   if (!clientType) throw new Error('configureClient() has not run')
   return clientType
+}
+
+export { ClientTooOldError, isClientTooOld, resetClientTooOld } from './clientVersion'
+
+/**
+ * Latches a `clientTooOld` answer (docs/plans/api-surface.md §1.5): every
+ * later request fails at once, and the page offers its reload, as Proton
+ * latches APP_VERSION_BAD. Returns whether `error` was one.
+ */
+export function noteClientTooOld(error: unknown): boolean {
+  const response = (error as { response?: { status?: number; data?: { code?: unknown } } } | null)?.response
+  if (!isTooOldAnswer(response?.status, response?.data?.code)) return false
+  latchClientTooOld()
+  return true
 }
 
 export interface RefreshResult {
@@ -39,16 +62,22 @@ export interface RefreshResult {
  */
 export async function refreshAccessToken(): Promise<RefreshResult> {
   const run = async (): Promise<RefreshResult> => {
+    if (isClientTooOld()) throw new ClientTooOldError()
     const base = await resolveApiBase()
-    const res = await axios.post<RefreshResult>(
-      `${base}/auth/refresh`,
-      {},
-      { withCredentials: true, headers: { 'X-Kutup-Client': getClientType() } },
-    )
-    return res.data
+    try {
+      const res = await axios.post<RefreshResult>(
+        `${base}/auth/refresh`,
+        {},
+        { withCredentials: true, headers: { [CLIENT_HEADER]: clientVersionValue() ?? getClientType() } },
+      )
+      return res.data
+    } catch (error) {
+      if (noteClientTooOld(error)) throw new ClientTooOldError()
+      throw error
+    }
   }
   if (typeof navigator !== 'undefined' && navigator.locks) {
-    return navigator.locks.request('kutup-refresh', run)
+    return navigator.locks.request('kutup.session.refresh', run)
   }
   return run()
 }
@@ -129,6 +158,7 @@ axios.interceptors.request.use(exactBody)
 
 // Attach access token + resolve base URL on every request.
 api.interceptors.request.use(async (config) => {
+  if (isClientTooOld()) throw new ClientTooOldError()
   config.baseURL = await resolveApiBase()
   const token = getAccessToken()
   // A request that names its own credential (an administrator-made account's
@@ -146,7 +176,7 @@ api.interceptors.request.use(async (config) => {
  * Origin are its credential).
  */
 const SIGN_IN_CALL =
-  /(?:^|\/api)\/auth\/(?:login\/(?:start|finish|2fa)|register|opaque\/register\/(?:start|finish)|complete-setup|recover\/(?:preflight|grant)|refresh|logout|registration-code\/check|settings|forks\/consume)$/
+  /(?:^|\/api\/v1)\/auth\/(?:login\/(?:start|finish|2fa)|register|opaque\/register\/(?:start|finish)|complete-setup|recover\/(?:preflight|grant)|refresh|logout|registration-code\/check|settings|forks\/consume)$/
 
 // Auto-refresh on 401
 let isRefreshing = false
@@ -166,10 +196,12 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 api.interceptors.response.use(
   (res) => {
     noteSessionVersion(res.headers?.[SESSION_VERSION_HEADER])
+    noteInstance(res.headers?.[INSTANCE_HEADER])
     return res
   },
   async (error) => {
     noteSessionVersion(error.response?.headers?.[SESSION_VERSION_HEADER])
+    if (noteClientTooOld(error)) return Promise.reject(new ClientTooOldError())
     const originalRequest = error.config
     const status = error.response?.status
     // If axios couldn't even attach the request config (some network-layer
@@ -200,14 +232,14 @@ api.interceptors.response.use(
     // refreshing would end this origin's other tabs when there is no
     // session, or retry with another account's token when there is one.
     // Signed-in password checks restart themselves (reauth.ts). Every other
-    // call, /api/auth/sessions and /api/auth/forks included, refreshes.
+    // call, /api/v1/auth/sessions and /api/v1/auth/forks included, refreshes.
     const code = (error.response?.data as { code?: unknown } | undefined)?.code
     const skipRefresh =
       SIGN_IN_CALL.test((originalRequest.url ?? '').split('?')[0]!) ||
       code === 'invalidCredentials' ||
       code === 'setupTokenInvalid' ||
       code === 'preAuthInvalid' ||
-      // A Chat device's own credential (X-Kutup-Chat-Device) refused: the
+      // A Chat device's own credential (X-Kutup-Device) refused: the
       // device was removed, not this session.
       code === 'deviceCredential'
     if (status === 401 && !originalRequest._retry && !skipRefresh) {

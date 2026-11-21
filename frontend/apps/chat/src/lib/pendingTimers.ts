@@ -4,36 +4,36 @@
 // carry it themselves meanwhile, and the timer is set on acceptance. Kept
 // per account by its id, never by its name (docs/plans/account-identity.md).
 
-const PREFIX = 'kutup.chat.pending-default-timers.v2:'
+const PREFIX = 'kutup.chat.pendingTimers:'
 
-function read(userId: string): Record<string, number> {
+function read(accountId: string): Record<string, number> {
   try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(PREFIX + userId) ?? '{}')
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(PREFIX + accountId) ?? '{}')
     return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {}
   } catch {
     return {}
   }
 }
 
-function write(userId: string, timers: Record<string, number>): void {
+function write(accountId: string, timers: Record<string, number>): void {
   try {
-    if (Object.keys(timers).length === 0) window.localStorage.removeItem(PREFIX + userId)
-    else window.localStorage.setItem(PREFIX + userId, JSON.stringify(timers))
+    if (Object.keys(timers).length === 0) window.localStorage.removeItem(PREFIX + accountId)
+    else window.localStorage.setItem(PREFIX + accountId, JSON.stringify(timers))
   } catch {
     // Kept for this tab only: the messages still carry their expiry.
   }
 }
 
-export function pendingDefaultTimer(userId: string, conversationKey: string): number | undefined {
-  return read(userId)[conversationKey]
+export function pendingDefaultTimer(accountId: string, conversationKey: string): number | undefined {
+  return read(accountId)[conversationKey]
 }
 
-export function owePendingDefaultTimer(userId: string, conversationKey: string, seconds: number): void {
-  write(userId, { ...read(userId), [conversationKey]: seconds })
+export function owePendingDefaultTimer(accountId: string, conversationKey: string, seconds: number): void {
+  write(accountId, { ...read(accountId), [conversationKey]: seconds })
 }
 
-export function settlePendingDefaultTimer(userId: string, conversationKey: string): void {
-  const timers = read(userId)
+export function settlePendingDefaultTimer(accountId: string, conversationKey: string): void {
+  const timers = read(accountId)
   delete timers[conversationKey]
-  write(userId, timers)
+  write(accountId, timers)
 }

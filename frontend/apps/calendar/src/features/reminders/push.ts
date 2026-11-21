@@ -6,8 +6,10 @@ import { loadServerSettings } from '@kutup/session/apps'
 // server encrypts each reminder to (RFC 8291). The worker's words, zone and
 // language travel in its registration URL; it holds no keys.
 
-const WORKER = '/push-sw.js'
-const PREF = 'kutup-calendar-push'
+// Kutup's one service worker (`@kutup/config` src/sw/kutup-sw.js), with
+// Calendar's push turned on by `push=calendar`.
+const WORKER = '/kutup-sw.js'
+const PREF = 'kutup.calendar.push'
 
 export function pushSupported(): boolean {
   return typeof navigator !== 'undefined' && 'serviceWorker' in navigator && typeof window !== 'undefined' && 'PushManager' in window && typeof Notification !== 'undefined'
@@ -98,8 +100,11 @@ export interface WorkerWords {
  */
 export async function enablePush(publicKey: string, words: WorkerWords): Promise<void> {
   const { hour12, ...rest } = words
-  const query = new URLSearchParams({ ...rest, ...(hour12 === null ? {} : { hour12: String(hour12) }) }).toString()
-  const registration = await navigator.serviceWorker.register(`${WORKER}?${query}`, { scope: '/' })
+  const query = new URLSearchParams({ push: 'calendar', ...rest, ...(hour12 === null ? {} : { hour12: String(hour12) }) }).toString()
+  // One registration per origin (scope `/`), shared by Web Push and media
+  // streaming (@kutup/files stream/page.ts). Never `unregister()` it:
+  // turning notifications off would break streaming too.
+  const registration = await navigator.serviceWorker.register(`${WORKER}?${query}`, { scope: '/', updateViaCache: 'none' })
   await navigator.serviceWorker.ready
   const key = keyBytes(publicKey)
   let subscription = await registration.pushManager.getSubscription()
@@ -118,6 +123,9 @@ export async function enablePush(publicKey: string, words: WorkerWords): Promise
 
 /** No more reminders here while Calendar is closed. */
 export async function disablePush(): Promise<void> {
+  // Only the push subscription goes; the registration stays, because
+  // streaming (@kutup/files stream/page.ts) uses the same one. Never
+  // `unregister()` it here.
   const registration = await navigator.serviceWorker?.getRegistration('/')
   const subscription = await registration?.pushManager.getSubscription()
   await subscription?.unsubscribe()

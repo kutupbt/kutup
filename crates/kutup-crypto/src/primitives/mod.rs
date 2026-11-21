@@ -36,11 +36,5 @@ pub use random::{random, random_array, random_below, random_key, Rng};
 pub use sign::{SigningKey, VerifyingKey};
 pub use suite::{Suite, SuiteParams};
 
-/// Formats being moved here: secretstream stays as it is until the block
-/// format replaces it at the wipe (docs/plans/drive-block-format.md).
-pub mod legacy {
-    pub use crate::stream as secretstream;
-}
-
 #[cfg(test)]
 mod tests;

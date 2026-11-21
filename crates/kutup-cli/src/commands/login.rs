@@ -3,13 +3,12 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 
-use crate::api::{Client, TotpRequest};
+use crate::api::{instance_id_of, Client, TotpRequest};
 use crate::commands::prompt_line;
+use crate::config;
+use crate::errors::HeadBlocked;
 use crate::session::{Session, Store};
-use kutup_crypto::{
-    account_envelope::{self, AccountEnvelopePurpose},
-    opaque,
-};
+use kutup_crypto::opaque;
 
 pub fn run(
     profile: &str,
@@ -22,6 +21,8 @@ pub fn run(
         server = prompt_line("Server URL: ")?;
     }
     let server = server.trim_end_matches('/').to_string();
+    // A CLI this server no longer accepts says so before asking anything else.
+    Client::new(&server, "").check_version()?;
 
     // Username or Kutup address: --username flag, else prompt. Password: KUTUP_PASSWORD env (for
     // non-interactive automation/CI), else a hidden prompt.
@@ -41,7 +42,7 @@ pub fn run(
             "username": sess.username,
             "name": sess.name,
             "server": sess.server,
-            "userId": sess.user_id,
+            "accountId": sess.account_id,
         }))?;
     } else {
         println!("Logged in as {}", sess.username);
@@ -53,13 +54,15 @@ pub fn run(
 /// `register/start` with `grant` for the account's own key binding, the
 /// client's half, then `register/finish` with the master key sealed under
 /// the new password's export key. `client` carries the session the grant was
-/// issued to (none for a recovery). The new password envelope.
+/// issued to (none for a recovery). `generation` is the master key's (the
+/// account's current one). The new password envelope.
 pub(crate) fn set_password(
     client: &Client,
     grant: &str,
     key_binding: &str,
     password: &str,
     master_key: &[u8; 32],
+    generation: kutup_crypto::account_record::MasterKeyGeneration,
 ) -> Result<String> {
     let (registering, request) = opaque::client_registration_start(password).context("OPAQUE")?;
     let started = client
@@ -70,7 +73,7 @@ pub(crate) fn set_password(
         .context("the server's registration answer")?;
     let envelope = registered
         .export_key
-        .seal_master_key(master_key, key_binding)
+        .seal_master_key(master_key, generation, key_binding)
         .context("seal master-key envelope")?;
     client
         .register_finish(
@@ -92,9 +95,10 @@ pub(crate) fn reauth_grant(client: &Client, password: &str, grant_for: &str) -> 
     let started = client
         .login_start(None, &request, "reauth", Some(grant_for))
         .context("reauth")?;
-    let signed_in = signing_in
-        .finish(&started.response()?)
-        .map_err(|_| anyhow::anyhow!("the password is wrong"))?;
+    let signed_in = signing_in.finish(&started.response()?).map_err(|_| {
+        client.login_abort(&started.login_id);
+        anyhow::anyhow!("the password is wrong")
+    })?;
     client
         .reauth_finish(&started.login_id, &signed_in.finalization)
         .context("reauth")
@@ -127,9 +131,10 @@ pub(crate) fn login_with_password(
     let started = client
         .login_start(Some(name), &request, "session", None)
         .context("login")?;
-    let signed_in = signing_in
-        .finish(&started.response()?)
-        .map_err(|_| anyhow::anyhow!("wrong username or password"))?;
+    let signed_in = signing_in.finish(&started.response()?).map_err(|_| {
+        client.login_abort(&started.login_id);
+        anyhow::anyhow!("wrong username or password")
+    })?;
     let mut resp = client
         .login_finish(&started.login_id, &signed_in.finalization)
         .context("login")?;
@@ -175,6 +180,20 @@ pub(crate) fn login_with_password(
     if resp.requires_setup {
         bail!("account requires first-login setup — use the web UI to complete setup first");
     }
+    // Asked to be deleted: kept only when the person says so.
+    if let Some(closing) = resp.closing.take() {
+        super::confirm(
+            &format!(
+                "This account is closing and will be deleted on {}. Keep it?",
+                closing.closes_at
+            ),
+            false,
+        )
+        .context("the account is closing; sign in again to keep it")?;
+        resp = client
+            .keep_account(&closing.grant)
+            .context("keep the account")?;
+    }
     // What the account's keys are bound to (its key binding), told only with
     // the session.
     if resp.envelope_binding.is_empty() {
@@ -188,13 +207,58 @@ pub(crate) fn login_with_password(
         .export_key
         .open_master_key(&resp.master_key_envelope, &binding)
         .context("decrypt master key")?;
-    let private_key = account_envelope::open_b64(
-        &resp.drive_private_key_envelope,
-        master_key.as_slice(),
-        AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &binding,
+    // The account's roots open with the master key; its identity (the
+    // Drive keys too) comes from the identity root, whose authority must be
+    // the account's (docs/plans/identity-root.md).
+    let master: [u8; 32] = master_key
+        .as_slice()
+        .try_into()
+        .context("the master key is 32 bytes")?;
+    // Its generation is the one the envelope's (authenticated) header names;
+    // the keyring reaches every older key (docs/plans/mk-rotation-exercise.md).
+    let generation = kutup_crypto::account_record::inspect(
+        &b64.decode(&resp.master_key_envelope)
+            .context("the master-key envelope is not base64")?,
     )
-    .context("decrypt private key")?;
+    .context("the master-key envelope")?
+    .generation;
+    if resp.master_key_generation != generation.get() {
+        bail!("the server named another master-key generation than the envelope's");
+    }
+    let keyring = resp
+        .master_keyring
+        .iter()
+        .map(|record| b64.decode(record))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("the account's keyring records are not base64")?;
+    let master_keys =
+        kutup_crypto::master_keys::MasterKeys::open(&master, generation, &binding, &keyring)
+            .context("open the account's master-key keyring")?;
+    let authority: [u8; 32] = b64
+        .decode(&resp.account_authority_public_key)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .context("the server did not give the account's authority")?;
+    let records = resp
+        .account_roots
+        .iter()
+        .map(|record| b64.decode(record))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("the account's root records are not base64")?;
+    let roots = kutup_crypto::account_roots::AccountRoots::open(
+        &records,
+        &master_keys,
+        &binding,
+        &authority,
+    )
+    .context("open the account's roots")?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
+        .context("derive the account's keys")?;
+    let public_key = b64.encode(identity.drive_xwing_public_key());
+    if public_key != resp.drive_xwing_public_key {
+        bail!("the server publishes another Drive key than this account's master key derives");
+    }
+    let private_key = identity.drive_xwing_private_key().to_vec();
 
     // Step 4: the server moved to a new setup: the same password registered
     // under it, now, while this side holds it (a failure only waits for the
@@ -202,7 +266,7 @@ pub(crate) fn login_with_password(
     let mut master_key_envelope = resp.master_key_envelope;
     if let (true, Some(grant)) = (resp.rotate, resp.grant.as_deref()) {
         let signed = Client::new(server, &resp.access_token);
-        match set_password(&signed, grant, &binding, password, &master_key) {
+        match set_password(&signed, grant, &binding, password, &master, generation) {
             Ok(envelope) => master_key_envelope = envelope,
             Err(e) => eprintln!("note: moving the password to the server's new key failed: {e:#}"),
         }
@@ -213,59 +277,53 @@ pub(crate) fn login_with_password(
     let account = Client::new(server, &resp.access_token)
         .me()
         .context("read the account")?;
-    if account.account_id != resp.user_id {
+    if account.account_id != resp.account_id {
         bail!("the server described another account than the one signed in");
     }
 
-    // Step 5b: an account from before X-Wing moves to it now, once: the Drive
-    // key derived again from the master key, bound by the account's own
-    // authority, its seed sealed as before (docs/plans/pq-shares.md).
-    let (mut public_key, mut private_key, mut drive_private_key_envelope) = (
-        resp.public_key,
-        private_key,
-        resp.drive_private_key_envelope,
-    );
-    if resp.identity_suite == Some(1) {
-        let master: [u8; 32] = master_key
-            .as_slice()
-            .try_into()
-            .context("the master key is 32 bytes")?;
-        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
-            .context("derive the account's keys")?;
-        let person =
-            kutup_crypto::account_ref::AccountRef::new(&account.server, &account.account_id)
-                .context("the account's id")?;
-        let binding_signature = kutup_crypto::drive_key_binding::sign(&identity, &person, 1)
-            .context("sign the Drive key binding")?;
-        let envelope = account_envelope::seal_b64(
-            identity.drive_hpke_private_key(),
-            master_key.as_slice(),
-            AccountEnvelopePurpose::DriveHpkePrivateKey,
+    // Step 6: the account head, checked before the session is kept and
+    // before anything signs or seals with the roots
+    // (docs/plans/identity-root.md). A rolled-back or forked history (a
+    // restore from a backup looks the same) is told, and `kutup account
+    // reanchor` decides, as for any other command; anything else ends the
+    // sign-in.
+    let signed = Client::new(server, &resp.access_token);
+    let checked = config::data_dir(profile).and_then(|dir| {
+        crate::account_head::CliHead::open(
+            &signed,
+            &master_keys,
+            &roots.object_id,
             &binding,
-        )
-        .context("seal the Drive private key")?;
-        let new_public = b64.encode(identity.drive_hpke_public_key());
-        Client::new(server, &resp.access_token)
-            .upgrade_identity_suite(&serde_json::json!({
-                "publicKey": new_public,
-                "driveKeyBinding": b64.encode(binding_signature),
-                "driveKeyBindingEpoch": 1,
-                "drivePrivateKeyEnvelope": envelope,
-            }))
-            .context("move the account's Drive key to X-Wing")?;
-        eprintln!("Moved this account's sharing key to post-quantum encryption.");
-        public_key = new_public;
-        private_key = identity.drive_hpke_private_key().to_vec();
-        drive_private_key_envelope = envelope;
+            &identity.incarnation_id(),
+            roots.head_generations(),
+            dir,
+        )?
+        .at_sign_in()
+    });
+    match checked {
+        Ok(()) => {}
+        Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => eprintln!(
+            "warning: the account's history on the server was rolled back or forked; \
+             see `kutup account reanchor`"
+        ),
+        Err(error) => {
+            let _ = signed.logout();
+            return Err(error.context("check the account's history"));
+        }
     }
 
-    // Step 6: persist the session.
+    // Step 7: persist the session, with the server's instance id.
+    let instance_id = Client::new(server, "")
+        .health()
+        .ok()
+        .and_then(|health| instance_id_of(&health))
+        .unwrap_or_default();
     let mut store = Store::open(profile)?;
     let sess = Session {
         server: server.to_string(),
         name: name.to_string(),
         envelope_binding: binding,
-        user_id: resp.user_id,
+        account_id: resp.account_id,
         server_name: account.server,
         username: account.username,
         access_token: resp.access_token,
@@ -274,9 +332,13 @@ pub(crate) fn login_with_password(
         private_key: b64.encode(&private_key),
         public_key,
         master_key_envelope,
-        drive_private_key_envelope,
+        account_roots: resp.account_roots,
+        account_authority_public_key: resp.account_authority_public_key,
+        master_key_generation: generation.get(),
+        master_keyring: resp.master_keyring,
         storage_quota_bytes: resp.storage_quota_bytes,
         storage_used_bytes: resp.storage_used_bytes,
+        instance_id,
     };
     store.save_session(&sess).context("save session")?;
     Ok(sess)

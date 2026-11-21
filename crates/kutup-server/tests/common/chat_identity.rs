@@ -12,9 +12,9 @@
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use kutup_chat_proto::{
-    AccountIdentitySuiteId, AccountManifestDeviceV2, AccountManifestDriveKeysV1, AccountManifestV2,
+    AccountIdentitySuiteId, AccountManifestDeviceV3, AccountManifestDriveKeysV1, AccountManifestV3,
     AccountRef, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
-    RegisterChatDeviceRequestV2, CHAT_DEVICE_HEADER,
+    RegisterChatDeviceRequestV2, DEVICE_HEADER,
 };
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::primitives::SigningKey;
@@ -35,14 +35,14 @@ pub struct ChatDevice {
 }
 
 impl ChatDevice {
-    /// The `X-Kutup-Chat-Device` value.
+    /// The `X-Kutup-Device` value.
     pub fn header(&self) -> String {
         format!("{}.{}", self.id, URL_SAFE_NO_PAD.encode(self.credential))
     }
 
     /// `request` made as this device (its credential beside the JWT).
     pub fn auth(&self, request: RequestBuilder) -> RequestBuilder {
-        request.header(CHAT_DEVICE_HEADER, self.header())
+        request.header(DEVICE_HEADER, self.header())
     }
 }
 
@@ -54,8 +54,24 @@ pub struct ChatAccount {
     pub drive: AccountManifestDriveKeysV1,
     pub identity: IdentityKeyPair,
     pub devices: Vec<ChatDevice>,
-    /// The account's current V2 manifest (none before its first device).
-    pub head: Option<AccountManifestV2>,
+    /// The account's current manifest (none before its first device).
+    pub head: Option<AccountManifestV3>,
+    /// The `session` hash of the token's sign-in, which every device of this
+    /// account lists: from the token's `sid` (a test signs in as a root
+    /// sign-in), checked against `GET /api/v1/account/devices/session` at registration.
+    pub session: String,
+}
+
+/// The `session` hash of an access token's sign-in (its `sid` claim).
+fn token_session(token: &str) -> String {
+    kutup_chat_proto::device_session_hash(token_sid(token).as_bytes())
+}
+
+/// An access token's sign-in id (its `sid` claim).
+pub fn token_sid(token: &str) -> uuid::Uuid {
+    let payload = token.split('.').nth(1).expect("a JWT");
+    let claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+    uuid::Uuid::parse_str(claims["sid"].as_str().expect("an access token")).unwrap()
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -134,43 +150,65 @@ impl ChatAccount {
             authority: keys.authority_signing_key().clone(),
             drive: AccountManifestDriveKeysV1 {
                 suite: AccountIdentitySuiteId::XWingEd25519V2,
-                hpke_public_key: b64(&keys.drive_hpke_public_key()),
+                xwing_public_key: b64(&keys.drive_xwing_public_key()),
                 share_signing_public_key: b64(&keys.drive_signing_public_key()),
             },
             identity: IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng),
             devices: Vec::new(),
             head: None,
+            session: token_session(token),
         }
+    }
+
+    /// The server's `session` hash for the token is the one this account
+    /// lists; the account's device counter.
+    pub fn fetch_session(&self, c: &Client, base: &str) -> u32 {
+        let r = c
+            .get(format!("{base}/api/v1/account/devices/session"))
+            .bearer_auth(&self.token)
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK, "device session");
+        let answer = r.json::<Value>().unwrap();
+        assert_eq!(
+            answer["session"].as_str().unwrap(),
+            self.session,
+            "the token's sign-in"
+        );
+        answer["nextDeviceId"].as_u64().expect("the device counter") as u32
     }
 
     pub fn identity_key(&self) -> String {
         b64(&self.identity.identity_key().serialize())
     }
 
-    /// The account's next manifest listing `devices`, signed by its authority.
-    pub fn next_manifest(&self, devices: &[&ChatDevice]) -> AccountManifestV2 {
+    /// The account's next manifest listing `account_devices`, signed by its authority.
+    pub fn next_manifest(&self, devices: &[&ChatDevice]) -> AccountManifestV3 {
         let public = self.authority.verifying_key();
         let mut incarnation = Hasher::new(Suite::V1);
-        incarnation.update(b"kutup/account-incarnation/v1\0");
+        incarnation.update(b"kutup/account/incarnation/v1\0");
         incarnation.update(public.to_bytes());
-        let mut listed: Vec<AccountManifestDeviceV2> = devices
+        let mut listed: Vec<AccountManifestDeviceV3> = devices
             .iter()
-            .map(|device| AccountManifestDeviceV2 {
-                device_id: device.id,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: device.registration_id,
-                mls: None,
+            .map(|device| {
+                AccountManifestDeviceV3::chat(
+                    device.id,
+                    DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    device.registration_id,
+                    self.session.clone(),
+                )
             })
             .collect();
         listed.sort_by_key(|device| device.device_id);
-        let mut manifest = AccountManifestV2 {
-            manifest_version: 2,
+        let mut manifest = AccountManifestV3 {
+            manifest_version: kutup_chat_proto::ACCOUNT_MANIFEST_V3_VERSION,
+            min_version: None,
             account: self.account.clone(),
             incarnation_id: hex::encode(incarnation.finish()),
             sequence: self.head.as_ref().map_or(1, |head| head.sequence + 1),
             previous_hash: self.head.as_ref().map(|head| head.manifest_hash().unwrap()),
-            identity_key: self.identity_key(),
-            identity_binding: String::new(),
+            identity_key: Some(self.identity_key()),
+            identity_binding: Some(String::new()),
             drive: self.drive.clone(),
             devices: listed,
             issued_at: time::OffsetDateTime::now_utc()
@@ -178,6 +216,8 @@ impl ChatAccount {
                 .unwrap(),
             authority_key_id: hex::encode(hash(Suite::V1, public.to_bytes())),
             self_authority_key: b64(&public.to_bytes()),
+            successions: Vec::new(),
+            extensions: Vec::new(),
             signature: String::new(),
         };
         self.bind(&mut manifest);
@@ -188,31 +228,31 @@ impl ChatAccount {
 
     /// The account identity's signature over `manifest`'s authority,
     /// incarnation and account (its identity binding).
-    pub fn bind(&self, manifest: &mut AccountManifestV2) {
-        manifest.identity_binding = b64(&self
+    pub fn bind(&self, manifest: &mut AccountManifestV3) {
+        manifest.identity_binding = Some(b64(&self
             .identity
             .private_key()
             .calculate_signature(
                 &manifest.identity_binding_bytes().unwrap(),
                 &mut kutup_crypto::primitives::Rng,
             )
-            .unwrap());
+            .unwrap()));
     }
 
     /// Signs `manifest` (again) with the account's authority.
-    pub fn sign(&self, manifest: &mut AccountManifestV2) {
+    pub fn sign(&self, manifest: &mut AccountManifestV3) {
         manifest.signature = b64(&self.authority.sign(&manifest.signing_bytes().unwrap()));
     }
 
-    /// `POST /api/chat/manifest` of `manifest` as `by`, as it is.
+    /// `POST /api/v1/chat/manifest` of `manifest` as `by`, as it is.
     pub fn post_manifest(
         &self,
         c: &Client,
         base: &str,
         by: &ChatDevice,
-        manifest: &AccountManifestV2,
+        manifest: &AccountManifestV3,
     ) -> Response {
-        by.auth(c.post(format!("{base}/api/chat/manifest")))
+        by.auth(c.post(format!("{base}/api/v1/chat/manifest")))
             .bearer_auth(&self.token)
             .json(manifest)
             .send()
@@ -247,15 +287,16 @@ impl ChatAccount {
         base: &str,
         body: &RegisterChatDeviceRequestV2,
     ) -> Response {
-        c.post(format!("{base}/api/chat/device"))
+        c.post(format!("{base}/api/v1/chat/devices"))
             .bearer_auth(&self.token)
             .json(body)
             .send()
             .unwrap()
     }
 
-    /// The account's first device, or a new identity for it: device 1 under
-    /// a manifest listing it alone; every other device is dropped.
+    /// The account's first device, or a new identity for it: the account's
+    /// next device id (1 on a new account) under a manifest listing it
+    /// alone; every other device is dropped.
     pub fn reregister(&mut self, c: &Client, base: &str) -> ChatDevice {
         let (registration_id, credential) = new_device_secrets();
         self.reregister_as(c, base, registration_id, credential)
@@ -269,8 +310,9 @@ impl ChatAccount {
         registration_id: u32,
         credential: [u8; 32],
     ) -> ChatDevice {
+        let counter = self.fetch_session(c, base);
         let device = ChatDevice {
-            id: kutup_chat_proto::REREGISTRATION_DEVICE_ID,
+            id: kutup_chat_proto::next_device_id(counter, &[]).unwrap(),
             registration_id,
             credential,
         };
@@ -295,7 +337,7 @@ impl ChatAccount {
     /// A link token asked for by `by`.
     pub fn link_token(&self, c: &Client, base: &str, by: &ChatDevice) -> String {
         let r = by
-            .auth(c.post(format!("{base}/api/chat/link-tokens")))
+            .auth(c.post(format!("{base}/api/v1/chat/link-tokens")))
             .bearer_auth(&self.token)
             .send()
             .unwrap();
@@ -344,6 +386,7 @@ impl ChatAccount {
         registration_id: u32,
         credential: [u8; 32],
     ) -> ChatDevice {
+        self.fetch_session(c, base);
         let token = self.link_token(c, base, by);
         let body = self.registration(
             registration_id,
@@ -363,7 +406,7 @@ impl ChatAccount {
 
     /// The next manifest listing every device in `self.devices`, published
     /// by `by`.
-    pub fn publish(&mut self, c: &Client, base: &str, by: &ChatDevice) -> AccountManifestV2 {
+    pub fn publish(&mut self, c: &Client, base: &str, by: &ChatDevice) -> AccountManifestV3 {
         let devices: Vec<&ChatDevice> = self.devices.iter().collect();
         let manifest = self.next_manifest(&devices);
         let r = self.post_manifest(c, base, by, &manifest);

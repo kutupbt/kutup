@@ -22,6 +22,8 @@
 // appState.collaborators map so peers see each other's cursor + the
 // translucent rectangles around peer-selected elements.
 
+// First: where Excalidraw finds its fonts, before Excalidraw loads.
+import './assets'
 import {
   forwardRef,
   Suspense,
@@ -53,11 +55,14 @@ import { collabSocketUrl } from '@kutup/collab/socketUrl'
 import { useRequiredSession } from '@kutup/session/store'
 import { SaveTracker, hasLocalChanges } from './unsaved'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
-import { KIND } from '@kutup/collab/envelope'
-import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
-import { currentDevice, deviceRefused, renewRequested, TooManyDevicesError } from '@kutup/collab/currentDevice'
+import { KIND, peerKey } from '@kutup/collab/envelope'
+import { SenderCheck } from '@kutup/collab/senders'
+import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
+import { accountNameOfKey } from '@kutup/drive-core/accountName'
+import { encryptCollabFrame, openCollabFrame } from '@kutup/collab/cryptoFrame'
+import { currentDevice, replaceRefusedDevice, TooManyDevicesError, type CurrentDevice } from '@kutup/session/currentDevice'
 import { randomSenderSeqPrefix, buildAwarenessName } from '@kutup/collab/identity'
-import { listDevices } from '@kutup/collab/api'
+import { localBase } from '@kutup/collab/api'
 import { DeviceLimitNotice } from '../DeviceLimitNotice'
 import { uploadAsset, fetchAsset, QuotaExceededError } from '@kutup/collab/whiteboardAssets'
 import { useResolvedTheme } from '../useResolvedTheme'
@@ -101,7 +106,7 @@ interface Props {
 interface CursorPayload {
   color: string | null
   username: string | null
-  userId: string | null
+  accountId: string | null
   pointer?: { x: number; y: number; tool: 'pointer' | 'laser' }
   button?: 'up' | 'down'
   selectedElementIds?: Record<string, true>
@@ -118,7 +123,7 @@ function WhiteboardEditorBase(
   const [deviceLimit, setDeviceLimit] = useState(false)
   const userColor = session.color
   const username = session.username
-  const userId = session.userId
+  const userId = session.accountId
   const theme = useResolvedTheme()
 
   // Push kutup's theme into Excalidraw on every change. The `theme` prop
@@ -139,8 +144,7 @@ function WhiteboardEditorBase(
   const transportRef = useRef<CollabTransport | null>(null)
   const onOutdatedRef = useRef(onOutdated)
   onOutdatedRef.current = onOutdated
-  const deviceIdRef = useRef<number | null>(null)
-  const keypairRef = useRef<{ publicKey: Uint8Array; privateKey: Uint8Array } | null>(null)
+  const deviceRef = useRef<CurrentDevice | null>(null)
   const docKeyIdRef = useRef<number>(1)
   const lastSeenSeqRef = useRef<number>(0)
   const outboundSeqRef = useRef<bigint>(randomSenderSeqPrefix())
@@ -160,7 +164,8 @@ function WhiteboardEditorBase(
   // a free-draw. 200ms catches the trailing edge of a stroke.
   const broadcastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Presence (cursor + selection): peer state keyed by senderDeviceId.
+  // Presence (cursor + selection): peer state keyed by `peerKey` (the
+  // sender's account and device).
   // Pushed into Excalidraw via api.updateScene({ collaborators }).
   const collaboratorsRef = useRef<Map<string, Record<string, unknown>>>(new Map())
 
@@ -181,7 +186,7 @@ function WhiteboardEditorBase(
   // upstream Excalidraw's status-driven flow:
   //   1. Image element appears with status "pending" + binary in
   //      appState.files. We encrypt the binary client-side and PUT it to
-  //      /api/files/:fileId/assets/:assetId, then flip the element's
+  //      /api/v1/drive/files/:fileId/assets/:assetId, then flip the element's
   //      status to "saved" via updateScene.
   //   2. The status flip bumps versionNonce → broadcasts via the normal
   //      EXCALIDRAW_OP channel.
@@ -261,10 +266,22 @@ function WhiteboardEditorBase(
   // ---- Collab ----
   useEffect(() => {
     let alive = true
+    // Edits apply only when their sender's devices signed them; a sender
+    // whose edits are dropped is named once.
+    const senders = new SenderCheck({
+      onMalformed: () => toast.error(t('editor.editUnverified')),
+      authority: accountAuthorityVerdict,
+      name: accountNameOfKey,
+      onRefused: ({ name, reason, trust }) =>
+        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name }), {
+          // A reset the identity pins don't know: the person may trust it here.
+          action: trust ? { label: t('editor.senderTrust'), onClick: () => void trust() } : undefined,
+        }),
+    })
 
     void (async () => {
-      // This sign-in's collaboration device; replaced below if the server
-      // stops taking it (frames read the refs, the socket URL `did`).
+      // This sign-in's device; replaced below if the account stops listing
+      // it (frames and the socket URL read the ref).
       let current
       try {
         current = await currentDevice()
@@ -276,11 +293,9 @@ function WhiteboardEditorBase(
         throw error
       }
       if (!alive) return
-      keypairRef.current = current.keypair
-      let did = current.deviceId
-      deviceIdRef.current = did
+      deviceRef.current = current
 
-      const wsUrl = () => collabSocketUrl(fileId, did)
+      const wsUrl = () => collabSocketUrl(deviceRef.current ?? current, localBase(fileId))
 
       const transport = new CollabTransport({
         url: wsUrl,
@@ -300,9 +315,13 @@ function WhiteboardEditorBase(
             }
           }
         },
-        onFrame: async (bs: Uint8Array) => {
+        onFrame: async (bs: Uint8Array, { live }) => {
+          // A whiteboard op carries whole elements, and the log isn't
+          // trimmed by its saves: a dropped one is overtaken by the sender's
+          // next change of those elements.
+          if ((await senders.verify(bs, live)) !== 'take') return
           try {
-            const f = await openCollabFrameV1(bs, fileKey, {
+            const f = await openCollabFrame(bs, fileKey, {
               fileId,
               keyGeneration,
             })
@@ -336,12 +355,12 @@ function WhiteboardEditorBase(
               maybeFetchMissingAssets(merged)
             } else if (f.kind === KIND.EXCALIDRAW_CURSOR) {
               const data = JSON.parse(new TextDecoder().decode(f.plaintext)) as CursorPayload
-              const senderId = String(f.senderDeviceId)
-              const myDid = deviceIdRef.current
-              if (myDid !== null && f.senderDeviceId === BigInt(myDid)) return
+              const senderId = peerKey(f.sender, f.deviceId)
+              const me = deviceRef.current
+              if (me && senderId === peerKey(me.account, me.deviceId)) return
               const stroke = data.color ?? '#94a3b8'
               const collaborator: Record<string, unknown> = {
-                id: data.userId ?? senderId,
+                id: data.accountId ?? senderId,
                 socketId: senderId,
                 username: data.username ?? null,
                 color: { background: stroke, stroke },
@@ -367,7 +386,7 @@ function WhiteboardEditorBase(
         onPeers: (p) => {
           // Prune cursors of devices that have left the room. Otherwise a
           // peer who closes their tab leaves a frozen cursor on screen.
-          const live = new Set<string>(p.list.map((x: PeerInfo) => String(x.deviceId)))
+          const live = new Set<string>(p.list.map((x: PeerInfo) => peerKey(x.account, x.deviceId)))
           let pruned = false
           for (const k of Array.from(collaboratorsRef.current.keys())) {
             if (!live.has(k)) {
@@ -392,18 +411,8 @@ function WhiteboardEditorBase(
         },
         onError: (e: unknown) => console.warn('whiteboard: ws error', e),
         onRefused: async () => {
-          const id = did
-          const trusted = await listDevices()
-            .then((rows) => rows.some((row) => row.deviceId === id && row.trusted))
-            .catch(() => null)
-          if (trusted !== false || !(await deviceRefused())) return
-          const next = await currentDevice()
-          keypairRef.current = next.keypair
-          did = next.deviceId
-          deviceIdRef.current = did
-        },
-        onRenewDevice: (deviceIds) => {
-          void renewRequested(deviceIds).catch(() => undefined)
+          const next = await replaceRefusedDevice(deviceRef.current ?? current)
+          if (next) deviceRef.current = next
         },
       })
       if (!alive) { transport.close(); return }
@@ -414,10 +423,11 @@ function WhiteboardEditorBase(
       alive = false
       transportRef.current?.close()
       transportRef.current = null
+      senders.close()
       if (broadcastTimerRef.current) clearTimeout(broadcastTimerRef.current)
       if (presenceTimerRef.current) clearTimeout(presenceTimerRef.current)
     }
-    // A fresh token is fetched per connect (collabSocketUrl); refresh is
+    // A fresh ticket is fetched per connect (collabSocketUrl); refresh is
     // handled by transport reconnect, NOT by re-mounting the WS (would lose
     // in-flight broadcasts).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -429,16 +439,15 @@ function WhiteboardEditorBase(
     presenceTimerRef.current = setTimeout(() => void (async () => {
       presenceTimerRef.current = null
       const transport = transportRef.current
-      const did = deviceIdRef.current
-      const kp = keypairRef.current
-      if (!transport || !did || !kp) return
+      const device = deviceRef.current
+      if (!transport || !device) return
       const payload: CursorPayload = {
         color: userColorRef.current,
         // Same "<user> #<tabId>" shape that notes / office use, so two
         // tabs of the same account are distinguishable in the cursor
         // label instead of both reading just "admin".
         username: buildAwarenessName(usernameRef.current),
-        userId: userIdRef.current,
+        accountId: userIdRef.current,
         button: localButtonRef.current,
         selectedElementIds: localSelectionRef.current,
       }
@@ -446,13 +455,12 @@ function WhiteboardEditorBase(
       try {
         outboundSeqRef.current = outboundSeqRef.current + 1n
         const bytes = new TextEncoder().encode(JSON.stringify(payload))
-        const packed = await encryptCollabFrameV1(bytes, KIND.EXCALIDRAW_CURSOR, {
+        const packed = await encryptCollabFrame(bytes, KIND.EXCALIDRAW_CURSOR, {
           fileId,
           keyGeneration,
           docKeyId: docKeyIdRef.current,
-          deviceId: BigInt(did),
           sequence: outboundSeqRef.current,
-        }, fileKey, kp.privateKey)
+        }, fileKey, device)
         transport.send(packed, { edit: false })
       } catch (e) {
         console.warn('whiteboard: cursor send failed', e)
@@ -594,9 +602,8 @@ function WhiteboardEditorBase(
       broadcastTimerRef.current = null
       const api = apiRef.current
       const transport = transportRef.current
-      const did = deviceIdRef.current
-      const kp = keypairRef.current
-      if (!api || !transport || !did || !kp) return
+      const device = deviceRef.current
+      if (!api || !transport || !device) return
       // Use IncludingDeleted so deletes are propagated (Excalidraw marks
       // deletions with isDeleted: true rather than removing entries).
       const all = api.getSceneElementsIncludingDeleted() as OrderedExcalidrawElement[]
@@ -612,13 +619,12 @@ function WhiteboardEditorBase(
       try {
         outboundSeqRef.current = outboundSeqRef.current + 1n
         const payload = new TextEncoder().encode(JSON.stringify(changed))
-        const packed = await encryptCollabFrameV1(payload, KIND.EXCALIDRAW_OP, {
+        const packed = await encryptCollabFrame(payload, KIND.EXCALIDRAW_OP, {
           fileId,
           keyGeneration,
           docKeyId: docKeyIdRef.current,
-          deviceId: BigInt(did),
           sequence: outboundSeqRef.current,
-        }, fileKey, kp.privateKey)
+        }, fileKey, device)
         transport.send(packed)
         for (const el of changed) {
           last.set(el.id, el.version ?? 0)

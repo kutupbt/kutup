@@ -1,31 +1,29 @@
-//! Durable opaque Chat-media storage and account-private attachment ledger.
+//! Durable opaque Chat-media storage. The account-private attachment ledger
+//! is the account-records store's `chatAttachments` scope
+//! (`handlers::account_records`).
 //!
-//! The server validates only public suite framing, lengths, digests, quota and
-//! compare-and-swap metadata. Filenames, MIME types, conversations, messages
-//! and attachment keys remain inside Chat ciphertext and ledger AEAD.
+//! The server validates only public suite framing, lengths, digests and
+//! quota. Filenames, MIME types, conversations, messages and attachment keys
+//! remain inside Chat ciphertext and ledger AEAD.
 
 use kutup_crypto::primitives::{hash, Hasher, Suite};
 use kutup_federation_proto::ContentDigest;
 use std::io::ErrorKind;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, ChatAttachmentLedgerDiffPageV1,
-    ChatAttachmentLedgerPutReceiptV1, ChatAttachmentLedgerPutRequestV1,
-    ChatAttachmentLedgerWireEntityV1, ChatMediaDeliveryOfferV1, ChatMediaDeliveryStatusV1,
-    ChatMediaOfferResponseV1,
+    capability_hash, constant_time_capability_hash_eq, ChatMediaDeliveryOfferV1,
+    ChatMediaDeliveryStatusV1, ChatMediaOfferResponseV1,
 };
-use kutup_crypto::chat_attachment_ledger;
-use kutup_crypto::chat_media::{
-    self, ChatMediaObjectContextV1, ChatMediaSuiteId, CHAT_MEDIA_OBJECT_HEADER_BYTES,
-};
-use serde::{Deserialize, Serialize};
+use kutup_crypto::chat_media::{ChatMediaObjectContextV1, ChatMediaSuiteId};
+use kutup_crypto::chat_media_blocks::{self, CHAT_MEDIA_BLOCKS_HEADER_BYTES};
+use serde::Serialize;
 use tokio::io::AsyncReadExt as _;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -35,7 +33,7 @@ use super::tus::{
     header_str, parse_upload_metadata, require_tus_resumable, tus_text, MIN_PART_SIZE, TUS_VERSION,
 };
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::storage::{CompletedPart, MultipartUpload};
 use crate::AppState;
 
@@ -72,49 +70,36 @@ pub(crate) fn delivery_offer_digest(offer: &ChatMediaDeliveryOfferV1) -> AppResu
     let encoded = serde_json::to_vec(offer)
         .map_err(|error| AppError::internal(format!("encode Chat-media offer: {error}")))?;
     let mut digest = Hasher::new(Suite::V1);
-    digest.update(b"kutup/chat-media/delivery-offer-digest/v1\0");
+    digest.update(kutup_crypto::labels::CHAT_MEDIA_DELIVERY_OFFER_DIGEST_V1);
     digest.update(encoded);
     Ok(hex::encode(digest.finish()))
 }
 
 pub(crate) async fn consume_media_rate(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    scope_type: &'static str,
+    scope: crate::ratelimit::counters::Scope,
     scope_digest: &[u8; 32],
     budget: crate::ratelimit::Limit,
 ) -> AppResult<()> {
+    use crate::ratelimit::counters::Scope;
     let (limit, window_seconds) = crate::ratelimit::budget(budget);
-    debug_assert!(matches!(
-        scope_type,
-        "capability_minute" | "capability_day" | "recipient" | "federation_origin"
-    ));
-    let count: i64 = sqlx::query_scalar(
-        "INSERT INTO chat_media_rate_counters
-             (scope_type, scope_digest, window_start, count, expires_at)
-         VALUES (
-             $1, $2,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3),
-             1,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3)
-               + make_interval(secs => $3 * 2)
-         )
-         ON CONFLICT (scope_type, scope_digest, window_start)
-         DO UPDATE SET count = chat_media_rate_counters.count + 1
-         RETURNING count",
-    )
-    .bind(scope_type)
-    .bind(scope_digest.as_slice())
-    .bind(window_seconds)
-    .fetch_one(&mut **transaction)
-    .await?;
+    let metric = match scope {
+        Scope::MediaCapabilityMinute => "chat_media_capability_minute",
+        Scope::MediaCapabilityDay => "chat_media_capability_day",
+        Scope::MediaRecipient => "chat_media_recipient",
+        Scope::MediaFederationOrigin => "chat_media_federation_origin",
+        other => {
+            return Err(AppError::internal(format!(
+                "{} is not a Chat-media rate scope",
+                other.as_str()
+            )))
+        }
+    };
+    let count =
+        crate::ratelimit::counters::add(transaction, scope, scope_digest, 1, window_seconds)
+            .await?;
     if count > limit {
-        crate::telemetry::rate_limit_rejection(match scope_type {
-            "capability_minute" => "chat_media_capability_minute",
-            "capability_day" => "chat_media_capability_day",
-            "recipient" => "chat_media_recipient",
-            "federation_origin" => "chat_media_federation_origin",
-            _ => "chat_media_unknown",
-        });
+        crate::telemetry::rate_limit_rejection(metric);
         return Err(AppError::too_many_requests(
             "Chat-media delivery rate limit exceeded",
         ));
@@ -128,7 +113,7 @@ pub(crate) async fn match_delivery_capability(
     presented: &[u8; 32],
 ) -> AppResult<bool> {
     let direct: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT capability_hash FROM chat_delivery_capabilities WHERE user_id=$1",
+        "SELECT capability_hash FROM chat_delivery_capabilities WHERE account_id=$1",
     )
     .bind(recipient_user_id)
     .fetch_optional(&mut **transaction)
@@ -136,13 +121,6 @@ pub(crate) async fn match_delivery_capability(
     Ok(direct
         .and_then(|value| <[u8; 32]>::try_from(value).ok())
         .is_some_and(|candidate| constant_time_capability_hash_eq(&candidate, presented)))
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct LedgerDiffQuery {
-    after: Option<String>,
-    limit: Option<i64>,
 }
 
 fn canonical_uuid(value: &str) -> Option<Uuid> {
@@ -161,6 +139,58 @@ fn canonical_token_hash(value: &str) -> Option<[u8; 32]> {
 
 fn media_context(attachment_id: Uuid) -> Option<ChatMediaObjectContextV1> {
     ChatMediaObjectContextV1::new(&attachment_id.hyphenated().to_string()).ok()
+}
+
+/// What this server checks of a whole Chat-media object before it keeps it,
+/// whoever sent it (a local upload, or a peer's hand-over): its header names
+/// this attachment in the block suite, and its length and trailer
+/// (`trailer`, the last [`kutup_crypto::blocks::TRAILER_LEN`] bytes) fit
+/// together. The manifest's digest and the AEAD are the recipients' to check.
+pub(crate) fn check_object_shape(
+    attachment_id: Uuid,
+    header: &[u8],
+    total: u64,
+    trailer: &[u8],
+) -> AppResult<()> {
+    let context = media_context(attachment_id)
+        .ok_or_else(|| AppError::bad_request("invalid attachment context"))?;
+    if header.len() < CHAT_MEDIA_BLOCKS_HEADER_BYTES
+        || chat_media_blocks::validate_header(&header[..CHAT_MEDIA_BLOCKS_HEADER_BYTES], context)
+            .is_err()
+    {
+        return Err(AppError::bad_request("invalid Chat-media object header"));
+    }
+    if total < chat_media_blocks::min_object_len()
+        || chat_media_blocks::check_structure(total, trailer).is_err()
+    {
+        return Err(AppError::bad_request("Chat-media length mismatch"));
+    }
+    Ok(())
+}
+
+/// The stored object's block structure, from its length and trailer
+/// (docs/plans/drive-block-format.md §3): the manifest length fits the
+/// block count and the count the length. The AEAD is the reader's to check.
+async fn check_stored_structure(
+    state: &AppState,
+    storage_path: &str,
+    total: i64,
+) -> Result<(), std::io::Error> {
+    let invalid = || std::io::Error::new(ErrorKind::InvalidData, "invalid Chat-media structure");
+    let total = u64::try_from(total).map_err(|_| invalid())?;
+    let trailer_len = kutup_crypto::blocks::TRAILER_LEN as u64;
+    if total < chat_media_blocks::min_object_len() {
+        return Err(invalid());
+    }
+    let body = state
+        .storage
+        .get_object_range(storage_path, total - trailer_len, total - 1, total)
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let mut trailer = Vec::with_capacity(trailer_len as usize);
+    body.into_async_read().read_to_end(&mut trailer).await?;
+    chat_media_blocks::check_structure(total, &trailer).map_err(|_| invalid())?;
+    Ok(())
 }
 
 async fn hash_stored_object(
@@ -214,24 +244,23 @@ async fn hash_stored_object(
 #[tracing::instrument(name = "chat_media.create_upload", skip_all)]
 pub async fn create_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     headers: HeaderMap,
 ) -> Response {
     if let Some(response) = require_tus_resumable(&headers) {
         return response;
     }
-    let user_id = match trusted_uuid(&user.user_id) {
+    let user_id = match trusted_uuid(&user.account_id) {
         Ok(value) => value,
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "invalid user id"),
     };
     let total_bytes = match header_str(&headers, "Upload-Length").parse::<i64>() {
         Ok(value)
-            if value >= chat_media::object_ciphertext_size(0).unwrap_or(u64::MAX) as i64
+            if value >= chat_media_blocks::min_object_len() as i64
                 && value
-                    <= chat_media::object_ciphertext_size(
+                    <= chat_media_blocks::max_object_len(
                         state.config.chat_media_max_plaintext_bytes,
-                    )
-                    .unwrap_or(0) as i64 =>
+                    ) as i64 =>
         {
             value
         }
@@ -258,6 +287,8 @@ pub async fn create_upload(
         .get("suite")
         .and_then(|value| value.parse::<u16>().ok())
         .and_then(|value| ChatMediaSuiteId::try_from(value).ok())
+        // Attachments are written in the block format only.
+        .filter(|suite| *suite == ChatMediaSuiteId::KutupChatMediaBlocksV1)
     {
         Some(value) => value,
         None => return tus_text(StatusCode::BAD_REQUEST, "invalid Chat-media suite"),
@@ -307,7 +338,7 @@ pub async fn create_upload(
     };
     let inserted = sqlx::query(
         "INSERT INTO chat_media_uploads
-         (id,user_id,attachment_id,suite,total_bytes,retrieval_token_hash,storage_path,s3_upload_id)
+         (id,account_id,attachment_id,suite,total_bytes,retrieval_token_hash,storage_path,s3_upload_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
     )
     .bind(upload_id)
@@ -336,7 +367,10 @@ pub async fn create_upload(
         StatusCode::CREATED,
         [
             ("Tus-Resumable", TUS_VERSION.to_string()),
-            ("Location", format!("/api/chat/media/uploads/{upload_id}")),
+            (
+                "Location",
+                format!("/api/v1/chat/media/uploads/{upload_id}"),
+            ),
             ("Upload-Offset", "0".into()),
             ("Content-Type", "application/json".into()),
         ],
@@ -347,18 +381,19 @@ pub async fn create_upload(
 
 pub async fn head_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(response) = require_tus_resumable(&headers) {
         return response;
     }
-    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
+    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.account_id))
+    else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
     let row: Option<(i64, i64)> = match sqlx::query_as(
-        "SELECT total_bytes,received_bytes FROM chat_media_uploads WHERE id=$1 AND user_id=$2",
+        "SELECT total_bytes,received_bytes FROM chat_media_uploads WHERE id=$1 AND account_id=$2",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -389,7 +424,7 @@ pub async fn head_upload(
 #[tracing::instrument(name = "chat_media.patch_upload", skip_all)]
 pub async fn patch_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -400,7 +435,8 @@ pub async fn patch_upload(
     if header_str(&headers, "Content-Type") != "application/offset+octet-stream" {
         return tus_text(StatusCode::UNSUPPORTED_MEDIA_TYPE, "invalid Content-Type");
     }
-    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
+    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.account_id))
+    else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
     let client_offset = match header_str(&headers, "Upload-Offset").parse::<i64>() {
@@ -429,7 +465,7 @@ pub async fn patch_upload(
     };
     let row: Option<UploadRow> = match sqlx::query_as(
         "SELECT attachment_id,suite,total_bytes,received_bytes,retrieval_token_hash,storage_path,s3_upload_id,s3_part_etags,pending_bytes
-         FROM chat_media_uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
+         FROM chat_media_uploads WHERE id=$1 AND account_id=$2 FOR UPDATE",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -477,8 +513,8 @@ pub async fn patch_upload(
         let Some(context) = media_context(attachment_id) else {
             return tus_text(StatusCode::BAD_REQUEST, "invalid attachment context");
         };
-        if body.len() < CHAT_MEDIA_OBJECT_HEADER_BYTES
-            || chat_media::validate_object_header(&body[..CHAT_MEDIA_OBJECT_HEADER_BYTES], context)
+        if body.len() < CHAT_MEDIA_BLOCKS_HEADER_BYTES
+            || chat_media_blocks::validate_header(&body[..CHAT_MEDIA_BLOCKS_HEADER_BYTES], context)
                 .is_err()
         {
             return tus_text(StatusCode::BAD_REQUEST, "invalid Chat-media object header");
@@ -548,7 +584,10 @@ pub async fn patch_upload(
     {
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "storage finalize");
     }
-    let actual_digest = hash_stored_object(&state, &storage_path, total).await;
+    let actual_digest = match check_stored_structure(&state, &storage_path, total).await {
+        Ok(()) => hash_stored_object(&state, &storage_path, total).await,
+        Err(error) => Err(error),
+    };
     let actual_digest = match actual_digest {
         Ok(value) => value,
         Err(_) => {
@@ -563,8 +602,8 @@ pub async fn patch_upload(
     };
     let inserted = sqlx::query(
         "INSERT INTO chat_media_objects
-         (attachment_id,origin_user_id,origin_domain,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash,storage_path)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+         (attachment_id,origin_account_id,origin_server,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash,storage_path)
+         VALUES ($1,$2,$3,$4,$5,decode($6,'hex'),$7,$8)",
     )
     .bind(attachment_id)
     .bind(user_id)
@@ -581,7 +620,7 @@ pub async fn patch_upload(
         return tus_text(StatusCode::CONFLICT, "attachment finalization conflict");
     }
     let storage_reference_id: Option<Uuid> = match sqlx::query_scalar(
-        "INSERT INTO chat_media_references(user_id,attachment_id,logical_bytes)
+        "INSERT INTO chat_media_references(account_id,attachment_id,logical_bytes)
          VALUES ($1,$2,$3) RETURNING id",
     )
     .bind(user_id)
@@ -635,18 +674,19 @@ pub async fn patch_upload(
 
 pub async fn delete_upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(response) = require_tus_resumable(&headers) {
         return response;
     }
-    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.user_id)) else {
+    let (Some(upload_id), Ok(user_id)) = (canonical_uuid(&id), trusted_uuid(&user.account_id))
+    else {
         return tus_text(StatusCode::NOT_FOUND, "");
     };
     let row: Option<(String, String)> = match sqlx::query_as(
-        "SELECT storage_path,s3_upload_id FROM chat_media_uploads WHERE id=$1 AND user_id=$2",
+        "SELECT storage_path,s3_upload_id FROM chat_media_uploads WHERE id=$1 AND account_id=$2",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -670,7 +710,7 @@ pub async fn delete_upload(
     {
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "storage abort");
     }
-    if sqlx::query("DELETE FROM chat_media_uploads WHERE id=$1 AND user_id=$2")
+    if sqlx::query("DELETE FROM chat_media_uploads WHERE id=$1 AND account_id=$2")
         .bind(upload_id)
         .bind(user_id)
         .execute(&state.pool)
@@ -689,18 +729,17 @@ pub async fn delete_upload(
 #[tracing::instrument(name = "chat_media.deliver_local", skip_all)]
 pub async fn deliver_local(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(offer): Json<ChatMediaDeliveryOfferV1>,
 ) -> AppResult<Json<ChatMediaOfferResponseV1>> {
-    let origin_user_id = trusted_uuid(&user.user_id)?;
+    let origin_user_id = trusted_uuid(&user.account_id)?;
     let local_domain = state.config.chat_server_name.as_str();
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     offer
         .validate(&offer.destination_domain, now)
         .map_err(|_| AppError::bad_request("invalid Chat media delivery"))?;
     let configured_ciphertext_limit =
-        chat_media::object_ciphertext_size(state.config.chat_media_max_plaintext_bytes)
-            .map_err(|_| AppError::internal("invalid Chat-media server limit"))?;
+        chat_media_blocks::max_object_len(state.config.chat_media_max_plaintext_bytes);
     if offer.ciphertext_bytes > configured_ciphertext_limit {
         return Err(AppError::bad_request(
             "Chat media exceeds the destination server limit",
@@ -713,6 +752,7 @@ pub async fn deliver_local(
         if state.federation.is_none() {
             return Err(AppError::conflict("Chat federation is disabled"));
         }
+        crate::federation_switch::ensure_federates(&state.pool, origin_user_id).await?;
         return crate::chat_media_federation::stage_remote_delivery(&state, origin_user_id, offer)
             .await
             .map(Json);
@@ -744,9 +784,9 @@ pub async fn deliver_local(
         .execute(&mut *transaction)
         .await?;
     let existing_operation: Option<(String, Uuid)> = sqlx::query_as(
-        "SELECT offer_digest,storage_reference_id
+        "SELECT encode(offer_digest,'hex'),storage_reference_id
          FROM chat_media_origin_delivery_operations
-         WHERE origin_user_id=$1 AND operation_id=$2",
+         WHERE origin_account_id=$1 AND operation_id=$2",
     )
     .bind(origin_user_id)
     .bind(operation_id)
@@ -765,7 +805,7 @@ pub async fn deliver_local(
         }));
     }
     let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active=true")
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND state = 'active'")
             .bind(recipient)
             .fetch_optional(&mut *transaction)
             .await?;
@@ -784,7 +824,7 @@ pub async fn deliver_local(
     }
     type ObjectRow = (Uuid, i16, i64, String, Vec<u8>);
     let object: Option<ObjectRow> = sqlx::query_as(
-        "SELECT origin_user_id,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
+        "SELECT origin_account_id,suite,ciphertext_bytes,encode(ciphertext_sha256,'hex'),retrieval_token_hash
          FROM chat_media_objects WHERE attachment_id=$1",
     )
     .bind(attachment_id)
@@ -812,14 +852,14 @@ pub async fn deliver_local(
     // digests and never metric labels containing identities.
     consume_media_rate(
         &mut transaction,
-        "capability_minute",
+        crate::ratelimit::counters::Scope::MediaCapabilityMinute,
         &presented_capability_hash,
         crate::ratelimit::Limit::MediaCapabilityMinute,
     )
     .await?;
     consume_media_rate(
         &mut transaction,
-        "capability_day",
+        crate::ratelimit::counters::Scope::MediaCapabilityDay,
         &presented_capability_hash,
         crate::ratelimit::Limit::MediaCapabilityDay,
     )
@@ -827,7 +867,7 @@ pub async fn deliver_local(
     let recipient_rate_digest: [u8; 32] = hash(
         Suite::V1,
         [
-            b"kutup/chat-media/recipient-rate/v1\0".as_slice(),
+            kutup_crypto::labels::CHAT_MEDIA_RECIPIENT_RATE_V1,
             recipient_user_id.as_bytes(),
         ]
         .concat(),
@@ -835,7 +875,7 @@ pub async fn deliver_local(
     .into();
     consume_media_rate(
         &mut transaction,
-        "recipient",
+        crate::ratelimit::counters::Scope::MediaRecipient,
         &recipient_rate_digest,
         crate::ratelimit::Limit::MediaRecipient,
     )
@@ -845,7 +885,7 @@ pub async fn deliver_local(
     let pool =
         crate::storage_pool::lock(&mut transaction, recipient_user_id, Default::default()).await?;
     let existing_reference: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM chat_media_references WHERE user_id=$1 AND attachment_id=$2",
+        "SELECT id FROM chat_media_references WHERE account_id=$1 AND attachment_id=$2",
     )
     .bind(recipient_user_id)
     .bind(attachment_id)
@@ -863,7 +903,7 @@ pub async fn deliver_local(
             }));
         }
         let reference_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO chat_media_references(user_id,attachment_id,logical_bytes)
+            "INSERT INTO chat_media_references(account_id,attachment_id,logical_bytes)
              VALUES ($1,$2,$3) RETURNING id",
         )
         .bind(recipient_user_id)
@@ -881,9 +921,9 @@ pub async fn deliver_local(
     };
     sqlx::query(
         "INSERT INTO chat_media_origin_delivery_operations
-         (origin_user_id,operation_id,recipient_user_id,attachment_id,ciphertext_bytes,
+         (origin_account_id,operation_id,recipient_account_id,attachment_id,ciphertext_bytes,
           ciphertext_sha256,offer_digest,storage_reference_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+         VALUES ($1,$2,$3,$4,$5,decode($6,'hex'),decode($7,'hex'),$8)",
     )
     .bind(origin_user_id)
     .bind(operation_id)
@@ -915,17 +955,17 @@ pub async fn deliver_local(
 #[tracing::instrument(name = "chat_media.download", skip_all)]
 pub async fn download_object(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let row: Option<(String, i64)> = sqlx::query_as(
         "SELECT o.storage_path,o.ciphertext_bytes
          FROM chat_media_references r JOIN chat_media_objects o ON o.attachment_id=r.attachment_id
-         WHERE r.user_id=$1 AND r.attachment_id=$2",
+         WHERE r.account_id=$1 AND r.attachment_id=$2",
     )
     .bind(user_id)
     .bind(attachment_id)
@@ -964,16 +1004,16 @@ pub async fn download_object(
 /// per-recipient reference lifecycle and this endpoint fails closed.
 pub async fn discard_origin_object(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let mut tx = state.pool.begin().await?;
     let row: Option<(String, i64)> = sqlx::query_as(
         "SELECT storage_path,ciphertext_bytes FROM chat_media_objects
-         WHERE attachment_id=$1 AND origin_user_id=$2 FOR UPDATE",
+         WHERE attachment_id=$1 AND origin_account_id=$2 FOR UPDATE",
     )
     .bind(attachment_id)
     .bind(user_id)
@@ -997,7 +1037,7 @@ pub async fn discard_origin_object(
         return Err(AppError::conflict("Chat media has already been delivered"));
     }
     let removed =
-        sqlx::query("DELETE FROM chat_media_references WHERE user_id=$1 AND attachment_id=$2")
+        sqlx::query("DELETE FROM chat_media_references WHERE account_id=$1 AND attachment_id=$2")
             .bind(user_id)
             .bind(attachment_id)
             .execute(&mut *tx)
@@ -1029,16 +1069,16 @@ pub async fn discard_origin_object(
 /// the object and never reveals a sender or plaintext media metadata.
 pub async fn reference_info(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
 ) -> AppResult<Json<ChatMediaReferenceInfo>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let row: Option<(Uuid, i64, String)> = sqlx::query_as(
-        "SELECT r.id,o.ciphertext_bytes,o.ciphertext_sha256
+        "SELECT r.id,o.ciphertext_bytes,encode(o.ciphertext_sha256,'hex')
          FROM chat_media_references r JOIN chat_media_objects o ON o.attachment_id=r.attachment_id
-         WHERE r.user_id=$1 AND r.attachment_id=$2",
+         WHERE r.account_id=$1 AND r.attachment_id=$2",
     )
     .bind(user_id)
     .bind(attachment_id)
@@ -1061,19 +1101,19 @@ pub async fn reference_info(
 #[tracing::instrument(name = "chat_media.clear_reference", skip_all)]
 pub async fn clear_reference(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(attachment_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
         .ok_or_else(|| AppError::not_found("Chat media not found"))?;
     let mut tx = state.pool.begin().await?;
     type ReferenceRow = (Uuid, i64, String, Option<Uuid>);
     let row: Option<ReferenceRow> = sqlx::query_as(
-        "SELECT r.id,r.logical_bytes,o.storage_path,o.origin_user_id
+        "SELECT r.id,r.logical_bytes,o.storage_path,o.origin_account_id
          FROM chat_media_references r
          JOIN chat_media_objects o ON o.attachment_id=r.attachment_id
-         WHERE r.user_id=$1 AND r.attachment_id=$2 FOR UPDATE OF r,o",
+         WHERE r.account_id=$1 AND r.attachment_id=$2 FOR UPDATE OF r,o",
     )
     .bind(user_id)
     .bind(attachment_id)
@@ -1086,7 +1126,7 @@ pub async fn clear_reference(
         let pending: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                SELECT 1 FROM federation_outbox
-               WHERE kind='media' AND sender_user_id=$1 AND state='pending'
+               WHERE kind='media' AND sender_account_id=$1 AND state='pending'
                  AND payload->'transaction'->'offer'->>'attachmentId'=$2)",
         )
         .bind(user_id)
@@ -1141,26 +1181,23 @@ pub async fn clear_reference(
 
 pub async fn storage_summary(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<ChatMediaStorageSummary>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let (quota, used): (i64, i64) =
-        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM users WHERE id=$1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+        crate::storage_pool::quota_and_used(&state.pool, user_id).await?;
     let drive: i64 = sqlx::query_scalar(
         "SELECT
-          (SELECT COALESCE(SUM((CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)),0)::bigint FROM files WHERE uploader_user_id=$1) +
-          (SELECT COALESCE(SUM(size_bytes),0)::bigint FROM file_assets WHERE uploader_user_id=$1) +
-          (SELECT COALESCE(SUM(size_bytes),0)::bigint FROM file_thumbnails WHERE uploader_user_id=$1) +
-          (SELECT COALESCE(SUM(size_bytes),0)::bigint FROM file_versions WHERE author_user_id=$1)",
+          (SELECT COALESCE(SUM((CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END)),0)::bigint FROM drive_files WHERE uploader_account_id=$1) +
+          (SELECT COALESCE(SUM(size_bytes),0)::bigint FROM drive_file_assets WHERE uploader_account_id=$1) +
+          (SELECT COALESCE(SUM(size_bytes),0)::bigint FROM drive_file_thumbnails WHERE uploader_account_id=$1) +
+          (SELECT COALESCE(SUM(size_bytes),0)::bigint FROM drive_file_versions WHERE author_account_id=$1)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
     let chat: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(logical_bytes),0)::bigint FROM chat_media_references WHERE user_id=$1",
+        "SELECT COALESCE(SUM(logical_bytes),0)::bigint FROM chat_media_references WHERE account_id=$1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
@@ -1173,202 +1210,57 @@ pub async fn storage_summary(
     }))
 }
 
-pub async fn put_ledger_entity(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path(entity_id): Path<String>,
-    Json(request): Json<ChatAttachmentLedgerPutRequestV1>,
-) -> AppResult<Json<ChatAttachmentLedgerPutReceiptV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let entity_id = canonical_uuid(&entity_id)
-        .ok_or_else(|| AppError::bad_request("invalid ledger entity id"))?;
-    let operation_id = canonical_uuid(&request.operation_id)
-        .ok_or_else(|| AppError::bad_request("invalid ledger operation id"))?;
-    let envelope = chat_attachment_ledger::decode_canonical_b64(&request.envelope)
-        .map_err(|_| AppError::bad_request("invalid attachment ledger envelope"))?;
-    let header = chat_attachment_ledger::inspect(&envelope)
-        .map_err(|_| AppError::bad_request("invalid attachment ledger envelope"))?;
-    if Uuid::from_bytes(header.context.entity_id) != entity_id {
-        return Err(AppError::bad_request("ledger entity binding mismatch"));
-    }
-    let revision = i64::try_from(header.context.revision)
-        .map_err(|_| AppError::bad_request("ledger revision is too large"))?;
-    let digest = chat_attachment_ledger::envelope_digest(&envelope)
-        .map_err(|_| AppError::bad_request("invalid attachment ledger envelope"))?;
-    let account_incarnation: String =
-        sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id=$1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
-    if hex::encode(header.context.account_incarnation_id) != account_incarnation {
-        return Err(AppError::conflict("ledger account incarnation mismatch"));
-    }
-
-    let mut transaction = state.pool.begin().await?;
-    type Receipt = (Uuid, i64, String, i64);
-    let receipt: Option<Receipt> = sqlx::query_as(
-        "SELECT entity_id,revision,envelope_digest,cursor
-         FROM chat_attachment_ledger_operations WHERE user_id=$1 AND operation_id=$2",
-    )
-    .bind(user_id)
-    .bind(operation_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if let Some((stored_entity, stored_revision, stored_digest, cursor)) = receipt {
-        if stored_entity != entity_id || stored_revision != revision || stored_digest != digest {
-            return Err(AppError::conflict("ledger operation replay changed"));
-        }
-        return Ok(Json(ChatAttachmentLedgerPutReceiptV1 {
-            entity_id: entity_id.to_string(),
-            revision: header.context.revision.to_string(),
-            envelope_digest: digest,
-            cursor: cursor.to_string(),
-            idempotent: true,
-        }));
-    }
-    let current: Option<(i64, String)> = sqlx::query_as(
-        "SELECT revision,envelope_digest FROM chat_attachment_ledger_entities
-         WHERE user_id=$1 AND entity_id=$2 FOR UPDATE",
-    )
-    .bind(user_id)
-    .bind(entity_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    match &current {
-        None if revision == 1 && header.context.previous_envelope_digest == [0; 32] => {}
-        Some((current_revision, current_digest))
-            if revision == *current_revision + 1
-                && hex::encode(header.context.previous_envelope_digest) == *current_digest => {}
-        _ => {
-            return Err(AppError::conflict(
-                "ledger revision or predecessor mismatch",
-            ))
-        }
-    }
-    let cursor: i64 = sqlx::query_scalar("SELECT nextval('chat_attachment_ledger_cursor_seq')")
-        .fetch_one(&mut *transaction)
-        .await?;
-    if current.is_none() {
-        sqlx::query(
-            "INSERT INTO chat_attachment_ledger_entities
-             (user_id,entity_id,revision,envelope_digest,cursor)
-             VALUES ($1,$2,$3,$4,$5)",
-        )
-        .bind(user_id)
-        .bind(entity_id)
-        .bind(revision)
-        .bind(&digest)
-        .bind(cursor)
-        .execute(&mut *transaction)
-        .await?;
-    } else {
-        sqlx::query(
-            "UPDATE chat_attachment_ledger_entities
-             SET revision=$3,envelope_digest=$4,cursor=$5,updated_at=NOW()
-             WHERE user_id=$1 AND entity_id=$2",
-        )
-        .bind(user_id)
-        .bind(entity_id)
-        .bind(revision)
-        .bind(&digest)
-        .bind(cursor)
-        .execute(&mut *transaction)
-        .await?;
-    }
-    sqlx::query(
-        "INSERT INTO chat_attachment_ledger_history
-         (user_id,entity_id,revision,envelope_digest,envelope,cursor)
-         VALUES ($1,$2,$3,$4,$5,$6)",
-    )
-    .bind(user_id)
-    .bind(entity_id)
-    .bind(revision)
-    .bind(&digest)
-    .bind(&request.envelope)
-    .bind(cursor)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query(
-        "INSERT INTO chat_attachment_ledger_operations
-         (user_id,operation_id,entity_id,revision,envelope_digest,cursor)
-         VALUES ($1,$2,$3,$4,$5,$6)",
-    )
-    .bind(user_id)
-    .bind(operation_id)
-    .bind(entity_id)
-    .bind(revision)
-    .bind(&digest)
-    .bind(cursor)
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(ChatAttachmentLedgerPutReceiptV1 {
-        entity_id: entity_id.to_string(),
-        revision: header.context.revision.to_string(),
-        envelope_digest: digest,
-        cursor: cursor.to_string(),
-        idempotent: false,
-    }))
-}
-
-pub async fn ledger_diff(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Query(query): Query<LedgerDiffQuery>,
-) -> AppResult<Json<ChatAttachmentLedgerDiffPageV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
-    let after_text = query.after.as_deref().unwrap_or("0");
-    let after = after_text
-        .parse::<i64>()
-        .ok()
-        .filter(|value| *value >= 0 && value.to_string() == after_text)
-        .ok_or_else(|| AppError::bad_request("ledger cursor must be canonical non-negative i64"))?;
-    let limit = query.limit.unwrap_or(128);
-    if !(1..=256).contains(&limit) {
-        return Err(AppError::bad_request("ledger page limit must be 1..=256"));
-    }
-    let rows: Vec<(Uuid, i64, String, String, i64)> = sqlx::query_as(
-        "SELECT entity_id,revision,envelope_digest,envelope,cursor
-         FROM chat_attachment_ledger_history
-         WHERE user_id=$1 AND cursor>$2 ORDER BY cursor ASC LIMIT $3",
-    )
-    .bind(user_id)
-    .bind(after)
-    .bind(limit + 1)
-    .fetch_all(&state.pool)
-    .await?;
-    let more = rows.len() as i64 > limit;
-    let entities: Vec<_> = rows
-        .into_iter()
-        .take(limit as usize)
-        .map(|(entity_id, revision, envelope_digest, envelope, cursor)| {
-            Ok(ChatAttachmentLedgerWireEntityV1 {
-                entity_id: entity_id.to_string(),
-                revision: u64::try_from(revision)
-                    .map_err(|_| AppError::internal("stored ledger revision is invalid"))?
-                    .to_string(),
-                envelope_digest,
-                envelope,
-                cursor: cursor.to_string(),
-            })
-        })
-        .collect::<AppResult<_>>()?;
-    let next_cursor = entities
-        .last()
-        .map_or_else(|| after.to_string(), |entity| entity.cursor.clone());
-    let page = ChatAttachmentLedgerDiffPageV1 {
-        entities,
-        next_cursor,
-        more,
-    };
-    page.validate(after_text)
-        .map_err(|_| AppError::internal("stored attachment ledger page is invalid"))?;
-    Ok(Json(page))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_object_is_kept_only_in_the_block_suite_for_its_attachment() {
+        let attachment = Uuid::new_v4();
+        let context = media_context(attachment).unwrap();
+        let sealed = chat_media_blocks::seal_attachment(b"a song", &[9_u8; 32], context).unwrap();
+        let object = sealed.bytes.as_slice();
+        let total = object.len() as u64;
+        let trailer = &object[object.len() - kutup_crypto::blocks::TRAILER_LEN..];
+        check_object_shape(attachment, object, total, trailer).unwrap();
+        let refused = |header: &[u8], total: u64, trailer: &[u8]| {
+            check_object_shape(attachment, header, total, trailer)
+                .unwrap_err()
+                .message
+        };
+        // Another attachment's object, and something that isn't Kutup's.
+        assert_eq!(
+            check_object_shape(Uuid::new_v4(), object, total, trailer)
+                .unwrap_err()
+                .message,
+            "invalid Chat-media object header"
+        );
+        let foreign = vec![0x42_u8; object.len()];
+        assert_eq!(
+            refused(
+                &foreign,
+                total,
+                &foreign[foreign.len() - kutup_crypto::blocks::TRAILER_LEN..]
+            ),
+            "invalid Chat-media object header"
+        );
+        // The right header on the wrong length (a block more than the
+        // manifest counts) or trailer. A last block's own length is the
+        // AEAD's to check, not the server's.
+        let longer = total + kutup_crypto::blocks::BLOCK_SIZE as u64;
+        assert_eq!(
+            refused(object, longer, trailer),
+            "Chat-media length mismatch"
+        );
+        assert_eq!(
+            refused(object, total, &[0_u8; 12]),
+            "Chat-media length mismatch"
+        );
+        assert_eq!(
+            refused(object, chat_media_blocks::min_object_len() - 1, trailer),
+            "Chat-media length mismatch"
+        );
+    }
 
     #[test]
     fn public_identifiers_are_canonical_and_tokens_are_hashed() {

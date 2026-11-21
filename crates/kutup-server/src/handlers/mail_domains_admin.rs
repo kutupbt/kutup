@@ -14,12 +14,14 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
+use crate::entitlements::{self, Holder, Source};
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
 use crate::mail::domains::dkim;
 use crate::mail::domains::settings::{self, Settings, KEYS, MODE_KEY};
 use crate::mail::domains::store;
-use crate::middleware::AdminUser;
+use crate::middleware::AdminAccount;
 use crate::AppState;
 
 /// A DKIM key and the record that publishes it.
@@ -131,7 +133,7 @@ fn effective(settings: &Settings) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     out.insert(MODE_KEY.to_owned(), settings.mode.as_str().to_owned());
     let values = [
-        settings.domains_per_account,
+        settings.domains_per_organization,
         settings.addresses_per_account,
         settings.domains_on_server,
         settings.adds_per_day,
@@ -149,17 +151,17 @@ fn effective(settings: &Settings) -> BTreeMap<String, String> {
     out
 }
 
-/// `GET /api/admin/mail/domains`
+/// `GET /api/v1/admin/mail/domains`
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/domains",
+    path = "/api/v1/admin/mail/domains",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, body = AdminDomains))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<AdminDomains>> {
     let settings = Settings::load(&state.pool).await?;
     let server = &state.config.chat_server_name;
@@ -175,13 +177,13 @@ pub async fn list(
         })
         .collect();
     let rows: Vec<AdminDomainRow> = sqlx::query_as(
-        "SELECT d.id, d.name, COALESCE(u.username, u.id::text) AS owner, d.state, d.verify_state,
+        "SELECT d.id, d.name, o.name AS owner, d.state, d.verify_state,
                 d.mx_state, d.spf_state, d.dkim_state, d.dmarc_state,
                 d.approved_at IS NOT NULL AS approved, d.stopped_at IS NOT NULL AS stopped,
                 EXISTS (SELECT 1 FROM mail_domain_blocks b
                          WHERE b.name = d.name OR d.name LIKE '%.' || b.name) AS blocked,
                 d.created_at
-           FROM mail_domains d JOIN users u ON u.id = d.user_id
+           FROM mail_domains d JOIN organizations o ON o.id = d.organization_id
           WHERE d.removed_at IS NULL
           ORDER BY d.name",
     )
@@ -228,11 +230,11 @@ pub async fn list(
     }))
 }
 
-/// `PUT /api/admin/mail/domains/settings` — any of the `mail_domains.*`
+/// `PUT /api/v1/admin/mail/domains/settings` — any of the `mail_domains.*`
 /// settings, each checked against its range; applies at once.
 #[utoipa::path(
     put,
-    path = "/api/admin/mail/domains/settings",
+    path = "/api/v1/admin/mail/domains/settings",
     tag = "admin",
     security(("BearerAuth" = [])),
     request_body = BTreeMap<String, String>,
@@ -240,7 +242,7 @@ pub async fn list(
 )]
 pub async fn set_settings(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Json(changes): Json<BTreeMap<String, String>>,
 ) -> AppResult<Json<BTreeMap<String, String>>> {
     let mut checked = Vec::with_capacity(changes.len());
@@ -263,21 +265,22 @@ pub async fn set_settings(
     if !checked.is_empty() {
         audit(
             &state.pool,
-            &admin.user_id,
-            "mail.domains.settings",
+            &admin.account_id,
+            AdminAction::MailDomainUpdateSettings,
             None,
-            json!(checked.iter().cloned().collect::<BTreeMap<_, _>>()),
+            // The settings by their keys (dotted, as the registry names them).
+            json!({ "settings": checked.iter().cloned().collect::<BTreeMap<_, _>>() }),
         )
         .await;
     }
     Ok(Json(effective(&Settings::load(&state.pool).await?)))
 }
 
-/// `POST /api/admin/mail/domains/{id}/approve` — lets a verified domain
+/// `POST /api/v1/admin/mail/domains/{id}/approve` — lets a verified domain
 /// take mail (the `approve` mode).
 #[utoipa::path(
     post,
-    path = "/api/admin/mail/domains/{id}/approve",
+    path = "/api/v1/admin/mail/domains/{id}/approve",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -285,7 +288,7 @@ pub async fn set_settings(
 )]
 pub async fn approve(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
@@ -299,8 +302,8 @@ pub async fn approve(
     let name = name.ok_or_else(|| AppError::not_found("no such domain"))?;
     audit(
         &state.pool,
-        &admin.user_id,
-        "mail.domains.approve",
+        &admin.account_id,
+        AdminAction::MailDomainApprove,
         None,
         json!({ "domain": name }),
     )
@@ -308,12 +311,12 @@ pub async fn approve(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/admin/mail/domains/{id}/deactivate` — an administrator ends a
+/// `POST /api/v1/admin/mail/domains/{id}/deactivate` — an administrator ends a
 /// domain (abuse): inactive at once, its addresses freed, its owner told,
 /// and its name blocked until `unblock`.
 #[utoipa::path(
     post,
-    path = "/api/admin/mail/domains/{id}/deactivate",
+    path = "/api/v1/admin/mail/domains/{id}/deactivate",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -321,24 +324,24 @@ pub async fn approve(
 )]
 pub async fn deactivate(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
     let admin_id =
-        Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("bad session"))?;
-    let (owner, name) = store::deactivate(&state.pool, id, admin_id).await?;
-    crate::mail::notice::domain_lost(
+        Uuid::parse_str(&admin.account_id).map_err(|_| AppError::unauthorized("bad session"))?;
+    let (organization, name) = store::deactivate(&state.pool, id, admin_id).await?;
+    crate::mail::notice::domain_lost_to_owners(
         &state,
-        owner,
+        organization,
         &name,
         crate::mail::notice::DomainLost::Deactivated,
     )
     .await;
     audit(
         &state.pool,
-        &admin.user_id,
-        "mail.domains.deactivate",
+        &admin.account_id,
+        AdminAction::MailDomainDeactivate,
         None,
         json!({ "domain": name }),
     )
@@ -357,18 +360,18 @@ pub struct DomainBlock {
     pub blocked_by: Option<String>,
 }
 
-/// `GET /api/admin/mail/domains/blocks` — the blocked names (each covers
+/// `GET /api/v1/admin/mail/domains/blocks` — the blocked names (each covers
 /// the names under it), whether or not a domain row is left for them.
 #[utoipa::path(
     get,
-    path = "/api/admin/mail/domains/blocks",
+    path = "/api/v1/admin/mail/domains/blocks",
     tag = "admin",
     security(("BearerAuth" = [])),
     responses((status = 200, body = Vec<DomainBlock>))
 )]
 pub async fn blocks(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    _admin: AdminAccount,
 ) -> AppResult<Json<Vec<DomainBlock>>> {
     Ok(Json(
         store::blocks(&state.pool)
@@ -383,11 +386,11 @@ pub async fn blocks(
     ))
 }
 
-/// `DELETE /api/admin/mail/domains/blocks/{name}` — lifts a block: the name
+/// `DELETE /api/v1/admin/mail/domains/blocks/{name}` — lifts a block: the name
 /// and those under it may be proven again.
 #[utoipa::path(
     delete,
-    path = "/api/admin/mail/domains/blocks/{name}",
+    path = "/api/v1/admin/mail/domains/blocks/{name}",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path)),
@@ -395,15 +398,15 @@ pub async fn blocks(
 )]
 pub async fn unblock(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(name): Path<String>,
 ) -> AppResult<StatusCode> {
     let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
     store::unblock(&state.pool, &name).await?;
     audit(
         &state.pool,
-        &admin.user_id,
-        "mail.domains.unblock",
+        &admin.account_id,
+        AdminAction::MailDomainUnblock,
         None,
         json!({ "domain": name }),
     )
@@ -411,7 +414,9 @@ pub async fn unblock(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// One account's limits over the site's; `null` keeps the site's.
+/// One account's custom-domain limits over the site's; `null` keeps the
+/// site's. The domain count and the catch-all are its organization's
+/// (docs/plans/organizations.md §7), the address count its own.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DomainOverrides {
@@ -420,8 +425,19 @@ pub struct DomainOverrides {
     pub catch_all: Option<bool>,
 }
 
-/// An account's overrides as the page shows them, with each one's range
-/// (the site settings they override).
+/// The organization an account's domain limits belong to.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationRef {
+    pub id: String,
+    pub name: String,
+    /// The account's role in it.
+    pub role: String,
+}
+
+/// An account's limits as the page shows them, with each one's range (the
+/// site settings they override) and the organization the domain ones
+/// belong to (none until the account holds a domain or joins one).
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainOverridesView {
@@ -429,12 +445,32 @@ pub struct DomainOverridesView {
     pub overrides: DomainOverrides,
     pub max_domains_range: SettingRange,
     pub max_addresses_range: SettingRange,
+    pub organization: Option<OrganizationRef>,
 }
 
-/// `GET /api/admin/users/{id}/mail-domains`
+const DOMAINS_KEY: &str = "mail.domains.per_organization";
+const CATCH_ALL_KEY: &str = "mail.domains.catch_all";
+const ADDRESSES_KEY: &str = "mail.domains.addresses_per_account";
+
+/// The account's organization (enabled or invited member) with its role.
+async fn organization_of(
+    pool: &sqlx::PgPool,
+    account: Uuid,
+) -> AppResult<Option<(Uuid, String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT o.id, o.name, m.role FROM organization_members m
+           JOIN organizations o ON o.id = m.organization_id
+          WHERE m.account_id = $1 AND m.state IN (1, 2)",
+    )
+    .bind(account)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// `GET /api/v1/admin/accounts/{id}/mail-domains`
 #[utoipa::path(
     get,
-    path = "/api/admin/users/{id}/mail-domains",
+    path = "/api/v1/admin/accounts/{id}/mail-domains",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -442,32 +478,52 @@ pub struct DomainOverridesView {
 )]
 pub async fn overrides(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
 ) -> AppResult<Json<DomainOverridesView>> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such user"))?;
-    let row: Option<(Option<i32>, Option<i32>, Option<bool>)> = sqlx::query_as(
-        "SELECT max_domains, max_addresses, catch_all FROM mail_domain_overrides WHERE user_id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let (max_domains, max_addresses, catch_all) = row.unwrap_or_default();
+    let organization = organization_of(&state.pool, id).await?;
+    crate::handlers::admin::viewed(&state, &admin, id, "mailDomains").await?;
+    let max_addresses = entitlements::get(&state.pool, Holder::Account(id), ADDRESSES_KEY).await?;
+    let (mut max_domains, mut catch_all) = (None, None);
+    if let Some((organization, _, _)) = &organization {
+        let rows = entitlements::some(
+            &state.pool,
+            Holder::Organization(*organization),
+            &[DOMAINS_KEY, CATCH_ALL_KEY],
+        )
+        .await?;
+        for (key, value) in rows {
+            if key == DOMAINS_KEY {
+                max_domains = i32::try_from(value).ok();
+            } else {
+                catch_all = Some(value == 1);
+            }
+        }
+    }
     Ok(Json(DomainOverridesView {
         overrides: DomainOverrides {
             max_domains,
-            max_addresses,
+            max_addresses: max_addresses.and_then(|v| i32::try_from(v).ok()),
             catch_all,
         },
-        max_domains_range: range_of("mail_domains.per_account"),
-        max_addresses_range: range_of("mail_domains.addresses_per_account"),
+        max_domains_range: range_of(DOMAINS_KEY),
+        max_addresses_range: range_of(ADDRESSES_KEY),
+        organization: organization.map(|(id, name, role)| OrganizationRef {
+            id: id.to_string(),
+            name,
+            role,
+        }),
     }))
 }
 
-/// `PUT /api/admin/users/{id}/mail-domains`
+/// `PUT /api/v1/admin/accounts/{id}/mail-domains`: the address count on the
+/// account, the domain count and the catch-all on its organization; an
+/// account with none yet gets its organization of one, so an administrator
+/// can limit (or block, with 0) custom domains before the first one.
 #[utoipa::path(
     put,
-    path = "/api/admin/users/{id}/mail-domains",
+    path = "/api/v1/admin/accounts/{id}/mail-domains",
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -476,15 +532,12 @@ pub async fn overrides(
 )]
 pub async fn set_overrides(
     State(state): State<AppState>,
-    admin: AdminUser,
+    admin: AdminAccount,
     Path(id): Path<String>,
     Json(input): Json<DomainOverrides>,
 ) -> AppResult<Json<DomainOverrides>> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such user"))?;
-    let (domains, addresses) = (
-        range_of("mail_domains.per_account"),
-        range_of("mail_domains.addresses_per_account"),
-    );
+    let (domains, addresses) = (range_of(DOMAINS_KEY), range_of(ADDRESSES_KEY));
     let outside = |value: Option<i32>, range: SettingRange| {
         value.is_some_and(|n| !(range.min..=range.max).contains(&i64::from(n)))
     };
@@ -494,31 +547,55 @@ pub async fn set_overrides(
             domains.min, domains.max, addresses.min, addresses.max
         )));
     }
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+    let mut tx = state.pool.begin().await?;
+    let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(id)
-        .fetch_one(&state.pool)
+        .fetch_optional(&mut *tx)
         .await?;
-    if !exists {
+    if exists.is_none() {
         return Err(AppError::not_found("no such user"));
     }
-    sqlx::query(
-        "INSERT INTO mail_domain_overrides (user_id, max_domains, max_addresses, catch_all)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (user_id) DO UPDATE SET max_domains = EXCLUDED.max_domains,
-             max_addresses = EXCLUDED.max_addresses, catch_all = EXCLUDED.catch_all",
+    // An organization-wide limit needs the organization: one of one if the
+    // account has none yet.
+    let organization = if input.max_domains.is_some() || input.catch_all.is_some() {
+        Some(crate::organizations::of_account(&mut tx, id).await?)
+    } else {
+        organization_of(&state.pool, id).await?.map(|(id, _, _)| id)
+    };
+    entitlements::set_or_clear(
+        &mut *tx,
+        Holder::Account(id),
+        ADDRESSES_KEY,
+        input.max_addresses.map(i64::from),
+        Source::Admin,
     )
-    .bind(id)
-    .bind(input.max_domains)
-    .bind(input.max_addresses)
-    .bind(input.catch_all)
-    .execute(&state.pool)
     .await?;
+    if let Some(organization) = organization {
+        let holder = Holder::Organization(organization);
+        entitlements::set_or_clear(
+            &mut *tx,
+            holder,
+            DOMAINS_KEY,
+            input.max_domains.map(i64::from),
+            Source::Admin,
+        )
+        .await?;
+        entitlements::set_or_clear(
+            &mut *tx,
+            holder,
+            CATCH_ALL_KEY,
+            input.catch_all.map(i64::from),
+            Source::Admin,
+        )
+        .await?;
+    }
+    tx.commit().await?;
     audit(
         &state.pool,
-        &admin.user_id,
-        "mail.domains.overrides",
+        &admin.account_id,
+        AdminAction::MailDomainSetOverrides,
         Some(id),
-        json!(input),
+        json!({ "limits": input, "organization": organization.map(|o| o.to_string()) }),
     )
     .await;
     Ok(Json(input))

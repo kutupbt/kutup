@@ -18,7 +18,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
 
     let user_columns: Vec<String> = sqlx::query_scalar(
         "SELECT column_name FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'users'",
+         WHERE table_schema = 'public' AND table_name = 'accounts'",
     )
     .fetch_all(&pool)
     .await
@@ -26,7 +26,6 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     for required in [
         "master_key_envelope",
         "recovery_key_envelope",
-        "drive_private_key_envelope",
         "account_authority_public_key",
         "account_authority_key_id",
         "account_incarnation_id",
@@ -82,7 +81,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
         "collection ids must be client-generated"
     );
 
-    for table in ["files", "uploads"] {
+    for table in ["drive_files", "drive_uploads"] {
         let columns: Vec<String> = sqlx::query_scalar(
             "SELECT column_name FROM information_schema.columns
              WHERE table_schema = 'public' AND table_name = $1",
@@ -98,7 +97,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
             "key_epoch",
             "metadata_revision",
         ] {
-            if table == "files" && required == "file_id" {
+            if table == "drive_files" && required == "file_id" {
                 continue;
             }
             assert!(
@@ -132,7 +131,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
          FROM pg_index i
          JOIN pg_attribute a
            ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-         WHERE i.indrelid = 'collection_key_epoch_history'::regclass
+         WHERE i.indrelid = 'drive_collection_key_epoch_history'::regclass
            AND i.indisprimary
          ORDER BY array_position(i.indkey, a.attnum)",
     )
@@ -143,7 +142,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
 
     let local_share_columns: Vec<String> = sqlx::query_scalar(
         "SELECT column_name FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'collection_shares'",
+         WHERE table_schema = 'public' AND table_name = 'drive_collection_shares'",
     )
     .fetch_all(&pool)
     .await
@@ -159,7 +158,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
         "SELECT table_name || '.' || column_name
          FROM information_schema.columns
          WHERE table_schema = 'public'
-           AND table_name IN ('federated_outgoing_shares', 'federated_incoming_shares')",
+           AND table_name IN ('drive_federated_outgoing_shares', 'drive_federated_incoming_shares')",
     )
     .fetch_all(&pool)
     .await
@@ -176,7 +175,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
 
     let public_share_columns: Vec<String> = sqlx::query_scalar(
         "SELECT column_name FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'public_shares'",
+         WHERE table_schema = 'public' AND table_name = 'drive_public_shares'",
     )
     .fetch_all(&pool)
     .await
@@ -184,7 +183,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     for required in [
         "collection_key_envelope",
         "collection_key_epoch",
-        "owner_user_id",
+        "owner_account_id",
     ] {
         assert!(public_share_columns.iter().any(|column| column == required));
     }
@@ -206,7 +205,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     .unwrap();
     assert_eq!(
         history_primary_key,
-        ["user_id", "incarnation_id", "version"]
+        ["account_id", "incarnation_id", "version"]
     );
 
     // MLS groups are gone (docs/plans/pairwise-groups.md §9): no table of
@@ -256,7 +255,6 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
         "chat_media_federation_inbound_pending",
         "chat_media_federation_pull_grants",
         "chat_media_objects",
-        "chat_media_rate_counters",
         "chat_media_references",
         "chat_media_uploads",
         "chat_media_origin_delivery_operations",
@@ -273,7 +271,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    for required in ["origin_domain", "ciphertext_sha256", "retrieval_token_hash"] {
+    for required in ["origin_server", "ciphertext_sha256", "retrieval_token_hash"] {
         assert!(media_object_columns.iter().any(|column| column == required));
     }
     let origin_delivery_columns: Vec<String> = sqlx::query_scalar(
@@ -290,7 +288,7 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     let origin_user_nullable: String = sqlx::query_scalar(
         "SELECT is_nullable FROM information_schema.columns
          WHERE table_schema='public' AND table_name='chat_media_objects'
-           AND column_name='origin_user_id'",
+           AND column_name='origin_account_id'",
     )
     .fetch_one(&pool)
     .await
@@ -304,12 +302,6 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(
-        ledger_tables,
-        [
-            "chat_attachment_ledger_entities",
-            "chat_attachment_ledger_history",
-            "chat_attachment_ledger_operations"
-        ]
-    );
+    // The ledger moved to the account-records store (W3 slice 6).
+    assert!(ledger_tables.is_empty(), "{ledger_tables:?}");
 }

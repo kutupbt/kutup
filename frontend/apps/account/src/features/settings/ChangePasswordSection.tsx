@@ -1,3 +1,4 @@
+import { currentMasterKeyAt } from '@kutup/crypto/masterKeys'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
@@ -28,7 +29,7 @@ async function changePassword(current: string, next: string): Promise<void> {
   const grant = await accountGrant(current, 'passwordChange')
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  await opaqueReregister(next, session.envelopeBinding, session.masterKey, grant)
+  await opaqueReregister(next, session.envelopeBinding, currentMasterKeyAt(session.masterKeys), grant)
 }
 
 export function ChangePasswordSection() {

@@ -20,7 +20,7 @@ use kutup_crypto::drive_envelope::{
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_file, octet_stream_response, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Rejects empty/over-long/slashed/traversing asset ids — mirrors `validAssetID`.
@@ -32,15 +32,15 @@ fn valid_asset_id(id: &str) -> bool {
         && !id.contains("..")
 }
 
-fn asset_storage_path(file_id: Uuid, asset_id: &str) -> String {
+pub(crate) fn asset_storage_path(file_id: Uuid, asset_id: &str) -> String {
     format!("files/{file_id}/assets/{asset_id}")
 }
 
-/// `PUT /api/files/{fileId}/assets/{assetId}` — mirrors `Upload`.
+/// `PUT /api/v1/drive/files/{fileId}/assets/{assetId}` — mirrors `Upload`.
 #[utoipa::path(
     put,
-    path = "/api/files/{fileId}/assets/{assetId}",
-    tag = "assets",
+    path = "/api/v1/drive/files/{fileId}/assets/{assetId}",
+    tag = "drive",
     operation_id = "uploadFileAsset",
     security(("BearerAuth" = [])),
     params(
@@ -56,11 +56,11 @@ fn asset_storage_path(file_id: Uuid, asset_id: &str) -> String {
 )]
 pub async fn upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, asset_id)): Path<(String, String)>,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
 
     if !valid_asset_id(&asset_id) {
@@ -136,7 +136,7 @@ pub(crate) async fn store_asset(
     // exact live file, key generation and content-addressed asset id. The
     // server authenticates only public framing; it never receives the key.
     let (collection_id, key_generation): (Uuid, i32) = sqlx::query_as(
-        "SELECT collection_id, key_generation FROM files WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT collection_id, key_generation FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
@@ -163,7 +163,7 @@ pub(crate) async fn store_asset(
         .await?
         .into_result()?;
     let inserted: Option<i64> = sqlx::query_scalar(
-        r#"INSERT INTO file_assets (file_id, asset_id, size_bytes, uploader_user_id, key_generation)
+        r#"INSERT INTO drive_file_assets (file_id, asset_id, size_bytes, uploader_account_id, key_generation)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (file_id, asset_id) DO NOTHING
            RETURNING size_bytes"#,
@@ -213,7 +213,7 @@ pub(crate) async fn load_asset(
         return Err(AppError::bad_request("invalid assetId"));
     }
     let key_generation: i32 = sqlx::query_scalar(
-        "SELECT key_generation FROM file_assets WHERE file_id = $1 AND asset_id = $2",
+        "SELECT key_generation FROM drive_file_assets WHERE file_id = $1 AND asset_id = $2",
     )
     .bind(fid)
     .bind(asset_id)
@@ -233,11 +233,11 @@ pub(crate) async fn load_asset(
     Ok((bytes, key_generation))
 }
 
-/// `GET /api/files/{fileId}/assets/{assetId}` — mirrors `Download`.
+/// `GET /api/v1/drive/files/{fileId}/assets/{assetId}` — mirrors `Download`.
 #[utoipa::path(
     get,
-    path = "/api/files/{fileId}/assets/{assetId}",
-    tag = "assets",
+    path = "/api/v1/drive/files/{fileId}/assets/{assetId}",
+    tag = "drive",
     operation_id = "downloadFileAsset",
     security(("BearerAuth" = [])),
     params(
@@ -248,10 +248,10 @@ pub(crate) async fn load_asset(
 )]
 pub async fn download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path((file_id, asset_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
 
     if !valid_asset_id(&asset_id) {
@@ -275,7 +275,7 @@ pub(crate) async fn asset_response(
         return Err(AppError::bad_request("invalid assetId"));
     }
     let key_generation: i32 = sqlx::query_scalar(
-        "SELECT key_generation FROM file_assets WHERE file_id = $1 AND asset_id = $2",
+        "SELECT key_generation FROM drive_file_assets WHERE file_id = $1 AND asset_id = $2",
     )
     .bind(fid)
     .bind(asset_id)

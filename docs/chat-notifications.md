@@ -36,14 +36,15 @@ The chat app decides from the decrypted history, as Signal Desktop does.
 
 Messages are end-to-end encrypted and usually sealed-sender, so the server
 cannot say who wrote or what. A push is therefore **empty**. It wakes the
-browser's service worker (`/push-sw.js`), which shows one generic
+browser's service worker (`/kutup-sw.js?push=chat&…`, Kutup's one worker,
+`frontend/packages/config/src/sw/kutup-sw.js`), which shows one generic
 notification ("You may have new messages."). Clicking it opens Chat, which
 then shows what arrived.
 
 - **Opt-in:** "Notify me when Chat is closed" subscribes the browser
   (`PushManager.subscribe`, `userVisibleOnly`) with the server's VAPID key
-  (`/api/auth/settings` → `chat.webPushPublicKey`). It then registers the
-  endpoint for this chat device (`PUT /api/chat/push-subscription`).
+  (`/api/v1/auth/settings` → `chat.webPushPublicKey`). It then registers the
+  endpoint for this chat device (`PUT /api/v1/chat/push-subscription`).
   - Each start renews the registration, for a new server key or a new
     language of the worker's words, which travel in its registration URL.
   - Signing out removes it.

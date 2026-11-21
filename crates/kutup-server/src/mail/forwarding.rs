@@ -81,7 +81,7 @@ pub async fn outdate(
     sqlx::query(
         "DELETE FROM mail_forwarding_keys
           WHERE forwarding_id IN (SELECT id FROM mail_forwardings
-                                   WHERE forwarder_address_id = $1 AND kind = 'end_to_end')",
+                                   WHERE forwarder_address_id = $1 AND kind = 'endToEnd')",
     )
     .bind(forwarder_address_id)
     .execute(&mut **tx)
@@ -89,7 +89,7 @@ pub async fn outdate(
     sqlx::query(
         "UPDATE mail_forwardings SET state = 'outdated', activation = NULL, expires_at = NULL,
                 updated_at = now()
-          WHERE forwarder_address_id = $1 AND kind = 'end_to_end' AND state <> 'rejected'",
+          WHERE forwarder_address_id = $1 AND kind = 'endToEnd' AND state <> 'rejected'",
     )
     .bind(forwarder_address_id)
     .execute(&mut **tx)
@@ -249,10 +249,12 @@ pub async fn charge(
         Charge::Confirmation => (0, 1, 0),
         Charge::Forward => (0, 0, 1),
     };
-    sqlx::query("INSERT INTO mail_forwarding_quota (user_id) VALUES ($1) ON CONFLICT DO NOTHING")
-        .bind(account)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO mail_forwarding_quota (account_id) VALUES ($1) ON CONFLICT DO NOTHING",
+    )
+    .bind(account)
+    .execute(&mut **tx)
+    .await?;
     let charged = sqlx::query(
         "UPDATE mail_forwarding_quota SET
                 created_this_hour = CASE WHEN hour = date_trunc('hour', now())
@@ -263,7 +265,7 @@ pub async fn charge(
                 forwards_today = CASE WHEN day = current_date
                                       THEN forwards_today ELSE 0 END + $4,
                 day = current_date
-          WHERE user_id = $1
+          WHERE account_id = $1
             AND (CASE WHEN hour = date_trunc('hour', now()) THEN created_this_hour ELSE 0 END)
                 + $2 <= $5
             AND (CASE WHEN day = current_date THEN confirmations_today ELSE 0 END) + $3 <= $6
@@ -298,7 +300,7 @@ pub async fn outside_refusal(
     state: &AppState,
     account: Uuid,
 ) -> Result<Option<&'static str>, crate::error::AppError> {
-    let is_admin: bool = sqlx::query_scalar("SELECT is_admin FROM users WHERE id = $1")
+    let is_admin: bool = sqlx::query_scalar("SELECT role <> 'member' FROM accounts WHERE id = $1")
         .bind(account)
         .fetch_one(&state.pool)
         .await?;
@@ -318,8 +320,8 @@ pub async fn outside_refusal(
     Ok(None)
 }
 
-const RETURN_PATH_DOMAIN: &[u8] = b"kutup/mail-forwarding/return-path/v1\0";
-const MARKER_DOMAIN: &[u8] = b"kutup/mail-forwarding/marker/v1\0";
+const RETURN_PATH_DOMAIN: &[u8] = kutup_crypto::labels::MAIL_FORWARDING_RETURN_PATH_V1;
+const MARKER_DOMAIN: &[u8] = kutup_crypto::labels::MAIL_FORWARDING_MARKER_V1;
 
 /// The loop marker's MAC: its own label, over the forwarding alone.
 fn marker_mac(key: &[u8; 32], forwarding: Uuid) -> String {
@@ -419,12 +421,14 @@ const TICK: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 /// and forwardings whose forwarder or forwardee address no longer receives
 /// (closed after a rename hold, or freed) end with their proxy factors.
 pub fn spawn(state: AppState) {
+    crate::job_health::register("mail.forwarding", TICK);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(TICK);
         loop {
             tick.tick().await;
-            if let Err(error) = tidy(&state.pool).await {
-                tracing::warn!(error = %error, "mail: tidying forwardings failed");
+            match tidy(&state.pool).await {
+                Ok(()) => crate::job_health::beat(&state.pool, "mail.forwarding").await,
+                Err(error) => tracing::warn!(error = %error, "mail: tidying forwardings failed"),
             }
         }
     });
@@ -438,11 +442,11 @@ pub async fn tidy(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     // account comes back.
     let stopped: Vec<Uuid> = sqlx::query_scalar(
         "SELECT f.id FROM mail_forwardings f
-           JOIN users fu ON fu.id = f.user_id
+           JOIN accounts fu ON fu.id = f.account_id
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
-           LEFT JOIN users bu ON bu.id = b.user_id
-          WHERE f.kind = 'end_to_end' AND f.state <> 'outdated'
-            AND (NOT fu.is_active OR NOT COALESCE(bu.is_active, true))",
+           LEFT JOIN accounts bu ON bu.id = b.account_id
+          WHERE f.kind = 'endToEnd' AND f.state <> 'outdated'
+            AND (fu.state <> 'active' OR NOT COALESCE(bu.state = 'active', true))",
     )
     .fetch_all(pool)
     .await?;
@@ -479,7 +483,6 @@ pub struct Arrived {
     /// The copy's message row (its folder after filters decides spam).
     pub message_id: Uuid,
     pub object_key: String,
-    pub object_version: String,
     pub readable: Readable,
     /// Whether the message may be forwarded at all: false when it came back
     /// through a forwarding loop (our marker header, our SRS sender, or more
@@ -586,15 +589,15 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
         return Ok(());
     }
     let forwardings: Vec<Forwarding> = sqlx::query_as(
-        "SELECT f.id, f.kind, f.match, f.conditions, b.id, b.user_id, f.forwardee_email,
-                a.address, f.user_id
+        "SELECT f.id, f.kind, f.match, f.conditions, b.id, b.account_id, f.forwardee_email,
+                a.address, f.account_id
            FROM mail_forwardings f
            JOIN mail_addresses a ON a.id = f.forwarder_address_id
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
-           LEFT JOIN users u ON u.id = b.user_id
+           LEFT JOIN accounts u ON u.id = b.account_id
           WHERE f.forwarder_address_id = $1 AND f.state = 'active'
             AND f.verified_at IS NOT NULL
-            AND (f.kind = 'outside' OR (b.state = 'active' AND b.disabled_at IS NULL AND u.is_active))",
+            AND (f.kind = 'outside' OR (b.state = 'active' AND b.disabled_at IS NULL AND u.state = 'active'))",
     )
     .bind(arrived.address_id)
     .fetch_all(&state.pool)
@@ -603,13 +606,13 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
         return Ok(());
     }
     // Spam isn't forwarded, nor what itself came by forwarding.
-    let copy: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT folder, forwarded_from FROM mail_messages WHERE id = $1")
+    let copy: Option<(String, bool)> =
+        sqlx::query_as("SELECT folder, forwarded FROM mail_messages WHERE id = $1")
             .bind(arrived.message_id)
             .fetch_optional(&state.pool)
             .await?;
     match copy {
-        Some((folder, None)) if folder != "spam" => {}
+        Some((folder, false)) if folder != "spam" => {}
         _ => return Ok(()),
     }
     let readable = &arrived.readable;
@@ -666,10 +669,7 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
             continue;
         };
         if message.is_none() {
-            let (body, _) = state
-                .storage
-                .get_stored(&arrived.object_key, &arrived.object_version)
-                .await?;
+            let (body, _) = state.storage.get_object(&arrived.object_key).await?;
             message = Some(body.collect().await?.into_bytes().to_vec());
         }
         let stored = message.as_deref().expect("read above");
@@ -731,7 +731,7 @@ async fn claim_budget(
 ) -> Result<bool, sqlx::Error> {
     let mut tx = state.pool.begin().await?;
     // Each account's forwards are counted one at a time.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(account)
         .execute(&mut *tx)
         .await?;
@@ -882,9 +882,9 @@ async fn deliver(
     let id = Uuid::new_v4();
     let key = super::object_key(forwardee_user, id);
     let size = i64::try_from(forwarded.len())?;
-    let version = state
+    state
         .storage
-        .put_object_versioned(&key, ByteStream::from(forwarded), size)
+        .upload(&key, ByteStream::from(forwarded), size)
         .await?;
     let stored: anyhow::Result<bool> = async {
         let mut tx = state.pool.begin().await?;
@@ -896,15 +896,14 @@ async fn deliver(
             &mut tx,
             super::NewMessage {
                 id,
-                user_id: Some(forwardee_user),
+                account_id: Some(forwardee_user),
                 address_id: forwardee_address,
                 thread_id: None,
                 direction: "inbound",
                 folder: "inbox",
-                protection: "end_to_end",
+                protection: "endToEnd",
                 seen: false,
                 object_key: &key,
-                object_version: &version,
                 size,
                 readable,
                 bcc: &[],
@@ -921,7 +920,7 @@ async fn deliver(
     }
     .await;
     if !matches!(stored, Ok(true)) {
-        if let Err(error) = state.storage.delete_stored(&key, &version).await {
+        if let Err(error) = state.storage.delete(&key).await {
             tracing::warn!(error = %error, "mail: unrecorded forwarded copy left for the sweep");
         }
     }

@@ -5,21 +5,20 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use kutup_crypto::drive_object::DriveFileBlobContextV1;
-
+use crate::api::versions::ContentRoute;
 use crate::context::require_session;
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections};
-use crate::transfer::stream_download;
+use anyhow::{Context, Result};
 
 pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Result<()> {
     let dest_dir = dest.unwrap_or(".");
     let ctx = require_session(profile)?;
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
+    crate::drive_signer::load_pins(&ctx, profile);
 
-    let cols = decrypt_collections(ctx.client.list_collections()?, &master_key, &ctx.session);
+    let cols = decrypt_collections(ctx.client.list_collections()?, &roots, &ctx.session);
     for col in &cols {
-        let Ok(col_key) = decrypt_collection_key(col, &master_key, &ctx.session) else {
+        let Ok(col_key) = decrypt_collection_key(col, &roots, &ctx.session) else {
             continue;
         };
         let Ok(files) = ctx.client.list_files(&col.id) else {
@@ -29,29 +28,28 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
             continue;
         };
 
-        let keys = crate::keyring::Keyring::load(&ctx.client, col, &col_key, &master_key)?;
+        let keys = crate::keyring::Keyring::load(&ctx.client, col, &col_key, &ctx.session)?;
         let (file_key, meta) = crate::file_crypto::open(f, &keys).context("decrypt file record")?;
 
         let dest_path = resolve_dest(dest_dir, &meta.name);
 
-        // What the file holds now: the server serves its latest whole-file
-        // version, else the upload, sealed at `contentKeyGeneration`.
+        // What the file holds now (its latest whole-file version, else the
+        // upload), sealed at `contentKeyGeneration`: the revision and
+        // manifest its metadata commits to, read block by block.
         let (content_key, content_generation) = crate::file_crypto::content_key(f, &file_key)?;
-        let stream = ctx.client.download_file_stream(file_id)?;
-        let from_version = ctx
-            .client
-            .list_versions(file_id)
-            .is_ok_and(|versions| versions.iter().any(|v| v.kind == "file"));
-
-        let bar =
-            crate::output::progress_bar(Some(f.encrypted_size_bytes.max(0) as u64), &meta.name);
-
+        let bar = crate::output::progress_bar(Some(meta.size), &meta.name);
         let mut out = File::create(&dest_path).context("open dest")?;
-        let blob_context = DriveFileBlobContextV1::new(&f.id, content_generation)?;
-        let mut written = match stream_download(stream, &content_key, blob_context, &mut out, |n| {
-            bar.set_position(n as u64)
-        }) {
-            Ok(w) => w,
+        let opened = match crate::revisions::read(
+            &ctx.client,
+            &ContentRoute::Current(file_id),
+            &content_key,
+            &f.id,
+            content_generation,
+            &crate::revisions::current(&meta),
+            &mut out,
+            |n| bar.set_position(n),
+        ) {
+            Ok(opened) => opened,
             Err(e) => {
                 drop(out);
                 let _ = std::fs::remove_file(&dest_path);
@@ -59,17 +57,11 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
             }
         };
         bar.finish_and_clear();
-
-        // Integrity check (only meaningful for the cold-start blob; snapshot
-        // bytes carry their own size and may differ from the original).
-        if !from_version && meta.size > 0 && written != meta.size as i64 {
-            let _ = std::fs::remove_file(&dest_path);
-            bail!(
-                "size mismatch: expected {} bytes, got {}",
-                meta.size,
-                written
-            );
-        }
+        let mut written = opened.size as i64;
+        let from_version = opened
+            .version
+            .as_deref()
+            .is_some_and(|v| v != crate::api::versions::ORIGINAL);
 
         // Whiteboards may reference images stored as separate asset blobs;
         // re-inline them so the on-disk file is self-contained. Best-effort.

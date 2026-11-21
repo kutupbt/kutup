@@ -24,11 +24,11 @@ use super::gateway::{self, Opened};
 use super::{keys, limits};
 use crate::error::{AppError, AppResult};
 use crate::federation::{FederationRequestSpec, FederationStack};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
-const GATEWAY_PATH: &str = "/api/fed/chat/groups/gateway";
-const KEY_CONFIG_PATH: &str = "/api/fed/chat/groups/gateway-key";
+const GATEWAY_PATH: &str = "/api/fed/v2/chat/groups/gateway";
+const KEY_CONFIG_PATH: &str = "/api/fed/v2/chat/groups/gateway-key";
 const OCTET_STREAM: &str = "application/octet-stream";
 const JSON: &str = "application/json";
 /// The most identity documents one key-config answer carries.
@@ -65,12 +65,12 @@ pub struct GatewayKeyAnswer {
     pub identity_history: Vec<serde_json::Value>,
 }
 
-/// `GET /api/chat/groups/gateway-key?server=&fromSequence=`: a home's key
+/// `GET /api/v1/chat/groups/gateway-key?server=&fromSequence=`: a home's key
 /// config and identity history, as this server got them.
 #[utoipa::path(
     get,
-    path = "/api/chat/groups/gateway-key",
-    tag = "chat groups",
+    path = "/api/v1/chat/groups/gateway-key",
+    tag = "chat.groups",
     security(("BearerAuth" = [])),
     params(
         ("server" = String, Query, description = "The group's home server"),
@@ -84,7 +84,7 @@ pub struct GatewayKeyAnswer {
 )]
 pub async fn gateway_key(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<GatewayKeyQuery>,
 ) -> AppResult<Json<GatewayKeyAnswer>> {
     let federation = enabled(&state)?;
@@ -107,6 +107,14 @@ pub async fn gateway_key(
             identity_history,
         }));
     }
+    // A group homed on another server is reached through it: not while this
+    // account's federation is off. The account stays a member; the group is
+    // quiet for it until the switch is on again (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.account_id)?,
+    )
+    .await?;
     let remote = federation
         .send(
             &query.server,
@@ -161,12 +169,12 @@ fn opaque(status: StatusCode, body: Vec<u8>) -> Response {
         .into_response()
 }
 
-/// `POST /api/chat/groups/relay/{server}`: passes a sealed request to the home
+/// `POST /api/v1/chat/groups/relay/{server}`: passes a sealed request to the home
 /// `server` and its sealed answer back. The body is opaque to this server.
 #[utoipa::path(
     post,
-    path = "/api/chat/groups/relay/{server}",
-    tag = "chat groups",
+    path = "/api/v1/chat/groups/relay/{server}",
+    tag = "chat.groups",
     security(("BearerAuth" = [])),
     params(("server" = String, Path, description = "The group's home server")),
     request_body(content = Vec<u8>, content_type = "message/ohttp-req", description = "A request sealed to the home's gateway key (RFC 9458)"),
@@ -180,7 +188,7 @@ fn opaque(status: StatusCode, body: Vec<u8>) -> Response {
 )]
 pub async fn relay(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(server): Path<String>,
     body: Bytes,
 ) -> AppResult<Response> {
@@ -188,7 +196,7 @@ pub async fn relay(
     if body.is_empty() || body.len() > MAX_SEALED {
         return Err(AppError::bad_request("sealed request size is invalid"));
     }
-    if !limits::relaying_user(&user.user_id) {
+    if !limits::relaying_user(&user.account_id) {
         return Err(AppError::too_many_requests("too many group requests"));
     }
     if server == federation.server_name() {
@@ -199,6 +207,14 @@ pub async fn relay(
             },
         );
     }
+    // A group homed on another server is reached through it: not while this
+    // account's federation is off. The account stays a member; the group is
+    // quiet for it until the switch is on again (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.account_id)?,
+    )
+    .await?;
     let remote = federation
         .send(
             &server,
@@ -223,11 +239,11 @@ pub async fn relay(
     })
 }
 
-/// `POST /api/fed/chat/groups/gateway`: a peer relays a sealed request here.
+/// `POST /api/fed/v2/chat/groups/gateway`: a peer relays a sealed request here.
 #[utoipa::path(
     post,
-    path = "/api/fed/chat/groups/gateway",
-    tag = "chat federation",
+    path = "/api/fed/v2/chat/groups/gateway",
+    tag = "chat.federation",
     request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "A sealed group request, relayed"),
     responses(
         (status = 200, description = "The sealed answer (signed federation response)"),
@@ -273,12 +289,12 @@ pub async fn fed_gateway(
     }
 }
 
-/// `GET /api/fed/chat/groups/gateway-key`: this home's key config, for a
+/// `GET /api/fed/v2/chat/groups/gateway-key`: this home's key config, for a
 /// peer's user. The config is signed by this server's identity.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/groups/gateway-key",
-    tag = "chat federation",
+    path = "/api/fed/v2/chat/groups/gateway-key",
+    tag = "chat.federation",
     responses(
         (status = 200, description = "The gateway key config, signed by this server's identity"),
         (status = 404, description = "Groups are off"),

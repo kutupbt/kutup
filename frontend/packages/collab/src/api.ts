@@ -1,110 +1,13 @@
 import axios from 'axios'
-import { toBase64 } from '@kutup/crypto/base64'
-import { signDeviceRegistration, signDeviceRevocation } from '@kutup/crypto/deviceRegistration'
 import api from '@kutup/session/client'
-import { QuotaExceededError } from '@kutup/session/errors'
-import { getSession } from '@kutup/session/store'
-
-export interface DeviceRow {
-  deviceId: number
-  label: string
-  /** The device's Ed25519 public key, base64. */
-  publicSigning: string
-  isActive: boolean
-  /** Active and registered under the account's current keys: the collaboration routes accept it. */
-  trusted: boolean
-  /** Trusted and within its 30-day lease: one of the at most 20 the account has in use. */
-  inUse: boolean
-  /** Registered (or last renewed) by this sign-in on this origin. */
-  thisSession: boolean
-  /** When the account's statement for it was signed (other servers trust one 30 days). */
-  statementIssuedAtMs: number
-  createdAt: string
-  lastSeenAt: string | null
-}
-
-/** The server part of a Kutup address (`username@server`): what device statements name. */
-export function serverOfAddress(address: string): string {
-  const at = address.lastIndexOf('@')
-  if (at < 0 || at === address.length - 1) throw new Error('the account address has no server')
-  return address.slice(at + 1)
-}
-
-/** The signed-in account's keys and server, for signing device statements. */
-function signer(): { masterKey: string; server: string; userId: string } {
-  const session = getSession()
-  if (!session) throw new Error('not signed in')
-  return { masterKey: toBase64(session.masterKey), server: serverOfAddress(session.address), userId: session.userId }
-}
-
-/** A fresh challenge, signed by the account for `publicSigningB64`. */
-async function statement(publicSigningB64: string): Promise<{ challenge: string; issuedAtMs: number; signature: string }> {
-  const { masterKey, server, userId } = signer()
-  const { data } = await api.post<{ challenge: string }>('/devices/challenge')
-  const issuedAtMs = Date.now()
-  const signature = await signDeviceRegistration(masterKey, server, userId, publicSigningB64, data.challenge, issuedAtMs)
-  return { challenge: data.challenge, issuedAtMs, signature }
-}
-
-/**
- * Register this browser's collaboration signing key, vouched for by the
- * account (docs/plans/device-registration.md): a one-time challenge from
- * the server, signed by the account authority (from the master key) with
- * the server, the user id, the device key and the time.
- */
-export async function registerDevice(
-  publicSigningB64: string,
-  label: string,
-): Promise<{ deviceId: number; issuedAtMs: number }> {
-  const signed = await statement(publicSigningB64)
-  const r = await api.post<{ deviceId: number }>('/devices', { publicSigning: publicSigningB64, label, ...signed })
-  return { deviceId: r.data.deviceId, issuedAtMs: signed.issuedAtMs }
-}
-
-/** Renews a device's statement with the same key (other servers trust one 30 days); when it was made. */
-export async function renewDevice(deviceId: number, publicSigningB64: string): Promise<number> {
-  const signed = await statement(publicSigningB64)
-  await api.post(`/devices/${deviceId}/renew`, signed)
-  return signed.issuedAtMs
-}
-
-/** Revokes a device for good, with the account's signed revocation. */
-export async function revokeDevice(deviceId: number, publicSigningB64: string): Promise<void> {
-  const { masterKey, server } = signer()
-  const revokedAtMs = Date.now()
-  const signature = await signDeviceRevocation(masterKey, server, publicSigningB64, revokedAtMs)
-  await api.delete(`/devices/${deviceId}`, { data: { revokedAtMs, signature } })
-}
-
-/** The account has 20 devices in use (`409 tooManyDevices`): the user removes one first. */
-export function isTooManyDevices(error: unknown): boolean {
-  return (
-    axios.isAxiosError(error) &&
-    error.response?.status === 409 &&
-    (error.response.data as { code?: unknown } | undefined)?.code === 'tooManyDevices'
-  )
-}
-
-/** A collaboration call refused this browser's device (`403 deviceNotAuthorized`). */
-export function isDeviceNotAuthorized(error: unknown): boolean {
-  return (
-    axios.isAxiosError(error) &&
-    error.response?.status === 403 &&
-    (error.response.data as { code?: unknown } | undefined)?.code === 'deviceNotAuthorized'
-  )
-}
-
-export async function listDevices(): Promise<DeviceRow[]> {
-  const r = await api.get<DeviceRow[]>('/devices')
-  return r.data
-}
+import { MetadataConflictError, QuotaExceededError, type CurrentMetadata } from '@kutup/session/errors'
 
 export interface VersionRow {
   id: string
   storagePath: string
   seqAtSnapshot: number
   docKeyId: number
-  authorUserId: string
+  authorAccountId: string
   sizeBytes: number
   label: string | null
   keepForever: boolean
@@ -113,18 +16,25 @@ export interface VersionRow {
   kind: 'file' | 'yjs'
   /** The generation of the file key it was sealed under (docs/plans/drive-move.md). */
   keyGeneration: number
-  /** Saved by someone on another server (`user@server`); the owner is `authorUserId` then. */
+  /** Saved by someone on another server (`user@server`); the owner is `authorAccountId` then. */
   remoteAuthor?: string
   /** A whole-file version: the version it replaced (`null`: the original upload, or not recorded). */
   parentVersionId?: string | null
+  /**
+   * What the version is, sealed by whoever saved it
+   * (docs/plans/drive-block-format.md §2): readers open it first, then the
+   * version against the digest and size it commits to. `null`: a
+   * streaming-format version, which no longer opens.
+   */
+  revisionContentEnvelope: string | null
 }
 
 /**
- * Where a file's collaboration calls go, under the API: `/files/:id` here;
+ * Where a file's collaboration calls go, under the API: `/drive/files/:id` here;
  * for a file on another server, its route through this server
  * (docs/plans/collab-federation.md), which takes the same suffixes.
  */
-export const localBase = (fileId: string) => `/files/${fileId}`
+export const localBase = (fileId: string) => `/drive/files/${fileId}`
 
 /**
  * The newest version holding collaboration state (`kind` `yjs`), from a
@@ -145,7 +55,7 @@ export async function listVersions(fileId: string, base = localBase(fileId)): Pr
 export function getVersionDownloadUrl(fileId: string, vid: string, base = localBase(fileId)): string {
   // Includes /api prefix because this URL is consumed directly (e.g. anchor href),
   // not via the axios instance which adds the baseURL itself.
-  return `/api${base}/versions/${vid}/download`
+  return `/api/v1${base}/versions/${vid}/download`
 }
 
 export async function patchVersion(
@@ -191,6 +101,32 @@ export interface NewVersion {
    * {@link VersionConflictError}.
    */
   basedOn?: string
+  /**
+   * The revision the sealed blob is bound to (its header names it): the
+   * version's id once stored (docs/plans/drive-block-format.md §2).
+   */
+  revisionId: string
+  /**
+   * What the revision is (`sealRevisionContent`, as `sealDriveFile` gives
+   * it): kept with the version, so it opens against a committed digest.
+   */
+  revisionContentEnvelope: string
+  /**
+   * The file's next metadata (the file's current revision + 1): a whole-file
+   * save becomes the file's current content and the metadata commits to it;
+   * a note's state (`yjs`) is named by it as the saved state
+   * (`stateRevisionId`, docs/plans/drive-block-format.md §2).
+   */
+  metadata?: { metadataEnvelope: string; metadataRevision: number }
+}
+
+/** The current metadata a `409 revisionConflict` carries (null when it carries none). */
+function currentMetadataOf(body: { metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined): CurrentMetadata | null {
+  if (!body) return null
+  const { metadataRevision, metadataEnvelope } = body
+  if (typeof metadataRevision !== 'number' || !Number.isSafeInteger(metadataRevision) || metadataRevision < 1) return null
+  if (typeof metadataEnvelope !== 'string' || !metadataEnvelope) return null
+  return { metadataRevision, metadataEnvelope }
 }
 
 /** A conditional save lost: the file holds `current` now (a version id, or `original`). */
@@ -221,6 +157,12 @@ export async function createVersion(
   form.append('keepForever', String(Boolean(version.keepForever)))
   if (version.label) form.append('label', version.label)
   if (version.basedOn) form.append('basedOn', version.basedOn)
+  form.append('revisionId', version.revisionId)
+  form.append('revisionContentEnvelope', version.revisionContentEnvelope)
+  if (version.metadata) {
+    form.append('metadataEnvelope', version.metadata.metadataEnvelope)
+    form.append('metadataRevision', String(version.metadata.metadataRevision))
+  }
   form.append('file', new Blob([sealed as BlobPart], { type: 'application/octet-stream' }), 'version')
   try {
     const r = await api.post<VersionRow>(`${base}/versions`, form)
@@ -229,9 +171,14 @@ export async function createVersion(
     if (axios.isAxiosError(err) && err.response?.status === 413) {
       throw new QuotaExceededError()
     }
-    const body = axios.isAxiosError(err) ? (err.response?.data as { code?: string; current?: string } | undefined) : undefined
-    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'version_conflict' && body.current) {
+    const body = axios.isAxiosError(err)
+      ? (err.response?.data as { code?: string; current?: string; metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined)
+      : undefined
+    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'versionConflict' && body.current) {
       throw new VersionConflictError(body.current)
+    }
+    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'revisionConflict') {
+      throw new MetadataConflictError(currentMetadataOf(body))
     }
     throw err
   }

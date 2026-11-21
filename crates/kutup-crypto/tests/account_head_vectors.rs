@@ -19,11 +19,33 @@ const PATH: &str = concat!(
 );
 const BINDING: &str = "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d";
 const INCARNATION: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+/// The root generations the vectors' heads record.
+const GENS: account_head::RootGenerations = account_head::RootGenerations {
+    identity: 1,
+    drive: 1,
+    object_id: 1,
+    pseudonym: 1,
+    call_link: 1,
+};
+const OBJECT_ID_KEY: [u8; 32] = [0x43; 32];
+
+/// The head keys of the vectors' account: its master key at generation 1 and
+/// its object-id root.
+fn head_keys(master: &[u8; 32], object_id_key: &[u8; 32]) -> HeadKeys {
+    HeadKeys::derive(
+        &kutup_crypto::master_keys::MasterKeys::first(master),
+        &kutup_crypto::account_roots::ObjectIdKey::from_bytes(*object_id_key),
+    )
+    .unwrap()
+}
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Vectors {
     master_key: String,
+    /// The account's object-id root: value ids, writers and local names are
+    /// keyed by it, so a master-key rotation changes none of them.
+    object_id_key: String,
     binding: String,
     incarnation_id: String,
     retention: u64,
@@ -105,6 +127,7 @@ impl Material {
             &self.keys,
             BINDING,
             INCARNATION,
+            GENS,
             anchor,
             &self.named(current),
             segment.as_deref(),
@@ -116,7 +139,7 @@ impl Material {
 
 fn derive() -> Vectors {
     let master = [0x42u8; 32];
-    let keys = HeadKeys::derive(&master).unwrap();
+    let keys = head_keys(&master, &OBJECT_ID_KEY);
     let device = "device-alpha";
     let writer = keys.writer(device).unwrap();
     let indexes: Vec<Vec<(String, u64)>> = vec![
@@ -135,7 +158,14 @@ fn derive() -> Vectors {
     for (i, index) in indexes.iter().enumerate() {
         let entry = keys.scope_digest("contacts", index).unwrap();
         let head = match heads.last() {
-            None => AccountHeadV1::first(INCARNATION, &writer, vec![entry]).unwrap(),
+            None => AccountHeadV1::first(
+                INCARNATION,
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                GENS,
+                &writer,
+                vec![entry],
+            )
+            .unwrap(),
             Some(before) => before.next(&sealed[i - 1], &writer, vec![entry]).unwrap(),
         };
         sealed.push(
@@ -163,7 +193,7 @@ fn derive() -> Vectors {
     let anchors: Vec<Anchor> = sealed
         .iter()
         .map(|s| {
-            account_head::check(&keys, BINDING, INCARNATION, None, s, None)
+            account_head::check(&keys, BINDING, INCARNATION, GENS, None, s, None)
                 .unwrap()
                 .verified
                 .unwrap()
@@ -258,6 +288,7 @@ fn derive() -> Vectors {
         &material.keys,
         BINDING,
         INCARNATION,
+        GENS,
         &anchors[2],
         &material.sealed[0],
         None,
@@ -271,6 +302,7 @@ fn derive() -> Vectors {
             &material.keys,
             BINDING,
             INCARNATION,
+            GENS,
             None,
             &material.sealed[i],
             None,
@@ -290,6 +322,7 @@ fn derive() -> Vectors {
     .unwrap();
     Vectors {
         master_key: STANDARD.encode(master),
+        object_id_key: STANDARD.encode(OBJECT_ID_KEY),
         binding: BINDING.into(),
         incarnation_id: INCARNATION.into(),
         retention: account_head::RETENTION,
@@ -332,7 +365,12 @@ fn checked_in_vectors_hold() {
     let v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
     assert_eq!(v, derive());
     let master: [u8; 32] = STANDARD.decode(&v.master_key).unwrap().try_into().unwrap();
-    let keys = HeadKeys::derive(&master).unwrap();
+    let object_id_key: [u8; 32] = STANDARD
+        .decode(&v.object_id_key)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let keys = head_keys(&master, &object_id_key);
     // A device's sealed state opens to the state, for its incarnation only.
     let local = STANDARD.decode(&v.local_sealed).unwrap();
     assert_eq!(
@@ -357,6 +395,7 @@ fn checked_in_vectors_hold() {
         &keys,
         &v.binding,
         &v.incarnation_id,
+        GENS,
         None,
         &STANDARD.decode(&v.sealed[2]).unwrap(),
         None,

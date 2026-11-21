@@ -1,7 +1,7 @@
 //! Canonical cryptographic framing for continuous E2EE Chat history.
 //!
 //! Backup keys are rooted in a random account secret wrapped with
-//! [`AccountEnvelopePurpose::ChatBackupRoot`](crate::account_envelope::AccountEnvelopePurpose::ChatBackupRoot).
+//! [`AccountRecordPurpose::ChatBackupRoot`](crate::account_record::AccountRecordPurpose::ChatBackupRoot).
 //! This module never accepts Direct, MLS, Drive, Chat-media, attachment-ledger,
 //! or device-transfer keys as substitutes.
 
@@ -12,12 +12,12 @@ use zeroize::Zeroizing;
 use crate::error::{CryptoError, Result};
 
 const MAGIC: &[u8; 8] = b"KUTPCB1\0";
-const HKDF_SALT: &[u8] = b"kutup/chat-backup/v1\0";
-const MESSAGE_ARCHIVE_LABEL: &[u8] = b"kutup/chat-backup/message-archive-key/v1\0";
-const EVENT_SEGMENT_LABEL: &[u8] = b"kutup/chat-backup/event-segment-key/v1\0";
-const MEDIA_ID_LABEL: &[u8] = b"kutup/chat-backup/media-id-key/v1\0";
-const MEDIA_ENCRYPTION_LABEL: &[u8] = b"kutup/chat-backup/media-encryption-root/v1\0";
-const MANIFEST_SIGNING_LABEL: &[u8] = b"kutup/chat-backup/manifest-signing-seed/v1\0";
+const HKDF_SALT: &[u8] = crate::labels::CHAT_BACKUP_V1;
+const MESSAGE_ARCHIVE_LABEL: &[u8] = crate::labels::CHAT_BACKUP_MESSAGE_ARCHIVE_KEY_V1;
+const EVENT_SEGMENT_LABEL: &[u8] = crate::labels::CHAT_BACKUP_EVENT_SEGMENT_KEY_V1;
+const MEDIA_ID_LABEL: &[u8] = crate::labels::CHAT_BACKUP_MEDIA_ID_KEY_V1;
+const MEDIA_ENCRYPTION_LABEL: &[u8] = crate::labels::CHAT_BACKUP_MEDIA_ENCRYPTION_ROOT_V1;
+const MANIFEST_SIGNING_LABEL: &[u8] = crate::labels::CHAT_BACKUP_MANIFEST_SIGNING_SEED_V1;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 pub const CHAT_BACKUP_OBJECT_HEADER_BYTES: usize =
@@ -52,7 +52,9 @@ impl TryFrom<u16> for ChatBackupSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::HkdfSha256XChaCha20Poly1305V1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat backup suite {value}"
             ))),
         }
@@ -84,7 +86,9 @@ impl TryFrom<u8> for ChatBackupProtectionDomainV1 {
     fn try_from(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::StandardChat),
-            _ => Err(CryptoError::InvalidInput(format!(
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat backup protection domain {value}"
             ))),
         }
@@ -125,7 +129,9 @@ impl TryFrom<u8> for ChatBackupObjectPurposeV1 {
         match value {
             1 => Ok(Self::BaseSnapshot),
             2 => Ok(Self::EventSegment),
-            _ => Err(CryptoError::InvalidInput(format!(
+            // Code point 0 is reserved (crypto-agility.md): corrupt, not newer.
+            0 => Err(CryptoError::InvalidInput("reserved code point 0".into())),
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat backup object purpose {value}"
             ))),
         }
@@ -334,7 +340,22 @@ pub fn seal_object(
     Ok(out)
 }
 
+/// The suite and purpose right after the magic, read before any length:
+/// an object of a suite or purpose this reader doesn't know (a later
+/// version, such as a chunked base) is *newer than me*, whatever its header
+/// and length look like (docs/plans/format-evolution.md, "Chat backup
+/// base"). Both are in the authenticated header.
+fn check_known_version(object: &[u8]) -> Result<()> {
+    if object.len() >= MAGIC.len() + 3 && &object[..MAGIC.len()] == MAGIC {
+        let at = MAGIC.len();
+        ChatBackupSuiteId::try_from(u16::from_be_bytes([object[at], object[at + 1]]))?;
+        ChatBackupObjectPurposeV1::try_from(object[at + 2])?;
+    }
+    Ok(())
+}
+
 fn parse_header(header: &[u8]) -> Result<ChatBackupObjectHeaderV1> {
+    check_known_version(header)?;
     if header.len() != CHAT_BACKUP_OBJECT_HEADER_BYTES || &header[..MAGIC.len()] != MAGIC {
         return Err(CryptoError::InvalidInput(
             "invalid Chat backup object header".into(),
@@ -394,6 +415,7 @@ fn parse_header(header: &[u8]) -> Result<ChatBackupObjectHeaderV1> {
 }
 
 fn parse_object(object: &[u8]) -> Result<ParsedObject<'_>> {
+    check_known_version(object)?;
     if object.len() < CHAT_BACKUP_OBJECT_HEADER_BYTES + TAG_LEN {
         return Err(CryptoError::InvalidInput(
             "invalid Chat backup object header".into(),
@@ -502,6 +524,26 @@ mod tests {
         let mut tampered = object;
         *tampered.last_mut().unwrap() ^= 1;
         assert!(open_object(&tampered, &root, context).is_err());
+    }
+
+    /// A later version (another suite, or a new purpose such as a chunked
+    /// base) is newer than this reader, even with another header length.
+    #[test]
+    fn a_later_suite_or_purpose_is_newer_than_me() {
+        let object = seal_object(b"event", &[6u8; 32], segment_context()).unwrap();
+        let mut suite = object.clone();
+        suite[8..10].copy_from_slice(&2u16.to_be_bytes());
+        assert!(inspect_object(&suite).unwrap_err().is_newer());
+        let mut purpose = object.clone();
+        purpose[10] = 9;
+        purpose.truncate(40);
+        assert!(inspect_object(&purpose).unwrap_err().is_newer());
+        let mut reserved = object.clone();
+        reserved[10] = 0;
+        assert!(!inspect_object(&reserved).unwrap_err().is_newer());
+        let mut magic = object;
+        magic[0] ^= 1;
+        assert!(!inspect_object(&magic).unwrap_err().is_newer());
     }
 
     #[test]

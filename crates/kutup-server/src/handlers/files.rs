@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::{can_access_collection, trusted_uuid};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::models::{FileRow, FileThumbnails, MessageResponse, UploadResult};
 use crate::AppState;
 
@@ -90,21 +90,21 @@ pub struct ClaimSeedResponse {
     committed: bool,
 }
 
-/// `GET /api/collections/{id}/files` — mirrors `ListFiles`.
+/// `GET /api/v1/drive/collections/{id}/files` — mirrors `ListFiles`.
 #[utoipa::path(
     get,
-    path = "/api/collections/{id}/files",
-    tag = "files",
+    path = "/api/v1/drive/collections/{id}/files",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Collection id")),
     responses((status = 200, description = "Files in the collection", body = Vec<FileRow>))
 )]
 pub async fn list_files(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
 
     if !can_access_collection(&state.pool, user_id, coll_id).await? {
@@ -115,28 +115,31 @@ pub async fn list_files(
     Ok(Json(out).into_response())
 }
 
-/// `GET /api/drive/files` — every file in the folders this account owns or
+/// `GET /api/v1/drive/files` — every file in the folders this account owns or
 /// has been given (not albums, not the trash), newest first: one request
 /// where listing each folder takes one per folder (the Office home lists
 /// documents across all of them; docs/research/18-web-performance.md).
-/// Rows are those of `GET /api/collections/{id}/files`.
+/// Rows are those of `GET /api/v1/drive/collections/{id}/files`.
 #[utoipa::path(
     get,
-    path = "/api/drive/files",
-    tag = "files",
+    path = "/api/v1/drive/files",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Files in every folder the account can read", body = Vec<FileRow>))
 )]
-pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+pub async fn list_all_files(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.account_id)?;
     let out = file_rows(
         &state.pool,
         "f.collection_id IN (
-             SELECT c.id FROM collections c
+             SELECT c.id FROM drive_collections c
              WHERE c.deleted_at IS NULL AND c.kind = 'folder'
-               AND (c.owner_user_id = $1
-                    OR EXISTS (SELECT 1 FROM collection_shares cs
-                               WHERE cs.collection_id = c.id AND cs.recipient_user_id = $1)))",
+               AND (c.owner_account_id = $1
+                    OR EXISTS (SELECT 1 FROM drive_collection_shares cs
+                               WHERE cs.collection_id = c.id AND cs.recipient_account_id = $1)))",
         user_id,
         user_id,
     )
@@ -144,26 +147,26 @@ pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> Ap
     Ok(Json(out).into_response())
 }
 
-/// `POST /api/files/upload` — mirrors `Upload`.
+/// `POST /api/v1/drive/files` — mirrors `Upload`.
 #[utoipa::path(
     post,
-    path = "/api/files/upload",
-    tag = "files",
+    path = "/api/v1/drive/files",
+    tag = "drive",
     operation_id = "uploadFile",
     security(("BearerAuth" = [])),
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "Fields: fileId, collectionId, metadataEnvelope, fileKeyEnvelope + the encrypted `file` part"
+        description = "Fields: fileId, collectionId, metadataEnvelope, fileKeyEnvelope, nameHash, revisionId, metadataRevision (1), revisionContentEnvelope (the revision's sealed content record), optional contentHash + the encrypted `file` part (block format, docs/plans/drive-block-format.md): the upload commits inline"
     ),
     responses((status = 201, description = "File stored", body = UploadResult))
 )]
 pub async fn upload(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     // The upload limit is a setting, the site's or the account's own
     // (docs/plans/drive-block-format.md §7), counted as the file arrives.
     let mut budget = crate::drive_blob::BodyBudget::new(
@@ -205,7 +208,7 @@ pub async fn upload(
                 .await
                 .map_err(|_| AppError::bad_request("invalid multipart form"))?
             {
-                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 8 {
+                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 10 {
                     return Err(AppError::bad_request("form field too large"));
                 }
                 val.extend_from_slice(&chunk);
@@ -240,18 +243,18 @@ pub async fn upload(
 
     // Write access: owner, or share recipient with can_upload.
     let collection: Option<(Uuid, i32)> = sqlx::query_as(
-        "SELECT owner_user_id, key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT owner_account_id, key_epoch FROM drive_collections WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(coll_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((owner_user_id, key_epoch)) = collection else {
+    let Some((owner_account_id, key_epoch)) = collection else {
         return Err(AppError::forbidden("forbidden"));
     };
-    let is_owner = owner_user_id == user_id;
+    let is_owner = owner_account_id == user_id;
     if !is_owner {
         let can_upload: Option<bool> = sqlx::query_scalar(
-            "SELECT can_upload FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
+            "SELECT can_upload FROM drive_collection_shares WHERE collection_id = $1 AND recipient_account_id = $2",
         )
         .bind(coll_id)
         .bind(user_id)
@@ -274,12 +277,27 @@ pub async fn upload(
         DriveEnvelopeContextV1::file_metadata(&file_id_str, 1, 1)
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
-    // A new file's key is generation 1. With `revisionId` the blob is in the
-    // block format, bound to that revision; without, the streaming format.
-    let format =
-        crate::drive_blob::BlobFormat::from_revision(fields.get("revisionId").map(String::as_str))?;
-    format.check_file(&tmp_file, file_size as u64, file_id, 1)?;
-    let revision = format.revision_id();
+    // A new file's key is generation 1. The blob is bound to the revision
+    // `revisionId` names.
+    let blob =
+        crate::drive_blob::BlockBlob::from_revision(fields.get("revisionId").map(String::as_str))?;
+    // It commits inline (docs/plans/drive-block-format.md §10 slice 3): the
+    // client sealed the whole buffer, so its metadata, naming revision 1,
+    // comes with the content.
+    crate::drive_blob::check_first_metadata_revision(
+        fields.get("metadataRevision").map(String::as_str),
+    )?;
+    blob.check_file(&tmp_file, file_size as u64, file_id, 1)?;
+    // What the revision is, sealed under the key of generation 1.
+    let revision_content = crate::drive_blob::revision_content_envelope(
+        blob,
+        fields
+            .get(crate::drive_blob::REVISION_CONTENT_FIELD)
+            .map(String::as_str),
+        file_id,
+        1,
+    )?;
+    let revision = blob.revision_id;
     let storage_path = crate::file_content::revision_path(file_id, revision);
 
     // Claim the id, then check room — both held until commit, so neither a
@@ -295,7 +313,7 @@ pub async fn upload(
     // The folder must still be live, at the epoch the envelopes were bound
     // to, until the file row is in (a key rotation updates this row).
     let live_epoch: Option<i32> = sqlx::query_scalar(
-        "SELECT key_epoch FROM collections WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
+        "SELECT key_epoch FROM drive_collections WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
     )
     .bind(coll_id)
     .fetch_optional(&mut *tx)
@@ -322,12 +340,14 @@ pub async fn upload(
         })?;
 
     let insert = sqlx::query(
-        r#"INSERT INTO files (id, collection_id, uploader_user_id,
+        r#"INSERT INTO drive_files (id, collection_id, uploader_account_id,
                               metadata_envelope, file_key_envelope,
                               key_epoch, key_generation, metadata_revision,
-                              storage_path, encrypted_size_bytes, original_key_generation,
-                              name_hash, content_hash, content_revision_id)
-           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,$9,$10,$11)"#,
+                              encrypted_size_bytes, original_key_generation,
+                              name_hash, content_hash, content_revision_id,
+                              blob_suite, revision_content_envelope, current_doc_key_id)
+           VALUES ($1,$2,$3,kutup_unb64($4),kutup_unb64($5),$6,1,1,$7,1,decode($8, 'hex'),
+                   decode($9, 'hex'),$10,$11,kutup_unb64($12),1)"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -335,11 +355,12 @@ pub async fn upload(
     .bind(&metadata_envelope)
     .bind(&file_key_envelope)
     .bind(key_epoch)
-    .bind(&storage_path)
     .bind(file_size)
     .bind(&name_hash)
     .bind(&content_hash)
     .bind(revision)
+    .bind(crate::drive_blob::BLOCK_SUITE)
+    .bind(&revision_content)
     .execute(&mut *tx)
     .await;
     if let Err(error) = insert {
@@ -376,11 +397,11 @@ pub async fn upload(
         .into_response())
 }
 
-/// `GET /api/files/{id}/download` — mirrors `Download`.
+/// `GET /api/v1/drive/files/{id}/download` — mirrors `Download`.
 #[utoipa::path(
     get,
-    path = "/api/files/{id}/download",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/download",
+    tag = "drive",
     operation_id = "downloadFile",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
@@ -392,18 +413,19 @@ pub async fn upload(
 )]
 pub async fn download(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
-    let exists: Option<Uuid> =
-        sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
-            .bind(file_id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let exists: Option<Uuid> = sqlx::query_scalar(
+        "SELECT collection_id FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(file_id)
+    .fetch_optional(&state.pool)
+    .await?;
     if exists.is_none() {
         return Err(AppError::not_found("not found"));
     }
@@ -437,13 +459,13 @@ pub(crate) const VERSION_HEADER: &str = "x-kutup-version";
 /// Names the original upload where a version id is expected.
 pub(crate) const ORIGINAL: &str = "original";
 
-/// `GET /api/files/{id}/original` — the original upload, while it is kept:
+/// `GET /api/v1/drive/files/{id}/original` — the original upload, while it is kept:
 /// the base of an office editing session that began before the file's first
 /// saved version.
 #[utoipa::path(
     get,
-    path = "/api/files/{id}/original",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}/original",
+    tag = "drive",
     operation_id = "downloadFileOriginal",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
@@ -456,11 +478,11 @@ pub(crate) const ORIGINAL: &str = "original";
 )]
 pub async fn download_original(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::not_found("not found"));
@@ -488,19 +510,22 @@ pub struct DriveLimits {
     stream_blob_fallback_max_bytes: i64,
 }
 
-/// `GET /api/drive/limits` — the upload and streaming limits, as they are
+/// `GET /api/v1/drive/limits` — the upload and streaming limits, as they are
 /// for this account (its own where administrators set them).
 #[utoipa::path(
     get,
-    path = "/api/drive/limits",
-    tag = "files",
+    path = "/api/v1/drive/limits",
+    tag = "drive",
     security(("BearerAuth" = [])),
     responses((status = 200, body = DriveLimits))
 )]
-pub async fn limits(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<DriveLimits>> {
+pub async fn limits(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<DriveLimits>> {
     use crate::site_settings as s;
     let pool = &state.pool;
-    let account = trusted_uuid(&user.user_id)?;
+    let account = trusted_uuid(&user.account_id)?;
     Ok(Json(DriveLimits {
         upload_max_bytes: s::DRIVE_UPLOAD_MAX_BYTES.load_for(pool, account).await?,
         version_max_bytes: s::DRIVE_VERSION_MAX_BYTES.load_for(pool, account).await?,
@@ -519,11 +544,11 @@ pub async fn limits(State(state): State<AppState>, user: AuthUser) -> AppResult<
     }))
 }
 
-/// `PUT /api/files/{id}` — mirrors `UpdateMetadata` (rename).
+/// `PUT /api/v1/drive/files/{id}` — mirrors `UpdateMetadata` (rename).
 #[utoipa::path(
     put,
-    path = "/api/files/{id}",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     request_body = UpdateFileMetadataRequest,
@@ -531,11 +556,11 @@ pub async fn limits(State(state): State<AppState>, user: AuthUser) -> AppResult<
 )]
 pub async fn update_metadata(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(req): Json<UpdateFileMetadataRequest>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     if req.metadata_envelope.is_empty() || req.metadata_revision <= 1 {
@@ -546,8 +571,8 @@ pub async fn update_metadata(
 
     let mut tx = state.pool.begin().await?;
     let row: Option<(Uuid, Uuid, i32, i64)> = sqlx::query_as(
-        r#"SELECT collection_id, uploader_user_id, key_generation, metadata_revision
-           FROM files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE"#,
+        r#"SELECT collection_id, uploader_account_id, key_generation, metadata_revision
+           FROM drive_files WHERE id = $1 AND deleted_at IS NULL FOR UPDATE"#,
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
@@ -593,8 +618,8 @@ pub async fn update_metadata(
         crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(file_id)).await?;
     }
     sqlx::query(
-        "UPDATE files SET metadata_envelope = $1, metadata_revision = $2,
-                          name_hash = CASE WHEN $5 THEN $4 ELSE name_hash END, updated_at = NOW()
+        "UPDATE drive_files SET metadata_envelope = kutup_unb64($1), metadata_revision = $2,
+                          name_hash = CASE WHEN $5 THEN decode($4, 'hex') ELSE name_hash END, updated_at = NOW()
          WHERE id = $3",
     )
     .bind(&req.metadata_envelope)
@@ -612,13 +637,13 @@ pub async fn update_metadata(
     .into_response())
 }
 
-/// `DELETE /api/files/{id}` — soft-deletes into the trash (30-day retention). Quota stays
+/// `DELETE /api/v1/drive/files/{id}` — soft-deletes into the trash (30-day retention). Quota stays
 /// reserved while the file is in trash (the blob still occupies storage); the permanent
-/// path (`DELETE /api/trash/{id}` or the retention sweeper) releases it.
+/// path (`DELETE /api/v1/drive/trash/{id}` or the retention sweeper) releases it.
 #[utoipa::path(
     delete,
-    path = "/api/files/{id}",
-    tag = "files",
+    path = "/api/v1/drive/files/{id}",
+    tag = "drive",
     operation_id = "deleteFile",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
@@ -626,14 +651,14 @@ pub async fn update_metadata(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT collection_id, uploader_user_id FROM files WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT collection_id, uploader_account_id FROM drive_files WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(file_id)
     .fetch_optional(&state.pool)
@@ -644,7 +669,7 @@ pub async fn delete(
     require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
 
     sqlx::query(
-        "UPDATE files SET deleted_at = NOW(), trash_root_id = id WHERE id = $1 AND deleted_at IS NULL",
+        "UPDATE drive_files SET deleted_at = NOW(), trash_root_id = id WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(file_id)
     .execute(&state.pool)
@@ -653,21 +678,21 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// `POST /api/files/{fileId}/claim-seed` — mirrors `ClaimSeed`.
+/// `POST /api/v1/drive/files/{fileId}/claim-seed` — mirrors `ClaimSeed`.
 #[utoipa::path(
     post,
-    path = "/api/files/{fileId}/claim-seed",
-    tag = "files",
+    path = "/api/v1/drive/files/{fileId}/claim-seed",
+    tag = "drive",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "File id")),
     responses((status = 200, description = "Whether this caller won the first-seeder race", body = ClaimSeedResponse))
 )]
 pub async fn claim_seed(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(file_id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     // Seeding writes the document's first state: an editor's job.
     if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
@@ -676,7 +701,7 @@ pub async fn claim_seed(
 
     // Atomic false → true; RETURNING reports whether this caller won the race.
     let claimed: Option<Uuid> = sqlx::query_scalar(
-        "UPDATE files SET seed_committed = true WHERE id = $1 AND seed_committed = false RETURNING id",
+        "UPDATE drive_files SET seed_committed = true WHERE id = $1 AND seed_committed = false RETURNING id",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
@@ -696,7 +721,7 @@ async fn require_owner_or_uploader_with_delete(
     uploader_id: Uuid,
 ) -> AppResult<()> {
     let owner: Option<Uuid> =
-        sqlx::query_scalar("SELECT owner_user_id FROM collections WHERE id = $1")
+        sqlx::query_scalar("SELECT owner_account_id FROM drive_collections WHERE id = $1")
             .bind(coll_id)
             .fetch_optional(&state.pool)
             .await?;
@@ -707,7 +732,7 @@ async fn require_owner_or_uploader_with_delete(
         return Err(AppError::forbidden("forbidden"));
     }
     let can_delete: Option<bool> = sqlx::query_scalar(
-        "SELECT can_delete FROM collection_shares WHERE collection_id = $1 AND recipient_user_id = $2",
+        "SELECT can_delete FROM drive_collection_shares WHERE collection_id = $1 AND recipient_account_id = $2",
     )
     .bind(coll_id)
     .bind(user_id)
@@ -735,7 +760,7 @@ pub(crate) async fn file_rows(
     struct Row {
         id: Uuid,
         collection_id: Uuid,
-        uploader_user_id: Uuid,
+        uploader_account_id: Uuid,
         metadata_envelope: String,
         file_key_envelope: String,
         key_epoch: i32,
@@ -757,8 +782,10 @@ pub(crate) async fn file_rows(
         content_hash: Option<String>,
     }
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        r#"SELECT f.id, f.collection_id, f.uploader_user_id, f.name_hash, f.content_hash,
-                  f.metadata_envelope, f.file_key_envelope, f.key_epoch, f.key_generation,
+        r#"SELECT f.id, f.collection_id, f.uploader_account_id,
+                  encode(f.name_hash, 'hex') AS name_hash, encode(f.content_hash, 'hex') AS content_hash,
+                  kutup_b64(f.metadata_envelope) AS metadata_envelope,
+                  kutup_b64(f.file_key_envelope) AS file_key_envelope, f.key_epoch, f.key_generation,
                   f.metadata_revision, f.encrypted_size_bytes, f.created_at, f.updated_at,
                   f.original_key_generation,
                   {} AS key_history, {} AS content_key_generation,
@@ -768,20 +795,20 @@ pub(crate) async fn file_rows(
                   -- Drawn from something other than the latest version (or,
                   -- with no versions, from a version at all).
                   EXISTS (
-                    SELECT 1 FROM file_thumbnails t
+                    SELECT 1 FROM drive_file_thumbnails t
                     WHERE t.file_id = f.id
                       AND t.source_version IS DISTINCT FROM (
-                        SELECT v.id FROM file_versions v WHERE v.file_id = f.id
+                        SELECT v.id FROM drive_file_versions v WHERE v.file_id = f.id
                         ORDER BY v.created_at DESC LIMIT 1)
                   ) AS thumb_stale,
-                  -- Only the owner learns whom a file is shared with.
+                  -- Only the mailbox_owner learns whom a file is shared with.
                   EXISTS (
-                    SELECT 1 FROM file_shares fs JOIN collections oc ON oc.id = f.collection_id
-                    WHERE fs.file_id = f.id AND oc.owner_user_id = $2
+                    SELECT 1 FROM drive_file_shares fs JOIN drive_collections oc ON oc.id = f.collection_id
+                    WHERE fs.file_id = f.id AND oc.owner_account_id = $2
                   ) AS shared
-           FROM files f
-           LEFT JOIN file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
-           LEFT JOIN file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
+           FROM drive_files f
+           LEFT JOIN drive_file_thumbnails sm ON sm.file_id = f.id AND sm.variant = 'sm'
+           LEFT JOIN drive_file_thumbnails lg ON lg.file_id = f.id AND lg.variant = 'lg'
            WHERE {} AND f.deleted_at IS NULL
            ORDER BY f.created_at DESC"#,
         crate::models::FILE_KEY_HISTORY_SQL,
@@ -798,7 +825,7 @@ pub(crate) async fn file_rows(
         .map(|r| FileRow {
             id: r.id.to_string(),
             collection_id: r.collection_id.to_string(),
-            uploader_user_id: r.uploader_user_id.to_string(),
+            uploader_account_id: r.uploader_account_id.to_string(),
             metadata_envelope: r.metadata_envelope,
             file_key_envelope: r.file_key_envelope,
             key_epoch: r.key_epoch,

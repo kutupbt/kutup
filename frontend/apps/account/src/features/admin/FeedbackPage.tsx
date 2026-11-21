@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { feedbackIssueBody, feedbackTracker, githubIssueUrl } from '@kutup/session/feedback'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Label } from '@kutup/ui/components/label'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { Textarea } from '@kutup/ui/components/textarea'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
@@ -16,7 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Tabs, TabsList, TabsTrigger } from '@kutup/ui/components/tabs'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
@@ -71,7 +72,7 @@ export function FeedbackPage() {
           <TabsTrigger value="resolved">{t('admin.feedback.resolved')}</TabsTrigger>
         </TabsList>
       </Tabs>
-      {feedback.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+      {feedback.isPending ? <ListSkeleton label={t('common.loading')} /> : null}
       {feedback.isError ? <Alert variant="error">{apiErrorMessage(feedback.error, t('common.tryAgain'))}</Alert> : null}
       {feedback.data && feedback.data.length === 0 ? (
         <EmptyState
@@ -186,9 +187,9 @@ function FeedbackCard({
       <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
         <dt className="text-muted-foreground">{t('admin.feedback.from')}</dt>
         <dd className="min-w-0 truncate">
-          {item.userId ? (
-            <Link to={`/admin/users/${item.userId}`} className="font-medium hover:underline">
-              {item.userUsername}
+          {item.accountId ? (
+            <Link to={`/admin/users/${item.accountId}`} className="font-medium hover:underline">
+              {item.username}
             </Link>
           ) : (
             <span className="text-muted-foreground">{t('admin.feedback.deletedAccount')}</span>

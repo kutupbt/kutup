@@ -1,4 +1,4 @@
-import type { FileMetadataV1, MediaMetadataV1 } from '@kutup/crypto'
+import type { ContentCommitment, FileMetadataV2, MediaMetadataV1 } from '@kutup/crypto'
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
 import type { FileKind } from './kinds'
 
@@ -31,7 +31,7 @@ export interface Folder {
   key: Uint8Array | null
   keyEpoch: number
   /** Who owns it and whose authority signs its key history. */
-  ownerUserId: string
+  ownerAccountId: string
   ownerAuthorityPublicKey: string
   /** The current epoch's statement hash: a new one means a new keyring. */
   epochStatementHash: string
@@ -60,7 +60,7 @@ export interface Folder {
 export interface DriveFile {
   id: string
   collectionId: string
-  uploaderUserId: string | null
+  uploaderAccountId: string | null
   /** The folder epoch the file key is wrapped at; below the folder's, the file is re-keyed before it is written to or moved. */
   keyEpoch: number
   /** The generation of the file's current key (docs/plans/drive-move.md). */
@@ -80,6 +80,18 @@ export interface DriveFile {
   sha256: string | null
   /** A photo's or video's details (docs/plans/photos.md), when read. */
   media: MediaMetadataV1 | null
+  /**
+   * The current content its sealed metadata commits to (the revision and its
+   * manifest's digest, docs/plans/drive-block-format.md §2): the only object
+   * a download of the current content opens. Null when it could not be decrypted.
+   */
+  content: ContentCommitment | null
+  /** The original upload's revision, as the sealed metadata names it (null: not named). */
+  originalRevisionId: string | null
+  /** A note's or place list's latest saved state, as the sealed metadata names it (null: none saved). */
+  stateRevisionId: string | null
+  /** The rest of the sealed metadata (its version, a newer client's fields), kept for rewrites. */
+  metadataRest?: Record<string, unknown>
   /** The file key of `keyGeneration`. */
   fileKey: Uint8Array | null
   /** That key sealed under the folder key at `keyEpoch`, as listed. */
@@ -110,11 +122,19 @@ export interface DriveFile {
  * never dropped.
  */
 export function fileMetadataOf(
-  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media'> & { sha256?: string | null },
-  change: Partial<FileMetadataV1> = {},
-): FileMetadataV1 {
-  if (!file.name) throw new Error('file is not open')
-  const metadata: FileMetadataV1 = { name: file.name, mimeType: file.mimeType, size: file.size }
+  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media' | 'content' | 'metadataRest'> & {
+    sha256?: string | null
+    originalRevisionId?: string | null
+    stateRevisionId?: string | null
+  },
+  change: Partial<FileMetadataV2> = {},
+): FileMetadataV2 {
+  const content = change.content ?? file.content
+  if (!file.name || !content) throw new Error('file is not open')
+  const metadata: FileMetadataV2 = { ...file.metadataRest, name: file.name, mimeType: file.mimeType, size: file.size, content }
+  // The revisions the metadata names are carried by every rewrite.
+  if (file.originalRevisionId) metadata.originalRevisionId = file.originalRevisionId
+  if (file.stateRevisionId) metadata.stateRevisionId = file.stateRevisionId
   if (file.sha256) metadata.sha256 = file.sha256
   if (file.media) metadata.media = file.media
   return { ...metadata, ...change }
@@ -143,9 +163,9 @@ export function fileLocation(folder: Pick<Folder, 'source' | 'remoteShareId' | '
 export function contentPath(location: FileLocation, fileId: string): string {
   switch (location.kind) {
     case 'local':
-      return `/files/${fileId}/download`
+      return `/drive/files/${fileId}/download`
     case 'remoteFolder':
-      return `/drive/federation/shares/${location.shareId}/files/${fileId}/content`
+      return `/drive/federation/folder-shares/${location.shareId}/files/${fileId}/content`
     case 'remoteFile':
       return `/drive/federation/file-shares/${location.shareId}/content`
   }
@@ -158,9 +178,9 @@ export function contentPath(location: FileLocation, fileId: string): string {
 export function thumbnailPath(location: FileLocation, fileId: string, variant: 'sm' | 'lg'): string | null {
   switch (location.kind) {
     case 'local':
-      return `/files/${fileId}/thumbnails/${variant}`
+      return `/drive/files/${fileId}/thumbnails/${variant}`
     case 'remoteFolder':
-      return `/drive/federation/shares/${location.shareId}/files/${fileId}/thumbnails/${variant}`
+      return `/drive/federation/folder-shares/${location.shareId}/files/${fileId}/thumbnails/${variant}`
     case 'remoteFile':
       return null
   }
@@ -176,7 +196,7 @@ export function remoteStatePath(location: FileLocation, fileId: string): string 
     case 'local':
       return null
     case 'remoteFolder':
-      return `/drive/federation/shares/${location.shareId}/files/${fileId}/state`
+      return `/drive/federation/folder-shares/${location.shareId}/files/${fileId}/state`
     case 'remoteFile':
       return `/drive/federation/file-shares/${location.shareId}/state`
   }
@@ -184,15 +204,15 @@ export function remoteStatePath(location: FileLocation, fileId: string): string 
 
 /**
  * Where a file's live-editing calls go, under the API (versions, the seed,
- * the socket): `/files/:id` here; a file on another server through this
+ * the socket): `/drive/files/:id` here; a file on another server through this
  * server's routes for it (docs/plans/collab-federation.md).
  */
 export function collabBase(location: FileLocation, fileId: string): string {
   switch (location.kind) {
     case 'local':
-      return `/files/${fileId}`
+      return `/drive/files/${fileId}`
     case 'remoteFolder':
-      return `/drive/federation/shares/${location.shareId}/files/${fileId}`
+      return `/drive/federation/folder-shares/${location.shareId}/files/${fileId}`
     case 'remoteFile':
       return `/drive/federation/file-shares/${location.shareId}`
   }

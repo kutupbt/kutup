@@ -11,7 +11,7 @@ use utoipa::ToSchema;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::mail::sender_rules::normalise_for;
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// Senders one account may list.
@@ -25,21 +25,21 @@ pub struct MailImageSender {
     pub created_at: OffsetDateTime,
 }
 
-/// `GET /api/mail/image-senders` — senders whose images always load, newest first.
+/// `GET /api/v1/mail/image-senders` — senders whose images always load, newest first.
 #[utoipa::path(
     get,
-    path = "/api/mail/image-senders",
+    path = "/api/v1/mail/image-senders",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, description = "Senders", body = [MailImageSender]))
 )]
 pub async fn list(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<Vec<MailImageSender>>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let rows: Vec<(String, OffsetDateTime)> = sqlx::query_as(
-        "SELECT address, created_at FROM mail_image_senders WHERE user_id = $1 ORDER BY created_at DESC",
+        "SELECT address, created_at FROM mail_image_senders WHERE account_id = $1 ORDER BY created_at DESC",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -67,10 +67,10 @@ fn address(state: &AppState, value: &str) -> AppResult<String> {
         .ok_or_else(|| AppError::bad_request("not an address"))
 }
 
-/// `POST /api/mail/image-senders` — this sender's images always load.
+/// `POST /api/v1/mail/image-senders` — this sender's images always load.
 #[utoipa::path(
     post,
-    path = "/api/mail/image-senders",
+    path = "/api/v1/mail/image-senders",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = MailImageSenderAddress,
@@ -81,13 +81,13 @@ fn address(state: &AppState, value: &str) -> AppResult<String> {
 )]
 pub async fn add(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<MailImageSenderAddress>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address(&state, &request.address)?;
     let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM mail_image_senders WHERE user_id = $1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM mail_image_senders WHERE account_id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
@@ -95,7 +95,7 @@ pub async fn add(
         return Err(AppError::bad_request("1000 senders at most"));
     }
     sqlx::query(
-        "INSERT INTO mail_image_senders (user_id, address) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        "INSERT INTO mail_image_senders (account_id, address) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(user_id)
     .bind(&address)
@@ -104,10 +104,10 @@ pub async fn add(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/mail/image-senders/delete` — images from this sender are asked for again.
+/// `POST /api/v1/mail/image-senders/delete` — images from this sender are asked for again.
 #[utoipa::path(
     post,
-    path = "/api/mail/image-senders/delete",
+    path = "/api/v1/mail/image-senders/delete",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = MailImageSenderAddress,
@@ -115,12 +115,12 @@ pub async fn add(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<MailImageSenderAddress>,
 ) -> AppResult<axum::http::StatusCode> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let address = address(&state, &request.address)?;
-    sqlx::query("DELETE FROM mail_image_senders WHERE user_id = $1 AND address = $2")
+    sqlx::query("DELETE FROM mail_image_senders WHERE account_id = $1 AND address = $2")
         .bind(user_id)
         .bind(&address)
         .execute(&state.pool)

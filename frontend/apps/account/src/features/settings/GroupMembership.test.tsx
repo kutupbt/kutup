@@ -8,7 +8,7 @@ let groups: { isPending: boolean; isError: boolean; data: MailGroup[] | undefine
 vi.mock('@kutup/mail-core/groups', () => ({ useMyGroups: () => groups }))
 vi.mock('@kutup/mail-core/api', () => ({ useMailAccount: () => ({ data: undefined }) }))
 vi.mock('@kutup/mail-core/ui/GroupDialog', () => ({ GroupDialog: () => null }))
-vi.mock('@kutup/session/store', () => ({ useRequiredSession: () => ({ isAdmin: false }) }))
+vi.mock('@kutup/session/store', () => ({ useRequiredSession: () => ({ role: 'member' }) }))
 vi.mock('@kutup/session/apps', () => ({ appUrl: (app: string, path = '/') => `https://${app}.example.test${path}` }))
 
 const { GroupMembershipNavLink } = await import('./GroupMembershipNavLink')

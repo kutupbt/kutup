@@ -14,7 +14,7 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
   return { getCryptoWasm: async () => module }
 })
 
-import { encryptChatMediaV1 } from '@kutup/crypto/chatMedia'
+import { sealChatMedia } from '@kutup/crypto/chatMedia'
 import { toBase64 } from '@kutup/crypto/base64'
 import { hash, toHex } from '@kutup/crypto/hash'
 import {
@@ -63,18 +63,20 @@ async function fixture(): Promise<{
   descriptor: ChatAttachmentDescriptorV1
 }> {
   const plaintext = new TextEncoder().encode('authenticated offline Chat attachment')
-  const ciphertext = await encryptChatMediaV1(plaintext, key, attachmentId)
+  const sealed = await sealChatMedia(plaintext, key, attachmentId)
+  const ciphertext = sealed.bytes
   return {
     plaintext,
     ciphertext,
     descriptor: {
       version: 1,
-      suite: 1,
+      suite: 2,
       attachmentId,
       originDomain: 'a.test',
       retrievalToken: 'opaque-token',
       ciphertextBytes: ciphertext.length,
       ciphertextSha256: toHex(await hash(ciphertext)),
+      manifestSha256: sealed.manifestSha256,
       attachmentKey: toBase64(key),
       plaintextBytes: plaintext.length,
       filename: 'note.txt',
@@ -96,7 +98,7 @@ describe('Chat private ciphertext cache integration', () => {
   it('authenticates arbitrary cached chunk boundaries before yielding plaintext', async () => {
     const { plaintext, ciphertext, descriptor } = await fixture()
     const restored: number[] = []
-    for await (const { plain } of decryptChatMediaCiphertextV1(split(ciphertext), descriptor)) {
+    for await (const { plain } of decryptChatMediaCiphertextV1(() => split(ciphertext), descriptor)) {
       restored.push(...plain)
     }
     expect(Uint8Array.from(restored)).toEqual(plaintext)
@@ -104,7 +106,7 @@ describe('Chat private ciphertext cache integration', () => {
     const tampered = ciphertext.slice()
     tampered[tampered.length - 1] ^= 1
     await expect(async () => {
-      for await (const _chunk of decryptChatMediaCiphertextV1(split(tampered), descriptor)) {
+      for await (const _chunk of decryptChatMediaCiphertextV1(() => split(tampered), descriptor)) {
         // Drain to force FINAL and digest verification.
       }
     }).rejects.toThrow()
@@ -185,15 +187,17 @@ describe('Chat private ciphertext cache integration', () => {
     png.set(new TextEncoder().encode('IHDR'), 12)
     new DataView(png.buffer).setUint32(16, 2, false)
     new DataView(png.buffer).setUint32(20, 3, false)
-    const ciphertext = await encryptChatMediaV1(png, key, attachmentId)
+    const sealed = await sealChatMedia(png, key, attachmentId)
+    const ciphertext = sealed.bytes
     const descriptor: ChatAttachmentDescriptorV1 = {
       version: 1,
-      suite: 1,
+      suite: 2,
       attachmentId,
       originDomain: 'a.test',
       retrievalToken: 'opaque-token',
       ciphertextBytes: ciphertext.length,
       ciphertextSha256: toHex(await hash(ciphertext)),
+      manifestSha256: sealed.manifestSha256,
       attachmentKey: toBase64(key),
       plaintextBytes: png.length,
       filename: 'photo.png',
@@ -218,12 +222,14 @@ describe('Chat private ciphertext cache integration', () => {
 
     const pdfAttachmentId = '22222222-2222-4222-8222-222222222222'
     const pdf = new TextEncoder().encode('%PDF-1.7\n% bounded test')
-    const pdfCiphertext = await encryptChatMediaV1(pdf, key, pdfAttachmentId)
+    const pdfSealed = await sealChatMedia(pdf, key, pdfAttachmentId)
+    const pdfCiphertext = pdfSealed.bytes
     const pdfDescriptor: ChatAttachmentDescriptorV1 = {
       ...descriptor,
       attachmentId: pdfAttachmentId,
       ciphertextBytes: pdfCiphertext.length,
       ciphertextSha256: toHex(await hash(pdfCiphertext)),
+      manifestSha256: pdfSealed.manifestSha256,
       plaintextBytes: pdf.length,
       filename: 'report.pdf',
       mimeType: 'application/pdf',

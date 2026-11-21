@@ -1,5 +1,5 @@
 //! Custom mail domains' API (docs/plans/mail-custom-domains.md), Proton's
-//! shape under `/api/mail/domains`: add a domain, read it with its records
+//! shape under `/api/v1/mail/domains`: add a domain, read it with its records
 //! to publish and their states (`?refresh=1` checks DNS now, Proton's
 //! "Refresh status"), set its catch-all, remove it. Answers 404 where the
 //! server has no Mail.
@@ -24,7 +24,7 @@ use crate::mail::domains::name;
 use crate::mail::domains::records::{dkim_target, DKIM_SELECTORS};
 use crate::mail::domains::settings::{Mode, Settings};
 use crate::mail::domains::store::{self, Row};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::ratelimit::MAIL_DOMAIN_CHECKS;
 use crate::AppState;
 
@@ -205,39 +205,48 @@ async fn view(state: &AppState, row: &Row, settings: &Settings) -> AppResult<Mai
     })
 }
 
-/// `GET /api/mail/domains` — the account's domains and its limit.
+/// `GET /api/v1/mail/domains` — the account's domains and its limit.
 #[utoipa::path(
     get,
-    path = "/api/mail/domains",
+    path = "/api/v1/mail/domains",
     tag = "mail",
     security(("BearerAuth" = [])),
     responses((status = 200, body = MailDomains), (status = 404, description = "No Mail here"))
 )]
-pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailDomains>> {
+pub async fn list(
+    State(state): State<AppState>,
+    user: AuthAccount,
+) -> AppResult<Json<MailDomains>> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
-    let settings = Settings::load(&state.pool)
-        .await?
-        .for_user(&state.pool, user_id)
-        .await?;
-    let rows = store::list(&state.pool, user_id).await?;
+    let user_id = trusted_uuid(&user.account_id)?;
+    // The domains of the organization the account manages; none yet (or
+    // not its to manage): an empty list under the site's limit.
+    let site = Settings::load(&state.pool).await?;
+    let organization = crate::organizations::managed_domains(&state.pool, user_id).await?;
+    let (settings, rows) = match organization {
+        Some(organization) => (
+            site.for_org(&state.pool, organization).await?,
+            store::list(&state.pool, organization).await?,
+        ),
+        None => (site, Vec::new()),
+    };
     let mut domains = Vec::with_capacity(rows.len());
     for row in &rows {
         domains.push(view(&state, row, &settings).await?);
     }
     Ok(Json(MailDomains {
         used: rows.len() as i64,
-        max: settings.domains_per_account,
+        max: settings.domains_per_organization,
         mode: settings.mode.as_str(),
         domains,
     }))
 }
 
-/// `POST /api/mail/domains` — adds a domain (or gives back one the account
+/// `POST /api/v1/mail/domains` — adds a domain (or gives back one the account
 /// removed, with its code). Nothing flows until it is verified.
 #[utoipa::path(
     post,
-    path = "/api/mail/domains",
+    path = "/api/v1/mail/domains",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = AddDomain,
@@ -250,22 +259,19 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Js
 )]
 pub async fn add(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<AddDomain>,
 ) -> AppResult<(StatusCode, Json<MailDomain>)> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let name = name::normalize(&input.name, &state.config.chat_server_name)
         .map_err(|refusal| coded(AppError::bad_request("not a domain to add"), refusal.code()))?;
-    let mut settings = Settings::load(&state.pool)
-        .await?
-        .for_user(&state.pool, user_id)
-        .await?;
+    let mut site = Settings::load(&state.pool).await?;
     // Without Stalwart's management key, a domain could never take mail.
     if !crate::mail::domains::sweep::configured(&state) {
-        settings.mode = Mode::Off;
+        site.mode = Mode::Off;
     }
-    let row = match store::add(&state.pool, user_id, &name, &settings).await? {
+    let row = match store::add(&state.pool, user_id, &name, &site).await? {
         Ok(row) => row,
         Err(refusal @ store::AddRefusal::Off) => {
             return Err(coded(
@@ -280,6 +286,7 @@ pub async fn add(
             ))
         }
     };
+    let settings = site.for_org(&state.pool, row.organization_id).await?;
     Ok((
         StatusCode::CREATED,
         Json(view(&state, &row, &settings).await?),
@@ -310,11 +317,11 @@ impl Drop for Running {
     }
 }
 
-/// `GET /api/mail/domains/{id}` — one domain; `?refresh=1` checks its DNS
+/// `GET /api/v1/mail/domains/{id}` — one domain; `?refresh=1` checks its DNS
 /// now (uncached; 30 an hour per account).
 #[utoipa::path(
     get,
-    path = "/api/mail/domains/{id}",
+    path = "/api/v1/mail/domains/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path), ("refresh" = Option<u8>, Query)),
@@ -322,18 +329,19 @@ impl Drop for Running {
 )]
 pub async fn get(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Query(query): Query<Refresh>,
 ) -> AppResult<Json<MailDomain>> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
+    let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
     let settings = Settings::load(&state.pool)
         .await?
-        .for_user(&state.pool, user_id)
+        .for_org(&state.pool, organization)
         .await?;
-    let mut row = store::get(&state.pool, user_id, id).await?;
+    let mut row = store::get(&state.pool, organization, id).await?;
     if query.refresh == Some(1) {
         if !MAIL_DOMAIN_CHECKS.allow(&user_id.to_string()) {
             return Err(AppError::too_many_requests(
@@ -364,11 +372,11 @@ pub async fn get(
     Ok(Json(view(&state, &row, &settings).await?))
 }
 
-/// `DELETE /api/mail/domains/{id}` — removes the domain; its addresses are
+/// `DELETE /api/v1/mail/domains/{id}` — removes the domain; its addresses are
 /// freed (Proton: "all the addresses associated with it will be disabled").
 #[utoipa::path(
     delete,
-    path = "/api/mail/domains/{id}",
+    path = "/api/v1/mail/domains/{id}",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -376,21 +384,22 @@ pub async fn get(
 )]
 pub async fn delete(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
-    store::remove(&state.pool, user_id, id).await?;
+    let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
+    store::remove(&state.pool, organization, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `PUT /api/mail/domains/{id}/catch-all` — one active address on the
+/// `PUT /api/v1/mail/domains/{id}/catch-all` — one active address on the
 /// domain that takes mail for unknown names on it, or none.
 #[utoipa::path(
     put,
-    path = "/api/mail/domains/{id}/catch-all",
+    path = "/api/v1/mail/domains/{id}/catch-all",
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
@@ -399,12 +408,12 @@ pub async fn delete(
 )]
 pub async fn catch_all(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(id): Path<String>,
     Json(input): Json<CatchAll>,
 ) -> AppResult<StatusCode> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
     let address = input
         .address_id
@@ -412,11 +421,12 @@ pub async fn catch_all(
         .map(Uuid::parse_str)
         .transpose()
         .map_err(|_| AppError::bad_request("addressId"))?;
+    let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
     let settings = Settings::load(&state.pool)
         .await?
-        .for_user(&state.pool, user_id)
+        .for_org(&state.pool, organization)
         .await?;
-    store::set_catch_all(&state.pool, user_id, id, address, &settings).await?;
+    store::set_catch_all(&state.pool, organization, id, address, &settings).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -436,19 +446,19 @@ pub struct CreatedAddress {
     pub address: String,
     /// An address the account held before, back with its keys and key
     /// list, disabled: the client enables it with the chain's next list
-    /// (`PUT /api/mail/addresses/{id}/enable`), never a first key.
+    /// (`PUT /api/v1/mail/addresses/{id}/enable`), never a first key.
     pub continues: bool,
 }
 
-/// `POST /api/mail/domains/addresses` — a new address on one of the
+/// `POST /api/v1/mail/domains/addresses` — a new address on one of the
 /// caller's verified domains, within its address limit (every address
 /// counts, the username's included). A new one has no key yet: the client
-/// makes one and adds it (`POST /api/mail/addresses/{id}/keys`), as for any
+/// makes one and adds it (`POST /api/v1/mail/addresses/{id}/keys`), as for any
 /// address; one the account held before comes back with its chain
 /// (`continues`).
 #[utoipa::path(
     post,
-    path = "/api/mail/domains/addresses",
+    path = "/api/v1/mail/domains/addresses",
     tag = "mail",
     security(("BearerAuth" = [])),
     request_body = NewAddress,
@@ -461,31 +471,36 @@ pub struct CreatedAddress {
 )]
 pub async fn create_address(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(input): Json<NewAddress>,
 ) -> AppResult<(StatusCode, Json<CreatedAddress>)> {
     enabled(&state)?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let domain_id =
         Uuid::parse_str(&input.domain_id).map_err(|_| AppError::not_found("no such domain"))?;
     let local = input.local.trim().to_lowercase();
     kutup_crypto::mail_address::check_local(&local)
         .map_err(|_| coded(AppError::bad_request("not an address"), "invalidAddress"))?;
+    // A domain of the organization the account manages (O1: its own
+    // addresses; admins making members' addresses come with O3).
+    let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
     let settings = Settings::load(&state.pool)
         .await?
-        .for_user(&state.pool, user_id)
+        .for_org(&state.pool, organization)
+        .await?
+        .for_account(&state.pool, user_id)
         .await?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
     let domain: Option<Row> = sqlx::query_as(&format!(
-        "SELECT {} FROM mail_domains WHERE id = $1 AND user_id = $2 AND removed_at IS NULL FOR SHARE",
+        "SELECT {} FROM mail_domains WHERE id = $1 AND organization_id = $2 AND removed_at IS NULL FOR SHARE",
         store::COLUMNS
     ))
     .bind(domain_id)
-    .bind(user_id)
+    .bind(organization)
     .fetch_optional(&mut *tx)
     .await?;
     let domain = domain.ok_or_else(|| AppError::not_found("no such domain"))?;
@@ -498,7 +513,7 @@ pub async fn create_address(
     let address = kutup_crypto::mail_address::canonical(&format!("{local}@{}", domain.name))
         .map_err(|_| coded(AppError::bad_request("not an address"), "invalidAddress"))?;
     let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM mail_addresses WHERE user_id = $1 AND state IN ('active', 'receiving')",
+        "SELECT count(*) FROM mail_addresses WHERE account_id = $1 AND state IN ('active', 'receiving')",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
@@ -516,16 +531,17 @@ pub async fn create_address(
     // a rollback to the devices that saw the old chain. Only a chain the
     // account's current authority signed continues; after an account reset
     // the address starts a new one.
-    let authority: String =
-        sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let authority: String = sqlx::query_scalar(
+        "SELECT kutup_b64(account_authority_public_key) FROM accounts WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
     let freed: Option<(Uuid, Vec<u8>, Vec<u8>)> = sqlx::query_as(
         "SELECT a.id, l.data, l.signature FROM mail_addresses a
            JOIN LATERAL (SELECT data, signature FROM mail_key_lists
                           WHERE address_id = a.id ORDER BY sequence DESC LIMIT 1) l ON true
-          WHERE a.user_id = $1 AND a.folded = lower($2) AND a.state = 'freed'
+          WHERE a.account_id = $1 AND a.folded = lower($2) AND a.state = 'freed'
           ORDER BY a.created_at DESC LIMIT 1",
     )
     .bind(user_id)
@@ -550,7 +566,7 @@ pub async fn create_address(
                     SET state = 'active', domain_id = $2, receive_until = NULL,
                         disabled_at = now(),
                         position = (SELECT COALESCE(max(position) + 1, 0) FROM mail_addresses
-                                     WHERE user_id = $3 AND state = 'active')
+                                     WHERE account_id = $3 AND state = 'active')
                   WHERE id = $1
                   RETURNING id",
             )
@@ -576,7 +592,7 @@ pub async fn create_address(
         None => {
             sqlx::query_scalar(
                 "UPDATE mail_addresses SET state = 'active'
-              WHERE user_id = $1 AND domain_id = $2 AND folded = lower($3) AND state = 'closed'
+              WHERE account_id = $1 AND domain_id = $2 AND folded = lower($3) AND state = 'closed'
               RETURNING id",
             )
             .bind(user_id)
@@ -592,10 +608,10 @@ pub async fn create_address(
             sqlx::query_scalar(
                 // Last in the account's order (Proton adds an address at the
                 // end; "Set as default" moves it first).
-                "INSERT INTO mail_addresses (user_id, address, domain_id, position)
+                "INSERT INTO mail_addresses (account_id, address, domain_id, position)
                  VALUES ($1, $2, $3,
                          (SELECT COALESCE(max(position) + 1, 0) FROM mail_addresses
-                           WHERE user_id = $1 AND state = 'active'))
+                           WHERE account_id = $1 AND state = 'active'))
                  ON CONFLICT (folded) WHERE state <> 'freed' DO NOTHING RETURNING id",
             )
             .bind(user_id)

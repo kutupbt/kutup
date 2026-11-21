@@ -61,7 +61,7 @@ export interface MailMessage {
   labels: string[]
   seen: boolean
   starred: boolean
-  protection: 'zero_access' | 'end_to_end'
+  protection: 'zeroAccess' | 'endToEnd'
   /**
    * The forwarder's address, when this is a copy forwarded end to end to the
    * account (docs/plans/mail-forwarding.md): it opens only with a forwarding
@@ -174,7 +174,7 @@ export interface MailAccount {
   addressId: string
   address: string
   /**
-   * This server's own mail domain (`/user/me`'s server), never
+   * This server's own mail domain (`/account`'s server), never
    * the From's: who is a Kutup user and who is outside is judged by it. The
    * sending address's domain (`address`) only names its Message-IDs.
    */
@@ -275,6 +275,19 @@ const scoped = (group?: string) => (group ? { group } : {})
 /** Fetched again this often while the app is open (web push comes later). */
 export const POLL_MS = 30_000
 
+/**
+ * The open list and the counts, fetched again now: the sidebar's refresh
+ * (Proton's `call()` on the event loop). Resolves when both are in.
+ */
+export function useRefetchOpenMail() {
+  const queryClient = useQueryClient()
+  return () =>
+    Promise.all([
+      queryClient.refetchQueries({ queryKey: ['mail', 'folder'], type: 'active' }),
+      queryClient.refetchQueries({ queryKey: ['mail', 'counts'], type: 'active' }),
+    ])
+}
+
 /** No address key yet: the Account app makes it at sign-in. */
 export class NoAddressKey extends Error {
   constructor() {
@@ -289,7 +302,7 @@ export class UnverifiedOwnKeys extends Error {
   }
 }
 
-/** One of the account's addresses, as `GET /api/mail/addresses` lists them. */
+/** One of the account's addresses, as `GET /api/v1/mail/addresses` lists them. */
 export interface OwnAddressRow {
   id: string
   address: string
@@ -329,10 +342,10 @@ export type CheckedOwnAddress = Omit<OwnAddressRow, 'keys'> & {
 export function mailAccountOf(
   rows: readonly CheckedOwnAddress[],
   identity: Pick<MailIdentity, 'displayName' | 'signature'> | null,
-  session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'privateKey'>,
+  session: Pick<Session, 'masterKeys' | 'envelopeBinding' | 'username' | 'privateKey'>,
   fold: (address: string) => string | null,
   /**
-   * The account itself, as `/user/me` names it: its server and id, and
+   * The account itself, as `/account` names it: its server and id, and
    * this server's mail domain (its server name: Kutup addresses are
    * `username@server`).
    */
@@ -371,7 +384,7 @@ export function mailAccountOf(
   const held = rows.filter((row) => row.state !== 'freed')
   const own = new Set(held.map((row) => fold(row.address)).filter((folded) => folded !== null))
   const sealed = (row: CheckedOwnAddress) => (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
-    masterKeyBase64: toBase64(session.masterKey),
+    masterKeys: session.masterKeys,
     binding: session.envelopeBinding,
     address: row.address,
     envelope: key.privateKeyEnvelope,
@@ -465,8 +478,8 @@ export function useMailAccount() {
         .get<MailIdentity>('/mail/identity')
         .then((r) => r.data)
         .catch(() => null)
-      // The account as shares name it: by `/user/me`, never by a mail domain.
-      const { data: me } = await api.get<{ server: string; accountId: string }>('/user/me')
+      // The account as shares name it: by `/account`, never by a mail domain.
+      const { data: me } = await api.get<{ server: string; accountId: string }>('/account')
       // Strict: a list older than one this device has seen stops Mail.
       const checked = await checkedAddresses(session, data, { strict: true })
       // Each sending address's own name and signature (Proton's per-address
@@ -615,6 +628,8 @@ export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true)
       ).data,
     getNextPageParam: () => null,
     refetchInterval: POLL_MS,
+    // Back on the tab: at once if a poll fell due meanwhile (Proton's event loop).
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -648,6 +663,8 @@ export function useCounts(group?: string) {
     enabled: !settings.isPending,
     queryFn: async () => (await api.get<FolderCount[]>('/mail/counts', { params: { ...scoped(group), ...(conversations ? { conversations: true } : {}) } })).data,
     refetchInterval: POLL_MS,
+    // Back on the tab: at once if a poll fell due meanwhile (Proton's event loop).
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -720,6 +737,22 @@ async function offeredKey(raw: Uint8Array, parsed: ParsedMessage, from: string, 
  * as for reading (OpenPGP from outside decrypted too), signatures not checked,
  * which search does not need.
  */
+/**
+ * A message as it was received or sent: its MIME, opened from the stored
+ * encryption, for export (an outside sender's own OpenPGP layer stays, as
+ * Proton's export keeps it). Your own mailbox only.
+ */
+export async function storedMessage(account: MailAccount, message: MailMessage): Promise<Uint8Array> {
+  const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
+  return (await openWithKeys(account, new Uint8Array(response.data), undefined, !!message.forwardedFrom)).data
+}
+
+/** One numbered page of a place's messages (one row per message), with how many it holds. */
+export async function placePage(place: PlaceKey, page: number, limit: number): Promise<{ messages: MailMessage[]; total: number }> {
+  const { data } = await api.get<Page>('/mail/messages', { params: { folder: place, page, limit } })
+  return { messages: data.messages, total: data.total ?? data.messages.length }
+}
+
 export async function openMessageText(account: MailAccount, message: MailMessage): Promise<string> {
   const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
   const opened = await openWithKeys(account, new Uint8Array(response.data), undefined, !!message.forwardedFrom)
@@ -759,7 +792,7 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
   if (account.isOwnAddress(sender)) {
     // Sent from this account, perhaps from an address it had before.
     candidates = account.ownPublicKeys
-  } else if (sender && message.protection === 'end_to_end') {
+  } else if (sender && message.protection === 'endToEnd') {
     candidates = await addressKeys(sender)
       .then((keys) => keys.all)
       .catch(() => [])
@@ -773,7 +806,7 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
   // A Kutup user's mail they sent with Encrypt off (docs/plans/mail-encrypt-sign.md):
   // readable on the way, encrypted on arrival; its signature, if any, is
   // checked against the sender's own key list.
-  const readableFromKutup = message.direction === 'inbound' && !!sender && !outside && message.protection === 'zero_access'
+  const readableFromKutup = message.direction === 'inbound' && !!sender && !outside && message.protection === 'zeroAccess'
   if (!outside && !readableFromKutup) return { parsed: await parseMessage(opened.data), raw: opened.data, signed: opened.signed, verified: opened.verified }
 
   const pin = outside ? pinned(sender) : undefined
@@ -1107,7 +1140,7 @@ export interface MailSettings {
   /** Rows on a page of the list: 50, 100 or 200 (Proton's PageSize). */
   pageSize: number
   /** Moving list mail to Spam: ask, just move, or move and unsubscribe (Proton's SpamAction). */
-  spamAction: 'ask' | 'just_spam' | 'spam_and_unsubscribe'
+  spamAction: 'ask' | 'justSpam' | 'spamAndUnsubscribe'
   /** Remote images: blocked until loaded, or always (Proton's "Auto show remote images"); never automatic in Spam. */
   remoteImages: 'ask' | 'always'
   /** Remote images load through the Kutup server, known trackers never load, and links lose tracking parameters (Proton's "Protect against email tracking"). */
@@ -1128,7 +1161,11 @@ export interface MailSettings {
   /** Every new message carries your public key as an attachment (Proton's AttachPublicKey). */
   attachPublicKey: boolean
   /** How mail to outside OpenPGP users is encrypted or signed (Proton's PGPScheme); Inline is plain text. */
-  pgpScheme: 'pgp_mime' | 'inline'
+  pgpScheme: 'pgpMime' | 'inline'
+  /** The tab icon shows the open place's unread count (Proton's UnreadFavicon). */
+  unreadFavicon: boolean
+  /** Sent mail moved elsewhere still shows in Sent (Proton's ShowMoved). */
+  keepMovedSent: boolean
 }
 
 export const mailSettingsKey = ['mail', 'settings'] as const
@@ -1391,7 +1428,7 @@ export interface SendOptions {
    * or Inline, plain text with each attachment encrypted (or signed) on its
    * own. Kutup recipients are not affected.
    */
-  pgpScheme?: 'pgp_mime' | 'inline'
+  pgpScheme?: 'pgpMime' | 'inline'
 }
 
 export async function sendDraft(
@@ -1467,7 +1504,7 @@ export async function sendDraft(
   const keyed = options.encrypt
     ? external.flatMap((address, i) => {
         const key = pgpKey(protections[i])
-        const scheme = pinned(address)?.pgp.scheme ?? options.pgpScheme ?? 'pgp_mime'
+        const scheme = pinned(address)?.pgp.scheme ?? options.pgpScheme ?? 'pgpMime'
         return key ? [{ address, key, inline: scheme === 'inline' }] : []
       })
     : []

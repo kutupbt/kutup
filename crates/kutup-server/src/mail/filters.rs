@@ -267,7 +267,7 @@ pub async fn load(
 ) -> sqlx::Result<Vec<Loaded>> {
     let rows: Vec<(String, serde_json::Value, serde_json::Value)> = sqlx::query_as(
         "SELECT match, conditions, actions FROM mail_filters
-          WHERE user_id = $1 AND enabled AND ($2::uuid[] IS NULL OR id = ANY($2))
+          WHERE account_id = $1 AND enabled AND ($2::uuid[] IS NULL OR id = ANY($2))
           ORDER BY position, created_at",
     )
     .bind(user_id)
@@ -325,8 +325,8 @@ pub async fn apply(
              custom_folder = CASE WHEN $3::text IS NULL THEN custom_folder ELSE $4 END,
              seen = seen OR $5 OR $3::text = 'trash',
              starred = starred OR $6
-          WHERE user_id = $1 AND id = $2 AND folder <> 'drafts'
-            AND ($4::uuid IS NULL OR EXISTS (SELECT 1 FROM mail_folders f WHERE f.user_id = $1 AND f.id = $4))",
+          WHERE account_id = $1 AND id = $2 AND folder <> 'drafts'
+            AND ($4::uuid IS NULL OR EXISTS (SELECT 1 FROM mail_folders f WHERE f.account_id = $1 AND f.id = $4))",
     )
     .bind(user_id)
     .bind(id)
@@ -341,7 +341,7 @@ pub async fn apply(
     let flagged = if moved == 0 && custom.is_some() {
         sqlx::query(
             "UPDATE mail_messages SET seen = seen OR $3, starred = starred OR $4
-              WHERE user_id = $1 AND id = $2 AND folder <> 'drafts'",
+              WHERE account_id = $1 AND id = $2 AND folder <> 'drafts'",
         )
         .bind(user_id)
         .bind(id)
@@ -356,7 +356,7 @@ pub async fn apply(
     if !outcome.labels.is_empty() {
         sqlx::query(
             "INSERT INTO mail_message_labels (message_id, label_id)
-             SELECT $2, l.id FROM mail_labels l WHERE l.user_id = $1 AND l.id = ANY($3)
+             SELECT $2, l.id FROM mail_labels l WHERE l.account_id = $1 AND l.id = ANY($3)
              ON CONFLICT DO NOTHING",
         )
         .bind(user_id)

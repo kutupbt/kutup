@@ -4,8 +4,8 @@
 //! clear.
 //!
 //! `seal = magic ‖ nonce ‖ XChaCha20-Poly1305(key, state, aad)` with
-//! `key = HKDF-SHA256(setup key, info = "kutup/opaque-login-state/v1\0")` (a
-//! key of its own, not the setup's) and `aad = "kutup/opaque-login-state/v1\0"
+//! `key = HKDF-SHA256(setup key, salt = "kutup/opaque/login-state/v1\0")` (a
+//! key of its own, not the setup's) and `aad = "kutup/opaque/login-state/v1\0"
 //! ‖ login id (16 bytes)`, so a state opens only for the login it was made
 //! for.
 
@@ -14,14 +14,14 @@ use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 
-const LABEL: &[u8] = b"kutup/opaque-login-state/v1\0";
+const LABEL: &[u8] = crate::labels::OPAQUE_LOGIN_STATE_V1;
 const MAGIC: &[u8; 4] = b"KOL1";
 const NONCE_LEN: usize = 24;
 
 fn key(setup_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0u8; 32]);
-    Kdf::new(Suite::V1, &[], setup_key)
-        .expand(LABEL, key.as_mut_slice())
+    Kdf::new(Suite::V1, LABEL, setup_key)
+        .expand(&[], key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("opaque login state HKDF".into()))?;
     Ok(key)
 }

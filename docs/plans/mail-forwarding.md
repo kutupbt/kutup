@@ -136,7 +136,7 @@ States: `Pending`, `Active`, `Outdated`, `Paused`, `Rejected`.
     with rPGP: a v4 key with a Curve25519 ECDH subkey, SEIPDv1 and one v3
     PKESK.
   - It also seals mail that arrived already PGP-encrypted, which it then
-    marks `end_to_end`.
+    marks `endToEnd`.
   - Every stored copy passes `insert_message`, where filters run.
 - **Kutup-to-Kutup mail** on one server never touches SMTP
   (`handlers/mail_send.rs`). The sender's browser makes one data packet and

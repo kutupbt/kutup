@@ -1,7 +1,7 @@
 //! The account's one storage pool: Drive, Photos, Office, Maps and Chat
-//! (and later Mail) all charge `users.storage_used_bytes` against
-//! `users.storage_quota_bytes`, as Proton does with one storage figure per
-//! account.
+//! (and later Mail) all charge `accounts.storage_used_bytes` against the
+//! account's quota ([`quota`]: its entitlement, else the site's default), as
+//! Proton does with one storage figure per account.
 //!
 //! Every write that adds stored bytes locks the user's row here, in the
 //! same transaction as the row it inserts and the charge it makes, so
@@ -14,30 +14,74 @@
 //! group's for its shared mailbox), in the transaction that stores or
 //! deletes the bytes; [`charge_within_quota`] adds the room check for writes
 //! that grow the pool. What fills the pool by app is summed from the tables
-//! themselves (`GET /api/user/storage`).
+//! themselves (`GET /api/v1/account/storage`).
 
 use sqlx::{PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
-/// An account's storage when nobody set another: 10 GiB, the
-/// `users.storage_quota_bytes` column default (migration 001).
+/// An account's storage when nobody set another: 10 GiB.
 pub const DEFAULT_QUOTA_BYTES: i64 = 10 * 1024 * 1024 * 1024;
 
-/// The `site_settings` key an administrator sets the quota new accounts get
-/// with. Existing accounts keep theirs.
-pub const DEFAULT_QUOTA_SETTING: &str = "default_storage_quota_bytes";
+/// The `site_settings` key of the quota every account has unless it has its
+/// own (the entitlement `crate::entitlements::STORAGE_QUOTA`). A change
+/// applies to every account without its own at once.
+pub const DEFAULT_QUOTA_SETTING: &str = "account.default_storage_quota_bytes";
 
-/// The quota a new account gets: the administrator's setting, else 10 GiB.
+/// The quota from an account's own value and the site's, as stored: the
+/// account's, else the site's, else 10 GiB; a value not above zero is passed
+/// over.
+fn resolve_quota(own: Option<i64>, site: Option<String>) -> i64 {
+    own.filter(|value| *value > 0)
+        .or_else(|| {
+            site.and_then(|value| value.parse::<i64>().ok())
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(DEFAULT_QUOTA_BYTES)
+}
+
+/// The site's quota, for an account without its own: the administrators'
+/// setting, else 10 GiB.
 pub async fn default_quota<'e, E: PgExecutor<'e>>(executor: E) -> sqlx::Result<i64> {
-    Ok(
+    Ok(resolve_quota(
+        None,
         sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key = $1")
             .bind(DEFAULT_QUOTA_SETTING)
             .fetch_optional(executor)
-            .await?
-            .and_then(|value| value.parse::<i64>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(DEFAULT_QUOTA_BYTES),
+            .await?,
+    ))
+}
+
+/// `account`'s quota now: its entitlement, else the site's, else 10 GiB.
+pub async fn quota<'e, E: PgExecutor<'e>>(executor: E, account: Uuid) -> sqlx::Result<i64> {
+    let (own, site): (Option<i64>, Option<String>) = sqlx::query_as(
+        "SELECT (SELECT value FROM account_entitlements WHERE account_id = $1 AND key = $2),
+                (SELECT value FROM site_settings WHERE key = $3)",
     )
+    .bind(account)
+    .bind(crate::entitlements::STORAGE_QUOTA)
+    .bind(DEFAULT_QUOTA_SETTING)
+    .fetch_one(executor)
+    .await?;
+    Ok(resolve_quota(own, site))
+}
+
+/// `account`'s quota and the bytes it uses.
+pub async fn quota_and_used<'e, E: PgExecutor<'e>>(
+    executor: E,
+    account: Uuid,
+) -> sqlx::Result<(i64, i64)> {
+    let (own, site, used): (Option<i64>, Option<String>, i64) = sqlx::query_as(
+        "SELECT (SELECT value FROM account_entitlements WHERE account_id = u.id AND key = $2),
+                (SELECT value FROM site_settings WHERE key = $3),
+                u.storage_used_bytes
+           FROM accounts u WHERE u.id = $1",
+    )
+    .bind(account)
+    .bind(crate::entitlements::STORAGE_QUOTA)
+    .bind(DEFAULT_QUOTA_SETTING)
+    .fetch_one(executor)
+    .await?;
+    Ok((resolve_quota(own, site), used))
 }
 
 /// The reservation a check leaves out because it belongs to the very write
@@ -84,12 +128,12 @@ pub async fn lock(
     user_id: Uuid,
     leave: Leave<'_>,
 ) -> sqlx::Result<Pool> {
-    let (quota, used): (i64, i64) = sqlx::query_as(
-        "SELECT storage_quota_bytes, storage_used_bytes FROM users WHERE id = $1 FOR UPDATE",
-    )
-    .bind(user_id)
-    .fetch_one(&mut **tx)
-    .await?;
+    let used: i64 =
+        sqlx::query_scalar("SELECT storage_used_bytes FROM accounts WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    let quota = quota(&mut **tx, user_id).await?;
     let reserved = reserved(&mut **tx, user_id, leave).await?;
     Ok(Pool {
         quota,
@@ -119,9 +163,9 @@ pub async fn charge<'e, E: PgExecutor<'e>>(
     // reconciler will correct) is seen rather than hidden by the clamp.
     let (sql, id) = match payer {
         Payer::Account(id) => (
-            "WITH before AS (SELECT storage_used_bytes AS used FROM users WHERE id = $1 FOR UPDATE)
-             UPDATE users SET storage_used_bytes = GREATEST(before.used + $2, 0)
-             FROM before WHERE users.id = $1 RETURNING before.used",
+            "WITH before AS (SELECT storage_used_bytes AS used FROM accounts WHERE id = $1 FOR UPDATE)
+             UPDATE accounts SET storage_used_bytes = GREATEST(before.used + $2, 0)
+             FROM before WHERE accounts.id = $1 RETURNING before.used",
             id,
         ),
         Payer::MailGroup(id) => (
@@ -172,12 +216,12 @@ pub async fn reserved<'e, E: PgExecutor<'e>>(
         None => (None, None),
     };
     sqlx::query_scalar(
-        "SELECT COALESCE((SELECT SUM(total_bytes) FROM uploads
-                           WHERE user_id = $1 AND id IS DISTINCT FROM $2), 0)::bigint
+        "SELECT COALESCE((SELECT SUM(total_bytes) FROM drive_uploads
+                           WHERE account_id = $1 AND id IS DISTINCT FROM $2), 0)::bigint
               + COALESCE((SELECT SUM(total_bytes - received_bytes) FROM chat_media_uploads
-                           WHERE user_id = $1 AND id IS DISTINCT FROM $3), 0)::bigint
+                           WHERE account_id = $1 AND id IS DISTINCT FROM $3), 0)::bigint
               + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_media_federation_inbound_pending
-                           WHERE recipient_user_id = $1
+                           WHERE recipient_account_id = $1
                              AND NOT (origin IS NOT DISTINCT FROM $4 AND sequence IS NOT DISTINCT FROM $5)), 0)::bigint",
     )
     .bind(user_id)
@@ -192,6 +236,18 @@ pub async fn reserved<'e, E: PgExecutor<'e>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The account's own quota, else the site's, else 10 GiB; nothing at or
+    /// below zero counts.
+    #[test]
+    fn the_quota_is_the_accounts_else_the_sites() {
+        assert_eq!(resolve_quota(Some(5), Some("7".into())), 5);
+        assert_eq!(resolve_quota(None, Some("7".into())), 7);
+        assert_eq!(resolve_quota(Some(0), Some("7".into())), 7);
+        assert_eq!(resolve_quota(None, Some("x".into())), DEFAULT_QUOTA_BYTES);
+        assert_eq!(resolve_quota(None, Some("-1".into())), DEFAULT_QUOTA_BYTES);
+        assert_eq!(resolve_quota(None, None), DEFAULT_QUOTA_BYTES);
+    }
 
     /// Every write goes through [`charge`]: no other code (nor any
     /// migration) assigns the counters, except the two recounts that set

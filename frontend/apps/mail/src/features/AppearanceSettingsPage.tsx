@@ -5,7 +5,7 @@ import { useMailSettings, useUpdateMailSettings, type MailSettings } from '@kutu
 import { Alert } from '@kutup/ui/components/alert'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { FONT_FACES, FONT_SIZES } from './composerLook'
@@ -125,7 +125,7 @@ export function AppearanceSettingsPage() {
   const { t } = useTranslation()
   const settings = useMailSettings()
   const update = useUpdateMailSettings()
-  if (settings.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (settings.isPending) return <FormSkeleton label={t('common.loading')} />
   if (settings.isError) return <Alert variant="error">{apiErrorMessage(settings.error, t('common.tryAgain'))}</Alert>
   const save = (change: Partial<MailSettings>) =>
     update.mutate(change, {

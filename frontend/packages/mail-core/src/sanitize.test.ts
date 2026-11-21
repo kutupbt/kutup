@@ -32,14 +32,19 @@ describe('sanitizeMailHtml', () => {
     expect(result.document).toContain("img-src data: blob:;")
   })
 
-  it('loads remote images when the reader allows them', () => {
-    const result = sanitizeMailHtml(hostile, { allowRemote: true, inlineImages: images })
+  it('never loads a remote address itself, even when the reader allows remote images', () => {
+    const result = sanitizeMailHtml(hostile, {
+      allowRemote: true,
+      inlineImages: images,
+      // A resolver handing back the address itself is not obeyed.
+      resolveRemote: (url) => url,
+    })
     const html = body(result.document)
     expect(result.remoteBlocked).toBe(false)
-    expect(html).toContain('src="https://t.example/pixel.gif"')
-    expect(html).toContain("url('https://t.example/b.png')")
+    expect(html).not.toContain('t.example')
     expect(html).not.toMatch(/<script|onerror|javascript:/i)
-    expect(result.document).toContain('img-src data: blob: https: http:')
+    expect(result.document).toContain("img-src data: blob:;")
+    expect(sanitizeMailHtml(hostile, { allowRemote: true }).document).not.toContain('t.example')
   })
 
   it('swaps remote addresses for proxied images, and lists every one', () => {
@@ -115,5 +120,23 @@ describe('sanitizeMailHtml', () => {
     )
     expect(sanitizeSignature('<p></p><p>x</p><p></p>')).toBe('<p>x</p>')
     expect(sanitizeSignature('  ')).toBe('')
+  })
+})
+
+describe('the frame document', () => {
+  it("gives its own style sheet the page's style nonce, and none without one", () => {
+    expect(plainTextDocument('hi')).toContain('<style>')
+    const meta = document.createElement('meta')
+    meta.name = 'csp-nonce'
+    meta.content = '0123456789abcdef0123456789abcdef'
+    document.head.append(meta)
+    try {
+      expect(plainTextDocument('hi')).toContain('<style nonce="0123456789abcdef0123456789abcdef">')
+      expect(sanitizeMailHtml('<p>hi</p>', { allowRemote: false }).document).toContain('<style nonce="0123456789abcdef0123456789abcdef">')
+      meta.content = '__KUTUP_CSP_NONCE__'
+      expect(plainTextDocument('hi')).toContain('<style>')
+    } finally {
+      meta.remove()
+    }
   })
 })

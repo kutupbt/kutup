@@ -25,8 +25,8 @@ use crate::mail_key::{
     open_group_secret, seal_group_secret, GroupShareMember, MailKeyListV1, SignedMailKeyListV1,
 };
 
-const SIGNING_SHARE_DOMAIN: &[u8] = b"kutup/mail-group-signing-share/v2\0";
-const HANDOVER_DOMAIN: &[u8] = b"kutup/mail-group-signer-handover/v1\0";
+const SIGNING_SHARE_DOMAIN: &[u8] = crate::labels::MAIL_GROUP_SIGNING_SHARE_V2;
+const HANDOVER_DOMAIN: &[u8] = crate::labels::MAIL_GROUP_SIGNER_HANDOVER_V1;
 const HANDOVER_VERSION: u16 = 1;
 /// The handover's bytes after its domain: version, group, sequence, the
 /// previous list's hash, the next signer, the signature.
@@ -68,7 +68,7 @@ pub fn seal_group_signing_share(
     key: &GroupSigningKey,
     group_id: &str,
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
+    member_xwing_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     seal_group_secret(
         SIGNING_SHARE_DOMAIN,
@@ -76,7 +76,7 @@ pub fn seal_group_signing_share(
         group_id,
         &key.public_key,
         member,
-        member_hpke_public_key,
+        member_xwing_public_key,
     )
 }
 
@@ -326,12 +326,12 @@ mod tests {
             sequence,
             previous_hash: previous.map(SignedMailKeyListV1::hash),
             issued_at: "2026-10-16T12:00:00Z".into(),
-            keys: vec![MailKeyEntryV1 {
-                fingerprint: [fingerprint; 20],
-                sha256_fingerprint: [fingerprint; 32],
-                primary: true,
-                flags: DEFAULT_FLAGS,
-            }],
+            keys: vec![MailKeyEntryV1::v4(
+                [fingerprint; 20],
+                [fingerprint; 32],
+                true,
+                DEFAULT_FLAGS,
+            )],
         }
         .sign(&signer.signing_key())
         .unwrap()
@@ -424,7 +424,10 @@ mod tests {
     #[test]
     fn a_signing_key_share_opens_for_its_member_and_signer_only() {
         let key = GroupSigningKey::from_seed(&[5; 32]);
-        let bob = crate::identity::AccountIdentityKeysV1::derive(&[0x22; 32]).unwrap();
+        let bob = crate::identity::AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([0x22; 32]),
+        )
+        .unwrap();
         let bob_ref = AccountRef::new("kutup.dev", "8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b").unwrap();
         let incarnation = bob.incarnation_id();
         let share = seal_group_signing_share(
@@ -434,7 +437,7 @@ mod tests {
                 account: &bob_ref,
                 incarnation_id: &incarnation,
             },
-            &bob.drive_hpke_public_key(),
+            &bob.drive_xwing_public_key(),
         )
         .unwrap();
         let opened = open_group_signing_share(
@@ -442,7 +445,7 @@ mod tests {
             GROUP,
             &key.public_key,
             &bob_ref,
-            bob.drive_hpke_private_key(),
+            bob.drive_xwing_private_key(),
         )
         .unwrap();
         assert_eq!(opened.public_key, key.public_key);
@@ -452,7 +455,7 @@ mod tests {
             GROUP,
             &other.public_key,
             &bob_ref,
-            bob.drive_hpke_private_key()
+            bob.drive_xwing_private_key()
         )
         .is_err());
         let carol = AccountRef::new("kutup.dev", "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70").unwrap();
@@ -461,7 +464,7 @@ mod tests {
             GROUP,
             &key.public_key,
             &carol,
-            bob.drive_hpke_private_key()
+            bob.drive_xwing_private_key()
         )
         .is_err());
     }

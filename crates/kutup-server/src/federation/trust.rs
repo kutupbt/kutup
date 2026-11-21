@@ -12,6 +12,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::audit_log::AdminAction;
+
 /// Trust applies to the server identity, not to an individual feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PeerTrustState {
@@ -157,7 +159,7 @@ impl FederationTrustStore {
                 insert_audit(
                     &mut transaction,
                     None,
-                    "federation.identity.pin",
+                    AdminAction::FederationPinPeer,
                     json!({
                         "actorType": "system",
                         "domain": domain,
@@ -165,7 +167,6 @@ impl FederationTrustStore {
                         "sequence": candidate.sequence,
                         "fingerprint": candidate.key.key_id,
                     }),
-                    now,
                 )
                 .await?;
                 FederationPeerObservation::FirstPinned {
@@ -195,7 +196,7 @@ impl FederationTrustStore {
         validate_server_name(domain).map_err(anyhow::Error::msg)?;
         type PeerRow = (String, String);
         let row: Option<PeerRow> = sqlx::query_as(
-            "SELECT current_document_hash, current_public_key
+            "SELECT encode(current_document_hash, 'hex'), kutup_b64(current_public_key)
              FROM federation_peer_identities WHERE domain = $1",
         )
         .bind(domain)
@@ -289,7 +290,7 @@ impl FederationTrustStore {
         insert_audit(
             &mut transaction,
             Some(admin_user_id),
-            "federation.identity.verify",
+            AdminAction::FederationVerifyPeer,
             json!({
                 "actorType": "admin",
                 "domain": domain,
@@ -297,7 +298,6 @@ impl FederationTrustStore {
                 "fingerprint": peer.current_key_id,
                 "fingerprintDisplay": grouped_fingerprint(expected_fingerprint)?,
             }),
-            now,
         )
         .await?;
         transaction.commit().await?;
@@ -362,8 +362,8 @@ impl FederationTrustStore {
         sqlx::query(
             "UPDATE federation_peer_identities
              SET trust_state = 'verified', current_sequence = $2,
-                 current_document_hash = $3, current_key_id = $4,
-                 current_public_key = $5, verified_at = $6,
+                 current_document_hash = decode($3, 'hex'), current_key_id = decode($4, 'hex'),
+                 current_public_key = kutup_unb64($5), verified_at = $6,
                  quarantine_reason = NULL, pending_document = NULL,
                  pending_identity_chain = NULL, pending_document_hash = NULL,
                  last_seen_at = $6, updated_at = $6
@@ -380,9 +380,9 @@ impl FederationTrustStore {
         insert_audit(
             &mut transaction,
             Some(admin_user_id),
-            "federation.identity.repin",
+            AdminAction::FederationRepinPeer,
             json!({
-                "actorType": "admin-break-glass",
+                "actorType": "adminBreakGlass",
                 "domain": domain,
                 "oldFingerprint": expected_old_fingerprint,
                 "oldFingerprintDisplay": grouped_fingerprint(expected_old_fingerprint)?,
@@ -390,7 +390,6 @@ impl FederationTrustStore {
                 "newFingerprintDisplay": grouped_fingerprint(expected_new_fingerprint)?,
                 "newSequence": candidate.sequence,
             }),
-            now,
         )
         .await?;
         transaction.commit().await?;
@@ -474,8 +473,8 @@ async fn observe_existing(
         .map_err(|_| anyhow::anyhow!("peer identity sequence exceeds PostgreSQL BIGINT"))?;
     sqlx::query(
         "UPDATE federation_peer_identities
-         SET current_sequence = $2, current_document_hash = $3,
-             current_key_id = $4, current_public_key = $5,
+         SET current_sequence = $2, current_document_hash = decode($3, 'hex'),
+             current_key_id = decode($4, 'hex'), current_public_key = kutup_unb64($5),
              last_seen_at = $6, updated_at = $6
          WHERE domain = $1",
     )
@@ -490,7 +489,7 @@ async fn observe_existing(
     insert_audit(
         transaction,
         None,
-        "federation.identity.advance-remote",
+        AdminAction::FederationAdvancePeer,
         json!({
             "actorType": "system",
             "domain": domain,
@@ -499,7 +498,6 @@ async fn observe_existing(
             "fingerprint": candidate.key.key_id,
             "trust": existing.trust.as_str(),
         }),
-        now,
     )
     .await?;
     Ok(FederationPeerObservation::Advanced {
@@ -525,7 +523,7 @@ async fn quarantine_peer(
         "UPDATE federation_peer_identities
          SET trust_state = 'quarantined', quarantine_reason = $2,
              pending_document = $3, pending_identity_chain = $4,
-             pending_document_hash = $5, last_seen_at = $6, updated_at = $6
+             pending_document_hash = decode($5, 'hex'), last_seen_at = $6, updated_at = $6
          WHERE domain = $1",
     )
     .bind(domain)
@@ -539,7 +537,7 @@ async fn quarantine_peer(
     insert_audit(
         transaction,
         None,
-        "federation.identity.quarantine",
+        AdminAction::FederationQuarantinePeer,
         json!({
             "actorType": "system",
             "domain": domain,
@@ -549,7 +547,6 @@ async fn quarantine_peer(
             "candidateSequence": candidate.sequence,
             "candidateFingerprint": candidate.key.key_id,
         }),
-        now,
     )
     .await?;
     Ok(())
@@ -568,8 +565,9 @@ async fn load_peer(
         Option<String>,
     );
     let row: Option<StoredPeerRow> = sqlx::query_as(
-        "SELECT trust_state, current_sequence, current_document_hash,
-                    current_key_id, pending_identity_chain, pending_document_hash
+        "SELECT trust_state, current_sequence, encode(current_document_hash, 'hex'),
+                    encode(current_key_id, 'hex'), pending_identity_chain,
+                    encode(pending_document_hash, 'hex')
              FROM federation_peer_identities WHERE domain = $1",
     )
     .bind(domain)
@@ -605,7 +603,7 @@ async fn insert_peer(
         "INSERT INTO federation_peer_identities
          (domain, trust_state, current_sequence, current_document_hash,
           current_key_id, current_public_key, first_seen_at, last_seen_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $7)",
+         VALUES ($1, $2, $3, decode($4, 'hex'), decode($5, 'hex'), kutup_unb64($6), $7, $7, $7)",
     )
     .bind(domain)
     .bind(trust.as_str())
@@ -632,7 +630,7 @@ async fn insert_identity_documents(
         sqlx::query(
             "INSERT INTO federation_peer_identity_documents
              (domain, sequence, document_hash, key_id, document, acceptance, recorded_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             VALUES ($1, $2, decode($3, 'hex'), decode($4, 'hex'), $5, $6, $7)
              ON CONFLICT (domain, sequence, document_hash) DO NOTHING",
         )
         .bind(domain)
@@ -660,7 +658,7 @@ async fn accept_identity_documents(
         sqlx::query(
             "INSERT INTO federation_peer_identity_documents
              (domain, sequence, document_hash, key_id, document, acceptance, recorded_at)
-             VALUES ($1, $2, $3, $4, $5, 'accepted', $6)
+             VALUES ($1, $2, decode($3, 'hex'), decode($4, 'hex'), $5, 'accepted', $6)
              ON CONFLICT (domain, sequence, document_hash) DO UPDATE
              SET acceptance = 'accepted'",
         )
@@ -709,25 +707,21 @@ async fn lock_domain(
     Ok(())
 }
 
+/// Into the admin log's chain, in this transaction (docs/plans/server-personal-data.md, A8).
 async fn insert_audit(
     transaction: &mut Transaction<'_, Postgres>,
     admin_user_id: Option<Uuid>,
-    action: &str,
+    action: AdminAction,
     payload: serde_json::Value,
-    occurred_at: OffsetDateTime,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO admin_audit_log
-         (admin_user_id, action, target_user_id, payload, occurred_at)
-         VALUES ($1, $2, NULL, $3, $4)",
+    crate::audit_log::append_in(
+        transaction,
+        admin_user_id.map_or(crate::audit_log::Actor::Job, crate::audit_log::Actor::Admin),
+        action,
+        None,
+        &payload,
     )
-    .bind(admin_user_id.unwrap_or_else(Uuid::nil))
-    .bind(action)
-    .bind(payload)
-    .bind(occurred_at)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
+    .await
 }
 
 fn validate_exact_fingerprint(value: &str) -> anyhow::Result<()> {

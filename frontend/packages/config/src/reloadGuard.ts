@@ -21,9 +21,14 @@ export interface GuardWindow {
  * Reload button instead; there is no loop. The flag clears once the page has
  * drawn. Chrome aborts requests in flight when the device's network changes
  * (`net::ERR_NETWORK_CHANGED`), which leaves a page blank otherwise.
+ *
+ * A page that finds itself older than the code it talks to (the service
+ * worker's stream protocol, @kutup/files stream/page.ts) dispatches
+ * [`RELOAD_NEEDED_EVENT`] on the window: the same page then offers its
+ * Reload button, saying Kutup was updated, whatever the page shows.
  */
 export function reloadGuard(win: GuardWindow, build: string): void {
-  const key = `kutup-reload:${build}`
+  const key = `kutup.ui.reload:${build}`
   let handled = false
   const root = () => win.document.getElementById('root')
   const blank = () => {
@@ -41,17 +46,21 @@ export function reloadGuard(win: GuardWindow, build: string): void {
 
   // The words are here, not in the app's translations: the app's bundle is
   // what failed to load.
-  function showError() {
+  function showError(updated = false) {
     let language = ''
     try {
-      language = win.localStorage.getItem('kutup-lang') ?? ''
+      language = win.localStorage.getItem('kutup.ui.language') ?? ''
     } catch {
       language = ''
     }
     const tr = (language || win.navigator.language).toLowerCase().startsWith('tr')
-    const text = tr
-      ? { title: 'Kutup yüklenemedi', body: 'Bu sayfanın bir kısmı gelmedi; ağınız değişmiş olabilir. Bağlantınızı denetleyip yeniden yükleyin.', reload: 'Yeniden yükle' }
-      : { title: 'Kutup could not load', body: 'Part of this page did not arrive, perhaps because your network changed. Check your connection and reload.', reload: 'Reload' }
+    const text = updated
+      ? tr
+        ? { title: 'Kutup güncellendi', body: 'Bu sayfa Kutup’un yeni sürümünden eski. Sürdürmek için yeniden yükleyin.', reload: 'Yeniden yükle' }
+        : { title: 'Kutup was updated', body: 'This page is older than the new version of Kutup. Reload to go on.', reload: 'Reload' }
+      : tr
+        ? { title: 'Kutup yüklenemedi', body: 'Bu sayfanın bir kısmı gelmedi; ağınız değişmiş olabilir. Bağlantınızı denetleyip yeniden yükleyin.', reload: 'Yeniden yükle' }
+        : { title: 'Kutup could not load', body: 'Part of this page did not arrive, perhaps because your network changed. Check your connection and reload.', reload: 'Reload' }
     const render = () => {
       const doc = win.document
       const host = root() ?? doc.body
@@ -111,6 +120,12 @@ export function reloadGuard(win: GuardWindow, build: string): void {
     true,
   )
   win.addEventListener('vite:preloadError', () => failed())
+  // The literal of RELOAD_NEEDED_EVENT: this function's source is inlined alone.
+  win.addEventListener('kutup:reload-needed', () => {
+    if (handled) return
+    handled = true
+    showError(true)
+  })
   win.addEventListener('load', () => {
     win.setTimeout(() => {
       if (!blank()) {
@@ -123,6 +138,9 @@ export function reloadGuard(win: GuardWindow, build: string): void {
     }, 5000)
   })
 }
+
+/** What a page dispatches on its window when it must reload to talk to newer code. */
+export const RELOAD_NEEDED_EVENT = 'kutup:reload-needed'
 
 /** The inline `<script>` body for an app built as `build`. */
 export function reloadGuardScript(build: string): string {

@@ -2,9 +2,10 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import api from '@kutup/session/client'
 import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import { broadcastColor } from '@kutup/session/sessionSync'
+import type { AccountRole, TwoFactorState } from '@kutup/session/api-types'
 import { getSession, updateSession } from '@kutup/session/store'
-import { toBase64 } from '@kutup/crypto/base64'
-import { signDeviceRevocation } from '@kutup/crypto/deviceRegistration'
+import { removeDevicesFromManifest } from '@kutup/crypto/accountManifest'
+import { listAccountDevices, ownAccount, publishNextManifest, type AccountDevice } from '@kutup/session/devices'
 
 // --- profile ------------------------------------------------------------
 
@@ -13,20 +14,22 @@ export const meKey = ['me'] as const
 export interface Me {
   id: string
   username: string
-  totpEnabled: boolean
+  twoFactor: TwoFactorState
   storageQuotaBytes: number
   storageUsedBytes: number
-  isAdmin: boolean
+  role: AccountRole
   color: string
   /** How long file versions are kept, in days (docs/plans/drive-versions-v2.md). */
   versionRetentionDays: number
+  /** Whether Chat and Drive talk to other servers (docs/plans/server-personal-data.md, A4). */
+  federation: 'on' | 'off'
 }
 
 
 export function useMe() {
   return useQuery({
     queryKey: meKey,
-    queryFn: async () => (await api.get<Me>('/user/me')).data,
+    queryFn: async () => (await api.get<Me>('/account')).data,
   })
 }
 
@@ -35,7 +38,7 @@ export function useUpdateColor() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (color: string) => {
-      await api.patch('/user/me', { color })
+      await api.patch('/account', { color })
       return color || null
     },
     onSuccess: async (color) => {
@@ -56,7 +59,7 @@ export interface TotpEnrolment {
 
 export function useStartTotp() {
   return useMutation({
-    mutationFn: async () => (await api.post<TotpEnrolment>('/user/2fa/setup')).data,
+    mutationFn: async () => (await api.post<TotpEnrolment>('/account/2fa/setup')).data,
   })
 }
 
@@ -72,11 +75,11 @@ export function useVerifyTotp() {
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/verify', { code, grant })
+      const { data } = await api.post<{ recoveryCodes: string[] }>('/account/2fa/verify', { code, grant })
       return data.recoveryCodes
     },
     onSuccess: async () => {
-      updateSession({ totpEnabled: true })
+      updateSession({ twoFactor: 'on' })
       await queryClient.invalidateQueries({ queryKey: meKey })
       await queryClient.invalidateQueries({ queryKey: recoveryCodesKey })
     },
@@ -89,7 +92,7 @@ export const recoveryCodesKey = ['recoveryCodes'] as const
 export function useRecoveryCodesLeft(enabled: boolean) {
   return useQuery({
     queryKey: recoveryCodesKey,
-    queryFn: async () => (await api.get<{ remaining: number }>('/user/2fa/recovery-codes')).data.remaining,
+    queryFn: async () => (await api.get<{ remaining: number }>('/account/2fa/recovery-codes')).data.remaining,
     enabled,
   })
 }
@@ -104,7 +107,7 @@ export function useRenewRecoveryCodes() {
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/recovery-codes', { code, grant })
+      const { data } = await api.post<{ recoveryCodes: string[] }>('/account/2fa/recovery-codes', { code, grant })
       return data.recoveryCodes
     },
     onSuccess: async () => {
@@ -118,10 +121,10 @@ export function useDisableTotp() {
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      await api.delete('/user/2fa', { data: { code, grant } })
+      await api.delete('/account/2fa', { data: { code, grant } })
     },
     onSuccess: async () => {
-      updateSession({ totpEnabled: false })
+      updateSession({ twoFactor: 'off' })
       await queryClient.invalidateQueries({ queryKey: meKey })
       await queryClient.invalidateQueries({ queryKey: recoveryCodesKey })
     },
@@ -136,7 +139,10 @@ export interface SessionView {
   id: string
   clientType: string
   parentId: string | null
-  userAgent: string | null
+  /** The browser, parsed at sign-in: family, major version, system. */
+  browser?: string
+  browserMajor?: number
+  os?: string
   createdAt: string
   lastUsedAt: string
   current: boolean
@@ -175,59 +181,48 @@ export function useRevokeOtherSessions() {
 
 export const devicesKey = ['devices'] as const
 
-export interface EditorDevice {
-  deviceId: number
-  label: string
-  /** Its Ed25519 public key, base64: what a revocation names. */
-  publicSigning: string
-  /** Not revoked. */
-  isActive: boolean
-  /** Not revoked, and its sign-in is live: edits from it are taken. */
-  trusted: boolean
-  /** Trusted and renewed within 30 days: one of the at most 20 in use. */
-  inUse: boolean
-  createdAt: string
-  lastSeenAt: string | null
-}
+/** An editing app or the CLI, as the account's device list has it. */
+export type EditorDevice = AccountDevice & { kind: 'editor' | 'cli' }
 
-/** The most devices an account has in use (docs/plans/device-registration.md). */
-export const MAX_DEVICES_IN_USE = 20
-
+/**
+ * The account's editing devices and CLIs (docs/plans/one-device-list.md).
+ * Chat devices are listed, and removed, in their own section: removing one
+ * takes it out of every group, which only Chat can do.
+ */
 export function useDevices() {
   return useQuery({
     queryKey: devicesKey,
-    queryFn: async () => (await api.get<EditorDevice[]>('/devices')).data,
+    queryFn: async () =>
+      (await listAccountDevices()).filter((d): d is EditorDevice => d.kind === 'editor' || d.kind === 'cli'),
   })
 }
 
+/**
+ * Removes a device: the account's next manifest without it, signed with the
+ * master key's authority and published by this sign-in alone (the server
+ * takes one that only removes devices without a device of the app's own, so
+ * the Account app registers none). The server then drops the device's row
+ * and closes its connections.
+ */
 export function useRevokeDevice() {
   const queryClient = useQueryClient()
   return useMutation({
-    // Revoking is the account's act: its key signs it, so a session alone
-    // cannot revoke the account's devices.
     mutationFn: async (device: EditorDevice) => {
       const session = getSession()
       if (!session) throw new Error('not signed in')
-      const revokedAtMs = Date.now()
-      const signature = await signDeviceRevocation(
-        toBase64(session.masterKey),
-        serverOfAddress(session.address),
-        device.publicSigning,
-        revokedAtMs,
+      const identityRoot = session.roots.identityRoot
+      await publishNextManifest(await ownAccount(session), null, async (head) =>
+        // Listed: the next manifest leaves it out. Not listed (yet, or any
+        // more): nothing to sign; the next publication drops its row.
+        head?.devices.some((listed) => listed.deviceId === device.deviceId)
+          ? removeDevicesFromManifest(head, [device.deviceId], new Date().toISOString(), identityRoot)
+          : null,
       )
-      await api.delete(`/devices/${device.deviceId}`, { data: { revokedAtMs, signature } })
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: devicesKey })
     },
   })
-}
-
-/** The server part of a Kutup address (`username@server`): what device revocations name. */
-function serverOfAddress(address: string): string {
-  const at = address.lastIndexOf('@')
-  if (at < 0 || at === address.length - 1) throw new Error('the account address has no server')
-  return address.slice(at + 1)
 }
 
 // --- security events (the account's own sign-in history) ------------------
@@ -254,20 +249,26 @@ export interface SecurityEvent {
   thisSession: boolean
   /** The kind of session that made it (`web-account`, `cli`, …), as the session list has it; null for a recovery or an administrator's reset. */
   client: string | null
-  /** That session's User-Agent; null as `client` is. */
-  userAgent: string | null
+  /** That session's browser: family, major version, system; absent as `client` is, or when unknown. */
+  browser?: string
+  browserMajor?: number
+  os?: string
   /** Done by an administrator. */
   byAdmin: boolean
   /** For a name event: the name it was about (the old one, for a rename). */
   oldName?: string
   /** For a rename: the new name. */
   newName?: string
+  /** How many times it happened: repeats within ten minutes (a failed sign-in, an administrator's view) are one event. */
+  count: number
 }
 
 interface SecurityEventsPage {
   events: SecurityEvent[]
   /** Older events; null when there are none. */
   next: string | null
+  /** How many days events are kept (the newest 500 at most). */
+  retentionDays: number
 }
 
 export const securityEventsKey = ['security-events'] as const
@@ -279,7 +280,7 @@ export function useSecurityEvents() {
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) =>
       (
-        await api.get<SecurityEventsPage>('/user/security-events', {
+        await api.get<SecurityEventsPage>('/account/security-events', {
           params: { limit: 50, ...(pageParam ? { cursor: pageParam } : {}) },
         })
       ).data,

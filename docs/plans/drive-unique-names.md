@@ -39,7 +39,7 @@ disk or the network, and natively SHA-256 is as fast as SHA-1.
 - A rename onto a taken name is refused (the dialog says so before it is
   sent). A move into a folder where the name is taken leaves the item
   where it is, as before. A copy takes the next free name. A restore into
-  a taken name is refused (`409 name_taken`), and the client restores it
+  a taken name is refused (`409 nameTaken`), and the client restores it
   under a new name in the same request (the next free `name (n)`, sealed
   at the next revision); a folder that comes back at the top level is
   named there (`409 nameNeeded` until it is).
@@ -60,7 +60,12 @@ disk or the network, and natively SHA-256 is as fast as SHA-1.
   reached by every member through the folder's key chain, so the hash key
   stays the same through every rotation and nothing is rehashed. An
   account's top-level folders, with no folder above them, use one key from
-  the account master key (`"kutup/drive/top-level-names/v1"`). Like
+  the account's current Drive root (`"kutup/drive/top-level-names/v1"`;
+  docs/plans/identity-rotation.md §3; the master key before it). Each
+  top-level folder records the Drive-root generation its hash was made
+  under (`nameHashGeneration`, which the server requires at the top level
+  and checks is the owner's newest), and a Drive-root rotation rehashes the
+  top level under the new root. Like
   Proton's per-folder hash key, someone removed from a folder can still
   compute it, but the server no longer shows them the folder.
 - **Name hash**: `HMAC-SHA256(hash key, "name" ‖ 0 ‖ canonical name)`;
@@ -105,7 +110,7 @@ not SHA-1.
   missing one is `400`): create folder, rename folder, move folder, upload (tus at create and again when
   it finishes, multipart before anything is stored), rename file, move
   file, and uploads arriving from another server. A clash is
-  `409 name_taken` with what holds the name (file or folder, its id, its
+  `409 nameTaken` with what holds the name (file or folder, its id, its
   content hash); signed federation errors carry the same body. Restore
   refuses a name taken where the item lands, and takes a new name (its
   hash and envelope) in the same request.

@@ -20,6 +20,7 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { cn } from '@kutup/ui/lib/cn'
 import { useMapScene, useStage } from '../../app/stage'
@@ -196,7 +197,7 @@ function Workspace({
   const role = shareRole(folder, file, atlas.lists.find((l) => l.file.id === file.id)?.shared)
   // Owners and uploaders who may delete; editors of a file shared by itself too.
   const mayRename =
-    folder.source === 'file' ? folder.canUpload : folder.canManage || (folder.canDelete && file.uploaderUserId === session.userId)
+    folder.source === 'file' ? folder.canUpload : folder.canManage || (folder.canDelete && file.uploaderAccountId === session.accountId)
   const mayTrash = folder.source !== 'file' && mayRename
   const editable = !readOnly && list.doc !== null && list.status !== 'error' && atlas.me !== null
   const color = atlas.colorOf(file.id)
@@ -426,7 +427,7 @@ function Workspace({
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain border-t border-border">
         {list.status === 'connecting' && list.places.length === 0 ? (
-          <LoadingPanel label={t('list.loadingPlaces')} />
+          <ListSkeleton label={t('list.loadingPlaces')} rows={5} />
         ) : list.places.length === 0 ? (
           <p className="p-6 text-center text-sm text-muted-foreground">{editable ? t('list.emptyEditor') : t('list.empty')}</p>
         ) : (

@@ -3,7 +3,9 @@ import type { ChatService } from '@kutup/chat-core/service'
 // Web Push for this browser: a service worker that shows a notification
 // when the server wakes this chat device while Chat is closed.
 
-const WORKER = '/push-sw.js'
+// Kutup's one service worker (`@kutup/config` src/sw/kutup-sw.js), with
+// Chat's push turned on by `push=chat`; it also serves media streams.
+const WORKER = '/kutup-sw.js'
 
 export function webPushSupported(): boolean {
   return 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined'
@@ -32,8 +34,11 @@ export async function enableWebPush(
   publicKey: string,
   words: { title: string; body: string },
 ): Promise<void> {
-  const query = new URLSearchParams(words).toString()
-  const registration = await navigator.serviceWorker.register(`${WORKER}?${query}`, { scope: '/' })
+  const query = new URLSearchParams({ push: 'chat', ...words }).toString()
+  // One registration per origin (scope `/`), shared by Web Push and media
+  // streaming (@kutup/files stream/page.ts). Never `unregister()` it:
+  // turning notifications off would break streaming too.
+  const registration = await navigator.serviceWorker.register(`${WORKER}?${query}`, { scope: '/', updateViaCache: 'none' })
   await navigator.serviceWorker.ready
   const key = keyBytes(publicKey)
   let subscription = await registration.pushManager.getSubscription()
@@ -48,6 +53,9 @@ export async function enableWebPush(
 
 /** Stop waking this device, and drop the browser's subscription. */
 export async function disableWebPush(service: ChatService | null): Promise<void> {
+  // Only the push subscription goes; the registration stays, because
+  // streaming (@kutup/files stream/page.ts) uses the same one. Never
+  // `unregister()` it here.
   const registration = await navigator.serviceWorker?.getRegistration('/')
   const subscription = await registration?.pushManager.getSubscription()
   await subscription?.unsubscribe()

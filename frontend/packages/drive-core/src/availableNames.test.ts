@@ -12,6 +12,7 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
 const { post } = vi.hoisted(() => ({ post: vi.fn() }))
 vi.mock('@kutup/session/client', () => ({ default: { post } }))
 
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 import type { Folder } from './model'
 import { atTopLevel, findAvailableName, inFolder, nameHashIn, numberedNames, randomNameHash } from './names'
 
@@ -52,7 +53,7 @@ describe('an available name', () => {
     expect(free.name).toBe('Report (3).pdf')
     expect(free.hash).toBe(await nameHashIn(inFolder(folder), 'Report (3).pdf'))
     expect(post).toHaveBeenCalledTimes(1)
-    expect(post.mock.calls[0][0]).toBe(`/collections/${folder.id}/available-hashes`)
+    expect(post.mock.calls[0][0]).toBe(`/drive/collections/${folder.id}/available-hashes`)
   })
 
   it('goes on to the next batch when ten are taken', async () => {
@@ -63,7 +64,7 @@ describe('an available name', () => {
   })
 
   it('is the name itself when free, at the top level too', async () => {
-    const top = atTopLevel(new Uint8Array(32).fill(3))
+    const top = atTopLevel(testRoots(3))
     await serverWith(top, [])
     expect((await findAvailableName(top, 'Projects')).name).toBe('Projects')
     expect(post.mock.calls[0][0]).toBe('/drive/top-level-available-hashes')

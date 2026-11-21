@@ -17,8 +17,14 @@ pub struct SessionInfo {
     /// The sign-in a web app's session was forked from.
     #[serde(default)]
     pub parent_id: Option<String>,
-    #[serde(default)]
-    pub user_agent: Option<String>,
+    /// The browser, as the server parsed it at sign-in (never the raw
+    /// User-Agent): family, major version, system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_major: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
     pub created_at: String,
     pub last_used_at: String,
     /// Part of this client's own sign-in.

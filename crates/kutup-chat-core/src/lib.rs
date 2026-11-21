@@ -53,7 +53,15 @@ mod group_recover;
 mod group_send;
 mod group_settings;
 mod keys;
+mod records_sync;
 pub use keys::PublishedKeys;
+/// The account's master keys (docs/plans/mk-rotation-exercise.md): the
+/// current one and every older one through the keyring.
+pub use kutup_crypto::account_record::MasterKeyGeneration;
+/// The account's stored roots (docs/plans/identity-root.md), as native
+/// apps hand them over.
+pub use kutup_crypto::account_roots::AccountRoots;
+pub use kutup_crypto::master_keys::{MasterKeys, MASTER_KEY_STALE};
 mod manifest;
 mod media_wait;
 mod multi_seal;
@@ -107,7 +115,7 @@ pub use manifest::{
     ManifestPolicy, SafetyNumberV2, SAFETY_QR_PREFIX,
 };
 pub use media_wait::{MediaSendDue, MediaSends};
-pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
+pub use profile::{profile_owner_key, ProfileOwnerKey, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{
     ChatTransport, DistributionOutcome, GroupListItem, IdentityPinsRecord, IdentityPinsWrite,

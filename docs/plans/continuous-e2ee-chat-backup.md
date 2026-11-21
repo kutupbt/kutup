@@ -148,7 +148,7 @@ service; neither is implied or claimed by V1.
 At unified recovery setup, or at the first backup-capable account unlock for an
 existing account, the client generates a fresh random 32-byte
 `ChatBackupRootV1`. It wraps that exact value with `AccountEnvelopeV1` under the
-account master key using a new closed `AccountEnvelopePurpose::ChatBackupRoot`.
+account master key using a new closed `AccountRecordPurpose::ChatBackupRoot`.
 The existing envelope authenticates suite, purpose, canonical account context,
 nonce, and exact length. A Drive private-key envelope, password/recovery
 master-key envelope, or envelope for another account must not open as a backup root.

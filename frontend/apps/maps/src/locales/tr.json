@@ -104,6 +104,10 @@
     "tooMany": "Bu harita alabileceği kadar yer içeriyor.",
     "mapLabel": "{{title}} haritası",
     "quota": "Depolama alanınız dolu, bu yüzden değişiklikler artık sürüm olarak kaydedilmiyor.",
+    "senderReset": "{{name}} tarafından yapılan değişiklikler doğrulanamıyor: hesabı sıfırlandı",
+    "senderUnverified": "{{name}} tarafından yapılan bazı değişiklikler doğrulanamadı ve uygulanmadı",
+    "editUnverified": "Bir değişiklik doğrulanamadı ve uygulanmadı",
+    "senderTrust": "Yeni hesabına güven",
     "preRestoreLabel": "Geri yüklemeden önce ({{time}})",
     "restoredLabel": "Geri yüklendi ({{time}})",
     "share": "Paylaş",
@@ -123,7 +127,7 @@
     "placeCount_one": "{{count}} yer",
     "placeCount_other": "{{count}} yer",
     "rightClickHint": "Ya da yerin olduğu noktaya haritada sağ tıklayın.",
-    "tooManyDevices": "Kullanımda 20 cihazınız var. Listeleri burada düzenlemek için Hesap → Cihazlar bölümünden birini kaldırın."
+    "tooManyDevices": "Hesabınız olabileceği kadar cihaza sahip. Listeleri burada düzenlemek için Hesap → Cihazlar bölümünden birini kaldırın."
   },
   "place": {
     "addTitle": "Yer ekle",

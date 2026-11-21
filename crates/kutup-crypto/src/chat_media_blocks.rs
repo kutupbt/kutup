@@ -1,7 +1,7 @@
 //! Chat attachments in the block format (docs/plans/drive-block-format.md
-//! §2): Chat-media suite 2
-//! (`CHAT_MEDIA_BLOCKS_SUITE`; `ChatMediaSuiteId`, a wire type, gains it when
-//! Chat switches). An attachment is immutable, so its
+//! §2): Chat-media suite 2 (`ChatMediaSuiteId::KutupChatMediaBlocksV1`), the
+//! suite every attachment is written and accepted in. An attachment is
+//! immutable, so its
 //! header names only the attachment; its manifest is unsigned, as the E2EE
 //! descriptor that carries the attachment key commits to the manifest's
 //! digest (Signal's incremental MAC in the pointer, in Kutup's framing).
@@ -13,20 +13,23 @@
 use zeroize::Zeroizing;
 
 use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest, SealedObject};
-use crate::chat_media::{ChatMediaObjectContextV1, ChatMediaObjectPurpose};
+use crate::chat_media::{
+    ChatMediaObjectContextV1, ChatMediaObjectPurpose, ChatMediaSuiteId,
+    MAX_CHAT_MEDIA_PLAINTEXT_BYTES,
+};
 use crate::error::{CryptoError, Result};
 
 const MAGIC: &[u8; 8] = b"KUTPCM2\0";
 pub const CHAT_MEDIA_BLOCKS_HEADER_BYTES: usize = 28;
 /// The Chat-media suite of the block format.
-pub const CHAT_MEDIA_BLOCKS_SUITE: u16 = 2;
+pub const CHAT_MEDIA_BLOCKS_SUITE: u16 = ChatMediaSuiteId::KutupChatMediaBlocksV1.as_u16();
 const KEY_LEN: usize = 32;
 
 /// The Chat-media family of the block construction.
 pub static CHAT_MEDIA_BLOCKS: BlockFamily = BlockFamily {
-    block_key_label: b"kutup/chat-media/blocks/block-key/v1\0",
-    nonce_key_label: b"kutup/chat-media/blocks/nonce-key/v1\0",
-    manifest_key_label: b"kutup/chat-media/blocks/manifest-key/v1\0",
+    block_key_label: crate::labels::CHAT_MEDIA_BLOCKS_BLOCK_KEY_V1,
+    nonce_key_label: crate::labels::CHAT_MEDIA_BLOCKS_NONCE_KEY_V1,
+    manifest_key_label: crate::labels::CHAT_MEDIA_BLOCKS_MANIFEST_KEY_V1,
     signature_domain: b"",
     trailer_magic: b"KUTPCMM\0",
     signed: false,
@@ -43,6 +46,7 @@ pub fn header(context: ChatMediaObjectContextV1) -> [u8; CHAT_MEDIA_BLOCKS_HEADE
 
 /// Checks a header against the attachment expected.
 pub fn validate_header(header: &[u8], expected: ChatMediaObjectContextV1) -> Result<()> {
+    crate::blocks::refuse_newer_suite(header, MAGIC, CHAT_MEDIA_BLOCKS_SUITE, "Chat-media block")?;
     if header.len() != CHAT_MEDIA_BLOCKS_HEADER_BYTES
         || header.get(..8) != Some(MAGIC)
         || u16::from_be_bytes([header[8], header[9]]) != CHAT_MEDIA_BLOCKS_SUITE
@@ -99,9 +103,36 @@ pub fn reader(
     )
 }
 
-/// The whole object's length for `size` plaintext bytes.
+/// The whole object's length for `size` plaintext bytes (at most
+/// [`MAX_CHAT_MEDIA_PLAINTEXT_BYTES`]).
 pub fn object_len(size: u64) -> Result<u64> {
+    if size > MAX_CHAT_MEDIA_PLAINTEXT_BYTES {
+        return Err(CryptoError::InvalidInput(
+            "Chat-media attachment exceeds the plaintext limit".into(),
+        ));
+    }
     CHAT_MEDIA_BLOCKS.object_len(CHAT_MEDIA_BLOCKS_HEADER_BYTES, size)
+}
+
+/// The shortest object: an empty attachment's.
+pub fn min_object_len() -> u64 {
+    object_len(0).expect("an empty attachment has a length")
+}
+
+/// The longest object for attachments of at most `max_plaintext` bytes
+/// (capped at [`MAX_CHAT_MEDIA_PLAINTEXT_BYTES`]).
+pub fn max_object_len(max_plaintext: u64) -> u64 {
+    object_len(max_plaintext.min(MAX_CHAT_MEDIA_PLAINTEXT_BYTES))
+        .expect("the attachment limit has a length")
+}
+
+/// What a server can check of a whole stored object without the key: from
+/// its length and its last [`blocks::TRAILER_LEN`] bytes, the manifest's
+/// length fits the block count and the count fits the length. The block
+/// count, if it holds.
+pub fn check_structure(total_len: u64, trailer: &[u8]) -> Result<u64> {
+    let manifest = CHAT_MEDIA_BLOCKS.parse_trailer(trailer)?;
+    CHAT_MEDIA_BLOCKS.check_structure(CHAT_MEDIA_BLOCKS_HEADER_BYTES, total_len, manifest)
 }
 
 pub fn seal_attachment(
@@ -169,5 +200,37 @@ mod tests {
         assert!(
             open_attachment(&swapped.bytes, &[1; 32], context, &swapped.manifest_sha256).is_ok()
         );
+        let trailer = &object[object.len() - crate::blocks::TRAILER_LEN..];
+        assert_eq!(check_structure(object.len() as u64, trailer).unwrap(), 2);
+        assert!(check_structure(
+            object.len() as u64 + crate::blocks::BLOCK_SIZE as u64,
+            trailer
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn lengths_stop_at_the_attachment_limit() {
+        assert!(object_len(MAX_CHAT_MEDIA_PLAINTEXT_BYTES + 1).is_err());
+        assert_eq!(
+            max_object_len(u64::MAX),
+            object_len(MAX_CHAT_MEDIA_PLAINTEXT_BYTES).unwrap()
+        );
+        assert!(min_object_len() < max_object_len(1));
+    }
+
+    #[test]
+    fn only_its_own_header_is_accepted() {
+        let context =
+            ChatMediaObjectContextV1::new("66666666-6666-4666-8666-666666666666").unwrap();
+        // Suite 1 named under the block magic.
+        let mut suite_one = header(context);
+        suite_one[8..10].copy_from_slice(&1u16.to_be_bytes());
+        assert!(validate_header(&suite_one, context).is_err());
+        // The block suite under the old secretstream magic.
+        let mut old_magic = header(context);
+        old_magic[..8].copy_from_slice(b"KUTPCM1\0");
+        assert!(validate_header(&old_magic, context).is_err());
+        assert!(validate_header(&header(context), context).is_ok());
     }
 }

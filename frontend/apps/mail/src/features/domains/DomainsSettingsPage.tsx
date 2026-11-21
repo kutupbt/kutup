@@ -8,7 +8,8 @@ import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
@@ -31,7 +32,7 @@ export function DomainsSettingsPage() {
   const [deleting, setDeleting] = useState<MailDomain | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
-  if (domains.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (domains.isPending) return <ListSkeleton label={t('common.loading')} rows={4} />
   if (domains.isError) return <Alert variant="error">{apiErrorMessage(domains.error, t('common.tryAgain'))}</Alert>
   const data = domains.data
   if (!data) {

@@ -147,21 +147,20 @@ goes beyond Signal parity.
   identifying User-Agent, no bulk downloads, respect caching. The proxy
   sends one identifying User-Agent per server and caches; the admin page
   links the policy.
-- Content Security Policy: each app allows only the providers the admin
-  enabled (and its own origin for the proxy), and none when the relay is
-  enforced. This lands with the per-origin CSP for account, Drive and Chat
-  in phase 5 of docs/plans/multi-app-web-rewrite.md; until then "always"
-  is what the apps do, not what the browser enforces.
+- Content Security Policy: the apps allow their own origin (the relay) and
+  only the provider origins in `KUTUP_MAP_DIRECT_ORIGINS`; the server offers
+  direct loading only for those
+  ([`../content-security-policy.md`](../content-security-policy.md)).
 
 ## Slices
 
 1. (done) **Map foundation:**
-   - admin settings in `site_settings.maps` (providers, own tile server,
+   - admin settings in `site_settings` key `server.maps` (providers, own tile server,
      relay mode, cache size, maps off) on the account app's admin **Maps**
      page;
    - each person's choice in `user_map_preferences` (migration 055) on the
      account app's **Maps** page, with the notice and a preview map;
-   - the relay `GET /api/maps/proxy/{provider}/{path}`
+   - the relay `GET /api/v1/maps/proxy/{provider}/{path}`
      (`kutup-server/src/maps.rs`): signed-in people only, offered providers
      only, plain paths, map resource types only, 4 MiB, 1,200 requests a
      minute per person; style JSON rewritten to point back at the relay;
@@ -198,7 +197,7 @@ goes beyond Signal parity.
    - the `liveLocation` and `liveLocationStop` kinds, validated on every
      receive path;
    - `live_location_streams` (migration 056) and the stream endpoints,
-     with the federated read under `/api/fed/chat/` and a sweeper;
+     with the federated read under `/api/fed/v2/chat/` and a sweeper;
    - the sharing tab's manager: pacing, re-keying hourly and when someone
      leaves (the old stream deleted), ending at the end time or when nobody
      else is left, surviving a reload of the tab (session storage).

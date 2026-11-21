@@ -4,6 +4,7 @@ import {
   isAccount,
   parseAddress,
   parseAddressInput,
+  parseContactUri,
   type AccountRef,
   type TypedAddress,
 } from '@kutup/chat-core/identity'
@@ -79,6 +80,9 @@ export async function resolveTyped(
   homeServer: string | undefined,
   t: TFunction,
 ): Promise<{ account: AccountRef; warning?: string } | { error: string }> {
+  // A contact link by account id: the account itself, no name to look up.
+  const linked = parseContactUri(value)
+  if (linked) return { account: linked }
   const address = homeServer ? parseAddressInput(value, homeServer) : parseAddress(value)
   if (!address) return { error: t('chat.errors.invalidAddress') }
   const resolved = await resolveAddress(address)

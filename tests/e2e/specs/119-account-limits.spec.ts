@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appUrl, newAccount, signInAsAdmin } from '../fixtures/apps'
 
 // An account's own limits (docs/plans/settings-registry.md): on the account's
@@ -24,10 +24,10 @@ test("an account's own limit: set on its page, shown as its own, reset to the se
     await page.getByRole('row').filter({ hasText: person.username }).first().click()
     await page.waitForURL(/\/admin\/users\/[0-9a-f-]{36}$/)
 
-    const row = page.getByTestId('admin-rate-limit-drive_upload_max_bytes')
+    const row = page.getByTestId('admin-rate-limit-drive.upload_max_bytes')
     await expect(row.getByText('Largest upload (bytes)')).toBeVisible({ timeout: 30_000 })
     await expect(row.getByText(/^The server's/)).toBeVisible()
-    const input = row.getByTestId('admin-rate-limit-drive_upload_max_bytes-value')
+    const input = row.getByTestId('admin-rate-limit-drive.upload_max_bytes-value')
     const site = await input.inputValue()
     // Below its range: refused on the page.
     await input.fill('5')
@@ -39,11 +39,11 @@ test("an account's own limit: set on its page, shown as its own, reset to the se
     await expect(row.getByText(`This account's own; the server's is ${site}`)).toBeVisible({ timeout: 15_000 })
     // Still its own after a reload.
     await page.reload()
-    await expect(page.getByTestId('admin-rate-limit-drive_upload_max_bytes-value')).toHaveValue(String(MIB), { timeout: 30_000 })
+    await expect(page.getByTestId('admin-rate-limit-drive.upload_max_bytes-value')).toHaveValue(String(MIB), { timeout: 30_000 })
 
-    await page.getByTestId('admin-rate-limit-drive_upload_max_bytes-reset').click()
-    await expect(page.getByTestId('admin-rate-limit-drive_upload_max_bytes-value')).toHaveValue(site, { timeout: 15_000 })
-    await expect(page.getByTestId('admin-rate-limit-drive_upload_max_bytes').getByText(/^The server's/)).toBeVisible()
+    await page.getByTestId('admin-rate-limit-drive.upload_max_bytes-reset').click()
+    await expect(page.getByTestId('admin-rate-limit-drive.upload_max_bytes-value')).toHaveValue(site, { timeout: 15_000 })
+    await expect(page.getByTestId('admin-rate-limit-drive.upload_max_bytes').getByText(/^The server's/)).toBeVisible()
 
     // Gone with the account.
     await page.getByRole('button', { name: 'Delete account', exact: true }).click()

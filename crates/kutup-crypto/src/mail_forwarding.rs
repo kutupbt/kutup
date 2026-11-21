@@ -543,7 +543,7 @@ pub fn encryption_fingerprints(public_key: &[u8]) -> Result<Vec<[u8; FINGERPRINT
         .collect()
 }
 
-const SEAL_DOMAIN: &[u8] = b"kutup/mail-forwarding/proxy-parameter/v1\0";
+const SEAL_DOMAIN: &[u8] = crate::labels::MAIL_FORWARDING_PROXY_PARAMETER_V1;
 const SEAL_NONCE_LEN: usize = 24;
 
 fn seal_aad(

@@ -1,13 +1,17 @@
 //! Shared streaming tus uploader with resume — used by `upload` (and the
-//! sync engine's push path).
+//! sync engine's push path), in the block format
+//! (docs/plans/drive-block-format.md §2, §10 slice 3).
 //!
-//! Resume model: ciphertext is deterministic given (file key, stream header)
-//! — see `StreamEncryptor::resume` — so an interrupted upload persists only
-//! `{upload_id, wrapped file key, header, sizes, mtime}` (never the raw key)
-//! and a later run re-encrypts from byte 0, discards everything the server
-//! already has (per `tus_head`), and transmits the remainder. Offsets always
-//! sit on chunk boundaries because the CLI ships one chunk per PATCH and the
-//! server advances by whole PATCH bodies.
+//! A new file is uploaded as an uploaded revision (tus with `revisionId`),
+//! then committed with its first metadata, which commits to the revision and
+//! its manifest's digest (`revisions::commit_upload`). Resume: an
+//! interrupted upload keeps `{upload id, wrapped file key, revision id, the
+//! content's SHA-256, sizes, mtime}` and, once made, the sealed tail (never
+//! the raw key). A later run asks the server where it stopped (any offset),
+//! seals again from block 0 (synthetic nonces give the same bytes; the last
+//! block goes only if the content hashes to the recorded SHA-256, else
+//! `NotTheSameFile` discards the upload), sends the rest and commits; an
+//! upload whose bytes all arrived but whose commit did not is committed.
 
 use kutup_crypto::primitives::{Hasher, Suite};
 use std::fs::File;
@@ -19,13 +23,14 @@ use anyhow::{bail, Context, Result};
 use base64::Engine;
 use indicatif::ProgressBar;
 
-use crate::api::{ApiError, Client, FileMetadata};
+use crate::api::{ApiError, Client};
 use crate::file_crypto;
 use crate::mimetype::guess_mime;
+use crate::revisions::{Base, CommitUpload, Draft};
 use crate::session::{ResumeState, Store};
-use crate::transfer::{chunk_boundary, cipher_size, StreamUploader};
-use kutup_crypto::drive_object::DriveFileBlobContextV1;
-use kutup_crypto::stream::HEADER_BYTES;
+use crate::transfer::{BlockSource, ChangedWhileUploading, NotTheSameFile};
+use crate::version_upload::{kept_tail, send_parts};
+use kutup_crypto::drive_blocks::DriveBlobContextV2;
 
 /// Local resume records older than this are swept (the server reaps its
 /// side at 24 h; one extra hour avoids racing it).
@@ -62,7 +67,8 @@ pub struct Uploaded {
     pub file_key: [u8; 32],
     /// The file key's generation (a new file's first).
     pub key_generation: u32,
-    /// The name it was uploaded under.
+    /// The name it was committed under (the next free one when its own
+    /// was taken while it uploaded).
     pub name: String,
 }
 
@@ -96,29 +102,6 @@ pub(crate) fn record_content_hash(
     }
 }
 
-/// After a new whole-file version of `file` (its content now `size` bytes
-/// with SHA-256 `sha256`): the metadata's size and SHA-256 follow, the name
-/// stays, and the content hash is recorded again, which the version
-/// cleared (docs/plans/drive-unique-names.md).
-pub(crate) fn follow_new_content(
-    client: &Client,
-    file: &crate::api::File,
-    file_key: &[u8; 32],
-    hash_key: &[u8; 32],
-    size: u64,
-    sha256: &[u8; 32],
-) -> Result<()> {
-    let mut meta = file_crypto::open_metadata(file, file_key).context("decrypt file metadata")?;
-    meta.size = size;
-    meta.sha256 = Some(b64().encode(sha256));
-    let request = file_crypto::rename_request(file, file_key, &meta)?;
-    client
-        .update_file_metadata(&file.id, &request)
-        .context("update file metadata")?;
-    record_content_hash(client, &file.id, hash_key, sha256);
-    Ok(())
-}
-
 pub(crate) fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -137,8 +120,9 @@ fn b64() -> base64::engine::GeneralPurpose {
     base64::engine::general_purpose::STANDARD
 }
 
-/// Uploads one file through tus with bounded memory, resuming an interrupted
-/// prior attempt when `resume` is set and the file is unchanged.
+/// Uploads one file through tus with bounded memory and commits it,
+/// resuming an interrupted prior attempt when `resume` is set and the file
+/// is unchanged.
 pub fn upload_streaming(
     client: &Client,
     store: &Store,
@@ -168,73 +152,78 @@ pub fn upload_streaming(
         Some(sha256) => sha256,
         None => sha256_file(local_path)?,
     };
+    let sha256_b64 = b64().encode(sha256);
+    let upload = Upload {
+        client,
+        store,
+        resume_key: &resume_key,
+        local_path,
+        collection_id,
+        hash_key: &hash_key,
+        draft: Draft {
+            name: name.clone(),
+            mime_type: guess_mime(local_path),
+            size: plain_size as u64,
+            sha256: Some(sha256_b64.clone()),
+            media: None,
+            original_revision_id: None,
+            state_revision_id: None,
+            v: kutup_crypto::file_metadata::FILE_METADATA_VERSION,
+            min: None,
+            extra: Default::default(),
+        },
+        sha256,
+        progress: &progress,
+    };
 
     if let Some(rec) = store.get_resume(&resume_key)? {
+        // The same file: its size, date and content (an upload of another
+        // content under this path would be another file).
         let unchanged = rec.plain_size == plain_size
             && rec.mtime_secs == mtime_secs
             && rec.mtime_nanos == mtime_nanos
-            && rec.key_epoch == key_epoch;
+            && rec.key_epoch == key_epoch
+            && rec.sha256 == sha256_b64
+            && !rec.revision_id.is_empty();
         if resume && unchanged {
-            if let Some(done) = try_resume(
-                client,
-                store,
-                &resume_key,
-                &rec,
-                local_path,
-                collection_id,
-                collection_key,
-                &progress,
-                &hash_key,
-                &sha256,
-                &name,
-            )? {
+            if let Some(done) = try_resume(&upload, &rec, collection_key)? {
                 return Ok(done);
             }
             // Invalid/stale state was cleaned up — fall through to a fresh upload.
         } else {
-            // --no-resume, or the file changed since the attempt: abandon it.
+            // --no-resume, or another content than the attempt's: abandon it.
             let _ = client.tus_delete(&rec.upload_id);
             let _ = store.delete_resume(&resume_key);
         }
     }
 
-    // Fresh upload.
-    let meta = FileMetadata {
-        name: name.clone(),
-        mime_type: guess_mime(local_path),
-        size: plain_size as u64,
-        sha256: Some(b64().encode(sha256)),
-        media: None,
-    };
-    let record = file_crypto::create(collection_id, key_epoch, collection_key, &meta)?;
-    debug_assert_eq!(record.metadata_revision, 1);
-
-    let cipher_total = cipher_size(plain_size);
+    // Fresh upload: the file's key now, its metadata with the commit.
+    let record = file_crypto::create(collection_id, key_epoch, collection_key)?;
+    let revision_id = uuid::Uuid::new_v4().to_string();
+    let cipher_total = crate::transfer::object_len(plain_size as u64)?;
     let (upload_id, file_id_hint) = client
         .tus_create(
             cipher_total,
             &record.id,
             collection_id,
-            &record.metadata_envelope,
             &record.file_key_envelope,
             &crate::names::name_hash(&hash_key, &name)?,
+            &revision_id,
         )
         .context("tus create")?;
     if file_id_hint != record.id {
+        let _ = client.tus_delete(&upload_id);
         bail!("tus create returned a different file id");
     }
-
-    let file = File::open(local_path)?;
-    let blob_context = DriveFileBlobContextV1::new(&record.id, record.key_generation)?;
-    let up = StreamUploader::new(file, &record.file_key, plain_size, blob_context)?;
 
     let now = now_unix();
     let mut rec = ResumeState {
         upload_id,
-        file_id: file_id_hint,
+        file_id: record.id.clone(),
         file_key_envelope: record.file_key_envelope,
         key_epoch: record.key_epoch,
-        header: b64().encode(up.header_bytes()),
+        revision_id,
+        sha256: sha256_b64,
         plain_size,
         cipher_total,
         mtime_secs,
@@ -246,209 +235,211 @@ pub fn upload_streaming(
     // Persist BEFORE the first PATCH: a crash at any later point leaves a
     // record + server session, which is exactly what resume needs.
     store.save_resume(&resume_key, &rec)?;
-
-    let bar = make_bar(&progress, plain_size, &name);
-    let patched_id = run_patches(client, store, &resume_key, &mut rec, up, 0, &bar, &sha256)?;
-    let _ = store.delete_resume(&resume_key);
-
-    let file_id = pick_file_id(patched_id, &rec)?;
-    record_content_hash(client, &file_id, &hash_key, &sha256);
-    Ok(Uploaded {
-        file_id,
-        file_key: record.file_key,
-        key_generation: record.key_generation,
-        name,
-    })
+    upload.finish(&mut rec, &record.file_key, 0)
 }
 
-/// Attempts to continue `rec`. `Ok(Some)` = finished (either resumed to the
-/// end, or the prior attempt turned out to be complete). `Ok(None)` = state
-/// was unusable and has been cleaned up (caller starts fresh). Transient
-/// transport errors propagate with the state kept.
-#[allow(clippy::too_many_arguments)]
-fn try_resume(
-    client: &Client,
-    store: &Store,
-    resume_key: &str,
-    rec: &ResumeState,
-    local_path: &Path,
-    collection_id: &str,
-    collection_key: &[u8],
-    progress: &Progress,
-    hash_key: &[u8; 32],
-    sha256: &[u8; 32],
-    name: &str,
-) -> Result<Option<Uploaded>> {
-    match client.tus_head(&rec.upload_id)? {
-        None => {
-            // Session gone: either it finished and we crashed before clearing
-            // local state, or the server swept it.
-            if !rec.file_id.is_empty() {
-                if let Ok(files) = client.list_files(collection_id) {
-                    if files.iter().any(|f| f.id == rec.file_id) {
-                        let file_key = unwrap_file_key(rec, collection_id, collection_key)?;
-                        let _ = store.delete_resume(resume_key);
-                        eprintln!("Previous upload had already completed.");
-                        return Ok(Some(Uploaded {
-                            file_id: rec.file_id.clone(),
-                            file_key,
-                            key_generation: file_crypto::FIRST_GENERATION,
-                            name: name.to_string(),
-                        }));
-                    }
-                }
-            }
-            let _ = store.delete_resume(resume_key);
-            Ok(None)
+/// One new file's upload, as it runs.
+struct Upload<'a> {
+    client: &'a Client,
+    store: &'a Store,
+    resume_key: &'a str,
+    local_path: &'a Path,
+    collection_id: &'a str,
+    hash_key: &'a [u8; 32],
+    draft: Draft,
+    sha256: [u8; 32],
+    progress: &'a Progress,
+}
+
+impl Upload<'_> {
+    fn forget(&self, cancel: Option<&str>) {
+        if let Some(upload_id) = cancel {
+            let _ = self.client.tus_delete(upload_id);
         }
-        Some((offset, length)) => {
-            if length != rec.cipher_total
-                || offset >= rec.cipher_total
-                || chunk_boundary(offset).is_none()
-            {
-                let _ = client.tus_delete(&rec.upload_id);
-                let _ = store.delete_resume(resume_key);
-                return Ok(None);
-            }
+        let _ = self.store.delete_resume(self.resume_key);
+    }
 
-            let file_key = match unwrap_file_key(rec, collection_id, collection_key) {
-                Ok(k) => k,
-                Err(_) => {
-                    let _ = client.tus_delete(&rec.upload_id);
-                    let _ = store.delete_resume(resume_key);
-                    return Ok(None);
-                }
-            };
-            let header: [u8; HEADER_BYTES] = match b64()
-                .decode(&rec.header)
-                .ok()
-                .and_then(|h| h.try_into().ok())
-            {
-                Some(h) => h,
-                None => {
-                    let _ = client.tus_delete(&rec.upload_id);
-                    let _ = store.delete_resume(resume_key);
-                    return Ok(None);
-                }
-            };
-
-            let file = File::open(local_path)?;
-            let blob_context =
-                DriveFileBlobContextV1::new(&rec.file_id, file_crypto::FIRST_GENERATION)?;
-            let up = match StreamUploader::resume(
-                file,
-                &file_key,
-                rec.plain_size,
-                &header,
-                offset,
-                blob_context,
-            ) {
-                Ok(up) => up,
-                Err(_) => {
-                    let _ = client.tus_delete(&rec.upload_id);
-                    let _ = store.delete_resume(resume_key);
-                    return Ok(None);
-                }
-            };
-
+    /// Sends the object from `offset`, then commits it.
+    fn finish(&self, rec: &mut ResumeState, file_key: &[u8; 32], offset: i64) -> Result<Uploaded> {
+        let identity = crate::drive_signer::identity(self.client)?;
+        let context = DriveBlobContextV2::new(
+            &rec.file_id,
+            &rec.revision_id,
+            file_crypto::FIRST_GENERATION,
+        )?;
+        let mut source = BlockSource::new(
+            || Ok(File::open(self.local_path)?),
+            file_key,
+            context,
+            identity.signer(),
+            rec.plain_size as u64,
+            self.sha256,
+            kept_tail(rec)?,
+        )?;
+        if offset > 0 {
             eprintln!(
-                "Resuming upload of {name} at {}%",
+                "Resuming upload of {} at {}%",
+                self.draft.name,
                 offset * 100 / rec.cipher_total.max(1)
             );
-            let bar = make_bar(progress, rec.plain_size, name);
-            bar.set_position(up.plain_read() as u64);
-
-            let mut rec = rec.clone();
-            let patched_id = run_patches(
-                client, store, resume_key, &mut rec, up, offset, &bar, sha256,
-            )?;
-            let _ = store.delete_resume(resume_key);
-
-            let file_id = pick_file_id(patched_id, &rec)?;
-            record_content_hash(client, &file_id, hash_key, sha256);
-            Ok(Some(Uploaded {
-                file_id,
-                file_key,
-                key_generation: file_crypto::FIRST_GENERATION,
-                name: name.to_string(),
-            }))
         }
-    }
-}
-
-/// Ships remaining chunks. On a permanent (4xx) rejection the session and
-/// local state are dropped; on a transient failure the state is kept and the
-/// error tells the user to rerun.
-#[allow(clippy::too_many_arguments)]
-fn run_patches(
-    client: &Client,
-    store: &Store,
-    resume_key: &str,
-    rec: &mut ResumeState,
-    mut up: StreamUploader<File>,
-    mut offset: i64,
-    bar: &ProgressBar,
-    sha256: &[u8; 32],
-) -> Result<String> {
-    let mut file_id = String::new();
-    #[cfg(feature = "fail-inject")]
-    let mut patches_done: u32 = 0;
-    loop {
-        // The last part goes only once what was sealed is what was hashed
-        // (and sealed in the metadata); a changed file cancels the upload.
-        let next = up.next_chunk().and_then(|chunk| match chunk {
-            Some(_) if up.finished() => up.check_sha256(sha256).map(|()| chunk),
-            chunk => Ok(chunk),
-        });
-        let chunk = match next {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) => break,
-            Err(err) => {
-                bar.finish_and_clear();
-                if err.is::<crate::transfer::ChangedWhileUploading>() {
-                    let _ = client.tus_delete(&rec.upload_id);
-                    let _ = store.delete_resume(resume_key);
+        let bar = make_bar(self.progress, rec.plain_size, &self.draft.name);
+        let sent = send_parts(
+            self.client,
+            self.store,
+            Some(self.resume_key),
+            rec,
+            &mut source,
+            offset,
+            &bar,
+        );
+        bar.finish_and_clear();
+        if let Err(err) = sent {
+            if err.is::<ChangedWhileUploading>() || err.is::<NotTheSameFile>() {
+                self.forget(Some(&rec.upload_id));
+                return Err(err);
+            }
+            if is_permanent(&err) {
+                self.forget(Some(&rec.upload_id));
+                if matches!(err.downcast_ref::<ApiError>(), Some(e) if e.status == 403) {
+                    return Err(err.context(
+                        "access to the folder was lost during the upload; it was discarded",
+                    ));
                 }
                 return Err(err);
             }
-        };
-        match client.tus_patch(&rec.upload_id, offset, chunk) {
-            Ok((new_offset, final_id)) => {
-                offset = new_offset;
-                if !final_id.is_empty() {
-                    file_id = final_id;
-                }
-                rec.updated_at = now_unix();
-                let _ = store.save_resume(resume_key, rec);
-                bar.set_position(up.plain_read() as u64);
-                #[cfg(feature = "fail-inject")]
-                {
-                    patches_done += 1;
-                    maybe_abort(patches_done);
-                }
-            }
-            Err(err) => {
-                bar.finish_and_clear();
-                if is_permanent(&err) {
-                    let _ = client.tus_delete(&rec.upload_id);
-                    let _ = store.delete_resume(resume_key);
-                    if matches!(err.downcast_ref::<ApiError>(), Some(e) if e.status == 403) {
-                        return Err(err.context(
-                            "access to the folder was lost during the upload; it was discarded",
-                        ));
-                    }
-                    return Err(err);
-                }
-                let pct = offset * 100 / rec.cipher_total.max(1);
-                return Err(err.context(format!(
-                    "upload interrupted at {pct}% — rerun the same command to resume \
-                     (or pass --no-resume to restart)"
-                )));
-            }
+            return Err(err.context(
+                "upload interrupted — rerun the same command to resume \
+                 (or pass --no-resume to restart)",
+            ));
         }
+        let content = source
+            .content()
+            .cloned()
+            .context("the upload ended before its tail was made")?;
+        self.commit(rec, file_key, &content)
     }
-    bar.finish_and_clear();
-    Ok(file_id)
+
+    /// Commits the uploaded revision as the new file, under the next free
+    /// name if its own was taken meanwhile.
+    fn commit(
+        &self,
+        rec: &ResumeState,
+        file_key: &[u8; 32],
+        content: &kutup_crypto::file_metadata::ContentCommitmentV1,
+    ) -> Result<Uploaded> {
+        let free_name = |taken: &str| {
+            crate::revisions::free_name_in(self.client, self.collection_id, self.hash_key, taken)
+        };
+        let committed = crate::revisions::commit_upload(
+            self.client,
+            &CommitUpload {
+                file_id: &rec.file_id,
+                revision_id: &rec.revision_id,
+                file_key,
+                key_generation: file_crypto::FIRST_GENERATION,
+                content,
+                draft: self.draft.clone(),
+                base: Base::NewFile,
+                free_name: Some(&free_name),
+            },
+        );
+        let name = match committed {
+            Ok(name) => name,
+            Err(err) => {
+                return Err(match crate::revisions::conflict_code(&err) {
+                    // Parts are missing: the next run sends them.
+                    Some("notUploaded") => {
+                        err.context("the upload is not complete; rerun the same command")
+                    }
+                    // Refused for good (the object lost, the name taken, the
+                    // folder gone): the upload and its quota go.
+                    _ if is_permanent(&err) => {
+                        self.forget(Some(&rec.upload_id));
+                        err.context("commit the upload; it was discarded")
+                    }
+                    _ => err.context("commit the upload — rerun the same command to commit it"),
+                });
+            }
+        };
+        self.forget(None);
+        record_content_hash(self.client, &rec.file_id, self.hash_key, &self.sha256);
+        Ok(Uploaded {
+            file_id: rec.file_id.clone(),
+            file_key: *file_key,
+            key_generation: file_crypto::FIRST_GENERATION,
+            name,
+        })
+    }
+}
+
+/// Attempts to continue `rec`. `Ok(Some)` = finished (resumed to the end
+/// and committed, or the prior attempt turned out to be complete).
+/// `Ok(None)` = state was unusable and has been cleaned up (caller starts
+/// fresh). Transient transport errors propagate with the state kept.
+fn try_resume(
+    upload: &Upload<'_>,
+    rec: &ResumeState,
+    collection_key: &[u8],
+) -> Result<Option<Uploaded>> {
+    let client = upload.client;
+    let file_key = match unwrap_file_key(rec, upload.collection_id, collection_key) {
+        Ok(k) => k,
+        Err(_) => {
+            upload.forget(Some(&rec.upload_id));
+            return Ok(None);
+        }
+    };
+    let Ok(tail) = kept_tail(rec) else {
+        upload.forget(Some(&rec.upload_id));
+        return Ok(None);
+    };
+    let mut rec = rec.clone();
+    match client.tus_head(&rec.upload_id)? {
+        None => {
+            // Session gone: committed before we could clear local state, or
+            // the server swept it. With every byte sent (a tail), committing
+            // again settles which.
+            if let Some(tail) = tail {
+                return match upload.commit(&rec, &file_key, &tail.content) {
+                    Ok(done) => Ok(Some(done)),
+                    Err(err) if crate::revisions::status_of(&err) == Some(404) => {
+                        if client
+                            .list_files(upload.collection_id)
+                            .is_ok_and(|files| files.iter().any(|f| f.id == rec.file_id))
+                        {
+                            upload.forget(None);
+                            eprintln!("Previous upload had already completed.");
+                            return Ok(Some(Uploaded {
+                                file_id: rec.file_id.clone(),
+                                file_key,
+                                key_generation: file_crypto::FIRST_GENERATION,
+                                name: upload.draft.name.clone(),
+                            }));
+                        }
+                        upload.forget(None);
+                        Ok(None)
+                    }
+                    Err(err) => Err(err),
+                };
+            }
+            upload.forget(None);
+            Ok(None)
+        }
+        Some((offset, length)) if length != rec.cipher_total || offset > length => {
+            upload.forget(Some(&rec.upload_id));
+            Ok(None)
+        }
+        // Every byte arrived; only the commit is left.
+        Some((offset, length)) if offset == length => match tail {
+            Some(tail) => upload.commit(&rec, &file_key, &tail.content).map(Some),
+            None => {
+                upload.forget(Some(&rec.upload_id));
+                Ok(None)
+            }
+        },
+        Some((offset, _)) => upload.finish(&mut rec, &file_key, offset).map(Some),
+    }
 }
 
 /// A 4xx (other than timeout/rate-limit) means the server rejected the
@@ -456,16 +447,6 @@ fn run_patches(
 pub(crate) fn is_permanent(err: &anyhow::Error) -> bool {
     matches!(err.downcast_ref::<ApiError>(),
              Some(e) if e.status < 500 && e.status != 408 && e.status != 429)
-}
-
-fn pick_file_id(patched_id: String, rec: &ResumeState) -> Result<String> {
-    if !patched_id.is_empty() {
-        return Ok(patched_id);
-    }
-    if !rec.file_id.is_empty() {
-        return Ok(rec.file_id.clone());
-    }
-    bail!("tus: upload completed but server returned no file id")
 }
 
 fn unwrap_file_key(
@@ -500,36 +481,23 @@ pub(crate) fn make_bar(progress: &Progress, plain_total: i64, name: &str) -> Pro
     }
 }
 
-#[cfg(feature = "fail-inject")]
-fn maybe_abort(patches_done: u32) {
-    if let Some(n) = std::env::var("KUTUP_TEST_ABORT_AFTER_PATCHES")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok())
-    {
-        if patches_done >= n {
-            eprintln!("fail-inject: aborting after {patches_done} PATCH(es)");
-            std::process::exit(74);
-        }
-    }
-}
-
 /// Creates a sub-collection under `parent_id` (used by `upload -r` and the
 /// sync engine), its name kept unique under the parent's hash key. Returns
 /// `(collection_id, collection_key)`; a taken name is the server's
-/// `name_taken` (`ApiError::name_taken`).
+/// `nameTaken` (`ApiError::name_taken`).
 pub fn create_sub_collection(
     client: &Client,
     name: &str,
     parent_id: &str,
     parent_hash_key: &[u8; 32],
-    owner_user_id: &str,
-    master_key: &[u8],
+    owner_account_id: &str,
+    session: &crate::session::Session,
 ) -> Result<(String, [u8; 32])> {
     let (mut request, collection_key) = crate::collection_crypto::create_owned(
         name,
         Some(parent_id.to_string()),
-        owner_user_id,
-        master_key,
+        owner_account_id,
+        session,
     )?;
     request.name_hash = Some(crate::names::name_hash(parent_hash_key, name)?);
     let resp = client.create_collection(&request)?;

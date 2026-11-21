@@ -32,7 +32,7 @@ fn attempt(
 ) -> Response {
     let request = |path: &str, body: Value| {
         let mut request = c
-            .post(format!("{base}/api/auth/{path}"))
+            .post(format!("{base}/api/v1/auth/{path}"))
             .header("x-kutup-client", "web-account")
             .header("x-real-ip", ip)
             .json(&body);
@@ -101,7 +101,7 @@ fn an_account_signs_in_by_its_name_and_its_keys_carry_its_key_binding() {
     // The login preflight is gone: OPAQUE gives out nothing before the
     // exchange.
     let gone = c
-        .get(format!("{base}/api/auth/login/preflight"))
+        .get(format!("{base}/api/v1/auth/login/preflight"))
         .query(&[("name", &user.username)])
         .send()
         .unwrap();
@@ -125,7 +125,7 @@ fn unknown_names_look_like_accounts() {
     let start = |name: &str| -> Value {
         let (_, ke1) = kutup_crypto::opaque::client_login_start("any password").unwrap();
         let r = c
-            .post(format!("{base}/api/auth/login/start"))
+            .post(format!("{base}/api/v1/auth/login/start"))
             .header("x-kutup-client", "cli")
             .json(&json!({ "name": name, "credentialRequest": b64(&ke1) }))
             .send()
@@ -154,10 +154,11 @@ fn unknown_names_look_like_accounts() {
     assert_eq!(keys(&start(&at_domain)), keys(&fake));
     let (status, _, _) = opaque_login(&c, &base, &name, "any password", "session", None, None);
     assert_eq!(status, 401);
-    // A recovery's preflight: a key binding's shape and an envelope, the same
-    // each time, and for the address as for the name.
+    // A recovery's preflight: a key binding's shape, the same each time, and
+    // for the address as for the name; the envelope comes only after a proof
+    // (its header names the master key's generation).
     let preflight = |name: &str| -> Value {
-        c.get(format!("{base}/api/auth/recover/preflight"))
+        c.get(format!("{base}/api/v1/auth/recover/preflight"))
             .query(&[("name", name)])
             .send()
             .unwrap()
@@ -167,11 +168,12 @@ fn unknown_names_look_like_accounts() {
     let recovery = preflight(&name);
     assert_eq!(recovery, preflight(&name));
     assert_eq!(preflight(&at_domain), recovery);
+    assert!(recovery.get("recoveryKeyEnvelope").is_none());
     let binding = recovery["envelopeBinding"].as_str().unwrap();
     assert!(uuid::Uuid::parse_str(binding).is_ok_and(|id| id.get_version_num() == 4));
     // A recovery grant for it is refused as a wrong phrase is.
     let r = c
-        .post(format!("{base}/api/auth/recover/grant"))
+        .post(format!("{base}/api/v1/auth/recover/grant"))
         .json(&json!({ "name": name, "recoveryProof": b64(&[3u8; 32]) }))
         .send()
         .unwrap();
@@ -201,7 +203,7 @@ fn temporary_passwords_are_registered_by_the_administrators_client() {
     let token = common::admin_token(&c, &base, admin_password, admin_name);
     let username = format!("tmp{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
     let create = |body: Value| {
-        bearer(c.post(format!("{base}/api/admin/users")), &token)
+        bearer(c.post(format!("{base}/api/v1/admin/accounts")), &token)
             .json(&body)
             .send()
             .unwrap()
@@ -221,7 +223,7 @@ fn temporary_passwords_are_registered_by_the_administrators_client() {
     let (registering, request) = kutup_crypto::opaque::client_registration_start("x").unwrap();
     drop(registering);
     let r = bearer(
-        c.post(format!("{base}/api/auth/opaque/register/start")),
+        c.post(format!("{base}/api/v1/auth/opaque/register/start")),
         &stranger.token,
     )
     .json(&json!({
@@ -231,7 +233,7 @@ fn temporary_passwords_are_registered_by_the_administrators_client() {
     .send()
     .unwrap();
     assert_eq!(r.status(), 403);
-    let users: Vec<Value> = bearer(c.get(format!("{base}/api/admin/users")), &token)
+    let users: Vec<Value> = bearer(c.get(format!("{base}/api/v1/admin/accounts")), &token)
         .send()
         .unwrap()
         .json()
@@ -259,7 +261,9 @@ fn temporary_passwords_are_registered_by_the_administrators_client() {
         let mut body = common::temp_registration(&c, &base, password, &token, Some(grant));
         body["grant"] = json!(grant);
         bearer(
-            c.post(format!("{base}/api/admin/users/{id}/rotate-temp-password")),
+            c.post(format!(
+                "{base}/api/v1/admin/accounts/{id}/rotate-temp-password"
+            )),
             &token,
         )
         .json(&body)
@@ -281,7 +285,9 @@ fn temporary_passwords_are_registered_by_the_administrators_client() {
                           "opaqueRecord": "AA==", "opaqueServerKeyId": 1 });
     body["grant"] = json!(grant);
     let reused = bearer(
-        c.post(format!("{base}/api/admin/users/{id}/rotate-temp-password")),
+        c.post(format!(
+            "{base}/api/v1/admin/accounts/{id}/rotate-temp-password"
+        )),
         &token,
     )
     .json(&body)
@@ -292,15 +298,21 @@ fn temporary_passwords_are_registered_by_the_administrators_client() {
 
     // The break-glass administrator, known by its username, is kept.
     let r = bearer(
-        c.delete(format!("{base}/api/admin/users/{}", id_of(admin_name))),
+        c.delete(format!(
+            "{base}/api/v1/admin/accounts/{}",
+            id_of(admin_name)
+        )),
         &token,
     )
     .send()
     .unwrap();
     assert_eq!(r.status(), 403);
-    let r = bearer(c.delete(format!("{base}/api/admin/users/{id}")), &token)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.delete(format!("{base}/api/v1/admin/accounts/{id}")),
+        &token,
+    )
+    .send()
+    .unwrap();
     assert!(r.status().is_success(), "delete: {}", r.status());
     common::purge_accounts(&c, &base, &[&stranger]);
 }
@@ -325,7 +337,7 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .filter(|v| v.starts_with("kutup_known="))
+        .filter(|v| v.starts_with("kutup.known="))
         .map(str::to_owned)
         .collect();
     let path_of = |cookie: &str| -> String {
@@ -338,35 +350,28 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     };
     let known = set
         .iter()
-        .find(|v| !v.starts_with("kutup_known=;"))
+        .find(|v| !v.starts_with("kutup.known=;"))
         .expect("known-client cookie")
         .clone();
     assert!(known.contains("HttpOnly"), "{known}");
     // Sent to sign-in only: a browser path-matches (RFC 6265 5.1.4), so the
     // anonymous Chat routes, which refuse any cookie, never carry it.
     let path = path_of(&known);
-    assert_eq!(path, "/api/auth", "{known}");
+    assert_eq!(path, "/api/v1/auth", "{known}");
     let matches = |request: &str| {
         request == path
             || (request.starts_with(&path)
                 && (path.ends_with('/') || request[path.len()..].starts_with('/')))
     };
-    assert!(matches("/api/auth/login/start"));
+    assert!(matches("/api/v1/auth/login/start"));
     for route in [
-        "/api/chat/anonymous/messages/multi",
-        "/api/chat/anonymous/accounts/x/keys",
-        "/api/chat/users/x/keys",
+        "/api/v1/chat/anonymous/messages/multi",
+        "/api/v1/chat/anonymous/accounts/x/keys",
+        "/api/v1/chat/users/x/keys",
         "/api",
     ] {
         assert!(!matches(route), "{route} would carry {known}");
     }
-    // The mark a browser may hold from before, at `Path=/api`, is cleared.
-    assert!(
-        set.iter().any(|v| v.starts_with("kutup_known=;")
-            && v.contains("Max-Age=0")
-            && path_of(v) == "/api"),
-        "{set:?}"
-    );
     let known = known.split(';').next().unwrap().to_owned();
 
     // Five misses lock that client only; another address still gets in.
@@ -384,7 +389,7 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     for _ in 0..5 {
         let (_, ke1) = kutup_crypto::opaque::client_login_start("a guess").unwrap();
         let r = c
-            .post(format!("{base}/api/auth/login/start"))
+            .post(format!("{base}/api/v1/auth/login/start"))
             .header("x-kutup-client", "web-account")
             .header("x-real-ip", "198.51.100.40")
             .json(&json!({ "name": user.username, "credentialRequest": b64(&ke1) }))
@@ -413,7 +418,7 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     );
     // A malformed request is refused before the name is looked up.
     let r = c
-        .post(format!("{base}/api/auth/login/start"))
+        .post(format!("{base}/api/v1/auth/login/start"))
         .header("x-kutup-client", "web-account")
         .header("x-real-ip", "203.0.113.32")
         .json(&json!({ "name": user.username, "credentialRequest": "not base64!" }))
@@ -433,7 +438,7 @@ fn answers_carry_the_session_version_and_errors_a_code() {
     let c = client();
     let user = register(&c, &base);
     let version = |token: &str| {
-        let response = bearer(c.get(format!("{base}/api/user/me")), token)
+        let response = bearer(c.get(format!("{base}/api/v1/account")), token)
             .send()
             .unwrap();
         assert_eq!(response.status(), 200);
@@ -449,7 +454,7 @@ fn answers_carry_the_session_version_and_errors_a_code() {
     assert_eq!(version(&user.token), first, "stable while nothing changes");
     // A client error names a code, the status's default here.
     let refused: Value = c
-        .get(format!("{base}/api/user/me"))
+        .get(format!("{base}/api/v1/account"))
         .send()
         .unwrap()
         .json()
@@ -474,7 +479,7 @@ fn the_session_version_changes_when_the_account_does() {
     let admin_token = common::admin_token(&c, &base, admin_password, admin_name);
     let user = register(&c, &base);
     let version = || {
-        bearer(c.get(format!("{base}/api/user/me")), &user.token)
+        bearer(c.get(format!("{base}/api/v1/account")), &user.token)
             .send()
             .unwrap()
             .headers()
@@ -487,10 +492,10 @@ fn the_session_version_changes_when_the_account_does() {
     // Made an administrator elsewhere: every app of the account sees a new
     // version on its next answer.
     let promoted = bearer(
-        c.put(format!("{base}/api/admin/users/{}", user.id)),
+        c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin_token,
     )
-    .json(&json!({ "isAdmin": true }))
+    .json(&json!({ "role": "admin" }))
     .send()
     .unwrap();
     assert!(
@@ -504,10 +509,10 @@ fn the_session_version_changes_when_the_account_does() {
     // The value names nothing: it is not a digest anyone could recompute.
     assert!(after.chars().all(|ch| ch.is_ascii_hexdigit()) && after.len() == 16);
     let demoted = bearer(
-        c.put(format!("{base}/api/admin/users/{}", user.id)),
+        c.put(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &admin_token,
     )
-    .json(&json!({ "isAdmin": false }))
+    .json(&json!({ "role": "member" }))
     .send()
     .unwrap();
     assert!(demoted.status().is_success());
@@ -525,7 +530,7 @@ fn every_new_account_has_its_mail_address() {
     let base = base.trim_end_matches('/').to_string();
     let c = client();
     let addresses = |token: &str| -> Vec<Value> {
-        bearer(c.get(format!("{base}/api/mail/addresses")), token)
+        bearer(c.get(format!("{base}/api/v1/mail/addresses")), token)
             .send()
             .unwrap()
             .json()
@@ -579,7 +584,7 @@ fn a_taken_address_refuses_the_username_and_reads_never_write() {
     let taken = format!("taken{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
     runtime
         .block_on(
-            sqlx::query("INSERT INTO mail_addresses (user_id, address) VALUES ($1::uuid, $2)")
+            sqlx::query("INSERT INTO mail_addresses (account_id, address) VALUES ($1::uuid, $2)")
                 .bind(&someone.id)
                 .bind(format!("{taken}@{server}"))
                 .execute(&pool),
@@ -587,7 +592,7 @@ fn a_taken_address_refuses_the_username_and_reads_never_write() {
         .unwrap();
     assert_eq!(common::register_named(&c, &base, &taken).as_u16(), 409);
     assert_eq!(
-        count("SELECT count(*) FROM users WHERE username = $1", &taken),
+        count("SELECT count(*) FROM accounts WHERE username = $1", &taken),
         0
     );
 
@@ -599,11 +604,14 @@ fn a_taken_address_refuses_the_username_and_reads_never_write() {
                 .execute(&pool),
         )
         .unwrap();
-    let listed: Vec<Value> = bearer(c.get(format!("{base}/api/mail/addresses")), &someone.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let listed: Vec<Value> = bearer(
+        c.get(format!("{base}/api/v1/mail/addresses")),
+        &someone.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     // (Only the row this test made for `taken` is left: the account's own is
     // not made again.)
     assert!(

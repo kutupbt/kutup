@@ -1,24 +1,41 @@
-import { fromBase64, openFileMetadataV1, openPublicLinkCollectionKeyV1 } from '@kutup/crypto'
+import { openFileMetadataV1, openPublicLinkCollectionKeyV1 } from '@kutup/crypto'
 import { openAlbumFileKeyV1 } from '@kutup/crypto/album'
 import { DRIVE_ENVELOPE_PURPOSE, openDriveEnvelope } from '@kutup/crypto/driveEnvelope'
 import { toDriveFile } from '@kutup/drive-core/files'
-import { fileKeyAt } from '@kutup/drive-core/keyring'
+import { currentContentOf } from '@kutup/drive-core/keyring'
+import { acceptFileMetadata } from '@kutup/drive-core/metadataGuard'
 import type { DriveFile } from '@kutup/drive-core/model'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
+import { openPublicPlayback, type Playback, type PlaybackFallback } from '@kutup/drive-core/playback'
 import { mediaKindOf } from '@kutup/files/media'
 import type { MediaMetadataV1 } from '@kutup/crypto'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import api from '@kutup/session/client'
+import { getAccessToken } from '@kutup/session/store'
 import type { FileRow } from '@kutup/session/api-types'
 import { joinLivePhotos, type Photo } from '../library/library'
 import { newestFirst } from '../library/timeline'
+import { parseLinkFragment } from '@kutup/crypto/linkFragment'
+import { goToLinkHome } from '@kutup/session/apps'
 
 // An album's public link (docs/plans/photos.md): the album key sealed under
 // a link key that lives only in the URL fragment, so the server never holds
 // it; the page opens the album and its photos in the browser.
 
-export type PublicFailure = 'missingKey' | 'notFound' | 'expired' | 'removed' | 'badKey' | 'notAlbum' | 'other'
+export type PublicFailure =
+  | 'missingKey'
+  | 'newerLink'
+  | 'notFound'
+  | 'expired'
+  | 'removed'
+  | 'blocked'
+  | 'blockedLegal'
+  | 'sharingOff'
+  | 'signInRequired'
+  | 'badKey'
+  | 'notAlbum'
+  | 'other'
 
 export class PublicAlbumError extends Error {
   constructor(public readonly failure: PublicFailure) {
@@ -31,7 +48,7 @@ interface ShareInfo {
   targetId: string
   collectionKeyEnvelope: string
   collectionKeyEpoch: number
-  ownerUserId: string
+  ownerAccountId: string
   /** Who shared it (`alice@example.org`): the page says so. */
   ownerAccount: string
   expiresAt: string | null
@@ -41,7 +58,7 @@ interface ShareInfo {
 }
 
 interface PublicItem {
-  file: Omit<FileRow, 'uploaderUserId' | 'updatedAt' | 'thumbnails'>
+  file: Omit<FileRow, 'uploaderAccountId' | 'updatedAt' | 'thumbnails'>
   thumbnails: DriveFile['thumbnails']
   fileKeyEnvelope: string
   keyGeneration: number
@@ -58,18 +75,14 @@ export interface PublicAlbum {
   photos: PublicPhoto[]
 }
 
-/** The link's key, from the fragment (`#key=…`), which browsers never send. */
+/** The link's key, from the fragment (`#v1.…`), which browsers never send. */
 function linkKey(): Uint8Array | null {
-  try {
-    const key = new URLSearchParams(window.location.hash.slice(1)).get('key')
-    const bytes = key ? fromBase64(key) : null
-    return bytes && bytes.length === 32 ? bytes : null
-  } catch {
-    return null
-  }
+  const fragment = parseLinkFragment(window.location.hash)
+  if (fragment.kind === 'newer') throw new PublicAlbumError('newerLink')
+  return fragment.kind === 'key' ? fragment.key : null
 }
 
-const base = (token: string) => `/share/${encodeURIComponent(token)}`
+const base = (token: string) => `/drive/public-links/${encodeURIComponent(token)}`
 
 export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
   const key = linkKey()
@@ -80,17 +93,24 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
   } catch (error) {
     const response = (error as { response?: { status?: number; data?: { code?: unknown } } }).response
     const status = response?.status
-    // Taken down by the server's administrators: `410` `link_removed`.
-    const gone = response?.data?.code === 'link_removed' ? 'removed' : 'expired'
+    const code = response?.data?.code
+    // The server's controls on public links (docs/plans/server-personal-data.md, A11).
+    if (code === 'linkBlocked') throw new PublicAlbumError(status === 451 ? 'blockedLegal' : 'blocked')
+    if (code === 'sharingOff') throw new PublicAlbumError('sharingOff')
+    if (code === 'signInRequired') throw new PublicAlbumError('signInRequired')
+    // Taken down by the server's administrators: `410` `linkRemoved`.
+    const gone = code === 'linkRemoved' ? 'removed' : 'expired'
     throw new PublicAlbumError(status === 404 ? 'notFound' : status === 410 ? gone : 'other')
   }
+  // A folder's or a file's link shows in Drive (docs/plans/api-surface.md §7).
+  if (share.collectionKind !== 'album' && (await goToLinkHome('drive', token))) return new Promise<PublicAlbum>(() => undefined)
   if (share.collectionKind !== 'album' || !share.nameEnvelope || !share.nameRevision) throw new PublicAlbumError('notAlbum')
   let albumKey: Uint8Array
   let name: string
   try {
     albumKey = await openPublicLinkCollectionKeyV1(share.collectionKeyEnvelope, key, {
       collectionId: share.targetId,
-      ownerUserId: share.ownerUserId,
+      ownerAccountId: share.ownerAccountId,
       epoch: share.collectionKeyEpoch,
     })
     name = new TextDecoder().decode(
@@ -99,7 +119,7 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
         epoch: share.collectionKeyEpoch,
         revision: BigInt(share.nameRevision),
         objectId: share.targetId,
-        parentId: share.ownerUserId,
+        parentId: share.ownerAccountId,
       }),
     )
   } catch {
@@ -117,6 +137,8 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
           generation: item.keyGeneration,
         })
         const metadata = await openFileMetadataV1(item.file, fileKey)
+        // Older metadata than this device has seen of the file does not open.
+        await acceptFileMetadata(item.file.id, item.file.metadataRevision)
         const kind = mediaKindOf(metadata.name, metadata.mimeType)
         if (!kind) return null
         const file = toDriveFile({ ...item.file, thumbnails: item.thumbnails }, { fileKey, metadata })
@@ -127,7 +149,7 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
           // No folder here: the link reaches the photo, nothing around it.
           folder: {
             source: 'shared', id: item.file.collectionId, parentId: null, name: null, key: null, keyEpoch: item.file.keyEpoch,
-            ownerUserId: share.ownerUserId, ownerAuthorityPublicKey: '', epochStatementHash: '', nameRevision: 1, color: null,
+            ownerAccountId: share.ownerAccountId, ownerAuthorityPublicKey: '', epochStatementHash: '', nameRevision: 1, color: null,
             createdAt: item.file.createdAt, updatedAt: item.file.createdAt, ownerAccount: null,
             canUpload: false, canDelete: false, canManage: false, isRoot: false,
           },
@@ -148,17 +170,45 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
 
 /** A photo's thumbnail through the link. */
 export function publicThumbnail(token: string, photo: PublicPhoto, variant: 'sm' | 'lg'): Promise<string | null> {
-  return thumbnailUrl(photo.file, variant, `${base(token)}/thumbnails/${photo.id}/${variant}`)
+  return thumbnailUrl(photo.file, variant, `${base(token)}/files/${photo.id}/thumbnails/${variant}`)
 }
 
 /** A photo's content through the link, decrypted as it streams. */
 export async function readPublicOriginal(token: string, photo: PublicPhoto, signal?: AbortSignal): Promise<Blob> {
   const file = photo.file
-  const key = await fileKeyAt(file, file.contentKeyGeneration)
-  const url = `${await resolveApiBase()}${base(token)}/download/${file.id}`
+  const current = await currentContentOf(file)
+  const url = `${await resolveApiBase()}${base(token)}/files/${file.id}/download`
   const parts: BlobPart[] = []
-  for await (const { plain } of fetchDecryptedChunks(url, key, { fileId: file.id, generation: file.contentKeyGeneration }, '', signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, current.fileKey, current.expected, getAccessToken() ?? '', signal)) {
     parts.push(new Blob([plain as BlobPart]))
   }
   return new Blob(parts, { type: file.mimeType })
+}
+
+/**
+ * A video through the link, for its player: streamed by block through the
+ * service worker (docs/plans/drive-block-format.md §4) with the link's key
+ * and the default limits, or read whole where no worker controls the page.
+ */
+export async function openPublicVideo(
+  token: string,
+  photo: PublicPhoto,
+  signal?: AbortSignal,
+  onProgress?: (read: number) => void,
+  onFallback?: (next: PlaybackFallback) => void,
+): Promise<Playback> {
+  const url = `${await resolveApiBase()}${base(token)}/files/${photo.file.id}/download`
+  return openPublicPlayback(
+    {
+      url,
+      size: photo.file.size,
+      mimeType: photo.file.mimeType,
+      content: () => currentContentOf(photo.file),
+      accessToken: getAccessToken() ?? '',
+      readWhole: (readSignal) => readPublicOriginal(token, photo, readSignal),
+    },
+    signal,
+    onProgress,
+    onFallback,
+  )
 }

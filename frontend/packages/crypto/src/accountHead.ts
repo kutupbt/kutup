@@ -4,7 +4,8 @@
 // and the head this page verified, stay in WASM. Sealed heads travel as
 // canonical base64.
 
-import { toBase64 } from './base64'
+import type { ObjectIdKey } from './accountRoots'
+import type { MasterKeys } from './masterKeys'
 import { getCryptoWasm, type AccountHeadKeysHandle, type VerifiedAccountHeadHandle } from './rustWasm'
 
 /** One scope's entry: how many values, and the digest of their (id, revision) pairs. */
@@ -107,9 +108,44 @@ export class VerifiedHead {
 export class AccountHead {
   private constructor(private readonly handle: AccountHeadKeysHandle) {}
 
-  static async open(masterKey: Uint8Array, binding: string, incarnationId: string): Promise<AccountHead> {
+  /**
+   * `generations`: the account's root generations in use (from its roots); a
+   * head that records others is refused (`rootGenerationMismatch`), so a server
+   * can't serve an older root (docs/plans/identity-root.md).
+   */
+  /**
+   * The head keys of the account whose master keys are `masterKeys` (heads
+   * sealed under the current key, opened under the one they name) and whose
+   * object-id root keys its ids (`roots.objectIdKey`). `roots`' generations
+   * are the ones every head must record.
+   */
+  static async open(
+    masterKeys: MasterKeys,
+    binding: string,
+    incarnationId: string,
+    roots: {
+      objectIdKey: ObjectIdKey
+      identityGeneration: number
+      driveGeneration: number
+      objectIdGeneration: number
+      pseudonymGeneration: number
+      callLinkGeneration: number
+    },
+  ): Promise<AccountHead> {
     const wasm = await getCryptoWasm()
-    return new AccountHead(new wasm.AccountHeadKeys(toBase64(masterKey), binding, incarnationId))
+    return new AccountHead(
+      new wasm.AccountHeadKeys(
+        masterKeys,
+        roots.objectIdKey,
+        binding,
+        incarnationId,
+        roots.identityGeneration,
+        roots.driveGeneration,
+        roots.objectIdGeneration,
+        roots.pseudonymGeneration,
+        roots.callLinkGeneration,
+      ),
+    )
   }
 
   writer(deviceId: string): string {

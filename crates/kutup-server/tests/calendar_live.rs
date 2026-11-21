@@ -7,8 +7,8 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 
 use kutup_crypto::calendar::{
-    self as cal, EventPartV1, Passphrase, SealedEventV1, SealedMetadataV1, SessionKey,
-    UnlockedCalendarKey,
+    self as cal, CalendarShareEnvelopeV1, EventPartV1, Passphrase, SealedEventV1, SealedMetadataV1,
+    SessionKey, UnlockedCalendarKey, FIRST_KEY_GENERATION,
 };
 use kutup_crypto::calendar_event::{EventFieldsV1, TimeV1};
 use kutup_crypto::mail_key::{self, MailKeyEntryV1, MailKeyListV1, DEFAULT_FLAGS};
@@ -27,7 +27,7 @@ struct Owner {
 /// A user with an address key, as the Account app sets one up.
 fn owner(c: &Client, base: &str) -> Owner {
     let user = register(c, base);
-    let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+    let addresses: Value = bearer(c.get(format!("{base}/api/v1/mail/addresses")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -39,9 +39,14 @@ fn owner(c: &Client, base: &str) -> Owner {
         .unwrap()
         .as_secs() as u32;
     let key = mail_key::generate_address_key(&address, now).unwrap();
-    let envelope =
-        mail_key::seal_address_key(&user.master_key, &user.binding, &address, &key.secret_key)
-            .unwrap();
+    let envelope = mail_key::seal_address_key(
+        &user.master_key,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        &user.binding,
+        &address,
+        &key.secret_key,
+    )
+    .unwrap();
     let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
     let list = MailKeyListV1 {
         incarnation_id: hex32(user.identity.incarnation_id()),
@@ -50,17 +55,17 @@ fn owner(c: &Client, base: &str) -> Owner {
         sequence: 1,
         previous_hash: None,
         issued_at: "2026-10-21T12:00:00Z".into(),
-        keys: vec![MailKeyEntryV1 {
-            fingerprint: key.fingerprint,
-            sha256_fingerprint: key.sha256_fingerprint,
-            primary: true,
-            flags: DEFAULT_FLAGS,
-        }],
+        keys: vec![MailKeyEntryV1::v4(
+            key.fingerprint,
+            key.sha256_fingerprint,
+            true,
+            DEFAULT_FLAGS,
+        )],
     }
     .sign(user.identity.authority_signing_key())
     .unwrap();
     let r = bearer(
-        c.post(format!("{base}/api/mail/addresses/{id}/keys")),
+        c.post(format!("{base}/api/v1/mail/addresses/{id}/keys")),
         &user.token,
     )
     .json(&json!({
@@ -81,10 +86,25 @@ fn owner(c: &Client, base: &str) -> Owner {
 
 /// A new calendar's body, its passphrase and its key as made.
 fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase, UnlockedCalendarKey) {
-    let id = uuid::Uuid::new_v4();
+    new_calendar_with_id(owner, name, uuid::Uuid::new_v4())
+}
+
+/// A new calendar under a chosen id: its share and metadata are bound to it.
+fn new_calendar_with_id(
+    owner: &Owner,
+    name: &str,
+    id: uuid::Uuid,
+) -> (Value, Passphrase, UnlockedCalendarKey) {
     let passphrase = Passphrase::generate();
     let key = cal::generate_calendar_key(&passphrase, 1_790_000_000).unwrap();
-    let sealed = cal::seal_passphrase(&passphrase, &owner.secret_key).unwrap();
+    let share = cal::seal_own_passphrase(
+        &passphrase,
+        &id.to_string(),
+        FIRST_KEY_GENERATION,
+        &owner.user.person,
+        &owner.user.identity,
+    )
+    .unwrap();
     let metadata = key
         .unlocked
         .seal_metadata(&id.to_string(), name, "Family", &owner.secret_key)
@@ -92,16 +112,10 @@ fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase, UnlockedCalend
     (
         json!({
             "id": id,
-            "addressId": owner.address_id,
             "publicKey": b64(&key.public_key),
             "lockedSecretKey": b64(&key.locked_secret_key),
-            "passphrase": {
-                "dataPacket": b64(&sealed.data_packet),
-                "signature": sealed.signature,
-                "keyPacket": b64(&sealed.key_packets[0]),
-            },
+            "passphraseShare": share.encode_b64().unwrap(),
             "metadata": SealedMetadataV1::of(&metadata),
-            "color": "#3E7BFA",
         }),
         passphrase,
         key.unlocked,
@@ -133,6 +147,9 @@ fn fields(uid: &str, start: &str, end: &str, summary: &str) -> EventFieldsV1 {
         transp: Some("opaque".into()),
         comment: None,
         other: Vec::new(),
+        signed_other: Vec::new(),
+        calendar_other: Vec::new(),
+        comment_other: Vec::new(),
     }
 }
 
@@ -146,7 +163,7 @@ fn seal(fields: &EventFieldsV1, calendar: &UnlockedCalendarKey, author_secret: &
 fn sync(c: &Client, base: &str, owner: &Owner, calendar: &str, changes: Value) -> Vec<Value> {
     let r = bearer(
         c.post(format!(
-            "{base}/api/calendar/calendars/{calendar}/events/sync"
+            "{base}/api/v1/calendar/calendars/{calendar}/events/sync"
         )),
         &owner.user.token,
     )
@@ -165,7 +182,7 @@ fn sync(c: &Client, base: &str, owner: &Owner, calendar: &str, changes: Value) -
 fn drop_calendars(c: &Client, base: &str, owner: &Owner, ids: &[&str]) {
     for id in ids {
         let r = bearer(
-            c.delete(format!("{base}/api/calendar/calendars/{id}")),
+            c.delete(format!("{base}/api/v1/calendar/calendars/{id}")),
             &owner.user.token,
         )
         .json(&json!({}))
@@ -177,7 +194,7 @@ fn drop_calendars(c: &Client, base: &str, owner: &Owner, ids: &[&str]) {
 }
 
 fn storage(c: &Client, base: &str, user: &User) -> i64 {
-    let usage: Value = bearer(c.get(format!("{base}/api/user/storage")), &user.token)
+    let usage: Value = bearer(c.get(format!("{base}/api/v1/account/storage")), &user.token)
         .send()
         .unwrap()
         .json()
@@ -196,11 +213,11 @@ fn calendars_and_events() {
     let ada = owner(&c, &base);
     let eve = owner(&c, &base);
 
-    // A calendar: its key, the passphrase sealed to Ada's address key and
-    // signed, the name sealed to the calendar.
+    // A calendar: its key, the passphrase shared with Ada's own account key
+    // and signed by it, the name sealed to the calendar.
     let (body, passphrase, key) = new_calendar(&ada, "Ev");
     let r = bearer(
-        c.post(format!("{base}/api/calendar/calendars")),
+        c.post(format!("{base}/api/v1/calendar/calendars")),
         &ada.user.token,
     )
     .json(&body)
@@ -215,23 +232,23 @@ fn calendars_and_events() {
     let created: Value = r.json().unwrap();
     let id = created["id"].as_str().unwrap().to_owned();
     assert_eq!(created["permissions"], 127);
-    assert_eq!(created["color"], "#3e7bfa");
-    assert_eq!(created["revision"], 1);
+    // The member's colour and display are its sealed settings record, not
+    // the server's (docs/plans/account-records.md).
+    assert!(created.get("color").is_none() && created.get("revision").is_none());
     assert_eq!(
         decode(created["publicKey"].as_str().unwrap()),
         key.public_key()
     );
 
     // What the server hands back opens: the passphrase, the key, the name.
-    let opened = cal::open_passphrase(
-        &decode(created["passphrase"]["keyPacket"].as_str().unwrap()),
-        &decode(created["passphrase"]["dataPacket"].as_str().unwrap()),
-        created["passphrase"]["signature"]
-            .as_str()
-            .unwrap()
-            .as_bytes(),
-        &ada.secret_key,
-        &[&ada.public_key],
+    assert_eq!(created["keyGeneration"], 1);
+    assert_eq!(created["ownerAccountId"], ada.user.id.as_str());
+    let opened = cal::open_own_passphrase(
+        &CalendarShareEnvelopeV1::decode_b64(created["passphraseShare"].as_str().unwrap()).unwrap(),
+        &id,
+        FIRST_KEY_GENERATION,
+        &ada.user.person,
+        &ada.user.identity,
     )
     .unwrap();
     assert_eq!(opened.as_str(), passphrase.as_str());
@@ -250,22 +267,21 @@ fn calendars_and_events() {
     let charged = storage(&c, &base, &ada.user);
     assert!(charged > 0);
 
-    // Listed by the account head's calendars scope at revision 1.
-    let index: Value = bearer(
-        c.get(format!("{base}/api/account/index/calendars")),
+    // No head scope lists calendars by id any more: the account's settings
+    // records (`calendarSettings`) stand for them, under hashed ids.
+    let r = bearer(
+        c.get(format!("{base}/api/v1/account/index/calendars")),
         &ada.user.token,
     )
     .send()
-    .unwrap()
-    .json()
     .unwrap();
-    assert!(index["values"].to_string().contains(&id), "{index}");
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
 
-    // A second calendar with the same id: refused.
-    let (mut again, _, _) = new_calendar(&ada, "Again");
-    again["id"] = json!(id);
+    // A second calendar with the same id (its share bound to that id, so
+    // only the id clashes): refused.
+    let (again, _, _) = new_calendar_with_id(&ada, "Again", id.parse().unwrap());
     let r = bearer(
-        c.post(format!("{base}/api/calendar/calendars")),
+        c.post(format!("{base}/api/v1/calendar/calendars")),
         &ada.user.token,
     )
     .json(&again)
@@ -274,17 +290,55 @@ fn calendars_and_events() {
     assert_eq!(r.status(), StatusCode::CONFLICT);
     assert_eq!(r.json::<Value>().unwrap()["code"], "calendarExists");
 
-    // Refused calendars: a passphrase to someone else's key, a locked key
-    // that isn't the calendar's, another account's address.
+    // Refused calendars: Eve's own share, a share of another calendar of
+    // Ada's, a share to Eve signed by Ada, a locked key that isn't the
+    // calendar's.
     let (mut bad, _, _) = new_calendar(&ada, "Bad");
     let (other, _, _) = new_calendar(&eve, "Other");
-    bad["passphrase"] = other["passphrase"].clone();
+    bad["passphraseShare"] = other["passphraseShare"].clone();
     assert_status(
         &c,
         &base,
         &ada.user,
         "POST",
-        "/api/calendar/calendars",
+        "/api/v1/calendar/calendars",
+        &bad,
+        StatusCode::BAD_REQUEST,
+    );
+    let (mut bad, _, _) = new_calendar(&ada, "Bad");
+    let (elsewhere, _, _) = new_calendar(&ada, "Elsewhere");
+    bad["passphraseShare"] = elsewhere["passphraseShare"].clone();
+    assert_status(
+        &c,
+        &base,
+        &ada.user,
+        "POST",
+        "/api/v1/calendar/calendars",
+        &bad,
+        StatusCode::BAD_REQUEST,
+    );
+    let (mut bad, _, _) = new_calendar(&ada, "Bad");
+    let eve_incarnation = eve.user.identity.incarnation_id();
+    let to_eve = cal::seal_passphrase(
+        &Passphrase::generate(),
+        bad["id"].as_str().unwrap(),
+        FIRST_KEY_GENERATION,
+        &ada.user.person,
+        &ada.user.identity,
+        &cal::CalendarMember {
+            account: &eve.user.person,
+            incarnation_id: &eve_incarnation,
+            xwing_public_key: &eve.user.identity.drive_xwing_public_key(),
+        },
+    )
+    .unwrap();
+    bad["passphraseShare"] = json!(to_eve.encode_b64().unwrap());
+    assert_status(
+        &c,
+        &base,
+        &ada.user,
+        "POST",
+        "/api/v1/calendar/calendars",
         &bad,
         StatusCode::BAD_REQUEST,
     );
@@ -295,18 +349,7 @@ fn calendars_and_events() {
         &base,
         &ada.user,
         "POST",
-        "/api/calendar/calendars",
-        &bad,
-        StatusCode::BAD_REQUEST,
-    );
-    let (mut bad, _, _) = new_calendar(&ada, "Bad");
-    bad["addressId"] = json!(eve.address_id);
-    assert_status(
-        &c,
-        &base,
-        &ada.user,
-        "POST",
-        "/api/calendar/calendars",
+        "/api/v1/calendar/calendars",
         &bad,
         StatusCode::BAD_REQUEST,
     );
@@ -331,7 +374,7 @@ fn calendars_and_events() {
     // In its window, and opened by the calendar's key.
     let page: Value = bearer(
         c.get(format!(
-            "{base}/api/calendar/calendars/{id}/events?start=2026-10-26T00:00:00Z&end=2026-11-02T00:00:00Z"
+            "{base}/api/v1/calendar/calendars/{id}/events?start=2026-10-26T00:00:00Z&end=2026-11-02T00:00:00Z"
         )),
         &ada.user.token,
     )
@@ -348,7 +391,7 @@ fn calendars_and_events() {
     assert_eq!(EventFieldsV1::of(&opened.parts), first);
     let outside: Value = bearer(
         c.get(format!(
-            "{base}/api/calendar/calendars/{id}/events?start=2026-11-02T00:00:00Z&end=2026-11-09T00:00:00Z"
+            "{base}/api/v1/calendar/calendars/{id}/events?start=2026-11-02T00:00:00Z&end=2026-11-09T00:00:00Z"
         )),
         &ada.user.token,
     )
@@ -466,7 +509,7 @@ fn calendars_and_events() {
     );
     assert_eq!(
         (results[0]["status"].as_u64(), results[0]["code"].as_str()),
-        (Some(409), Some("revision_conflict")),
+        (Some(409), Some("revisionConflict")),
         "{results:?}"
     );
     // A SEQUENCE lower than the stored one: refused.
@@ -506,7 +549,7 @@ fn calendars_and_events() {
     let page = |query: &str| -> Value {
         bearer(
             c.get(format!(
-                "{base}/api/calendar/calendars/{id}/events?{window}&limit=1{query}"
+                "{base}/api/v1/calendar/calendars/{id}/events?{window}&limit=1{query}"
             )),
             &ada.user.token,
         )
@@ -530,7 +573,7 @@ fn calendars_and_events() {
     // Half a cursor: refused.
     let r = bearer(
         c.get(format!(
-            "{base}/api/calendar/calendars/{id}/events?{window}&afterId={event_id}"
+            "{base}/api/v1/calendar/calendars/{id}/events?{window}&afterId={event_id}"
         )),
         &ada.user.token,
     )
@@ -555,7 +598,7 @@ fn calendars_and_events() {
     // Strangers see nothing; a sync over the batch is refused.
     let r = bearer(
         c.get(format!(
-            "{base}/api/calendar/calendars/{id}/events/{event_id}"
+            "{base}/api/v1/calendar/calendars/{id}/events/{event_id}"
         )),
         &eve.user.token,
     )
@@ -563,7 +606,7 @@ fn calendars_and_events() {
     .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
     let r = bearer(
-        c.post(format!("{base}/api/calendar/calendars/{id}/events/sync")),
+        c.post(format!("{base}/api/v1/calendar/calendars/{id}/events/sync")),
         &eve.user.token,
     )
     .json(&json!({ "addressId": eve.address_id, "changes": [{ "delete": { "id": event_id, "baseRevision": 3 } }] }))
@@ -574,7 +617,7 @@ fn calendars_and_events() {
         .map(|_| json!({ "delete": { "id": event_id, "baseRevision": 3 } }))
         .collect();
     let r = bearer(
-        c.post(format!("{base}/api/calendar/calendars/{id}/events/sync")),
+        c.post(format!("{base}/api/v1/calendar/calendars/{id}/events/sync")),
         &ada.user.token,
     )
     .json(&json!({ "addressId": ada.address_id, "changes": eleven }))
@@ -582,24 +625,15 @@ fn calendars_and_events() {
     .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 
-    // The member's own colour, by revision; a stale one conflicts.
+    // The member's own colour is not the server's to keep: refused.
     let r = bearer(
-        c.put(format!("{base}/api/calendar/calendars/{id}")),
+        c.put(format!("{base}/api/v1/calendar/calendars/{id}")),
         &ada.user.token,
     )
-    .json(&json!({ "color": "#00aa55", "baseRevision": 1, "revision": 2 }))
+    .json(&json!({ "color": "#00aa55" }))
     .send()
     .unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
-    assert_eq!(r.json::<Value>().unwrap()["color"], "#00aa55");
-    let r = bearer(
-        c.put(format!("{base}/api/calendar/calendars/{id}")),
-        &ada.user.token,
-    )
-    .json(&json!({ "display": false, "baseRevision": 1, "revision": 2 }))
-    .send()
-    .unwrap();
-    assert_eq!(r.status(), StatusCode::CONFLICT);
+    assert!(r.status().is_client_error(), "{}", r.status());
 
     // A delete from an older revision: refused, the event kept.
     let results = sync(
@@ -609,7 +643,7 @@ fn calendars_and_events() {
         &id,
         json!([{ "delete": { "id": event_id, "baseRevision": 2 } }]),
     );
-    assert_eq!(results[0]["code"], "revision_conflict", "{results:?}");
+    assert_eq!(results[0]["code"], "revisionConflict", "{results:?}");
     // Deleted with its events; the storage goes back.
     let results = sync(
         &c,
@@ -620,7 +654,7 @@ fn calendars_and_events() {
     );
     assert_eq!(results[0]["status"], 200);
     let r = bearer(
-        c.delete(format!("{base}/api/calendar/calendars/{id}")),
+        c.delete(format!("{base}/api/v1/calendar/calendars/{id}")),
         &eve.user.token,
     )
     .json(&json!({}))
@@ -628,7 +662,7 @@ fn calendars_and_events() {
     .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
     let r = bearer(
-        c.delete(format!("{base}/api/calendar/calendars/{id}")),
+        c.delete(format!("{base}/api/v1/calendar/calendars/{id}")),
         &ada.user.token,
     )
     .json(&json!({}))
@@ -637,7 +671,7 @@ fn calendars_and_events() {
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
     assert_eq!(storage(&c, &base, &ada.user), 0);
     let listed: Value = bearer(
-        c.get(format!("{base}/api/calendar/calendars")),
+        c.get(format!("{base}/api/v1/calendar/calendars")),
         &ada.user.token,
     )
     .send()
@@ -652,7 +686,7 @@ fn calendars_and_events() {
 fn made_calendar(c: &Client, base: &str, ada: &Owner, name: &str) -> (String, UnlockedCalendarKey) {
     let (body, _, key) = new_calendar(ada, name);
     let r = bearer(
-        c.post(format!("{base}/api/calendar/calendars")),
+        c.post(format!("{base}/api/v1/calendar/calendars")),
         &ada.user.token,
     )
     .json(&body)
@@ -697,7 +731,7 @@ fn repeating_events() {
     let window = |start: &str, end: &str| -> Vec<String> {
         let page: Value = bearer(
             c.get(format!(
-                "{base}/api/calendar/calendars/{id}/events?start={start}&end={end}"
+                "{base}/api/v1/calendar/calendars/{id}/events?start={start}&end={end}"
             )),
             &ada.user.token,
         )
@@ -843,7 +877,7 @@ fn repeating_events() {
     // landing once however often it is sent: cut the series to two, then
     // the new series from the 2nd (its own UID).
     let stored: Value = bearer(
-        c.get(format!("{base}/api/calendar/calendars/{id}/events?start=2026-10-19T00:00:00Z&end=2026-10-20T00:00:00Z")),
+        c.get(format!("{base}/api/v1/calendar/calendars/{id}/events?start=2026-10-19T00:00:00Z&end=2026-10-20T00:00:00Z")),
         &ada.user.token,
     )
     .send()
@@ -884,7 +918,7 @@ fn repeating_events() {
             assert_eq!(results[0]["event"]["rangeEndUtc"], "2026-10-26T09:00:00Z");
         } else {
             // Sent again: the cut is a conflict the app reads as done.
-            assert_eq!(results[0]["code"], "revision_conflict", "{results:?}");
+            assert_eq!(results[0]["code"], "revisionConflict", "{results:?}");
         }
         assert_eq!(results[1]["status"], 200, "{results:?}");
     }
@@ -901,7 +935,7 @@ fn repeating_events() {
     let events = |start: &str, end: &str| -> Vec<Value> {
         let page: Value = bearer(
             c.get(format!(
-                "{base}/api/calendar/calendars/{id}/events?start={start}&end={end}"
+                "{base}/api/v1/calendar/calendars/{id}/events?start={start}&end={end}"
             )),
             &ada.user.token,
         )
@@ -1063,7 +1097,7 @@ fn reminders_and_alarms() {
     let alarms = |start: &str, end: &str| -> Vec<Value> {
         let page: Value = bearer(
             c.get(format!(
-                "{base}/api/calendar/alarms?start={start}&end={end}"
+                "{base}/api/v1/calendar/alarms?start={start}&end={end}"
             )),
             &ada.user.token,
         )
@@ -1152,7 +1186,7 @@ fn reminders_and_alarms() {
         ["2027-11-04T09:00:00Z", "2027-11-04T09:00:00Z"]
     );
     let r = bearer(
-        c.put(format!("{base}/api/calendar/settings")),
+        c.put(format!("{base}/api/v1/calendar/settings")),
         &ada.user.token,
     )
     .json(&json!({ "zone": "Mars/Olympus" }))
@@ -1161,7 +1195,7 @@ fn reminders_and_alarms() {
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     assert_eq!(r.json::<Value>().unwrap()["code"], "unknownZone");
     let r = bearer(
-        c.put(format!("{base}/api/calendar/settings")),
+        c.put(format!("{base}/api/v1/calendar/settings")),
         &ada.user.token,
     )
     .json(&json!({ "zone": "Europe/Istanbul" }))
@@ -1175,7 +1209,7 @@ fn reminders_and_alarms() {
 
     // The member's defaults, for every event of the calendar.
     let listed: Value = bearer(
-        c.get(format!("{base}/api/calendar/calendars")),
+        c.get(format!("{base}/api/v1/calendar/calendars")),
         &ada.user.token,
     )
     .send()
@@ -1191,7 +1225,7 @@ fn reminders_and_alarms() {
         .clone();
     assert_eq!(mine["defaultReminders"]["timed"][0]["trigger"], "-PT15M");
     let r = bearer(
-        c.put(format!("{base}/api/calendar/calendars/{id}")),
+        c.put(format!("{base}/api/v1/calendar/calendars/{id}")),
         &ada.user.token,
     )
     .json(&json!({
@@ -1199,8 +1233,6 @@ fn reminders_and_alarms() {
             "timed": [{ "type": "email", "trigger": "-P1D" }],
             "allDay": [{ "type": "device", "trigger": "PT9H" }],
         },
-        "baseRevision": mine["revision"],
-        "revision": mine["revision"].as_i64().unwrap() + 1,
     }))
     .send()
     .unwrap();
@@ -1230,7 +1262,7 @@ fn reminders_and_alarms() {
     };
     let subscribe = |endpoint: &str, p256dh: &str| {
         bearer(
-            c.put(format!("{base}/api/calendar/push-subscription")),
+            c.put(format!("{base}/api/v1/calendar/push-subscription")),
             &ada.user.token,
         )
         .json(&json!({ "endpoint": endpoint, "p256dh": p256dh, "auth": "AAAAAAAAAAAAAAAAAAAAAA" }))
@@ -1251,7 +1283,7 @@ fn reminders_and_alarms() {
         );
         assert_eq!(subscribe(&fcm, "AAAA"), StatusCode::BAD_REQUEST);
         let r = bearer(
-            c.delete(format!("{base}/api/calendar/push-subscription")),
+            c.delete(format!("{base}/api/v1/calendar/push-subscription")),
             &ada.user.token,
         )
         .send()
@@ -1329,7 +1361,7 @@ fn the_calendar_limit_is_a_setting() {
     let (name, password) = admin.split_once(':').unwrap();
     let admin_token = admin_token(&c, &base, password, name);
     let set = |value: Value| {
-        let r = bearer(c.put(format!("{base}/api/admin/settings")), &admin_token)
+        let r = bearer(c.put(format!("{base}/api/v1/admin/settings")), &admin_token)
             .json(&json!({ "calendarsPerAccount": value }))
             .send()
             .unwrap();
@@ -1338,14 +1370,14 @@ fn the_calendar_limit_is_a_setting() {
     let ada = owner(&c, &base);
     set(json!(1));
     let first = bearer(
-        c.post(format!("{base}/api/calendar/calendars")),
+        c.post(format!("{base}/api/v1/calendar/calendars")),
         &ada.user.token,
     )
     .json(&new_calendar(&ada, "One").0)
     .send()
     .unwrap();
     let second = bearer(
-        c.post(format!("{base}/api/calendar/calendars")),
+        c.post(format!("{base}/api/v1/calendar/calendars")),
         &ada.user.token,
     )
     .json(&new_calendar(&ada, "Two").0)
@@ -1360,7 +1392,7 @@ fn the_calendar_limit_is_a_setting() {
         .unwrap()
         .to_owned();
     let r = bearer(
-        c.delete(format!("{base}/api/calendar/calendars/{id}")),
+        c.delete(format!("{base}/api/v1/calendar/calendars/{id}")),
         &ada.user.token,
     )
     .json(&json!({}))

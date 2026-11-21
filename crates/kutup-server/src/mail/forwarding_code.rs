@@ -21,7 +21,7 @@ use crate::AppState;
 
 /// The label the code key is derived under, apart from every other use of
 /// `MAIL_FORWARDING_KEYS`.
-const CODE_KEY_LABEL: &[u8] = b"kutup mail forwarding code v1";
+const CODE_KEY_LABEL: &[u8] = kutup_crypto::labels::MAIL_FORWARDING_CODE_KEY_V1;
 
 /// Codes a forwarding may send in a minute (`forwarding_code_resends`).
 static RESENDS: std::sync::LazyLock<RateLimiter> =
@@ -68,7 +68,7 @@ pub fn matches(
 }
 
 /// The label an outside forwarding's stop link is derived under.
-const STOP_LABEL: &[u8] = b"kutup mail forwarding stop v1";
+const STOP_LABEL: &[u8] = kutup_crypto::labels::MAIL_FORWARDING_STOP_V1;
 
 /// An outside forwarding's stop link token and the hash it is found by
 /// (`confirmation_hash`): derived from the current forwarding key, so every
@@ -119,7 +119,7 @@ pub async fn issue(
     let (version, _) = keys.current().ok_or(NotIssued::Unavailable)?;
     let key = code_key(keys, version).expect("the current key is configured");
     let (account, destination): (Uuid, String) = sqlx::query_as(
-        "SELECT user_id, lower(forwardee_email) FROM mail_forwardings WHERE id = $1",
+        "SELECT account_id, lower(forwardee_email) FROM mail_forwardings WHERE id = $1",
     )
     .bind(forwarding)
     .fetch_one(&mut **tx)
@@ -253,7 +253,7 @@ async fn try_send(
             "SELECT f.kind, a.address, f.forwardee_email, p.language
                FROM mail_forwardings f
                JOIN mail_addresses a ON a.id = f.forwarder_address_id
-               LEFT JOIN user_ui_preferences p ON p.user_id = f.user_id
+               LEFT JOIN account_ui_preferences p ON p.account_id = f.account_id
               WHERE f.id = $1",
         )
         .bind(issued.forwarding)
@@ -272,7 +272,7 @@ async fn try_send(
     }
     // Under Mail's own rules: none goes out for an account that may not
     // send outside now.
-    let account: Uuid = sqlx::query_scalar("SELECT user_id FROM mail_forwardings WHERE id = $1")
+    let account: Uuid = sqlx::query_scalar("SELECT account_id FROM mail_forwardings WHERE id = $1")
         .bind(issued.forwarding)
         .fetch_one(&state.pool)
         .await?;

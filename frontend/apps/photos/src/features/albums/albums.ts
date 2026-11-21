@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createOwnedCollectionV1, openFileMetadataV1, renameOwnedCollectionV1 } from '@kutup/crypto'
+import { acceptFileMetadata } from '@kutup/drive-core/metadataGuard'
 import { openAlbumFileKeyV1, sealAlbumFileKeyV1 } from '@kutup/crypto/album'
 import { rotateFolder, type FolderAccess, type Removal } from '@kutup/drive-core/access'
 import type { PendingUpgradeRemoval } from '@kutup/drive-core/identityPins'
@@ -18,7 +19,7 @@ import { newestFirst } from '../library/timeline'
 // is opened, shared and re-keyed as a Drive folder is (it is one to
 // drive-core), so its owner shares it with people who may view it or add
 // their own photos to it, and with people on other servers, who view it
-// through their own server (`/drive/federation/shares/:id/album`).
+// through their own server (`/drive/federation/folder-shares/:id/album`).
 
 export interface Album {
   /** The album as a collection: its key, epoch, owner and this account's rights. */
@@ -89,13 +90,13 @@ function toAlbum(folder: Folder, itemCount: number): Album | null {
 export function useAlbums() {
   const identity = useDriveIdentity()
   return useQuery({
-    queryKey: [...albumsKey, identity.data?.userId],
+    queryKey: [...albumsKey, identity.data?.accountId],
     enabled: identity.isSuccess,
     queryFn: async (): Promise<Album[]> => {
       const me = identity.data!
       const [local, remote] = await Promise.all([
-        api.get<(CollectionRowWithTimes & { itemCount: number })[]>('/albums'),
-        api.get<IncomingShare[]>('/drive/federation/shares', { params: { kind: 'album' } }),
+        api.get<(CollectionRowWithTimes & { itemCount: number })[]>('/photos/albums'),
+        api.get<IncomingShare[]>('/drive/federation/folder-shares', { params: { kind: 'album' } }),
       ])
       const opened = await Promise.all([
         ...local.data.map(async (row) => toAlbum(await openRow(row, me), row.itemCount)),
@@ -126,7 +127,7 @@ function folderFor(index: FolderIndex | undefined, row: FileRow, album: Album): 
     name: null,
     key: null,
     keyEpoch: row.keyEpoch,
-    ownerUserId: '',
+    ownerAccountId: '',
     ownerAuthorityPublicKey: '',
     epochStatementHash: '',
     nameRevision: 1,
@@ -151,7 +152,7 @@ export function useAlbumItems(album: Album | undefined, index: FolderIndex | und
     queryFn: async (): Promise<Photo[]> => {
       const a = album!
       if (a.folder.source === 'remote') return remoteAlbumItems(a, () => queryClient.invalidateQueries({ queryKey: albumsKey }))
-      const { data } = await api.get<AlbumItemWire[]>(`/albums/${a.id}/items`)
+      const { data } = await api.get<AlbumItemWire[]>(`/photos/albums/${a.id}/items`)
       const stale: Photo[] = []
       const photos = await Promise.all(
         data.map(async (item): Promise<Photo | null> => {
@@ -171,6 +172,8 @@ export function useAlbumItems(album: Album | undefined, index: FolderIndex | und
               generation: item.keyGeneration,
             })
             const metadata = await openFileMetadataV1(item.file, fileKey)
+            // Older metadata than this device has seen of the file does not open.
+            await acceptFileMetadata(item.file.id, item.file.metadataRevision)
             const photo = toPhoto(folderFor(index, item.file, a), toDriveFile(item.file, { fileKey, metadata }))
             return photo ? { ...photo, addedBy: item.addedBy } : null
           } catch {
@@ -196,13 +199,13 @@ async function remoteAlbumItems(album: Album, reloadAlbums: () => Promise<void>)
   const shareId = album.folder.remoteShareId!
   let data: RemoteAlbumItemWire[]
   try {
-    data = (await api.get<RemoteAlbumItemWire[]>(`/drive/federation/shares/${shareId}/album`)).data
+    data = (await api.get<RemoteAlbumItemWire[]>(`/drive/federation/folder-shares/${shareId}/album`)).data
   } catch (error) {
     if ((error as { response?: { status?: number } }).response?.status === 404) throw new AlbumGone()
     throw error
   }
   if (data.some((item) => item.albumEpoch > album.folder.keyEpoch)) {
-    await api.post(`/drive/federation/shares/${shareId}/refresh`)
+    await api.post(`/drive/federation/folder-shares/${shareId}/refresh`)
     await reloadAlbums()
     return []
   }
@@ -218,6 +221,7 @@ async function remoteAlbumItems(album: Album, reloadAlbums: () => Promise<void>)
         })
         const row: FileRow = { ...item.file, thumbnails: item.thumbnails }
         const metadata = await openFileMetadataV1(row, fileKey)
+        await acceptFileMetadata(row.id, row.metadataRevision)
         return toPhoto(folderFor(undefined, row, album), toDriveFile(row, { fileKey, metadata }))
       } catch {
         return null
@@ -245,7 +249,7 @@ export async function addToAlbum(album: Album, photos: readonly Photo[]): Promis
           : [],
       ),
     )
-    if (items.length) await api.post(`/albums/${album.id}/items`, { items })
+    if (items.length) await api.post(`/photos/albums/${album.id}/items`, { items })
   }
 }
 
@@ -260,7 +264,7 @@ export async function rotateAlbum(
   removed: Removal,
   alsoRemove?: PendingUpgradeRemoval,
 ): Promise<void> {
-  const { data: keys } = await api.get<AlbumKeyWire[]>(`/albums/${album.id}/keys`)
+  const { data: keys } = await api.get<AlbumKeyWire[]>(`/photos/albums/${album.id}/keys`)
   const fileKeys = await Promise.all(
     keys.map(async (k) => ({
       k,
@@ -289,8 +293,8 @@ export async function rotateAlbum(
 
 /** A new album, empty. */
 export async function createAlbum(me: DriveIdentity, name: string): Promise<Album> {
-  const created = await createOwnedCollectionV1(me.masterKey, me.userId, name.trim(), null)
-  await api.post('/albums', created.payload)
+  const created = await createOwnedCollectionV1(me, me.accountId, name.trim(), null)
+  await api.post('/photos/albums', created.payload)
   const now = new Date().toISOString()
   return toAlbum(
     {
@@ -300,7 +304,7 @@ export async function createAlbum(me: DriveIdentity, name: string): Promise<Albu
       name: name.trim(),
       key: created.collectionKey,
       keyEpoch: 1,
-      ownerUserId: me.userId,
+      ownerAccountId: me.accountId,
       ownerAuthorityPublicKey: me.authorityPublicKey,
       epochStatementHash: created.epochStatementHash,
       nameRevision: 1,
@@ -349,31 +353,31 @@ export function useAddToAlbum() {
 
 export function useRemoveFromAlbum() {
   return useAlbumMutation(({ album, photos }: { album: Album; photos: readonly Photo[] }) =>
-    api.post(`/albums/${album.id}/items/remove`, { fileIds: photos.flatMap((p) => (p.live ? [p.id, p.live.id] : [p.id])) }),
+    api.post(`/photos/albums/${album.id}/items/remove`, { fileIds: photos.flatMap((p) => (p.live ? [p.id, p.live.id] : [p.id])) }),
   )
 }
 
 export function useRenameAlbum() {
   return useAlbumMutation(async ({ album, name }: { album: Album; name: string }) => {
     const next = await renameOwnedCollectionV1(
-      { id: album.id, ownerUserId: album.folder.ownerUserId, keyEpoch: album.folder.keyEpoch, nameRevision: album.folder.nameRevision },
+      { id: album.id, ownerAccountId: album.folder.ownerAccountId, keyEpoch: album.folder.keyEpoch, nameRevision: album.folder.nameRevision },
       album.key,
       name.trim(),
     )
-    await api.put(`/collections/${album.id}`, next)
+    await api.put(`/drive/collections/${album.id}`, next)
   })
 }
 
 export function useDeleteAlbum() {
-  return useAlbumMutation(({ album }: { album: Album }) => api.delete(`/albums/${album.id}`))
+  return useAlbumMutation(({ album }: { album: Album }) => api.delete(`/photos/albums/${album.id}`))
 }
 
 /** Leave an album shared with you; the photos you put in leave with you. */
 export function useLeaveAlbum() {
   return useAlbumMutation(({ album }: { album: Album }) =>
     album.folder.source === 'remote'
-      ? api.delete(`/drive/federation/shares/${album.folder.remoteShareId}`)
-      : api.delete(`/albums/${album.id}/membership`),
+      ? api.delete(`/drive/federation/folder-shares/${album.folder.remoteShareId}`)
+      : api.delete(`/photos/albums/${album.id}/membership`),
   )
 }
 
@@ -383,7 +387,7 @@ export function useRemoveAlbumAccess() {
     me,
   ) => {
     // Built from access as it is now: anyone added since stays.
-    const { data: access } = await api.get<FolderAccess>(`/collections/${album.id}/access`)
+    const { data: access } = await api.get<FolderAccess>(`/drive/collections/${album.id}/access`)
     await rotateAlbum(album, me, access, removed, alsoRemove)
   })
 }

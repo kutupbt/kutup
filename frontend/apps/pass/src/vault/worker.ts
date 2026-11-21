@@ -7,6 +7,7 @@
 // on request), attachments, one-time codes and the encrypted KDBX file. The
 // vault's key and its decrypted database stay here; locking frees them.
 
+import type { MasterKeysBytes } from '@kutup/crypto/masterKeys'
 import { freshUrl, retryLoad } from '@kutup/crypto/retry'
 import { exactBytes } from '@kutup/crypto/bytes'
 import type { Request, Response } from './protocol'
@@ -28,8 +29,8 @@ interface WasmVault {
   keyChangeSaved(): void
   abandonKeyChange(): void
   keyParts(): unknown
-  keepKey(masterKey: Uint8Array, binding: string, fileId: string, revision: number, generated: boolean): string
-  keptKeyIsMine(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): boolean
+  keepKey(masterKeys: MasterKeysBytes, binding: string, fileId: string, revision: number, generated: boolean): string
+  keptKeyIsMine(envelope: string, masterKeys: MasterKeysBytes, binding: string, fileId: string): boolean
   free(): void
 }
 
@@ -39,11 +40,11 @@ interface PassWasm {
     create(name: string, password: string | null | undefined, keyFile: Uint8Array | null | undefined, nowMs: number): WasmVault
     open(contents: Uint8Array, password: string | null | undefined, passwordHash: Uint8Array | null | undefined, keyFile: Uint8Array | null | undefined): WasmVault
   }
-  openKept(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): unknown
+  openKept(envelope: string, masterKeys: MasterKeysBytes, binding: string, fileId: string): unknown
   importPreview(contents: Uint8Array, provider: string | null | undefined): unknown
   importFormats(): unknown
   probeVault(contents: Uint8Array): unknown
-  resealKeptKey(envelope: string, masterKey: Uint8Array, binding: string, from: string, to: string, revision: number): string
+  resealKeptKey(envelope: string, masterKeys: MasterKeysBytes, binding: string, from: string, to: string, revision: number): string
   generateKeyFile(): Uint8Array
 }
 
@@ -116,11 +117,11 @@ async function run(request: Request): Promise<unknown> {
       return null
     }
     case 'keepKey':
-      return vault(request.handle).keepKey(request.masterKey, request.binding, request.fileId, request.revision, request.generated)
+      return vault(request.handle).keepKey(request.masterKeys, request.binding, request.fileId, request.revision, request.generated)
     case 'keptKeyIsMine':
-      return vault(request.handle).keptKeyIsMine(request.envelope, request.masterKey, request.binding, request.fileId)
+      return vault(request.handle).keptKeyIsMine(request.envelope, request.masterKeys, request.binding, request.fileId)
     case 'openKept':
-      return module.openKept(request.envelope, request.masterKey, request.binding, request.fileId)
+      return module.openKept(request.envelope, request.masterKeys, request.binding, request.fileId)
     case 'importPreview':
       return module.importPreview(request.contents, request.provider)
     case 'importFormats':
@@ -128,7 +129,7 @@ async function run(request: Request): Promise<unknown> {
     case 'probeVault':
       return module.probeVault(request.contents)
     case 'resealKeptKey':
-      return module.resealKeptKey(request.envelope, request.masterKey, request.binding, request.from, request.to, request.revision)
+      return module.resealKeptKey(request.envelope, request.masterKeys, request.binding, request.from, request.to, request.revision)
   }
 }
 

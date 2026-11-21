@@ -1,3 +1,5 @@
+import type { ObjectIdKey } from '@kutup/crypto/accountRoots'
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import api from '@kutup/session/client'
@@ -5,6 +7,7 @@ import { getSession, subscribe as subscribeSession, useRequiredSession } from '@
 import { openMessageText, useMailAccount, type ListView, type MailAccount, type MailMessage, type Page, type PlaceKey } from './api'
 import { contentPage } from './contentFilter'
 import { createMailSearch, mailSearchMatcher, mailSearchStoreName, type DocRef, type IndexDoc, type MailSearchIndex, type SealedRecord, type SearchHit } from './searchWasm'
+import { storageReady } from '@kutup/crypto/storageGate'
 
 // Body search in the browser (docs/plans/mail-body-search.md), as Proton's
 // "Search message content": turned on by the reader, it downloads and opens
@@ -134,7 +137,8 @@ class SealedStore {
   private constructor(private readonly db: IDBDatabase) {}
 
   /** `onClosed`: another tab deletes the database, so this one lets go. */
-  static open(name: string, onClosed: () => void): Promise<SealedStore> {
+  static async open(name: string, onClosed: () => void): Promise<SealedStore> {
+    await storageReady()
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(name, 1)
       request.onupgradeneeded = () => request.result.createObjectStore('records')
@@ -231,7 +235,8 @@ export class ContentSearch {
   private readonly channel: BroadcastChannel | null
 
   private constructor(
-    private readonly masterKey: Uint8Array,
+    private readonly masterKeys: MasterKeys,
+    private readonly binding: string,
     private account: MailAccount,
     private readonly dbName: string,
     private readonly matches: (query: string, text: string) => boolean,
@@ -248,10 +253,10 @@ export class ContentSearch {
     }
   }
 
-  /** Named by an HMAC under a key from the master key: bound to no name. */
-  static async open(masterKey: Uint8Array, account: MailAccount): Promise<ContentSearch> {
-    const dbName = `kutup-mail-search:${await mailSearchStoreName(masterKey)}`
-    const search = new ContentSearch(masterKey, account, dbName, await mailSearchMatcher())
+  /** Named by an HMAC under a key from the object-id root: bound to no name, kept across a rotation. */
+  static async open(masterKeys: MasterKeys, objectIdKey: ObjectIdKey, binding: string, account: MailAccount): Promise<ContentSearch> {
+    const dbName = `kutup.mail.search:${await mailSearchStoreName(objectIdKey)}`
+    const search = new ContentSearch(masterKeys, binding, account, dbName, await mailSearchMatcher())
     await search.exclusive(() => Promise.resolve())
     return search
   }
@@ -326,7 +331,7 @@ export class ContentSearch {
     const wrapped = (await store.get([KEY_ID])).get(KEY_ID)
     let index: MailSearchIndex
     try {
-      index = await createMailSearch(this.masterKey, wrapped)
+      index = await createMailSearch(this.masterKeys, this.binding, wrapped)
     } catch (error) {
       store.close()
       if (!wrapped) throw error
@@ -334,7 +339,10 @@ export class ContentSearch {
       await SealedStore.remove(this.dbName)
       return this.attach()
     }
-    if (!wrapped) await store.put([{ id: KEY_ID, sealed: index.wrappedStoreKey() }])
+    // A new key, or one wrapped again under the current master key after a
+    // rotation: kept, so the older key is needed no more.
+    const current = index.wrappedStoreKey()
+    if (!wrapped || !sameBytes(wrapped, current)) await store.put([{ id: KEY_ID, sealed: current }])
     this.store = store
     this.index = index
   }
@@ -837,11 +845,11 @@ export function useContentSearch(): ContentSearch | null {
     if (!account.data || typeof indexedDB === 'undefined') return
     let live = true
     const data = account.data
-    let promise = opened.get(session.userId)
+    let promise = opened.get(session.accountId)
     if (!promise) {
-      promise = ContentSearch.open(session.masterKey, data)
-      opened.set(session.userId, promise)
-      promise.catch(() => opened.delete(session.userId))
+      promise = ContentSearch.open(session.masterKeys, session.roots.objectIdKey, session.envelopeBinding, data)
+      opened.set(session.accountId, promise)
+      promise.catch(() => opened.delete(session.accountId))
     }
     promise
       .then((s) => {
@@ -852,7 +860,7 @@ export function useContentSearch(): ContentSearch | null {
     return () => {
       live = false
     }
-  }, [account.data, session.userId, session.masterKey])
+  }, [account.data, session.accountId, session.masterKeys, session.roots.objectIdKey, session.envelopeBinding])
   return search
 }
 
@@ -882,4 +890,8 @@ export function useContentSearchList(search: ContentSearch | null, folder: Place
       return { pages: [contentPage(rows, folder, view, search!.address)], pageParams: [page] }
     },
   })
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i])
 }

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { createOffice, officeReady } from '../fixtures/office'
 import { backFromEditor, createFolder, createNote, item, itemAction, noteLive, noteText, openItem, typeAtEnd } from '../fixtures/drive'
@@ -34,7 +34,7 @@ test('a note in a shared folder is edited together by two people', async ({ brow
   a.on('response', (response) => {
     const path = new URL(response.url()).pathname
     if (/\/federated-shares$/.test(path)) federated.push(path)
-    if (/^\/api\/collections\/[^/]+\/share$/.test(path) && response.request().method() === 'POST') localShare = response.status()
+    if (/^\/api\/v1\/drive\/collections\/[^/]+\/share$/.test(path) && response.request().method() === 'POST') localShare = response.status()
   })
   await itemAction(a, folder, 'Share')
   const dialog = a.getByRole('dialog')

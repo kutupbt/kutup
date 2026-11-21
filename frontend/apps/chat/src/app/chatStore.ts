@@ -56,7 +56,7 @@ export interface ChatSelf {
   /** Its address now (`username@server`): shown only, never a key. */
   address: string
   /** The account's id: what this browser keys the account's local state by, never a name. */
-  userId: string
+  accountId: string
 }
 
 export interface ChatSnapshot extends ChatData {
@@ -264,17 +264,18 @@ export function openChat(session: Session, install?: ChatInstall): void {
       set({ status: 'failed', failure: 'unavailable', capabilities })
       return
     }
-    const account: AccountRef = { server: capabilities.serverName, accountId: session.userId }
-    const mediaCache = privateCiphertextCacheForAccountV1(session.userId)
+    const account: AccountRef = { server: capabilities.serverName, accountId: session.accountId }
+    const mediaCache = privateCiphertextCacheForAccountV1(session.accountId)
     void mediaCache.initialize().catch((error: unknown) => console.warn('chat: media cache unavailable', error))
     let service: ChatService
     try {
       service = await ChatService.open({
-        userId: session.userId,
+        accountId: session.accountId,
         envelopeBinding: session.envelopeBinding,
         account,
         displayName: session.username,
-        masterKey: session.masterKey,
+        masterKeys: session.masterKeys,
+        roots: session.roots,
         capabilities,
         install,
       })
@@ -319,7 +320,6 @@ export function openChat(session: Session, install?: ChatInstall): void {
       resetRenameWatch()
       service.dispose()
     }
-    forgetPlaintextChatState(`${session.username}@${capabilities.serverName}`, session.userId)
     startAccountNames(session, () => set({ namesRevision: state.namesRevision + 1 }))
     const sealed = service.sealedStorage
     setSealedStorage(sealed)
@@ -332,33 +332,13 @@ export function openChat(session: Session, install?: ChatInstall): void {
         account,
         key: accountKey(account),
         address: `${session.username}@${capabilities.serverName}`,
-        userId: session.userId,
+        accountId: session.accountId,
       },
       mediaCache,
       connection: service.connectionStatus(),
     })
     await reload(service)
   })()
-}
-
-/**
- * Removes what older versions kept in this browser in plaintext, keyed by the
- * address or the account id: drafts, read positions and owed timers. None of
- * it is read any more (an account that later takes the same username must
- * not inherit it); it is only cleared away.
- */
-function forgetPlaintextChatState(address: string, userId: string): void {
-  for (const key of [
-    `kutup.chat.drafts.v1:${address}`,
-    `kutup:chat:read:${userId}`,
-    `kutup.chat.pending-default-timers.v1:${address}`,
-  ]) {
-    try {
-      window.localStorage.removeItem(key)
-    } catch {
-      // Storage blocked: nothing reads these keys anyway.
-    }
-  }
 }
 
 /**

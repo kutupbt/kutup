@@ -43,7 +43,8 @@
     "trash": "Trash",
     "all": "All mail",
     "scheduled": "Scheduled",
-    "snoozed": "Snoozed"
+    "snoozed": "Snoozed",
+    "refresh": "Refresh {{name}}"
   },
   "empty": {
     "inbox": "Your inbox is empty",
@@ -563,6 +564,10 @@
     "autoDeleteHint": "Delete Trash and Spam messages after 30 days. Turning it on counts messages already there from now.",
     "almostAllMail": "Exclude Spam/Trash from All mail",
     "almostAllMailHint": "All mail then shows everything except what is in Spam and Trash.",
+    "keepMovedSent": "Keep messages in Sent",
+    "keepMovedSentHint": "Sent mail you move to another folder still shows in Sent.",
+    "unreadFavicon": "Show unread count in the tab icon",
+    "unreadFaviconHint": "The tab's icon shows how many unread messages the open folder has.",
     "conversations": "Conversation grouping",
     "conversationsHint": "Group emails in the same conversation together in your mailbox, or display them separately.",
     "signOutside": "Sign outside mail",
@@ -645,7 +650,10 @@
     "signatureTooLong": "The signature is too long (10 KB at most).",
     "addLink": "Add link",
     "nameAndSignature": "Display name and signature",
-    "address": "Address"
+    "address": "Address",
+    "sharedSignatures": "Shared mailboxes",
+    "sharedSignaturesHint": "The signature a message starts with when someone writes as the mailbox. Owners and managers set it.",
+    "sharedSignatureOf": "Signature of {{name}}"
   },
   "autoReply": {
     "title": "Auto-reply",
@@ -947,7 +955,7 @@
     "removed": "Images from {{address}} will be asked for again.",
     "bodyProxy": "They load through the Kutup server, so the sender does not see your IP address or browser, but can still tell that and when the message was opened.",
     "proxyTitle": "Protect against email tracking",
-    "proxyHint": "Remote images come through Kutup instead of your browser, so senders do not see your IP address or browser; they can still tell that and when a message was opened. Known tracking pixels never load, and tracking parameters are taken out of links.",
+    "proxyHint": "Known tracking pixels are never asked for, and tracking parameters are taken out of links. Remote images always come through Kutup instead of your browser, so senders never see your IP address or browser; they can still tell that and when a message was opened.",
     "embeddedTitle": "Auto show embedded images",
     "embeddedHint": "Images sent inside a message show at once. Turned off, they wait until you load them.",
     "metadataTitle": "Remove image metadata",
@@ -964,9 +972,7 @@
     "linksList": "Cleaned links",
     "unknownProvider": "Tracker",
     "removed": "Removed: {{names}}",
-    "proxyFailed": "Tracker protection prevented some images from loading. Load them if you trust the sender.",
-    "loadDirect": "Load",
-    "loadDirectHint": "Images will be loaded without the Kutup server"
+    "proxyFailed": "Some images could not be loaded through Kutup, so they are not shown."
   },
   "schedule": {
     "menu": "Schedule send",
@@ -1131,7 +1137,7 @@
       "unverified": "Pending verification"
     },
     "kind": {
-      "end_to_end": "End-to-end encrypted",
+      "endToEnd": "End-to-end encrypted",
       "outside": "Not end-to-end encrypted"
     },
     "notice": {
@@ -1338,5 +1344,58 @@
       "enabled": "Enabled",
       "updated": "Catch-all address updated"
     }
+  },
+  "sendCheck": {
+    "sendAnyway": "Send anyway",
+    "dontShowAgain": "Don't show again",
+    "noReply": {
+      "title": "No-reply address detected",
+      "body": "The address {{detail}} does not seem to accept replies. Are you sure you want to send your message?"
+    },
+    "noSubject": {
+      "title": "Subject missing",
+      "body": "You have not given your email any subject. Do you want to send the message anyway?"
+    },
+    "noAttachment": {
+      "title": "No attachment found",
+      "body": "You wrote “{{detail}}”, but no attachment has been added. Do you want to send your message anyway?"
+    }
+  },
+  "sieve": {
+    "import": "Import Sieve",
+    "export": "Export as Sieve",
+    "importTitle": "Import filters from Sieve",
+    "importDescription": "Paste a Sieve script or choose a file, from Proton, Fastmail or a Sieve server. Kutup reads the filters its own can hold: sender, recipient, subject and attachments; moving, labels, read and starred. The filters go after yours.",
+    "script": "Sieve script",
+    "chooseFile": "Choose a Sieve file",
+    "tooLarge": "That file is too large for a Sieve script.",
+    "read": "Read",
+    "back": "Back",
+    "toAdd_one": "{{count}} filter to add",
+    "toAdd_other": "{{count}} filters to add",
+    "nothing": "Nothing in this script is a filter Kutup can hold.",
+    "skipped_one": "{{count}} part not imported",
+    "skipped_other": "{{count}} parts not imported",
+    "add_one": "Add {{count}} filter",
+    "add_other": "Add {{count}} filters",
+    "added_one": "{{count}} filter added",
+    "added_other": "{{count}} filters added",
+    "addFailed": "Added {{count}}, then: {{error}}",
+    "problem": {
+      "syntax": "The script could not be read:",
+      "unsupported": "Kutup's filters can't do this:",
+      "unknownPlace": "No folder or label with this name (make it first, then import again):",
+      "noAction": "This filter does nothing Kutup can do:"
+    }
+  },
+  "export": {
+    "title": "Export mail",
+    "hint": "Download a folder or label, or all your mail, as .eml files in a zip. The messages are opened in this browser; the file holds them readable, so keep it safe.",
+    "place": "What to export",
+    "start": "Export",
+    "stop": "Stop",
+    "progress": "{{done}} of {{total}} messages",
+    "done": "Your mail is downloaded.",
+    "failed": "The export stopped. Try again."
   }
 }

@@ -1,48 +1,72 @@
 // High-level crypto operations for registration and login flows.
+import { FIRST_MASTER_KEY_GENERATION } from './masterKeys'
 import { getSodium } from './sodium'
 import { deriveRecoveryAuthProof } from './kdf'
 import { fromBase64, toBase64 } from './base64'
-import {
-  ACCOUNT_ENVELOPE_PURPOSE,
-  openAccountEnvelope,
-  sealAccountEnvelope,
-} from './accountEnvelope'
+import { ACCOUNT_RECORD_PURPOSE, sealAccountRecord } from './accountRecord'
 import { deriveAccountIdentityKeys } from './identity'
+import { generateAccountRoots, sealAccountRoots, type AccountRoots, type IdentityRoot } from './accountRoots'
 
-export { encryptStream, decryptStream } from './symmetric'
 export {
-  decryptFileBlobV1,
-  encryptFileBlobV1,
-  fileBlobCipherSize,
-  newFileBlobStreamEncryptorV1,
-  openFileBlobStreamV1,
-} from './fileBlob'
-export type { FileBlobContextV1 } from './fileBlob'
-export {
-  CHAT_MEDIA_OBJECT_HEADER_BYTES,
-  CHAT_MEDIA_OBJECT_PREFIX_BYTES,
-  CHAT_MEDIA_SUITE_V1,
-  MAX_CHAT_MEDIA_PLAINTEXT_BYTES,
-  chatAttachmentLedgerEnvelopeDigest,
-  chatMediaCipherSize,
-  decryptChatMediaV1,
-  deriveChatAttachmentLedgerKey,
-  encryptChatMediaV1,
-  newChatMediaStreamEncryptorV1,
-  openChatAttachmentLedger,
-  openChatMediaStreamV1,
-  sealChatAttachmentLedger,
-} from './chatMedia'
+  checkServedRecord,
+  committedContent,
+  DRIVE_BLOCK_SIZE,
+  manifestSignerOf,
+  newDriveBlockEncryptor,
+  newRevisionId,
+  openDriveFile,
+  openDriveObject,
+  openRevisionContent,
+  resolveServed,
+  setManifestSignerCheck,
+  REVISION_CONTENT_HEADER,
+  REVISION_HEADER,
+  sealDriveFile,
+  sealRevisionContent,
+} from './driveBlocks'
 export type {
-  ChatAttachmentLedgerContextV1,
-  ChatMediaStreamEncryptorV1,
+  ContentCommitment,
+  DriveBlockEncryptor,
+  DriveObjectExpected,
+  DriveObjectToOpen,
+  DriveRevisionContext,
+  ManifestSignature,
+  ManifestSigner,
+  ManifestSignerCheck,
+  ServedRevision,
+} from './driveBlocks'
+export {
+  CHAT_MEDIA_SUITE,
+  MAX_CHAT_MEDIA_PLAINTEXT_BYTES,
+  chatMediaObjectLength,
+  newChatMediaBlockEncryptor,
+  openChatAttachmentLedger,
+  openChatMedia,
+  openChatMediaReader,
+  sealChatAttachmentLedger,
+  sealChatMedia,
 } from './chatMedia'
+export type { ChatAttachmentLedgerOwner } from './chatMedia'
 // The recovery phrase (bip39 and its wordlists) is @kutup/crypto/mnemonic,
 // kept out of this barrel so only the pages that use it load it.
 export { deriveRecoveryAuthProof } from './kdf'
 export { generateKey } from './symmetric'
 export { fromBase64, toBase64 } from './base64'
 export { deriveAccountIdentityKeys } from './identity'
+export {
+  generateAccountRoots,
+  IDENTITY_ROOT_MISMATCH,
+  isIdentityRootMismatch,
+  openAccountRoots,
+  sealAccountRoots,
+  type AccountRoots,
+  type AccountSecrets,
+  type CallLinkRoot,
+  type DriveRoot,
+  type IdentityRoot,
+  type ObjectIdKey,
+  type PseudonymRoot,
+} from './accountRoots'
 export {
   DEFAULT_MAIL_KEY_FLAGS,
   MAIL_KEY_FLAGS,
@@ -100,9 +124,10 @@ export type {
   SealedMailKey,
   SignedMailKeyList,
 } from './mailKey'
-export { openContactCard, openMailName, sealContactCard, sealMailName, signContactSummary, verifyContactSummary } from './contactCard'
+export { contactSummaryRest, openContactCard, openMailName, sealContactCard, sealMailName, signContactSummary, verifyContactSummary } from './contactCard'
 export type { ContactSummary, MailNameKind, Revisioned } from './contactCard'
 export { OlderThanSeenError, RevisionGuard, revisionGuard, memoryRevisionStore, type RevisionStore } from './revisionGuard'
+export { LocalChainPins, localChainPins, type ChainPin } from './localChainPins'
 export type { AccountIdentityKeysV1 } from './identity'
 export {
   DRIVE_ENVELOPE_PURPOSE,
@@ -138,10 +163,15 @@ export {
   renameOwnedCollectionV1,
 } from './ownedCollection'
 export type { CreateOwnedCollectionV1, OwnedCollectionWireV1 } from './ownedCollection'
+export { isNewerFormatError } from './newerFormat'
 export {
   createFileRecordV1,
+  openFileKeyV1,
+  openFileMetadataDraftV1,
+  fileMetadataRest,
   openFileMetadataV1,
   openFileRecordV1,
+  sealFileMetadataDraftV1,
   rekeyFileRecordV1,
   renameFileRecordV1,
   wrapFileKeyForV1,
@@ -150,16 +180,17 @@ export { fileKeyAtV1, sealPreviousFileKeyV1 } from './fileKeyring'
 export type { FileKeyLinkV1 } from './fileKeyring'
 export type {
   CreatedFileRecordV1,
-  FileMetadataV1,
+  FileMetadataDraftV1,
+  FileMetadataV2,
   MediaMetadataV1,
   TakenFromV1,
   FileWireV1,
 } from './fileRecord'
 export {
-  ACCOUNT_ENVELOPE_PURPOSE,
-  openAccountEnvelope,
-  sealAccountEnvelope,
-} from './accountEnvelope'
+  ACCOUNT_RECORD_PURPOSE,
+  openAccountRecord,
+  sealAccountRecord,
+} from './accountRecord'
 
 /**
  * A new account's keys, before any password: the master key, the recovery
@@ -167,19 +198,22 @@ export {
  * comes from OPAQUE (`@kutup/crypto/opaqueWorker`), sealed under its export key.
  */
 export interface AccountKeySet {
-  recoveryKeyEnvelope: string // canonical base64 AccountEnvelopeV1
-  drivePrivateKeyEnvelope: string // canonical base64 AccountEnvelopeV1
+  recoveryKeyEnvelope: string // canonical base64 AccountRecordV1
   publicKey: string // base64
   accountAuthorityPublicKey: string
   accountAuthorityKeyId: string
   accountIncarnationId: string
   driveSigningPublicKey: string
   recoveryProof: string // base64 derived proof; cannot decrypt the recovery wrap
+  /** The account's root records for the server (docs/plans/identity-root.md), sealed under the master key for the binding. */
+  accountRoots: string[]
   // For display to the user (never sent to the server)
   mnemonic: string // 24-word BIP39
   // In memory only
   masterKey: Uint8Array
   privateKey: Uint8Array
+  /** The account's roots, opened: its identity derives from `roots.identityRoot`. */
+  roots: AccountRoots
 }
 
 /** Fresh account keys bound to `binding` (no password involved: no Argon2id). */
@@ -205,66 +239,63 @@ export async function rebindAccountKeySet(keys: AccountKeySet, binding: string):
   const { decodeMnemonic } = await import('./mnemonic')
   const recoveryKeyEntropy = decodeMnemonic(keys.mnemonic)
   try {
-    return await sealAccountKeySet(keys.masterKey, recoveryKeyEntropy, binding)
+    return await sealAccountKeySet(keys.masterKey, recoveryKeyEntropy, binding, keys.roots)
   } finally {
     recoveryKeyEntropy.fill(0)
   }
 }
 
-async function sealAccountKeySet(masterKey: Uint8Array, recoveryKeyEntropy: Uint8Array, binding: string): Promise<AccountKeySet> {
+async function sealAccountKeySet(
+  masterKey: Uint8Array,
+  recoveryKeyEntropy: Uint8Array,
+  binding: string,
+  kept?: AccountRoots,
+): Promise<AccountKeySet> {
   const { encodeMnemonic } = await import('./mnemonic')
   const mnemonic = encodeMnemonic(recoveryKeyEntropy)
   const recoveryProof = await deriveRecoveryAuthProof(toBase64(recoveryKeyEntropy), binding)
-  // The purpose-separated account identity; Rust owns the keys and envelopes.
-  // It derives from the master key alone, so it does not change with the binding.
-  const accountIdentity = await deriveAccountIdentityKeys(toBase64(masterKey))
-  const driveHpkePublicKey = fromBase64(accountIdentity.driveHpkePublicKey)
-  const driveHpkePrivateKey = fromBase64(accountIdentity.driveHpkePrivateKey)
-  const recoveryKeyEnvelope = await sealAccountEnvelope(
+  // The account's roots (docs/plans/identity-root.md): new ones, or the same
+  // ones sealed again for another binding, so nothing shown changes.
+  const { roots, envelopes: accountRoots } = kept
+    ? { roots: kept, envelopes: await sealAccountRoots(masterKey, binding, kept) }
+    : await generateAccountRoots(masterKey, binding)
+  // The purpose-separated account identity, from the identity root; Rust
+  // owns the keys and envelopes.
+  const accountIdentity = await deriveAccountIdentityKeys(roots.identityRoot)
+  const driveXwingPublicKey = fromBase64(accountIdentity.driveXwingPublicKey)
+  const driveXwingPrivateKey = fromBase64(accountIdentity.driveXwingPrivateKey)
+  const recoveryKeyEnvelope = await sealAccountRecord(
     masterKey,
     recoveryKeyEntropy,
-    ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
-    binding,
-  )
-  const drivePrivateKeyEnvelope = await sealAccountEnvelope(
-    driveHpkePrivateKey,
-    masterKey,
-    ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
+    ACCOUNT_RECORD_PURPOSE.recoveryMasterKey,
+    FIRST_MASTER_KEY_GENERATION,
     binding,
   )
   return {
     recoveryKeyEnvelope,
-    drivePrivateKeyEnvelope,
-    publicKey: toBase64(driveHpkePublicKey),
+    publicKey: toBase64(driveXwingPublicKey),
     accountAuthorityPublicKey: accountIdentity.authorityPublicKey,
     accountAuthorityKeyId: accountIdentity.authorityKeyId,
     accountIncarnationId: accountIdentity.incarnationId,
     driveSigningPublicKey: accountIdentity.driveSigningPublicKey,
     recoveryProof,
+    accountRoots,
     mnemonic,
     masterKey,
-    privateKey: driveHpkePrivateKey,
+    privateKey: driveXwingPrivateKey,
+    roots,
   }
 }
 
 /**
- * The account's current Drive keys (X-Wing, docs/plans/pq-shares.md), derived
- * again from its master key, with the private key sealed to `binding`: what
- * an account from before them publishes once (`POST /account/identity-suite`).
+ * The account's Drive keys (X-Wing, docs/plans/pq-shares.md), derived from
+ * its identity root: they are never stored (docs/plans/w6-key-hierarchy.md §1).
  */
-export async function currentDriveKeys(
-  masterKey: Uint8Array,
-  binding: string,
-): Promise<{ publicKey: string; privateKey: Uint8Array; drivePrivateKeyEnvelope: string }> {
-  const identity = await deriveAccountIdentityKeys(toBase64(masterKey))
-  const privateKey = fromBase64(identity.driveHpkePrivateKey)
-  const drivePrivateKeyEnvelope = await sealAccountEnvelope(
-    privateKey,
-    masterKey,
-    ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
-    binding,
-  )
-  return { publicKey: identity.driveHpkePublicKey, privateKey, drivePrivateKeyEnvelope }
+export async function driveKeysOf(
+  identityRoot: IdentityRoot,
+): Promise<{ publicKey: string; privateKey: Uint8Array }> {
+  const identity = await deriveAccountIdentityKeys(identityRoot)
+  return { publicKey: identity.driveXwingPublicKey, privateKey: fromBase64(identity.driveXwingPrivateKey) }
 }
 
 export interface LoginResult {
@@ -272,16 +303,4 @@ export interface LoginResult {
   privateKey: Uint8Array
 }
 
-export async function decryptPrivateKey(
-  drivePrivateKeyEnvelope: string,
-  masterKey: Uint8Array,
-  binding: string,
-): Promise<Uint8Array> {
-  return openAccountEnvelope(
-    drivePrivateKeyEnvelope,
-    masterKey,
-    ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
-    binding,
-  )
-}
 export { yjsSeedClientId } from './yjsSeed'

@@ -9,6 +9,7 @@ import { Skeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { useMe } from './api'
+import { DeleteAccountSection } from './DeleteAccountSection'
 import { UsernameSection } from './UsernameSection'
 
 export function AccountSettingsPage() {
@@ -47,6 +48,8 @@ export function AccountSettingsPage() {
       </Section>
 
       <UsernameSection />
+
+      <DeleteAccountSection />
     </PageBody>
   )
 }

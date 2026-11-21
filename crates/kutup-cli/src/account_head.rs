@@ -18,13 +18,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::account_head::{
-    self, HeadKeys, HeadStatus, IndexCheck, LocalHeadStateV1, VerifiedHead,
-};
+use kutup_crypto::account_head::{self, HeadKeys, HeadStatus, LocalHeadStateV1, VerifiedHead};
+use kutup_crypto::account_records::{Merged, RecordScope, ScopeRecords};
 use kutup_crypto::revision_guard::GuardKeys;
 
 use crate::api::Client;
 use crate::errors::HeadBlocked;
+use kutup_crypto::account_roots::ObjectIdKey;
+use kutup_crypto::master_keys::MasterKeys;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -33,75 +34,26 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// A scope's values as the verified head vouches for them.
-#[derive(Debug, Clone)]
-pub struct Index {
-    pub scope: String,
-    pub values: Vec<(String, u64)>,
-    /// The head covers the scope: values outside it, or at another revision, are refused.
-    pub covered: bool,
-    /// The account has no head yet: the chain starts on this basis.
-    pub basis: Option<String>,
+/// What a records batch changes: puts as `(id, revision, envelope)` (the
+/// revision the envelope was sealed at, the envelope canonical base64), and
+/// ids to delete; `done` is what the write returns once stored.
+pub struct RecordsEdit<T> {
+    pub puts: Vec<(String, u64, String)>,
+    pub deletes: Vec<String>,
+    pub done: T,
 }
 
-impl Index {
-    /// No index to hold values to (the device is blocked on another history,
-    /// so only its own guard holds them).
-    pub fn uncovered(scope: &str) -> Self {
-        Self {
-            scope: scope.to_owned(),
-            values: Vec::new(),
-            covered: false,
-            basis: None,
+/// A records scope read without the head: only while this device is
+/// blocked on another history (reads go on, held to the device's own guard).
+pub fn unverified_records(client: &Client, scope: RecordScope) -> Result<ScopeRecords> {
+    let mut copy = ScopeRecords::new(scope);
+    for _ in 0..100_000 {
+        let page = client.get_account_records(scope, copy.cursor)?;
+        if copy.merge(&page)? == Merged::Done {
+            return Ok(copy);
         }
     }
-
-    pub fn revision(&self, id: &str) -> Option<u64> {
-        self.values
-            .iter()
-            .find(|(value, _)| value == id)
-            .map(|(_, revision)| *revision)
-    }
-
-    /// Refuses a value at another revision than the covered index lists.
-    pub fn expect(&self, id: &str, revision: u64) -> Result<()> {
-        if self.covered && self.revision(id) != Some(revision) {
-            bail!(
-                "{}: {id} is not at the revision the account's verified state lists (rolled back, or brought back)",
-                self.scope
-            );
-        }
-        Ok(())
-    }
-
-    /// Refuses a listing that is not exactly the covered index's ids.
-    pub fn expect_listing<'a>(&self, ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
-        if !self.covered {
-            return Ok(());
-        }
-        let mut listed: Vec<&str> = ids.into_iter().collect();
-        listed.sort_unstable();
-        let mut indexed: Vec<&str> = self.values.iter().map(|(id, _)| id.as_str()).collect();
-        indexed.sort_unstable();
-        if listed != indexed {
-            bail!(
-                "{}: the server's list is not the one the account's verified state lists (a value dropped or brought back)",
-                self.scope
-            );
-        }
-        Ok(())
-    }
-}
-
-/// Sends a listed write with the given head; `Ok(None)` when another device wrote first.
-pub type Send<'a, T> = Box<dyn FnOnce(&str) -> Result<Option<T>> + 'a>;
-
-/// What a listed write sends: the index after it, and how to send it with a head.
-pub struct Edit<'a, T> {
-    /// Each id's new revision, or `None` when the write removes it.
-    pub changes: Vec<(String, Option<u64>)>,
-    /// Sends the write with `head`; `Ok(None)` when another device wrote first.
-    pub send: Send<'a, T>,
+    bail!("{}: the server's records did not end", scope.name())
 }
 
 /// The sealed revision guard: the highest revision this profile has seen of
@@ -222,20 +174,25 @@ pub(crate) struct StateStore {
     keys: HeadKeys,
     binding: String,
     incarnation: String,
+    /// The account's root generations in use, which the head must record.
+    generations: account_head::RootGenerations,
     dir: PathBuf,
 }
 
 impl StateStore {
     pub(crate) fn new(
-        master_key: &[u8; 32],
+        master_keys: &MasterKeys,
+        object_id_key: &ObjectIdKey,
         binding: &str,
         incarnation: &str,
+        generations: account_head::RootGenerations,
         dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
-            keys: HeadKeys::derive(master_key)?,
+            keys: HeadKeys::derive(master_keys, object_id_key)?,
             binding: binding.to_owned(),
             incarnation: incarnation.to_owned(),
+            generations,
             dir,
         })
     }
@@ -347,14 +304,23 @@ pub struct HeadReport {
 impl<'a> CliHead<'a> {
     pub fn open(
         client: &'a Client,
-        master_key: &[u8; 32],
+        master_keys: &MasterKeys,
+        object_id_key: &ObjectIdKey,
         binding: &str,
         incarnation: &str,
+        generations: account_head::RootGenerations,
         dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
             client,
-            store: StateStore::new(master_key, binding, incarnation, dir)?,
+            store: StateStore::new(
+                master_keys,
+                object_id_key,
+                binding,
+                incarnation,
+                generations,
+                dir,
+            )?,
             verified: None,
             blocked: None,
         })
@@ -362,9 +328,14 @@ impl<'a> CliHead<'a> {
 
     /// This profile's sealed revision guard, taking over the older plaintext
     /// `identity-pins-revision` once (its value becomes the pin list's).
-    pub fn guard(dir: &Path, master_key: &[u8; 32]) -> Result<Guard> {
+    pub fn guard(
+        dir: &Path,
+        master_keys: &MasterKeys,
+        object_id_key: &ObjectIdKey,
+        binding: &str,
+    ) -> Result<Guard> {
         let guard = Guard {
-            keys: GuardKeys::derive(master_key)?,
+            keys: GuardKeys::derive(master_keys, object_id_key, binding)?,
             path: dir.join("revisions.json"),
         };
         let old = dir.join("identity-pins-revision");
@@ -443,6 +414,7 @@ impl<'a> CliHead<'a> {
             &self.store.keys,
             &self.store.binding,
             &self.store.incarnation,
+            self.store.generations,
             state.anchor.as_ref(),
             &current,
             segment.as_deref(),
@@ -460,6 +432,7 @@ impl<'a> CliHead<'a> {
                     &self.store.keys,
                     &self.store.binding,
                     &self.store.incarnation,
+                    self.store.generations,
                     &anchor,
                     &current,
                     segment.as_deref(),
@@ -494,73 +467,120 @@ impl<'a> CliHead<'a> {
         }
     }
 
-    /// A scope's index, checked against the head it was read with. A
-    /// rollback or fork is read once more first: another device moving on
+    /// The server's head, checked, and before the account's first head the
+    /// basis to start the chain on (the contacts index answers with both).
+    /// A rollback or fork is read once more first: another device moving on
     /// between two reads is not one.
-    pub fn index(&mut self, scope: &str) -> Result<Index> {
-        match self.index_once(scope) {
-            Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => self.index_once(scope),
+    fn checked_basis(&mut self) -> Result<Option<String>> {
+        match self.checked_basis_once() {
+            Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => {
+                self.checked_basis_once()
+            }
             other => other,
         }
     }
 
-    fn index_once(&mut self, scope: &str) -> Result<Index> {
-        let Some(record) = self.client.get_account_index(scope)? else {
+    fn checked_basis_once(&mut self) -> Result<Option<String>> {
+        let Some(record) = self.client.get_account_index("contacts")? else {
             let head = self.client.get_account_head()?;
             self.verify(head.as_deref())?;
-            return Ok(Index {
-                scope: scope.to_owned(),
-                values: Vec::new(),
-                covered: false,
-                basis: None,
-            });
+            return Ok(None);
         };
         self.verify(record.head.as_deref())?;
-        let covered = match &self.verified {
-            None => false,
-            Some(verified) => {
-                match account_head::check_index(&self.store.keys, verified, scope, &record.values) {
-                    Ok(IndexCheck::Matches) => true,
-                    Ok(IndexCheck::Uncovered) => false,
-                    Err(_) => bail!(
-                        "{scope}: the server's list does not match the account's verified state"
-                    ),
-                }
-            }
-        };
-        Ok(Index {
-            scope: scope.to_owned(),
-            values: record.values,
-            covered,
-            basis: if record.head.is_none() {
-                record.basis
-            } else {
-                None
-            },
+        Ok(if record.head.is_none() {
+            record.basis
+        } else {
+            None
         })
     }
 
-    /// A listed write of `scope`: the edit made on the verified index, sent
-    /// with the next head, redone (five tries) when another device wrote
-    /// first; the chain started first when there is none. An edit returning
-    /// `None` sends nothing.
-    pub fn listed_write<'e, T>(
+    /// A records scope, read from the start and checked: every page's head
+    /// verified as it comes, and once caught up the scope's index checked
+    /// against the last one (docs/plans/account-records.md, decision 5).
+    /// With the account's basis when it has no head yet. A rollback or fork
+    /// is read once more first, as [`Self::index`] does.
+    pub fn records(&mut self, scope: RecordScope) -> Result<(ScopeRecords, Option<String>)> {
+        match self.records_once(scope) {
+            Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => self.records_once(scope),
+            other => other,
+        }
+    }
+
+    fn records_once(&mut self, scope: RecordScope) -> Result<(ScopeRecords, Option<String>)> {
+        // Each page starts past the one before, so this ends; the bound only
+        // stops a server that keeps answering "more".
+        const MOST_PAGES: usize = 100_000;
+        let mut copy = ScopeRecords::new(scope);
+        let mut resyncs = 0;
+        for _ in 0..MOST_PAGES {
+            let page = self.client.get_account_records(scope, copy.cursor)?;
+            self.verify(page.head.as_deref())?;
+            match copy.merge(&page)? {
+                Merged::More => continue,
+                Merged::Resync => {
+                    resyncs += 1;
+                    if resyncs > 3 {
+                        bail!(
+                            "{}: the server kept sending this device back to the start",
+                            scope.name()
+                        );
+                    }
+                    continue;
+                }
+                Merged::Done => {}
+            }
+            if let Some(verified) = &self.verified {
+                if account_head::check_index(
+                    &self.store.keys,
+                    verified,
+                    scope.name(),
+                    &copy.index(),
+                )
+                .is_err()
+                {
+                    bail!(
+                        "{}: the server's records do not match the account's verified state",
+                        scope.name()
+                    );
+                }
+            }
+            let basis = if page.head.is_none() {
+                page.basis
+            } else {
+                None
+            };
+            return Ok((copy, basis));
+        }
+        bail!("{}: the server's records did not end", scope.name())
+    }
+
+    /// A batch of `scope`'s records with the next head: `edit` makes the
+    /// puts `(id, revision, envelope)` and deletes on the verified copy (its
+    /// second argument counts tries from 1), redone (five tries) when
+    /// another device wrote first. The chain starts first when there is
+    /// none. An edit returning `None`, or an empty batch, sends nothing.
+    pub fn records_write<T>(
         &mut self,
-        scope: &str,
-        mut edit: impl FnMut(&Index, u32) -> Result<Option<Edit<'e, T>>>,
+        scope: RecordScope,
+        mut edit: impl FnMut(&ScopeRecords, u32) -> Result<Option<RecordsEdit<T>>>,
     ) -> Result<Option<T>> {
         for attempt in 1..=5 {
-            let index = self.index(scope)?;
+            let (copy, basis) = self.records(scope)?;
             let writer = self.store.keys.writer(&self.load()?.device_id)?;
-            let Some(change) = edit(&index, attempt)? else {
+            let Some(change) = edit(&copy, attempt)? else {
                 return Ok(None);
             };
-            if let Some(basis) = &index.basis {
-                let entry = self.store.keys.scope_digest(scope, &index.values)?;
+            let plan = copy.plan(change.puts, change.deletes)?;
+            if plan.is_empty() {
+                return Ok(Some(change.done));
+            }
+            if let Some(basis) = &basis {
+                let entry = self.store.keys.scope_digest(scope.name(), &copy.index())?;
                 let (first, verified) = account_head::first(
                     &self.store.keys,
                     &self.store.binding,
                     &self.store.incarnation,
+                    self.store.generations,
                     &writer,
                     vec![entry],
                 )?;
@@ -573,30 +593,73 @@ impl<'a> CliHead<'a> {
                 self.verified = Some(verified);
                 self.advance()?;
             }
-            let mut values: BTreeMap<String, u64> = index.values.iter().cloned().collect();
-            for (id, revision) in &change.changes {
-                match revision {
-                    Some(revision) => values.insert(id.clone(), *revision),
-                    None => values.remove(id),
-                };
-            }
-            let values: Vec<(String, u64)> = values.into_iter().collect();
-            let entry = self.store.keys.scope_digest(scope, &values)?;
+            let entry = self
+                .store
+                .keys
+                .scope_digest(scope.name(), &plan.index_after(&copy))?;
             let verified = self.verified.as_ref().context("no verified account head")?;
             let next = verified.next(&writer, vec![entry])?;
             let sealed = account_head::seal(&self.store.keys, &self.store.binding, &next)?;
-            match (change.send)(&STANDARD.encode(&sealed))? {
-                Some(done) => {
-                    let committed =
-                        verified.committed(&self.store.keys, &self.store.binding, &sealed)?;
-                    self.verified = Some(committed);
-                    self.advance()?;
-                    return Ok(Some(done));
-                }
-                None => continue,
+            if self
+                .client
+                .post_account_records(&plan, Some(&STANDARD.encode(&sealed)))?
+                .is_some()
+            {
+                let committed =
+                    verified.committed(&self.store.keys, &self.store.binding, &sealed)?;
+                self.verified = Some(committed);
+                self.advance()?;
+                return Ok(Some(change.done));
             }
         }
-        bail!("{scope}: another device kept writing first; try again")
+        bail!(
+            "{}: another device kept writing first; try again",
+            scope.name()
+        )
+    }
+
+    /// The check a sign-in makes before its session is kept and before
+    /// anything signs or seals with the roots: the server's head checked,
+    /// roots' generations included, so a rolled-back identity or Drive root
+    /// is never used. With no head yet, the chain is started on what the
+    /// account holds, covering no scope, with the generations it registered.
+    /// A rollback or fork is [`HeadBlocked`], as for any other check.
+    pub fn at_sign_in(&mut self) -> Result<()> {
+        for _ in 1..=5 {
+            let basis = self.checked_basis()?;
+            if self.verified.is_some() {
+                return Ok(());
+            }
+            let basis =
+                basis.context("the server has no account head and no basis to start one on")?;
+            let writer = self.store.keys.writer(&self.load()?.device_id)?;
+            let (first, verified) = account_head::first(
+                &self.store.keys,
+                &self.store.binding,
+                &self.store.incarnation,
+                self.store.generations,
+                &writer,
+                Vec::new(),
+            )?;
+            // Another device started it first: check that one.
+            if self
+                .client
+                .start_account_head(&STANDARD.encode(&first), &basis)?
+            {
+                self.verified = Some(verified);
+                return self.advance();
+            }
+        }
+        bail!("another device kept starting the account's history; try again")
+    }
+
+    /// The head a master-key rotation continues: checked now (the chain
+    /// started first when there is none), and this device's writer id.
+    pub fn for_rotation(&mut self) -> Result<(&VerifiedHead, String)> {
+        self.at_sign_in()?;
+        let writer = self.store.keys.writer(&self.load()?.device_id)?;
+        let verified = self.verified.as_ref().context("no verified account head")?;
+        Ok((verified, writer))
     }
 
     /// Where this device stands: checks the head now.
@@ -656,6 +719,7 @@ impl<'a> CliHead<'a> {
                     &store.keys,
                     &store.binding,
                     &store.incarnation,
+                    store.generations,
                     &anchor,
                     current,
                     segment.as_deref(),
@@ -671,39 +735,25 @@ impl<'a> CliHead<'a> {
     }
 }
 
+/// The key binding the tests' revision guards are sealed for.
+#[cfg(test)]
+const GUARD_BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn index(covered: bool, values: &[(&str, u64)]) -> Index {
-        Index {
-            scope: "contacts".into(),
-            values: values.iter().map(|(id, r)| (id.to_string(), *r)).collect(),
-            covered,
-            basis: None,
-        }
-    }
-
-    #[test]
-    fn a_covered_index_holds_values_and_listings() {
-        let index = index(true, &[("a", 1), ("b", 2)]);
-        index.expect("a", 1).unwrap();
-        assert!(index.expect("a", 2).is_err());
-        assert!(index.expect("c", 1).is_err());
-        index.expect_listing(["b", "a"]).unwrap();
-        assert!(index.expect_listing(["a"]).is_err());
-        assert!(index.expect_listing(["a", "b", "c"]).is_err());
-        // Uncovered: nothing to hold it to yet.
-        let open = super::tests::index(false, &[]);
-        open.expect("x", 9).unwrap();
-        open.expect_listing(["x"]).unwrap();
-    }
 
     #[test]
     fn the_guard_is_sealed_and_only_moves_forward() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path();
-        let guard = CliHead::guard(dir, &[7u8; 32]).unwrap();
+        let guard = CliHead::guard(
+            dir,
+            &MasterKeys::first(&[7u8; 32]),
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING,
+        )
+        .unwrap();
         assert_eq!(guard.seen("s", "x").unwrap(), 0);
         guard.accept("s", "x", 5).unwrap();
         assert!(guard.accept("s", "x", 4).is_err());
@@ -711,10 +761,15 @@ mod tests {
         assert!(guard.next("s", "x", 0).unwrap() > 5);
         // Another account's keys read nothing; an altered entry reads as none.
         assert_eq!(
-            CliHead::guard(dir, &[8u8; 32])
-                .unwrap()
-                .seen("s", "x")
-                .unwrap(),
+            CliHead::guard(
+                dir,
+                &MasterKeys::first(&[8u8; 32]),
+                &kutup_crypto::account_roots::ObjectIdKey::from_bytes([8u8; 32]),
+                GUARD_BINDING
+            )
+            .unwrap()
+            .seen("s", "x")
+            .unwrap(),
             0
         );
         // Entries are named by an HMAC: the file says nothing of what they are about.
@@ -727,7 +782,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path();
         std::fs::write(dir.join("identity-pins-revision"), "1790000000000").unwrap();
-        let guard = CliHead::guard(dir, &[7u8; 32]).unwrap();
+        let guard = CliHead::guard(
+            dir,
+            &MasterKeys::first(&[7u8; 32]),
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING,
+        )
+        .unwrap();
         assert_eq!(
             guard
                 .seen(
@@ -745,14 +806,31 @@ mod tests {
 
     /// `n` verified heads of one account, each on the one before.
     fn verified_chain(n: usize) -> Vec<VerifiedHead> {
-        let keys = HeadKeys::derive(&[7u8; 32]).unwrap();
+        let keys = HeadKeys::derive(
+            &MasterKeys::first(&[7u8; 32]),
+            &ObjectIdKey::from_bytes([7u8; 32]),
+        )
+        .unwrap();
         let writer = keys.writer("device-a").unwrap();
         let entry = |i: u64| {
             keys.scope_digest("pins", &[("pins".to_string(), i)])
                 .unwrap()
         };
-        let (_, first) =
-            account_head::first(&keys, BINDING, INCARNATION, &writer, vec![entry(1)]).unwrap();
+        let (_, first) = account_head::first(
+            &keys,
+            BINDING,
+            INCARNATION,
+            account_head::RootGenerations {
+                identity: 1,
+                drive: 1,
+                object_id: 1,
+                pseudonym: 1,
+                call_link: 1,
+            },
+            &writer,
+            vec![entry(1)],
+        )
+        .unwrap();
         let mut heads = vec![first];
         for i in 2..=n as u64 {
             let last = heads.last().unwrap();
@@ -764,7 +842,21 @@ mod tests {
     }
 
     fn store(dir: &Path) -> StateStore {
-        StateStore::new(&[7u8; 32], BINDING, INCARNATION, dir.to_path_buf()).unwrap()
+        StateStore::new(
+            &MasterKeys::first(&[7u8; 32]),
+            &ObjectIdKey::from_bytes([7u8; 32]),
+            BINDING,
+            INCARNATION,
+            account_head::RootGenerations {
+                identity: 1,
+                drive: 1,
+                object_id: 1,
+                pseudonym: 1,
+                call_link: 1,
+            },
+            dir.to_path_buf(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -778,7 +870,13 @@ mod tests {
                 std::thread::spawn(move || {
                     // Each its own handles, as another process would have.
                     let store = store(&dir);
-                    let guard = CliHead::guard(&dir, &[7u8; 32]).unwrap();
+                    let guard = CliHead::guard(
+                        &dir,
+                        &MasterKeys::first(&[7u8; 32]),
+                        &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+                        GUARD_BINDING,
+                    )
+                    .unwrap();
                     for (i, head) in heads.iter().enumerate() {
                         // Out of order across threads: some go back to older heads.
                         let pick = if (i + t) % 3 == 0 {
@@ -805,7 +903,13 @@ mod tests {
             40,
             "the anchor never moved back"
         );
-        let guard = CliHead::guard(temp.path(), &[7u8; 32]).unwrap();
+        let guard = CliHead::guard(
+            temp.path(),
+            &MasterKeys::first(&[7u8; 32]),
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING,
+        )
+        .unwrap();
         for t in 0..4 {
             for i in 0..40 {
                 assert_eq!(guard.seen("s", &format!("{t}-{i}")).unwrap(), 1 + i as u64);
@@ -858,7 +962,13 @@ mod tests {
         std::fs::write(dir.join("identity-pins-revision"), "1790000000000").unwrap();
         // The guard's file cannot be written (a directory stands in its place).
         std::fs::create_dir(dir.join("revisions.json")).unwrap();
-        assert!(CliHead::guard(dir, &[7u8; 32]).is_err());
+        assert!(CliHead::guard(
+            dir,
+            &MasterKeys::first(&[7u8; 32]),
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING
+        )
+        .is_err());
         assert!(dir.join("identity-pins-revision").exists());
     }
 }

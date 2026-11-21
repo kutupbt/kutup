@@ -10,13 +10,13 @@ export interface ApiErrorBody {
 }
 
 export type ApiErrorCode =
-  | 'bad_request'
+  | 'badRequest'
   | 'unauthenticated'
   | 'forbidden'
-  | 'not_found'
+  | 'notFound'
   | 'conflict'
-  | 'payload_too_large'
-  | 'too_many_requests'
+  | 'payloadTooLarge'
+  | 'tooManyRequests'
   | 'internal'
   | 'network'
 
@@ -36,19 +36,19 @@ export function apiErrorCode(error: unknown): ApiErrorCode | null {
   switch (status) {
     case 400:
     case 422:
-      return 'bad_request'
+      return 'badRequest'
     case 401:
       return 'unauthenticated'
     case 403:
       return 'forbidden'
     case 404:
-      return 'not_found'
+      return 'notFound'
     case 409:
       return 'conflict'
     case 413:
-      return 'payload_too_large'
+      return 'payloadTooLarge'
     case 429:
-      return 'too_many_requests'
+      return 'tooManyRequests'
     default:
       return 'internal'
   }
@@ -63,6 +63,7 @@ const CODE_MESSAGES: Record<string, string> = {
   keysPendingUpgrade: 'apiErrors.keysPendingUpgrade',
   peerOutdated: 'apiErrors.peerOutdated',
   checkTimedOut: 'apiErrors.checkTimedOut',
+  orgRoleRequired: 'apiErrors.orgRoleRequired',
 }
 
 /** `value`'s message for its `code`: a server body, or a client error that stops before asking. */

@@ -11,6 +11,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
+use kutup_crypto::account_record::MasterKeyGeneration;
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::account_rename::{self, AccountRenameV1};
 use kutup_crypto::drive_key_binding;
@@ -21,7 +22,7 @@ use kutup_crypto::identity_pins::{
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/vectors/identity-pins-v3.json"
+    "/tests/vectors/identity-pins-v4.json"
 );
 
 #[derive(Serialize, Deserialize)]
@@ -32,10 +33,9 @@ struct Vectors {
     /// The owner's key binding, which the sealed list binds.
     binding: String,
     authority_public_key: String,
-    drive_hpke_public_key: String,
+    drive_xwing_public_key: String,
     drive_signing_public_key: String,
     drive_key_binding: String,
-    pins_key: String,
     revision: u64,
     pins: String,
     nonce: String,
@@ -146,14 +146,13 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
         revision,
         sealed: STANDARD.encode(sealed),
     };
-    let mut magic = sealed.to_vec();
-    magic[5] = b'2';
-    let mut suite = sealed.to_vec();
-    suite[9] = 2;
+    // The record's header ends with revision ‖ nonce ‖ length.
+    let header = kutup_crypto::account_record::inspect(sealed).unwrap();
+    let length_at = sealed.len() - header.ciphertext_len as usize - 4;
     let mut relabelled = sealed.to_vec();
-    relabelled[17] = 8;
+    relabelled[length_at - 24 - 32 - 1] = 8;
     let mut nonce = sealed.to_vec();
-    nonce[18] ^= 1;
+    nonce[length_at - 1] ^= 1;
     let mut tag = sealed.to_vec();
     *tag.last_mut().unwrap() ^= 1;
     vec![
@@ -165,8 +164,6 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
             sealed,
         ),
         case("relabelled as another revision", BINDING, 8, &relabelled),
-        case("magic of suite 2", BINDING, 7, &magic),
-        case("suite 2", BINDING, 7, &suite),
         case("nonce changed", BINDING, 7, &nonce),
         case("ciphertext changed", BINDING, 7, &tag),
     ]
@@ -213,18 +210,39 @@ const T: i64 = 1_791_800_000_000;
 const SINCE: &str = "2026-10-13T12:00:00Z";
 
 fn rules() -> RuleVectors {
-    let dave_keys = AccountIdentityKeysV1::derive(&[0x55u8; 32]).unwrap();
-    let erin_keys = AccountIdentityKeysV1::derive(&[0x66u8; 32]).unwrap();
-    let frank_keys = AccountIdentityKeysV1::derive(&[0x77u8; 32]).unwrap();
-    let stranger_keys = AccountIdentityKeysV1::derive(&[0x88u8; 32]).unwrap();
+    let dave_keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x55u8; 32]),
+    )
+    .unwrap();
+    let erin_keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x66u8; 32]),
+    )
+    .unwrap();
+    let frank_keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x77u8; 32]),
+    )
+    .unwrap();
+    let stranger_keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x88u8; 32]),
+    )
+    .unwrap();
     let dave = acct("kutup.dev", "5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b");
     let erin = acct("kutup.dev", "6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c");
     let frank = acct("example.org", "7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d");
     let stranger = acct("kutup.dev", "8d40e3f1-5e70-4192-9d3e-4f5a6b7c8d9e");
     let chain = vec![
-        account_rename::sign(&dave_keys, 1, "dave@kutup.dev", "davey@kutup.dev", T).unwrap(),
         account_rename::sign(
             &dave_keys,
+            dave.id(),
+            1,
+            "dave@kutup.dev",
+            "davey@kutup.dev",
+            T,
+        )
+        .unwrap(),
+        account_rename::sign(
+            &dave_keys,
+            dave.id(),
             2,
             "davey@kutup.dev",
             "david@kutup.dev",
@@ -376,7 +394,10 @@ fn rules() -> RuleVectors {
     )
     .unwrap();
     let gina = acct("kutup.dev", "9e51f402-6f81-42a3-8e4f-5a6b7c8d9eaf");
-    let gina_keys = AccountIdentityKeysV1::derive(&[0x99u8; 32]).unwrap();
+    let gina_keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x99u8; 32]),
+    )
+    .unwrap();
     let records = vec![
         record_case(
             "first met: pinned with its address",
@@ -721,10 +742,22 @@ fn rules() -> RuleVectors {
 }
 
 fn pins() -> IdentityPinsV2 {
-    let bob = AccountIdentityKeysV1::derive(&[0x22u8; 32]).unwrap();
-    let cara = AccountIdentityKeysV1::derive(&[0x23u8; 32]).unwrap();
-    let carol = AccountIdentityKeysV1::derive(&[0x33u8; 32]).unwrap();
-    let carol_before = AccountIdentityKeysV1::derive(&[0x34u8; 32]).unwrap();
+    let bob = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x22u8; 32]),
+    )
+    .unwrap();
+    let cara = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x23u8; 32]),
+    )
+    .unwrap();
+    let carol = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x33u8; 32]),
+    )
+    .unwrap();
+    let carol_before = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x34u8; 32]),
+    )
+    .unwrap();
     let mut cara_pin = plain(
         &acct("kutup.dev", "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f"),
         &cara,
@@ -770,20 +803,30 @@ fn write_vectors() {
     let master = [0x11u8; 32];
     // The account the binding names: (server, account id), its string form.
     let account = "aci:00000000-0000-4000-8000-0000000000a1@kutup.dev";
-    let identity = AccountIdentityKeysV1::derive(&master).unwrap();
+    let identity = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes(master),
+    )
+    .unwrap();
     let binding = drive_key_binding::sign(&identity, &account.parse().unwrap(), 1).unwrap();
-    let key = identity_pins::derive_key(&master).unwrap();
+    let key = master;
     let nonce = [0x44u8; 24];
-    let sealed = identity_pins::seal_with_nonce(&key, BINDING, 7, &pins(), &nonce).unwrap();
+    let sealed = identity_pins::seal_with_nonce(
+        &key,
+        MasterKeyGeneration::FIRST,
+        BINDING,
+        7,
+        &pins(),
+        &nonce,
+    )
+    .unwrap();
     let vectors = Vectors {
         master_key: STANDARD.encode(master),
         account: account.into(),
         binding: BINDING.into(),
         authority_public_key: STANDARD.encode(identity.authority_public_key()),
-        drive_hpke_public_key: STANDARD.encode(identity.drive_hpke_public_key()),
+        drive_xwing_public_key: STANDARD.encode(identity.drive_xwing_public_key()),
         drive_signing_public_key: STANDARD.encode(identity.drive_signing_public_key()),
         drive_key_binding: STANDARD.encode(binding),
-        pins_key: STANDARD.encode(*key),
         revision: 7,
         pins: json(&pins()),
         nonce: STANDARD.encode(nonce),
@@ -802,14 +845,17 @@ fn key32(value: &str) -> [u8; 32] {
 fn checked_in_vectors_hold() {
     let v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
     let master = key32(&v.master_key);
-    let identity = AccountIdentityKeysV1::derive(&master).unwrap();
+    let identity = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes(master),
+    )
+    .unwrap();
     assert_eq!(
         STANDARD.encode(identity.authority_public_key()),
         v.authority_public_key
     );
     assert_eq!(
-        STANDARD.encode(identity.drive_hpke_public_key()),
-        v.drive_hpke_public_key
+        STANDARD.encode(identity.drive_xwing_public_key()),
+        v.drive_xwing_public_key
     );
     assert_eq!(
         STANDARD.encode(identity.drive_signing_public_key()),
@@ -825,7 +871,7 @@ fn checked_in_vectors_hold() {
         &key32(&v.authority_public_key),
         1,
         &STANDARD
-            .decode(&v.drive_hpke_public_key)
+            .decode(&v.drive_xwing_public_key)
             .unwrap()
             .try_into()
             .unwrap(),
@@ -834,14 +880,24 @@ fn checked_in_vectors_hold() {
     )
     .unwrap();
 
-    let key = identity_pins::derive_key(&master).unwrap();
-    assert_eq!(STANDARD.encode(*key), v.pins_key);
+    let key = master;
     assert_eq!(json(&pins()), v.pins);
     let nonce: [u8; 24] = STANDARD.decode(&v.nonce).unwrap().try_into().unwrap();
-    let sealed =
-        identity_pins::seal_with_nonce(&key, &v.binding, v.revision, &pins(), &nonce).unwrap();
+    let sealed = identity_pins::seal_with_nonce(
+        &key,
+        MasterKeyGeneration::FIRST,
+        &v.binding,
+        v.revision,
+        &pins(),
+        &nonce,
+    )
+    .unwrap();
     assert_eq!(STANDARD.encode(&sealed), v.sealed);
     assert_eq!(identity_pins::inspect(&sealed).unwrap(), v.revision);
+    assert_eq!(
+        identity_pins::validate(&sealed, &v.binding).unwrap(),
+        v.revision
+    );
     assert_eq!(
         identity_pins::open(&key, &v.binding, &sealed).unwrap(),
         (pins(), v.revision)
@@ -861,7 +917,15 @@ fn checked_in_vectors_hold() {
         );
     }
     // The address is not a key binding, so nothing seals to it either.
-    assert!(identity_pins::seal_with_nonce(&key, &v.account, v.revision, &pins(), &nonce).is_err());
+    assert!(identity_pins::seal_with_nonce(
+        &key,
+        MasterKeyGeneration::FIRST,
+        &v.account,
+        v.revision,
+        &pins(),
+        &nonce
+    )
+    .is_err());
     check_rules(&v.rules);
 }
 

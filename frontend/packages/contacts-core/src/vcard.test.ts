@@ -75,7 +75,7 @@ describe('vCard', () => {
       { address: 'p@proton.me', publicKey: 'AAAA', fingerprint: '' },
       { address: 'p@proton.me', publicKey: 'BBBB', fingerprint: '' },
     ])
-    expect(card.emails[0].pgp).toEqual({ encrypt: true, sign: true, scheme: 'pgp_mime' })
+    expect(card.emails[0].pgp).toEqual({ encrypt: true, sign: true, scheme: 'pgpMime' })
     const older = ['BEGIN:VCARD', 'VERSION:4.0', 'FN:O', 'item1.EMAIL:o@example.org', 'item1.KEY;PREF=1:data:application/pgp-keys;base64,DDDD', 'item1.X-PM-ENCRYPT:false', 'END:VCARD'].join('\r\n')
     expect(parseVCards(older)[0].draft.emails[0].pgp).toEqual({ encrypt: false })
   })

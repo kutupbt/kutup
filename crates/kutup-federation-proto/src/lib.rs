@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 pub use discovery::{
     FederationCapabilityId, FederationDiscoveryTransportPolicy, FederationDiscoveryV2,
-    FederationGroupSendKeyV1, MAX_GROUP_SEND_KEYS, MAX_GROUP_SEND_KEY_BYTES,
+    FederationGroupSendKeyV1, MAX_GROUP_SEND_KEYS, MAX_GROUP_SEND_KEY_BYTES, SERVED_VERSIONS,
 };
 pub use error::FederationProtocolError;
 pub use http_signatures::{
@@ -43,7 +43,7 @@ pub const FEDERATION_VERSION: u16 = 2;
 /// The only accepted identity-document format.
 pub const FEDERATION_IDENTITY_VERSION: u16 = 1;
 /// RFC 9421 application tag and fixed signature label for this profile.
-pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
+pub const FEDERATION_SIGNATURE_TAG: &str = kutup_crypto::labels::FEDERATION_SIGNATURE_TAG;
 pub const FEDERATION_SIGNATURE_LABEL: &str = "kutup";
 /// Both request and response signatures have a maximum five-minute lifetime.
 pub const MAX_SIGNATURE_LIFETIME_SECONDS: i64 = 5 * 60;

@@ -1,3 +1,4 @@
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { AxiosError, AxiosHeaders } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -16,6 +17,8 @@ vi.mock('./profile', async (importOriginal) => ({
   activateSession: (...a: unknown[]) => activateSession(...a),
   fetchProfile: (...a: unknown[]) => fetchProfile(...a),
 }))
+// The instance check has its own tests (instance.test.ts).
+vi.mock('./instance', () => ({ ensureInstance: async () => undefined }))
 const wasm = vi.fn()
 vi.mock('@kutup/crypto/rustWasm', () => ({ getCryptoWasm: () => wasm() }))
 const open = vi.fn()
@@ -28,6 +31,7 @@ vi.mock('@kutup/crypto/localState', () => ({
 import { encodeKeys } from './keys'
 import { restoreSession } from './persist'
 import { PERSISTED_SESSION_KEY, readPersisted, writePersisted } from './persistedStore'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 function httpError(status: number) {
   return new AxiosError('x', 'ERR', undefined, undefined, {
@@ -36,8 +40,9 @@ function httpError(status: number) {
 }
 const networkError = new AxiosError('Network Error', 'ERR_NETWORK')
 const keys = {
-  userId: 'u1',
-  masterKey: new Uint8Array(32),
+  accountId: 'u1',
+  masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)),
+  roots: testRoots(0),
   privateKey: new Uint8Array(32),
   publicKey: 'p',
   keyBinding: '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90',
@@ -46,7 +51,7 @@ const keys = {
 beforeEach(() => {
   localStorage.clear()
   vi.clearAllMocks()
-  writePersisted({ v: 1, sessionId: 'S1', userId: 'u1', blob: 'BLOB' })
+  writePersisted({ v: 1, sessionId: 'S1', accountId: 'u1', blob: 'BLOB' })
   refresh.mockResolvedValue({ accessToken: 'AT', sessionId: 'S1' })
   get.mockResolvedValue({ data: { key: 'A'.repeat(43) + '=' } })
   wasm.mockResolvedValue({})
@@ -60,7 +65,7 @@ describe('restoreSession', () => {
     expect(open).toHaveBeenCalledWith('BLOB', expect.any(Uint8Array), 3, 'web-drive:S1')
     // The profile came alongside the key, under the fresh token.
     expect(fetchProfile).toHaveBeenCalledWith('AT')
-    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), 'AT', 'S1', { id: 'u1' })
+    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'u1' }), 'AT', 'S1', { id: 'u1' })
   })
 
   it('ends the sign-in when the server names another key binding', async () => {

@@ -34,8 +34,8 @@ use crate::AppState;
 
 const JSON: &str = "application/json";
 const OCTETS: &str = "application/octet-stream";
-const OFFER_PATH: &str = "/api/fed/chat/media/offers";
-const OBJECT_PATH: &str = "/api/fed/chat/media/objects";
+const OFFER_PATH: &str = "/api/fed/v2/chat/media/offers";
+const OBJECT_PATH: &str = "/api/fed/v2/chat/media/objects";
 
 fn canonical_uuid(value: &str) -> Option<Uuid> {
     Uuid::parse_str(value)
@@ -149,9 +149,9 @@ async fn send_offer(
         return Ok(Err(if unanswered || retryable_status(response.status) {
             OfferFailure::Retry(
                 if response.status == StatusCode::CONFLICT {
-                    "sequence_conflict"
+                    "sequenceConflict"
                 } else {
-                    "remote_error"
+                    "remoteError"
                 },
                 message,
             )
@@ -178,7 +178,7 @@ async fn send_offer(
             }
     }) else {
         return Ok(Err(OfferFailure::Retry(
-            "remote_error",
+            "remoteError",
             "remote Chat-media receipt does not match the offer".into(),
         )));
     };
@@ -194,6 +194,9 @@ enum MediaAnswer {
     Receipt { receipt: ChatMediaOfferResponseV1 },
     /// The destination refused the offer for good.
     Refused { status: u16, message: String },
+    /// Never sent: the sender's federation went off after it was queued; its
+    /// sequence was withdrawn (crate::federation_stream_control).
+    Withdrawn,
 }
 
 impl MediaAnswer {
@@ -206,6 +209,7 @@ impl MediaAnswer {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!("the recipient's server refused the attachment: {message}"),
             )),
+            MediaAnswer::Withdrawn => Err(crate::federation_switch::federation_off()),
         }
     }
 
@@ -215,11 +219,12 @@ impl MediaAnswer {
             MediaAnswer::Receipt { receipt }
                 if receipt.status == ChatMediaDeliveryStatusV1::StorageFull =>
             {
-                ("storage_full", false, Some("storage_full"))
+                ("storage_full", false, Some("storageFull"))
             }
             MediaAnswer::Receipt { .. } => ("delivered", true, None),
             MediaAnswer::Refused { status: 404, .. } => ("unavailable", false, Some("unavailable")),
-            MediaAnswer::Refused { .. } => ("rejected", false, Some("remote_rejection")),
+            MediaAnswer::Refused { .. } => ("rejected", false, Some("remoteRejection")),
+            MediaAnswer::Withdrawn => ("withdrawn", false, Some("federationOff")),
         }
     }
 }
@@ -278,10 +283,12 @@ struct MediaRow {
     state: String,
     answer: Option<Value>,
     attempts: i32,
+    #[sqlx(rename = "sender_account_id")]
+    sender_user_id: Option<Uuid>,
 }
 
 const MEDIA_ROW: &str = "id, destination, sequence, payload->'transaction' AS transaction, state,
-     answer, attempts";
+     answer, attempts, sender_account_id";
 
 /// Stage an authenticated local sender's remote delivery, or answer a repeat
 /// of it (Signal's model: the client sends its attachment message only once
@@ -350,9 +357,9 @@ pub(crate) async fn stage_remote_delivery(
     } else {
         type ObjectRow = (i16, i64, String, Vec<u8>);
         let object: Option<ObjectRow> = sqlx::query_as(
-            "SELECT suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
+            "SELECT suite,ciphertext_bytes,encode(ciphertext_sha256,'hex'),retrieval_token_hash
              FROM chat_media_objects
-             WHERE attachment_id=$1 AND origin_user_id=$2 AND origin_domain=$3",
+             WHERE attachment_id=$1 AND origin_account_id=$2 AND origin_server=$3",
         )
         .bind(attachment_id)
         .bind(origin_user_id)
@@ -388,7 +395,7 @@ pub(crate) async fn stage_remote_delivery(
             .map_err(|_| AppError::internal("serialize Chat-media transaction"))?;
         sqlx::query(
             "INSERT INTO chat_media_federation_pull_grants
-                 (origin_user_id,destination,recipient_account_id,operation_id,attachment_id,
+                 (origin_account_id,destination,recipient_account_id,operation_id,attachment_id,
                   retrieval_token_hash,expires_at)
              VALUES ($1,$2,$3,$4,$5,$6,to_timestamp($7))",
         )
@@ -403,7 +410,7 @@ pub(crate) async fn stage_remote_delivery(
         .await?;
         let id: Uuid = sqlx::query_scalar(
             "INSERT INTO federation_outbox
-                 (kind, destination, sequence, idempotency_key, sender_user_id,
+                 (kind, destination, sequence, idempotency_key, sender_account_id,
                   recipient_account_id, payload)
              VALUES ('media', $1, $2, $3, $4, $5,
                      jsonb_build_object('transaction', $6::jsonb, 'operationId', $7::text))
@@ -466,11 +473,72 @@ async fn attempt_media(
     if head != Some(row.sequence) {
         return Ok(None);
     }
-    let transaction: FederatedChatMediaTransactionV1 =
-        serde_json::from_value(row.transaction.clone())
-            .map_err(|_| AppError::internal("stored Chat-media transaction is malformed"))?;
-    let operation_id = canonical_uuid(&transaction.offer.operation_id)
-        .ok_or_else(|| AppError::internal("stored Chat-media operation is malformed"))?;
+    // A row this server can no longer read never stalls the queue.
+    let decoded =
+        serde_json::from_value::<FederatedChatMediaTransactionV1>(row.transaction.clone())
+            .ok()
+            .and_then(|transaction| {
+                canonical_uuid(&transaction.offer.operation_id).map(|id| (transaction, id))
+            });
+    let Some((transaction, operation_id)) = decoded else {
+        crate::federation_stream_control::settle_undecodable(
+            state,
+            kutup_chat_proto::FederationStreamV1::Media,
+            row.id,
+            &row.destination,
+            row.sequence,
+            row.attempts,
+        )
+        .await?;
+        return Ok(None);
+    };
+    // Its sender's federation went off since it was queued: the offer never
+    // leaves; its sequence is withdrawn instead (crate::federation_stream_control).
+    if let Some(sender) = row.sender_user_id {
+        if crate::chat_federation::sender_is_off(&state.pool, sender).await? {
+            use crate::federation_stream_control::{withdraw, Withdrawal};
+            match withdraw(
+                state,
+                kutup_chat_proto::FederationStreamV1::Media,
+                &row.destination,
+                row.sequence,
+                row.id,
+            )
+            .await?
+            {
+                Withdrawal::Accepted => {
+                    let answer = MediaAnswer::Withdrawn;
+                    settle_media(state, &row, operation_id, &answer).await?;
+                    crate::telemetry::chat_media_event(telemetry, answer.outcome().0);
+                    return Ok(Some(answer));
+                }
+                Withdrawal::Gap { expected } => {
+                    federation_outbox::retry_later(
+                        &state.pool,
+                        row.id,
+                        Some(row.sequence),
+                        row.attempts,
+                        "sequenceGap",
+                        &format!("remote expects media sequence {expected}"),
+                    )
+                    .await?;
+                    return Ok(None);
+                }
+                Withdrawal::Retry(error) => {
+                    federation_outbox::retry_later(
+                        &state.pool,
+                        row.id,
+                        Some(row.sequence),
+                        row.attempts,
+                        "transport",
+                        &error,
+                    )
+                    .await?;
+                    return Ok(None);
+                }
+            }
+        }
+    }
     let answer = match send_offer(state, &row.destination, &transaction).await? {
         Ok(receipt) => MediaAnswer::Receipt { receipt },
         Err(OfferFailure::Unsupported(error)) => {
@@ -621,10 +689,9 @@ fn check_offer(
             OffsetDateTime::now_utc().unix_timestamp(),
         )
         .map_err(AppError::bad_request)?;
-    let configured_ciphertext_limit = kutup_crypto::chat_media::object_ciphertext_size(
+    let configured_ciphertext_limit = kutup_crypto::chat_media_blocks::max_object_len(
         state.config.chat_media_max_plaintext_bytes,
-    )
-    .map_err(|_| AppError::internal("invalid Chat-media server limit"))?;
+    );
     if transaction.offer.ciphertext_bytes > configured_ciphertext_limit {
         return Err(AppError::bad_request(
             "Chat media exceeds the destination server limit",
@@ -707,7 +774,7 @@ async fn reserve_inbound_offer(
     let lease_id = Uuid::new_v4();
     type Pending = (String, Uuid, Uuid, i64);
     let pending: Option<Pending> = sqlx::query_as(
-        "SELECT transaction_digest,recipient_user_id,attachment_id,ciphertext_bytes
+        "SELECT encode(transaction_digest,'hex'),recipient_account_id,attachment_id,ciphertext_bytes
          FROM chat_media_federation_inbound_pending
          WHERE origin=$1 AND sequence=$2",
     )
@@ -770,11 +837,14 @@ async fn reserve_inbound_offer(
         .ok()
         .and_then(|bytes| bytes.try_into().ok());
     let capability_digest = capability.as_ref().map(capability_hash).unwrap_or([0; 32]);
-    let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active=true")
-            .bind(recipient)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let recipient_user_id: Option<Uuid> = sqlx::query_scalar(
+        // An account that doesn't talk to other servers is, to them, no
+        // account (crate::federation_switch).
+        "SELECT id FROM accounts WHERE id = $1 AND state = 'active' AND kutup_account_federates(id)",
+    )
+    .bind(recipient)
+    .fetch_optional(&mut *tx)
+    .await?;
     let capability_matches = if let Some(recipient_user_id) = recipient_user_id {
         capability.is_some()
             && chat_media::match_delivery_capability(&mut tx, recipient_user_id, &capability_digest)
@@ -799,18 +869,18 @@ async fn reserve_inbound_offer(
     };
     chat_media::consume_media_rate(
         &mut tx,
-        "capability_minute",
+        crate::ratelimit::counters::Scope::MediaCapabilityMinute,
         &capability_digest,
         crate::ratelimit::Limit::MediaCapabilityMinute,
     )
     .await?;
     chat_media::consume_media_rate(
         &mut tx,
-        "federation_origin",
+        crate::ratelimit::counters::Scope::MediaFederationOrigin,
         &hash(
             Suite::V1,
             [
-                b"kutup/chat-media/federation-origin-rate/v1\0".as_slice(),
+                kutup_crypto::labels::CHAT_MEDIA_FEDERATION_ORIGIN_RATE_V1,
                 origin.as_bytes(),
             ]
             .concat(),
@@ -824,7 +894,7 @@ async fn reserve_inbound_offer(
         return refuse_offer(tx, transaction, transaction_digest, collision).await;
     }
     let existing_reference: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM chat_media_references WHERE user_id=$1 AND attachment_id=$2",
+        "SELECT id FROM chat_media_references WHERE account_id=$1 AND attachment_id=$2",
     )
     .bind(recipient_user_id)
     .bind(attachment_id)
@@ -874,9 +944,9 @@ async fn reserve_inbound_offer(
     }
     sqlx::query(
         "INSERT INTO chat_media_federation_inbound_pending
-             (origin,sequence,operation_id,transaction_digest,recipient_user_id,
+             (origin,sequence,operation_id,transaction_digest,recipient_account_id,
               attachment_id,ciphertext_bytes,lease_id,lease_until)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '2 minutes')",
+         VALUES ($1,$2,$3,decode($4,'hex'),$5,$6,$7,$8,now()+interval '2 minutes')",
     )
     .bind(origin)
     .bind(sequence)
@@ -906,7 +976,7 @@ async fn check_object_identity(
 ) -> AppResult<bool> {
     type ExistingObject = (String, i16, i64, String, Vec<u8>);
     let existing: Option<ExistingObject> = sqlx::query_as(
-        "SELECT origin_domain,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
+        "SELECT origin_server,suite,ciphertext_bytes,encode(ciphertext_sha256,'hex'),retrieval_token_hash
          FROM chat_media_objects WHERE attachment_id=$1 FOR UPDATE",
     )
     .bind(attachment_id)
@@ -1060,12 +1130,26 @@ async fn process_reserved_offer_inner(
                 "origin Chat-media object differs from its signed offer",
             ));
         }
+        // The checks a local upload gets: a peer's object is kept only if
+        // it is this attachment's, in the block suite, with a structure
+        // that holds. Its signed offer named these bytes, so a refusal is
+        // final.
+        let mut file = streamed.file;
+        if let Err(refusal) =
+            check_pulled_object(&mut file, attachment_id, streamed.content_length).await
+        {
+            if refusal.status.is_server_error() {
+                return Err(refusal);
+            }
+            return refuse_reserved(state, transaction, transaction_digest, lease_id, refusal)
+                .await;
+        }
         let path = format!(
             "chat-media/federated/{}/{attachment_id}",
             transaction.origin_domain
         );
         let stream = ByteStream::read_from()
-            .file(streamed.file)
+            .file(file)
             .length(Length::Exact(streamed.content_length))
             .buffer_size(1024 * 1024)
             .build()
@@ -1088,7 +1172,7 @@ async fn process_reserved_offer_inner(
         )
         .await?;
         let pending: Option<(Uuid, Uuid, i64)> = sqlx::query_as(
-            "SELECT recipient_user_id,attachment_id,ciphertext_bytes
+            "SELECT recipient_account_id,attachment_id,ciphertext_bytes
              FROM chat_media_federation_inbound_pending
              WHERE origin=$1 AND sequence=$2 AND lease_id=$3 FOR UPDATE",
         )
@@ -1132,9 +1216,9 @@ async fn process_reserved_offer_inner(
                 .ok_or_else(|| AppError::internal("Chat-media object disappeared"))?;
             sqlx::query(
                 "INSERT INTO chat_media_objects
-                     (attachment_id,origin_user_id,origin_domain,suite,ciphertext_bytes,
+                     (attachment_id,origin_account_id,origin_server,suite,ciphertext_bytes,
                       ciphertext_sha256,retrieval_token_hash,storage_path)
-                 VALUES ($1,NULL,$2,$3,$4,$5,$6,$7)",
+                 VALUES ($1,NULL,$2,$3,$4,decode($5,'hex'),$6,$7)",
             )
             .bind(attachment_id)
             .bind(&transaction.origin_domain)
@@ -1203,7 +1287,7 @@ async fn process_reserved_offer_inner(
             return AppResult::Ok((StatusCode::OK, value, false));
         }
         let existing_reference: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM chat_media_references WHERE user_id=$1 AND attachment_id=$2",
+            "SELECT id FROM chat_media_references WHERE account_id=$1 AND attachment_id=$2",
         )
         .bind(recipient_user_id)
         .bind(attachment_id)
@@ -1213,7 +1297,7 @@ async fn process_reserved_offer_inner(
             (reference_id, ChatMediaDeliveryStatusV1::AlreadyStored)
         } else {
             let reference_id: Uuid = sqlx::query_scalar(
-                "INSERT INTO chat_media_references(user_id,attachment_id,logical_bytes)
+                "INSERT INTO chat_media_references(account_id,attachment_id,logical_bytes)
                  VALUES ($1,$2,$3) RETURNING id",
             )
             .bind(recipient_user_id)
@@ -1274,6 +1358,36 @@ async fn process_reserved_offer_inner(
             Err(error)
         }
     }
+}
+
+/// A pulled object's header and trailer, checked as a local upload's are
+/// (`chat_media::check_object_shape`); the file is left at its start.
+async fn check_pulled_object(
+    file: &mut tokio::fs::File,
+    attachment_id: Uuid,
+    total: u64,
+) -> AppResult<()> {
+    use kutup_crypto::blocks::TRAILER_LEN;
+    use kutup_crypto::chat_media_blocks::CHAT_MEDIA_BLOCKS_HEADER_BYTES;
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+    let io = |_| AppError::internal("read pulled Chat-media object");
+    let mut header = Vec::new();
+    let mut trailer = Vec::new();
+    if total >= CHAT_MEDIA_BLOCKS_HEADER_BYTES as u64 {
+        header.resize(CHAT_MEDIA_BLOCKS_HEADER_BYTES, 0);
+        file.seek(SeekFrom::Start(0)).await.map_err(io)?;
+        file.read_exact(&mut header).await.map_err(io)?;
+    }
+    if total >= TRAILER_LEN as u64 {
+        trailer.resize(TRAILER_LEN, 0);
+        file.seek(SeekFrom::Start(total - TRAILER_LEN as u64))
+            .await
+            .map_err(io)?;
+        file.read_exact(&mut trailer).await.map_err(io)?;
+    }
+    file.seek(SeekFrom::Start(0)).await.map_err(io)?;
+    chat_media::check_object_shape(attachment_id, &header, total, &trailer)
 }
 
 /// Records this server's final answer to the offer at its sequence, using
@@ -1463,12 +1577,15 @@ async fn serve_object_inner(
     type PullRow = (Vec<u8>, String, i64, String, i16);
     let row: Option<PullRow> = sqlx::query_as(
         "SELECT g.retrieval_token_hash,o.storage_path,o.ciphertext_bytes,
-                o.ciphertext_sha256,o.suite
+                encode(o.ciphertext_sha256,'hex'),o.suite
          FROM chat_media_federation_pull_grants g
          JOIN chat_media_objects o ON o.attachment_id=g.attachment_id
          WHERE g.destination=$1 AND g.recipient_account_id=$2 AND g.operation_id=$3
            AND g.attachment_id=$4 AND g.expires_at>now()
-           AND o.origin_domain=$5 AND o.origin_user_id=g.origin_user_id",
+           AND o.origin_server=$5 AND o.origin_account_id=g.origin_account_id
+           -- A sender whose federation is off serves nothing to another
+           -- server, its grants from before included (crate::federation_switch).
+           AND kutup_account_federates(g.origin_account_id)",
     )
     .bind(authenticated.origin())
     .bind(recipient_account_id(&transaction.offer).map_err(|_| chat_media::unavailable())?)
@@ -1498,4 +1615,66 @@ async fn serve_object_inner(
 pub(crate) fn recipient_account_id(offer: &ChatMediaDeliveryOfferV1) -> AppResult<Uuid> {
     Uuid::parse_str(&offer.recipient.account_id)
         .map_err(|_| AppError::bad_request("the recipient's account id is not a UUID"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kutup_crypto::chat_media::ChatMediaObjectContextV1;
+    use kutup_crypto::chat_media_blocks;
+    use tokio::io::AsyncReadExt as _;
+
+    async fn file_of(bytes: &[u8]) -> tokio::fs::File {
+        let path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        tokio::fs::write(&path, bytes).await.unwrap();
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        // Open files outlive their unlinked path on Unix.
+        drop(path);
+        file
+    }
+
+    #[tokio::test]
+    async fn a_peer_object_that_is_not_kutups_is_refused_as_a_local_upload_is() {
+        let attachment = Uuid::new_v4();
+        let context = ChatMediaObjectContextV1::new(&attachment.hyphenated().to_string()).unwrap();
+        let sealed = chat_media_blocks::seal_attachment(b"a video", &[3_u8; 32], context).unwrap();
+        let total = sealed.bytes.len() as u64;
+
+        // Kutup's object: accepted, and the file is back at its start.
+        let mut file = file_of(&sealed.bytes).await;
+        check_pulled_object(&mut file, attachment, total)
+            .await
+            .unwrap();
+        let mut read = Vec::new();
+        file.read_to_end(&mut read).await.unwrap();
+        assert_eq!(read, sealed.bytes);
+
+        // A peer sending any other bytes of the signed length: a final 400.
+        let foreign = vec![0x5a_u8; sealed.bytes.len()];
+        let refusal = check_pulled_object(&mut file_of(&foreign).await, attachment, total)
+            .await
+            .unwrap_err();
+        assert_eq!(refusal.status, StatusCode::BAD_REQUEST);
+        assert_eq!(refusal.message, "invalid Chat-media object header");
+
+        // Another attachment's object, and a short one.
+        let other = check_pulled_object(&mut file_of(&sealed.bytes).await, Uuid::new_v4(), total)
+            .await
+            .unwrap_err();
+        assert_eq!(other.message, "invalid Chat-media object header");
+        let short = check_pulled_object(&mut file_of(b"tiny").await, attachment, 4)
+            .await
+            .unwrap_err();
+        assert_eq!(short.status, StatusCode::BAD_REQUEST);
+
+        // The right header, a broken trailer.
+        let mut broken = sealed.bytes.clone();
+        let end = broken.len();
+        broken[end - 1] ^= 0xff;
+        broken[end - 12] ^= 0xff;
+        let refusal = check_pulled_object(&mut file_of(&broken).await, attachment, total)
+            .await
+            .unwrap_err();
+        assert_eq!(refusal.message, "Chat-media length mismatch");
+    }
 }

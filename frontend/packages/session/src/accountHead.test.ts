@@ -3,6 +3,7 @@ import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios'
 import { describe, expect, it, vi } from 'vitest'
 import type { AccountHeadValue, HeadAnchor, HeadIndex, HeadScope, HeadStatus, LocalHeadState, Reanchored } from '@kutup/crypto/accountHead'
 import { memoryRevisionStore } from '@kutup/crypto/revisionGuard'
+import { memoryRecordsStore } from './accountRecords'
 import {
   AccountHeadClient,
   HeadBlockedError,
@@ -472,7 +473,7 @@ describe('listed writes', () => {
     await expect(
       client.listedWrite('pins', async () => {
         edits++
-        return { changes: [['pins', 6]], send: () => Promise.reject(refused(409, edits < 3 ? 'head_conflict' : 'revision_conflict')) }
+        return { changes: [['pins', 6]], send: () => Promise.reject(refused(409, edits < 3 ? 'headConflict' : 'revisionConflict')) }
       }),
     ).rejects.toBeInstanceOf(AxiosError)
     expect(edits).toBe(5)
@@ -480,7 +481,7 @@ describe('listed writes', () => {
     await expect(
       client.listedWrite('pins', async () => {
         edits++
-        return { changes: [['pins', 6]], send: () => (edits < 2 ? Promise.reject(refused(409, 'head_conflict')) : Promise.resolve('ok')) }
+        return { changes: [['pins', 6]], send: () => (edits < 2 ? Promise.reject(refused(409, 'headConflict')) : Promise.resolve('ok')) }
       }),
     ).resolves.toBe('ok')
     expect(edits).toBe(2)
@@ -520,6 +521,164 @@ describe('listed writes', () => {
       }),
     ).rejects.toBeInstanceOf(AxiosError)
     expect(edits).toBe(1)
+  })
+})
+
+describe('account records', () => {
+  const page = (records: [string, number, number][], deleted: [string, number][], next: number, head: string | null, more = false) => ({
+    records: records.map(([id, revision, seq]) => ({ id, revision, envelope: `e:${id}:${revision}`, seq })),
+    deleted: deleted.map(([id, seq]) => ({ id, seq })),
+    next,
+    more,
+    resync: false,
+    head,
+    basis: head === null ? 'basis-1' : null,
+  })
+
+  it('reads every page, verifies each head, and checks the index once caught up', async () => {
+    const before = alive
+    const engine = new FakeEngine()
+    const head = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('chatGroups', [['a', 2], ['c', 1]])] })
+    let last = page([['a', 2, 4], ['c', 1, 5]], [['b', 3]], 5, head)
+    const { http, calls } = server({
+      'GET /account/records/chatGroups?after=0': () => page([['a', 1, 1], ['b', 5, 2]], [], 2, head, true),
+      'GET /account/records/chatGroups?after=2': () => last,
+    })
+    const client = new AccountHeadClient(engine, memoryRevisionStore(), http)
+    const copy = await client.records('chatGroups')
+    expect(copy.index()).toEqual([['a', 2], ['c', 1]])
+    expect(copy.cursor).toBe(5)
+    expect(calls.filter(([method]) => method === 'GET')).toHaveLength(2)
+    // A server that drops a record the head names: refused (a device with
+    // nothing kept, reading from the start).
+    last = page([['a', 2, 4]], [['b', 3]], 5, head)
+    await expect(new AccountHeadClient(engine, memoryRevisionStore(), http).records('chatGroups')).rejects.toEqual(new IndexMismatchError('chatGroups'))
+    // Only each client's one copy of its latest head stays.
+    expect(alive - before).toBeLessThanOrEqual(2)
+  })
+
+  it('refuses a page out of counter order', async () => {
+    const before = alive
+    const engine = new FakeEngine()
+    const head = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [] })
+    const { http } = server({ 'GET /account/records/pins?after=0': () => page([['pins', 1, 3], ['pins', 2, 3]], [], 3, head) })
+    await expect(new AccountHeadClient(engine, memoryRevisionStore(), http).records('pins')).rejects.toThrow(/out of order/)
+    expect(alive - before).toBeLessThanOrEqual(1)
+  })
+
+  it('writes a batch on the verified copy with the next head, starting the chain first', async () => {
+    const before = alive
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const { http, calls } = server({
+      'GET /account/records/chatGroups?after=0': () => page([['a', 1, 1], ['b', 5, 2]], [], 2, null),
+      'POST /account/head': () => ({}),
+      'POST /account/records': () => ({ seq: 4 }),
+    })
+    const client = new AccountHeadClient(engine, store, http)
+    const done = await client.recordsWrite('chatGroups', async (copy) => {
+      expect(copy.index()).toEqual([['a', 1], ['b', 5]])
+      return { puts: [{ id: 'a', revision: 2, envelope: 'A2' }], deletes: ['b'], done: 'stored' }
+    })
+    expect(done).toBe('stored')
+    const start = calls.find(([method, url]) => method === 'POST' && url === '/account/head')![2] as { head: string; basis: string }
+    expect(start.basis).toBe('basis-1')
+    expect(unseal(start.head).scopes).toEqual([engine.scope('chatGroups', [['a', 1], ['b', 5]])])
+    const batch = calls.find(([method, url]) => method === 'POST' && url === '/account/records')![2] as { head: string; puts: unknown[]; deletes: unknown[] }
+    expect(batch.puts).toEqual([{ scope: 'chatGroups', id: 'a', baseRevision: 1, envelope: 'A2' }])
+    expect(batch.deletes).toEqual([{ scope: 'chatGroups', id: 'b', baseRevision: 5 }])
+    expect(unseal(batch.head)).toMatchObject({ sequence: 2, previous: digest(start.head), scopes: [engine.scope('chatGroups', [['a', 2]])] })
+    expect((await stateIn(engine, store)).anchor).toEqual(anchorOf(batch.head))
+    expect(alive - before).toBeLessThanOrEqual(1)
+  })
+
+  it('redoes a batch when another device wrote first', async () => {
+    const before = alive
+    const engine = new FakeEngine()
+    const head = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('pins', [['pins', 1]])] })
+    let tries = 0
+    const { http } = server({
+      'GET /account/records/pins?after=0': () => page([['pins', 1, 1]], [], 1, head),
+      // The second try reads on from the copy it kept.
+      'GET /account/records/pins?after=1': () => page([], [], 1, head),
+      'POST /account/records': () => {
+        tries++
+        if (tries === 1) throw conflict409('revisionConflict')
+        return { seq: 2 }
+      },
+    })
+    const attempts: number[] = []
+    await new AccountHeadClient(engine, memoryRevisionStore(), http).recordsWrite('pins', async (_copy, attempt) => {
+      attempts.push(attempt)
+      return { puts: [{ id: 'pins', revision: 2, envelope: 'P2' }], deletes: [], done: null }
+    })
+    expect(attempts).toEqual([1, 2])
+    expect(alive - before).toBeLessThanOrEqual(1)
+  })
+})
+
+describe('kept records copies', () => {
+  const page = (records: [string, number, number][], next: number, head: string) => ({
+    records: records.map(([id, revision, seq]) => ({ id, revision, envelope: `e:${id}:${revision}`, seq })),
+    deleted: [],
+    next,
+    more: false,
+    resync: false,
+    head,
+    basis: null,
+  })
+
+  it('reads only what changed since the kept cursor, and a write moves it on', async () => {
+    const engine = new FakeEngine()
+    const records = memoryRecordsStore()
+    const head1 = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('chatContacts', [['a', 1], ['b', 1]])] })
+    const head2 = seal({ sequence: 2, previous: digest(head1), writer: 'w:other', scopes: [engine.scope('chatContacts', [['a', 2], ['b', 1]])] })
+    let current = head1
+    const { http, calls } = server({
+      'GET /account/records/chatContacts?after=0': () => page([['a', 1, 1], ['b', 1, 2]], 2, current),
+      'GET /account/records/chatContacts?after=2': () => (current === head1 ? page([], 2, current) : page([['a', 2, 3]], 3, current)),
+      'GET /account/records/chatContacts?after=3': () => page([], 9, current),
+      'GET /account/heads?from=1': () => ({ heads: [head1, head2], next: null }),
+      'POST /account/records': () => ({ seq: 9 }),
+    })
+    const first = new AccountHeadClient(engine, memoryRevisionStore(), http, Date.now, records)
+    expect((await first.records('chatContacts')).index()).toEqual([['a', 1], ['b', 1]])
+    // Another page load of this device: from the kept cursor, not from 0.
+    current = head2
+    const store = memoryRevisionStore()
+    await store.put(`account-head:${engine.name}`, JSON.stringify({ ...engine.newLocalState(), anchor: anchorOf(head1), anchoredAtMs: 1 }))
+    const later = new AccountHeadClient(engine, store, http, Date.now, records)
+    const copy = await later.records('chatContacts')
+    expect(copy.index()).toEqual([['a', 2], ['b', 1]])
+    expect(calls.filter(([method, url]) => method === 'GET' && url.endsWith('after=0'))).toHaveLength(1)
+    // A write lands at seq 9: the kept copy is the scope at 9.
+    await later.recordsWrite('chatContacts', () => Promise.resolve({ puts: [{ id: 'c', revision: 1, envelope: 'C' }], deletes: [], done: null }))
+    expect((await records.load(`${engine.name}:chatContacts`))?.cursor).toBe(9)
+  })
+
+  it('never trusts an altered kept copy: the digest catches it, and the scope is read again from the start', async () => {
+    const engine = new FakeEngine()
+    const head = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('chatContacts', [['a', 1], ['b', 1]])] })
+    const alterations: [string, [string, { revision: number; envelope: string }][]][] = [
+      ['a record removed', [['a', { revision: 1, envelope: 'e:a:1' }]]],
+      ['a revision changed', [['a', { revision: 1, envelope: 'e:a:1' }], ['b', { revision: 7, envelope: 'e:b:7' }]]],
+      ['a record added', [['a', { revision: 1, envelope: 'e:a:1' }], ['b', { revision: 1, envelope: 'e:b:1' }], ['x', { revision: 1, envelope: 'e:x:1' }]]],
+    ]
+    for (const [what, rows] of alterations) {
+      const records = memoryRecordsStore()
+      // The altered copy opens (here: the store hands it back as kept), at
+      // the server's own cursor, so nothing new would be read.
+      await records.save(`${engine.name}:chatContacts`, 2, { puts: rows, deletes: [], reset: true })
+      const { http, calls } = server({
+        'GET /account/records/chatContacts?after=2': () => page([], 2, head),
+        'GET /account/records/chatContacts?after=0': () => page([['a', 1, 1], ['b', 1, 2]], 2, head),
+      })
+      const copy = await new AccountHeadClient(engine, memoryRevisionStore(), http, Date.now, records).records('chatContacts')
+      expect(copy.index(), what).toEqual([['a', 1], ['b', 1]])
+      expect(calls.some(([, url]) => url.endsWith('after=0')), what).toBe(true)
+      // The kept copy is the verified one now, not the altered one.
+      expect((await records.load(`${engine.name}:chatContacts`))?.records.map(([id]) => id).sort(), what).toEqual(['a', 'b'])
+    }
   })
 })
 
@@ -563,7 +722,7 @@ describe('races (the #202 review)', () => {
         send: (head: string) => {
           sent.push(head)
           // The server takes a head only on top of its newest.
-          if (unseal(head).previous !== digest(server.head)) return Promise.reject(conflict409('head_conflict'))
+          if (unseal(head).previous !== digest(server.head)) return Promise.reject(conflict409('headConflict'))
           server = { head, values: [...server.values, ['b', 7]] }
           return Promise.resolve('ok')
         },
@@ -612,5 +771,73 @@ describe('races (the #202 review)', () => {
     client.subscribe((condition) => seen.push(condition.kind))
     await client.verifiedHead()
     expect(seen).toEqual(['unknown', 'trusted'])
+  })
+})
+
+describe('at sign-in', () => {
+  it('with no head yet, starts the chain on the basis, covering no scope, and anchors it', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const { http, calls } = server({
+      'GET /account/index/contacts': () => ({ head: null, values: [], basis: 'basis-1' }),
+      'POST /account/head': () => ({}),
+    })
+    await new AccountHeadClient(engine, store, http).atSignIn()
+    const start = calls.find(([method]) => method === 'POST')![2] as { head: string; basis: string }
+    expect(start.basis).toBe('basis-1')
+    expect(unseal(start.head)).toMatchObject({ sequence: 1, previous: null, writer: 'w:dev-1', scopes: [] })
+    expect((await stateIn(engine, store)).anchor).toEqual(anchorOf(start.head))
+  })
+
+  it('checks the head there is, fresh even when a check is still recent, and writes nothing', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const [head] = chain(1)
+    const { http, calls } = server({
+      'GET /account/index/contacts': () => ({ head, values: [], basis: null }),
+      'GET /account/head': () => ({ head }),
+    })
+    const client = new AccountHeadClient(engine, store, http)
+    await client.verifiedHead()
+    await client.atSignIn()
+    expect(calls.filter(([, url]) => url === '/account/index/contacts')).toHaveLength(1)
+    expect(calls.filter(([method]) => method === 'POST')).toHaveLength(0)
+    expect((await stateIn(engine, store)).anchor).toEqual(anchorOf(head!))
+  })
+
+  it('another device starting the chain first: its head is checked and trusted', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const [theirs] = chain(1)
+    let started = false
+    const { http } = server({
+      'GET /account/index/contacts': () => (started ? { head: theirs, values: [], basis: null } : { head: null, values: [], basis: 'b' }),
+      'POST /account/head': () => {
+        started = true
+        throw refused(409, 'headConflict')
+      },
+    })
+    await new AccountHeadClient(engine, store, http).atSignIn()
+    expect((await stateIn(engine, store)).anchor).toEqual(anchorOf(theirs!))
+  })
+
+  it('a head missing that this device remembered blocks (the shell offers to continue)', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    await remembering(engine, store, chain(1)[0]!)
+    const { http, calls } = server({ 'GET /account/index/contacts': () => ({ head: null, values: [], basis: 'b' }) })
+    const client = new AccountHeadClient(engine, store, http)
+    await expect(client.atSignIn()).rejects.toBeInstanceOf(HeadBlockedError)
+    expect(client.current()).toEqual({ kind: 'blocked', reason: 'rollback' })
+    expect(calls.filter(([method]) => method === 'POST')).toHaveLength(0)
+  })
+
+  it('a head that does not check (another root generation) fails the sign-in', async () => {
+    const engine = new FakeEngine()
+    engine.onCheck = () => {
+      throw new Error('rootGenerationMismatch')
+    }
+    const { http } = server({ 'GET /account/index/contacts': () => ({ head: chain(1)[0], values: [], basis: null }) })
+    await expect(new AccountHeadClient(engine, memoryRevisionStore(), http).atSignIn()).rejects.toThrow('rootGenerationMismatch')
   })
 })

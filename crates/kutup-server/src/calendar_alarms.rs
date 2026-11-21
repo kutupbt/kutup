@@ -106,14 +106,16 @@ async fn recompute_for(
     only: Option<Uuid>,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "DELETE FROM calendar_alarms WHERE event_id = $1 AND ($2::uuid IS NULL OR user_id = $2)",
+        "DELETE FROM calendar_alarms WHERE event_id = $1 AND ($2::uuid IS NULL OR account_id = $2)",
     )
     .bind(event_id)
     .bind(only)
     .execute(&mut *conn)
     .await?;
     let event: Option<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT calendar_id, shared_signed, calendar_signed FROM calendar_events WHERE id = $1",
+        "SELECT e.calendar_id, se.shared_signed, e.calendar_signed FROM calendar_events e
+           JOIN calendar_shared_events se ON se.id = e.shared_event_id
+          WHERE e.id = $1",
     )
     .bind(event_id)
     .fetch_optional(&mut *conn)
@@ -138,13 +140,13 @@ async fn recompute_for(
         i64,
     );
     let members: Vec<Member> = sqlx::query_as(
-        "SELECT m.user_id, m.default_reminders_timed, m.default_reminders_all_day,
+        "SELECT m.account_id, m.default_reminders_timed, m.default_reminders_all_day,
                 r.reminders, s.zone,
-                (SELECT count(*) FROM calendar_alarms a WHERE a.user_id = m.user_id)
+                (SELECT count(*) FROM calendar_alarms a WHERE a.account_id = m.account_id)
            FROM calendar_members m
-           LEFT JOIN calendar_event_reminders r ON r.event_id = $2 AND r.user_id = m.user_id
-           LEFT JOIN calendar_user_settings s ON s.user_id = m.user_id
-          WHERE m.calendar_id = $1 AND ($3::uuid IS NULL OR m.user_id = $3)",
+           LEFT JOIN calendar_event_reminders r ON r.event_id = $2 AND r.account_id = m.account_id
+           LEFT JOIN calendar_account_settings s ON s.account_id = m.account_id
+          WHERE m.calendar_id = $1 AND ($3::uuid IS NULL OR m.account_id = $3)",
     )
     .bind(calendar)
     .bind(event_id)
@@ -179,7 +181,7 @@ async fn recompute_for(
             };
             sqlx::query(
                 "INSERT INTO calendar_alarms
-                   (user_id, event_id, reminder, action, occurrence_start, fire_at)
+                   (account_id, event_id, reminder, action, occurrence_start, fire_at)
                  VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(user)
@@ -205,10 +207,10 @@ pub async fn queue_recompute(
     calendar: Option<Uuid>,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO calendar_alarm_recomputes (user_id, calendar_id)
+        "INSERT INTO calendar_alarm_recomputes (account_id, calendar_id)
          SELECT $1, m.calendar_id FROM calendar_members m
-          WHERE m.user_id = $1 AND ($2::uuid IS NULL OR m.calendar_id = $2)
-         ON CONFLICT (user_id, calendar_id)
+          WHERE m.account_id = $1 AND ($2::uuid IS NULL OR m.calendar_id = $2)
+         ON CONFLICT (account_id, calendar_id)
             DO UPDATE SET after_event = NULL, requested_at = now()",
     )
     .bind(user)
@@ -268,9 +270,14 @@ pub fn spawn(state: AppState) {
                 .load(&state.pool)
                 .await
                 .unwrap_or(CALENDAR_ALARM_TICK_SECONDS.default);
+            crate::job_health::register(
+                "calendar.alarms",
+                std::time::Duration::from_secs(tick as u64),
+            );
             tokio::time::sleep(std::time::Duration::from_secs(tick as u64)).await;
             // Late ones first, moved on without sending, all of them (no
             // account's share applies: nothing is sent); then the due ones.
+            let mut ok = true;
             for late in [true, false] {
                 loop {
                     match fire_due(&state, &client, late).await {
@@ -278,10 +285,14 @@ pub fn spawn(state: AppState) {
                         Ok(false) => break,
                         Err(error) => {
                             tracing::warn!(error = %error, "calendar: firing reminders failed");
+                            ok = false;
                             break;
                         }
                     }
                 }
+            }
+            if ok {
+                crate::job_health::beat(&state.pool, "calendar.alarms").await;
             }
         }
     });
@@ -321,13 +332,14 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
     // `per_account` of one account's, so one account's many never make the
     // others' late. The outer `fire_at` bounds hold for the version locked:
     // a row another server moved on meanwhile is skipped, never sent again.
-    let columns = "a.user_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
-                e.shared_signed, e.calendar_signed, m.default_reminders_timed,
+    let columns = "a.account_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
+                se.shared_signed, e.calendar_signed, m.default_reminders_timed,
                 m.default_reminders_all_day, r.reminders, s.zone";
     let joins = "JOIN calendar_events e ON e.id = a.event_id
-           JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.user_id = a.user_id
-           LEFT JOIN calendar_event_reminders r ON r.event_id = a.event_id AND r.user_id = a.user_id
-           LEFT JOIN calendar_user_settings s ON s.user_id = a.user_id";
+           JOIN calendar_shared_events se ON se.id = e.shared_event_id
+           JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.account_id = a.account_id
+           LEFT JOIN calendar_event_reminders r ON r.event_id = a.event_id AND r.account_id = a.account_id
+           LEFT JOIN calendar_account_settings s ON s.account_id = a.account_id";
     let rows: Vec<Row> = if late {
         sqlx::query_as(&format!(
             "SELECT {columns} FROM calendar_alarms a {joins}
@@ -342,11 +354,11 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
     } else {
         sqlx::query_as(&format!(
             "SELECT {columns} FROM calendar_alarms a
-               JOIN (SELECT user_id, event_id, reminder,
-                            row_number() OVER (PARTITION BY user_id ORDER BY fire_at) AS place
+               JOIN (SELECT account_id, event_id, reminder,
+                            row_number() OVER (PARTITION BY account_id ORDER BY fire_at) AS place
                        FROM calendar_alarms
                       WHERE fire_at <= now() AND fire_at >= now() - make_interval(secs => $3)) d
-                 ON d.user_id = a.user_id AND d.event_id = a.event_id AND d.reminder = a.reminder
+                 ON d.account_id = a.account_id AND d.event_id = a.event_id AND d.reminder = a.reminder
                {joins}
               WHERE d.place <= $2
                 AND a.fire_at <= now() AND a.fire_at >= now() - make_interval(secs => $3)
@@ -463,7 +475,7 @@ async fn moved(
         Some((occurrence, fire)) => {
             sqlx::query(
                 "UPDATE calendar_alarms SET occurrence_start = $4, fire_at = $5
-                  WHERE user_id = $1 AND event_id = $2 AND reminder = $3",
+                  WHERE account_id = $1 AND event_id = $2 AND reminder = $3",
             )
             .bind(user)
             .bind(event)
@@ -475,7 +487,7 @@ async fn moved(
         }
         None => {
             sqlx::query(
-                "DELETE FROM calendar_alarms WHERE user_id = $1 AND event_id = $2 AND reminder = $3",
+                "DELETE FROM calendar_alarms WHERE account_id = $1 AND event_id = $2 AND reminder = $3",
             )
             .bind(user)
             .bind(event)
@@ -493,7 +505,7 @@ async fn recompute_queued(state: &AppState) -> anyhow::Result<()> {
     let batch = CALENDAR_RECOMPUTE_BATCH.load(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     let waiting: Vec<(Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
-        "SELECT user_id, calendar_id, after_event FROM calendar_alarm_recomputes
+        "SELECT account_id, calendar_id, after_event FROM calendar_alarm_recomputes
           ORDER BY requested_at LIMIT 10 FOR UPDATE SKIP LOCKED",
     )
     .fetch_all(&mut *tx)
@@ -514,7 +526,7 @@ async fn recompute_queued(state: &AppState) -> anyhow::Result<()> {
         }
         if (events.len() as i64) < batch {
             sqlx::query(
-                "DELETE FROM calendar_alarm_recomputes WHERE user_id = $1 AND calendar_id = $2",
+                "DELETE FROM calendar_alarm_recomputes WHERE account_id = $1 AND calendar_id = $2",
             )
             .bind(user)
             .bind(calendar)
@@ -523,7 +535,7 @@ async fn recompute_queued(state: &AppState) -> anyhow::Result<()> {
         } else {
             sqlx::query(
                 "UPDATE calendar_alarm_recomputes SET after_event = $3
-                  WHERE user_id = $1 AND calendar_id = $2",
+                  WHERE account_id = $1 AND calendar_id = $2",
             )
             .bind(user)
             .bind(calendar)
@@ -554,7 +566,7 @@ async fn push(
         "SELECT p.session_id, p.endpoint, p.p256dh, p.auth
            FROM calendar_push_subscriptions p
            JOIN auth_sessions a ON a.id = p.session_id
-          WHERE p.user_id = $1 AND a.revoked_at IS NULL AND a.expires_at > now()",
+          WHERE p.account_id = $1 AND a.revoked_at IS NULL AND a.expires_at > now()",
     )
     .bind(alarm.user)
     .fetch_all(&state.pool)
@@ -617,9 +629,9 @@ fn subscription_tag(auth: &[u8], label: &[u8], value: &[u8], length: usize) -> S
 /// all-day event's says its date, "all day".
 async fn email(state: &AppState, alarm: &Due) -> anyhow::Result<()> {
     let (language, zone): (Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT p.language, s.zone FROM users u
-           LEFT JOIN user_ui_preferences p ON p.user_id = u.id
-           LEFT JOIN calendar_user_settings s ON s.user_id = u.id
+        "SELECT p.language, s.zone FROM accounts u
+           LEFT JOIN account_ui_preferences p ON p.account_id = u.id
+           LEFT JOIN calendar_account_settings s ON s.account_id = u.id
           WHERE u.id = $1",
     )
     .bind(alarm.user)
@@ -693,6 +705,7 @@ mod tests {
             exdates: Vec::new(),
             organizer: None,
             sequence: 0,
+            other: Vec::new(),
         };
         let rule = Rule::parse("FREQ=WEEKLY;COUNT=3").unwrap();
         let series = Series::new(&shared.dtstart, shared.dtend.as_ref(), Some(&rule), &[]).unwrap();

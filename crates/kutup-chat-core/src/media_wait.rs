@@ -281,7 +281,8 @@ impl Engine {
 mod tests {
     use base64::Engine as _;
     use futures_executor::block_on;
-    use kutup_crypto::chat_media::{object_ciphertext_size, ChatMediaSuiteId};
+    use kutup_crypto::chat_media::ChatMediaSuiteId;
+    use kutup_crypto::chat_media_blocks::object_len;
 
     use super::*;
     use crate::group_harness_tests::{befriend, rng, Person, World};
@@ -291,12 +292,13 @@ mod tests {
     fn attachment(send_id: &str, seq: u64) -> ChatContent {
         let descriptor = ChatAttachmentDescriptorV1 {
             version: 1,
-            suite: ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1,
+            suite: ChatMediaSuiteId::KutupChatMediaBlocksV1,
             attachment_id: "55555555-5555-4555-8555-555555555555".into(),
             origin_domain: "a.test".into(),
             retrieval_token: base64::engine::general_purpose::STANDARD.encode([1; 32]),
-            ciphertext_bytes: object_ciphertext_size(7).unwrap(),
+            ciphertext_bytes: object_len(7).unwrap(),
             ciphertext_sha256: "22".repeat(32),
+            manifest_sha256: base64::engine::general_purpose::STANDARD.encode([4; 32]),
             attachment_key: base64::engine::general_purpose::STANDARD.encode([3; 32]),
             plaintext_bytes: 7,
             filename: "a.pdf".into(),
@@ -308,6 +310,7 @@ mod tests {
             duration_ms: None,
             preview: None,
             backup_media_id: None,
+            backup_media_manifest_sha256: None,
         };
         ChatContent::attachment_with_id(send_id, "2026-10-27T10:00:00Z", seq, descriptor).unwrap()
     }
@@ -414,7 +417,7 @@ mod tests {
         block_on(alice.engine.send(&id, &bob.account, &content, &mut rng)).unwrap();
         bob.receive();
         world.refuse_profile_uploads.set(true);
-        let wrapping_key = bob.wrapping_key;
+        let wrapping_key = bob.profile_owner.clone();
         let _ = block_on(bob.engine.update_profile(
             "Bob",
             None,

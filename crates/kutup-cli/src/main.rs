@@ -11,6 +11,7 @@ mod commands;
 mod config;
 mod context;
 mod cryptohelpers;
+mod drive_signer;
 mod editor_kind;
 mod errors;
 mod file_crypto;
@@ -19,6 +20,8 @@ mod keyring;
 mod mimetype;
 mod names;
 mod output;
+mod revisions;
+mod senders;
 mod session;
 #[cfg(unix)]
 mod sshagent;
@@ -394,6 +397,13 @@ fn exit_code_for(err: &anyhow::Error) -> i32 {
         return 4;
     }
     if let Some(api) = err.downcast_ref::<api::ApiError>() {
+        // Too old for the server, or the server too old for this CLI.
+        if matches!(
+            api.code.as_deref(),
+            Some("clientTooOld") | Some("apiVersionUnsupported")
+        ) {
+            return 7;
+        }
         return match api.status {
             401 | 403 => 3,
             404 => 4,
@@ -457,6 +467,12 @@ mod tests {
             .context("outermost");
             assert_eq!(exit_code_for(&e), want, "status {status}");
         }
+        let too_old = anyhow::Error::new(api::ApiError::from_parts(
+            426,
+            "Upgrade Required",
+            r#"{"error":"client too old","code":"clientTooOld","minimum":"9.0.0"}"#.into(),
+        ));
+        assert_eq!(exit_code_for(&too_old), 7);
     }
 
     #[test]

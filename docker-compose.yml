@@ -6,8 +6,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-kutup}
       POSTGRES_USER: ${POSTGRES_USER:-kutup}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # The server's own role, made with a new database (postgres/initdb).
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:-}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kutup}"]
       interval: 5s
@@ -77,7 +81,12 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
+      # With POSTGRES_APP_USER set, the server runs as that role and the
+      # owner (POSTGRES_USER) only migrates, grants and deletes expired log
+      # rows: the security and admin logs are then append-only for the server
+      # (docs/self-hosting.md, "Database roles").
+      DATABASE_URL: postgres://${POSTGRES_APP_USER:-${POSTGRES_USER:-kutup}}:${POSTGRES_APP_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
+      DATABASE_OWNER_URL: ${DATABASE_OWNER_URL:-${POSTGRES_APP_USER:+postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable}}
       JWT_SECRET: ${JWT_SECRET}
       # The keys the OPAQUE setups are sealed under (docs/self-hosting.md): never
       # in the database or its backups.
@@ -133,6 +142,8 @@ services:
       MAIL_BACKUP_MX: ${MAIL_BACKUP_MX:-}
       MAIL_BATCH_CHUNK: ${MAIL_BATCH_CHUNK:-}
       MAIL_DEFAULT_DELAY_SEND_SECONDS: ${MAIL_DEFAULT_DELAY_SEND_SECONDS:-}
+      # Map providers browsers may load directly (blank: all through the relay).
+      KUTUP_MAP_DIRECT_ORIGINS: ${KUTUP_MAP_DIRECT_ORIGINS:-}
       # The map relay's shared tile cache; its size is set on the admin Maps page.
       MAPS_CACHE_DIR: /var/cache/kutup-maps
       # Single break-glass admin (username:password) — created on first boot; it can
@@ -142,10 +153,7 @@ services:
       SEAWEEDFS_MASTER_URL: ${SEAWEEDFS_MASTER_URL:-http://seaweedfs-master:9333}
       # Fallback capacity for the admin Settings card when the probe is unavailable. 0 → hidden.
       STORAGE_TOTAL_BYTES: ${STORAGE_TOTAL_BYTES:-0}
-      # Days a trashed item stays restorable before the sweeper purges it. 0 disables the sweep.
-      TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
       CHAT_MAILBOX_RETENTION_DAYS: ${CHAT_MAILBOX_RETENTION_DAYS:-30}
-      CHAT_SEND_RETENTION_DAYS: ${CHAT_SEND_RETENTION_DAYS:-30}
       CHAT_MEDIA_DELIVERY_RETENTION_DAYS: ${CHAT_MEDIA_DELIVERY_RETENTION_DAYS:-45}
       CHAT_DEVICE_EXPIRY_DAYS: ${CHAT_DEVICE_EXPIRY_DAYS:-90}
       CHAT_MEDIA_MAX_PLAINTEXT_BYTES: ${CHAT_MEDIA_MAX_PLAINTEXT_BYTES:-2147483648}
@@ -192,11 +200,11 @@ services:
       RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN: ${RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN:-}
       RATE_LIMIT_USER_LOOKUP_PER_MIN: ${RATE_LIMIT_USER_LOOKUP_PER_MIN:-}
       RATE_LIMIT_ADMIN_PER_MIN: ${RATE_LIMIT_ADMIN_PER_MIN:-}
+      RATE_LIMIT_CSP_REPORTS_PER_MIN: ${RATE_LIMIT_CSP_REPORTS_PER_MIN:-}
       RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR: ${RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR:-}
       RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR: ${RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR:-}
       RATE_LIMIT_AVAILABLE_HASHES_PER_MIN: ${RATE_LIMIT_AVAILABLE_HASHES_PER_MIN:-}
       RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN: ${RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN:-}
-      RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN: ${RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN:-}
       RATE_LIMIT_CHAT_GROUP_RELAY_PER_MIN: ${RATE_LIMIT_CHAT_GROUP_RELAY_PER_MIN:-}
       RATE_LIMIT_CHAT_GROUP_GATEWAY_RELAY_PER_MIN: ${RATE_LIMIT_CHAT_GROUP_GATEWAY_RELAY_PER_MIN:-}
       RATE_LIMIT_CHAT_GROUP_PSEUDONYM_PER_MIN: ${RATE_LIMIT_CHAT_GROUP_PSEUDONYM_PER_MIN:-}
@@ -208,7 +216,7 @@ services:
       RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN: ${RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN:-}
       RATE_LIMIT_CHAT_GROUP_CREATES_RELAY_PER_HOUR: ${RATE_LIMIT_CHAT_GROUP_CREATES_RELAY_PER_HOUR:-}
       RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN: ${RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN:-}
-      RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN: ${RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN:-}
+      RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN: ${RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN:-}
       RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN: ${RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN:-}
       RATE_LIMIT_RENAME_CHECKS_PER_15_MIN: ${RATE_LIMIT_RENAME_CHECKS_PER_15_MIN:-}
       RATE_LIMIT_RENAME_LOOKUPS_PER_15_MIN: ${RATE_LIMIT_RENAME_LOOKUPS_PER_15_MIN:-}
@@ -218,6 +226,10 @@ services:
       NAME_HOLD_DAYS: ${NAME_HOLD_DAYS:-}
       OLD_ADDRESS_RECEIVE_DAYS: ${OLD_ADDRESS_RECEIVE_DAYS:-}
       NAME_SWEEP_SECONDS: ${NAME_SWEEP_SECONDS:-}
+      # Off only for a restore drill's first start (scripts/restore-drill.sh).
+      BACKGROUND_JOBS: ${BACKGROUND_JOBS:-}
+      # Off only in a restore drill: nothing is sent to another host.
+      OUTBOUND_DELIVERY: ${OUTBOUND_DELIVERY:-}
       RATE_LIMITS_RELAXED: ${RATE_LIMITS_RELAXED:-}
       # Who may register on a fresh database (on, code, off; default off).
       REGISTRATION_MODE: ${REGISTRATION_MODE:-}
@@ -266,6 +278,11 @@ services:
       KUTUP_MAIL_URL: ${KUTUP_MAIL_URL:-}
       KUTUP_PASS_URL: ${KUTUP_PASS_URL:-}
       KUTUP_CALENDAR_URL: ${KUTUP_CALENDAR_URL:-}
+      # The apps' Content-Security-Policy (40-kutup-hosts.sh): Chat's group
+      # call SFU, map providers loaded directly, and the strict policy enforced.
+      CHAT_SFU_URL: ${CHAT_SFU_URL:-}
+      KUTUP_MAP_DIRECT_ORIGINS: ${KUTUP_MAP_DIRECT_ORIGINS:-}
+      KUTUP_CSP_ENFORCE: ${KUTUP_CSP_ENFORCE:-}
 
   nginx:
     image: nginx:alpine
@@ -285,7 +302,7 @@ services:
       - backend
       - frontend
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-check-certificate --quiet --output-document=/dev/null https://127.0.0.1/api/auth/settings"]
+      test: ["CMD-SHELL", "wget --no-check-certificate --quiet --output-document=/dev/null https://127.0.0.1/api/v1/auth/settings"]
       interval: 2s
       timeout: 5s
       retries: 30

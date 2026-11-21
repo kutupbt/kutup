@@ -13,6 +13,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use kutup_crypto::account_record::{self, MasterKeyGeneration};
 use kutup_crypto::chat_group::{GroupHome, GroupMasterKey};
 use kutup_crypto::chat_group_list::{self, GroupListKey, SEALED_LEN};
 
@@ -23,38 +24,44 @@ const HOME: GroupHome<'static> = GroupHome {
     identity_document_hash: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
 };
 
+/// The vectors' object-id key.
+const OBJECT_ID_KEY: [u8; 32] = [0x44u8; 32];
+
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/vectors/chat-group-list-v1.json"
+    "/tests/vectors/chat-group-list-v2.json"
 );
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Vectors {
     account_master_key: String,
+    /// The account's object-id key (a stored root): entry ids are hashed under it.
+    object_id_key: String,
     key_binding: String,
     group_id: String,
     entry_id: String,
     revision: u64,
     plain: String,
     nonce: String,
-    /// The derived keys and the AAD, so a second implementation can find
-    /// where it parts from this one.
-    id_key: String,
-    seal_key: String,
-    aad: String,
-    /// The sealed entry (4032 bytes): its header, a digest, and in full.
-    sealed_header: String,
+    /// The record's AEAD key, so a second implementation can find where it
+    /// parts from this one.
+    aead_key: String,
+    /// The sealed entry (an account record): a digest, and in full.
     sealed_sha256: String,
     sealed: String,
 }
 
 fn sealed() -> Vec<u8> {
-    let key = GroupListKey::derive(&[0x11u8; 32]);
+    let key = GroupListKey::new(
+        &[0x11u8; 32],
+        MasterKeyGeneration::FIRST,
+        &kutup_crypto::account_roots::ObjectIdKey::from_bytes(OBJECT_ID_KEY),
+    );
     let group_id = GroupMasterKey::from_bytes(&[0x22u8; 32], HOME)
         .unwrap()
         .group_id();
-    key.seal_with_fixed_nonce(
+    key.seal_with_nonce(
         "6f1c2a3b-4d5e-4f60-8a71-b2c3d4e5f607",
         &key.entry_id(&group_id),
         5,
@@ -66,28 +73,26 @@ fn sealed() -> Vec<u8> {
 
 fn computed() -> Vectors {
     let master = [0x11u8; 32];
-    let key = GroupListKey::derive(&master);
+    let key = GroupListKey::new(
+        &master,
+        MasterKeyGeneration::FIRST,
+        &kutup_crypto::account_roots::ObjectIdKey::from_bytes(OBJECT_ID_KEY),
+    );
     let group_id = GroupMasterKey::from_bytes(&[0x22u8; 32], HOME)
         .unwrap()
         .group_id();
     let sealed = sealed();
     let entry_id = key.entry_id(&group_id);
-    let (id_key, seal_key) = key.vector_keys();
     Vectors {
         account_master_key: STANDARD.encode(master),
+        object_id_key: STANDARD.encode(OBJECT_ID_KEY),
         key_binding: "6f1c2a3b-4d5e-4f60-8a71-b2c3d4e5f607".into(),
         group_id: URL_SAFE_NO_PAD.encode(group_id),
         entry_id: chat_group_list::encode_entry_id(&entry_id),
         revision: 5,
         plain: STANDARD.encode(br#"{"version":1,"groupId":"example"}"#),
         nonce: STANDARD.encode([0x33u8; 24]),
-        id_key: STANDARD.encode(id_key),
-        seal_key: STANDARD.encode(seal_key),
-        aad: STANDARD.encode(
-            chat_group_list::vector_aad(5, "6f1c2a3b-4d5e-4f60-8a71-b2c3d4e5f607", &entry_id)
-                .unwrap(),
-        ),
-        sealed_header: STANDARD.encode(&sealed[..42]),
+        aead_key: STANDARD.encode(account_record::aead_key_for_vectors(&master, &sealed).unwrap()),
         sealed_sha256: hex::encode(Sha256::digest(&sealed)),
         sealed: STANDARD.encode(&sealed),
     }
@@ -101,7 +106,11 @@ fn the_group_list_entry_matches_its_vector() {
     assert_eq!(sealed.len(), SEALED_LEN);
     assert_eq!(chat_group_list::inspect(&sealed).unwrap(), stored.revision);
     // It opens, only as itself.
-    let key = GroupListKey::derive(&[0x11u8; 32]);
+    let key = GroupListKey::new(
+        &[0x11u8; 32],
+        MasterKeyGeneration::FIRST,
+        &kutup_crypto::account_roots::ObjectIdKey::from_bytes(OBJECT_ID_KEY),
+    );
     let entry_id = chat_group_list::decode_entry_id(&stored.entry_id).unwrap();
     let opened = key.open(&stored.key_binding, &entry_id, &sealed).unwrap();
     assert_eq!(opened.revision, stored.revision);

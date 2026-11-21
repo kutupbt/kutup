@@ -56,13 +56,15 @@ pub fn spawn(state: AppState) {
     if !configured(&state) {
         return;
     }
+    let every = Duration::from_secs(state.config.mail_domains_sweep_seconds);
+    crate::job_health::register("mail.domains_sweep", every);
     tokio::spawn(async move {
-        let mut tick =
-            tokio::time::interval(Duration::from_secs(state.config.mail_domains_sweep_seconds));
+        let mut tick = tokio::time::interval(every);
         loop {
             tick.tick().await;
-            if let Err(error) = run(&state).await {
-                tracing::warn!(error = %error, "mail: custom domains sweep failed");
+            match run(&state).await {
+                Ok(()) => crate::job_health::beat(&state.pool, "mail.domains_sweep").await,
+                Err(error) => tracing::warn!(error = %error, "mail: custom domains sweep failed"),
             }
         }
     });
@@ -129,12 +131,11 @@ async fn check_due(state: &AppState, settings: &Settings) -> AppResult<()> {
             // A small random wait, so a tick's checks don't all start at once.
             let wait = kutup_crypto::primitives::random_below(2000);
             tokio::time::sleep(Duration::from_millis(wait)).await;
-            let user_settings = match settings.for_user(&state.pool, row.user_id).await {
+            let org_settings = match settings.for_org(&state.pool, row.organization_id).await {
                 Ok(settings) => settings,
                 Err(_) => settings,
             };
-            match store::check_and_save(&state.pool, resolver, &server, &user_settings, &row).await
-            {
+            match store::check_and_save(&state.pool, resolver, &server, &org_settings, &row).await {
                 Ok((checked, change, lost_holder)) => {
                     tell_losses(&state, &checked, change, lost_holder).await;
                 }
@@ -149,21 +150,27 @@ async fn check_due(state: &AppState, settings: &Settings) -> AppResult<()> {
     Ok(())
 }
 
-/// Tells the accounts a check took a domain from, in their inboxes: the
-/// owner whose domain lapsed, and a holder another account's proof moved it
-/// from.
+/// Tells the organizations a check took a domain from, in their owners'
+/// inboxes: the one whose domain lapsed, and a holder another
+/// organization's proof moved it from.
 pub async fn tell_losses(
     state: &AppState,
     checked: &Row,
     change: Change,
     lost_holder: Option<Uuid>,
 ) {
-    use crate::mail::notice::{domain_lost, DomainLost};
+    use crate::mail::notice::{domain_lost_to_owners, DomainLost};
     if change == Change::Inactive {
-        domain_lost(state, checked.user_id, &checked.name, DomainLost::Lapsed).await;
+        domain_lost_to_owners(
+            state,
+            checked.organization_id,
+            &checked.name,
+            DomainLost::Lapsed,
+        )
+        .await;
     }
     if let Some(holder) = lost_holder {
-        domain_lost(state, holder, &checked.name, DomainLost::Transferred).await;
+        domain_lost_to_owners(state, holder, &checked.name, DomainLost::Transferred).await;
     }
 }
 
@@ -262,8 +269,8 @@ async fn reconcile_stalwart(state: &AppState, settings: &Settings) -> AppResult<
 
 /// The site setting holding the last fingerprint of Stalwart's objects
 /// outside Kutup's tag, and the one holding when it last changed.
-pub const UNTAGGED_FINGERPRINT: &str = "mail_domains_untagged_fingerprint";
-pub const UNTAGGED_CHANGED_AT: &str = "mail_domains_untagged_changed_at";
+pub const UNTAGGED_FINGERPRINT: &str = "mail.untagged_domains_fingerprint";
+pub const UNTAGGED_CHANGED_AT: &str = "mail.untagged_domains_changed_at";
 
 /// Alerts when `MAIL_DOMAIN`'s objects in Stalwart (anything outside Kutup's
 /// tag) change: the reconcile never touches them, so a change means someone

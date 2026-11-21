@@ -14,8 +14,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_collab::{ListDoc, TextDoc};
-use kutup_crypto::drive_object::{decrypt_file_blob, encrypt_file_blob, DriveFileBlobContextV1};
-use kutup_crypto::envelope::{self, kind, CollabFrameContextV1, Frame};
+use kutup_crypto::envelope::{self, kind, CollabFrameContextV3, Frame};
 
 use crate::api::versions::{NewVersion, VersionRow};
 use crate::api::{ApiError, Client, File};
@@ -32,16 +31,24 @@ pub struct Peer<'a> {
     sess: &'a Session,
     signer: Option<Signer<'a>>,
     device: Option<Device>,
+    /// Whether a logged frame is its sender's (one-device-list.md §8, slice 3).
+    pub senders: crate::senders::Senders<'a>,
 }
 
 impl<'a> Peer<'a> {
-    pub fn new(client: &'a Client, store: &'a Store, sess: &'a Session) -> Self {
+    pub fn new(
+        client: &'a Client,
+        store: &'a Store,
+        sess: &'a Session,
+        authority: crate::senders::AuthorityCheck<'a>,
+    ) -> Self {
         Peer {
             client,
             store,
             sess,
             signer: None,
             device: None,
+            senders: crate::senders::Senders::new(client, store, authority),
         }
     }
 
@@ -212,7 +219,7 @@ fn read_remote(
         doc.apply_v2(state)?;
         after = *seq;
     }
-    let mut page = peer.with_device(|d| client.collab_frames(&file.id, d.id, after))?;
+    let mut page = peer.with_device(|d| client.collab_frames(&file.id, d, after))?;
     let mut saved = false;
     // No base, or the log was trimmed past it: start from the newest saved
     // state (merging it in is safe), and read the log after it.
@@ -220,28 +227,30 @@ fn read_remote(
         if let Some(version) = newest_yjs(&client.list_versions(&file.id)?) {
             saved = true;
             if version.size_bytes > 0 {
-                let blob = client.download_version(&file.id, &version.id)?;
-                let context = DriveFileBlobContextV1::new(&file.id, version.key_generation)?;
-                let state = decrypt_file_blob(&blob, &keys.at(version.key_generation)?, context)
+                let state = crate::revisions::read_version(client, file, &keys.current, version)
                     .context("open the saved state")?;
                 doc.apply_v2(&state)?;
             }
             if version.seq_at_snapshot > after {
                 after = version.seq_at_snapshot;
-                page = peer.with_device(|d| client.collab_frames(&file.id, d.id, after))?;
+                page = peer.with_device(|d| client.collab_frames(&file.id, d, after))?;
             }
         }
     }
     let mut through = after;
     loop {
         for logged in &page.frames {
-            apply_frame(&doc, keys, &logged.bytes()?)?;
+            let raw = logged.bytes()?;
+            // Only a frame its sender's devices signed (slice 3).
+            if peer.senders.verify(&logged.sender, &raw)? {
+                apply_frame(&doc, keys, &raw)?;
+            }
             through = through.max(logged.seq);
         }
         if !page.more {
             break;
         }
-        page = peer.with_device(|d| client.collab_frames(&file.id, d.id, through))?;
+        page = peer.with_device(|d| client.collab_frames(&file.id, d, through))?;
     }
     let never_opened = !saved && page.head_seq == 0 && base.is_none_or(|(_, seq)| *seq == 0);
     let seed = if never_opened {
@@ -289,14 +298,9 @@ fn apply_frame(doc: &Doc, keys: &Keys, packed: &[u8]) -> Result<()> {
 /// What a file nobody has opened holds, decrypted, as the editors seed from
 /// it: its newest whole-file version, else its upload.
 fn current_content(client: &Client, keys: &Keys) -> Result<Vec<u8>> {
-    let file = &keys.file;
-    let (key, generation) = crate::file_crypto::content_key(file, &keys.current)?;
-    let (response, _) = client
-        .download_current_stream(&file.id)
+    let (content, _) = crate::revisions::read_current(client, &keys.file, &keys.current)
         .context("download the file")?;
-    let blob = response.bytes().context("download the file")?;
-    let context = DriveFileBlobContextV1::new(&file.id, generation)?;
-    Ok(decrypt_file_blob(&blob, &key, context)?)
+    Ok(content)
 }
 
 /// A sender sequence prefix above `must_exceed`: 31 random bits, shifted
@@ -336,17 +340,19 @@ fn send(
         remote.sender_next += 1;
         let sequence = remote.sender_next;
         let result = peer.with_device(|device| {
-            let context = CollabFrameContextV1::new(
+            let context = CollabFrameContextV3::new(
                 kind::YJS_UPDATE,
                 file.key_generation,
                 remote.doc_key_id,
                 &file.id,
-                device.id as u64,
+                device.id,
+                device.manifest_sequence,
                 sequence as u64,
             )?;
             let unsigned = envelope::seal_unsigned(update, &keys.current, context)?;
-            let signed = envelope::sign(&Frame::unpack(&unsigned)?, device.seed())?;
-            client.post_collab_frame(&file.id, device.id, signed)
+            let signed =
+                envelope::sign(&Frame::unpack(&unsigned)?, &device.account, device.seed())?;
+            client.post_collab_frame(&file.id, device, signed)
         });
         match result {
             Err(e) if attempt == 0 && refused(&e) => {
@@ -354,7 +360,7 @@ fn send(
                 // Re-read the document key and this device's sequences, and
                 // go on above them under a new prefix.
                 let page =
-                    peer.with_device(|d| client.collab_frames(&file.id, d.id, remote.through))?;
+                    peer.with_device(|d| client.collab_frames(&file.id, d, remote.through))?;
                 remote.sender_next = sender_prefix(page.my_sender_seq_high);
                 remote.doc_key_id =
                     u32::try_from(page.current_doc_key_id).unwrap_or(remote.doc_key_id);
@@ -373,20 +379,27 @@ fn refused(error: &anyhow::Error) -> bool {
 
 /// Saves the document as a `yjs` version, as the editor's autosave does: the
 /// log up to `remote.through` is in it, and the server trims the log there.
+/// The state commits with the file's next metadata naming it
+/// (`stateRevisionId`, drive-core `stateCommitter`), so a reader that asks
+/// for the state the metadata names gets no other.
 fn snapshot(client: &Client, keys: &Keys, remote: &Remote) -> Result<()> {
-    let file = &keys.file;
-    let context = DriveFileBlobContextV1::new(&file.id, file.key_generation)?;
-    let sealed = encrypt_file_blob(&remote.doc.state_v2(), &keys.current, context)?;
-    client.create_version(
-        &file.id,
-        sealed,
-        &NewVersion {
+    crate::revisions::save_version(
+        client,
+        &crate::revisions::Target {
+            file: &keys.file,
+            file_key: &keys.current,
+        },
+        &remote.doc.state_v2(),
+        NewVersion {
             kind: "yjs".into(),
             seq_at_snapshot: remote.through,
             doc_key_id: i64::from(remote.doc_key_id),
-            label: String::new(),
-            keep_forever: false,
-            based_on: None,
+            ..Default::default()
+        },
+        |current, _, revision_id| {
+            let mut next = current.clone();
+            next.state_revision_id = Some(revision_id.to_string());
+            next
         },
     )?;
     Ok(())

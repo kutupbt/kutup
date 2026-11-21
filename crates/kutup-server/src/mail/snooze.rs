@@ -10,12 +10,14 @@ const TICK: Duration = Duration::from_secs(20);
 
 /// Wakes snoozed mail whose time has come, every 20 seconds.
 pub fn spawn(state: AppState) {
+    crate::job_health::register("mail.snooze", TICK);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(TICK);
         loop {
             tick.tick().await;
-            if let Err(error) = wake(&state).await {
-                tracing::warn!(error = %error, "mail: waking snoozed mail failed");
+            match wake(&state).await {
+                Ok(_) => crate::job_health::beat(&state.pool, "mail.snooze").await,
+                Err(error) => tracing::warn!(error = %error, "mail: waking snoozed mail failed"),
             }
         }
     });

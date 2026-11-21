@@ -7,7 +7,10 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
+use kutup_crypto::account_roots::ObjectIdKey;
 use kutup_crypto::mail_search::{store_name, MailSearchKeys};
+
+const OBJECT_ID_KEY: [u8; 32] = [0x6d; 32];
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -18,6 +21,10 @@ const PATH: &str = concat!(
 #[serde(rename_all = "camelCase")]
 struct Vectors {
     master_key: String,
+    /// The account's object-id root, which the database's name comes from.
+    object_id_key: String,
+    /// The account's key binding, which the wrapped store key is bound to.
+    binding: String,
     store_name: String,
     store_key: String,
     wrap_nonce: String,
@@ -41,8 +48,14 @@ struct Refusal {
     name: Option<String>,
     #[serde(default)]
     master_key: Option<String>,
+    /// The key binding the store key is unwrapped for (the vectors' own when
+    /// absent).
+    #[serde(default)]
+    binding: Option<String>,
     bytes: String,
 }
+
+const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
 
 fn flipped(bytes: &[u8], at: usize) -> Vec<u8> {
     let mut out = bytes.to_vec();
@@ -59,8 +72,20 @@ fn write_vectors() {
     let master = [0x5au8; 32];
     let store_key = [0x33u8; 32];
     let wrap_nonce = [0x22u8; 24];
-    let wrapped = MailSearchKeys::wrap_with_nonce(&master, &store_key, &wrap_nonce).unwrap();
-    let keys = MailSearchKeys::open(&master, &wrapped).unwrap();
+    let wrapped = MailSearchKeys::wrap_with_nonce(
+        &master,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        BINDING,
+        &store_key,
+        &wrap_nonce,
+    )
+    .unwrap();
+    let keys = MailSearchKeys::open(
+        &kutup_crypto::master_keys::MasterKeys::first(&master),
+        BINDING,
+        &wrapped,
+    )
+    .unwrap();
     let name = "shard/680/fat";
     let value = "fatura → İş".as_bytes();
     let nonce = [0x44u8; 24];
@@ -70,26 +95,38 @@ fn write_vectors() {
         kind: "record".into(),
         name: Some(name.into()),
         master_key: None,
+        binding: None,
         bytes: STANDARD.encode(bytes),
     };
-    let store = |why: &str, master: &[u8], bytes: Vec<u8>| Refusal {
+    let store = |why: &str, master: &[u8], binding: Option<&str>, bytes: Vec<u8>| Refusal {
         why: why.into(),
         kind: "storeKey".into(),
         name: None,
         master_key: Some(STANDARD.encode(master)),
+        binding: binding.map(Into::into),
         bytes: STANDARD.encode(bytes),
     };
     let tag_at = sealed.len() - 1;
     // The same master key, another store key (the index deleted and made again).
     let other_store = MailSearchKeys::open(
-        &master,
-        &MailSearchKeys::wrap_with_nonce(&master, &[0x34u8; 32], &wrap_nonce).unwrap(),
+        &kutup_crypto::master_keys::MasterKeys::first(&master),
+        BINDING,
+        &MailSearchKeys::wrap_with_nonce(
+            &master,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            BINDING,
+            &[0x34u8; 32],
+            &wrap_nonce,
+        )
+        .unwrap(),
     )
     .unwrap();
     let elsewhere = other_store.seal_with_nonce(name, value, &nonce).unwrap();
     let vectors = Vectors {
         master_key: STANDARD.encode(master),
-        store_name: store_name(&master).unwrap(),
+        object_id_key: STANDARD.encode(OBJECT_ID_KEY),
+        binding: BINDING.into(),
+        store_name: store_name(&ObjectIdKey::from_bytes(OBJECT_ID_KEY)).unwrap(),
         store_key: STANDARD.encode(store_key),
         wrap_nonce: STANDARD.encode(wrap_nonce),
         wrapped_store_key: STANDARD.encode(&wrapped),
@@ -110,13 +147,26 @@ fn write_vectors() {
                 name,
                 elsewhere,
             ),
-            store("another master key", &[0x5bu8; 32], wrapped.clone()),
+            store("another master key", &[0x5bu8; 32], None, wrapped.clone()),
+            store(
+                "another account's key binding",
+                &master,
+                Some("7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d"),
+                wrapped.clone(),
+            ),
             store(
                 "a flipped wrapped byte",
                 &master,
+                None,
                 flipped(&wrapped, wrapped.len() - 1),
             ),
-            store("a flipped suite byte", &master, flipped(&wrapped, 9)),
+            store("a flipped suite byte", &master, None, flipped(&wrapped, 9)),
+            store(
+                "a flipped purpose byte",
+                &master,
+                None,
+                flipped(&wrapped, 11),
+            ),
         ],
     };
     std::fs::write(PATH, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
@@ -127,16 +177,30 @@ fn vectors_hold() {
     let vectors: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
     let key32 = |b64: &str| -> [u8; 32] { STANDARD.decode(b64).unwrap().try_into().unwrap() };
     let master = key32(&vectors.master_key);
-    assert_eq!(store_name(&master).unwrap(), vectors.store_name);
+    assert_eq!(
+        store_name(&ObjectIdKey::from_bytes(key32(&vectors.object_id_key))).unwrap(),
+        vectors.store_name
+    );
     let wrap_nonce: [u8; 24] = STANDARD
         .decode(&vectors.wrap_nonce)
         .unwrap()
         .try_into()
         .unwrap();
-    let wrapped =
-        MailSearchKeys::wrap_with_nonce(&master, &key32(&vectors.store_key), &wrap_nonce).unwrap();
+    let wrapped = MailSearchKeys::wrap_with_nonce(
+        &master,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        &vectors.binding,
+        &key32(&vectors.store_key),
+        &wrap_nonce,
+    )
+    .unwrap();
     assert_eq!(STANDARD.encode(&wrapped), vectors.wrapped_store_key);
-    let keys = MailSearchKeys::open(&master, &wrapped).unwrap();
+    let keys = MailSearchKeys::open(
+        &kutup_crypto::master_keys::MasterKeys::first(&master),
+        &vectors.binding,
+        &wrapped,
+    )
+    .unwrap();
     assert_eq!(keys.record_id(&vectors.name), vectors.record_id);
     let nonce: [u8; 24] = STANDARD.decode(&vectors.nonce).unwrap().try_into().unwrap();
     let value = STANDARD.decode(&vectors.value).unwrap();
@@ -149,10 +213,14 @@ fn vectors_hold() {
             "record" => keys
                 .open_record(refusal.name.as_deref().unwrap(), &bytes)
                 .is_err(),
-            "storeKey" => {
-                MailSearchKeys::open(&key32(refusal.master_key.as_deref().unwrap()), &bytes)
-                    .is_err()
-            }
+            "storeKey" => MailSearchKeys::open(
+                &kutup_crypto::master_keys::MasterKeys::first(&key32(
+                    refusal.master_key.as_deref().unwrap(),
+                )),
+                refusal.binding.as_deref().unwrap_or(&vectors.binding),
+                &bytes,
+            )
+            .is_err(),
             other => panic!("unknown refusal kind {other}"),
         };
         assert!(refused, "must be refused: {}", refusal.why);

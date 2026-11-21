@@ -22,15 +22,14 @@ use kutup_chat_proto::{
     UploadChatBackupMediaRequestV1, MAX_CHAT_BACKUP_BASE_CIPHERTEXT_BYTES,
     MAX_CHAT_BACKUP_PAGE_SEGMENTS,
 };
-use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+use kutup_crypto::account_record::{self, AccountRecordPurpose};
+use kutup_crypto::blocks::{self, BLOCK_SIZE, TRAILER_LEN};
 use kutup_crypto::chat_backup::{
     self, ChatBackupObjectPurposeV1, ChatBackupProtectionDomainV1, ChatBackupSuiteId,
 };
-use kutup_crypto::chat_backup_media::{
-    self, ChatBackupMediaContextV1, CHAT_BACKUP_MEDIA_HEADER_BYTES,
-};
+use kutup_crypto::chat_backup_media::{padded_media_plaintext_bytes, ChatBackupMediaContextV1};
+use kutup_crypto::chat_backup_media_blocks::{self, CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES};
 use kutup_crypto::primitives::{hash, Hasher, Suite};
-use kutup_crypto::stream::{StreamEncryptor, CHUNK_SIZE, TAG_FINAL, TAG_MESSAGE};
 use serde::Deserialize;
 use std::io::{Read, Seek, SeekFrom, Write};
 use tempfile::NamedTempFile;
@@ -40,7 +39,7 @@ use uuid::Uuid;
 
 use super::trusted_uuid;
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const ZERO_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -104,26 +103,29 @@ fn request_digest<T: serde::Serialize>(value: &T) -> AppResult<String> {
     Ok(hex::encode(hash(Suite::V1, encoded)))
 }
 
-#[utoipa::path(post, path = "/api/chat/backup", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = ProvisionChatBackupRequestV1,
     responses((status = 201, body = ChatBackupStatusV1), (status = 200, body = ChatBackupStatusV1)))]
 pub async fn provision(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<ProvisionChatBackupRequestV1>,
 ) -> AppResult<(StatusCode, Json<ChatBackupStatusV1>)> {
     request
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid Chat backup: {error}")))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let operation_id = canonical_uuid("backup operation id", &request.operation_id)?;
     let backup_incarnation_id = canonical_uuid(
         "backup incarnation id",
         &request.signer_authorization.backup_incarnation_id,
     )?;
-    let envelope = account_envelope::decode_canonical_b64(&request.root_envelope)
-        .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
-    account_envelope::inspect(&envelope)
+    let envelope = account_record::decode_record_b64(
+        &request.root_envelope,
+        account_record::AccountRecordPurpose::ChatBackupRoot,
+    )
+    .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
+    account_record::inspect(&envelope)
         .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
     let digest = request_digest(&request)?;
     let authorization_digest = request
@@ -133,8 +135,8 @@ pub async fn provision(
 
     let mut transaction = state.pool.begin().await?;
     let user_row: (String, String, String, String) = sqlx::query_as(
-        "SELECT COALESCE(key_binding, ''),account_incarnation_id,account_authority_public_key,
-                account_authority_key_id FROM users WHERE id=$1 FOR UPDATE",
+        "SELECT COALESCE(key_binding::text, ''),encode(account_incarnation_id,'hex'),
+                kutup_b64(account_authority_public_key),encode(account_authority_key_id,'hex') FROM accounts WHERE id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_one(&mut *transaction)
@@ -142,9 +144,9 @@ pub async fn provision(
     let (binding, account_incarnation_id, authority_public_key, authority_key_id) = user_row;
     // The one check every stored account envelope passes: its purpose, this
     // account's key binding, no object.
-    if account_envelope::validate_for(
+    if account_record::validate_for(
         &envelope,
-        AccountEnvelopePurpose::ChatBackupRoot,
+        AccountRecordPurpose::ChatBackupRoot,
         &binding,
         &[],
     )
@@ -172,8 +174,8 @@ pub async fn provision(
         .map_err(AppError::bad_request)?;
 
     if let Some((stored_digest, stored_backup_id)) = sqlx::query_as::<_, (String, Uuid)>(
-        "SELECT request_digest,backup_incarnation_id
-         FROM chat_backup_provision_operations WHERE user_id=$1 AND operation_id=$2",
+        "SELECT encode(request_digest,'hex'),backup_incarnation_id
+         FROM chat_backup_provision_operations WHERE account_id=$1 AND operation_id=$2",
     )
     .bind(user_id)
     .bind(operation_id)
@@ -191,8 +193,8 @@ pub async fn provision(
 
     if let Some((stored_backup_id, root_envelope, stored_authorization_digest)) =
         sqlx::query_as::<_, (Uuid, String, String)>(
-            "SELECT backup_incarnation_id,root_envelope,signer_authorization_digest
-             FROM chat_backups WHERE user_id=$1",
+            "SELECT backup_incarnation_id,kutup_b64(root_envelope),encode(signer_authorization_digest,'hex')
+             FROM chat_backups WHERE account_id=$1",
         )
         .bind(user_id)
         .fetch_optional(&mut *transaction)
@@ -209,9 +211,9 @@ pub async fn provision(
     } else {
         sqlx::query(
             "INSERT INTO chat_backups
-             (user_id,backup_incarnation_id,suite,protection_domain,root_envelope,
+             (account_id,backup_incarnation_id,suite,protection_domain,root_envelope,
               signer_authorization,signer_authorization_digest)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+             VALUES ($1,$2,$3,$4,kutup_unb64($5),$6,decode($7,'hex'))",
         )
         .bind(user_id)
         .bind(backup_incarnation_id)
@@ -231,7 +233,7 @@ pub async fn provision(
     }
     sqlx::query(
         "INSERT INTO chat_backup_provision_operations
-         (user_id,operation_id,request_digest,backup_incarnation_id) VALUES ($1,$2,$3,$4)",
+         (account_id,operation_id,request_digest,backup_incarnation_id) VALUES ($1,$2,decode($3,'hex'),$4)",
     )
     .bind(user_id)
     .bind(operation_id)
@@ -247,14 +249,14 @@ pub async fn provision(
     ))
 }
 
-#[utoipa::path(get, path = "/api/chat/backup", tag = "chat-backup",
+#[utoipa::path(get, path = "/api/v1/chat/backup", tag = "chat.backup",
     security(("BearerAuth" = [])), responses((status = 200, body = ChatBackupStatusV1)))]
 pub async fn status(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
 ) -> AppResult<Json<ChatBackupStatusV1>> {
     Ok(Json(
-        load_status(&state, trusted_uuid(&user.user_id)?).await?,
+        load_status(&state, trusted_uuid(&user.account_id)?).await?,
     ))
 }
 
@@ -263,7 +265,7 @@ pub async fn status(
 pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()> {
     let mut transaction = state.pool.begin().await?;
     let backup_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT backup_incarnation_id FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+        "SELECT backup_incarnation_id FROM chat_backups WHERE account_id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -274,14 +276,14 @@ pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()>
     };
     let released: i64 = sqlx::query_scalar(
         "SELECT
-           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_segments WHERE user_id=$1),0) +
-           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_bases WHERE user_id=$1),0) +
-           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_media_objects WHERE user_id=$1),0)",
+           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_segments WHERE account_id=$1),0) +
+           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_bases WHERE account_id=$1),0) +
+           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_media_objects WHERE account_id=$1),0)",
     )
     .bind(user_id)
     .fetch_one(&mut *transaction)
     .await?;
-    sqlx::query("DELETE FROM chat_backups WHERE user_id=$1")
+    sqlx::query("DELETE FROM chat_backups WHERE account_id=$1")
         .bind(user_id)
         .execute(&mut *transaction)
         .await?;
@@ -302,29 +304,26 @@ pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()>
 
 async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupStatusV1> {
     let (quota, used): (i64, i64) =
-        sqlx::query_as("SELECT storage_quota_bytes,storage_used_bytes FROM users WHERE id=$1")
-            .bind(user_id)
-            .fetch_one(&state.pool)
-            .await?;
+        crate::storage_pool::quota_and_used(&state.pool, user_id).await?;
     let delivery_media_bytes: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(logical_bytes),0)::bigint
-         FROM chat_media_references WHERE user_id=$1",
+         FROM chat_media_references WHERE account_id=$1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
     let history_media_bytes: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint
-         FROM chat_backup_media_objects WHERE user_id=$1",
+         FROM chat_backup_media_objects WHERE account_id=$1",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
     let message_bytes: i64 = sqlx::query_scalar(
         "SELECT
-          COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_segments WHERE user_id=$1),0) +
+          COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_segments WHERE account_id=$1),0) +
           COALESCE((SELECT SUM(ciphertext_bytes)::bigint FROM chat_backup_bases
-                    WHERE user_id=$1),0)",
+                    WHERE account_id=$1),0)",
     )
     .bind(user_id)
     .fetch_one(&state.pool)
@@ -344,8 +343,8 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
         Option<OffsetDateTime>,
     );
     let backup: Option<BackupRow> = sqlx::query_as(
-        "SELECT root_envelope,signer_authorization,current_manifest,current_cursor,
-                latest_protected_at FROM chat_backups WHERE user_id=$1",
+        "SELECT kutup_b64(root_envelope),signer_authorization,current_manifest,current_cursor,
+                latest_protected_at FROM chat_backups WHERE account_id=$1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -363,8 +362,8 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
         });
     };
     let heads: Vec<(i32, i64, String)> = sqlx::query_as(
-        "SELECT source_device_id,last_device_sequence,last_segment_digest
-         FROM chat_backup_device_heads WHERE user_id=$1 ORDER BY source_device_id",
+        "SELECT source_device_id,last_device_sequence,encode(last_segment_digest,'hex')
+         FROM chat_backup_device_heads WHERE account_id=$1 ORDER BY source_device_id",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -399,19 +398,19 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
     })
 }
 
-#[utoipa::path(post, path = "/api/chat/backup/segments", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/segments", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = AppendChatBackupSegmentRequestV1,
     responses((status = 200, body = ChatBackupSegmentReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn append_segment(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     headers: axum::http::HeaderMap,
     Json(request): Json<AppendChatBackupSegmentRequestV1>,
 ) -> AppResult<Json<ChatBackupSegmentReceiptV1>> {
     let ciphertext = request
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid backup segment: {error}")))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     // Written by the device it names, with its credential (a replay too).
     crate::handlers::chat_identity::authenticate_device(
         &state.pool,
@@ -450,7 +449,7 @@ pub async fn append_segment(
     let mut transaction = state.pool.begin().await?;
     let backup: (Uuid, i64, i16, i16) = sqlx::query_as(
         "SELECT backup_incarnation_id,current_cursor,suite,protection_domain
-         FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+         FROM chat_backups WHERE account_id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -460,7 +459,7 @@ pub async fn append_segment(
         return Err(AppError::conflict("backup incarnation or suite changed"));
     }
     let account_incarnation_id: String =
-        sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id=$1")
+        sqlx::query_scalar("SELECT encode(account_incarnation_id,'hex') FROM accounts WHERE id=$1")
             .bind(user_id)
             .fetch_one(&mut *transaction)
             .await?;
@@ -472,16 +471,25 @@ pub async fn append_segment(
         ));
     }
 
-    if let Some((cursor, digest, acknowledged_at, stored_device, stored_sequence, stored_previous, stored_manifest, stored_bytes)) =
-        sqlx::query_as::<_, (i64, String, OffsetDateTime, i32, i64, String, i64, i32)>(
-            "SELECT cursor,ciphertext_sha256,acknowledged_at,source_device_id,
-                    device_sequence,previous_segment_digest,account_manifest_sequence,ciphertext_bytes
-             FROM chat_backup_segments WHERE user_id=$1 AND operation_id=$2",
-        )
-        .bind(user_id)
-        .bind(operation_id)
-        .fetch_optional(&mut *transaction)
-        .await?
+    if let Some((
+        cursor,
+        digest,
+        acknowledged_at,
+        stored_device,
+        stored_sequence,
+        stored_previous,
+        stored_manifest,
+        stored_bytes,
+    )) = sqlx::query_as::<_, (i64, String, OffsetDateTime, i32, i64, String, i64, i32)>(
+        "SELECT cursor,encode(ciphertext_sha256,'hex'),acknowledged_at,source_device_id,
+                    device_sequence,encode(previous_segment_digest,'hex'),account_manifest_sequence,
+                    ciphertext_bytes
+             FROM chat_backup_segments WHERE account_id=$1 AND operation_id=$2",
+    )
+    .bind(user_id)
+    .bind(operation_id)
+    .fetch_optional(&mut *transaction)
+    .await?
     {
         if digest != request.ciphertext_sha256
             || stored_device != source_device_id
@@ -504,7 +512,7 @@ pub async fn append_segment(
     }
 
     let current_manifest_sequence: Option<i64> =
-        sqlx::query_scalar("SELECT version FROM chat_device_manifests WHERE user_id=$1")
+        sqlx::query_scalar("SELECT version FROM chat_device_manifests WHERE account_id=$1")
             .bind(user_id)
             .fetch_optional(&mut *transaction)
             .await?;
@@ -512,7 +520,8 @@ pub async fn append_segment(
         return Err(AppError::conflict("account manifest sequence changed"));
     }
     let device_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM chat_devices WHERE user_id=$1 AND device_id=$2)",
+        "SELECT EXISTS(SELECT 1 FROM account_devices
+          WHERE account_id = $1 AND device_id = $2 AND suite IS NOT NULL)",
     )
     .bind(user_id)
     .bind(source_device_id)
@@ -523,8 +532,8 @@ pub async fn append_segment(
     }
 
     let head: Option<(i64, String)> = sqlx::query_as(
-        "SELECT last_device_sequence,last_segment_digest
-         FROM chat_backup_device_heads WHERE user_id=$1 AND source_device_id=$2 FOR UPDATE",
+        "SELECT last_device_sequence,encode(last_segment_digest,'hex')
+         FROM chat_backup_device_heads WHERE account_id=$1 AND source_device_id=$2 FOR UPDATE",
     )
     .bind(user_id)
     .bind(source_device_id)
@@ -560,10 +569,10 @@ pub async fn append_segment(
     let acknowledged_at = OffsetDateTime::now_utc();
     sqlx::query(
         "INSERT INTO chat_backup_segments
-         (user_id,cursor,operation_id,source_device_id,device_sequence,
+         (account_id,cursor,operation_id,source_device_id,device_sequence,
           previous_segment_digest,account_manifest_sequence,ciphertext_bytes,
           ciphertext_sha256,ciphertext,acknowledged_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+         VALUES ($1,$2,$3,$4,$5,decode($6,'hex'),$7,$8,decode($9,'hex'),$10,$11)",
     )
     .bind(user_id)
     .bind(cursor)
@@ -580,9 +589,9 @@ pub async fn append_segment(
     .await?;
     sqlx::query(
         "INSERT INTO chat_backup_device_heads
-         (user_id,source_device_id,last_device_sequence,last_segment_digest)
-         VALUES ($1,$2,$3,$4)
-         ON CONFLICT (user_id,source_device_id) DO UPDATE SET
+         (account_id,source_device_id,last_device_sequence,last_segment_digest)
+         VALUES ($1,$2,$3,decode($4,'hex'))
+         ON CONFLICT (account_id,source_device_id) DO UPDATE SET
            last_device_sequence=EXCLUDED.last_device_sequence,
            last_segment_digest=EXCLUDED.last_segment_digest,
            updated_at=NOW()",
@@ -595,7 +604,7 @@ pub async fn append_segment(
     .await?;
     sqlx::query(
         "UPDATE chat_backups SET current_cursor=$1,latest_protected_at=$2,updated_at=NOW()
-         WHERE user_id=$3",
+         WHERE account_id=$3",
     )
     .bind(cursor)
     .bind(acknowledged_at)
@@ -618,17 +627,17 @@ pub async fn append_segment(
     }))
 }
 
-#[utoipa::path(get, path = "/api/chat/backup/segments", tag = "chat-backup",
+#[utoipa::path(get, path = "/api/v1/chat/backup/segments", tag = "chat.backup",
     security(("BearerAuth" = [])), params(
         ("after" = Option<u64>, Query, description = "Exclusive account backup cursor"),
         ("limit" = Option<u16>, Query, description = "Page size")
     ), responses((status = 200, body = ChatBackupSegmentPageV1)))]
 pub async fn list_segments(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Query(query): Query<SegmentPageQuery>,
 ) -> AppResult<Json<ChatBackupSegmentPageV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let after = i64::try_from(query.after.unwrap_or(0))
         .map_err(|_| AppError::bad_request("invalid backup cursor"))?;
     let limit = query
@@ -644,7 +653,7 @@ pub async fn list_segments(
         .execute(&mut *snapshot)
         .await?;
     let current_cursor: i64 =
-        sqlx::query_scalar("SELECT current_cursor FROM chat_backups WHERE user_id=$1")
+        sqlx::query_scalar("SELECT current_cursor FROM chat_backups WHERE account_id=$1")
             .bind(user_id)
             .fetch_optional(&mut *snapshot)
             .await?
@@ -661,9 +670,10 @@ pub async fn list_segments(
         OffsetDateTime,
     );
     let rows: Vec<SegmentRow> = sqlx::query_as(
-        "SELECT operation_id,cursor,source_device_id,device_sequence,previous_segment_digest,
-                    ciphertext_bytes,ciphertext_sha256,ciphertext,acknowledged_at
-             FROM chat_backup_segments WHERE user_id=$1 AND cursor>$2
+        "SELECT operation_id,cursor,source_device_id,device_sequence,
+                    encode(previous_segment_digest,'hex'),ciphertext_bytes,
+                    encode(ciphertext_sha256,'hex'),ciphertext,acknowledged_at
+             FROM chat_backup_segments WHERE account_id=$1 AND cursor>$2
              ORDER BY cursor LIMIT $3",
     )
     .bind(user_id)
@@ -711,17 +721,17 @@ pub async fn list_segments(
 
 /// Streams an encrypted base snapshot to object storage. The multipart form
 /// contains a canonical `metadata` JSON part and one `ciphertext` file part.
-#[utoipa::path(post, path = "/api/chat/backup/bases", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/bases", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body(
         content = Vec<u8>, content_type = "multipart/form-data",
         description = "Typed metadata and encrypted base ciphertext"
     ), responses((status = 200, body = ChatBackupBaseReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn stage_base(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     mut multipart: Multipart,
 ) -> AppResult<Json<ChatBackupBaseReceiptV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut metadata: Option<StageChatBackupBaseRequestV1> = None;
     let mut object: Option<(NamedTempFile, u64, [u8; 32])> = None;
     while let Some(mut field) = multipart
@@ -811,8 +821,8 @@ pub async fn stage_base(
 
     let preflight: Option<(Uuid, i64, i64, String)> = sqlx::query_as(
         "SELECT b.backup_incarnation_id,b.current_generation,b.current_cursor,
-                u.account_incarnation_id
-         FROM chat_backups b JOIN users u ON u.id=b.user_id WHERE b.user_id=$1",
+                encode(u.account_incarnation_id,'hex')
+         FROM chat_backups b JOIN accounts u ON u.id=b.account_id WHERE b.account_id=$1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -835,8 +845,8 @@ pub async fn stage_base(
 
     if let Some((generation, covered, bytes, digest)) =
         sqlx::query_as::<_, (i64, i64, i64, String)>(
-            "SELECT generation,covered_cursor,ciphertext_bytes,ciphertext_sha256
-             FROM chat_backup_bases WHERE user_id=$1 AND object_id=$2",
+            "SELECT generation,covered_cursor,ciphertext_bytes,encode(ciphertext_sha256,'hex')
+             FROM chat_backup_bases WHERE account_id=$1 AND object_id=$2",
         )
         .bind(user_id)
         .bind(object_id)
@@ -881,7 +891,7 @@ pub async fn stage_base(
         let (locked_backup_id, locked_generation, locked_cursor): (Uuid, i64, i64) =
             sqlx::query_as(
                 "SELECT backup_incarnation_id,current_generation,current_cursor
-                 FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+                 FROM chat_backups WHERE account_id=$1 FOR UPDATE",
             )
             .bind(user_id)
             .fetch_one(&mut *transaction)
@@ -904,10 +914,10 @@ pub async fn stage_base(
                     "SELECT
                    COALESCE((SELECT SUM(ciphertext_bytes)::bigint
                              FROM chat_backup_segments
-                             WHERE user_id=$1 AND cursor<=$2),0) +
+                             WHERE account_id=$1 AND cursor<=$2),0) +
                    COALESCE((SELECT SUM(ciphertext_bytes)::bigint
                              FROM chat_backup_bases
-                             WHERE user_id=$1 AND state='committed'),0)",
+                             WHERE account_id=$1 AND state='committed'),0)",
                 )
                 .bind(user_id)
                 .bind(locked_cursor)
@@ -924,9 +934,9 @@ pub async fn stage_base(
         }
         let inserted = sqlx::query(
             "INSERT INTO chat_backup_bases
-             (user_id,object_id,generation,covered_cursor,ciphertext_bytes,
+             (account_id,object_id,generation,covered_cursor,ciphertext_bytes,
               ciphertext_sha256,storage_path)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             VALUES ($1,$2,$3,$4,$5,decode($6,'hex'),$7)
              ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
@@ -955,8 +965,8 @@ pub async fn stage_base(
             .await?;
         } else {
             let existing: Option<(Uuid, i64, i64, String)> = sqlx::query_as(
-                "SELECT object_id,covered_cursor,ciphertext_bytes,ciphertext_sha256
-                 FROM chat_backup_bases WHERE user_id=$1 AND generation=$2",
+                "SELECT object_id,covered_cursor,ciphertext_bytes,encode(ciphertext_sha256,'hex')
+                 FROM chat_backup_bases WHERE account_id=$1 AND generation=$2",
             )
             .bind(user_id)
             .bind(i64::try_from(metadata.generation).unwrap_or(i64::MAX))
@@ -995,25 +1005,25 @@ pub async fn stage_base(
     }))
 }
 
-#[utoipa::path(put, path = "/api/chat/backup/manifest", tag = "chat-backup",
+#[utoipa::path(put, path = "/api/v1/chat/backup/manifest", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = CommitChatBackupManifestRequestV1,
     responses((status = 200, body = ChatBackupManifestCommitReceiptV1), (status = 409, description = "Restore point changed")))]
 pub async fn commit_manifest(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CommitChatBackupManifestRequestV1>,
 ) -> AppResult<Json<ChatBackupManifestCommitReceiptV1>> {
     request.validate().map_err(|error| {
         AppError::bad_request(format!("invalid backup manifest commit: {error}"))
     })?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let base_id = canonical_uuid("backup base object id", &request.manifest.base_object_id)?;
     let manifest_digest = request.manifest.digest().map_err(AppError::bad_request)?;
     let mut transaction = state.pool.begin().await?;
     let row: (i64, i64, String, serde_json::Value, String) = sqlx::query_as(
-        "SELECT current_generation,current_cursor,current_manifest_digest,
-                signer_authorization,signer_authorization_digest
-         FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+        "SELECT current_generation,current_cursor,encode(current_manifest_digest,'hex'),
+                signer_authorization,encode(signer_authorization_digest,'hex')
+         FROM chat_backups WHERE account_id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -1043,9 +1053,9 @@ pub async fn commit_manifest(
         return Err(AppError::conflict("backup manifest CAS binding mismatch"));
     }
     let staged: Option<(i64, i64, String)> = sqlx::query_as(
-        "SELECT ciphertext_bytes,covered_cursor,ciphertext_sha256
+        "SELECT ciphertext_bytes,covered_cursor,encode(ciphertext_sha256,'hex')
          FROM chat_backup_bases
-         WHERE user_id=$1 AND object_id=$2 AND generation=$3 AND state='staged'
+         WHERE account_id=$1 AND object_id=$2 AND generation=$3 AND state='staged'
          FOR UPDATE",
     )
     .bind(user_id)
@@ -1069,7 +1079,7 @@ pub async fn commit_manifest(
     }
     let reconciliation_id: Uuid = sqlx::query_scalar(
         "SELECT operation_id FROM chat_backup_media_reconciliations
-         WHERE user_id=$1 AND target_generation=$2 AND reference_set_digest=$3 AND completed=true",
+         WHERE account_id=$1 AND target_generation=$2 AND reference_set_digest=decode($3,'hex') AND completed=true",
     )
     .bind(user_id)
     .bind(i64::try_from(request.manifest.generation).unwrap_or(i64::MAX))
@@ -1079,7 +1089,7 @@ pub async fn commit_manifest(
     .ok_or_else(|| AppError::conflict("backup media reconciliation is incomplete"))?;
     let mut old_paths: Vec<String> = sqlx::query_scalar(
         "SELECT storage_path FROM chat_backup_bases
-         WHERE user_id=$1 AND state='committed' AND object_id<>$2",
+         WHERE account_id=$1 AND state='committed' AND object_id<>$2",
     )
     .bind(user_id)
     .bind(base_id)
@@ -1087,7 +1097,7 @@ pub async fn commit_manifest(
     .await?;
     let released_segments: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint FROM chat_backup_segments
-         WHERE user_id=$1 AND cursor<=$2",
+         WHERE account_id=$1 AND cursor<=$2",
     )
     .bind(user_id)
     .bind(covered_cursor)
@@ -1095,21 +1105,21 @@ pub async fn commit_manifest(
     .await?;
     let released_bases: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(ciphertext_bytes),0)::bigint FROM chat_backup_bases
-         WHERE user_id=$1 AND state='committed' AND object_id<>$2",
+         WHERE account_id=$1 AND state='committed' AND object_id<>$2",
     )
     .bind(user_id)
     .bind(base_id)
     .fetch_one(&mut *transaction)
     .await?;
-    sqlx::query("DELETE FROM chat_backup_media_references WHERE user_id=$1")
+    sqlx::query("DELETE FROM chat_backup_media_references WHERE account_id=$1")
         .bind(user_id)
         .execute(&mut *transaction)
         .await?;
     sqlx::query(
-        "INSERT INTO chat_backup_media_references(user_id,media_id,reference_id)
-         SELECT user_id,media_id,reference_id
+        "INSERT INTO chat_backup_media_references(account_id,media_id,reference_id)
+         SELECT account_id,media_id,reference_id
          FROM chat_backup_media_reconciliation_entries
-         WHERE user_id=$1 AND operation_id=$2",
+         WHERE account_id=$1 AND operation_id=$2",
     )
     .bind(user_id)
     .bind(reconciliation_id)
@@ -1118,9 +1128,9 @@ pub async fn commit_manifest(
     let unreferenced_media: Vec<(String, i64)> = sqlx::query_as(
         "SELECT object.storage_path,object.ciphertext_bytes
          FROM chat_backup_media_objects object
-         WHERE object.user_id=$1 AND NOT EXISTS (
+         WHERE object.account_id=$1 AND NOT EXISTS (
            SELECT 1 FROM chat_backup_media_references reference
-           WHERE reference.user_id=object.user_id AND reference.media_id=object.media_id
+           WHERE reference.account_id=object.account_id AND reference.media_id=object.media_id
          )",
     )
     .bind(user_id)
@@ -1132,9 +1142,9 @@ pub async fn commit_manifest(
     old_paths.extend(unreferenced_media.into_iter().map(|(path, _)| path));
     sqlx::query(
         "DELETE FROM chat_backup_media_objects object
-         WHERE object.user_id=$1 AND NOT EXISTS (
+         WHERE object.account_id=$1 AND NOT EXISTS (
            SELECT 1 FROM chat_backup_media_references reference
-           WHERE reference.user_id=object.user_id AND reference.media_id=object.media_id
+           WHERE reference.account_id=object.account_id AND reference.media_id=object.media_id
          )",
     )
     .bind(user_id)
@@ -1143,29 +1153,29 @@ pub async fn commit_manifest(
     let committed_at = OffsetDateTime::now_utc();
     sqlx::query(
         "UPDATE chat_backup_bases SET state='committed',committed_at=$1,expires_at='infinity'
-         WHERE user_id=$2 AND object_id=$3",
+         WHERE account_id=$2 AND object_id=$3",
     )
     .bind(committed_at)
     .bind(user_id)
     .bind(base_id)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query("DELETE FROM chat_backup_segments WHERE user_id=$1 AND cursor<=$2")
+    sqlx::query("DELETE FROM chat_backup_segments WHERE account_id=$1 AND cursor<=$2")
         .bind(user_id)
         .bind(covered_cursor)
         .execute(&mut *transaction)
         .await?;
     sqlx::query(
-        "DELETE FROM chat_backup_bases WHERE user_id=$1 AND state='committed' AND object_id<>$2",
+        "DELETE FROM chat_backup_bases WHERE account_id=$1 AND state='committed' AND object_id<>$2",
     )
     .bind(user_id)
     .bind(base_id)
     .execute(&mut *transaction)
     .await?;
     sqlx::query(
-        "UPDATE chat_backups SET current_generation=$1,current_manifest_digest=$2,
+        "UPDATE chat_backups SET current_generation=$1,current_manifest_digest=decode($2,'hex'),
          current_manifest=$3,current_base_object_id=$4,latest_protected_at=$5,updated_at=NOW()
-         WHERE user_id=$6",
+         WHERE account_id=$6",
     )
     .bind(i64::try_from(request.manifest.generation).unwrap_or(i64::MAX))
     .bind(&manifest_digest)
@@ -1188,7 +1198,7 @@ pub async fn commit_manifest(
     .await?;
     sqlx::query(
         "DELETE FROM chat_backup_media_reconciliations
-         WHERE user_id=$1 AND target_generation<=$2",
+         WHERE account_id=$1 AND target_generation<=$2",
     )
     .bind(user_id)
     .bind(i64::try_from(request.manifest.generation).unwrap_or(i64::MAX))
@@ -1209,21 +1219,21 @@ pub async fn commit_manifest(
     }))
 }
 
-#[utoipa::path(get, path = "/api/chat/backup/bases/{objectId}", tag = "chat-backup",
+#[utoipa::path(get, path = "/api/v1/chat/backup/bases/{objectId}", tag = "chat.backup",
     security(("BearerAuth" = [])), params(("objectId" = String, Path)),
     responses((status = 200, description = "Encrypted committed base", content_type = "application/octet-stream")))]
 pub async fn download_base(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(object_id): Path<String>,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let object_id = canonical_uuid("backup base object id", &object_id)?;
     let row: Option<(String, i64, String)> = sqlx::query_as(
-        "SELECT base.storage_path,base.ciphertext_bytes,base.ciphertext_sha256
+        "SELECT base.storage_path,base.ciphertext_bytes,encode(base.ciphertext_sha256,'hex')
          FROM chat_backups backup JOIN chat_backup_bases base
-           ON base.user_id=backup.user_id AND base.object_id=backup.current_base_object_id
-         WHERE backup.user_id=$1 AND base.object_id=$2 AND base.state='committed'",
+           ON base.account_id=backup.account_id AND base.object_id=backup.current_base_object_id
+         WHERE backup.account_id=$1 AND base.object_id=$2 AND base.state='committed'",
     )
     .bind(user_id)
     .bind(object_id)
@@ -1249,18 +1259,18 @@ pub async fn download_base(
 
 /// Server-side copy of an account-owned inner Chat-media ciphertext into its
 /// backup-specific padded outer encryption. The outer key is never persisted.
-#[utoipa::path(post, path = "/api/chat/backup/media/copy", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/media/copy", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = CopyChatBackupMediaRequestV1,
     responses((status = 200, body = kutup_chat_proto::ChatBackupMediaReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn copy_media(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<CopyChatBackupMediaRequestV1>,
 ) -> AppResult<Json<kutup_chat_proto::ChatBackupMediaReceiptV1>> {
     let outer_key = request
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid backup media copy: {error}")))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let operation_id = canonical_uuid("backup media operation id", &request.operation_id)?;
     let backup_id = canonical_uuid("backup incarnation id", &request.backup_incarnation_id)?;
     let source_id = canonical_uuid("source attachment id", &request.source_attachment_id)?;
@@ -1268,17 +1278,20 @@ pub async fn copy_media(
     let media_id = canonical_hex_32("backup media id", &request.media_id)?;
     let request_hash = request_digest(&request)?;
 
-    if let Some((stored_hash, bytes, ciphertext_hash)) = sqlx::query_as::<_, (String, i64, String)>(
-        "SELECT operation.request_digest,object.ciphertext_bytes,object.ciphertext_sha256
+    if let Some((stored_hash, bytes, ciphertext_hash, stored_path)) =
+        sqlx::query_as::<_, (String, i64, String, String)>(
+            "SELECT encode(operation.request_digest,'hex'),object.ciphertext_bytes,
+                encode(object.ciphertext_sha256,'hex'),
+                object.storage_path
              FROM chat_backup_media_operations operation
              JOIN chat_backup_media_objects object
-               ON object.user_id=operation.user_id AND object.media_id=operation.media_id
-             WHERE operation.user_id=$1 AND operation.operation_id=$2",
-    )
-    .bind(user_id)
-    .bind(operation_id)
-    .fetch_optional(&state.pool)
-    .await?
+               ON object.account_id=operation.account_id AND object.media_id=operation.media_id
+             WHERE operation.account_id=$1 AND operation.operation_id=$2",
+        )
+        .bind(user_id)
+        .bind(operation_id)
+        .fetch_optional(&state.pool)
+        .await?
     {
         if stored_hash != request_hash {
             return Err(AppError::conflict(
@@ -1289,18 +1302,19 @@ pub async fn copy_media(
             media_id: request.media_id,
             ciphertext_bytes: u64::try_from(bytes).unwrap_or_default(),
             ciphertext_sha256: ciphertext_hash,
+            manifest_sha256: stored_manifest_sha256(&state, &stored_path, bytes).await?,
             already_stored: true,
         }));
     }
 
     let source: Option<(String, i64, Uuid, String)> = sqlx::query_as(
         "SELECT object.storage_path,object.ciphertext_bytes,backup.backup_incarnation_id,
-                account.account_incarnation_id
+                encode(account.account_incarnation_id,'hex')
          FROM chat_media_references reference
          JOIN chat_media_objects object ON object.attachment_id=reference.attachment_id
-         JOIN chat_backups backup ON backup.user_id=reference.user_id
-         JOIN users account ON account.id=reference.user_id
-         WHERE reference.user_id=$1 AND reference.attachment_id=$2",
+         JOIN chat_backups backup ON backup.account_id=reference.account_id
+         JOIN accounts account ON account.id=reference.account_id
+         WHERE reference.account_id=$1 AND reference.attachment_id=$2",
     )
     .bind(user_id)
     .bind(source_id)
@@ -1320,25 +1334,28 @@ pub async fn copy_media(
         protection_domain: ChatBackupProtectionDomainV1::StandardChat,
         media_id,
     };
-    let typed_header = chat_backup_media::build_media_header(
-        media_context,
-        u64::try_from(source_bytes).map_err(|_| AppError::internal("stored media length"))?,
-    )
-    .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
-    debug_assert_eq!(typed_header.len(), CHAT_BACKUP_MEDIA_HEADER_BYTES);
-    let parsed_header = chat_backup_media::inspect_media_header(&typed_header)
-        .map_err(|_| AppError::internal("generated backup media header"))?;
-    let expected_outer_bytes =
-        chat_backup_media::media_object_ciphertext_bytes(parsed_header.padded_plaintext_bytes)
-            .map_err(|_| AppError::bad_request("backup media is too large"))?;
+    let source_bytes =
+        u64::try_from(source_bytes).map_err(|_| AppError::internal("stored media length"))?;
+    let typed_header = chat_backup_media_blocks::header(media_context, source_bytes)
+        .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
+    let padded_bytes = padded_media_plaintext_bytes(source_bytes)
+        .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
+    let expected_outer_bytes = chat_backup_media_blocks::object_len(source_bytes)
+        .map_err(|_| AppError::bad_request("backup media is too large"))?;
     let (source_body, measured_source_bytes) =
         state.storage.get_object(&source_path).await.map_err(|_| {
             AppError::not_found("Chat media is no longer available for server copy")
         })?;
-    if measured_source_bytes != source_bytes {
+    if u64::try_from(measured_source_bytes).ok() != Some(source_bytes) {
         return Err(AppError::internal("stored Chat media length mismatch"));
     }
 
+    // The block format (KUTPBM2, docs/plans/drive-block-format.md §5): the
+    // Chat-media ciphertext padded to its bucket, sealed block by block
+    // under the outer key, then the sealed manifest the backup's index
+    // commits to. The key lives only for this request.
+    let mut sealer = chat_backup_media_blocks::sealer(&outer_key, media_context, source_bytes)
+        .map_err(|_| AppError::internal("initialize backup media encryption"))?;
     let mut output =
         NamedTempFile::new().map_err(|_| AppError::internal("create backup media temp file"))?;
     let mut output_digest = Hasher::new(Suite::V1);
@@ -1346,42 +1363,37 @@ pub async fn copy_media(
         .write_all(&typed_header)
         .map_err(|_| AppError::internal("write backup media temp file"))?;
     output_digest.update(typed_header);
-    let (mut encryptor, stream_header) =
-        StreamEncryptor::new_with_aad(&outer_key, &typed_header)
-            .map_err(|_| AppError::internal("initialize backup media encryption"))?;
-    output
-        .write_all(&stream_header)
-        .map_err(|_| AppError::internal("write backup media temp file"))?;
-    output_digest.update(stream_header);
     let mut source_reader = source_body.into_async_read();
-    let source_bytes = u64::try_from(source_bytes).unwrap_or_default();
     let mut offset = 0u64;
-    while offset < parsed_header.padded_plaintext_bytes {
-        let chunk_len =
-            usize::try_from((parsed_header.padded_plaintext_bytes - offset).min(CHUNK_SIZE as u64))
-                .map_err(|_| AppError::internal("backup media chunk length"))?;
-        let mut plaintext = vec![0u8; chunk_len];
+    while offset < padded_bytes {
+        let block_len = usize::try_from((padded_bytes - offset).min(BLOCK_SIZE as u64))
+            .map_err(|_| AppError::internal("backup media block length"))?;
+        let mut plaintext = zeroize::Zeroizing::new(vec![0u8; block_len]);
         if offset < source_bytes {
-            let source_in_chunk = usize::try_from((source_bytes - offset).min(chunk_len as u64))
-                .map_err(|_| AppError::internal("backup media source chunk length"))?;
+            let source_in_block = usize::try_from((source_bytes - offset).min(block_len as u64))
+                .map_err(|_| AppError::internal("backup media source block length"))?;
             source_reader
-                .read_exact(&mut plaintext[..source_in_chunk])
+                .read_exact(&mut plaintext[..source_in_block])
                 .await
                 .map_err(|_| AppError::internal("read Chat media for backup"))?;
         }
-        let final_chunk = offset + chunk_len as u64 == parsed_header.padded_plaintext_bytes;
-        let encrypted = encryptor
-            .push(
-                &plaintext,
-                if final_chunk { TAG_FINAL } else { TAG_MESSAGE },
-            )
+        let sealed = sealer
+            .seal_next(&plaintext)
             .map_err(|_| AppError::internal("encrypt backup media"))?;
         output
-            .write_all(&encrypted)
+            .write_all(&sealed)
             .map_err(|_| AppError::internal("write backup media temp file"))?;
-        output_digest.update(&encrypted);
-        offset += chunk_len as u64;
+        output_digest.update(&sealed);
+        offset += block_len as u64;
     }
+    let tail = sealer
+        .finish(None)
+        .map_err(|_| AppError::internal("seal backup media manifest"))?;
+    output
+        .write_all(&tail.bytes)
+        .map_err(|_| AppError::internal("write backup media temp file"))?;
+    output_digest.update(&tail.bytes);
+    let manifest_sha256 = STANDARD.encode(tail.manifest_sha256);
     let outer_digest = hex::encode(output_digest.finish());
     let measured_outer_bytes = output
         .as_file()
@@ -1409,7 +1421,7 @@ pub async fn copy_media(
     let store_result: AppResult<bool> = async {
         let mut transaction = state.pool.begin().await?;
         let locked_backup_id: Uuid = sqlx::query_scalar(
-            "SELECT backup_incarnation_id FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+            "SELECT backup_incarnation_id FROM chat_backups WHERE account_id=$1 FOR UPDATE",
         )
         .bind(user_id)
         .fetch_one(&mut *transaction)
@@ -1420,16 +1432,17 @@ pub async fn copy_media(
             ));
         }
         let existing: Option<(i64, String)> = sqlx::query_as(
-            "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
-             WHERE user_id=$1 AND media_id=$2",
+            "SELECT ciphertext_bytes,encode(ciphertext_sha256,'hex') FROM chat_backup_media_objects
+             WHERE account_id=$1 AND media_id=$2",
         )
         .bind(user_id)
         .bind(media_id.as_slice())
         .fetch_optional(&mut *transaction)
         .await?;
         let inserted = if existing.is_some() {
-            // Secretstream uses a fresh header, so concurrent valid copies of
-            // the same deterministic media ID need not have equal ciphertext.
+            // The manifest's nonce is random, so concurrent valid copies of
+            // the same deterministic media ID need not have equal ciphertext:
+            // the stored one stands, with its own manifest digest.
             false
         } else {
             // The account's one storage pool, shared with Drive (crate::storage_pool).
@@ -1445,8 +1458,8 @@ pub async fn copy_media(
             }
             sqlx::query(
                 "INSERT INTO chat_backup_media_objects
-                 (user_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path)
-                 VALUES ($1,$2,$3,$4,$5)",
+                 (account_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path)
+                 VALUES ($1,$2,$3,decode($4,'hex'),$5)",
             )
             .bind(user_id)
             .bind(media_id.as_slice())
@@ -1465,7 +1478,7 @@ pub async fn copy_media(
         };
         if let Some(existing_media_id) = sqlx::query_scalar::<_, Vec<u8>>(
             "SELECT media_id FROM chat_backup_media_references
-             WHERE user_id=$1 AND reference_id=$2",
+             WHERE account_id=$1 AND reference_id=$2",
         )
         .bind(user_id)
         .bind(reference_id)
@@ -1479,7 +1492,7 @@ pub async fn copy_media(
             }
         } else {
             sqlx::query(
-                "INSERT INTO chat_backup_media_references(user_id,media_id,reference_id)
+                "INSERT INTO chat_backup_media_references(account_id,media_id,reference_id)
                  VALUES ($1,$2,$3)",
             )
             .bind(user_id)
@@ -1489,8 +1502,8 @@ pub async fn copy_media(
             .await?;
         }
         sqlx::query(
-            "INSERT INTO chat_backup_media_operations(user_id,operation_id,request_digest,media_id)
-             VALUES ($1,$2,$3,$4)",
+            "INSERT INTO chat_backup_media_operations(account_id,operation_id,request_digest,media_id)
+             VALUES ($1,$2,decode($3,'hex'),$4)",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -1515,9 +1528,9 @@ pub async fn copy_media(
         if let Err(error) = state.storage.delete(&path).await {
             tracing::warn!("failed to remove duplicate backup media copy: {error:#}");
         }
-        let (bytes, stored_digest): (i64, String) = sqlx::query_as(
-            "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
-             WHERE user_id=$1 AND media_id=$2",
+        let (bytes, stored_digest, stored_path): (i64, String, String) = sqlx::query_as(
+            "SELECT ciphertext_bytes,encode(ciphertext_sha256,'hex'),storage_path FROM chat_backup_media_objects
+             WHERE account_id=$1 AND media_id=$2",
         )
         .bind(user_id)
         .bind(media_id.as_slice())
@@ -1527,6 +1540,7 @@ pub async fn copy_media(
             media_id: request.media_id,
             ciphertext_bytes: u64::try_from(bytes).unwrap_or_default(),
             ciphertext_sha256: stored_digest,
+            manifest_sha256: stored_manifest_sha256(&state, &stored_path, bytes).await?,
             already_stored: true,
         }));
     }
@@ -1535,23 +1549,24 @@ pub async fn copy_media(
         media_id: request.media_id,
         ciphertext_bytes: measured_outer_bytes,
         ciphertext_sha256: outer_digest,
+        manifest_sha256,
         already_stored: false,
     }))
 }
 
 /// Direct upload fallback for a verified outer-encrypted media copy retained
 /// by a client after the administrator-retained delivery object has expired.
-#[utoipa::path(post, path = "/api/chat/backup/media", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/media", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body(
         content = Vec<u8>, content_type = "multipart/form-data",
         description = "Typed metadata and outer-encrypted media ciphertext"
     ), responses((status = 200, body = kutup_chat_proto::ChatBackupMediaReceiptV1), (status = 507, description = "Chat storage full")))]
 pub async fn upload_media(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     mut multipart: Multipart,
 ) -> AppResult<Json<kutup_chat_proto::ChatBackupMediaReceiptV1>> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let mut metadata: Option<UploadChatBackupMediaRequestV1> = None;
     let mut object: Option<(NamedTempFile, u64, [u8; 32])> = None;
     while let Some(mut field) = multipart
@@ -1604,7 +1619,7 @@ pub async fn upload_media(
     }
     let metadata =
         metadata.ok_or_else(|| AppError::bad_request("missing backup media metadata"))?;
-    metadata
+    let claimed_manifest = metadata
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid backup media: {error}")))?;
     let (mut file, measured_bytes, measured_digest) =
@@ -1619,31 +1634,36 @@ pub async fn upload_media(
     let backup_id = canonical_uuid("backup incarnation id", &metadata.backup_incarnation_id)?;
     let reference_id = canonical_uuid("backup media reference id", &metadata.reference_id)?;
     let media_id = canonical_hex_32("backup media id", &metadata.media_id)?;
-    let mut public_header = vec![0u8; CHAT_BACKUP_MEDIA_HEADER_BYTES];
+    let mut public_header = vec![0u8; CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES];
     file.as_file_mut()
         .seek(SeekFrom::Start(0))
         .and_then(|_| file.as_file_mut().read_exact(&mut public_header))
         .map_err(|_| AppError::bad_request("backup media header is truncated"))?;
-    let parsed = chat_backup_media::inspect_media_header(&public_header)
+    let parsed = chat_backup_media_blocks::inspect_header(&public_header)
         .map_err(|_| AppError::bad_request("invalid backup media header"))?;
-    let expected_bytes =
-        chat_backup_media::media_object_ciphertext_bytes(parsed.padded_plaintext_bytes)
-            .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
+    let expected_bytes = chat_backup_media_blocks::object_len(parsed.source_ciphertext_bytes)
+        .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
     if expected_bytes != measured_bytes
         || parsed.source_ciphertext_bytes != metadata.source_ciphertext_bytes
         || parsed.context.backup_incarnation_id != *backup_id.as_bytes()
         || parsed.context.media_id != media_id
         || parsed.context.protection_domain != ChatBackupProtectionDomainV1::StandardChat
-        || parsed.suite != ChatBackupSuiteId::HkdfSha256XChaCha20Poly1305V1
     {
         return Err(AppError::bad_request(
             "backup media public binding mismatch",
         ));
     }
+    // The block structure, and the manifest the client's backup index will
+    // commit to: the one in these bytes.
+    if sealed_manifest_sha256_of_file(file.as_file_mut(), measured_bytes)? != claimed_manifest {
+        return Err(AppError::bad_request(
+            "backup media manifest binding mismatch",
+        ));
+    }
     let account: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT backup.backup_incarnation_id,account.account_incarnation_id
-         FROM chat_backups backup JOIN users account ON account.id=backup.user_id
-         WHERE backup.user_id=$1",
+        "SELECT backup.backup_incarnation_id,encode(account.account_incarnation_id,'hex')
+         FROM chat_backups backup JOIN accounts account ON account.id=backup.account_id
+         WHERE backup.account_id=$1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -1661,8 +1681,8 @@ pub async fn upload_media(
     }
 
     if let Some((bytes, digest)) = sqlx::query_as::<_, (i64, String)>(
-        "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
-         WHERE user_id=$1 AND media_id=$2",
+        "SELECT ciphertext_bytes,encode(ciphertext_sha256,'hex') FROM chat_backup_media_objects
+         WHERE account_id=$1 AND media_id=$2",
     )
     .bind(user_id)
     .bind(media_id.as_slice())
@@ -1677,10 +1697,12 @@ pub async fn upload_media(
             ));
         }
         ensure_media_reference(&state, user_id, media_id, reference_id).await?;
+        // The same whole object, so the same manifest.
         return Ok(Json(kutup_chat_proto::ChatBackupMediaReceiptV1 {
             media_id: metadata.media_id,
             ciphertext_bytes: measured_bytes,
             ciphertext_sha256: digest,
+            manifest_sha256: metadata.manifest_sha256,
             already_stored: true,
         }));
     }
@@ -1701,13 +1723,13 @@ pub async fn upload_media(
         .map_err(|_| AppError::internal("backup media storage error"))?;
     let result: AppResult<bool> = async {
         let mut transaction = state.pool.begin().await?;
-        sqlx::query("SELECT user_id FROM chat_backups WHERE user_id=$1 FOR UPDATE")
+        sqlx::query("SELECT account_id FROM chat_backups WHERE account_id=$1 FOR UPDATE")
             .bind(user_id)
             .execute(&mut *transaction)
             .await?;
         let existing: Option<(i64, String)> = sqlx::query_as(
-            "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
-             WHERE user_id=$1 AND media_id=$2",
+            "SELECT ciphertext_bytes,encode(ciphertext_sha256,'hex') FROM chat_backup_media_objects
+             WHERE account_id=$1 AND media_id=$2",
         )
         .bind(user_id)
         .bind(media_id.as_slice())
@@ -1736,8 +1758,8 @@ pub async fn upload_media(
             }
             sqlx::query(
                 "INSERT INTO chat_backup_media_objects
-                 (user_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path)
-                 VALUES ($1,$2,$3,$4,$5)",
+                 (account_id,media_id,ciphertext_bytes,ciphertext_sha256,storage_path)
+                 VALUES ($1,$2,$3,decode($4,'hex'),$5)",
             )
             .bind(user_id)
             .bind(media_id.as_slice())
@@ -1770,8 +1792,8 @@ pub async fn upload_media(
         let _ = state.storage.delete(&path).await;
     }
     let (stored_bytes, stored_digest): (i64, String) = sqlx::query_as(
-        "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
-         WHERE user_id=$1 AND media_id=$2",
+        "SELECT ciphertext_bytes,encode(ciphertext_sha256,'hex') FROM chat_backup_media_objects
+         WHERE account_id=$1 AND media_id=$2",
     )
     .bind(user_id)
     .bind(media_id.as_slice())
@@ -1782,8 +1804,68 @@ pub async fn upload_media(
         media_id: metadata.media_id,
         ciphertext_bytes: u64::try_from(stored_bytes).unwrap_or_default(),
         ciphertext_sha256: stored_digest,
+        // Stored only as these bytes (the whole digest is checked above).
+        manifest_sha256: metadata.manifest_sha256,
         already_stored: !inserted,
     }))
+}
+
+/// The sealed manifest's SHA-256 of a whole backup media
+/// object of `total` bytes held in `file`, its block structure checked.
+fn sealed_manifest_sha256_of_file(file: &mut std::fs::File, total: u64) -> AppResult<[u8; 32]> {
+    let invalid = || AppError::bad_request("invalid backup media structure");
+    let trailer_len = TRAILER_LEN as u64;
+    let mut trailer = [0u8; TRAILER_LEN];
+    file.seek(SeekFrom::Start(
+        total.checked_sub(trailer_len).ok_or_else(invalid)?,
+    ))
+    .and_then(|_| file.read_exact(&mut trailer))
+    .map_err(|_| invalid())?;
+    chat_backup_media_blocks::check_structure(total, &trailer).map_err(|_| invalid())?;
+    let manifest_len = chat_backup_media_blocks::CHAT_BACKUP_MEDIA_BLOCKS
+        .parse_trailer(&trailer)
+        .map_err(|_| invalid())?;
+    let mut manifest = vec![0u8; manifest_len];
+    file.seek(SeekFrom::Start(total - trailer_len - manifest_len as u64))
+        .and_then(|_| file.read_exact(&mut manifest))
+        .map_err(|_| invalid())?;
+    Ok(blocks::manifest_digest(&manifest))
+}
+
+/// The sealed manifest's SHA-256 (canonical base64) of the stored backup
+/// media object at `path`, read by range: its trailer, then its manifest.
+async fn stored_manifest_sha256(state: &AppState, path: &str, total: i64) -> AppResult<String> {
+    let broken = || AppError::internal("stored backup media is malformed");
+    let total = u64::try_from(total).map_err(|_| broken())?;
+    let trailer_len = TRAILER_LEN as u64;
+    let read = |start: u64, end: u64| async move {
+        let body = state
+            .storage
+            .get_object_range(path, start, end, total)
+            .await
+            .map_err(|_| AppError::internal("backup media storage error"))?;
+        let mut bytes = Vec::with_capacity((end - start + 1) as usize);
+        body.into_async_read()
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| AppError::internal("backup media storage error"))?;
+        if bytes.len() as u64 != end - start + 1 {
+            return Err(broken());
+        }
+        Ok::<_, AppError>(bytes)
+    };
+    let trailer = read(
+        total.checked_sub(trailer_len).ok_or_else(broken)?,
+        total - 1,
+    )
+    .await?;
+    chat_backup_media_blocks::check_structure(total, &trailer).map_err(|_| broken())?;
+    let manifest_len = chat_backup_media_blocks::CHAT_BACKUP_MEDIA_BLOCKS
+        .parse_trailer(&trailer)
+        .map_err(|_| broken())? as u64;
+    let manifest_end = total - trailer_len - 1;
+    let manifest = read(manifest_end + 1 - manifest_len, manifest_end).await?;
+    Ok(STANDARD.encode(blocks::manifest_digest(&manifest)))
 }
 
 async fn insert_media_reference(
@@ -1794,7 +1876,7 @@ async fn insert_media_reference(
 ) -> AppResult<()> {
     if let Some(existing) = sqlx::query_scalar::<_, Vec<u8>>(
         "SELECT media_id FROM chat_backup_media_references
-         WHERE user_id=$1 AND reference_id=$2",
+         WHERE account_id=$1 AND reference_id=$2",
     )
     .bind(user_id)
     .bind(reference_id)
@@ -1808,7 +1890,7 @@ async fn insert_media_reference(
         }
     } else {
         sqlx::query(
-            "INSERT INTO chat_backup_media_references(user_id,media_id,reference_id)
+            "INSERT INTO chat_backup_media_references(account_id,media_id,reference_id)
              VALUES ($1,$2,$3)",
         )
         .bind(user_id)
@@ -1832,19 +1914,23 @@ async fn ensure_media_reference(
     Ok(())
 }
 
-#[utoipa::path(get, path = "/api/chat/backup/media/{mediaId}", tag = "chat-backup",
+#[utoipa::path(get, path = "/api/v1/chat/backup/media/{mediaId}", tag = "chat.backup",
     security(("BearerAuth" = [])), params(("mediaId" = String, Path)),
-    responses((status = 200, description = "Outer-encrypted backup media", content_type = "application/octet-stream")))]
+    responses(
+        (status = 200, description = "Outer-encrypted backup media", content_type = "application/octet-stream"),
+        (status = 206, description = "One range of it (`Range: bytes=…`)", content_type = "application/octet-stream"),
+        (status = 416, description = "A range past its end")))]
 pub async fn download_media(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(media_id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let media_id_bytes = canonical_hex_32("backup media id", &media_id)?;
     let row: Option<(String, i64, String)> = sqlx::query_as(
-        "SELECT storage_path,ciphertext_bytes,ciphertext_sha256
-         FROM chat_backup_media_objects WHERE user_id=$1 AND media_id=$2",
+        "SELECT storage_path,ciphertext_bytes,encode(ciphertext_sha256,'hex')
+         FROM chat_backup_media_objects WHERE account_id=$1 AND media_id=$2",
     )
     .bind(user_id)
     .bind(media_id_bytes.as_slice())
@@ -1853,33 +1939,41 @@ pub async fn download_media(
     let Some((path, expected_bytes, digest)) = row else {
         return Err(AppError::not_found("backup media not found"));
     };
-    let (body, stored_bytes) = state
-        .storage
-        .get_object(&path)
-        .await
-        .map_err(|_| AppError::internal("backup media storage error"))?;
-    if stored_bytes != expected_bytes {
-        return Err(AppError::internal("stored backup media length mismatch"));
-    }
-    Ok(super::octet_stream_response(
-        body,
-        stored_bytes,
+    // A restore reads the header, the trailer and the manifest, then the
+    // blocks, by range (docs/plans/drive-block-format.md §5). The object
+    // never changes under its digest, which is its ETag.
+    let total = u64::try_from(expected_bytes)
+        .map_err(|_| AppError::internal("stored backup media length"))?;
+    let etag = format!("\"{digest}\"");
+    let asked = crate::content_range::requested(
+        &headers,
+        total,
+        &etag,
+        crate::content_range::max_part_bytes(&state.pool).await?,
+    );
+    crate::content_range::serve(
+        &state.storage,
+        &path,
+        total,
+        &etag,
+        asked,
         &[("x-kutup-ciphertext-sha256".parse().expect("header"), digest)],
-    ))
+    )
+    .await
 }
 
-#[utoipa::path(post, path = "/api/chat/backup/media/reconciliation", tag = "chat-backup",
+#[utoipa::path(post, path = "/api/v1/chat/backup/media/reconciliation", tag = "chat.backup",
     security(("BearerAuth" = [])), request_body = ReconcileChatBackupMediaRequestV1,
     responses((status = 200, body = ChatBackupMediaReconciliationReceiptV1)))]
 pub async fn reconcile_media(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Json(request): Json<ReconcileChatBackupMediaRequestV1>,
 ) -> AppResult<Json<ChatBackupMediaReconciliationReceiptV1>> {
     request
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid media reconciliation: {error}")))?;
-    let user_id = trusted_uuid(&user.user_id)?;
+    let user_id = trusted_uuid(&user.account_id)?;
     let operation_id = canonical_uuid("media reconciliation operation id", &request.operation_id)?;
     let target_generation = i64::try_from(request.target_generation)
         .map_err(|_| AppError::bad_request("target generation exceeds server range"))?;
@@ -1888,7 +1982,7 @@ pub async fn reconcile_media(
     let page_digest = request_digest(&request)?;
     let mut transaction = state.pool.begin().await?;
     let current_generation: i64 = sqlx::query_scalar(
-        "SELECT current_generation FROM chat_backups WHERE user_id=$1 FOR UPDATE",
+        "SELECT current_generation FROM chat_backups WHERE account_id=$1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut *transaction)
@@ -1901,7 +1995,7 @@ pub async fn reconcile_media(
     }
     let staged: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM chat_backup_bases
-         WHERE user_id=$1 AND generation=$2 AND state='staged')",
+         WHERE account_id=$1 AND generation=$2 AND state='staged')",
     )
     .bind(user_id)
     .bind(target_generation)
@@ -1913,8 +2007,8 @@ pub async fn reconcile_media(
         ));
     }
     if let Some(stored_digest) = sqlx::query_scalar::<_, String>(
-        "SELECT request_digest FROM chat_backup_media_reconciliation_pages
-         WHERE user_id=$1 AND operation_id=$2 AND page_index=$3",
+        "SELECT encode(request_digest,'hex') FROM chat_backup_media_reconciliation_pages
+         WHERE account_id=$1 AND operation_id=$2 AND page_index=$3",
     )
     .bind(user_id)
     .bind(operation_id)
@@ -1929,7 +2023,7 @@ pub async fn reconcile_media(
         }
         let (next_page, completed): (i32, bool) = sqlx::query_as(
             "SELECT next_page,completed FROM chat_backup_media_reconciliations
-             WHERE user_id=$1 AND operation_id=$2",
+             WHERE account_id=$1 AND operation_id=$2",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -1943,9 +2037,9 @@ pub async fn reconcile_media(
         }));
     }
     let operation: Option<(i64, String, i32, bool)> = sqlx::query_as(
-        "SELECT target_generation,reference_set_digest,next_page,completed
+        "SELECT target_generation,encode(reference_set_digest,'hex'),next_page,completed
          FROM chat_backup_media_reconciliations
-         WHERE user_id=$1 AND operation_id=$2 FOR UPDATE",
+         WHERE account_id=$1 AND operation_id=$2 FOR UPDATE",
     )
     .bind(user_id)
     .bind(operation_id)
@@ -1968,8 +2062,8 @@ pub async fn reconcile_media(
         }
         sqlx::query(
             "INSERT INTO chat_backup_media_reconciliations
-             (user_id,operation_id,target_generation,reference_set_digest)
-             VALUES ($1,$2,$3,$4)",
+             (account_id,operation_id,target_generation,reference_set_digest)
+             VALUES ($1,$2,$3,decode($4,'hex'))",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -1989,7 +2083,7 @@ pub async fn reconcile_media(
         let media_id = canonical_hex_32("backup media id", &reference.media_id)?;
         sqlx::query(
             "INSERT INTO chat_backup_media_reconciliation_entries
-             (user_id,operation_id,reference_id,media_id) VALUES ($1,$2,$3,$4)",
+             (account_id,operation_id,reference_id,media_id) VALUES ($1,$2,$3,$4)",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -2013,7 +2107,7 @@ pub async fn reconcile_media(
     if request.final_page {
         let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
             "SELECT reference_id,media_id FROM chat_backup_media_reconciliation_entries
-             WHERE user_id=$1 AND operation_id=$2 ORDER BY reference_id",
+             WHERE account_id=$1 AND operation_id=$2 ORDER BY reference_id",
         )
         .bind(user_id)
         .bind(operation_id)
@@ -2038,7 +2132,7 @@ pub async fn reconcile_media(
     sqlx::query(
         "UPDATE chat_backup_media_reconciliations
          SET next_page=$1,completed=$2,updated_at=NOW()
-         WHERE user_id=$3 AND operation_id=$4",
+         WHERE account_id=$3 AND operation_id=$4",
     )
     .bind(new_next_page)
     .bind(now_completed)
@@ -2048,7 +2142,7 @@ pub async fn reconcile_media(
     .await?;
     sqlx::query(
         "INSERT INTO chat_backup_media_reconciliation_pages
-         (user_id,operation_id,page_index,request_digest) VALUES ($1,$2,$3,$4)",
+         (account_id,operation_id,page_index,request_digest) VALUES ($1,$2,$3,decode($4,'hex'))",
     )
     .bind(user_id)
     .bind(operation_id)

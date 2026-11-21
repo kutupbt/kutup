@@ -4,10 +4,11 @@ import { webcrypto } from 'node:crypto'
 import { runInNewContext } from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
 
-// The calendar's service worker (public/push-sw.js), run against a fake
+// Kutup's service worker (@kutup/config src/sw/kutup-sw.js) with Calendar's
+// push on, run against a fake
 // worker global: what a reminder push shows, and what a click opens.
 
-const SOURCE = readFileSync(new URL('../../../public/push-sw.js', import.meta.url), 'utf8')
+const SOURCE = readFileSync(new URL('../../../../../packages/config/src/sw/kutup-sw.js', import.meta.url), 'utf8')
 const ACCOUNT = '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70'
 /** The server's `account` for this subscription secret ([1; 16]) and account (its Rust test pins it too). */
 const ACCOUNT_TAG = 'bOzkrVOAPAcr6dlqCNiyod'
@@ -27,6 +28,7 @@ function worker(shown: Shown[] = [], windows: unknown[] = []) {
   })
   const openWindow = vi.fn(() => Promise.resolve(null))
   const query = new URLSearchParams({
+    push: 'calendar',
     title: 'Kutup Calendar',
     at: 'Event at {{time}}',
     today: 'Event today',
@@ -38,7 +40,7 @@ function worker(shown: Shown[] = [], windows: unknown[] = []) {
     account: ACCOUNT,
   })
   const self = {
-    location: { href: `https://calendar.kutup.test/push-sw.js?${query}` },
+    location: { href: `https://calendar.kutup.test/kutup-sw.js?${query}` },
     addEventListener: (name: string, handler: Handler) => {
       handlers[name] = handler
     },
@@ -114,7 +116,7 @@ describe('the calendar’s service worker', () => {
     const { fire, openWindow } = worker()
     await fire('notificationclick', { notification: { close: () => undefined, data: { url: `/?event=${E1}` } } })
     expect(openWindow).toHaveBeenLastCalledWith(`/?event=${E1}`)
-    await fire('notificationclick', { notification: { close: () => undefined, data: { url: '/api/user/me' } } })
+    await fire('notificationclick', { notification: { close: () => undefined, data: { url: '/api/v1/account' } } })
     expect(openWindow).toHaveBeenLastCalledWith('/')
   })
 })

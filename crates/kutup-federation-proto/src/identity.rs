@@ -7,8 +7,8 @@ use crate::{
     FederationProtocolError, FEDERATION_IDENTITY_VERSION,
 };
 
-const IDENTITY_SIGNING_DOMAIN: &[u8] = b"kutup-federation-identity-document-v1\0";
-const IDENTITY_HASH_DOMAIN: &[u8] = b"kutup-federation-identity-document-hash-v1\0";
+const IDENTITY_SIGNING_DOMAIN: &[u8] = kutup_crypto::labels::FEDERATION_IDENTITY_DOCUMENT_V1;
+const IDENTITY_HASH_DOMAIN: &[u8] = kutup_crypto::labels::FEDERATION_IDENTITY_DOCUMENT_HASH_V1;
 
 /// Closed identity-document version. Unknown versions fail during decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

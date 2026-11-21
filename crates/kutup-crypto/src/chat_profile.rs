@@ -6,9 +6,11 @@
 //! - A profile key (32 random bytes) gives the profile's version (its
 //!   public name), its access key (what a fetch shows) and the key each
 //!   item's envelope is sealed under, per purpose and context.
-//! - The owner's own copy of the profile key is wrapped under a key the
-//!   master key and the key binding derive.
-//! - Every envelope binds its suite, purpose, account, version, revision and
+//! - The owner's own copy of the profile key is an account record (purpose
+//!   `ChatProfileKeyWrap`, docs/plans/w1-account-record.md) under the master
+//!   key, bound to the account's key binding, the profile version and the
+//!   revision.
+//! - Every envelope binds its suite, purpose, account id, version, revision and
 //!   source device in its AAD and in its key.
 
 use base64::engine::general_purpose::STANDARD;
@@ -16,17 +18,19 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::account_ref::AccountRef;
+use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
+use crate::account_ref::{AccountId, AccountRef, ACCOUNT_ID_LEN};
 use crate::error::{CryptoError, Result as CryptoResult};
+use crate::master_keys::MasterKeys;
 use crate::primitives::{hash, Aead, Kdf, Suite};
 
 const MAGIC: &[u8; 8] = b"KUTPPE1\0";
-const FIXED_PREFIX_BYTES: usize = 8 + 2 + 1 + 1 + 8 + 4 + 32 + 2;
+/// Magic, suite, purpose, reserved, revision, source device, version, and
+/// the owner's account id.
+const FIXED_PREFIX_BYTES: usize = 8 + 2 + 1 + 1 + 8 + 4 + 32 + ACCOUNT_ID_LEN;
 const NONCE_BYTES: usize = 24;
 const LENGTH_BYTES: usize = 4;
 const TAG_BYTES: usize = 16;
-/// An account's bytes (`AccountRef::bytes`): its server, length-prefixed, and its id.
-const MAX_ACCOUNT_BYTES: usize = 2 + 253 + 16;
 pub const PROFILE_NAME_PADDED_LENGTHS: [usize; 2] = [53, 257];
 /// Signal's padding buckets for the profile "about" text.
 pub const PROFILE_ABOUT_PADDED_LENGTHS: [usize; 3] = [128, 254, 512];
@@ -69,7 +73,8 @@ impl TryFrom<u16> for ProfileSuiteId {
 pub enum ProfileEnvelopePurpose {
     DisplayName = 1,
     Avatar = 2,
-    WrappedProfileKey = 3,
+    // 3 was the owner's wrapped profile key, now an account record
+    // (`ChatProfileKeyWrap`): never reused.
     About = 4,
 }
 
@@ -86,7 +91,6 @@ impl ProfileEnvelopePurpose {
             Self::Avatar => {
                 (2 + TAG_BYTES..=MAX_PROFILE_AVATAR_BYTES + 1 + TAG_BYTES).contains(&len)
             }
-            Self::WrappedProfileKey => len == 32 + TAG_BYTES,
             Self::About => PROFILE_ABOUT_PADDED_LENGTHS
                 .iter()
                 .any(|plain| len == plain + TAG_BYTES),
@@ -109,7 +113,6 @@ impl TryFrom<u8> for ProfileEnvelopePurpose {
         match value {
             1 => Ok(Self::DisplayName),
             2 => Ok(Self::Avatar),
-            3 => Ok(Self::WrappedProfileKey),
             4 => Ok(Self::About),
             _ => Err(format!("unknown encrypted profile purpose {value}")),
         }
@@ -125,9 +128,10 @@ pub const ACCOUNT_PROFILE_SOURCE: u32 = 128;
 pub struct ProfileEnvelopeContextV1 {
     pub suite: ProfileSuiteId,
     pub purpose: ProfileEnvelopePurpose,
-    /// The profile's owner: their server and permanent account id, never a
-    /// name (docs/plans/account-ids.md).
-    pub account: AccountRef,
+    /// The profile's owner: their permanent account id alone, never a name
+    /// or their server's name (docs/plans/account-ids.md,
+    /// docs/plans/identity-rotation.md §6).
+    pub account: AccountId,
     pub profile_version: [u8; 32],
     pub revision: u64,
     pub source_device_id: u32,
@@ -136,7 +140,7 @@ pub struct ProfileEnvelopeContextV1 {
 impl ProfileEnvelopeContextV1 {
     pub fn new(
         purpose: ProfileEnvelopePurpose,
-        account: &AccountRef,
+        account: impl Into<AccountId>,
         profile_version: &str,
         revision: u64,
         source_device_id: u32,
@@ -152,7 +156,7 @@ impl ProfileEnvelopeContextV1 {
         Ok(Self {
             suite: ProfileSuiteId::XChaCha20Poly1305V1,
             purpose,
-            account: account.clone(),
+            account: account.into(),
             profile_version: version.try_into().expect("32-byte profile version"),
             revision,
             source_device_id,
@@ -165,15 +169,13 @@ impl ProfileEnvelopeContextV1 {
 
     /// Stable context used by the profile module's purpose-specific HKDF.
     pub fn key_derivation_info(&self) -> Vec<u8> {
-        let account = self.account.bytes();
-        let mut info = Vec::with_capacity(2 + 1 + 8 + 4 + 32 + 2 + account.len());
+        let mut info = Vec::with_capacity(2 + 1 + 8 + 4 + 32 + ACCOUNT_ID_LEN);
         info.extend_from_slice(&self.suite.as_u16().to_be_bytes());
         info.push(self.purpose.as_u8());
         info.extend_from_slice(&self.revision.to_be_bytes());
         info.extend_from_slice(&self.source_device_id.to_be_bytes());
         info.extend_from_slice(&self.profile_version);
-        info.extend_from_slice(&(account.len() as u16).to_be_bytes());
-        info.extend_from_slice(&account);
+        info.extend_from_slice(self.account.as_bytes());
         info
     }
 }
@@ -194,9 +196,7 @@ pub fn encode_profile_envelope_header(
     context
         .purpose
         .validate_ciphertext_len(ciphertext_len as usize)?;
-    let account = context.account.bytes();
-    let mut header =
-        Vec::with_capacity(FIXED_PREFIX_BYTES + account.len() + NONCE_BYTES + LENGTH_BYTES);
+    let mut header = Vec::with_capacity(FIXED_PREFIX_BYTES + NONCE_BYTES + LENGTH_BYTES);
     header.extend_from_slice(MAGIC);
     header.extend_from_slice(&context.suite.as_u16().to_be_bytes());
     header.push(context.purpose.as_u8());
@@ -204,8 +204,7 @@ pub fn encode_profile_envelope_header(
     header.extend_from_slice(&context.revision.to_be_bytes());
     header.extend_from_slice(&context.source_device_id.to_be_bytes());
     header.extend_from_slice(&context.profile_version);
-    header.extend_from_slice(&(account.len() as u16).to_be_bytes());
-    header.extend_from_slice(&account);
+    header.extend_from_slice(context.account.as_bytes());
     header.extend_from_slice(nonce);
     header.extend_from_slice(&ciphertext_len.to_be_bytes());
     Ok(header)
@@ -218,7 +217,7 @@ pub fn decode_profile_envelope(encoded: &str) -> Result<DecodedProfileEnvelopeV1
     if STANDARD.encode(&bytes) != encoded {
         return Err("encrypted profile envelope base64 is not canonical".into());
     }
-    if bytes.len() < FIXED_PREFIX_BYTES + 1 + NONCE_BYTES + LENGTH_BYTES + TAG_BYTES
+    if bytes.len() < FIXED_PREFIX_BYTES + NONCE_BYTES + LENGTH_BYTES + TAG_BYTES
         || bytes.get(..MAGIC.len()) != Some(MAGIC)
     {
         return Err("encrypted profile envelope is too short".into());
@@ -231,27 +230,16 @@ pub fn decode_profile_envelope(encoded: &str) -> Result<DecodedProfileEnvelopeV1
     let revision = u64::from_be_bytes(bytes[12..20].try_into().expect("eight-byte slice"));
     let source_device_id = u32::from_be_bytes(bytes[20..24].try_into().expect("four-byte slice"));
     let version: [u8; 32] = bytes[24..56].try_into().expect("32-byte slice");
-    let account_len = u16::from_be_bytes([bytes[56], bytes[57]]) as usize;
-    if account_len == 0 || account_len > MAX_ACCOUNT_BYTES {
-        return Err("encrypted profile account length is invalid".into());
-    }
-    let account_end = FIXED_PREFIX_BYTES
-        .checked_add(account_len)
-        .ok_or_else(|| "encrypted profile account length overflow".to_string())?;
-    let header_len = account_end
-        .checked_add(NONCE_BYTES + LENGTH_BYTES)
-        .ok_or_else(|| "encrypted profile header length overflow".to_string())?;
-    if bytes.len() < header_len + TAG_BYTES {
-        return Err("encrypted profile envelope is truncated".into());
-    }
-    let (account, read) = AccountRef::read(&bytes[FIXED_PREFIX_BYTES..account_end])
-        .map_err(|_| "encrypted profile account is invalid".to_string())?;
-    if read != account_len {
-        return Err("encrypted profile account has trailing bytes".into());
-    }
+    let account = AccountId::from_bytes(
+        bytes[56..FIXED_PREFIX_BYTES]
+            .try_into()
+            .expect("sixteen-byte slice"),
+    );
+    let account_end = FIXED_PREFIX_BYTES;
+    let header_len = account_end + NONCE_BYTES + LENGTH_BYTES;
     let context = ProfileEnvelopeContextV1::new(
         purpose,
-        &account,
+        account,
         &hex::encode(version),
         revision,
         source_device_id,
@@ -283,33 +271,143 @@ pub fn decode_profile_envelope(encoded: &str) -> Result<DecodedProfileEnvelopeV1
 pub const PROFILE_KEY_BYTES: usize = 32;
 /// An access key's length.
 pub const PROFILE_ACCESS_KEY_BYTES: usize = 16;
-const VERSION_INFO: &[u8] = b"kutup-chat-profile-version-v1";
-const ACCESS_INFO: &[u8] = b"kutup-chat-profile-access-v1";
-const WRAP_INFO: &[u8] = b"kutup-chat-profile-wrap-v2";
-const ENVELOPE_KEY_SALT: &[u8] = b"kutup/profile-envelope/key/v1\0";
+const KEY_SALT: &[u8] = crate::labels::CHAT_PROFILE_V1;
+const VERSION_INFO: &[u8] = crate::labels::CHAT_PROFILE_VERSION_V1;
+const ACCESS_INFO: &[u8] = crate::labels::CHAT_PROFILE_ACCESS_V1;
+const ENVELOPE_KEY_SALT: &[u8] = crate::labels::PROFILE_ENVELOPE_KEY_V1;
 
 fn invalid(message: &str) -> CryptoError {
     CryptoError::InvalidInput(message.into())
 }
 
-/// HKDF-SHA256 with no salt (RFC 5869: a hash length of zeros, which HMAC
-/// treats as the empty key it pads).
+/// HKDF-SHA256 salted with the profile family's label.
 fn expand<const N: usize>(ikm: &[u8], info: &[u8]) -> CryptoResult<[u8; N]> {
     let mut out = [0u8; N];
-    Kdf::new(Suite::V1, &[], ikm).expand(info, &mut out)?;
+    Kdf::new(Suite::V1, KEY_SALT, ikm).expand(info, &mut out)?;
     Ok(out)
 }
 
-/// The key the account's own copy of its profile key is wrapped under: from
-/// the master key and the account's key binding.
-pub fn derive_wrapping_key(master_key: &[u8; 32], binding: &str) -> CryptoResult<[u8; 32]> {
-    let binding = crate::key_binding::check(binding)
-        .map_err(|_| invalid("profile wrapping needs the account's key binding"))?;
-    let mut info = Vec::with_capacity(WRAP_INFO.len() + 2 + binding.len());
-    info.extend_from_slice(WRAP_INFO);
-    info.extend_from_slice(&(binding.len() as u16).to_be_bytes());
-    info.extend_from_slice(binding.as_bytes());
-    expand(master_key, &info)
+/// What the account's own copy of its profile key is sealed under: the
+/// account's master keys (sealed under the current one, opened under the one
+/// of the generation the copy names) and its key binding.
+#[derive(Clone)]
+pub struct ProfileOwnerKey {
+    keys: MasterKeys,
+    binding: String,
+}
+
+impl ProfileOwnerKey {
+    /// `master_key` at `generation` alone, no older key reachable.
+    pub fn new(
+        master_key: &[u8; 32],
+        generation: MasterKeyGeneration,
+        binding: &str,
+    ) -> CryptoResult<Self> {
+        Self::from_keys(&MasterKeys::only(master_key, generation), binding)
+    }
+
+    /// The account's whole master-key set.
+    pub fn from_keys(keys: &MasterKeys, binding: &str) -> CryptoResult<Self> {
+        let binding = account_record::canonical_binding(binding)
+            .map_err(|_| invalid("the profile key's copy needs the account's key binding"))?;
+        Ok(Self {
+            keys: keys.clone(),
+            binding,
+        })
+    }
+
+    pub fn binding(&self) -> &str {
+        &self.binding
+    }
+}
+
+impl std::fmt::Debug for ProfileOwnerKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProfileOwnerKey")
+            .field("generation", &self.keys.generation())
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
+}
+
+const WRAP_PURPOSE: AccountRecordPurpose = AccountRecordPurpose::ChatProfileKeyWrap;
+
+/// A profile version (lowercase hex) as a record's object: its 32 bytes.
+fn version_object(version: &str) -> CryptoResult<[u8; 32]> {
+    let bytes = hex::decode(version)
+        .map_err(|_| invalid("profile version must be lowercase SHA-256 hex"))?;
+    if hex::encode(&bytes) != version {
+        return Err(invalid("profile version must be lowercase SHA-256 hex"));
+    }
+    bytes
+        .try_into()
+        .map_err(|_| invalid("profile version must be lowercase SHA-256 hex"))
+}
+
+/// The owner's copy of `key` at `revision` (standard base64): an account
+/// record for the profile version the key derives.
+pub fn wrap_profile_key(
+    key: &[u8; PROFILE_KEY_BYTES],
+    owner: &ProfileOwnerKey,
+    revision: u64,
+) -> CryptoResult<String> {
+    let version = version_object(&profile_version(key)?)?;
+    let sealed = account_record::seal_revision(
+        key,
+        owner.keys.current(),
+        WRAP_PURPOSE,
+        owner.keys.generation(),
+        &owner.binding,
+        &version,
+        revision,
+    )?;
+    Ok(STANDARD.encode(sealed))
+}
+
+/// The profile key from the owner's copy: sealed for this account, this
+/// profile version and this revision, and deriving that version.
+pub fn unwrap_profile_key(
+    wrapped: &str,
+    owner: &ProfileOwnerKey,
+    version: &str,
+    revision: u64,
+) -> CryptoResult<Zeroizing<[u8; PROFILE_KEY_BYTES]>> {
+    let bytes = account_record::decode_record_b64(wrapped, WRAP_PURPOSE)?;
+    let (plain, sealed_at) = account_record::open_revision(
+        &bytes,
+        owner.keys.key_for(&bytes)?,
+        WRAP_PURPOSE,
+        &owner.binding,
+        &version_object(version)?,
+    )?;
+    let plain = Zeroizing::new(plain);
+    if sealed_at != revision {
+        return Err(invalid("wrapped profile key is for another revision"));
+    }
+    let key = Zeroizing::new(profile_key(&plain)?);
+    if profile_version(key.as_slice())? != version {
+        return Err(invalid(
+            "wrapped profile key does not match profile version",
+        ));
+    }
+    Ok(key)
+}
+
+/// What a server checks of the owner's copy before it stores a profile: an
+/// account record of this account, for this version and this revision.
+pub fn validate_wrapped_profile_key(
+    wrapped: &str,
+    binding: &str,
+    version: &str,
+    revision: u64,
+) -> CryptoResult<()> {
+    let bytes = account_record::decode_record_b64(wrapped, WRAP_PURPOSE)?;
+    let header =
+        account_record::validate_for(&bytes, WRAP_PURPOSE, binding, &version_object(version)?)?;
+    if header.revision != Some(revision) {
+        return Err(invalid("wrapped profile key is for another revision"));
+    }
+    Ok(())
 }
 
 /// A profile key, checked: exactly 32 bytes.
@@ -439,20 +537,23 @@ pub fn open_padded_text(
 }
 
 /// The sealed-delivery capability for `recipient` from their profile key:
-/// salted with their account (server and permanent id), never a name
-/// (docs/plans/account-ids.md).
+/// salted with their permanent account id alone, never a name or their
+/// server's name (docs/plans/account-ids.md, identity-rotation.md §6).
+/// (A, X) and (B, X) derive the same capability; harmless, since it is keyed
+/// by the secret profile key, which only the profile's owner hands out.
 pub fn derive_delivery_capability(
     profile_key: &[u8; 32],
     recipient: &AccountRef,
 ) -> CryptoResult<[u8; 16]> {
     let mut out = [0u8; 16];
-    Kdf::new(Suite::V1, &recipient.bytes(), profile_key)
-        .expand(DELIVERY_CAPABILITY_CONTEXT, &mut out)?;
+    // Salted with the label; the recipient's account id is the info.
+    Kdf::new(Suite::V1, DELIVERY_CAPABILITY_CONTEXT, profile_key)
+        .expand(&recipient.id_bytes(), &mut out)?;
     Ok(out)
 }
 
-/// Its info label.
-pub const DELIVERY_CAPABILITY_CONTEXT: &[u8] = b"kutup/sealed-delivery-capability/v1";
+/// Its salt label.
+pub const DELIVERY_CAPABILITY_CONTEXT: &[u8] = crate::labels::SEALED_DELIVERY_CAPABILITY_V1;
 
 /// What the server keeps to check a delivery capability: its SHA-256.
 pub fn capability_hash(capability: &[u8; 16]) -> [u8; 32] {
@@ -587,13 +688,13 @@ fn context(
 
 /// Seals `contents` under `key` (revision `revision`, from
 /// `source_device_id`) for `account`, with the owner's copy of the key
-/// wrapped under `wrapping_key`. Validates the contents first.
+/// sealed for `owner`. Validates the contents first.
 pub fn seal_profile(
     key: &[u8; PROFILE_KEY_BYTES],
     contents: &ProfileContents,
     revision: u64,
     source_device_id: u32,
-    wrapping_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     account: &AccountRef,
 ) -> CryptoResult<SealedProfile> {
     let display_name = validate_display_name(&contents.display_name)?;
@@ -651,17 +752,7 @@ pub fn seal_profile(
             )
         })
         .transpose()?;
-    let wrapped_key = seal_item(
-        key,
-        wrapping_key,
-        &context(
-            ProfileEnvelopePurpose::WrappedProfileKey,
-            account,
-            &version,
-            revision,
-            source_device_id,
-        )?,
-    )?;
+    let wrapped_key = wrap_profile_key(key, owner, revision)?;
     let delivery = derive_delivery_capability(key, account)?;
     Ok(SealedProfile {
         suite: ProfileSuiteId::XChaCha20Poly1305V1,
@@ -682,29 +773,13 @@ pub fn seal_profile(
 /// checked against the version and both verifiers, then the items.
 pub fn open_own_profile(
     sealed: &SealedProfile,
-    wrapping_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     account: &AccountRef,
 ) -> CryptoResult<OpenedProfile> {
     if sealed.suite != ProfileSuiteId::XChaCha20Poly1305V1 || sealed.account != *account {
         return Err(invalid("encrypted profile suite or account does not match"));
     }
-    let wrapped = open_item(
-        &sealed.wrapped_key,
-        wrapping_key,
-        &context(
-            ProfileEnvelopePurpose::WrappedProfileKey,
-            &sealed.account,
-            &sealed.version,
-            sealed.revision,
-            sealed.source_device_id,
-        )?,
-    )?;
-    let key = Zeroizing::new(profile_key(&wrapped)?);
-    if profile_version(key.as_slice())? != sealed.version {
-        return Err(invalid(
-            "wrapped profile key does not match profile version",
-        ));
-    }
+    let key = unwrap_profile_key(&sealed.wrapped_key, owner, &sealed.version, sealed.revision)?;
     if access_key_verifier(&profile_access_key(key.as_slice())?) != sealed.access_key_verifier {
         return Err(invalid(
             "wrapped profile key does not match access verifier",
@@ -823,19 +898,17 @@ fn open_items(sealed: &SealedProfile, key: &[u8; 32]) -> CryptoResult<ProfileCon
 }
 
 /// The account app's next profile revision: over `current` (the same key,
-/// one revision later) or the first, under a fresh key. Only the master key
-/// and the key binding take part; the source is [`ACCOUNT_PROFILE_SOURCE`].
+/// one revision later) or the first, under a fresh key. Only the owner's
+/// key takes part; the source is [`ACCOUNT_PROFILE_SOURCE`].
 pub fn seal_account_profile(
-    master_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     current: Option<&SealedProfile>,
     contents: &ProfileContents,
     account: &AccountRef,
-    binding: &str,
 ) -> CryptoResult<SealedProfile> {
-    let wrapping_key = derive_wrapping_key(master_key, binding)?;
     let (key, revision) = match current {
         Some(current) => {
-            let opened = open_own_profile(current, &wrapping_key, account)?;
+            let opened = open_own_profile(current, owner, account)?;
             let revision = opened
                 .revision
                 .checked_add(1)
@@ -849,19 +922,9 @@ pub fn seal_account_profile(
         contents,
         revision,
         ACCOUNT_PROFILE_SOURCE,
-        &wrapping_key,
+        owner,
         account,
     )
-}
-
-/// The account's own profile, opened from the master key.
-pub fn open_account_profile(
-    master_key: &[u8; 32],
-    current: &SealedProfile,
-    account: &AccountRef,
-    binding: &str,
-) -> CryptoResult<OpenedProfile> {
-    open_own_profile(current, &derive_wrapping_key(master_key, binding)?, account)
 }
 
 #[cfg(test)]

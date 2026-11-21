@@ -24,7 +24,7 @@ export interface EpochLinkV1 {
 export async function unlockCollectionKeyring(
   currentKey: Uint8Array,
   collectionId: string,
-  ownerUserId: string,
+  ownerAccountId: string,
   ownerAuthorityPublicKey: string,
   chain: EpochLinkV1[],
 ): Promise<Uint8Array[]> {
@@ -33,7 +33,7 @@ export async function unlockCollectionKeyring(
     .unlockCollectionKeyring(
       toBase64(currentKey),
       collectionId,
-      ownerUserId,
+      ownerAccountId,
       ownerAuthorityPublicKey,
       chain.map((link) => ({
         epoch: link.epoch,
@@ -49,9 +49,9 @@ export async function sealPreviousCollectionKey(
   previousKey: Uint8Array,
   key: Uint8Array,
   collectionId: string,
-  ownerUserId: string,
+  ownerAccountId: string,
   epoch: number,
 ): Promise<string> {
   const module = await getCryptoWasm()
-  return module.sealPreviousCollectionKey(toBase64(previousKey), toBase64(key), collectionId, ownerUserId, epoch)
+  return module.sealPreviousCollectionKey(toBase64(previousKey), toBase64(key), collectionId, ownerAccountId, epoch)
 }

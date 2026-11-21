@@ -3,8 +3,8 @@
 # verify-cli-account-head.sh — the account head on the command line against a
 # live stack (docs/plans/rollback-protection.md §9):
 #
-#   the old plaintext pin revision taken over · meeting someone pins them,
-#   which starts the account's head · a vault key kept and forgotten under the
+#   the old plaintext pin revision taken over · sign-in starts the account's
+#   head, and meeting someone pins them · a vault key kept and forgotten under the
 #   head · a corrupt state file kept aside and said so ·
 #   the server rolled back (exit 6, --json needs --yes, reanchor) · another
 #   device shown another history (a fork: exit 6, reanchor).
@@ -47,8 +47,8 @@ exit_of() { set +e; "$@" >/dev/null 2>"$TMP/err"; local code=$?; set -e; echo "$
 # this script goes back to), so the server's data matches its newest head.
 rollback_to() {
   {
-    echo "DELETE FROM account_heads WHERE sequence > $1 AND user_id = (SELECT id FROM users WHERE username = '$USERNAME');"
-    echo "DELETE FROM pass_vault_secrets WHERE user_id = (SELECT id FROM users WHERE username = '$USERNAME');"
+    echo "DELETE FROM account_heads WHERE sequence > $1 AND account_id = (SELECT id FROM accounts WHERE username = '$USERNAME');"
+    echo "DELETE FROM account_records WHERE scope = 1 AND account_id = (SELECT id FROM accounts WHERE username = '$USERNAME');"
   } | $E2E_PSQL >/dev/null
 }
 
@@ -61,11 +61,14 @@ echo "==> register and sign in $USERNAME"
 a register --server "$KUTUP_SERVER" --username "$USERNAME" >/dev/null
 a login --server "$KUTUP_SERVER" --username "$USERNAME" >/dev/null
 [ "$(state a | jq -r .status)" = trusted ] || fail "a new account should be trusted"
-[ "$(state a | jq -r .current)" = null ] || fail "a new account has no head yet"
+# Sign-in starts the account head when there is none (#415: the head is
+# checked, and started, before the session goes live): #1, anchored here.
+[ "$(state a | jq -r .current)" = 1 ] || fail "sign-in should start the head at #1, got $(state a)"
+[ "$(state a | jq -r .anchor)" = 1 ] || fail "this device should anchor the head it started, got $(state a)"
 
-echo "==> meeting $KUTUP_PEER pins them: the head starts"
+echo "==> meeting $KUTUP_PEER pins them: the head moves on"
 a identity show "$KUTUP_PEER" >/dev/null
-[ "$(state a | jq -r .current)" = 2 ] || fail "expected head #2 (the start and the pin), got $(state a)"
+[ "$(state a | jq -r .current)" = 2 ] || fail "expected head #2 (the start at sign-in, then the pin), got $(state a)"
 
 echo "==> the old plaintext pin revision is taken over once"
 # As an older CLI left it: no sealed guard yet, the revision in plain text.

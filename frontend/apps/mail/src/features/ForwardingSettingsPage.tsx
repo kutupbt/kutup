@@ -19,7 +19,8 @@ import { Badge } from '@kutup/ui/components/badge'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Tabs, TabsList, TabsTrigger } from '@kutup/ui/components/tabs'
 import { ForwardingCodeDialog } from './ForwardingCodeDialog'
 import { ForwardingDialog } from './ForwardingDialog'
@@ -46,7 +47,7 @@ export function ForwardingSettingsPage() {
   const [editing, setEditing] = useState<MailForwarding | 'new' | null>(null)
   const [verifying, setVerifying] = useState<MailForwarding | null>(null)
 
-  if (forwardings.isPending || addresses.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (forwardings.isPending || addresses.isPending) return <ListSkeleton label={t('common.loading')} rows={4} />
   if (forwardings.isError || addresses.isError) {
     return <Alert variant="error">{forwardingErrorMessage(forwardings.error ?? addresses.error, t)}</Alert>
   }
@@ -152,7 +153,7 @@ function Row({
           ) : (
             <Badge variant={STATE_BADGE[forwarding.state]}>{t(`forwarding.state.${forwarding.state}`)}</Badge>
           )}
-          <Badge variant={forwarding.kind === 'end_to_end' ? 'ok' : 'warn'}>{t(`forwarding.kind.${forwarding.kind}`)}</Badge>
+          <Badge variant={forwarding.kind === 'endToEnd' ? 'ok' : 'warn'}>{t(`forwarding.kind.${forwarding.kind}`)}</Badge>
         </p>
         <p className="text-xs text-muted-foreground">{describeForwarding(forwarding, t)}</p>
         {forwarding.notice ? <p className="text-xs text-status-warn">{t(`forwarding.notice.${forwarding.notice}`)}</p> : null}

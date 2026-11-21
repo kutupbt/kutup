@@ -49,6 +49,15 @@ describe('aggregateLatestReactions', () => {
     ])
   })
 
+  it('shows any emoji, after the picker’s own', () => {
+    const result = aggregateLatestReactions([
+      operation('aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', '🫠', true, 1_000, '1'),
+      operation('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', '😂', true, 1_100, '1'),
+    ], new Set([targetMessageId]), 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test')
+
+    expect(result.get(targetMessageId)?.map(reaction => reaction.emoji)).toEqual(['😂', '🫠'])
+  })
+
   it('uses a newer inactive operation to remove the person’s current reaction', () => {
     const result = aggregateLatestReactions([
       operation('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', '👍', true, 1_000, '1'),

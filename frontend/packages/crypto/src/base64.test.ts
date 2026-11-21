@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fromBase64, toBase64 } from './base64'
+import { fromBase64, toBase64, toBase64Url } from './base64'
 
 describe('base64', () => {
   it('round-trips small inputs', () => {
@@ -15,5 +15,10 @@ describe('base64', () => {
     expect(encoded.length).toBe(Math.ceil(bytes.length / 3) * 4)
     // Compared as one buffer: a deep compare of a million elements is slow.
     expect(Buffer.from(fromBase64(encoded)).equals(Buffer.from(bytes))).toBe(true)
+  })
+
+  it('writes unpadded base64url', () => {
+    expect(toBase64Url(new Uint8Array([0xfb, 0xff, 0xbf]))).toBe('-_-_')
+    expect(toBase64Url(new TextEncoder().encode('kutup'))).toBe('a3V0dXA')
   })
 })

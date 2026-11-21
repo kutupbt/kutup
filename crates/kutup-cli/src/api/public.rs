@@ -20,7 +20,7 @@ pub struct PublicShare {
     #[serde(default)]
     pub collection_key_epoch: u32,
     #[serde(default)]
-    pub owner_user_id: String,
+    pub owner_account_id: String,
     /// Signs the folder's key history.
     #[serde(default)]
     pub owner_authority_public_key: String,
@@ -32,7 +32,7 @@ impl Client {
     /// Fetches public-share metadata. Mirrors `GetPublicShare`.
     pub fn get_public_share(&self, token: &str) -> Result<PublicShare> {
         let resp = self
-            .request(Method::GET, &format!("/share/{token}"))
+            .request(Method::GET, &format!("/drive/public-links/{token}"))
             .send()?;
         super::decode_json(resp)
     }
@@ -40,25 +40,8 @@ impl Client {
     /// Lists files in a collection-type public share. Mirrors `ListPublicShareFiles`.
     pub fn list_public_share_files(&self, token: &str) -> Result<Vec<File>> {
         let resp = self
-            .request(Method::GET, &format!("/share/{token}/files"))
+            .request(Method::GET, &format!("/drive/public-links/{token}/files"))
             .send()?;
         super::decode_json(resp)
-    }
-
-    /// Streams the encrypted blob of a file in a public share (no total
-    /// timeout — large blobs must survive slow links). Anonymous: the token
-    /// is the capability.
-    pub fn public_share_download_stream(
-        &self,
-        token: &str,
-        file_id: &str,
-    ) -> Result<reqwest::blocking::Response> {
-        let resp = self
-            .upload_request(Method::GET, &format!("/share/{token}/download/{file_id}"))
-            .send()?;
-        if resp.status().as_u16() >= 400 {
-            return Err(super::api_error(resp));
-        }
-        Ok(resp)
     }
 }

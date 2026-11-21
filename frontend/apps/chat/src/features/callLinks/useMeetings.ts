@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { useRequiredSession } from '@kutup/session/store'
 import { createCallLink, deleteCallLink, listCallLinks, replaceCallLink, setWaitingRoom, updateCallLinkInfo, type MeetingInfo, type OwnedCallLink } from './callLinks'
-import { addJoinedMeeting, clearJoinedMeetings, listJoinedMeetings, removeJoinedMeeting } from './joinedMeetings'
+import { addJoinedMeetings, clearJoinedMeetings, listJoinedMeetings, removeJoinedMeeting } from './joinedMeetings'
 import { forgetJoinedMeetings, joinedMeetings, subscribeJoinedMeetings, type JoinedMeeting } from './meetingHistory'
 
 const QUERY = ['chat-meetings'] as const
@@ -26,24 +26,24 @@ export function useMeetings(enabled = true) {
     onMutate: () => queryClient.cancelQueries({ queryKey: QUERY }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY }),
   }
-  const list = useQuery({ queryKey: QUERY, queryFn: () => listCallLinks(session.masterKey), enabled })
+  const list = useQuery({ queryKey: QUERY, queryFn: () => listCallLinks(session.roots.callLinkRoot), enabled })
   const create = useMutation({
     ...settle,
-    mutationFn: ({ info, waitingRoom }: MeetingDraft) => createCallLink(session.masterKey, info, waitingRoom),
+    mutationFn: ({ info, waitingRoom }: MeetingDraft) => createCallLink(session.roots.callLinkRoot, info, waitingRoom),
     onSuccess: (meeting) => update((previous) => [meeting, ...previous]),
   })
   const change = useMutation({
     ...settle,
     mutationFn: async ({ meeting, draft }: { meeting: OwnedCallLink; draft: MeetingDraft }) => {
       let next = await updateCallLinkInfo(meeting, draft.info)
-      if (draft.waitingRoom !== meeting.waitingRoom) next = await setWaitingRoom(session.masterKey, next, draft.waitingRoom)
+      if (draft.waitingRoom !== meeting.waitingRoom) next = await setWaitingRoom(session.roots.callLinkRoot, next, draft.waitingRoom)
       return next
     },
     onSuccess: (meeting) => update((previous) => previous.map((other) => (other.roomId === meeting.roomId ? meeting : other))),
   })
   const replace = useMutation({
     ...settle,
-    mutationFn: (meeting: OwnedCallLink) => replaceCallLink(session.masterKey, meeting),
+    mutationFn: (meeting: OwnedCallLink) => replaceCallLink(session.roots.callLinkRoot, meeting),
     onSuccess: (next, meeting) => update((previous) => previous.map((other) => (other.roomId === meeting.roomId ? next : other))),
   })
   const remove = useMutation({
@@ -67,8 +67,8 @@ function snapshot(): JoinedMeeting[] {
 const JOINED_QUERY = ['chat-joined-meetings'] as const
 
 /** The stays in this browser's storage that belong in `userId`'s list: the ones joined while it was signed in here. */
-function theirs(local: JoinedMeeting[], userId: string): JoinedMeeting[] {
-  return local.filter((entry) => entry.account === userId)
+function theirs(local: JoinedMeeting[], accountId: string): JoinedMeeting[] {
+  return local.filter((entry) => entry.account === accountId)
 }
 
 /**
@@ -82,7 +82,7 @@ export function useJoinedMeetingsSync(): void {
   const queryClient = useQueryClient()
   const local = useSyncExternalStore(subscribeJoinedMeetings, snapshot)
   const moving = useRef(false)
-  const { userId, masterKey } = session
+  const { accountId: userId } = session
 
   useEffect(() => {
     const pending = theirs(local, userId)
@@ -91,11 +91,8 @@ export function useJoinedMeetingsSync(): void {
     void (async () => {
       const moved = new Set<string>()
       try {
-        // Oldest first, so the server's order is the order they happened in.
-        for (const stay of [...pending].reverse()) {
-          await addJoinedMeeting(masterKey, stay)
-          moved.add(stay.id)
-        }
+        await addJoinedMeetings(session, pending)
+        for (const stay of pending) moved.add(stay.id)
       } catch (error) {
         console.warn('chat: a joined meeting did not reach the account yet', error)
       } finally {
@@ -106,7 +103,7 @@ export function useJoinedMeetingsSync(): void {
         }
       }
     })()
-  }, [local, userId, masterKey, queryClient])
+  }, [local, userId, session, queryClient])
 }
 
 /**
@@ -122,16 +119,16 @@ export function useJoinedMeetings() {
   // when this window is looked at, and every half minute while it is open.
   const list = useQuery({
     queryKey: JOINED_QUERY,
-    queryFn: () => listJoinedMeetings(session.masterKey, session.userId),
+    queryFn: () => listJoinedMeetings(session),
     refetchOnWindowFocus: true,
     refetchInterval: 30_000,
     staleTime: 0,
   })
   const entries = useMemo(() => {
     const byId = new Map<string, JoinedMeeting>()
-    for (const entry of [...theirs(local, session.userId), ...(list.data ?? [])]) byId.set(entry.id, entry)
+    for (const entry of [...theirs(local, session.accountId), ...(list.data ?? [])]) byId.set(entry.id, entry)
     return [...byId.values()].sort((a, b) => b.joinedAtMs - a.joinedAtMs)
-  }, [local, list.data, session.userId])
+  }, [local, list.data, session.accountId])
   const settle = {
     onMutate: () => queryClient.cancelQueries({ queryKey: JOINED_QUERY }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: JOINED_QUERY }),
@@ -140,7 +137,7 @@ export function useJoinedMeetings() {
     ...settle,
     mutationFn: async (entry: JoinedMeeting) => {
       forgetJoinedMeetings(new Set([entry.id]))
-      await removeJoinedMeeting(entry.id)
+      await removeJoinedMeeting(session, entry.id)
     },
     onSuccess: (_result, entry) =>
       queryClient.setQueryData<JoinedMeeting[]>(JOINED_QUERY, (previous) => (previous ?? []).filter((other) => other.id !== entry.id)),
@@ -148,8 +145,8 @@ export function useJoinedMeetings() {
   const clear = useMutation({
     ...settle,
     mutationFn: async () => {
-      forgetJoinedMeetings(new Set(theirs(joinedMeetings(), session.userId).map((entry) => entry.id)))
-      await clearJoinedMeetings()
+      forgetJoinedMeetings(new Set(theirs(joinedMeetings(), session.accountId).map((entry) => entry.id)))
+      await clearJoinedMeetings(session)
     },
     onSuccess: () => queryClient.setQueryData<JoinedMeeting[]>(JOINED_QUERY, []),
   })

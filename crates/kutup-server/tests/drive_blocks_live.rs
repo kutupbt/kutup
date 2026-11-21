@@ -2,12 +2,15 @@
 //! (docs/plans/drive-block-format.md §3, slice 2): a block-format blob names
 //! its revision, which the request names too; the server checks the header
 //! and the structure on every upload path, keys each revision apart, and
-//! serves one `Range` at a time with the revision id as the ETag.
+//! serves one `Range` at a time with the revision id as the ETag. A tus
+//! upload in the block format lands as an uploaded revision, current once
+//! committed (slice 3; `drive_commit_live.rs` covers the commit itself).
 //!
 //! Gated on `KUTUP_LIVE_SERVER`:
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
 //!     cargo test -p kutup-server --test drive_blocks_live -- --nocapture
 
+use kutup_crypto::blocks::SignerIdentity;
 use kutup_crypto::blocks::TRAILER_LEN;
 use kutup_crypto::drive_blocks::{self, DriveBlobContextV2, DRIVE_BLOCKS_HEADER_BYTES};
 use reqwest::blocking::{multipart, Client, Response};
@@ -20,13 +23,19 @@ use common::*;
 /// `plain` sealed in the block format for revision `revision` of `file`
 /// (generation `generation`), signed by `user`.
 fn blob(user: &User, file: &Sealed, revision: &str, generation: u32, plain: &[u8]) -> Vec<u8> {
-    let account = *uuid::Uuid::parse_str(&user.id).unwrap().as_bytes();
+    let identity = SignerIdentity {
+        account_id: *uuid::Uuid::parse_str(&user.id).unwrap().as_bytes(),
+        incarnation_id: hex::decode(user.identity.incarnation_id())
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    };
     drive_blocks::seal_file(
         plain,
         &file.key,
         DriveBlobContextV2::new(&file.id, revision, generation).unwrap(),
         user.identity.drive_signing_key(),
-        account,
+        identity,
     )
     .unwrap()
     .bytes
@@ -48,8 +57,13 @@ fn form_upload(
         .text("metadataEnvelope", file.metadata_envelope.clone())
         .text("nameHash", test_name_hash(&file.id))
         .text("revisionId", revision.to_owned())
+        .text("metadataRevision", "1")
+        .text(
+            "revisionContentEnvelope",
+            revision_content_at(file, revision),
+        )
         .part("file", multipart::Part::bytes(bytes).file_name("encrypted"));
-    bearer(c.post(format!("{base}/api/files/upload")), &user.token)
+    bearer(c.post(format!("{base}/api/v1/drive/files")), &user.token)
         .multipart(form)
         .send()
         .unwrap()
@@ -83,7 +97,7 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     let folder = create_folder(&c, &base, &owner);
 
     // The limits a client reads.
-    let limits: Value = bearer(c.get(format!("{base}/api/drive/limits")), &owner.token)
+    let limits: Value = bearer(c.get(format!("{base}/api/v1/drive/limits")), &owner.token)
         .send()
         .unwrap()
         .json()
@@ -154,7 +168,7 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     assert_eq!(r.json::<Value>().unwrap()["code"], "revisionTaken");
 
     // --- Ranged reads: the ETag is the revision id. ---
-    let url = format!("{base}/api/files/{}/download", file.id);
+    let url = format!("{base}/api/v1/drive/files/{}/download", file.id);
     let etag = format!("\"{revision}\"");
     let whole = get(&c, &url, &owner.token, &[]);
     assert_eq!(whole.status(), StatusCode::OK);
@@ -219,12 +233,18 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
         .text("seqAtSnapshot", "0")
         .text("docKeyId", "1")
         .text("revisionId", version.clone())
+        .text("metadataEnvelope", metadata_at(&file, 2))
+        .text("metadataRevision", "2")
+        .text(
+            "revisionContentEnvelope",
+            revision_content_at(&file, &version),
+        )
         .part(
             "file",
             multipart::Part::bytes(saved.clone()).file_name("version"),
         );
     let r = bearer(
-        c.post(format!("{base}/api/files/{}/versions", file.id)),
+        c.post(format!("{base}/api/v1/drive/files/{}/versions", file.id)),
         &owner.token,
     )
     .multipart(form)
@@ -245,7 +265,10 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     assert_eq!(stale.status(), StatusCode::OK);
     let by_version = get(
         &c,
-        &format!("{base}/api/files/{}/versions/{version}/download", file.id),
+        &format!(
+            "{base}/api/v1/drive/files/{}/versions/{version}/download",
+            file.id
+        ),
         &owner.token,
         &[("Range", "bytes=0-47")],
     );
@@ -283,6 +306,24 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
             .send()
             .unwrap();
         assert_eq!(r.status(), expect, "broken trailer: {broken_trailer}");
+        if !broken_trailer {
+            // An uploaded revision: nothing to read until its commit.
+            assert_eq!(
+                download(&c, &base, &owner.token, &file.id).0,
+                StatusCode::NOT_FOUND
+            );
+            let r = commit(
+                &c,
+                &base,
+                &owner.token,
+                &file.id,
+                &revision,
+                &metadata_at(&file, 1),
+                1,
+                &revision_content_at(&file, &revision),
+            );
+            assert_eq!(r.status(), StatusCode::OK);
+        }
         let (status, stored) = download(&c, &base, &owner.token, &file.id);
         if broken_trailer {
             assert_eq!(
@@ -337,24 +378,15 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     );
     let version = uuid();
     let next = blob(&owner, &file, &version, 1, &plain);
-    let metadata = kutup_crypto::drive_envelope::seal_b64(
-        br#"{"name":"a.txt","mimeType":"text/plain","size":70000}"#,
-        &file.key,
-        kutup_crypto::drive_envelope::DriveEnvelopeContextV1::file_metadata(&file.id, 1, 2)
-            .unwrap(),
-    )
-    .unwrap();
     let meta = [
         ("versionOf", file.id.as_str()),
-        ("metadataEnvelope", metadata.as_str()),
-        ("metadataRevision", "2"),
         ("revisionId", version.as_str()),
     ]
     .iter()
     .map(|(k, v)| format!("{k} {}", b64(v.as_bytes())))
     .collect::<Vec<_>>()
     .join(",");
-    let created = bearer(c.post(format!("{base}/api/uploads")), &owner.token)
+    let created = bearer(c.post(format!("{base}/api/v1/drive/uploads")), &owner.token)
         .header("Tus-Resumable", "1.0.0")
         .header("Upload-Length", next.len().to_string())
         .header("Upload-Metadata", meta)
@@ -363,10 +395,10 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
     assert_eq!(created.status(), StatusCode::CREATED);
     assert_eq!(
         header(&created, "location"),
-        format!("/api/uploads/{version}")
+        format!("/api/v1/drive/uploads/{version}")
     );
     let stranger = register(&c, &base);
-    let at = format!("{base}/api/uploads/{version}");
+    let at = format!("{base}/api/v1/drive/uploads/{version}");
     let tus = |request: reqwest::blocking::RequestBuilder| {
         request
             .header("Tus-Resumable", "1.0.0")
@@ -397,6 +429,35 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
             .body(next.clone())),
         StatusCode::NO_CONTENT
     );
+    // Nobody else commits it; its uploader does.
+    assert_eq!(
+        commit(
+            &c,
+            &base,
+            &stranger.token,
+            &file.id,
+            &version,
+            &metadata_at(&file, 2),
+            2,
+            &revision_content_at(&file, &version)
+        )
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        commit(
+            &c,
+            &base,
+            &owner.token,
+            &file.id,
+            &version,
+            &metadata_at(&file, 2),
+            2,
+            &revision_content_at(&file, &version)
+        )
+        .status(),
+        StatusCode::OK
+    );
     assert_eq!(
         download(&c, &base, &owner.token, &file.id),
         (StatusCode::OK, next)
@@ -419,7 +480,6 @@ fn tus_create_blocks(
     let meta = [
         ("fileId", file.id.as_str()),
         ("collectionId", folder.id.as_str()),
-        ("metadataEnvelope", file.metadata_envelope.as_str()),
         ("fileKeyEnvelope", file.file_key_envelope.as_str()),
         ("nameHash", name_hash.as_str()),
         ("revisionId", revision),
@@ -428,7 +488,7 @@ fn tus_create_blocks(
     .map(|(k, v)| format!("{k} {}", b64(v.as_bytes())))
     .collect::<Vec<_>>()
     .join(",");
-    bearer(c.post(format!("{base}/api/uploads")), token)
+    bearer(c.post(format!("{base}/api/v1/drive/uploads")), token)
         .header("Tus-Resumable", "1.0.0")
         .header("Upload-Length", length.to_string())
         .header("Upload-Metadata", meta)

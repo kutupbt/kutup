@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { newAccount, registerAccount } from '../fixtures/apps'
 import { addEntry, createVault, expectSaved, openPass } from '../fixtures/pass'
 

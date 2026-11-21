@@ -92,7 +92,7 @@ Who uses which key:
   envelope (`MailAddressPrivateKeyV1`, `mail_key.rs:280-292`) keeps its
   20-byte fingerprint and its purpose.
 - **The v6 key's storage is its own.** It gets a new
-  `AccountEnvelopePurpose::MailAddressPrivateKeyV6` and payload domain
+  `AccountRecordPurpose::MailAddressPrivateKeyV6` and payload domain
   `kutup/mail-address-key-v6/v1\0`, with the 32-byte v6 fingerprint.
 - **The signed key list goes to `MailKeyListV2`.** Its entries carry the key
   version and the fingerprint at that version's length. Each address has

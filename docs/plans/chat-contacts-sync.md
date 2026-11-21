@@ -3,7 +3,7 @@
 Status: decided (2026-10-19): the main session's review, and the user's
 answers (see Decisions). Third session (client and chat-core). The second
 session built `kutup_crypto::chat_contact_list` (with vectors) and the server
-half (`/api/chat/contact-list`, the `chatContacts` scope).
+half (the account-records scope `chatContacts`, docs/plans/account-records.md).
 
 - Gap: [`roadmap.md`](../roadmap.md), "contact states after total device
   loss"; found by spec 34 on #247.
@@ -65,7 +65,7 @@ book's contacts (the Contacts app's own scope). It is built like `chatGroups`:
   and the AAD binding the account's key binding and the entry id.
 - **Size**: every sealed entry is exactly **2048 bytes**, padded as the group
   list's are.
-- **Routes**: `GET/PUT/DELETE /api/chat/contact-list[/{id}]`, with the group
+- **Routes** (until W3; now the records scope `chatContacts`): `GET/PUT/DELETE /api/chat/contact-list[/{id}]`, with the group
   list's bodies and codes, listed by the account head. They answer wherever
   Chat is on, not only with `CHAT_GROUPS`.
 
@@ -298,7 +298,7 @@ following the main session's review of #252:
     then tells the server little.
 - Web: `ApiChatTransport.fetchContactList / storeContactEntry /
   deleteContactEntry` under the account head's `chatContacts` scope; `full`
-  is the server's `contactListFull` code. Signing out flushes the contact
+  is the server's `scopeFull` code (`contactListFull` before W3). Signing out flushes the contact
   list (and the queued pins) with the group list.
 - A reject still waiting for its delayed write is dropped if the rejected
   person writes again first: the contact is then an incoming request, which

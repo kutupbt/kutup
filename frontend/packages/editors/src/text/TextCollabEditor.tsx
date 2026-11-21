@@ -50,7 +50,11 @@ import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { useRequiredSession } from '@kutup/session/store'
 import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
-import { TooManyDevicesError } from '@kutup/collab/currentDevice'
+import { stateCommitter, type MetadataTarget } from '@kutup/drive-core/metadataCommit'
+import { SenderCheck } from '@kutup/collab/senders'
+import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
+import { accountNameOfKey } from '@kutup/drive-core/accountName'
+import { TooManyDevicesError } from '@kutup/session/currentDevice'
 import { DeviceLimitNotice } from '../DeviceLimitNotice'
 import { buildAwarenessName, withAlpha } from '@kutup/collab/identity'
 import type { Awareness } from 'y-protocols/awareness'
@@ -92,6 +96,17 @@ interface Props {
   fileKeyAt?: (generation: number) => Promise<Uint8Array>
   /** A file on another server: its calls go through this server (see `localBase`). */
   base?: string
+  /**
+   * The file's current content revision (its metadata's `content`): thumbnails
+   * are sealed bound to it (docs/plans/drive-block-format.md §2). Null: none drawn.
+   */
+  contentRevisionId?: string | null
+  /**
+   * The file as each saved state commits its next metadata on top of it,
+   * naming the state (drive-core `stateCommitter`). Needed to save; MUST be
+   * referentially stable, like `fileKey`.
+   */
+  metadataTarget?: MetadataTarget
 }
 
 /** The first content of a note no one has edited yet (see deterministicSeed). */
@@ -149,6 +164,8 @@ export default function TextCollabEditor({
   readOnly = false,
   fileKeyAt,
   base,
+  contentRevisionId = null,
+  metadataTarget,
 }: Props) {
   const { t, i18n } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -166,7 +183,7 @@ export default function TextCollabEditor({
   // Live preview (Obsidian's editing mode) or source mode, remembered here.
   const [sourceMode, setSourceMode] = useState(() => {
     try {
-      return localStorage.getItem('kutup.notes.sourceMode') === '1'
+      return localStorage.getItem('kutup.office.notesSourceMode') === '1'
     } catch {
       return false
     }
@@ -323,7 +340,7 @@ export default function TextCollabEditor({
   // Source mode on or off, without rebuilding the editor.
   useEffect(() => {
     try {
-      localStorage.setItem('kutup.notes.sourceMode', sourceMode ? '1' : '0')
+      localStorage.setItem('kutup.office.notesSourceMode', sourceMode ? '1' : '0')
     } catch {
       // Private windows may refuse; the choice holds for this visit.
     }
@@ -375,13 +392,28 @@ export default function TextCollabEditor({
     const controller = new AbortController()
     let view: EditorView | null = null
     let cleanup: (() => void) | null = null
+    // Edits apply only when their sender's devices signed them; a sender
+    // whose edits are dropped is named once.
+    const senders = new SenderCheck({
+      onMalformed: () => toast.error(t('editor.editUnverified')),
+      authority: accountAuthorityVerdict,
+      name: accountNameOfKey,
+      onRefused: ({ name, reason, trust }) =>
+        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name }), {
+          // A reset the identity pins don't know: the person may trust it here.
+          action: trust ? { label: t('editor.senderTrust'), onClick: () => void trust() } : undefined,
+        }),
+    })
 
     void (async () => {
       // Only editors save; each saved version also redraws the thumbnail
       // (throttled; see noteThumbnailScheduler).
       // Thumbnails are stored with the file's own server: not from here for a
       // file on another one.
-      const thumbnails = readOnly || base ? null : noteThumbnailScheduler({ fileId, fileKey, keyGeneration }, filename)
+      const thumbnails =
+        readOnly || base || !contentRevisionId
+          ? null
+          : noteThumbnailScheduler({ fileId, fileKey, keyGeneration, revisionId: contentRevisionId }, filename)
       let ytext: Y.Text | null = null
       // The file's language (its own chunk) loads while the session opens.
       const ext = filename.split('.').pop()?.toLowerCase() ?? ''
@@ -394,6 +426,8 @@ export default function TextCollabEditor({
         keyGeneration,
         fileKeyAt,
         readOnly,
+        // Each saved state commits with the file's next metadata naming it.
+        commitState: metadataTarget ? stateCommitter(metadataTarget) : undefined,
         username,
         cursorColor,
         seed: initialContent
@@ -425,6 +459,7 @@ export default function TextCollabEditor({
         },
         onStatus: setStatus,
         onCollaborators: setCollaboratorCount,
+        senders,
         signal: controller.signal,
       }).catch((error: unknown) => {
         if (!(error instanceof TooManyDevicesError)) throw error
@@ -682,6 +717,7 @@ export default function TextCollabEditor({
     return () => {
       controller.abort()
       cleanup?.()
+      senders.close()
     }
     // Not every value read here is a dep: re-running would tear down and
     // recreate the socket for no reason, and on a second mount the

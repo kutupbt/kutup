@@ -36,7 +36,7 @@ backoff and states, and three have their own receiver tables.
 | A mismatch | doesn't use up the sequence: **the destination's queue blocks** until the client resends | uses it up | (none) | (none) |
 | Sending | the client's request, else a 5 s worker: one head per destination | an advisory-locked flush, batched (64 items, 4 MiB), from the client and the 5 s worker | the client's request, else a 5 s worker: **one row per tick for the whole server** | a 30 s announcer, 8 at once |
 | Backoff | 2^n s, at most 300 s, with jitter | 2^n s, at most 300 s, no jitter | 5·2^n s, at most 900 s | 30·2^n s, at most 6 h; dropped after 7 days |
-| Kept | delivered rows: `CHAT_SEND_RETENTION_DAYS` (env) | for ever, both sides (the receiver can't prune: its `last` is `MAX(sequence)`) | for ever, both sides | until delivered |
+| Kept | delivered rows: `chat.send_retention_days` (site setting) | for ever, both sides (the receiver can't prune: its `last` is `MAX(sequence)`) | for ever, both sides | until delivered |
 | Admin | counts and wake | none | none | none |
 
 Two defects come from the split:
@@ -115,7 +115,7 @@ per tick are settings (`NumericSetting`), as every limit is.
 
 **3. Every final answer uses up its sequence, and is recorded.** On both
 sides, as sealed chat does already:
-- **plain chat:** a mismatch is `rejected` (`device_mismatch`), and a
+- **plain chat:** a mismatch is `rejected` (`deviceMismatch`), and a
   resend after the client corrects goes out under a new sequence, so no
   queue blocks;
 - **media:** the receiver records refusals too, so a refused offer no longer
@@ -137,7 +137,7 @@ servers are ours, so both sides ship together.
   setting (`federationRecordDays`, 30). The state rows keep each high-water
   mark, so a replay past it is known as answered, but not how: it is never
   answered as a success. Plain chat answers 410 (the origin settles the
-  send as not delivered, `record_gone`), sealed chat a final refusal naming
+  send as not delivered, `recordGone`), sealed chat a final refusal naming
   the sequence, media 410 (a refusal: the client shows not delivered). The
   attachment-send lifetime clients are given is at most
   `federationRecordDays`, so a repeat finds the origin's record.
@@ -162,10 +162,10 @@ over unchanged, so peers mid-stream don't see a gap.
 Chat media (`20261027130000`): a v1 receiver recorded only some of its final
 answers (stored, storage full, the uniform 404 of a capability). So a v1
 offer its origin settled as refused goes pending again under its own
-sequence (`closing_sequence`, as plain chat's v1 mismatches): the receiver
+sequence (`closingSequence`, as plain chat's v1 mismatches): the receiver
 replays what it recorded, or refuses it and records that, and either uses
 the sequence up. A delivered v1 offer kept no answer; it gets the one a
-repeat should read (`already_stored`). An authentication or routing refusal
+repeat should read (`alreadyStored`). An authentication or routing refusal
 (401, 403) is no answer to an offer, so the origin waits on it as on a
 failure that may pass. The down migration stops while an offer of a deleted
 account is pending (it can't go back to a table that names every sender).

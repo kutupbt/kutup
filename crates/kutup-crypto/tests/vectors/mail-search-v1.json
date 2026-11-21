@@ -1,55 +1,63 @@
 {
   "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
-  "storeName": "e93068a1a0ee71e59e1881d19e7a2299",
+  "objectIdKey": "bW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW0=",
+  "binding": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+  "storeName": "4e179b798652aacfa10c1138909b8326",
   "storeKey": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=",
   "wrapNonce": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi",
-  "wrappedStoreKey": "S1VUTVNXMQAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHDw6SnNBe0fMuHwAck+Esg3w==",
+  "wrappedStoreKey": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAc98l56bpia0OIyQx1u2eJgr0HEkuy4ViTwJ9eT2uciIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMA0uRlBGHSZs0Me/1YIkRQUM5ir5p1FNsKILb2ukMCEzfEi530hWiY2QIHj9EqHcMQ==",
   "name": "shard/680/fat",
   "recordId": "91c3fa1579a1c4a7c85d8bde62b330ef0ba4f50ddf18e59b36e12d29872ab12d",
   "value": "ZmF0dXJhIOKGkiDEsMWf",
   "nonce": "RERERERERERERERERERERERERERERERE",
-  "sealed": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI=",
+  "sealed": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7s=",
   "refusals": [
     {
       "why": "another record name",
       "kind": "record",
       "name": "shard/680/fau",
       "masterKey": null,
-      "bytes": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI="
+      "binding": null,
+      "bytes": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7s="
     },
     {
       "why": "a flipped magic byte",
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
-      "bytes": "SlVUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI="
+      "binding": null,
+      "bytes": "SlVUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7s="
     },
     {
       "why": "a flipped suite byte",
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
-      "bytes": "S1VUTVMxAAAAAEREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI="
+      "binding": null,
+      "bytes": "S1VUTVMxAAAAAEREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7s="
     },
     {
       "why": "a flipped nonce byte",
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
-      "bytes": "S1VUTVMxAAAAAURERUREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI="
+      "binding": null,
+      "bytes": "S1VUTVMxAAAAAURERUREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7s="
     },
     {
       "why": "a flipped tag byte",
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
-      "bytes": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsM="
+      "binding": null,
+      "bytes": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7o="
     },
     {
       "why": "cut short",
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
+      "binding": null,
       "bytes": "S1VUTVMxAAAAAUREREREREREREQ="
     },
     {
@@ -57,28 +65,48 @@
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
-      "bytes": "S1VUTVMxAAAAAURERERERERERERERERERERERERERERERCXYDtkPBnTzCOx6S7Ju3V9xAfXseA8QA7qP0yYw3nE="
+      "binding": null,
+      "bytes": "S1VUTVMxAAAAAURERERERERERERERERERERERERERERERCXYDtkPBnTzCOx6S7Ju3VleFn1ZZjIl9TjO87ngoHc="
     },
     {
       "why": "another master key",
       "kind": "storeKey",
       "name": null,
       "masterKey": "W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1s=",
-      "bytes": "S1VUTVNXMQAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHDw6SnNBe0fMuHwAck+Esg3w=="
+      "binding": null,
+      "bytes": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAc98l56bpia0OIyQx1u2eJgr0HEkuy4ViTwJ9eT2uciIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMA0uRlBGHSZs0Me/1YIkRQUM5ir5p1FNsKILb2ukMCEzfEi530hWiY2QIHj9EqHcMQ=="
+    },
+    {
+      "why": "another account's key binding",
+      "kind": "storeKey",
+      "name": null,
+      "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding": "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
+      "bytes": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAc98l56bpia0OIyQx1u2eJgr0HEkuy4ViTwJ9eT2uciIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMA0uRlBGHSZs0Me/1YIkRQUM5ir5p1FNsKILb2ukMCEzfEi530hWiY2QIHj9EqHcMQ=="
     },
     {
       "why": "a flipped wrapped byte",
       "kind": "storeKey",
       "name": null,
       "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
-      "bytes": "S1VUTVNXMQAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHDw6SnNBe0fMuHwAck+Esg3g=="
+      "binding": null,
+      "bytes": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAc98l56bpia0OIyQx1u2eJgr0HEkuy4ViTwJ9eT2uciIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMA0uRlBGHSZs0Me/1YIkRQUM5ir5p1FNsKILb2ukMCEzfEi530hWiY2QIHj9EqHcMA=="
     },
     {
       "why": "a flipped suite byte",
       "kind": "storeKey",
       "name": null,
       "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
-      "bytes": "S1VUTVNXMQAAACIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHDw6SnNBe0fMuHwAck+Esg3w=="
+      "binding": null,
+      "bytes": "S1VUUEFSMQAAAAAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAc98l56bpia0OIyQx1u2eJgr0HEkuy4ViTwJ9eT2uciIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMA0uRlBGHSZs0Me/1YIkRQUM5ir5p1FNsKILb2ukMCEzfEi530hWiY2QIHj9EqHcMQ=="
+    },
+    {
+      "why": "a flipped purpose byte",
+      "kind": "storeKey",
+      "name": null,
+      "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding": null,
+      "bytes": "S1VUUEFSMQAAAQAYAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAc98l56bpia0OIyQx1u2eJgr0HEkuy4ViTwJ9eT2uciIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMA0uRlBGHSZs0Me/1YIkRQUM5ir5p1FNsKILb2ukMCEzfEi530hWiY2QIHj9EqHcMQ=="
     }
   ]
 }

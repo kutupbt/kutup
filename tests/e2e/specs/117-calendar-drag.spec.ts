@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 // The time grid by pointer and keyboard (docs/plans/calendar.md, "Calendar
@@ -43,9 +43,9 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
   const account = newAccount('caldrag', PASSWORD)
   const context = await browser.newContext({ viewport: { width: 1400, height: 1000 } })
   await context.addInitScript(() => {
-    localStorage.setItem('kutup-calendar-prefs', JSON.stringify({ zone: 'Europe/Istanbul', weekStart: 1, hour12: false }))
+    localStorage.setItem('kutup.calendar.prefs', JSON.stringify({ zone: 'Europe/Istanbul', weekStart: 1, hour12: false }))
     // The desktop-notifications banner (spec 118's) closed: it covers the grid's lower slots.
-    localStorage.setItem('kutup.calendar.notificationBanner.dismissed', '1')
+    localStorage.setItem('kutup.calendar.notificationBannerDismissed', '1')
   })
   await registerAccount(context, account)
   const page = await context.newPage()

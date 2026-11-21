@@ -34,7 +34,7 @@ export async function createStream(untilMs: number): Promise<StreamSecrets> {
     readCapability: randomBase64(32),
     writeSecret: randomBase64(32),
   }
-  await api.post('/live-locations', {
+  await api.post('/chat/live-locations', {
     streamId: secrets.streamId,
     writeSecret: secrets.writeSecret,
     readCapability: secrets.readCapability,
@@ -49,7 +49,7 @@ export type WriteResult = 'written' | 'tooSoon' | 'gone'
 export async function writeStream(secrets: StreamSecrets, counter: number, position: LiveLocationPosition): Promise<WriteResult> {
   const update = await sealLiveLocationUpdate(secrets.key, secrets.streamId, counter, position)
   try {
-    await api.put(`/live-locations/${secrets.streamId}`, { update }, { headers: { [WRITE_HEADER]: secrets.writeSecret } })
+    await api.put(`/chat/live-locations/${secrets.streamId}`, { update }, { headers: { [WRITE_HEADER]: secrets.writeSecret } })
     return 'written'
   } catch (error) {
     const status = axios.isAxiosError(error) ? error.response?.status : undefined
@@ -62,7 +62,7 @@ export async function writeStream(secrets: StreamSecrets, counter: number, posit
 /** End a stream now; a stream already gone is fine. */
 export async function deleteStream(secrets: Pick<StreamSecrets, 'streamId' | 'writeSecret'>): Promise<void> {
   try {
-    await api.delete(`/live-locations/${secrets.streamId}`, { headers: { [WRITE_HEADER]: secrets.writeSecret } })
+    await api.delete(`/chat/live-locations/${secrets.streamId}`, { headers: { [WRITE_HEADER]: secrets.writeSecret } })
   } catch (error) {
     if (!(axios.isAxiosError(error) && error.response?.status === 404)) throw error
   }
@@ -84,7 +84,7 @@ export async function readStream(
   localServer: string,
 ): Promise<StreamReading | null> {
   try {
-    const { data } = await api.get<{ update: string | null; updatedAtMs: number | null }>(`/live-locations/${stream.streamId}`, {
+    const { data } = await api.get<{ update: string | null; updatedAtMs: number | null }>(`/chat/live-locations/${stream.streamId}`, {
       headers: { [READ_HEADER]: stream.readCapability },
       params: stream.server === localServer ? undefined : { server: stream.server },
     })

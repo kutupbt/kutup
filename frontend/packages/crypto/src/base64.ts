@@ -9,6 +9,11 @@ export function toBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+/** Unpadded base64url (RFC 4648 §5): device credentials and other URL-safe tokens. */
+export function toBase64Url(bytes: Uint8Array): string {
+  return toBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
 export function fromBase64(b64: string): Uint8Array {
   const binary = atob(b64)
   const bytes = new Uint8Array(binary.length)

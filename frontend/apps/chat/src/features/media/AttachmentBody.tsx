@@ -34,8 +34,9 @@ function aborted(error: unknown): boolean {
 /**
  * An attachment inside its bubble. Nothing is fetched until asked: the
  * encrypted file is downloaded into this browser's private media cache,
- * checked, and opened from there (viewer for pictures, video, audio and
- * PDFs; a player for voice notes). "Save to device" writes the plaintext out;
+ * checked, and opened from there (viewer for pictures and PDFs; a player
+ * for voice notes). A video or song plays from its preview without that:
+ * it streams from the server block by block. "Save to device" writes the plaintext out;
  * "Clear local copy" drops the cached one. A deleted or expired message's
  * copy is dropped at once.
  */
@@ -120,8 +121,8 @@ export function AttachmentBody({
         (received, total) => setProgress(Math.floor((received / total) * 100)),
         abort.signal,
         expiresAtMs === undefined ? {} : { expiresAtMs },
-        attachment.backupMediaId && service
-          ? () => service.backupMediaCiphertext(attachment.backupMediaId!, token, abort.signal)
+        attachment.backupMediaId && attachment.backupMediaManifestSha256 && service
+          ? () => service.backupMediaCiphertext(attachment.backupMediaId!, attachment.backupMediaManifestSha256!, token, abort.signal)
           : undefined,
       )
       setState('available')
@@ -136,8 +137,11 @@ export function AttachmentBody({
   const failed = (error: unknown) => {
     if (!aborted(error)) toast.error(t('chat.attachments.downloadFailed'))
   }
+  // Video and audio stream from the server (docs/plans/drive-block-format.md
+  // §4): playing one needs no download into the cache first.
+  const streams = viewerKind === 'video' || viewerKind === 'audio'
   const open = () => {
-    if (state === 'available' && viewerKind) setViewerOpen(true)
+    if ((state === 'available' || (streams && accepted)) && viewerKind) setViewerOpen(true)
   }
 
   if (attachment.mediaClass === 'audio' && cache) {
@@ -163,14 +167,14 @@ export function AttachmentBody({
           attachment={attachment}
           visible={accepted}
           className="-mx-1 mb-2 overflow-hidden rounded-xl"
-          onActivate={() => (state === 'remote' ? void ensureAvailable().catch(failed) : open())}
+          onActivate={() => (state === 'remote' && !streams ? void ensureAvailable().catch(failed) : open())}
           activationLabel={
-            state === 'remote'
+            state === 'remote' && !streams
               ? t('chat.attachments.downloadInto', { filename: attachment.filename })
               : t('chat.attachments.open', { filename: attachment.filename })
           }
-          activationMode={state === 'remote' ? 'download' : 'open'}
-          disabled={!accepted || !cache || state === 'checking' || state === 'downloading' || (state === 'available' && !viewerKind)}
+          activationMode={state === 'remote' && !streams ? 'download' : 'open'}
+          disabled={!accepted || !cache || state === 'checking' || (state === 'downloading' && !streams) || (state === 'available' && !viewerKind)}
         />
       ) : null}
       <div className="flex items-center gap-3">

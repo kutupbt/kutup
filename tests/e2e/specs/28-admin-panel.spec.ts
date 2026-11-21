@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { ADMIN_PASSWORD, ADMIN_USERNAME, appUrl, newAccount, registerAccount, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
 
 test.describe.serial('administration', () => {
@@ -59,6 +59,11 @@ test.describe.serial('administration', () => {
 
   test('an administrator can create, promote, demote and delete a user', async () => {
     const name = await createUser('e2eadmin')
+    const created = new RegExp(`created ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
+    // The admin log names accounts by id only (no username snapshot): while
+    // the account exists the activity page shows its current name.
+    await page.goto(appUrl('account', '/admin/activity'))
+    await expect(page.getByText(created).first()).toBeVisible({ timeout: 15_000 })
     await openUser(name)
     await page.getByRole('button', { name: 'Make administrator', exact: true }).click()
     await confirm('Make administrator')
@@ -73,9 +78,10 @@ test.describe.serial('administration', () => {
     await page.getByPlaceholder('Search by username or address').fill(name)
     await expect(page.getByRole('row').filter({ hasText: name })).toHaveCount(0)
 
+    // Once deleted, the log keeps no trace of its name (A8).
     await page.goto(appUrl('account', '/admin/activity'))
-    await expect(page.getByText(new RegExp(`created ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)).first()).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByText(/deleted/).first()).toBeVisible()
+    await expect(page.getByText('created a deleted account').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText(created)).toHaveCount(0)
   })
 
   test('an account awaiting its first sign-in gets a new temporary password', async () => {
@@ -160,7 +166,8 @@ test.describe.serial('administration', () => {
       // The form fills in once the settings load.
       await expect(quota).not.toHaveValue('', { timeout: 15_000 })
       await quota.fill(gib)
-      await page.getByRole('button', { name: 'Save' }).click()
+      // The page has a Save per settings section: this one is the quota's form.
+      await page.locator('form', { has: quota }).getByRole('button', { name: 'Save', exact: true }).click()
       await expect(page.getByText('Settings saved').first()).toBeVisible({ timeout: 15_000 })
     }
     await save('3')

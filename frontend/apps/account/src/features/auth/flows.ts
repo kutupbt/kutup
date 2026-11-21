@@ -1,18 +1,21 @@
 // The account app's sign-in flows. The crypto steps are the canonical ones
-// from @kutup/crypto (Argon2id in a worker, typed account envelopes); this
+// from @kutup/crypto (OPAQUE in a worker, typed account envelopes); this
 // file sequences them against the API and hands the unlocked keys to the
 // session layer, which activates and persists them for this origin.
 
+import { inspectAccountRecord } from '@kutup/crypto/accountRecord'
+import { currentMasterKeyAt, FIRST_MASTER_KEY_GENERATION, firstMasterKeys, masterKeyGeneration, openMasterKeys, type MasterKeys } from '@kutup/crypto/masterKeys'
 import {
-  ACCOUNT_ENVELOPE_PURPOSE,
-  decryptPrivateKey,
+  ACCOUNT_RECORD_PURPOSE,
+  driveKeysOf,
   generateAccountKeySet,
-  openAccountEnvelope,
+  openAccountRecord,
   rebindAccountKeySet,
   toBase64,
   deriveRecoveryAuthProof,
   type AccountKeySet,
 } from '@kutup/crypto'
+import { isIdentityRootMismatch, openAccountRoots, type AccountRoots } from '@kutup/crypto/accountRoots'
 import { startOpaqueRegistration, type OpaqueRegistrar, type OpaqueSignIn } from '@kutup/crypto/opaqueWorker'
 import { FIRST_DRIVE_KEY_BINDING_EPOCH, signDriveKeyBinding } from '@kutup/crypto/identityPins'
 import { loadServerSettings } from '@kutup/session/apps'
@@ -28,15 +31,25 @@ import {
 } from '@kutup/session/opaque'
 import { persistKeys } from '@kutup/session/persist'
 import { activateSession } from '@kutup/session/profile'
+import { clearSession, setAccessToken } from '@kutup/session/store'
 
 interface LoginResponse {
   accessToken: string
   sessionId: string
-  userId: string
+  accountId: string
   username: string
   masterKeyEnvelope: string
-  drivePrivateKeyEnvelope: string
-  publicKey: string
+  /** The account's root records and the authority they must give (docs/plans/identity-root.md); with the session. */
+  accountRoots?: string[]
+  accountAuthorityPublicKey?: string
+  /**
+   * The master key's generation and every older key's keyring record
+   * (docs/plans/mk-rotation-exercise.md); with the session.
+   */
+  masterKeyGeneration?: number
+  masterKeyring?: string[]
+  /** The account's Drive key (X-Wing); with the session only. */
+  driveXwingPublicKey?: string
   /** What the account's keys are bound to (docs/plans/account-identity.md); only with a session. */
   keyBinding?: string
   requiresTotp?: boolean
@@ -46,6 +59,8 @@ interface LoginResponse {
   /** The server moved to a new OPAQUE setup: re-register with this grant (purpose `rotate`). */
   rotate?: boolean
   grant?: string
+  /** The account is closing: no session, but a grant (purpose `keep`) that keeps it. */
+  closing?: { closesAt: string; grant: string }
 }
 
 /**
@@ -59,6 +74,18 @@ export interface TotpChallenge {
   signIn: OpaqueSignIn
 }
 
+/**
+ * The account's newest identity root does not give the authority its server
+ * publishes: the sign-in is refused (no older root stands in), and the person
+ * is told the account's keys do not match.
+ */
+export class AccountKeysMismatchError extends Error {
+  constructor() {
+    super('the account keys do not match its published identity')
+    this.name = 'AccountKeysMismatchError'
+  }
+}
+
 /** An administrator-created account signing in for the first time. */
 export interface PendingSetup {
   name: string
@@ -68,17 +95,30 @@ export interface PendingSetup {
   setupToken: string
 }
 
+/**
+ * The account was asked to be deleted (docs/plans/server-personal-data.md,
+ * A5): every sign-in step passed, but instead of a session the server offers
+ * to keep it. Holds the open sign-in, as a {@link TotpChallenge} does, to
+ * finish with once kept; end it with {@link abandonClosing}.
+ */
+export interface ClosingOffer {
+  /** When the account is deleted. */
+  closesAt: string
+  grant: string
+  signIn: OpaqueSignIn
+}
+
 export type SignInResult =
   | { kind: 'signedIn' }
   | { kind: 'totp'; challenge: TotpChallenge }
   | { kind: 'setup'; setup: PendingSetup }
+  | { kind: 'closing'; offer: ClosingOffer }
 
 async function activate(
   response: Pick<LoginResponse, 'accessToken' | 'sessionId'>,
   keys: SessionKeys,
 ): Promise<void> {
-  // The session layer also moves an account from before X-Wing Drive keys
-  // to them (docs/plans/pq-shares.md): what it activated is what is kept.
+  // What the session layer activated (after its own checks) is what is kept.
   const activated = await activateSession(keys, response.accessToken, response.sessionId)
   await persistKeys(response.sessionId, activated)
 }
@@ -98,7 +138,7 @@ async function serverName(): Promise<string> {
  * them. Sent with every new set of keys: a new account's first, at epoch 1.
  */
 async function driveKeyBindingFor(keys: AccountKeys, accountId: string): Promise<string> {
-  return signDriveKeyBinding(toBase64(keys.masterKey), { server: await serverName(), accountId }, FIRST_DRIVE_KEY_BINDING_EPOCH)
+  return signDriveKeyBinding(keys.roots.identityRoot, { server: await serverName(), accountId }, FIRST_DRIVE_KEY_BINDING_EPOCH)
 }
 
 /**
@@ -111,12 +151,31 @@ export async function signIn(name: string, password: string): Promise<SignInResu
   const { data, signIn: opened } = await opaqueLogin<LoginResponse>(password, { purpose: 'session', name })
   if (data.requiresSetup && data.setupToken) {
     opened.close()
-    return { kind: 'setup', setup: { name, username: data.username, accountId: data.userId, setupToken: data.setupToken } }
+    return { kind: 'setup', setup: { name, username: data.username, accountId: data.accountId, setupToken: data.setupToken } }
   }
   if (data.requiresTotp && data.preAuthToken) {
     return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, signIn: opened } }
   }
+  return closingOrFinish(data, opened)
+}
+
+/** A closing account's offer, or the session. */
+function closingOrFinish(data: LoginResponse, opened: OpaqueSignIn): Promise<SignInResult> {
+  if (data.closing) {
+    return Promise.resolve({ kind: 'closing', offer: { ...data.closing, signIn: opened } })
+  }
   return finishSignIn(data, opened)
+}
+
+/** Keeps a closing account and finishes its sign-in. */
+export async function keepAccount(offer: ClosingOffer): Promise<SignInResult> {
+  const { data } = await api.post<LoginResponse>('/auth/keep', { grant: offer.grant })
+  return finishSignIn(data, offer.signIn)
+}
+
+/** Ends a sign-in offered to keep its account (the user went back). Safe to call again. */
+export function abandonClosing(offer: ClosingOffer): void {
+  offer.signIn.close()
 }
 
 /** Opens the master key with the sign-in's export key, activates, and re-registers if the server asks. */
@@ -127,12 +186,45 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
     // The master envelope opens only under its own binding, so once it has
     // opened the binding is verified.
     const masterKey = await opened.openMasterKey(data.masterKeyEnvelope, binding)
-    const privateKey = await decryptPrivateKey(data.drivePrivateKeyEnvelope, masterKey, binding)
-    await activate(data, { userId: data.userId, masterKey, privateKey, publicKey: data.publicKey, keyBinding: binding })
+    // Every older master key comes through the keyring, from the generation
+    // the envelope's header names (docs/plans/mk-rotation-exercise.md). The
+    // account's roots open with them; the newest identity root must give the
+    // account's published authority, or the keys are refused
+    // (docs/plans/identity-root.md). The Drive keys derive from it, never
+    // stored (docs/plans/w6-key-hierarchy.md §1); the server must publish the same.
+    let roots: AccountRoots
+    let masterKeys: MasterKeys
+    try {
+      masterKeys = await openMasterKeys(masterKey, data.masterKeyEnvelope, binding, data.masterKeyring ?? [])
+      if (data.masterKeyGeneration !== undefined && data.masterKeyGeneration !== masterKeyGeneration(masterKeys)) {
+        throw new Error('the server named another master-key generation than the envelope')
+      }
+      roots = await openAccountRoots(masterKeys, binding, data.accountRoots ?? [], data.accountAuthorityPublicKey ?? '')
+    } catch (error) {
+      setAccessToken(data.accessToken)
+      await api.post('/auth/logout').catch(() => undefined)
+      clearSession()
+      masterKey.fill(0)
+      throw isIdentityRootMismatch(error) ? new AccountKeysMismatchError() : error
+    }
+    const { publicKey, privateKey } = await driveKeysOf(roots.identityRoot)
+    if (publicKey !== data.driveXwingPublicKey) {
+      // This sign-in is over: ended on the server too (best effort), and the
+      // keys dropped here, as for a key-binding mismatch (profile.ts).
+      setAccessToken(data.accessToken)
+      await api.post('/auth/logout').catch(() => undefined)
+      clearSession()
+      masterKey.fill(0)
+      privateKey.fill(0)
+      throw new Error("the server publishes another Drive key than this account's")
+    }
+    await activate(data, { accountId: data.accountId, masterKey, masterKeys, roots, privateKey, publicKey, keyBinding: binding })
     // A new server setup: the password just used (held by the sign-in's
     // worker) is registered again under it, without asking. A failure leaves
     // the old record, and the next sign-in asks again.
-    if (data.rotate && data.grant) await reregisterWith(opened, binding, masterKey, data.grant).catch(() => undefined)
+    if (data.rotate && data.grant) {
+      await reregisterWith(opened, binding, currentMasterKeyAt(masterKeys), data.grant).catch(() => undefined)
+    }
   } finally {
     opened.close()
   }
@@ -144,7 +236,7 @@ export async function completeTotp(challenge: TotpChallenge, code: string): Prom
     preAuthToken: challenge.preAuthToken,
     code,
   })
-  return finishSignIn(data, challenge.signIn)
+  return closingOrFinish(data, challenge.signIn)
 }
 
 /** Ends a sign-in waiting for its second factor (the user went back, or left). Safe to call again. */
@@ -191,7 +283,7 @@ export async function generateAccountKeys(password: string, setupToken?: string)
     const draw = async () => {
       const keyBinding = crypto.randomUUID()
       const keys = await generateAccountKeySet(keyBinding)
-      const registered = await registerWith(registrar, keyBinding, keys.masterKey, auth)
+      const registered = await registerWith(registrar, keyBinding, { key: keys.masterKey, generation: FIRST_MASTER_KEY_GENERATION }, auth)
       return { ...keys, keyBinding, ...registered, registrar, auth }
     }
     try {
@@ -219,11 +311,11 @@ export function releaseAccountKeys(keys: AccountKeys): void {
  */
 async function remade(keys: AccountKeys, code: string): Promise<AccountKeys> {
   if (code === 'opaqueKeyStale') {
-    return { ...keys, ...(await registerWith(keys.registrar, keys.keyBinding, keys.masterKey, keys.auth)) }
+    return { ...keys, ...(await registerWith(keys.registrar, keys.keyBinding, { key: keys.masterKey, generation: FIRST_MASTER_KEY_GENERATION }, keys.auth)) }
   }
   const keyBinding = crypto.randomUUID()
   const resealed = await rebindAccountKeySet(keys, keyBinding)
-  const registered = await registerWith(keys.registrar, keyBinding, keys.masterKey, keys.auth)
+  const registered = await registerWith(keys.registrar, keyBinding, { key: keys.masterKey, generation: FIRST_MASTER_KEY_GENERATION }, keys.auth)
   return { ...keys, ...resealed, keyBinding, ...registered }
 }
 
@@ -256,8 +348,8 @@ function registrationBody(keys: AccountKeys) {
     opaqueServerKeyId: keys.opaqueServerKeyId,
     masterKeyEnvelope: keys.masterKeyEnvelope,
     recoveryKeyEnvelope: keys.recoveryKeyEnvelope,
-    drivePrivateKeyEnvelope: keys.drivePrivateKeyEnvelope,
-    publicKey: keys.publicKey,
+    accountRoots: keys.accountRoots,
+    driveXwingPublicKey: keys.publicKey,
     accountAuthorityPublicKey: keys.accountAuthorityPublicKey,
     accountAuthorityKeyId: keys.accountAuthorityKeyId,
     accountIncarnationId: keys.accountIncarnationId,
@@ -268,8 +360,11 @@ function registrationBody(keys: AccountKeys) {
 
 function sessionKeys(keys: AccountKeys): SessionKeys {
   return {
-    userId: '',
+    accountId: '',
     masterKey: keys.masterKey,
+    // A new account's: generation 1, no keyring.
+    masterKeys: firstMasterKeys(keys.masterKey),
+    roots: keys.roots,
     privateKey: keys.privateKey,
     publicKey: keys.publicKey,
     keyBinding: keys.keyBinding,
@@ -284,7 +379,12 @@ const registered = new WeakMap<AccountKeys, { data: LoginResponse; keys: Account
  * registered with the keys, so no second sign-in). Safe to call again with
  * the same keys when activating failed: the account is created once.
  */
-export async function registerAndSignIn(username: string, keys: AccountKeys, registrationCode?: string): Promise<void> {
+export async function registerAndSignIn(
+  username: string,
+  keys: AccountKeys,
+  registrationCode?: string,
+  acknowledgements: string[] = [],
+): Promise<void> {
   let done = registered.get(keys)
   if (!done) {
     done = await sendKeys(keys, async (sent) => {
@@ -296,6 +396,8 @@ export async function registerAndSignIn(username: string, keys: AccountKeys, reg
         await api.post<LoginResponse>('/auth/register', {
           username,
           ...(registrationCode ? { registrationCode } : {}),
+          // The operator's documents shown and confirmed (docs/plans/server-personal-data.md, A3).
+          acknowledgements,
           ...registrationBody(sent),
           accountId,
           accountIdProof,
@@ -305,7 +407,7 @@ export async function registerAndSignIn(username: string, keys: AccountKeys, reg
     })
     registered.set(keys, done)
   }
-  await activate(done.data, { ...sessionKeys(done.keys), userId: done.data.userId })
+  await activate(done.data, { ...sessionKeys(done.keys), accountId: done.data.accountId })
   releaseAccountKeys(keys)
 }
 
@@ -328,7 +430,7 @@ export async function completeSetup(setup: PendingSetup, keys: AccountKeys): Pro
     )
     registered.set(keys, done)
   }
-  await activate(done.data, { ...sessionKeys(done.keys), userId: done.data.userId })
+  await activate(done.data, { ...sessionKeys(done.keys), accountId: done.data.accountId })
   releaseAccountKeys(keys)
 }
 
@@ -349,24 +451,24 @@ export function normalizeMnemonic(value: string): string {
  * account ends. (The phrase is the second factor, so 2FA is not asked.)
  */
 export async function recoverAccount(name: string, mnemonic: string, newPassword: string): Promise<void> {
-  const { data } = await api.get<{ recoveryKeyEnvelope: string; envelopeBinding: string }>('/auth/recover/preflight', {
+  // The binding the phrase's proof is derived with; the recovery envelope
+  // comes only with the grant, after the proof (its header names the master
+  // key's generation, which nobody learns without the phrase).
+  const { data } = await api.get<{ envelopeBinding: string }>('/auth/recover/preflight', {
     params: { name },
   })
   const binding = data.envelopeBinding
   const { decodeMnemonic } = await import('@kutup/crypto/mnemonic')
   const recoveryKey = decodeMnemonic(normalizeMnemonic(mnemonic))
-  const masterKey = await openAccountEnvelope(
-    data.recoveryKeyEnvelope,
-    recoveryKey,
-    ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
-    binding,
-  )
+  let masterKey: Uint8Array | null = null
   try {
     const recoveryProof = await deriveRecoveryAuthProof(toBase64(recoveryKey), binding)
-    const { data: granted } = await api.post<{ grant: string }>('/auth/recover/grant', { name, recoveryProof })
-    await opaqueReregister(newPassword, binding, masterKey, granted.grant)
+    const { data: granted } = await api.post<{ grant: string; recoveryKeyEnvelope: string }>('/auth/recover/grant', { name, recoveryProof })
+    masterKey = await openAccountRecord(granted.recoveryKeyEnvelope, recoveryKey, ACCOUNT_RECORD_PURPOSE.recoveryMasterKey, binding)
+    const { generation } = await inspectAccountRecord(granted.recoveryKeyEnvelope)
+    await opaqueReregister(newPassword, binding, { key: masterKey, generation }, granted.grant)
   } finally {
-    masterKey.fill(0)
+    masterKey?.fill(0)
     recoveryKey.fill(0)
   }
 }

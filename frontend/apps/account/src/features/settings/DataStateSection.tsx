@@ -4,7 +4,7 @@ import { accountHead } from '@kutup/session/accountHead'
 import { useRequiredSession } from '@kutup/session/store'
 import { Card, CardContent } from '@kutup/ui/components/card'
 import { Section } from '@kutup/ui/components/page'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { describeHeadEvent } from './dataState'
 
@@ -19,7 +19,7 @@ export function DataStateSection() {
   const { t, i18n } = useTranslation()
   const session = useRequiredSession()
   const state = useQuery({
-    queryKey: ['account-head', 'data-state', session.userId],
+    queryKey: ['account-head', 'data-state', session.accountId],
     queryFn: async () => {
       const client = await accountHead(session)
       // A blocked head still has a state to show; the banner says the rest.
@@ -33,7 +33,7 @@ export function DataStateSection() {
       <Card>
         <CardContent className="space-y-3 p-5 text-sm">
           {state.isPending ? (
-            <LoadingPanel label={t('common.loading')} />
+            <FormSkeleton label={t('common.loading')} rows={2} />
           ) : !state.data || state.data.sequence === null ? (
             <p className="text-muted-foreground">{t('accountHead.dataStateNone')}</p>
           ) : (

@@ -10,15 +10,12 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
   return { getCryptoWasm: async () => module }
 })
 
-import { generateKey } from '@kutup/crypto'
-import {
-  DRIVE_FILE_BLOB_CIPHER_CHUNK,
-  fileBlobCipherSize,
-  newFileBlobStreamEncryptorV1,
-  resumeFileBlobStreamEncryptorV1,
-} from '@kutup/crypto/fileBlob'
-import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
-import { EncryptedFileSource, type PlaintextSource } from './encryptedSource'
+import { DRIVE_BLOCK_SIZE, generateKey, newDriveBlockEncryptor, newRevisionId, openDriveFile } from '@kutup/crypto'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
+import { hashBlob } from '@kutup/crypto/contentHash'
+import { EncryptedFileSource, NotTheSameFile, type PlaintextSource, type SealedBlockLog, type SealedTail } from './encryptedSource'
+
+const signer = { identityRoot: testRoots(5).identityRoot, accountId: '22222222-2222-4222-8222-222222222222', incarnationId: '05'.repeat(32) }
 
 function plaintext(size: number): PlaintextSource & { reads: number } {
   // A plain loop: Uint8Array.from over an array-like with a callback takes
@@ -36,102 +33,178 @@ function plaintext(size: number): PlaintextSource & { reads: number } {
   return source
 }
 
-/** The whole ciphertext, as one upload with a fresh encryptor makes it. */
+/** A revision of `size` bytes: sources over it, and its key and binding to open what they give. */
 async function setup(size: number) {
   const fileKey = await generateKey()
-  const context = { fileId: crypto.randomUUID(), generation: 1 }
-  const first = await newFileBlobStreamEncryptorV1(fileKey, context)
-  const plain = plaintext(size)
-  const parts = [first.prefix]
-  const messages = Math.max(1, Math.ceil(size / PLAIN_CHUNK))
-  for (let i = 0; i < messages; i++) {
-    const from = i * PLAIN_CHUNK
-    parts.push(first.push(await plain.read(from, Math.min(from + PLAIN_CHUNK, size)), i === messages - 1))
+  const context = { fileId: crypto.randomUUID(), revisionId: newRevisionId(), generation: 1 }
+  const open = () => newDriveBlockEncryptor(fileKey, context, size)
+  const source = async (
+    options: { input?: ReturnType<typeof plaintext>; tail?: SealedTail; onTail?: (tail: SealedTail) => Promise<void>; sha256?: string; blocks?: SealedBlockLog } = {},
+  ) => {
+    const input = options.input ?? plaintext(size)
+    return {
+      input,
+      source: new EncryptedFileSource(input, await open(), {
+        open,
+        signer,
+        tail: options.tail,
+        onTail: options.onTail,
+        sha256: options.sha256,
+        blocks: options.blocks,
+      }),
+    }
   }
-  const whole = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
-  let at = 0
-  for (const p of parts) {
-    whole.set(p, at)
-    at += p.length
-  }
-  const source = (input = plaintext(size)) => ({
-    input,
-    source: new EncryptedFileSource(input, () => resumeFileBlobStreamEncryptorV1(fileKey, context, first.prefix), first.prefix),
-  })
-  return { whole, source }
+  const opens = (object: Uint8Array, content: SealedTail['content']) =>
+    openDriveFile(object, fileKey, { fileId: context.fileId, generation: 1 }, content, size)
+  return { source, opens, revisionId: context.revisionId }
 }
 
-// Several 5 MiB chunks are built and encrypted here; that takes a few seconds.
+/** Everything from `start` to the end, in ranges of `step`. */
+async function readFrom(source: EncryptedFileSource, start: number, step: number): Promise<Uint8Array> {
+  const read: Uint8Array[] = []
+  let done = false
+  for (let at = start; !done; at += step) {
+    const slice = await source.bytes(at, at + step)
+    read.push(slice.bytes)
+    done = slice.done
+  }
+  return new Uint8Array(Buffer.concat(read))
+}
+
+// Several 4 MiB blocks are built and sealed here; that takes a few seconds.
 vi.setConfig({ testTimeout: 60_000 })
 
+const PATCH = 2 * (DRIVE_BLOCK_SIZE + 40)
+
 describe('EncryptedFileSource', () => {
-  for (const size of [0, 10, PLAIN_CHUNK, PLAIN_CHUNK + 1, 2 * PLAIN_CHUNK + 123]) {
-    it(`gives tus the exact ciphertext of a ${size}-byte file`, async () => {
-      const { whole, source } = await setup(size)
-      const { source: s } = source()
-      expect(s.size).toBe(fileBlobCipherSize(size))
-      expect(whole.length).toBe(s.size)
-      const read: Uint8Array[] = []
-      for (let at = 0; at < s.size; at += DRIVE_FILE_BLOB_CIPHER_CHUNK) {
-        const { bytes: value, done } = await s.bytes(at, at + DRIVE_FILE_BLOB_CIPHER_CHUNK)
-        read.push(value)
-        expect(done).toBe(at + DRIVE_FILE_BLOB_CIPHER_CHUNK >= s.size)
-      }
-      expect(Buffer.concat(read).equals(Buffer.from(whole))).toBe(true)
+  for (const size of [0, 10, DRIVE_BLOCK_SIZE, DRIVE_BLOCK_SIZE + 1, 2 * DRIVE_BLOCK_SIZE + 123]) {
+    it(`gives tus a ${size}-byte file's whole revision, which opens against its commitment`, async () => {
+      const { source, opens, revisionId } = await setup(size)
+      const tails: SealedTail[] = []
+      const { source: s } = await source({ onTail: async (tail) => void tails.push(tail) })
+      const object = await readFrom(s, 0, PATCH)
+      expect(object.length).toBe(s.size)
+      expect(tails).toHaveLength(1)
+      expect(s.content).toEqual(tails[0].content)
+      expect(s.content?.revisionId).toBe(revisionId)
+      expect(await opens(object, tails[0].content)).toEqual(await plaintext(size).read(0, size))
     })
   }
 
-  it('resumes in the middle with the same bytes, and a retried range reads nothing again', async () => {
-    const size = 3 * PLAIN_CHUNK + 5
-    const { whole, source } = await setup(size)
-    const { source: s, input } = source()
-    const at = 2 * DRIVE_FILE_BLOB_CIPHER_CHUNK
-    const first = await s.bytes(at, at + DRIVE_FILE_BLOB_CIPHER_CHUNK)
-    expect(Buffer.from(first.bytes).equals(Buffer.from(whole.subarray(at, at + DRIVE_FILE_BLOB_CIPHER_CHUNK)))).toBe(true)
+  it('resumes after a reload at a block boundary with the same bytes', async () => {
+    const size = 3 * DRIVE_BLOCK_SIZE + 5
+    const { source, opens } = await setup(size)
+    let kept: SealedTail | undefined
+    const { source: s } = await source({ onTail: async (tail) => void (kept = tail) })
+    const whole = await readFrom(s, 0, PATCH)
+    // The same file chosen again after a reload: a new source, the tail kept.
+    const { source: again } = await source({ tail: kept })
+    const at = 48 + 2 * (DRIVE_BLOCK_SIZE + 40)
+    const rest = await readFrom(again, at, PATCH)
+    expect(Buffer.from(rest).equals(Buffer.from(whole.subarray(at)))).toBe(true)
+    expect(await opens(whole, kept!.content)).toHaveLength(size)
+  })
+
+  it('resumes inside a block, sealing it again from its start, and sends from the exact offset', async () => {
+    const size = 2 * DRIVE_BLOCK_SIZE + 77
+    const { source, opens } = await setup(size)
+    let kept: SealedTail | undefined
+    // The first run stopped inside block 1, before the tail was made.
+    const { source: s } = await source({ onTail: async (tail) => void (kept = tail) })
+    const at = 48 + (DRIVE_BLOCK_SIZE + 40) + 12345
+    const sent = (await s.bytes(0, at)).bytes
+    expect(kept).toBeUndefined()
+    s.close()
+    const { source: again } = await source({ onTail: async (tail) => void (kept = tail) })
+    const rest = await readFrom(again, at, PATCH)
+    const object = new Uint8Array(Buffer.concat([sent, rest]))
+    expect(object.length).toBe(again.size)
+    expect(await opens(object, kept!.content)).toHaveLength(size)
+  })
+
+  it('resumes inside the tail from the kept tail, never making another', async () => {
+    const size = 100
+    const { source, opens } = await setup(size)
+    let kept: SealedTail | undefined
+    const { source: s } = await source({ onTail: async (tail) => void (kept = tail) })
+    const whole = await readFrom(s, 0, PATCH)
+    const tailAt = whole.length - 20
+    const made = vi.fn(async () => {})
+    const { source: again } = await source({ tail: kept, onTail: made })
+    const rest = await again.bytes(tailAt, whole.length)
+    expect(Buffer.from(rest.bytes).equals(Buffer.from(whole.subarray(tailAt)))).toBe(true)
+    expect(made).not.toHaveBeenCalled()
+    expect(await opens(whole, kept!.content)).toHaveLength(size)
+  })
+
+  it('reads nothing again for a retried range, and starts over for one before those it kept', async () => {
+    const size = 6 * DRIVE_BLOCK_SIZE
+    const { source } = await setup(size)
+    const { source: s, input } = await source()
+    const at = 48 + 4 * (DRIVE_BLOCK_SIZE + 40)
+    const first = await s.bytes(at, at + PATCH)
     const reads = input.reads
-    const retried = await s.bytes(at, at + DRIVE_FILE_BLOB_CIPHER_CHUNK)
-    expect(retried.bytes).toEqual(first.bytes)
+    expect((await s.bytes(at, at + PATCH)).bytes).toEqual(first.bytes)
     expect(input.reads).toBe(reads)
+    const early = await s.bytes(0, PATCH)
+    const { source: fresh } = await source()
+    expect(early.bytes).toEqual((await fresh.bytes(0, PATCH)).bytes)
   })
 
-  it('resumed in the middle of a whole number of chunks, reads to the very end', async () => {
-    const size = 8 * PLAIN_CHUNK
-    const { whole, source } = await setup(size)
-    const { source: s } = source()
-    const read: Uint8Array[] = []
-    let done = false
-    for (let at = 3 * DRIVE_FILE_BLOB_CIPHER_CHUNK; !done; at += DRIVE_FILE_BLOB_CIPHER_CHUNK) {
-      const slice = await s.bytes(at, at + DRIVE_FILE_BLOB_CIPHER_CHUNK)
-      read.push(slice.bytes)
-      done = slice.done
-    }
-    const tail = Buffer.concat(read)
-    expect(tail.length).toBe(whole.length - 3 * DRIVE_FILE_BLOB_CIPHER_CHUNK)
-    expect(tail.equals(Buffer.from(whole.subarray(3 * DRIVE_FILE_BLOB_CIPHER_CHUNK)))).toBe(true)
-  })
-
-  it('starts the stream over for a range before the ones it kept', async () => {
-    const size = 4 * PLAIN_CHUNK
-    const { whole, source } = await setup(size)
-    const { source: s } = source()
-    await s.bytes(3 * DRIVE_FILE_BLOB_CIPHER_CHUNK, 4 * DRIVE_FILE_BLOB_CIPHER_CHUNK)
-    const early = await s.bytes(0, DRIVE_FILE_BLOB_CIPHER_CHUNK)
-    expect(Buffer.from(early.bytes).equals(Buffer.from(whole.subarray(0, DRIVE_FILE_BLOB_CIPHER_CHUNK)))).toBe(true)
-  })
-
-  it("gives tus a Blob, whose size tus reads, down to the last range", async () => {
-    const { source } = await setup(PLAIN_CHUNK)
-    const { source: s } = source()
-    const last = await s.slice(DRIVE_FILE_BLOB_CIPHER_CHUNK, 2 * DRIVE_FILE_BLOB_CIPHER_CHUNK)
+  it('gives tus a Blob, whose size tus reads, down to the last range', async () => {
+    const { source } = await setup(DRIVE_BLOCK_SIZE)
+    const { source: s } = await source()
+    const last = await s.slice(PATCH / 2, PATCH)
     expect(last.value).toBeInstanceOf(Blob)
-    expect(last.value.size).toBe(s.size - DRIVE_FILE_BLOB_CIPHER_CHUNK)
+    expect(last.value.size).toBe(s.size - PATCH / 2)
     expect(last.done).toBe(true)
   })
 
   it('refuses a file that changed size while it was read', async () => {
-    const { source } = await setup(PLAIN_CHUNK + 10)
-    const shrunk = { ...plaintext(PLAIN_CHUNK + 10), read: async () => new Uint8Array(3) }
-    const { source: s } = source(shrunk as unknown as ReturnType<typeof plaintext>)
-    await expect(s.bytes(0, DRIVE_FILE_BLOB_CIPHER_CHUNK)).rejects.toThrow(/changed/)
+    const { source } = await setup(DRIVE_BLOCK_SIZE + 10)
+    const shrunk = { ...plaintext(DRIVE_BLOCK_SIZE + 10), read: async () => new Uint8Array(3) }
+    const { source: s } = await source({ input: shrunk as unknown as ReturnType<typeof plaintext> })
+    await expect(s.bytes(0, PATCH)).rejects.toThrow(/changed/)
+  })
+
+  it("hashes the content as it seals it again, and never hands out the last block of another file", async () => {
+    const size = DRIVE_BLOCK_SIZE + 10
+    const { source } = await setup(size)
+    const original = plaintext(size)
+    const sha256 = await hashBlob(new Blob([(await original.read(0, size)) as BlobPart]))
+    // The same file, resumed inside its first block: the whole is hashed again.
+    const { source: same } = await source({ sha256 })
+    const whole = await readFrom(same, 100, PATCH)
+    expect(whole.length).toBe(same.size - 100)
+    expect(same.wrongFile).toBeNull()
+
+    // Another file of the same size: refused at its last block.
+    const other = plaintext(size)
+    const changed = { ...other, read: async (start: number, end: number) => (await other.read(start, end)).map((byte) => byte ^ 1) }
+    const { source: wrong } = await source({ input: changed as ReturnType<typeof plaintext>, sha256 })
+    await expect(readFrom(wrong, 0, PATCH)).rejects.toBeInstanceOf(NotTheSameFile)
+    expect(wrong.wrongFile).toBe('sent')
+    await expect(wrong.bytes(0, 10)).rejects.toBeInstanceOf(NotTheSameFile)
+  })
+
+  it('without a hash, compares the blocks it seals again with those it sealed before', async () => {
+    const size = 2 * DRIVE_BLOCK_SIZE + 10
+    const { source } = await setup(size)
+    const known: string[] = []
+    const log: SealedBlockLog = { known, record: async (index, hash) => void (known[index] = hash) }
+    const { source: first } = await source({ blocks: log })
+    await first.bytes(0, first.size)
+    expect(known).toHaveLength(3)
+
+    // The same file again: the blocks match.
+    const { source: same } = await source({ blocks: { known: [...known], record: async () => {} } })
+    await expect(same.bytes(0, same.size)).resolves.toBeTruthy()
+
+    // Another file: its first block is refused before it is handed out.
+    const other = plaintext(size)
+    const changed = { ...other, read: async (start: number, end: number) => (await other.read(start, end)).map((byte) => byte ^ 1) }
+    const { source: wrong } = await source({ input: changed as ReturnType<typeof plaintext>, blocks: { known: [...known], record: async () => {} } })
+    await expect(wrong.bytes(0, 100)).rejects.toBeInstanceOf(NotTheSameFile)
+    expect(wrong.wrongFile).toBe('caught')
   })
 })

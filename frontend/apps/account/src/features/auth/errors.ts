@@ -3,7 +3,7 @@ import { isAxiosError } from 'axios'
 import { OpaqueAuthFailed, OpaqueWorkerClosed } from '@kutup/crypto/opaqueWorker'
 import { KeyBindingMismatchError } from '@kutup/session/profile'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { RegistrationConflictError } from './flows'
+import { AccountKeysMismatchError, RegistrationConflictError } from './flows'
 
 type TFunction = ReturnType<typeof useTranslation>['t']
 
@@ -15,6 +15,8 @@ type TFunction = ReturnType<typeof useTranslation>['t']
  */
 export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: string): string {
   if (error instanceof KeyBindingMismatchError) return t('auth.errors.keysChanged')
+  // The newest identity root is not the account's published identity: no older one stands in.
+  if (error instanceof AccountKeysMismatchError) return t('auth.errors.identityMismatch')
   // A wrong password fails in this browser (OPAQUE), before the server answers.
   if (error instanceof OpaqueAuthFailed) return t(fallbackKey)
   if (error instanceof OpaqueWorkerClosed) return t('auth.errors.signInAgain')
@@ -24,13 +26,15 @@ export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: stri
     return t(error.code === 'opaqueKeyStale' ? 'auth.errors.serverKeyChanged' : 'auth.errors.keyBindingTaken')
   }
   const code = apiErrorCode(error)
-  if (code === 'too_many_requests') {
+  if (code === 'tooManyRequests') {
     // The address's limiter (a minute) or the account's lockout (a while).
     return t(bodyCode(error) === 'rateLimited' ? 'auth.errors.slowDown' : 'auth.errors.locked')
   }
   if (code === 'network') return t('auth.errors.network')
   // The first step's token ran out, or the password changed since.
   if (code === 'unauthenticated' && bodyCode(error) === 'preAuthInvalid') return t('auth.errors.signInAgain')
+  // The authenticator's secret can't be read (docs/plans/server-personal-data.md, A2).
+  if (bodyCode(error) === 'authenticatorLost') return t('auth.errors.authenticatorLost')
   if (code === 'unauthenticated' && bodyCode(error) === 'setupTokenInvalid') return t('auth.errors.setupExpired')
   if (code === 'unauthenticated') return t(fallbackKey)
   if (code === 'conflict') {

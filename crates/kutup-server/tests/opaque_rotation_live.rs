@@ -26,7 +26,7 @@ fn client() -> Client {
 }
 
 fn live(c: &Client, base: &str, token: &str) -> StatusCode {
-    bearer(c.get(format!("{base}/api/user/me")), token)
+    bearer(c.get(format!("{base}/api/v1/account")), token)
         .send()
         .unwrap()
         .status()
@@ -47,12 +47,12 @@ fn rotate(
             Ok(registered) => registered,
             Err((status, _)) => return status,
         };
-    c.post(format!("{base}/api/auth/opaque/register/finish"))
+    c.post(format!("{base}/api/v1/auth/opaque/register/finish"))
         .bearer_auth(token)
         .json(&json!({
             "grant": grant, "keyBinding": user.binding,
             "opaqueRecord": record, "opaqueServerKeyId": key_id,
-            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, &user.binding).unwrap(),
+            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &user.binding).unwrap(),
         }))
         .send()
         .unwrap()
@@ -94,6 +94,14 @@ fn a_rotation_moves_the_record_once_and_shows() {
     let bytes = |key: &str| -> [u8; 32] { b64_decode(&text(key)).try_into().unwrap() };
     let master_key = bytes("masterKey");
     let first = sign_in(&c, &base, &text("username"), &text("password"));
+    // The account's roots, as its session gets them.
+    let roots = fetch_roots(
+        &c,
+        &base,
+        first["accessToken"].as_str().unwrap(),
+        &master_key,
+        &text("binding"),
+    );
     let mut user = User {
         id: text("id"),
         binding: text("binding"),
@@ -101,8 +109,9 @@ fn a_rotation_moves_the_record_once_and_shows() {
         password: text("password"),
         recovery_entropy: bytes("recoveryEntropy"),
         token: first["accessToken"].as_str().unwrap().to_owned(),
-        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap(),
+        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity).unwrap(),
         master_key,
+        roots,
         person: kutup_crypto::account_ref::AccountRef::new(&server_domain(&c, &base), &text("id"))
             .unwrap(),
         account: text("account"),
@@ -128,7 +137,7 @@ fn a_rotation_moves_the_record_once_and_shows() {
             .unwrap();
     };
     set_key(
-        "UPDATE users SET opaque_server_key_id = (SELECT max(key_id) FROM opaque_server_setups)
+        "UPDATE accounts SET opaque_server_key_id = (SELECT max(key_id) FROM opaque_server_setups)
          WHERE id = $1::uuid",
     );
     assert_eq!(
@@ -144,7 +153,7 @@ fn a_rotation_moves_the_record_once_and_shows() {
         "already on the current setup"
     );
     set_key(
-        "UPDATE users SET opaque_server_key_id = (SELECT min(key_id) FROM opaque_server_setups)
+        "UPDATE accounts SET opaque_server_key_id = (SELECT min(key_id) FROM opaque_server_setups)
          WHERE id = $1::uuid",
     );
     // A rotate grant is no password change.
@@ -207,21 +216,28 @@ fn a_rotation_moves_the_record_once_and_shows() {
     assert_eq!(opened.as_slice(), user.master_key.as_slice());
     // The owner sees it.
     let events: Value = bearer(
-        c.get(format!("{base}/api/user/security-events")),
+        c.get(format!("{base}/api/v1/account/security-events")),
         &user.token,
     )
     .send()
     .unwrap()
     .json()
     .unwrap();
-    let kinds: Vec<&str> = events["events"]
+    // Besides the sign-ins (and the sessions the rotation ended): one rotate.
+    let changes: Vec<&Value> = events["events"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|e| e["kind"].as_str().unwrap())
+        .filter(|e| {
+            !matches!(
+                e["kind"].as_str().unwrap(),
+                "signIn" | "signOut" | "sessionRevoked" | "allSessionsRevoked"
+            )
+        })
         .collect();
-    assert_eq!(kinds, ["rotate"], "{events}");
-    assert_eq!(events["events"][0]["thisSession"], true);
+    assert_eq!(changes.len(), 1, "{events}");
+    assert_eq!(changes[0]["kind"], "rotate");
+    assert_eq!(changes[0]["thisSession"], true);
     user.token = session["accessToken"].as_str().unwrap().to_owned();
     purge_accounts(&c, &base, &[&user]);
 }

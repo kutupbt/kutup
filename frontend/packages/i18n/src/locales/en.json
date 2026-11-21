@@ -46,6 +46,18 @@
     "light": "Light theme",
     "system": "Match system theme"
   },
+  "publicSharing": {
+    "blocked": {
+      "legalOrder": "Blocked by the server's operators under a legal order",
+      "abuse": "Blocked by the server's operators for abuse",
+      "other": "Blocked by the server's operators"
+    },
+    "targetBlocked": "The server's operators blocked links to this: no new one can be made.",
+    "off": {
+      "site": "Public links are turned off on this server.",
+      "account": "An administrator turned public links off for your account."
+    }
+  },
   "fileShare": {
     "title": "Share “{{name}}”",
     "description": "They get this file's own key, never its folder's. They see only this file.",
@@ -334,6 +346,15 @@
       "useNow": "Share with {{now}}",
       "formerly": "formerly {{formerly}}"
     },
+    "content": {
+      "forged": "This file carries {{name}}'s name, but their key did not sign it. Someone else with access may have written it: don't trust its contents until you have checked with them.",
+      "forgedUnnamed": "This file's signature does not match the person it names. Someone else with access may have written it: don't trust its contents until you have checked with them.",
+      "changed": "This file was signed by {{name}} with keys that are not the ones you know. Their account may have been reset, or someone may be passing off their name. Check with them another way before trusting it.",
+      "changedUnnamed": "This file was signed with keys that are not the ones you know for its author. Check with them another way before trusting it.",
+      "authorMismatch": "This file's history says {{claimed}} saved it, but {{name}} signed it. Check with them another way before trusting it.",
+      "authorMismatchSigner": "This file was signed by {{name}}, not by the person its history says saved it. Check with them another way before trusting it.",
+      "authorMismatchUnnamed": "This file was signed by someone other than the person its history says saved it. Check with them another way before trusting it."
+    },
     "accept": "Trust the new identity",
     "acceptFailed": "It could not be saved. Try again.",
     "knownAs": "the account you know as {{name}}",
@@ -464,6 +485,7 @@
   "apiErrors": {
     "keysPendingUpgrade": "This person needs to sign in to Kutup once more before you can share with them: their account is moving to stronger encryption keys.",
     "checkTimedOut": "The DNS check took too long. Try again in a minute.",
+    "orgRoleRequired": "Only your organization's owners and admins manage its domains.",
     "peerOutdated": "Their server runs an older version of Kutup. You can share with them once it is updated."
   },
   "pendingUpgrade": {

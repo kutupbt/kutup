@@ -178,16 +178,16 @@ fn check_names(
     destination: &Destination<'_>,
     new_name: Option<&str>,
 ) -> Result<NameCheck> {
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let cols = crate::cryptohelpers::decrypt_collections(
         ctx.client.list_collections()?,
-        &master_key,
+        &roots,
         &ctx.session,
     );
     let current = if folder {
         find_folder(&cols, id)?.name.clone()
     } else {
-        let found = locate_file(&ctx.client, &master_key, &ctx.session, &cols, id)?;
+        let found = locate_file(&ctx.client, &roots, &ctx.session, &cols, id)?;
         crate::file_crypto::open_metadata(&found.file, &found.file_key)
             .context("decrypt file metadata")?
             .name
@@ -205,7 +205,7 @@ fn check_names(
     // Files directly in the destination folder.
     if let Some(dest) = parent.and_then(|to| cols.iter().find(|c| c.id == to)) {
         if let Ok(keys) =
-            crate::cryptohelpers::folder_keyring(&ctx.client, dest, &master_key, &ctx.session)
+            crate::cryptohelpers::folder_keyring(&ctx.client, dest, &roots, &ctx.session)
         {
             for f in ctx.client.list_files(&dest.id)? {
                 if f.id != id {
@@ -257,25 +257,25 @@ fn place_hash_key(
     cols: &[Collection],
     parent: Option<&str>,
 ) -> Result<[u8; 32]> {
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let Some(parent) = parent else {
-        return crate::names::top_level_hash_key(&master_key);
+        return crate::names::top_level_hash_key(&roots);
     };
     let col = cols
         .iter()
         .find(|c| c.id == parent)
         .with_context(|| format!("folder {parent} not found"))?;
-    let keys = crate::cryptohelpers::folder_keyring(&ctx.client, col, &master_key, &ctx.session)?;
+    let keys = crate::cryptohelpers::folder_keyring(&ctx.client, col, &roots, &ctx.session)?;
     crate::names::folder_hash_key(&keys, &col.id)
 }
 
 fn rename_file(ctx: &SessionContext, id: &str, new_name: &str) -> Result<()> {
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let cols = ctx.client.list_collections()?;
     // A new name is new content: never under a key the folder has left.
     let found = rekey_if_behind(
         &ctx.client,
-        locate_file(&ctx.client, &master_key, &ctx.session, &cols, id)?,
+        locate_file(&ctx.client, &roots, &ctx.session, &cols, id)?,
     )?;
     let mut meta = crate::file_crypto::open_metadata(&found.file, &found.file_key)
         .context("decrypt existing metadata")?;
@@ -287,7 +287,7 @@ fn rename_file(ctx: &SessionContext, id: &str, new_name: &str) -> Result<()> {
 }
 
 fn rename_folder(ctx: &SessionContext, id: &str, new_name: &str) -> Result<()> {
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let cols = ctx.client.list_collections()?;
     let col = find_folder(&cols, id)?;
     // The server updates only owner-scoped rows; fail with a real reason
@@ -296,11 +296,13 @@ fn rename_folder(ctx: &SessionContext, id: &str, new_name: &str) -> Result<()> {
         bail!("only the owner can rename a shared folder");
     }
     let collection_key =
-        decrypt_collection_key(col, &master_key, &ctx.session).context("decrypt collection key")?;
+        decrypt_collection_key(col, &roots, &ctx.session).context("decrypt collection key")?;
     let mut rename = crate::collection_crypto::rename_request(col, &collection_key, new_name)
         .context("encrypt name")?;
     let hash_key = place_hash_key(ctx, &cols, col.parent_collection_id.as_deref())?;
     rename.name_hash = Some(crate::names::name_hash(&hash_key, new_name)?);
+    rename.name_hash_generation =
+        crate::names::hash_generation(&roots, col.parent_collection_id.as_deref());
     ctx.client
         .rename_collection(id, &rename)
         .context("rename folder")
@@ -323,7 +325,7 @@ fn move_folder(
             let Some(dest) = cols.iter().find(|c| c.id == *to) else {
                 return Err(destination_not_found(ctx, to, "folder"));
             };
-            if dest.is_shared || dest.owner_user_id != col.owner_user_id {
+            if dest.is_shared || dest.owner_account_id != col.owner_account_id {
                 return Err(UsageError(format!(
                     "folder {to} belongs to someone else: a folder moves only among your own \
                      folders (to put its contents there, download them and upload them there)"
@@ -337,25 +339,29 @@ fn move_folder(
         bail!("the folder is already there");
     }
     // Its name's hash in the new place (docs/plans/drive-unique-names.md).
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let name = crate::collection_crypto::open_name(
         col,
-        &decrypt_collection_key(col, &master_key, &ctx.session)
-            .context("decrypt collection key")?,
+        &decrypt_collection_key(col, &roots, &ctx.session).context("decrypt collection key")?,
     )
     .context("decrypt folder name")?;
     let name_hash =
         crate::names::name_hash(&place_hash_key(ctx, &cols, parent.as_deref())?, &name)?;
     // The server checks the destination is not the folder or anything in it.
     ctx.client
-        .move_collection(id, parent.as_deref(), Some(name_hash))
+        .move_collection(
+            id,
+            parent.as_deref(),
+            Some(name_hash),
+            crate::names::hash_generation(&roots, parent.as_deref()),
+        )
         .context("move folder")?;
     Ok(parent)
 }
 
 /// Moves a file into folder `to`; returns the folder it is now in.
 fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     // One reload on a conflict: another client re-keyed or moved the file,
     // or the destination's key rotated, between our read and the move.
     let mut attempt = 0;
@@ -365,13 +371,13 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
         let Some(dest) = cols.iter().find(|c| c.id == to) else {
             return Err(destination_not_found(ctx, to, "file"));
         };
-        let found = locate_file(&ctx.client, &master_key, &ctx.session, &cols, id)?;
+        let found = locate_file(&ctx.client, &roots, &ctx.session, &cols, id)?;
         check_file_move(&found.collection, dest)?;
 
         // A file behind its folder is re-keyed first, at the folder's
         // current epoch: its new key is what moves.
         let found = rekey_if_behind(&ctx.client, found)?;
-        let dest_key = decrypt_collection_key(dest, &master_key, &ctx.session)
+        let dest_key = decrypt_collection_key(dest, &roots, &ctx.session)
             .context("decrypt destination folder key")?;
         let mut request = crate::file_crypto::move_request(
             &found.file,
@@ -387,7 +393,7 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
         // follows.
         let meta = crate::file_crypto::open_metadata(&found.file, &found.file_key)
             .context("decrypt file metadata")?;
-        let dest_keys = crate::keyring::Keyring::load(&ctx.client, dest, &dest_key, &master_key)?;
+        let dest_keys = crate::keyring::Keyring::load(&ctx.client, dest, &dest_key, &ctx.session)?;
         let dest_hash_key = crate::names::folder_hash_key(&dest_keys, &dest.id)?;
         request.name_hash = Some(crate::names::name_hash(&dest_hash_key, &meta.name)?);
         if found.file.content_hash.is_some() {
@@ -430,7 +436,7 @@ fn check_file_move(source: &Collection, dest: &Collection) -> Result<()> {
     if source.id == dest.id {
         bail!("the file is already in that folder");
     }
-    if source.owner_user_id != dest.owner_user_id {
+    if source.owner_account_id != dest.owner_account_id {
         return Err(UsageError(
             "a file moves only between folders of the same owner; to put it in the other \
              folder, download it and upload it there"
@@ -486,7 +492,7 @@ mod tests {
         Collection {
             name_hash: None,
             id: id.into(),
-            owner_user_id: owner.into(),
+            owner_account_id: owner.into(),
             name_envelope: String::new(),
             owner_key_envelope: None,
             named_share_envelope: None,

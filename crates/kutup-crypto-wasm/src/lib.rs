@@ -13,18 +13,18 @@ use kutup_chat_proto::{
     ChatAttachmentLedgerEntryV1, ChatBackupBasePlaintextV1, ChatBackupManifestV1,
     ChatBackupSegmentPlaintextV1, ChatBackupSignerAuthorizationV1,
 };
-use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
-use kutup_crypto::chat_attachment_ledger::{self, ChatAttachmentLedgerContextV1};
+use kutup_crypto::account_record::{self, AccountRecordPurpose};
+use kutup_crypto::account_records::RecordScope;
+use kutup_crypto::account_ref::AccountRef;
+use kutup_crypto::chat_attachment_ledger;
 use kutup_crypto::chat_backup::{
     self, ChatBackupContextV1, ChatBackupObjectContextV1, ChatBackupObjectPurposeV1,
     ChatBackupProtectionDomainV1, ChatBackupSuiteId,
 };
-use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
 use kutup_crypto::chat_profile;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
-use kutup_crypto::envelope::{self, CollabFrameContextV1};
-use kutup_crypto::kdf::{self, AccountProtectionParameters, AccountProtectionSuiteId};
+use kutup_crypto::envelope::{self, CollabFrameContextV3};
+use kutup_crypto::kdf;
 use kutup_crypto::local_state::{self, LocalStatePurpose};
 use kutup_crypto::primitives::{SigningKey, Suite};
 use kutup_crypto::thumbnail::{self, Thumbnail, ThumbnailFormat, ThumbnailVariant};
@@ -34,34 +34,13 @@ use wasm_bindgen::prelude::*;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AccountProtectionKeysView {
-    key_encryption_key: String,
-    login_key: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AccountIdentityKeysView {
     authority_public_key: String,
     authority_key_id: String,
     incarnation_id: String,
-    drive_hpke_public_key: String,
-    drive_hpke_private_key: String,
+    drive_xwing_public_key: String,
+    drive_xwing_private_key: String,
     drive_signing_public_key: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DriveFileBlobPreparationView {
-    object_header: String,
-    stream_key: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChatMediaObjectPreparationView {
-    object_header: String,
-    stream_key: String,
 }
 
 #[derive(Serialize)]
@@ -69,15 +48,6 @@ struct ChatMediaObjectPreparationView {
 struct ChatBackupMediaPreparationView {
     media_id: String,
     outer_encryption_key: String,
-    object_header: String,
-    padded_plaintext_bytes: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenedChatBackupMediaHeaderView {
-    outer_encryption_key: String,
-    source_ciphertext_bytes: u64,
     padded_plaintext_bytes: u64,
 }
 
@@ -88,14 +58,21 @@ struct VerifiedChatBackupMetadataView {
     manifest_digest: Option<String>,
 }
 
+/// A record of a random-id scope, opened: its plaintext and the revision
+/// in its header.
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChatAttachmentLedgerHeaderView {
-    suite: u16,
-    account_incarnation_id: String,
-    entity_id: String,
-    revision: String,
-    previous_envelope_digest: String,
+struct OpenedRecordView {
+    plaintext: String,
+    revision: f64,
+}
+
+/// A random-id scope's record id (`IdForm::Random`) as its 32-byte object.
+fn random_record_id(scope: RecordScope, id: &str) -> Result<[u8; 32], JsValue> {
+    scope
+        .object(id)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| js_error("not a record id of its scope"))
 }
 
 #[derive(Serialize)]
@@ -104,7 +81,8 @@ struct OpenedCollabFrameView {
     kind: u8,
     key_generation: u32,
     doc_key_id: u32,
-    sender_device_id: String,
+    device_id: u32,
+    manifest_sequence: String,
     sequence: String,
     plaintext: String,
 }
@@ -137,7 +115,9 @@ pub(crate) fn chat_backup_context(
 fn web_local_state_purpose(purpose: u8) -> Result<LocalStatePurpose, JsValue> {
     match LocalStatePurpose::try_from(purpose).map_err(|error| js_error(&error.to_string()))? {
         p @ (LocalStatePurpose::SessionFork | LocalStatePurpose::WebSession) => Ok(p),
-        LocalStatePurpose::CliSession => Err(js_error(
+        // Manifest pins are sealed under a key the master key derives:
+        // `sealManifestPins`, never with a caller's key.
+        LocalStatePurpose::CliSession | LocalStatePurpose::ManifestPins => Err(js_error(
             "local-state purpose is not available to web clients",
         )),
     }
@@ -160,6 +140,63 @@ pub fn seal_local_state(
     Ok(STANDARD.encode(envelope))
 }
 
+/// This web app's manifest pins (docs/plans/one-device-list.md §8, slice 3):
+/// `pins`, a list of `AccountManifestPinV1`, sealed under the key the master
+/// key derives, for `profile` (`<client type>:<user id>`).
+#[wasm_bindgen(js_name = sealManifestPins)]
+pub fn seal_manifest_pins(
+    pins: JsValue,
+    master_keys_base64: &str,
+    profile: &str,
+) -> Result<String, JsValue> {
+    let pins: Vec<kutup_chat_proto::AccountManifestPinV1> = serde_wasm_bindgen::from_value(pins)
+        .map_err(|error| js_error(&format!("manifest pins: {error}")))?;
+    let plaintext = serde_json::to_vec(&pins)
+        .map_err(|error| js_error(&format!("encode manifest pins: {error}")))?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let key = local_state::manifest_pins_key(keys.current())
+        .map_err(|error| js_error(&error.to_string()))?;
+    let envelope = local_state::seal(
+        &plaintext,
+        key.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        profile,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(envelope))
+}
+
+/// The pins `sealManifestPins` sealed; fails closed on another account's
+/// master key, another profile, or a changed envelope. Their format names no
+/// master-key generation: each of the account's keys is tried, newest first
+/// (after a rotation the page seals them again under the current one).
+#[wasm_bindgen(js_name = openManifestPins)]
+pub fn open_manifest_pins(
+    envelope_base64: &str,
+    master_keys_base64: &str,
+    profile: &str,
+) -> Result<JsValue, JsValue> {
+    let envelope = decode_canonical_base64(envelope_base64, "manifest pins")?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let plaintext = keys
+        .newest_first()
+        .find_map(|(_, master)| {
+            let key = local_state::manifest_pins_key(master).ok()?;
+            local_state::open(
+                &envelope,
+                key.as_slice(),
+                LocalStatePurpose::ManifestPins,
+                profile,
+            )
+            .ok()
+        })
+        .ok_or_else(|| js_error("the manifest pins do not open with this account's keys"))?;
+    let pins: Vec<kutup_chat_proto::AccountManifestPinV1> = serde_json::from_slice(&plaintext)
+        .map_err(|error| js_error(&format!("manifest pins: {error}")))?;
+    serde_wasm_bindgen::to_value(&pins)
+        .map_err(|error| js_error(&format!("encode manifest pins: {error}")))
+}
+
 /// Open an envelope sealed by `sealLocalState` (or the Rust equivalent);
 /// fails closed on a wrong key, purpose or profile.
 #[wasm_bindgen(js_name = openLocalState)]
@@ -179,22 +216,24 @@ pub fn open_local_state(
 
 #[wasm_bindgen(js_name = createChatBackupSignerAuthorization)]
 pub fn create_chat_backup_signer_authorization(
-    master_key_base64: &str,
+    identity_root_base64: &str,
     backup_root_base64: &str,
     backup_incarnation_id: &str,
     created_at_unix: i64,
 ) -> Result<JsValue, JsValue> {
-    let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
+    let identity_root: [u8; 32] = decode_canonical_base64(identity_root_base64, "identity root")?
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let root: [u8; 32] = decode_canonical_base64(backup_root_base64, "backup root")?
         .try_into()
         .map_err(|_| js_error("backup root must be 32 bytes"))?;
     if created_at_unix <= 0 {
         return Err(js_error("backup authorization time is invalid"));
     }
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let context = chat_backup_context(&identity.incarnation_id(), backup_incarnation_id)?;
     let signer_seed = chat_backup::derive_manifest_signing_seed(&root, context)
         .map_err(|error| js_error(&error.to_string()))?;
@@ -227,21 +266,23 @@ pub fn create_chat_backup_signer_authorization(
 pub fn verify_chat_backup_metadata(
     signer_authorization: JsValue,
     manifest: JsValue,
-    master_key_base64: &str,
+    identity_root_base64: &str,
     backup_root_base64: &str,
     expected_backup_incarnation_id: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
+    let identity_root: [u8; 32] = decode_canonical_base64(identity_root_base64, "identity root")?
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let root: [u8; 32] = decode_canonical_base64(backup_root_base64, "backup root")?
         .try_into()
         .map_err(|_| js_error("backup root must be 32 bytes"))?;
     let authorization: ChatBackupSignerAuthorizationV1 =
         serde_wasm_bindgen::from_value(signer_authorization)
             .map_err(|error| js_error(&format!("decode backup authorization: {error}")))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let context = chat_backup_context(&identity.incarnation_id(), expected_backup_incarnation_id)?;
     if authorization.backup_incarnation_id != expected_backup_incarnation_id
         || authorization.account_incarnation_id != identity.incarnation_id()
@@ -458,92 +499,15 @@ pub fn prepare_chat_backup_media(
         .map_err(|error| js_error(&error.to_string()))?;
     let key = chat_backup::derive_media_encryption_key(&root, context, &media_id)
         .map_err(|error| js_error(&error.to_string()))?;
-    let header = kutup_crypto::chat_backup_media::build_media_header(
-        kutup_crypto::chat_backup_media::ChatBackupMediaContextV1 {
-            account_incarnation_id: context.account_incarnation_id,
-            backup_incarnation_id: context.backup_incarnation_id,
-            protection_domain: context.protection_domain,
-            media_id,
-        },
-        source_ciphertext_bytes,
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
-    let parsed = kutup_crypto::chat_backup_media::inspect_media_header(&header)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let padded_plaintext_bytes =
+        kutup_crypto::chat_backup_media::padded_media_plaintext_bytes(source_ciphertext_bytes)
+            .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&ChatBackupMediaPreparationView {
         media_id: hex::encode(media_id),
         outer_encryption_key: STANDARD.encode(key.as_slice()),
-        object_header: STANDARD.encode(header),
-        padded_plaintext_bytes: parsed.padded_plaintext_bytes,
+        padded_plaintext_bytes,
     })
     .map_err(|error| js_error(&format!("encode backup media preparation: {error}")))
-}
-
-#[wasm_bindgen(js_name = openChatBackupMediaHeader)]
-pub fn open_chat_backup_media_header(
-    header_base64: &str,
-    backup_root_base64: &str,
-    expected_account_incarnation_id: &str,
-    expected_backup_incarnation_id: &str,
-    expected_media_id: &str,
-) -> Result<JsValue, JsValue> {
-    let header = decode_canonical_base64(header_base64, "backup media header")?;
-    let root = decode_canonical_base64(backup_root_base64, "backup root")?;
-    let expected = chat_backup_context(
-        expected_account_incarnation_id,
-        expected_backup_incarnation_id,
-    )?;
-    let media_id: [u8; 32] = hex::decode(expected_media_id)
-        .ok()
-        .and_then(|value| value.try_into().ok())
-        .filter(|value: &[u8; 32]| hex::encode(value) == expected_media_id)
-        .ok_or_else(|| js_error("backup media id must be lowercase 32-byte hex"))?;
-    let parsed = kutup_crypto::chat_backup_media::inspect_media_header(&header)
-        .map_err(|error| js_error(&error.to_string()))?;
-    if parsed.context.account_incarnation_id != expected.account_incarnation_id
-        || parsed.context.backup_incarnation_id != expected.backup_incarnation_id
-        || parsed.context.protection_domain != expected.protection_domain
-        || parsed.context.media_id != media_id
-    {
-        return Err(js_error("backup media header context mismatch"));
-    }
-    let key = chat_backup::derive_media_encryption_key(&root, expected, &media_id)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&OpenedChatBackupMediaHeaderView {
-        outer_encryption_key: STANDARD.encode(key.as_slice()),
-        source_ciphertext_bytes: parsed.source_ciphertext_bytes,
-        padded_plaintext_bytes: parsed.padded_plaintext_bytes,
-    })
-    .map_err(|error| js_error(&format!("encode opened backup media header: {error}")))
-}
-
-/// Run the one expensive V1 Argon2id derivation and expand its two
-/// purpose-separated account subkeys.
-#[wasm_bindgen(js_name = deriveAccountProtectionKeys)]
-pub fn derive_account_protection_keys(
-    password: &str,
-    salt_base64: &str,
-    suite: u16,
-    memory_kib: u32,
-    iterations: u32,
-    parallelism: u32,
-) -> Result<JsValue, JsValue> {
-    AccountProtectionSuiteId::try_from(suite).map_err(|error| js_error(&error.to_string()))?;
-    let keys = kdf::derive_account_protection_keys_b64(
-        password,
-        salt_base64,
-        AccountProtectionParameters {
-            memory_kib,
-            iterations,
-            parallelism,
-        },
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&AccountProtectionKeysView {
-        key_encryption_key: STANDARD.encode(keys.key_encryption_key.as_slice()),
-        login_key: STANDARD.encode(keys.login_key.as_slice()),
-    })
-    .map_err(|error| js_error(&format!("encode account keys: {error}")))
 }
 
 /// Derive the recovery authorization proof sent to the server. Raw recovery
@@ -564,84 +528,255 @@ pub fn derive_recovery_auth_proof(
     Ok(STANDARD.encode(proof.as_slice()))
 }
 
-/// Derive the purpose-separated V1 account identity. The Drive private key is
-/// returned only so the existing account-private wrap can be created during
-/// the pre-tag format cutover; it is never sent in plaintext to the server.
-#[wasm_bindgen(js_name = deriveAccountIdentityKeys)]
-pub fn derive_account_identity_keys(master_key_base64: &str) -> Result<JsValue, JsValue> {
-    let master_key = STANDARD
-        .decode(master_key_base64)
-        .map_err(|_| js_error("master key must be canonical base64"))?;
-    if STANDARD.encode(&master_key) != master_key_base64 {
-        return Err(js_error("master key must be canonical base64"));
-    }
-    let master_key: [u8; 32] = master_key
+#[derive(Serialize)]
+struct SealedAccountRoots {
+    roots: kutup_crypto::account_roots::AccountRootsJson,
+    /// The five root records for the server, canonical base64.
+    envelopes: Vec<String>,
+}
+
+fn roots_error(error: kutup_crypto::error::CryptoError) -> JsValue {
+    js_error(&error.to_string())
+}
+
+/// The account's roots (docs/plans/identity-root.md) sealed under its
+/// current master key (`master_keys_base64`, the set) for the key `binding`,
+/// with the roots: `roots` as
+/// `openAccountRoots` gave them (a sign-up whose binding was drawn again, a
+/// master-key rotation re-wrapping every root at once), or `null` for a new
+/// account's, made now.
+#[wasm_bindgen(js_name = sealAccountRoots)]
+pub fn seal_account_roots(
+    master_keys_base64: &str,
+    binding: &str,
+    roots: JsValue,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::account_roots::{AccountRoots, AccountRootsJson};
+    let roots = if roots.is_null() {
+        AccountRoots::generate()
+    } else {
+        let json: AccountRootsJson = serde_wasm_bindgen::from_value(roots)
+            .map_err(|_| js_error("account roots malformed"))?;
+        AccountRoots::try_from(&json).map_err(roots_error)?
+    };
+    let keys = master_keys_of(master_keys_base64)?;
+    let envelopes = roots
+        .seal(keys.current(), keys.generation(), binding)
+        .map_err(roots_error)?;
+    serde_wasm_bindgen::to_value(&SealedAccountRoots {
+        roots: (&roots).into(),
+        envelopes: envelopes.iter().map(|e| STANDARD.encode(e)).collect(),
+    })
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Opens the account's roots from its root records (`accountRoots` of the
+/// sign-in answer, or `GET /api/v1/account/roots`). The newest identity root
+/// must derive `registered_authority_base64` (the account's authority public
+/// key); otherwise the error is `identityRootMismatch`, and no older root
+/// stands in.
+#[wasm_bindgen(js_name = openAccountRoots)]
+pub fn open_account_roots(
+    master_keys_base64: &str,
+    binding: &str,
+    envelopes: Vec<String>,
+    registered_authority_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let keys = master_keys_of(master_keys_base64)?;
+    let authority: [u8; 32] = decode_canonical_base64(registered_authority_base64, "authority")?
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+        .map_err(|_| js_error("authority length"))?;
+    let envelopes = envelopes
+        .iter()
+        .map(|e| decode_canonical_base64(e, "account root"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let roots =
+        kutup_crypto::account_roots::AccountRoots::open(&envelopes, &keys, binding, &authority)
+            .map_err(roots_error)?;
+    serde_wasm_bindgen::to_value(&kutup_crypto::account_roots::AccountRootsJson::from(&roots))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Derive the purpose-separated V1 account identity from the account's
+/// identity root (`roots.identityRoot`). The Drive private key is returned
+/// for the page's own use; it is never sent to the server.
+#[wasm_bindgen(js_name = deriveAccountIdentityKeys)]
+pub fn derive_account_identity_keys(identity_root_base64: &str) -> Result<JsValue, JsValue> {
+    let identity_root = identity_root_32(identity_root_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&AccountIdentityKeysView {
         authority_public_key: STANDARD.encode(identity.authority_public_key()),
         authority_key_id: identity.authority_key_id(),
         incarnation_id: identity.incarnation_id(),
-        drive_hpke_public_key: STANDARD.encode(identity.drive_hpke_public_key()),
-        drive_hpke_private_key: STANDARD.encode(identity.drive_hpke_private_key()),
+        drive_xwing_public_key: STANDARD.encode(identity.drive_xwing_public_key()),
+        drive_xwing_private_key: STANDARD.encode(identity.drive_xwing_private_key()),
         drive_signing_public_key: STANDARD.encode(identity.drive_signing_public_key()),
     })
     .map_err(|error| js_error(&format!("encode account identity: {error}")))
 }
 
-/// Seal one account secret into the canonical, suite-bearing V1 envelope.
-#[wasm_bindgen(js_name = sealAccountEnvelope)]
-pub fn seal_account_envelope(
+/// The master key's generation a page passes (never 0;
+/// `MASTER_KEY_GENERATION` in `@kutup/crypto` until rotation exists).
+fn master_key_generation(generation: u32) -> Result<account_record::MasterKeyGeneration, JsValue> {
+    account_record::MasterKeyGeneration::new(generation)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Seal one account secret into a canonical account record (`KUTPAR1`).
+#[wasm_bindgen(js_name = sealAccountRecord)]
+pub fn seal_account_record(
     plaintext_base64: &str,
     key_base64: &str,
-    purpose: u8,
+    purpose: u16,
+    generation: u32,
     binding: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "plaintext")?;
     let key = decode_canonical_base64(key_base64, "key")?;
     let purpose = generic_account_purpose(purpose)?;
-    account_envelope::seal_b64(&plaintext, &key, purpose, binding)
-        .map_err(|error| js_error(&error.to_string()))
+    account_record::seal_b64(
+        &plaintext,
+        &key,
+        purpose,
+        master_key_generation(generation)?,
+        binding,
+    )
+    .map_err(|error| js_error(&error.to_string()))
 }
 
-/// Open one account secret only when its purpose and login-email binding match.
-#[wasm_bindgen(js_name = openAccountEnvelope)]
-pub fn open_account_envelope(
+/// Open one account record only when its purpose and key binding match.
+#[wasm_bindgen(js_name = openAccountRecord)]
+pub fn open_account_record(
     envelope_base64: &str,
     key_base64: &str,
-    expected_purpose: u8,
+    expected_purpose: u16,
     binding: &str,
 ) -> Result<String, JsValue> {
     let key = decode_canonical_base64(key_base64, "key")?;
     let purpose = generic_account_purpose(expected_purpose)?;
-    let plaintext = account_envelope::open_b64(envelope_base64, &key, purpose, binding)
+    let plaintext = account_record::open_b64(envelope_base64, &key, purpose, binding)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
 }
 
-/// Checks an account envelope's shape (suite, purpose, object, revision and
-/// padded length) without a key, as the server does before storing one;
-/// throws when it is malformed. Returns the purpose.
-#[wasm_bindgen(js_name = inspectAccountEnvelope)]
-pub fn inspect_account_envelope(envelope_base64: &str) -> Result<u8, JsValue> {
-    let envelope = account_envelope::decode_canonical_b64(envelope_base64)
+/// Open one account record sealed under the account's master key (of the
+/// generation its header names; `master_keys_base64` is the account's set),
+/// only when its purpose and key binding match.
+#[wasm_bindgen(js_name = openAccountRecordWithMasterKeys)]
+pub fn open_account_record_with_master_keys(
+    envelope_base64: &str,
+    master_keys_base64: &str,
+    expected_purpose: u16,
+    binding: &str,
+) -> Result<String, JsValue> {
+    let keys = master_keys_of(master_keys_base64)?;
+    let purpose = generic_account_purpose(expected_purpose)?;
+    let envelope = account_record::decode_canonical_b64(envelope_base64)
         .map_err(|error| js_error(&error.to_string()))?;
-    account_envelope::inspect(&envelope)
-        .map(|header| header.purpose.as_u8())
-        .map_err(|error| js_error(&error.to_string()))
+    let key = keys
+        .key_for(&envelope)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let plaintext = account_record::open(&envelope, key, purpose, binding)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(plaintext))
 }
 
-/// Mail address keys have typed exports (`generateMailAddressKey`), so the
-/// generic account-envelope path cannot hand their secret key to JavaScript.
-fn generic_account_purpose(value: u8) -> Result<AccountEnvelopePurpose, JsValue> {
-    match AccountEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
-        AccountEnvelopePurpose::MailAddressPrivateKey | AccountEnvelopePurpose::PassVaultSecret => {
-            Err(js_error(
-                "this account envelope purpose has its own typed export",
-            ))
-        }
+/// The account's master keys after a sign-in: the key the password (or
+/// the recovery phrase) opened, of the generation its envelope names, and
+/// every older one through the keyring records (`masterKeyring`). Returns
+/// the set (base64 of `MasterKeys::encode`, for `session.masterKeys`).
+#[wasm_bindgen(js_name = openMasterKeys)]
+pub fn open_master_keys(
+    master_key_base64: &str,
+    envelope_base64: &str,
+    binding: &str,
+    keyring: Vec<String>,
+) -> Result<String, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let envelope = account_record::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let generation = account_record::inspect(&envelope)
+        .map_err(|error| js_error(&error.to_string()))?
+        .generation;
+    let keyring = keyring
+        .iter()
+        .map(|record| decode_canonical_base64(record, "keyring record"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let keys =
+        kutup_crypto::master_keys::MasterKeys::open(&master_key, generation, binding, &keyring)
+            .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(keys.encode()))
+}
+
+/// What `inspectAccountRecord` reads from a header.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountRecordInspection {
+    purpose: u16,
+    /// The master key the envelope belongs to (docs/plans/w6-key-hierarchy.md §2).
+    generation: u32,
+}
+
+/// Checks an account record's shape (suite, purpose, object, revision and
+/// padded length) without a key, as the server does before storing one;
+/// throws when it is malformed. Returns its purpose and master-key
+/// generation, as written: nothing is authenticated until it opens.
+#[wasm_bindgen(js_name = inspectAccountRecord)]
+pub fn inspect_account_record(envelope_base64: &str) -> Result<JsValue, JsValue> {
+    let envelope = account_record::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let header =
+        account_record::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&AccountRecordInspection {
+        purpose: header.purpose.as_u16(),
+        generation: header.generation.get(),
+    })
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Purposes with typed exports (mail address keys, Pass vault secrets,
+/// organization keys, contact cards, mail names, identity pins, Chat list
+/// entries, joined meetings, the profile key's own copy, the account head, a
+/// device's head state, its revisions seen, its mail-search store key, its
+/// chain pins and its stored roots): the generic
+/// account-record path never hands their secrets to JavaScript.
+fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> {
+    match AccountRecordPurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
+        AccountRecordPurpose::MailAddressPrivateKey
+        | AccountRecordPurpose::PassVaultSecret
+        | AccountRecordPurpose::OrganizationPrivateKey
+        | AccountRecordPurpose::ContactCard
+        | AccountRecordPurpose::MailName
+        | AccountRecordPurpose::IdentityPins
+        | AccountRecordPurpose::ChatGroupListEntry
+        | AccountRecordPurpose::ChatContactListEntry
+        | AccountRecordPurpose::PhotosLibrary
+        | AccountRecordPurpose::ChatAttachmentLedger
+        | AccountRecordPurpose::JoinedMeeting
+        | AccountRecordPurpose::ChatProfileKeyWrap
+        | AccountRecordPurpose::AccountHead
+        | AccountRecordPurpose::AccountLocalAnchor
+        | AccountRecordPurpose::RevisionSeen
+        | AccountRecordPurpose::MailSearchStoreKey
+        | AccountRecordPurpose::LocalChainPin
+        // The account's roots: `openAccountRoots`, `sealAccountRoots`
+        // (docs/plans/identity-root.md); the keyring: `openMasterKeys`; the
+        // Chat store key: Chat core's own store.
+        | AccountRecordPurpose::IdentityRoot
+        | AccountRecordPurpose::DriveRoot
+        | AccountRecordPurpose::GroupPseudonymRoot
+        | AccountRecordPurpose::CallLinkRoot
+        | AccountRecordPurpose::ObjectIdKey
+        | AccountRecordPurpose::MasterKeyKeyring
+        | AccountRecordPurpose::ChatStoreKey
+        // Records-scope plaintexts: `sealScopeRecord`, `openScopeRecord`.
+        | AccountRecordPurpose::ContactGroup
+        | AccountRecordPurpose::CalendarSettings => Err(js_error(
+            "this account-record purpose has its own typed export",
+        )),
         purpose => Ok(purpose),
     }
 }
@@ -649,13 +784,18 @@ fn generic_account_purpose(value: u8) -> Result<AccountEnvelopePurpose, JsValue>
 /// The purposes whose context is two plain UUIDs. Whiteboard assets and
 /// thumbnails derive their parent id and have typed exports
 /// (`sealWhiteboardAsset`, `sealThumbnail`); the generic path refuses them so
-/// their bindings cannot be bypassed.
+/// their bindings cannot be bypassed. The owner copies under the Drive root
+/// (owned folder keys, link keys) take the root itself
+/// (`sealOwnerCollectionKey`, `sealOwnerLinkKey` and their openers).
 fn generic_drive_purpose(value: u8) -> Result<DriveEnvelopePurpose, JsValue> {
     match DriveEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
-        DriveEnvelopePurpose::WhiteboardAsset
+        DriveEnvelopePurpose::CollectionKey
+        | DriveEnvelopePurpose::PublicLinkKey
+        | DriveEnvelopePurpose::WhiteboardAsset
         | DriveEnvelopePurpose::Thumbnail
         | DriveEnvelopePurpose::PreviousCollectionKey
-        | DriveEnvelopePurpose::PreviousFileKey => Err(js_error(
+        | DriveEnvelopePurpose::PreviousFileKey
+        | DriveEnvelopePurpose::RevisionContent => Err(js_error(
             "this Drive envelope purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -712,6 +852,104 @@ pub fn open_drive_envelope(
     Ok(STANDARD.encode(plaintext))
 }
 
+fn crypto_error(error: kutup_crypto::error::CryptoError) -> JsValue {
+    js_error(&error.to_string())
+}
+
+fn drive_root_at(
+    drive_root_base64: &str,
+    generation: u32,
+) -> Result<
+    (
+        kutup_crypto::account_roots::DriveRoot,
+        kutup_crypto::account_roots::RootGeneration,
+    ),
+    JsValue,
+> {
+    let root = kutup_crypto::account_roots::DriveRoot::from_slice(&decode_canonical_base64(
+        drive_root_base64,
+        "Drive root",
+    )?)
+    .map_err(crypto_error)?;
+    let generation =
+        kutup_crypto::account_roots::RootGeneration::new(generation).map_err(crypto_error)?;
+    Ok((root, generation))
+}
+
+/// An owned folder's key at `epoch`, sealed for its owner under their Drive
+/// root of `drive_generation` (docs/plans/identity-rotation.md §3).
+#[wasm_bindgen(js_name = sealOwnerCollectionKey)]
+pub fn seal_owner_collection_key(
+    collection_key_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    collection_id: &str,
+    owner_id: &str,
+    epoch: u32,
+) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(collection_key_base64, "collection key")?;
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context =
+        DriveEnvelopeContextV1::owner_collection_key(collection_id, owner_id, epoch, generation)
+            .map_err(crypto_error)?;
+    drive_envelope::seal_under_drive_root(&key, &root, context).map_err(crypto_error)
+}
+
+/// Opens an owned folder's key sealed under the owner's Drive root of
+/// `drive_generation`, the generation the envelope names.
+#[wasm_bindgen(js_name = openOwnerCollectionKey)]
+pub fn open_owner_collection_key(
+    envelope_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    collection_id: &str,
+    owner_id: &str,
+    epoch: u32,
+) -> Result<String, JsValue> {
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context =
+        DriveEnvelopeContextV1::owner_collection_key(collection_id, owner_id, epoch, generation)
+            .map_err(crypto_error)?;
+    let key = drive_envelope::open_under_drive_root(envelope_base64, &root, context)
+        .map_err(crypto_error)?;
+    Ok(STANDARD.encode(key.as_slice()))
+}
+
+/// A public link's key, sealed for its owner under their Drive root of
+/// `drive_generation`.
+#[wasm_bindgen(js_name = sealOwnerLinkKey)]
+pub fn seal_owner_link_key(
+    link_key_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    link_id: &str,
+    owner_id: &str,
+) -> Result<String, JsValue> {
+    let key = decode_canonical_base64(link_key_base64, "link key")?;
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context = DriveEnvelopeContextV1::owner_link_key(link_id, owner_id, generation)
+        .map_err(crypto_error)?;
+    drive_envelope::seal_under_drive_root(&key, &root, context).map_err(crypto_error)
+}
+
+/// Opens a link's owner copy sealed under the owner's Drive root of
+/// `drive_generation`.
+#[wasm_bindgen(js_name = openOwnerLinkKey)]
+pub fn open_owner_link_key(
+    envelope_base64: &str,
+    drive_root_base64: &str,
+    drive_generation: u32,
+    link_id: &str,
+    owner_id: &str,
+) -> Result<String, JsValue> {
+    let (root, generation) = drive_root_at(drive_root_base64, drive_generation)?;
+    let context = DriveEnvelopeContextV1::owner_link_key(link_id, owner_id, generation)
+        .map_err(crypto_error)?;
+    let key = drive_envelope::open_under_drive_root(envelope_base64, &root, context)
+        .map_err(crypto_error)?;
+    Ok(STANDARD.encode(key.as_slice()))
+}
+
 #[wasm_bindgen(js_name = sealWhiteboardAsset)]
 pub fn seal_whiteboard_asset(
     plaintext_base64: &str,
@@ -762,7 +1000,8 @@ fn thumbnail_variant(value: &str) -> Result<ThumbnailVariant, JsValue> {
 }
 
 /// Frame, pad and seal a thumbnail under the file key
-/// (docs/plans/drive-thumbnails.md). `format`: 1 JPEG, 2 WebP, 3 PNG.
+/// (docs/plans/drive-thumbnails.md), bound to the content revision it shows
+/// (docs/plans/drive-block-format.md §2). `format`: 1 JPEG, 2 WebP, 3 PNG.
 #[wasm_bindgen(js_name = sealThumbnail)]
 #[allow(clippy::too_many_arguments)]
 pub fn seal_thumbnail(
@@ -773,6 +1012,7 @@ pub fn seal_thumbnail(
     variant: &str,
     file_key_base64: &str,
     file_id: &str,
+    revision_id: &str,
     generation: u32,
 ) -> Result<String, JsValue> {
     let thumbnail = Thumbnail {
@@ -787,19 +1027,22 @@ pub fn seal_thumbnail(
         thumbnail_variant(variant)?,
         &file_key,
         file_id,
+        revision_id,
         generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(envelope))
 }
 
-/// Open a thumbnail of exactly this file, variant and key generation.
+/// Open a thumbnail of exactly this file, content revision, variant and key
+/// generation: one drawn from older content fails, and is drawn again.
 #[wasm_bindgen(js_name = openThumbnail)]
 pub fn open_thumbnail(
     envelope_base64: &str,
     variant: &str,
     file_key_base64: &str,
     expected_file_id: &str,
+    expected_revision_id: &str,
     expected_generation: u32,
 ) -> Result<JsValue, JsValue> {
     let envelope = decode_canonical_base64(envelope_base64, "thumbnail envelope")?;
@@ -809,6 +1052,7 @@ pub fn open_thumbnail(
         thumbnail_variant(variant)?,
         &file_key,
         expected_file_id,
+        expected_revision_id,
         expected_generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -821,161 +1065,123 @@ pub fn open_thumbnail(
     .map_err(|error| js_error(&error.to_string()))
 }
 
-#[wasm_bindgen(js_name = prepareDriveFileBlob)]
-pub fn prepare_drive_file_blob(
+/// A revision's content as JavaScript sees it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RevisionContentView {
+    revision_id: String,
+    manifest_sha256: String,
+    size: f64,
+}
+
+/// Seal what one content revision is (its id, its sealed manifest's SHA-256
+/// and its size) under the file key of `generation`, the generation that
+/// sealed its object (docs/plans/drive-block-format.md §2): every upload and
+/// save sends it with the revision, and readers of a non-current revision
+/// open it before the object.
+#[wasm_bindgen(js_name = sealRevisionContent)]
+pub fn seal_revision_content(
     file_key_base64: &str,
     file_id: &str,
+    revision_id: &str,
+    manifest_sha256: &str,
+    size: f64,
     generation: u32,
-) -> Result<JsValue, JsValue> {
+) -> Result<String, JsValue> {
+    if size.fract() != 0.0 || !(0.0..=9_007_199_254_740_991.0).contains(&size) {
+        return Err(js_error("revision size must be a whole number"));
+    }
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let context = DriveFileBlobContextV1::new(file_id, generation)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let object_header = drive_object::file_blob_header(context);
-    let stream_key = drive_object::derive_file_blob_key(&file_key, context)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&DriveFileBlobPreparationView {
-        object_header: STANDARD.encode(object_header),
-        stream_key: STANDARD.encode(stream_key.as_slice()),
-    })
-    .map_err(|error| js_error(&format!("encode Drive file-blob preparation: {error}")))
-}
-
-#[wasm_bindgen(js_name = openDriveFileBlobHeader)]
-pub fn open_drive_file_blob_header(
-    object_header_base64: &str,
-    file_key_base64: &str,
-    expected_file_id: &str,
-    expected_generation: u32,
-) -> Result<String, JsValue> {
-    let object_header = decode_canonical_base64(object_header_base64, "object header")?;
-    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let expected = DriveFileBlobContextV1::new(expected_file_id, expected_generation)
-        .map_err(|error| js_error(&error.to_string()))?;
-    drive_object::validate_file_blob_header(&object_header, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let stream_key = drive_object::derive_file_blob_key(&file_key, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(stream_key.as_slice()))
-}
-
-/// Return the canonical Chat-media header and its purpose-derived stream key.
-/// JS owns only bounded secretstream I/O, exactly as for Drive file blobs.
-#[wasm_bindgen(js_name = prepareChatMediaObject)]
-pub fn prepare_chat_media_object(
-    attachment_key_base64: &str,
-    attachment_id: &str,
-) -> Result<JsValue, JsValue> {
-    let attachment_key = decode_canonical_base64(attachment_key_base64, "attachment key")?;
-    let context = ChatMediaObjectContextV1::new(attachment_id)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let object_header = chat_media::object_header(context);
-    let stream_key = chat_media::derive_object_key(&attachment_key, context)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&ChatMediaObjectPreparationView {
-        object_header: STANDARD.encode(object_header),
-        stream_key: STANDARD.encode(stream_key.as_slice()),
-    })
-    .map_err(|error| js_error(&format!("encode Chat-media preparation: {error}")))
-}
-
-#[wasm_bindgen(js_name = openChatMediaObjectHeader)]
-pub fn open_chat_media_object_header(
-    object_header_base64: &str,
-    attachment_key_base64: &str,
-    expected_attachment_id: &str,
-) -> Result<String, JsValue> {
-    let object_header = decode_canonical_base64(object_header_base64, "object header")?;
-    let attachment_key = decode_canonical_base64(attachment_key_base64, "attachment key")?;
-    let expected = ChatMediaObjectContextV1::new(expected_attachment_id)
-        .map_err(|error| js_error(&error.to_string()))?;
-    chat_media::validate_object_header(&object_header, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let stream_key = chat_media::derive_object_key(&attachment_key, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(stream_key.as_slice()))
-}
-
-#[wasm_bindgen(js_name = sealChatAttachmentLedger)]
-#[allow(clippy::too_many_arguments)]
-pub fn seal_chat_attachment_ledger(
-    plaintext_base64: &str,
-    ledger_key_base64: &str,
-    account_incarnation_id: &str,
-    entity_id: &str,
-    revision: u64,
-    previous_envelope_digest: &str,
-) -> Result<String, JsValue> {
-    let plaintext = decode_canonical_base64(plaintext_base64, "ledger plaintext")?;
-    let ledger_key = decode_canonical_base64(ledger_key_base64, "ledger key")?;
-    let context = ChatAttachmentLedgerContextV1::new(
-        account_incarnation_id,
-        entity_id,
-        revision,
-        (!previous_envelope_digest.is_empty()).then_some(previous_envelope_digest),
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
-    chat_attachment_ledger::seal_b64(&plaintext, &ledger_key, context)
+    let content = kutup_crypto::revision_content::RevisionContentV1 {
+        revision_id: revision_id.to_owned(),
+        manifest_sha256: manifest_sha256.to_owned(),
+        size: size as u64,
+    };
+    kutup_crypto::revision_content::seal_revision_content(&content, &file_key, file_id, generation)
+        .map(|envelope| STANDARD.encode(envelope))
         .map_err(|error| js_error(&error.to_string()))
 }
 
-#[wasm_bindgen(js_name = deriveChatAttachmentLedgerKey)]
-pub fn derive_chat_attachment_ledger_key(master_key_base64: &str) -> Result<String, JsValue> {
-    let master_key = decode_canonical_base64(master_key_base64, "master key")?;
-    let key = chat_attachment_ledger::derive_account_ledger_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(key.as_slice()))
-}
-
-#[wasm_bindgen(js_name = openChatAttachmentLedger)]
-#[allow(clippy::too_many_arguments)]
-pub fn open_chat_attachment_ledger(
+/// Open the record of exactly this file, revision and key generation:
+/// `{revisionId, manifestSha256, size}`, what the revision's object must be.
+#[wasm_bindgen(js_name = openRevisionContent)]
+pub fn open_revision_content(
     envelope_base64: &str,
-    ledger_key_base64: &str,
-    expected_account_incarnation_id: &str,
-    expected_entity_id: &str,
-    expected_revision: u64,
-    expected_previous_envelope_digest: &str,
-) -> Result<String, JsValue> {
-    let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let ledger_key = decode_canonical_base64(ledger_key_base64, "ledger key")?;
-    let expected = ChatAttachmentLedgerContextV1::new(
-        expected_account_incarnation_id,
-        expected_entity_id,
-        expected_revision,
-        (!expected_previous_envelope_digest.is_empty())
-            .then_some(expected_previous_envelope_digest),
+    file_key_base64: &str,
+    expected_file_id: &str,
+    expected_revision_id: &str,
+    expected_generation: u32,
+) -> Result<JsValue, JsValue> {
+    let envelope = decode_canonical_base64(envelope_base64, "revision content envelope")?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let content = kutup_crypto::revision_content::open_revision_content(
+        &envelope,
+        &file_key,
+        expected_file_id,
+        expected_revision_id,
+        expected_generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    let plaintext = chat_attachment_ledger::open(&envelope, &ledger_key, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(plaintext))
+    serde_wasm_bindgen::to_value(&RevisionContentView {
+        revision_id: content.revision_id,
+        manifest_sha256: content.manifest_sha256,
+        size: content.size as f64,
+    })
+    .map_err(|error| js_error(&error.to_string()))
 }
 
-#[wasm_bindgen(js_name = chatAttachmentLedgerEnvelopeDigest)]
-pub fn chat_attachment_ledger_envelope_digest(envelope_base64: &str) -> Result<String, JsValue> {
-    let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
-    chat_attachment_ledger::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))
+/// Seal one ledger entity's record (the `chatAttachments` scope, its random
+/// id) as revision `revision`, an account record of the account bound by
+/// `binding` under its current master key (docs/chat-media.md).
+#[wasm_bindgen(js_name = sealChatAttachmentLedger)]
+pub fn seal_chat_attachment_ledger(
+    plaintext_base64: &str,
+    master_keys_base64: &str,
+    binding: &str,
+    entity_id: &str,
+    revision: f64,
+) -> Result<String, JsValue> {
+    let plaintext = decode_canonical_base64(plaintext_base64, "ledger plaintext")?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let entity = random_record_id(RecordScope::ChatAttachments, entity_id)?;
+    let envelope = chat_attachment_ledger::seal(
+        &plaintext,
+        keys.current(),
+        keys.generation(),
+        binding,
+        &entity,
+        whole_number(revision, "revision")?,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(envelope))
 }
 
-#[wasm_bindgen(js_name = inspectChatAttachmentLedgerEnvelope)]
-pub fn inspect_chat_attachment_ledger_envelope(envelope_base64: &str) -> Result<JsValue, JsValue> {
-    let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
+/// Open one ledger entity's record of the account bound by `binding`:
+/// `{ plaintext (base64), revision }`.
+#[wasm_bindgen(js_name = openChatAttachmentLedger)]
+pub fn open_chat_attachment_ledger(
+    envelope_base64: &str,
+    master_keys_base64: &str,
+    binding: &str,
+    entity_id: &str,
+) -> Result<JsValue, JsValue> {
+    let envelope = account_record::decode_record_b64(
+        envelope_base64,
+        AccountRecordPurpose::ChatAttachmentLedger,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let master = keys
+        .key_for(&envelope)
         .map_err(|error| js_error(&error.to_string()))?;
-    let header =
-        chat_attachment_ledger::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
-    let view = ChatAttachmentLedgerHeaderView {
-        suite: header.suite.as_u16(),
-        account_incarnation_id: hex::encode(header.context.account_incarnation_id),
-        entity_id: uuid::Uuid::from_bytes(header.context.entity_id)
-            .hyphenated()
-            .to_string(),
-        revision: header.context.revision.to_string(),
-        previous_envelope_digest: hex::encode(header.context.previous_envelope_digest),
-    };
-    serde_wasm_bindgen::to_value(&view)
-        .map_err(|error| js_error(&format!("encode Chat attachment ledger header: {error}")))
+    let entity = random_record_id(RecordScope::ChatAttachments, entity_id)?;
+    let (plaintext, revision) = chat_attachment_ledger::open(&envelope, master, binding, &entity)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&OpenedRecordView {
+        plaintext: STANDARD.encode(plaintext),
+        revision: revision as f64,
+    })
+    .map_err(|_| js_error("encode opened ledger record"))
 }
 
 #[wasm_bindgen(js_name = encodeChatAttachmentLedgerEntry)]
@@ -1004,23 +1210,25 @@ pub fn seal_collab_frame(
     key_generation: u32,
     doc_key_id: u32,
     file_id: &str,
-    sender_device_id: &str,
+    device_id: u32,
+    manifest_sequence: &str,
     sequence: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "collaboration plaintext")?;
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let sender_device_id = sender_device_id
+    let manifest_sequence = manifest_sequence
         .parse::<u64>()
-        .map_err(|_| js_error("sender device id must be canonical u64"))?;
+        .map_err(|_| js_error("manifest sequence must be canonical u64"))?;
     let sequence = sequence
         .parse::<u64>()
         .map_err(|_| js_error("sequence must be canonical u64"))?;
-    let context = CollabFrameContextV1::new(
+    let context = CollabFrameContextV3::new(
         kind,
         key_generation,
         doc_key_id,
         file_id,
-        sender_device_id,
+        device_id,
+        manifest_sequence,
         sequence,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -1029,12 +1237,54 @@ pub fn seal_collab_frame(
         .map_err(|error| js_error(&error.to_string()))
 }
 
+fn sender_account(value: &str) -> Result<AccountRef, JsValue> {
+    value
+        .parse::<AccountRef>()
+        .map_err(|_| js_error("the frame's sender must be an account reference"))
+}
+
+/// What the device's frame key signs: the frame under its sender account.
 #[wasm_bindgen(js_name = collabFrameSigningBytes)]
-pub fn collab_frame_signing_bytes(frame_base64: &str) -> Result<String, JsValue> {
+pub fn collab_frame_signing_bytes(frame_base64: &str, sender: &str) -> Result<String, JsValue> {
     let frame = decode_canonical_base64(frame_base64, "collaboration frame")?;
-    envelope::signing_bytes(&frame)
+    envelope::signing_bytes(&frame, &sender_account(sender)?)
         .map(|bytes| STANDARD.encode(bytes))
         .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeliveredCollabFrameView {
+    sender: String,
+    frame: String,
+}
+
+/// A frame as a server delivers it (its sender account, then the packed
+/// frame): `{ sender, frame }`, the frame canonical base64. Whether the
+/// sender signed it is `verifyCollabFrame`'s question.
+#[wasm_bindgen(js_name = deliveredCollabFrame)]
+pub fn delivered_collab_frame(delivered_base64: &str) -> Result<JsValue, JsValue> {
+    let bytes = decode_canonical_base64(delivered_base64, "delivered collaboration frame")?;
+    let (sender, frame) =
+        envelope::delivered(&bytes).map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&DeliveredCollabFrameView {
+        sender: sender.to_string(),
+        frame: STANDARD.encode(frame),
+    })
+    .map_err(|error| js_error(&format!("encode delivered frame: {error}")))
+}
+
+/// Whether `sender` signed the frame with `frameKey` (canonical base64 of
+/// the Ed25519 key its account's manifest lists for the frame's device).
+#[wasm_bindgen(js_name = verifyCollabFrame)]
+pub fn verify_collab_frame(
+    frame_base64: &str,
+    sender: &str,
+    frame_key_base64: &str,
+) -> Result<bool, JsValue> {
+    let frame = decode_canonical_base64(frame_base64, "collaboration frame")?;
+    let key = decode_canonical_base64(frame_key_base64, "frame key")?;
+    Ok(envelope::verify(&frame, &sender_account(sender)?, &key).is_ok())
 }
 
 #[wasm_bindgen(js_name = attachCollabFrameSignature)]
@@ -1065,11 +1315,182 @@ pub fn open_collab_frame(
         kind: parsed.kind,
         key_generation: parsed.key_generation,
         doc_key_id: parsed.doc_key_id,
-        sender_device_id: parsed.sender_device_id.to_string(),
+        device_id: parsed.device_id,
+        manifest_sequence: parsed.manifest_sequence.to_string(),
         sequence: parsed.sequence.to_string(),
         plaintext: STANDARD.encode(plaintext),
     })
     .map_err(|error| js_error(&format!("encode collaboration frame: {error}")))
+}
+
+pub(crate) fn account_keys(
+    identity_root_base64: &str,
+) -> Result<kutup_crypto::identity::AccountIdentityKeysV1, JsValue> {
+    let identity_root: [u8; 32] = decode_canonical_base64(identity_root_base64, "identity root")?
+        .try_into()
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
+    kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(&identity_root[..])?)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Signs `next` with the authority of `keys` (which checks `next` names
+/// it), checks it follows `head`, and hands it to JavaScript.
+fn signed(
+    mut next: kutup_chat_proto::AccountManifestV3,
+    head: Option<&kutup_chat_proto::AccountManifestV3>,
+    keys: &kutup_crypto::identity::AccountIdentityKeysV1,
+) -> Result<JsValue, JsValue> {
+    next.sign(keys.authority_signing_key())
+        .map_err(|error| js_error(&error))?;
+    next.verify_successor(head)
+        .map_err(|error| js_error(&error))?;
+    serde_wasm_bindgen::to_value(&next)
+        .map_err(|error| js_error(&format!("encode account manifest: {error}")))
+}
+
+/// A manifest that didn't parse: a newer one's error as it is (it starts
+/// with the *newer than me* prefix, which the web checks), any other named.
+fn manifest_error(what: &str, error: impl std::fmt::Display) -> JsValue {
+    let error = error.to_string();
+    // serde-wasm-bindgen shows its message as a JS `Error` ("Error: …").
+    let message = error.strip_prefix("Error: ").unwrap_or(&error);
+    if message.starts_with(kutup_crypto::error::NEWER_FORMAT_PREFIX) {
+        js_error(message)
+    } else {
+        js_error(&format!("{what}: {error}"))
+    }
+}
+
+fn head_manifest(head: JsValue) -> Result<Option<kutup_chat_proto::AccountManifestV3>, JsValue> {
+    if head.is_null() || head.is_undefined() {
+        return Ok(None);
+    }
+    let head: kutup_chat_proto::AccountManifestV3 = serde_wasm_bindgen::from_value(head)
+        .map_err(|error| manifest_error("account manifest", error))?;
+    head.verify().map_err(|error| js_error(&error))?;
+    Ok(Some(head))
+}
+
+/// The account's next manifest: `head` (as the server gave it; null when the
+/// account has none yet) with `entry` listed in place of any entry of its id,
+/// signed with the authority the identity root derives
+/// (docs/plans/one-device-list.md). The head must name that authority; an
+/// account's first manifest names `account` and no Chat identity.
+#[wasm_bindgen(js_name = listDeviceInManifest)]
+pub fn list_device_in_manifest(
+    head: JsValue,
+    entry: JsValue,
+    issued_at: &str,
+    identity_root_base64: &str,
+    account: &str,
+) -> Result<JsValue, JsValue> {
+    let mut entry: kutup_chat_proto::AccountManifestDeviceV3 =
+        serde_wasm_bindgen::from_value(entry)
+            .map_err(|error| js_error(&format!("manifest entry: {error}")))?;
+    // The entry is this device's: it lists what this build reads.
+    entry.capabilities =
+        kutup_chat_proto::Capability::of_this_build(&entry.kind, entry.chat.is_some());
+    entry.validate().map_err(|error| js_error(&error))?;
+    let keys = account_keys(identity_root_base64)?;
+    let head = head_manifest(head)?;
+    let next = match &head {
+        Some(head) => {
+            let mut devices = head.devices.clone();
+            devices.retain(|device| device.device_id != entry.device_id);
+            devices.push(entry);
+            head.successor(devices, issued_at)
+                .map_err(|error| js_error(&error))?
+        }
+        None => kutup_chat_proto::AccountManifestV3::first(
+            account
+                .parse()
+                .map_err(|_| js_error("an account reference is malformed"))?,
+            &keys,
+            vec![entry],
+            issued_at,
+        ),
+    };
+    signed(next, head.as_ref(), &keys)
+}
+
+/// The capability codes a device of `kind` of this build lists in its
+/// manifest entry (`chat`: it takes Chat): a device whose entry lists others
+/// lists itself again.
+#[wasm_bindgen(js_name = deviceCapabilities)]
+pub fn device_capabilities(kind: &str, chat: bool) -> Result<Vec<u16>, JsValue> {
+    let kind = kutup_chat_proto::DeviceKind::parse(kind).map_err(|error| js_error(&error))?;
+    Ok(kutup_chat_proto::Capability::of_this_build(&kind, chat))
+}
+
+/// Checks `head`, the account's head as its server gave it (null: it has
+/// none), against `pin`, the newest manifest of its own account this client
+/// saw (null: none), for the account `account` names and the incarnation
+/// the identity root derives; returns the pin to keep (null while there is
+/// none). Throws on a head that doesn't verify, names another account or
+/// incarnation, or is older than the pin, and on no head once there is a
+/// pin ([`kutup_chat_proto::AccountManifestPinV1::check`]).
+#[wasm_bindgen(js_name = checkOwnManifestHead)]
+pub fn check_own_manifest_head(
+    pin: JsValue,
+    head: JsValue,
+    identity_root_base64: &str,
+    account: &str,
+) -> Result<JsValue, JsValue> {
+    let keys = account_keys(identity_root_base64)?;
+    let account: kutup_crypto::account_ref::AccountRef = account
+        .parse()
+        .map_err(|_| js_error("an account reference is malformed"))?;
+    let pin: Option<kutup_chat_proto::AccountManifestPinV1> = if pin.is_null() || pin.is_undefined()
+    {
+        None
+    } else {
+        // A pin this client can't read is no pin it trusts: none.
+        serde_wasm_bindgen::from_value(pin).ok()
+    };
+    let head: Option<kutup_chat_proto::AccountManifestV3> = if head.is_null() || head.is_undefined()
+    {
+        None
+    } else {
+        Some(
+            serde_wasm_bindgen::from_value(head)
+                .map_err(|error| manifest_error("account manifest", error))?,
+        )
+    };
+    let next = kutup_chat_proto::AccountManifestPinV1::check(
+        pin.as_ref(),
+        head.as_ref(),
+        &account,
+        &keys.incarnation_id(),
+    )
+    .map_err(|error| js_error(&error))?;
+    match next {
+        Some(next) => serde_wasm_bindgen::to_value(&next)
+            .map_err(|error| js_error(&format!("encode manifest pin: {error}"))),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// The account's next manifest without the devices `device_ids` names (a
+/// removal, or this device signing out), signed as
+/// [`list_device_in_manifest`]. It must keep at least one device.
+#[wasm_bindgen(js_name = removeDevicesFromManifest)]
+pub fn remove_devices_from_manifest(
+    head: JsValue,
+    device_ids: Vec<u32>,
+    issued_at: &str,
+    identity_root_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let keys = account_keys(identity_root_base64)?;
+    let head = head_manifest(head)?.ok_or_else(|| js_error("the account has no manifest"))?;
+    let mut devices = head.devices.clone();
+    devices.retain(|device| !device_ids.contains(&device.device_id));
+    if devices.is_empty() {
+        return Err(js_error("a manifest keeps at least one device"));
+    }
+    let next = head
+        .successor(devices, issued_at)
+        .map_err(|error| js_error(&error))?;
+    signed(next, Some(&head), &keys)
 }
 
 /// The file-key generation a frame names in its public header, so a
@@ -1086,23 +1507,25 @@ pub fn collab_frame_key_generation(frame_base64: &str) -> Result<u32, JsValue> {
 #[wasm_bindgen(js_name = createCollectionEpochStatement)]
 #[allow(clippy::too_many_arguments)]
 pub fn create_collection_epoch_statement(
-    master_key_base64: &str,
+    identity_root_base64: &str,
     collection_key_base64: &str,
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     epoch: u32,
     previous_statement_hash: &str,
 ) -> Result<String, JsValue> {
-    let master_key = decode_canonical_base64(master_key_base64, "master key")?;
-    let master_key: [u8; 32] = master_key
+    let identity_root = decode_canonical_base64(identity_root_base64, "identity root")?;
+    let identity_root: [u8; 32] = identity_root
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let statement = kutup_crypto::collection_epoch::CollectionEpochStatementV1::create(
         collection_id,
-        owner_user_id,
+        owner_account_id,
         epoch,
         (!previous_statement_hash.is_empty()).then_some(previous_statement_hash),
         &collection_key,
@@ -1159,7 +1582,7 @@ pub fn seal_previous_collection_key(
     previous_key_base64: &str,
     key_base64: &str,
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     epoch: u32,
 ) -> Result<String, JsValue> {
     let previous = decode_canonical_base64(previous_key_base64, "previous collection key")?;
@@ -1168,7 +1591,7 @@ pub fn seal_previous_collection_key(
         &previous,
         &key,
         collection_id,
-        owner_user_id,
+        owner_account_id,
         epoch,
     )
     .map_err(|error| js_error(&error.to_string()))
@@ -1184,13 +1607,13 @@ struct EpochLinkJson {
 
 /// Every key of a folder, oldest first, as an array of base64 strings, from
 /// its current key and complete signed history (`chain`: the
-/// `GET /api/collections/{id}/epochs` array). Fails unless every statement
+/// `GET /api/v1/drive/collections/{id}/epochs` array). Fails unless every statement
 /// is the owner's, chained, and every key matches its commitment.
 #[wasm_bindgen(js_name = unlockCollectionKeyring)]
 pub fn unlock_collection_keyring(
     current_key_base64: &str,
     collection_id: &str,
-    owner_user_id: &str,
+    owner_account_id: &str,
     owner_authority_public_key_base64: &str,
     chain: JsValue,
 ) -> Result<JsValue, JsValue> {
@@ -1210,7 +1633,7 @@ pub fn unlock_collection_keyring(
     let keys = kutup_crypto::collection_keyring::unlock(
         &current,
         collection_id,
-        owner_user_id,
+        owner_account_id,
         &authority,
         &chain,
     )
@@ -1276,8 +1699,8 @@ pub fn file_key_at(
 #[allow(clippy::too_many_arguments)]
 pub fn seal_named_share_envelope(
     collection_key_base64: &str,
-    sender_master_key_base64: &str,
-    recipient_hpke_public_key_base64: &str,
+    sender_identity_root_base64: &str,
+    recipient_xwing_public_key_base64: &str,
     collection_id: &str,
     epoch: u32,
     sender: JsValue,
@@ -1286,16 +1709,19 @@ pub fn seal_named_share_envelope(
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
-    let sender_master_key = decode_canonical_base64(sender_master_key_base64, "master key")?;
-    let sender_master_key: [u8; 32] = sender_master_key
+    let sender_identity_root =
+        decode_canonical_base64(sender_identity_root_base64, "identity root")?;
+    let sender_identity_root: [u8; 32] = sender_identity_root
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
-        recipient_hpke_public_key_base64,
+        recipient_xwing_public_key_base64,
         "recipient HPKE public key",
     )?;
-    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &sender_identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     kutup_crypto::named_share::NamedShareEnvelopeV1::seal(
         &collection_key,
         collection_id,
@@ -1355,8 +1781,8 @@ pub fn open_named_share_envelope(
 #[allow(clippy::too_many_arguments)]
 pub fn seal_file_share_envelope(
     file_key_base64: &str,
-    sender_master_key_base64: &str,
-    recipient_hpke_public_key_base64: &str,
+    sender_identity_root_base64: &str,
+    recipient_xwing_public_key_base64: &str,
     file_id: &str,
     generation: u32,
     sender: JsValue,
@@ -1365,16 +1791,19 @@ pub fn seal_file_share_envelope(
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let sender_master_key = decode_canonical_base64(sender_master_key_base64, "master key")?;
-    let sender_master_key: [u8; 32] = sender_master_key
+    let sender_identity_root =
+        decode_canonical_base64(sender_identity_root_base64, "identity root")?;
+    let sender_identity_root: [u8; 32] = sender_identity_root
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))?;
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
-        recipient_hpke_public_key_base64,
+        recipient_xwing_public_key_base64,
         "recipient HPKE public key",
     )?;
-    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &sender_identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     kutup_crypto::named_share::FileShareEnvelopeV1::seal(
         &file_key,
         file_id,
@@ -1433,24 +1862,26 @@ pub fn open_file_share_envelope(
 #[wasm_bindgen(js_name = sealProfileKeyEnvelope)]
 pub fn seal_profile_key_envelope(
     profile_key_base64: &str,
-    sender_master_key_base64: &str,
-    recipient_hpke_public_key_base64: &str,
+    sender_identity_root_base64: &str,
+    recipient_xwing_public_key_base64: &str,
     sender: JsValue,
     sender_incarnation_id: &str,
     recipient: JsValue,
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let profile_key = decode_canonical_base64(profile_key_base64, "profile key")?;
-    let sender_master_key: [u8; 32] =
-        decode_canonical_base64(sender_master_key_base64, "master key")?
+    let sender_identity_root: [u8; 32] =
+        decode_canonical_base64(sender_identity_root_base64, "identity root")?
             .try_into()
-            .map_err(|_| js_error("master key must be 32 bytes"))?;
+            .map_err(|_| js_error("identity root must be 32 bytes"))?;
     let recipient_public_key = decode_canonical_base64(
-        recipient_hpke_public_key_base64,
+        recipient_xwing_public_key_base64,
         "recipient HPKE public key",
     )?;
-    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&sender_master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let sender_identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &sender_identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     kutup_crypto::profile_key_share::ProfileKeyEnvelopeV1::seal(
         &profile_key,
         &kutup_crypto::profile_key_share::ProfileKeyParties {
@@ -1601,10 +2032,11 @@ pub(crate) fn js_error(message: &str) -> JsValue {
     JsValue::from_str(message)
 }
 
-/// A Drive file's metadata (name, type, size, photo details), checked and
-/// written canonically (docs/plans/photos.md): JSON text in, the exact JSON
-/// text to seal out. Opening metadata runs it through here too, so every
-/// client refuses the same things.
+/// A Drive file's metadata (name, type, size, photo details, and the content
+/// revision it commits to), checked and written canonically
+/// (docs/plans/photos.md, docs/plans/drive-block-format.md §2): JSON text
+/// in, the exact JSON text to seal out. Opening metadata runs it through here
+/// too, so every client refuses the same things.
 #[wasm_bindgen(js_name = canonicalFileMetadata)]
 pub fn canonical_file_metadata(json: &str) -> Result<String, JsValue> {
     let metadata = kutup_crypto::file_metadata::decode(json.as_bytes())
@@ -1739,13 +2171,18 @@ pub fn drive_folder_hash_key(
         .map_err(|error| js_error(&error.to_string()))
 }
 
-/// The hash key for an account's top-level folders, from its master key.
+/// The hash key for an account's top-level folders, from its Drive root
+/// (the folder records the root's generation next to the hash).
 #[wasm_bindgen(js_name = driveTopLevelHashKey)]
-pub fn drive_top_level_hash_key(master_key_base64: &str) -> Result<String, JsValue> {
-    let key = decode_canonical_base64(master_key_base64, "master key")?;
-    kutup_crypto::drive_names::top_level_hash_key(&key)
+pub fn drive_top_level_hash_key(drive_root_base64: &str) -> Result<String, JsValue> {
+    let root = kutup_crypto::account_roots::DriveRoot::from_slice(&decode_canonical_base64(
+        drive_root_base64,
+        "Drive root",
+    )?)
+    .map_err(crypto_error)?;
+    kutup_crypto::drive_names::top_level_hash_key(&root)
         .map(|key| STANDARD.encode(key))
-        .map_err(|error| js_error(&error.to_string()))
+        .map_err(crypto_error)
 }
 
 /// The hash a name is kept unique by in its folder (lowercase hex).
@@ -1774,45 +2211,19 @@ pub fn drive_canonical_name(name: &str) -> String {
     kutup_crypto::drive_names::canonical_name(name)
 }
 
-/// The Photos library record's key (docs/plans/photos.md), from the master key.
-#[wasm_bindgen(js_name = photosLibraryKey)]
-pub fn photos_library_key(master_key_base64: &str) -> Result<String, JsValue> {
-    let master = decode_canonical_base64(master_key_base64, "master key")?;
-    kutup_crypto::photos_library::derive_photos_library_key(&master)
-        .map(|key| STANDARD.encode(key.as_slice()))
-        .map_err(|error| js_error(&error.to_string()))
-}
-
-fn photos_library_context(
-    account_incarnation_id: &str,
-    revision: f64,
-    previous_digest: Option<String>,
-) -> Result<kutup_crypto::photos_library::PhotosLibraryContextV1, JsValue> {
-    kutup_crypto::photos_library::PhotosLibraryContextV1::new(
-        account_incarnation_id,
-        whole_number(revision, "revision")?,
-        previous_digest.as_deref(),
-    )
-    .map_err(|error| js_error(&error.to_string()))
-}
-
-#[derive(Serialize)]
-struct SealedPhotosLibrary {
-    envelope: String,
-    digest: String,
-}
-
-/// Seal the library (JSON `{favourites, archived, hidden}`, put in canonical
-/// order here) as `revision`, after the record whose digest is given (none
-/// for revision 1). Returns `{ envelope, digest }`.
+/// Seal the library (JSON `{v, favourites, archived, hidden, …}`, put in
+/// canonical order here) as revision `revision` of the record `record_id`
+/// (the `photosLibrary` scope, a random id), an account record of the
+/// account bound by `binding` under its current master key. Returns the
+/// envelope (base64).
 #[wasm_bindgen(js_name = sealPhotosLibrary)]
 pub fn seal_photos_library(
     library_json: &str,
-    key_base64: &str,
-    account_incarnation_id: &str,
+    master_keys_base64: &str,
+    binding: &str,
+    record_id: &str,
     revision: f64,
-    previous_digest: Option<String>,
-) -> Result<JsValue, JsValue> {
+) -> Result<String, JsValue> {
     use kutup_crypto::photos_library;
     let library: photos_library::PhotosLibraryV1 =
         serde_json::from_str(library_json).map_err(|_| js_error("Photos library is not valid"))?;
@@ -1821,73 +2232,47 @@ pub fn seal_photos_library(
         .map_err(|error| js_error(&error.to_string()))?;
     let plaintext =
         photos_library::encode_library(&library).map_err(|error| js_error(&error.to_string()))?;
-    let key = decode_canonical_base64(key_base64, "Photos library key")?;
-    let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
-    let envelope = photos_library::seal(&plaintext, &key, context)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let digest =
-        photos_library::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&SealedPhotosLibrary {
-        envelope: STANDARD.encode(envelope),
-        digest,
-    })
-    .map_err(|_| js_error("encode sealed library"))
+    let keys = master_keys_of(master_keys_base64)?;
+    let id = random_record_id(RecordScope::PhotosLibrary, record_id)?;
+    let envelope = photos_library::seal(
+        &plaintext,
+        keys.current(),
+        keys.generation(),
+        binding,
+        &id,
+        whole_number(revision, "revision")?,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(envelope))
 }
 
-/// Open a library record as exactly the revision expected; its JSON text.
+/// Open the library record `record_id` of the account bound by `binding`:
+/// `{ plaintext (the library's JSON text), revision }`.
 #[wasm_bindgen(js_name = openPhotosLibrary)]
 pub fn open_photos_library(
     envelope_base64: &str,
-    key_base64: &str,
-    account_incarnation_id: &str,
-    revision: f64,
-    previous_digest: Option<String>,
-) -> Result<String, JsValue> {
+    master_keys_base64: &str,
+    binding: &str,
+    record_id: &str,
+) -> Result<JsValue, JsValue> {
     use kutup_crypto::photos_library;
-    let envelope = photos_library::decode_canonical_b64(envelope_base64)
+    let envelope =
+        account_record::decode_record_b64(envelope_base64, AccountRecordPurpose::PhotosLibrary)
+            .map_err(|error| js_error(&error.to_string()))?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let master = keys
+        .key_for(&envelope)
         .map_err(|error| js_error(&error.to_string()))?;
-    let key = decode_canonical_base64(key_base64, "Photos library key")?;
-    let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
-    let plaintext = photos_library::open(&envelope, &key, context)
+    let id = random_record_id(RecordScope::PhotosLibrary, record_id)?;
+    let (plaintext, revision) = photos_library::open(&envelope, master, binding, &id)
         .map_err(|error| js_error(&error.to_string()))?;
     let library =
         photos_library::decode_library(&plaintext).map_err(|error| js_error(&error.to_string()))?;
-    serde_json::to_string(&library).map_err(|_| js_error("encode library"))
-}
-
-/// A record's digest (its successor's predecessor), lowercase hex.
-#[wasm_bindgen(js_name = photosLibraryDigest)]
-pub fn photos_library_digest(envelope_base64: &str) -> Result<String, JsValue> {
-    use kutup_crypto::photos_library;
-    let envelope = photos_library::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
-    photos_library::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PhotosLibraryHeaderJson {
-    account_incarnation_id: String,
-    revision: f64,
-    /// Absent for revision 1.
-    previous_digest: Option<String>,
-}
-
-/// A library record's public header: whose, which revision, after which one.
-#[wasm_bindgen(js_name = inspectPhotosLibrary)]
-pub fn inspect_photos_library(envelope_base64: &str) -> Result<JsValue, JsValue> {
-    use kutup_crypto::photos_library;
-    let envelope = photos_library::decode_canonical_b64(envelope_base64)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let header =
-        photos_library::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&PhotosLibraryHeaderJson {
-        account_incarnation_id: hex::encode(header.account_incarnation_id),
-        revision: header.revision as f64,
-        previous_digest: (header.revision > 1)
-            .then(|| hex::encode(header.previous_envelope_digest)),
+    serde_wasm_bindgen::to_value(&OpenedRecordView {
+        plaintext: serde_json::to_string(&library).map_err(|_| js_error("encode library"))?,
+        revision: revision as f64,
     })
-    .map_err(|_| js_error("encode header"))
+    .map_err(|_| js_error("encode opened library"))
 }
 
 // --- mail address keys (docs/plans/mail-address-keys.md) ---------------------
@@ -1906,6 +2291,47 @@ struct MailAddressKeyView {
 
 /// A 32-byte key from canonical base64, wiped when dropped (as is the decoded
 /// copy).
+/// The identity root a page passes (canonical base64 of 32 bytes): every
+/// export that signs or seals as the account takes it, never the master key
+/// (docs/plans/identity-root.md).
+fn identity_root_32(identity_root_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
+    let bytes = decode_canonical_base64(identity_root_base64, "identity root")?;
+    let root: [u8; 32] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| js_error("identity root must be 32 bytes"))?;
+    Ok(zeroize::Zeroizing::new(root))
+}
+
+/// The account's object-id key a page passes (canonical base64 of 32 bytes).
+fn object_id_key_of(
+    object_id_key_base64: &str,
+) -> Result<kutup_crypto::account_roots::ObjectIdKey, JsValue> {
+    kutup_crypto::account_roots::ObjectIdKey::from_slice(&decode_canonical_base64(
+        object_id_key_base64,
+        "object-id key",
+    )?)
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+fn identity_root_of(bytes: &[u8]) -> Result<kutup_crypto::account_roots::IdentityRoot, JsValue> {
+    kutup_crypto::account_roots::IdentityRoot::from_slice(bytes)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// The account's master keys as a page passes them: base64 of
+/// `MasterKeys::encode` (`session.masterKeys`), the current key and every
+/// older one (docs/plans/mk-rotation-exercise.md). Records are sealed under
+/// the current one and opened under the one their header names.
+fn master_keys_of(
+    master_keys_base64: &str,
+) -> Result<kutup_crypto::master_keys::MasterKeys, JsValue> {
+    let decoded =
+        zeroize::Zeroizing::new(decode_canonical_base64(master_keys_base64, "master keys")?);
+    kutup_crypto::master_keys::MasterKeys::decode(&decoded)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 fn master_key_32(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
     let decoded =
         zeroize::Zeroizing::new(decode_canonical_base64(master_key_base64, "master key")?);
@@ -1916,19 +2342,21 @@ fn master_key_32(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>
     Ok(zeroize::Zeroizing::new(key))
 }
 
-/// Generates an address key and seals its secret part under the master key.
+/// Generates an address key and seals its secret part under the account's
+/// current master key.
 #[wasm_bindgen(js_name = generateMailAddressKey)]
 pub fn generate_mail_address_key(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     address: &str,
     created_at_secs: u32,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let key = kutup_crypto::mail_key::generate_address_key(address, created_at_secs)
         .map_err(|error| js_error(&error.to_string()))?;
     let envelope = kutup_crypto::mail_key::seal_address_key(
-        &master_key[..],
+        keys.current(),
+        keys.generation(),
         binding,
         address,
         &key.secret_key,
@@ -1971,20 +2399,21 @@ pub fn export_mail_address_key(
 /// with `wrong passphrase` when the passphrase does not open it.
 #[wasm_bindgen(js_name = importMailAddressKey)]
 pub fn import_mail_address_key(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     address: &str,
     file: &[u8],
     passphrase: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let key = kutup_crypto::mail_key::import_address_secret_key(file, passphrase, address)
         .map_err(|error| match error {
             kutup_crypto::CryptoError::AuthFailed => js_error("wrong passphrase"),
             error => js_error(&error.to_string()),
         })?;
     let envelope = kutup_crypto::mail_key::seal_address_key(
-        &master_key[..],
+        keys.current(),
+        keys.generation(),
         binding,
         address,
         &key.secret_key,
@@ -2024,27 +2453,26 @@ pub fn inspect_mail_address_public_key(
     .map_err(|error| js_error(&format!("encode public key: {error}")))
 }
 
+/// An address key's secret, opened under the master key of the generation
+/// its envelope names (`master_keys_base64`: the account's set).
 pub(crate) fn open_mail_secret(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
 ) -> Result<zeroize::Zeroizing<Vec<u8>>, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let envelope = decode_canonical_base64(envelope_base64, "envelope")?;
     let fingerprint: [u8; 20] = hex::decode(fingerprint_hex)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| js_error("fingerprint must be 40 hex digits"))?;
-    kutup_crypto::mail_key::open_address_key(
-        &envelope,
-        &master_key[..],
-        binding,
-        address,
-        &fingerprint,
-    )
-    .map_err(|error| js_error(&error.to_string()))
+    let master_key = keys
+        .key_for(&envelope)
+        .map_err(|error| js_error(&error.to_string()))?;
+    kutup_crypto::mail_key::open_address_key(&envelope, master_key, binding, address, &fingerprint)
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 /// A message opened with an address key (docs/plans/mail.md).
@@ -2194,7 +2622,7 @@ struct MailGroupKeyView {
 struct GroupMemberInput {
     account: kutup_crypto::account_ref::AccountRef,
     incarnation_id: String,
-    hpke_public_key: String,
+    xwing_public_key: String,
 }
 
 /// A group key as a member holds it: their share and what opens it.
@@ -2227,7 +2655,7 @@ fn seal_shares(
     members
         .iter()
         .map(|member| {
-            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.xwing_public_key, "member HPKE public key")?;
             kutup_crypto::mail_key::seal_group_key_share(
                 group_secret,
                 group_id,
@@ -2623,6 +3051,10 @@ pub fn armor_mail_public_key(public_key_base64: &str) -> Result<String, JsValue>
 #[derive(serde::Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MailKeyEntryView {
+    /// The OpenPGP key version (4 when absent): a list keeps entries of
+    /// versions this reader doesn't use (docs/plans/format-evolution.md).
+    #[serde(default = "v4_key")]
+    key_version: u8,
     fingerprint: String,
     sha256_fingerprint: String,
     primary: bool,
@@ -2664,6 +3096,10 @@ fn hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], JsValu
         .map_err(|_| js_error(&format!("{field} has the wrong length")))
 }
 
+fn v4_key() -> u8 {
+    kutup_crypto::mail_key::KEY_VERSION_V4
+}
+
 fn signed_list_view(signed: &kutup_crypto::mail_key::SignedMailKeyListV1) -> SignedMailKeyListView {
     let list = &signed.list;
     SignedMailKeyListView {
@@ -2678,7 +3114,8 @@ fn signed_list_view(signed: &kutup_crypto::mail_key::SignedMailKeyListV1) -> Sig
             .keys
             .iter()
             .map(|key| MailKeyEntryView {
-                fingerprint: hex::encode(key.fingerprint),
+                key_version: key.key_version,
+                fingerprint: hex::encode(&key.fingerprint),
                 sha256_fingerprint: hex::encode(key.sha256_fingerprint),
                 primary: key.primary,
                 flags: key.flags,
@@ -2696,8 +3133,13 @@ fn mail_key_list(
 ) -> Result<kutup_crypto::mail_key::MailKeyListV1, JsValue> {
     let mut keys = Vec::with_capacity(input.keys.len());
     for key in &input.keys {
+        let fingerprint = hex::decode(&key.fingerprint)
+            .ok()
+            .filter(|bytes| hex::encode(bytes) == key.fingerprint)
+            .ok_or_else(|| js_error("fingerprint must be lowercase hex"))?;
         keys.push(kutup_crypto::mail_key::MailKeyEntryV1 {
-            fingerprint: hex_array(&key.fingerprint, "fingerprint")?,
+            key_version: key.key_version,
+            fingerprint,
             sha256_fingerprint: hex_array(&key.sha256_fingerprint, "sha256Fingerprint")?,
             primary: key.primary,
             flags: key.flags,
@@ -2726,12 +3168,14 @@ fn mail_key_list(
 /// Signs an address's key list with the account authority derived from the
 /// master key; the authority and incarnation ids are filled in here.
 #[wasm_bindgen(js_name = signMailKeyList)]
-pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+pub fn sign_mail_key_list(identity_root_base64: &str, list: JsValue) -> Result<JsValue, JsValue> {
+    let identity_root = identity_root_32(identity_root_base64)?;
     let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
         .map_err(|error| js_error(&format!("key list: {error}")))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let list = mail_key_list(input, &identity.authority_public_key())?;
     let signed = list
         .sign(identity.authority_signing_key())
@@ -2914,7 +3358,7 @@ pub fn reshare_mail_group_signer(
     members
         .iter()
         .map(|member| {
-            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.xwing_public_key, "member HPKE public key")?;
             kutup_crypto::mail_group::seal_group_signing_share(
                 &signer,
                 &group_id,
@@ -2970,7 +3414,7 @@ pub fn new_mail_group_signer(
     let shares = members
         .iter()
         .map(|member| {
-            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_xwing_key(&member.xwing_public_key, "member HPKE public key")?;
             seal_group_signing_share(
                 &signer,
                 group_id,
@@ -3026,7 +3470,7 @@ fn public_key_32(value: &str, what: &str) -> Result<[u8; 32], JsValue> {
 
 /// A Drive HPKE public key: X-Wing's 1216 bytes (identity suite 2,
 /// docs/plans/pq-shares.md).
-fn drive_hpke_key(
+fn drive_xwing_key(
     value: &str,
     what: &str,
 ) -> Result<[u8; kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN], JsValue> {
@@ -3045,13 +3489,15 @@ fn drive_hpke_key(
 /// (`{ server, accountId }`).
 #[wasm_bindgen(js_name = signDriveKeyBinding)]
 pub fn sign_drive_key_binding(
-    master_key_base64: &str,
+    identity_root_base64: &str,
     account: JsValue,
     binding_epoch: u32,
 ) -> Result<String, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity_root = identity_root_32(identity_root_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let signature = kutup_crypto::drive_key_binding::sign(
         &identity,
         &account_arg(account, "account account")?,
@@ -3068,7 +3514,7 @@ pub fn sign_drive_key_binding(
 pub fn verify_drive_key_binding(
     account: JsValue,
     authority_public_key_base64: &str,
-    drive_hpke_public_key_base64: &str,
+    drive_xwing_public_key_base64: &str,
     drive_signing_public_key_base64: &str,
     binding_base64: &str,
     binding_epoch: u32,
@@ -3079,7 +3525,7 @@ pub fn verify_drive_key_binding(
             &account_arg(account, "account account")?,
             &public_key_32(authority_public_key_base64, "authority key")?,
             binding_epoch,
-            &drive_hpke_key(drive_hpke_public_key_base64, "Drive HPKE key")?,
+            &drive_xwing_key(drive_xwing_public_key_base64, "Drive HPKE key")?,
             &public_key_32(drive_signing_public_key_base64, "Drive signing key")?,
             &signature,
         )
@@ -3160,22 +3606,110 @@ fn revision_arg(revision: f64) -> Result<u64, JsValue> {
     Ok(revision as u64)
 }
 
+/// A records scope whose plaintext crosses into JavaScript as JSON, checked
+/// by its format (docs/plans/account-records.md, W3).
+fn json_scope(scope: &str) -> Result<kutup_crypto::account_records::RecordScope, JsValue> {
+    use kutup_crypto::account_records::RecordScope;
+    match RecordScope::by_name(scope) {
+        Some(scope @ (RecordScope::ContactGroups | RecordScope::CalendarSettings)) => Ok(scope),
+        _ => Err(js_error("not a records scope with a JSON plaintext")),
+    }
+}
+
+/// The plaintext of `scope` read through its format: checked, unknown fields
+/// kept, and written back in its own order.
+fn scope_plaintext(
+    scope: kutup_crypto::account_records::RecordScope,
+    json: &[u8],
+) -> Result<Vec<u8>, kutup_crypto::error::CryptoError> {
+    use kutup_crypto::account_records::RecordScope;
+    match scope {
+        RecordScope::ContactGroups => {
+            kutup_crypto::contact_group::ContactGroupV1::decode(json)?.encode()
+        }
+        _ => kutup_crypto::calendar_settings::CalendarSettingsV1::decode(json)?.encode(),
+    }
+}
+
+/// The record id in a hashed `scope` (`contactGroups`, `calendarSettings`)
+/// of the plain id `plain_id_base64` (a calendar's 16 UUID bytes, or 16
+/// random bytes for a new contact group), under the account's object-id key
+/// (`session.roots.objectIdKey`).
+#[wasm_bindgen(js_name = scopeRecordId)]
+pub fn scope_record_id(
+    object_id_key_base64: &str,
+    scope: &str,
+    plain_id_base64: &str,
+) -> Result<String, JsValue> {
+    let scope = json_scope(scope)?;
+    let plain = decode_canonical_base64(plain_id_base64, "plain id")?;
+    scope
+        .hashed_id(&object_id_key_of(object_id_key_base64)?, &plain)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Seals revision `revision` of record `id` of `scope` (`contactGroups`,
+/// `calendarSettings`) from its JSON plaintext, checked by its format.
+#[wasm_bindgen(js_name = sealScopeRecord)]
+pub fn seal_scope_record(
+    master_keys_base64: &str,
+    binding: &str,
+    scope: &str,
+    id: &str,
+    revision: f64,
+    json: &str,
+) -> Result<String, JsValue> {
+    let scope = json_scope(scope)?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let plain =
+        scope_plaintext(scope, json.as_bytes()).map_err(|error| js_error(&error.to_string()))?;
+    let sealed = scope
+        .seal(&keys, binding, id, revision_arg(revision)?, &plain)
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(sealed))
+}
+
+/// Opens record `id` of `scope`: `{ value: its JSON, revision }`. A record
+/// from a newer client is the `newer format: ` error, never corrupt.
+#[wasm_bindgen(js_name = openScopeRecord)]
+pub fn open_scope_record(
+    master_keys_base64: &str,
+    binding: &str,
+    scope: &str,
+    id: &str,
+    sealed_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let scope = json_scope(scope)?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let sealed = decode_canonical_base64(sealed_base64, "record")?;
+    let (plain, revision) = scope
+        .open(&keys, binding, id, &sealed)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let json = scope_plaintext(scope, &plain).map_err(|error| js_error(&error.to_string()))?;
+    let text = String::from_utf8(json).map_err(|_| js_error("record is not UTF-8"))?;
+    revisioned(text, revision)
+}
+
 /// Seals the account's identity pin list (canonical JSON) at `revision`,
 /// bound to the account's key binding.
 #[wasm_bindgen(js_name = sealIdentityPins)]
 pub fn seal_identity_pins(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     revision: f64,
     pins_json: &str,
 ) -> Result<String, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let keys = master_keys_of(master_keys_base64)?;
     let list: kutup_crypto::identity_pins::IdentityPinsV2 = serde_json::from_str(pins_json)
         .map_err(|error| js_error(&format!("identity pins: {error}")))?;
-    let key = kutup_crypto::identity_pins::derive_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let sealed = kutup_crypto::identity_pins::seal(&key, binding, revision_arg(revision)?, &list)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let sealed = kutup_crypto::identity_pins::seal(
+        keys.current(),
+        keys.generation(),
+        binding,
+        revision_arg(revision)?,
+        &list,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(sealed))
 }
 
@@ -3203,15 +3737,16 @@ fn revisioned<T: Serialize>(value: T, revision: u64) -> Result<JsValue, JsValue>
 /// `binding`: `{ value: its JSON, revision }`.
 #[wasm_bindgen(js_name = openIdentityPins)]
 pub fn open_identity_pins(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     sealed_base64: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let key = kutup_crypto::identity_pins::derive_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let keys = master_keys_of(master_keys_base64)?;
     let sealed = decode_canonical_base64(sealed_base64, "identity pins")?;
-    let (list, revision) = kutup_crypto::identity_pins::open(&key, binding, &sealed)
+    let master_key = keys
+        .key_for(&sealed)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let (list, revision) = kutup_crypto::identity_pins::open(master_key, binding, &sealed)
         .map_err(|error| js_error(&error.to_string()))?;
     let json = String::from_utf8(
         kutup_crypto::identity_pins::encode(&list).map_err(|error| js_error(&error.to_string()))?,
@@ -3449,16 +3984,18 @@ struct SignedContactSummaryView {
 /// the account's key binding.
 #[wasm_bindgen(js_name = signContactSummary)]
 pub fn sign_contact_summary(
-    master_key_base64: &str,
+    identity_root_base64: &str,
     binding: &str,
     revision: f64,
     summary_json: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
+    let identity_root = identity_root_32(identity_root_base64)?;
     let summary: kutup_crypto::contact_card::ContactSummaryV1 = serde_json::from_str(summary_json)
         .map_err(|error| js_error(&format!("contact summary: {error}")))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     let (bytes, signature) = kutup_crypto::contact_card::sign_summary(
         &summary,
         binding,
@@ -3496,7 +4033,10 @@ pub fn verify_contact_summary(
         &authority,
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&parsed)
+    // Plain objects, unknown fields included (a flattened map would
+    // otherwise become a JavaScript Map).
+    parsed
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
         .map_err(|error| js_error(&format!("encode summary: {error}")))
 }
 
@@ -3504,17 +4044,16 @@ pub fn verify_contact_summary(
 /// key, bound to its UID.
 #[wasm_bindgen(js_name = sealContactCard)]
 pub fn seal_contact_card(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     uid: &str,
     revision: f64,
     vcard: &str,
 ) -> Result<String, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let key = kutup_crypto::contact_card::derive_contacts_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let keys = master_keys_of(master_keys_base64)?;
     let sealed = kutup_crypto::contact_card::seal_card(
-        &key,
+        keys.current(),
+        keys.generation(),
         binding,
         uid,
         revision_arg(revision)?,
@@ -3525,19 +4064,17 @@ pub fn seal_contact_card(
 }
 
 type MailNameParts = (
-    zeroize::Zeroizing<[u8; 32]>,
+    kutup_crypto::master_keys::MasterKeys,
     kutup_crypto::mail_names::MailNameKind,
     [u8; 16],
 );
 
 fn mail_name_parts(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     kind: &str,
     id: &str,
 ) -> Result<MailNameParts, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let key = kutup_crypto::mail_names::derive_names_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let key = master_keys_of(master_keys_base64)?;
     let kind = kutup_crypto::mail_names::MailNameKind::parse(kind)
         .map_err(|error| js_error(&error.to_string()))?;
     let id = Uuid::parse_str(id).map_err(|_| js_error("mail name id is not a UUID"))?;
@@ -3549,16 +4086,17 @@ fn mail_name_parts(
 /// (docs/plans/mail-filters.md).
 #[wasm_bindgen(js_name = sealMailName)]
 pub fn seal_mail_name(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     kind: &str,
     id: &str,
     revision: f64,
     name: &str,
 ) -> Result<String, JsValue> {
-    let (key, kind, id) = mail_name_parts(master_key_base64, kind, id)?;
+    let (keys, kind, id) = mail_name_parts(master_keys_base64, kind, id)?;
     let sealed = kutup_crypto::mail_names::seal_name(
-        &key,
+        keys.current(),
+        keys.generation(),
         binding,
         kind,
         &id,
@@ -3573,15 +4111,18 @@ pub fn seal_mail_name(
 /// revision }`.
 #[wasm_bindgen(js_name = openMailName)]
 pub fn open_mail_name(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     kind: &str,
     id: &str,
     sealed_base64: &str,
 ) -> Result<JsValue, JsValue> {
-    let (key, kind, id) = mail_name_parts(master_key_base64, kind, id)?;
+    let (keys, kind, id) = mail_name_parts(master_keys_base64, kind, id)?;
     let sealed = decode_canonical_base64(sealed_base64, "name")?;
-    let (name, revision) = kutup_crypto::mail_names::open_name(&key, binding, kind, &id, &sealed)
+    let key = keys
+        .key_for(&sealed)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let (name, revision) = kutup_crypto::mail_names::open_name(key, binding, kind, &id, &sealed)
         .map_err(|error| js_error(&error.to_string()))?;
     revisioned(name, revision)
 }
@@ -3589,17 +4130,19 @@ pub fn open_mail_name(
 /// Opens a sealed contact card: `{ value: its vCard text, revision }`.
 #[wasm_bindgen(js_name = openContactCard)]
 pub fn open_contact_card(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     uid: &str,
     sealed_base64: &str,
 ) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let key = kutup_crypto::contact_card::derive_contacts_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let keys = master_keys_of(master_keys_base64)?;
     let sealed = decode_canonical_base64(sealed_base64, "card")?;
-    let (vcard, revision) = kutup_crypto::contact_card::open_card(&key, binding, uid, &sealed)
+    let master_key = keys
+        .key_for(&sealed)
         .map_err(|error| js_error(&error.to_string()))?;
+    let (vcard, revision) =
+        kutup_crypto::contact_card::open_card(master_key, binding, uid, &sealed)
+            .map_err(|error| js_error(&error.to_string()))?;
     let text =
         String::from_utf8(vcard.to_vec()).map_err(|_| js_error("contact card is not UTF-8"))?;
     revisioned(text, revision)
@@ -3614,12 +4157,25 @@ pub struct RevisionGuardKeys {
 
 #[wasm_bindgen]
 impl RevisionGuardKeys {
+    /// The keys of the account bound by `binding` (`session.envelopeBinding`):
+    /// records sealed under its current master key (opened under the one
+    /// they name; `session.masterKeys`), named under its object-id key (a
+    /// stored root, `session.roots.objectIdKey`).
     #[wasm_bindgen(constructor)]
-    pub fn new(master_key_base64: &str) -> Result<RevisionGuardKeys, JsValue> {
-        let master_key = master_key_32(master_key_base64)?;
+    pub fn new(
+        master_keys_base64: &str,
+        object_id_key_base64: &str,
+        binding: &str,
+    ) -> Result<RevisionGuardKeys, JsValue> {
+        let master_keys = master_keys_of(master_keys_base64)?;
+        let object_id_key = object_id_key_of(object_id_key_base64)?;
         Ok(Self {
-            keys: kutup_crypto::revision_guard::GuardKeys::derive(&master_key)
-                .map_err(|error| js_error(&error.to_string()))?,
+            keys: kutup_crypto::revision_guard::GuardKeys::derive(
+                &master_keys,
+                &object_id_key,
+                binding,
+            )
+            .map_err(|error| js_error(&error.to_string()))?,
         })
     }
 
@@ -3654,6 +4210,223 @@ impl RevisionGuardKeys {
         }
         Ok(revision as f64)
     }
+}
+
+/// The account's keys for its local chain pins (Rust `local_chain_pin`): the
+/// newest state of each account-private chain this device has seen, under
+/// names that do not reveal the chain, sealed to their name.
+#[wasm_bindgen]
+pub struct LocalChainPins {
+    keys: kutup_crypto::local_chain_pin::PinKeys,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedChainPin {
+    /// Decimal: a u64, which a JavaScript number can't always hold.
+    revision: String,
+    digest_hex: String,
+}
+
+#[wasm_bindgen]
+impl LocalChainPins {
+    /// The keys of the account bound by `binding` (`session.envelopeBinding`):
+    /// records sealed under its current master key (opened under the one
+    /// they name; `session.masterKeys`), named under its object-id key (a
+    /// stored root, `session.roots.objectIdKey`).
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        master_keys_base64: &str,
+        object_id_key_base64: &str,
+        binding: &str,
+    ) -> Result<LocalChainPins, JsValue> {
+        let master_keys = master_keys_of(master_keys_base64)?;
+        let object_id_key = object_id_key_of(object_id_key_base64)?;
+        Ok(Self {
+            keys: kutup_crypto::local_chain_pin::PinKeys::derive(
+                &master_keys,
+                &object_id_key,
+                binding,
+            )
+            .map_err(|error| js_error(&error.to_string()))?,
+        })
+    }
+
+    /// The device's name for the pin of chain `scope`/`id`.
+    #[wasm_bindgen(js_name = entryId)]
+    pub fn entry_id(&self, scope: &str, id: &str) -> Result<String, JsValue> {
+        self.keys
+            .entry_id(scope, id)
+            .map_err(|error| js_error(&error.to_string()))
+    }
+
+    /// The pin `revision` (decimal u64) and `digest_hex` (32 bytes, lowercase
+    /// hex), sealed for `entry` (base64).
+    #[wasm_bindgen(js_name = sealPin)]
+    pub fn seal_pin(
+        &self,
+        entry: &str,
+        revision: &str,
+        digest_hex: &str,
+    ) -> Result<String, JsValue> {
+        let revision = canonical_u64(revision)
+            .ok_or_else(|| js_error("chain pin: revision is not a canonical u64"))?;
+        let digest = canonical_hex_32(digest_hex)
+            .ok_or_else(|| js_error("chain pin: digest is not 32 bytes of lowercase hex"))?;
+        let sealed = self
+            .keys
+            .seal_pin(
+                entry,
+                &kutup_crypto::local_chain_pin::ChainPin { revision, digest },
+            )
+            .map_err(|error| js_error(&error.to_string()))?;
+        Ok(STANDARD.encode(sealed))
+    }
+
+    /// `{ revision, digestHex }` sealed for `entry`; throws when it was moved,
+    /// sealed for another account, or altered (the caller's "unseen").
+    #[wasm_bindgen(js_name = openPin)]
+    pub fn open_pin(&self, entry: &str, sealed_base64: &str) -> Result<JsValue, JsValue> {
+        let sealed = decode_canonical_base64(sealed_base64, "chain pin")?;
+        let pin = self
+            .keys
+            .open_pin(entry, &sealed)
+            .map_err(|error| js_error(&error.to_string()))?;
+        serde_wasm_bindgen::to_value(&OpenedChainPin {
+            revision: pin.revision.to_string(),
+            digest_hex: hex::encode(pin.digest),
+        })
+        .map_err(|error| js_error(&format!("encode: {error}")))
+    }
+}
+
+/// `value` as a u64 written canonically in decimal (no sign, no leading zero).
+fn canonical_u64(value: &str) -> Option<u64> {
+    let canonical = !value.is_empty()
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0'));
+    canonical.then(|| value.parse().ok()).flatten()
+}
+
+/// `value` as 32 bytes written in lowercase hex.
+fn canonical_hex_32(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 || value.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        return None;
+    }
+    hex::decode(value).ok()?.try_into().ok()
+}
+
+// --- Collab senders (docs/plans/one-device-list.md §8, slice 3) --------------
+// What a page knows of one sender account, kept here so a frame's check costs
+// no copy of the account's manifests.
+
+/// One sender account's manifests, as a page knows them
+/// ([`kutup_chat_proto::SenderManifests`]).
+#[wasm_bindgen]
+pub struct CollabSender {
+    inner: kutup_chat_proto::SenderManifests,
+}
+
+#[wasm_bindgen]
+impl CollabSender {
+    /// A record of `account` (`aci:<uuid>@<server>`) from the page's pin of
+    /// it (null: none).
+    #[wasm_bindgen(constructor)]
+    pub fn new(account: &str, pin: JsValue) -> Result<CollabSender, JsValue> {
+        let account: kutup_crypto::account_ref::AccountRef = account
+            .parse()
+            .map_err(|_| js_error("an account reference is malformed"))?;
+        let pin = if pin.is_null() || pin.is_undefined() {
+            None
+        } else {
+            Some(
+                serde_wasm_bindgen::from_value(pin)
+                    .map_err(|error| js_error(&format!("manifest pin: {error}")))?,
+            )
+        };
+        Ok(Self {
+            inner: kutup_chat_proto::SenderManifests::new(account, pin),
+        })
+    }
+
+    /// Takes the account's head with the manifests after the pin up to it
+    /// (`history`); throws on one that doesn't follow the pin. `newIncarnation`:
+    /// the identity pins vouch for the head's authority (an accepted reset).
+    #[wasm_bindgen(js_name = takeHead)]
+    pub fn take_head(
+        &mut self,
+        head: JsValue,
+        history: JsValue,
+        new_incarnation: bool,
+    ) -> Result<(), JsValue> {
+        let head: kutup_chat_proto::AccountManifestV3 = serde_wasm_bindgen::from_value(head)
+            .map_err(|error| manifest_error("account manifest", error))?;
+        let history: Vec<kutup_chat_proto::AccountManifestV3> =
+            if history.is_null() || history.is_undefined() {
+                Vec::new()
+            } else {
+                serde_wasm_bindgen::from_value(history)
+                    .map_err(|error| manifest_error("manifest history", error))?
+            };
+        self.inner
+            .take_head(head, &history, new_incarnation)
+            .map_err(|error| js_error(&error))
+    }
+
+    /// Takes earlier manifests of the account, for logged frames: the run a
+    /// `needManifest` asked for, linked by `previous_hash` up to the head.
+    #[wasm_bindgen(js_name = takeHistory)]
+    pub fn take_history(&mut self, run: JsValue) -> Result<(), JsValue> {
+        let run: Vec<kutup_chat_proto::AccountManifestV3> = serde_wasm_bindgen::from_value(run)
+            .map_err(|error| manifest_error("manifest history", error))?;
+        self.inner
+            .take_history(&run)
+            .map_err(|error| js_error(&error))
+    }
+
+    /// What to do with `delivered` (a frame as the server delivers it: its
+    /// sender, then the packed frame): `{ kind: 'take' }`, `{ kind:
+    /// 'needHead' }`, `{ kind: 'needManifest', sequence, through }` or `{ kind:
+    /// 'refuse', reason }`. A frame of another sender is refused.
+    pub fn check(&self, delivered: &[u8], live: bool) -> Result<JsValue, JsValue> {
+        let verdict = match envelope::delivered(delivered) {
+            Ok((sender, raw)) if sender == self.inner.account => self.inner.check(raw, live),
+            Ok(_) => kutup_chat_proto::SenderVerdict::Refuse {
+                reason: "the frame is another account's".into(),
+            },
+            Err(_) => kutup_chat_proto::SenderVerdict::Refuse {
+                reason: "the frame is malformed".into(),
+            },
+        };
+        serde_wasm_bindgen::to_value(&verdict)
+            .map_err(|error| js_error(&format!("encode verdict: {error}")))
+    }
+
+    /// The pin to keep for the account (null: none yet).
+    pub fn pin(&self) -> Result<JsValue, JsValue> {
+        match &self.inner.pin {
+            Some(pin) => serde_wasm_bindgen::to_value(pin)
+                .map_err(|error| js_error(&format!("encode manifest pin: {error}"))),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// The head's authority public key (canonical base64), for the identity
+    /// pins; null before a head.
+    #[wasm_bindgen(js_name = headAuthority)]
+    pub fn head_authority(&self) -> JsValue {
+        self.inner.head.as_ref().map_or(JsValue::NULL, |head| {
+            JsValue::from_str(&head.self_authority_key)
+        })
+    }
+}
+
+/// The sender account (`aci:<uuid>@<server>`) a delivered frame names.
+#[wasm_bindgen(js_name = deliveredFrameSender)]
+pub fn delivered_frame_sender(delivered: &[u8]) -> Result<String, JsValue> {
+    envelope::delivered(delivered)
+        .map(|(sender, _)| sender.to_string())
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 // --- OPAQUE sign-in (docs/plans/opaque.md) -----------------------------------
@@ -3712,6 +4485,7 @@ impl OpaqueRegistration {
     pub fn seal_master_key(
         &mut self,
         master_key_base64: &str,
+        generation: u32,
         key_binding: &str,
     ) -> Result<String, JsValue> {
         // Once: the export key is wiped afterwards, sealed or not.
@@ -3720,7 +4494,11 @@ impl OpaqueRegistration {
             .take()
             .ok_or_else(|| js_error("opaque: the registration is not finished"))?;
         export
-            .seal_master_key(&*master_key_32(master_key_base64)?, key_binding)
+            .seal_master_key(
+                &*master_key_32(master_key_base64)?,
+                master_key_generation(generation)?,
+                key_binding,
+            )
             .map_err(opaque_error)
     }
 
@@ -4033,8 +4811,8 @@ impl AccountHeadReanchored {
     }
 }
 
-/// The account's head keys, for one account (master key, key binding,
-/// incarnation), made once per session. The keys never leave WASM. Heads are
+/// The account's head keys, for one account (master keys, object-id root, key
+/// binding, incarnation), made once per session. The keys never leave WASM. Heads are
 /// verified into [`VerifiedAccountHead`]s the caller holds: an index is
 /// checked, and a next head written, only against one of those.
 #[wasm_bindgen]
@@ -4042,21 +4820,47 @@ pub struct AccountHeadKeys {
     keys: kutup_crypto::account_head::HeadKeys,
     binding: String,
     incarnation_id: String,
+    /// The account's root generations in use, which the head must record.
+    generations: kutup_crypto::account_head::RootGenerations,
 }
 
 #[wasm_bindgen]
 impl AccountHeadKeys {
     #[wasm_bindgen(constructor)]
+    /// `master_keys_base64`: the account's master-key set (heads are sealed
+    /// under the current key and opened under the one they name);
+    /// `object_id_key_base64`: its object-id root (`roots.objectIdKey`), which
+    /// keys value ids, writers and local names. The generations are those of
+    /// the account's roots in use (`roots.identityGeneration`,
+    /// `roots.driveGeneration`, `roots.objectIdGeneration`,
+    /// `roots.pseudonymGeneration`, `roots.callLinkGeneration`), which a head
+    /// must record with the current master key's.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        master_key_base64: &str,
+        master_keys_base64: &str,
+        object_id_key_base64: &str,
         binding: &str,
         incarnation_id: &str,
+        identity_generation: u32,
+        drive_generation: u32,
+        object_id_generation: u32,
+        pseudonym_generation: u32,
+        call_link_generation: u32,
     ) -> Result<AccountHeadKeys, JsValue> {
-        let master_key = master_key_32(master_key_base64)?;
+        let master_keys = master_keys_of(master_keys_base64)?;
+        let object_id_key = object_id_key_of(object_id_key_base64)?;
         Ok(Self {
-            keys: kutup_crypto::account_head::HeadKeys::derive(&master_key).map_err(head_err)?,
+            keys: kutup_crypto::account_head::HeadKeys::derive(&master_keys, &object_id_key)
+                .map_err(head_err)?,
             binding: binding.to_owned(),
             incarnation_id: incarnation_id.to_owned(),
+            generations: kutup_crypto::account_head::RootGenerations {
+                identity: identity_generation,
+                drive: drive_generation,
+                object_id: object_id_generation,
+                pseudonym: pseudonym_generation,
+                call_link: call_link_generation,
+            },
         })
     }
 
@@ -4180,6 +4984,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             anchor_arg(anchor_json)?.as_ref(),
             &sealed_head(current_base64)?,
             segment.as_deref(),
@@ -4209,6 +5014,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             &anchor,
             &sealed_head(current_base64)?,
             segment.as_deref(),
@@ -4267,6 +5073,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             writer,
             scopes,
         )
@@ -4298,6 +5105,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             None,
             &sealed,
             None,
@@ -4309,67 +5117,6 @@ impl AccountHeadKeys {
         }
         Ok(VerifiedAccountHead { inner })
     }
-}
-
-/// The account's statement for a collaboration device key
-/// (docs/plans/device-registration.md): the authority (from the master key)
-/// signs the incarnation, the server, the account, the device key, its
-/// purpose, the server's one-time challenge and the time. Returns the
-/// canonical base64 signature.
-#[wasm_bindgen(js_name = signDeviceRegistration)]
-pub fn sign_device_registration(
-    master_key_base64: &str,
-    server: &str,
-    user_id: &str,
-    device_public_base64: &str,
-    challenge_base64: &str,
-    issued_at_ms: f64,
-) -> Result<String, JsValue> {
-    let master = master_key_32(master_key_base64)?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let device = public_key_32(device_public_base64, "device key")?;
-    let challenge = public_key_32(challenge_base64, "challenge")?;
-    let statement = kutup_crypto::device_registration::DeviceStatement {
-        server,
-        user_id,
-        device_public: &device,
-        purpose: kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
-        challenge: &challenge,
-        issued_at_ms: millis(issued_at_ms)?,
-    };
-    kutup_crypto::device_registration::sign(&identity, &statement)
-        .map_err(|error| js_error(&error.to_string()))
-}
-
-/// The account's revocation of a device key, signed with its authority.
-/// Returns the canonical base64 signature.
-#[wasm_bindgen(js_name = signDeviceRevocation)]
-pub fn sign_device_revocation(
-    master_key_base64: &str,
-    server: &str,
-    device_public_base64: &str,
-    revoked_at_ms: f64,
-) -> Result<String, JsValue> {
-    let master = master_key_32(master_key_base64)?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let device = public_key_32(device_public_base64, "device key")?;
-    kutup_crypto::device_registration::sign_revocation(
-        &identity,
-        server,
-        &device,
-        millis(revoked_at_ms)?,
-    )
-    .map_err(|error| js_error(&error.to_string()))
-}
-
-/// A time from JavaScript: positive whole milliseconds.
-fn millis(value: f64) -> Result<i64, JsValue> {
-    if value.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&value) {
-        return Err(js_error("time must be positive whole milliseconds"));
-    }
-    Ok(value as i64)
 }
 
 /// The Yjs client id a file's first content is made under, from the file id
@@ -4384,6 +5131,7 @@ pub fn yjs_seed_client_id(file_id: &str, content: &[u8]) -> f64 {
 #[serde(rename_all = "camelCase")]
 struct RenameChainJs {
     incarnation_id: String,
+    account_id: String,
     first: String,
     current: String,
     addresses: Vec<String>,
@@ -4392,27 +5140,36 @@ struct RenameChainJs {
     digests: Vec<String>,
 }
 
-/// One rename, signed with the account authority derived from the master key
-/// (docs/plans/username-renames.md). Returns the statement as JSON.
+/// One rename of the account `account_id` (the signed-in account's permanent
+/// id, a lowercase UUID), signed with the account authority derived from the
+/// identity root (docs/plans/username-renames.md). Returns the statement as
+/// JSON.
 #[wasm_bindgen(js_name = signAccountRename)]
 pub fn sign_account_rename(
-    master_key_base64: &str,
+    identity_root_base64: &str,
+    account_id: &str,
     sequence: f64,
     previous: &str,
     current: &str,
     issued_at_ms: f64,
 ) -> Result<String, JsValue> {
-    let master = master_key_32(master_key_base64)?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let identity_root = identity_root_32(identity_root_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
+        &identity_root[..],
+    )?)
+    .map_err(|error| js_error(&error.to_string()))?;
     if sequence.fract() != 0.0 || !(1.0..=1000.0).contains(&sequence) {
         return Err(js_error("invalid rename sequence"));
     }
     if issued_at_ms.fract() != 0.0 || !issued_at_ms.is_finite() {
         return Err(js_error("invalid rename time"));
     }
+    let account_id: kutup_crypto::account_ref::AccountId = account_id
+        .parse()
+        .map_err(|_| js_error("invalid account id"))?;
     let statement = kutup_crypto::account_rename::sign(
         &identity,
+        account_id,
         sequence as u64,
         previous,
         current,
@@ -4422,20 +5179,25 @@ pub fn sign_account_rename(
     serde_json::to_string(&statement).map_err(|error| js_error(&error.to_string()))
 }
 
-/// Verifies an account's rename chain (JSON array) against its authority key.
+/// Verifies an account's rename chain (JSON array) against its authority key
+/// and the account id it was looked up for (every statement must name it).
 /// With `known_digests_json` (the digests of a chain verified before, a JSON
 /// array of hex), the chain must extend it: a server cannot roll a rename
 /// back. Returns where the account is and every address it has had.
 #[wasm_bindgen(js_name = verifyAccountRenameChain)]
 pub fn verify_account_rename_chain(
     authority_public_base64: &str,
+    account_id: &str,
     chain_json: &str,
     known_digests_json: Option<String>,
 ) -> Result<JsValue, JsValue> {
     let authority = public_key_32(authority_public_base64, "authority key")?;
+    let account_id: kutup_crypto::account_ref::AccountId = account_id
+        .parse()
+        .map_err(|_| js_error("invalid account id"))?;
     let chain: Vec<kutup_crypto::account_rename::AccountRenameV1> =
         serde_json::from_str(chain_json).map_err(|_| js_error("invalid rename chain"))?;
-    let view = kutup_crypto::account_rename::verify_chain(&authority, &chain)
+    let view = kutup_crypto::account_rename::verify_chain(&authority, account_id, &chain)
         .map_err(|error| js_error(&error.to_string()))?;
     let digests: Vec<String> = view.digests.iter().map(hex::encode).collect();
     if let Some(known) = known_digests_json {
@@ -4449,6 +5211,7 @@ pub fn verify_account_rename_chain(
     }
     serde_wasm_bindgen::to_value(&RenameChainJs {
         incarnation_id: view.incarnation_id,
+        account_id: view.account_id,
         first: view.first,
         current: view.current,
         addresses: view.addresses,
@@ -4514,7 +5277,7 @@ struct MailForwardingMaterialView {
 /// the forwarder's address key is opened from its envelope here and never
 /// leaves WASM. Returns `{ forwardeePublicKey, instances: [{
 /// forwarderFingerprint, forwardeeFingerprint, proxyParameter }],
-/// activation }`, the body of `POST /api/mail/forwardings`' `endToEnd`. The
+/// activation }`, the body of `POST /api/v1/mail/forwardings`' `endToEnd`. The
 /// forwardee key itself leaves only sealed in the activation, to
 /// `forwardee_public_key_base64` (the forwardee address's primary key, from
 /// its verified key list), binding `forwarding_id` (a UUID v4 the client
@@ -4583,12 +5346,12 @@ struct AcceptedMailForwardingView {
 /// not from the server), for this forwarding and addresses and unexpired at
 /// `now_secs`, and that the key stands in for the forwarder's current key.
 /// Returns `{ publicKey, privateKeyEnvelope, fingerprint }` for `POST
-/// /api/mail/forwardings/{id}/accept`; the key itself never leaves WASM
+/// /api/v1/mail/forwardings/{id}/accept`; the key itself never leaves WASM
 /// unsealed.
 #[wasm_bindgen(js_name = acceptMailForwarding)]
 #[allow(clippy::too_many_arguments)]
 pub fn accept_mail_forwarding(
-    master_key_base64: &str,
+    master_keys_base64: &str,
     binding: &str,
     forwardee_address: &str,
     envelope_base64: &str,
@@ -4601,7 +5364,7 @@ pub fn accept_mail_forwarding(
 ) -> Result<JsValue, JsValue> {
     use kutup_crypto::mail_forwarding::{self as forwarding, ActivationTerms};
     let secret = open_mail_secret(
-        master_key_base64,
+        master_keys_base64,
         binding,
         forwardee_address,
         envelope_base64,
@@ -4624,10 +5387,15 @@ pub fn accept_mail_forwarding(
     .map_err(|error| js_error(&error.to_string()))?;
     let public_key =
         forwarding::forwarding_public_key(&key).map_err(|error| js_error(&error.to_string()))?;
-    let master_key = master_key_32(master_key_base64)?;
-    let envelope =
-        kutup_crypto::mail_key::seal_address_key(&master_key[..], binding, forwardee_address, &key)
-            .map_err(|error| js_error(&error.to_string()))?;
+    let keys = master_keys_of(master_keys_base64)?;
+    let envelope = kutup_crypto::mail_key::seal_address_key(
+        keys.current(),
+        keys.generation(),
+        binding,
+        forwardee_address,
+        &key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
     let fingerprint =
         kutup_crypto::mail_key::inspect_forwarding_public_key(&public_key, forwardee_address)
             .map_err(|error| js_error(&error.to_string()))?
@@ -4727,10 +5495,17 @@ struct ProfileLookup {
     access_key: String,
 }
 
-fn profile_master_key(master_key: Vec<u8>) -> Result<[u8; 32], JsValue> {
-    master_key
-        .try_into()
-        .map_err(|_| js_error("the account master key is 32 bytes"))
+/// What the account's own copy of its profile key is sealed for: the master
+/// key at `generation`, and the key binding.
+fn profile_owner(
+    master_keys: Vec<u8>,
+    binding: &str,
+) -> Result<chat_profile::ProfileOwnerKey, JsValue> {
+    let master_keys = zeroize::Zeroizing::new(master_keys);
+    let keys = kutup_crypto::master_keys::MasterKeys::decode(&master_keys)
+        .map_err(|_| js_error("the account's master keys are malformed"))?;
+    chat_profile::ProfileOwnerKey::from_keys(&keys, binding)
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 fn profile_account(account: &str) -> Result<kutup_crypto::account_ref::AccountRef, JsValue> {
@@ -4757,38 +5532,36 @@ fn profile_lookup_of(key: &[u8]) -> Result<ProfileLookup, JsValue> {
     })
 }
 
-/// The account's own profile, opened from the master key.
+/// The account's own profile, opened with its master keys (`MasterKeys::encode`).
 #[wasm_bindgen(js_name = accountProfileOpen)]
 pub fn account_profile_open(
-    master_key: Vec<u8>,
+    master_keys: Vec<u8>,
     current: JsValue,
     account: String,
     binding: String,
 ) -> Result<JsValue, JsValue> {
-    let opened = chat_profile::open_account_profile(
-        &profile_master_key(master_key)?,
+    let opened = chat_profile::open_own_profile(
         &sealed_profile(current)?,
+        &profile_owner(master_keys, &binding)?,
         &profile_account(&account)?,
-        &binding,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     profile_output(&AccountProfileView::from(opened))
 }
 
 /// The account's own profile key (to give to the people it shares files
-/// with), opened from the master key.
+/// with), opened with its master keys.
 #[wasm_bindgen(js_name = accountProfileKey)]
 pub fn account_profile_key(
-    master_key: Vec<u8>,
+    master_keys: Vec<u8>,
     current: JsValue,
     account: String,
     binding: String,
 ) -> Result<JsValue, JsValue> {
-    let opened = chat_profile::open_account_profile(
-        &profile_master_key(master_key)?,
+    let opened = chat_profile::open_own_profile(
         &sealed_profile(current)?,
+        &profile_owner(master_keys, &binding)?,
         &profile_account(&account)?,
-        &binding,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     profile_output(&profile_lookup_of(opened.key.as_slice())?)
@@ -4822,11 +5595,11 @@ pub fn profile_open_peer(
     profile_output(&AccountProfileView::from(opened))
 }
 
-/// The account's next profile revision, sealed from the master key: the
-/// exact upload.
+/// The account's next profile revision, sealed under its current master
+/// key: the exact upload.
 #[wasm_bindgen(js_name = accountProfileSeal)]
 pub fn account_profile_seal(
-    master_key: Vec<u8>,
+    master_keys: Vec<u8>,
     current: JsValue,
     update: JsValue,
     account: String,
@@ -4845,7 +5618,7 @@ pub fn account_profile_seal(
         .transpose()
         .map_err(|_| js_error("the avatar is standard base64"))?;
     let upload = chat_profile::seal_account_profile(
-        &profile_master_key(master_key)?,
+        &profile_owner(master_keys, &binding)?,
         current.as_ref(),
         &chat_profile::ProfileContents {
             display_name: update.display_name,
@@ -4854,7 +5627,6 @@ pub fn account_profile_seal(
             about: update.about,
         },
         &profile_account(&account)?,
-        &binding,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     profile_output(&upload)

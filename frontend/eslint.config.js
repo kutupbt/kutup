@@ -126,12 +126,13 @@ const CRYPTO_CODE = ['packages/crypto/src/**/*.ts']
 /* The WASM loaders that import their own wasm-bindgen glue by URL. */
 const UI_WASM_LOADERS = ['apps/pass/src/vault/worker.ts', 'packages/mail-core/src/searchWasm.ts']
 const LOGIC_WASM_LOADERS = ['packages/chat-core/src/wasm.ts']
-/* Scripts served as they are (service workers, early theme scripts). */
-const PUBLIC_SCRIPTS = ['apps/*/public/**/*.{js,mjs}']
-/* Named exception: the calendar's push worker checks a push's account tag
-   with Web Crypto's HMAC (the suite's MAC, as calendar_alarms.rs makes it);
-   a service worker can't load @kutup/crypto's WASM before it must answer. */
-const PUBLIC_WEB_CRYPTO_EXCEPTIONS = ['apps/calendar/public/push-sw.js']
+/* Scripts served as they are (the service worker, early theme scripts). */
+const PUBLIC_SCRIPTS = ['apps/*/public/**/*.{js,mjs}', 'packages/config/src/sw/**/*.js']
+/* Named exception: the service worker's Calendar push checks a push's
+   account tag with Web Crypto's HMAC (the suite's MAC, as
+   calendar_alarms.rs makes it); a service worker can't load @kutup/crypto's
+   WASM before it must answer. */
+const PUBLIC_WEB_CRYPTO_EXCEPTIONS = ['packages/config/src/sw/kutup-sw.js']
 
 export default tseslint.config(
   { ignores: ['**/dist', '**/node_modules', 'wasm', 'apps/editor/public'] },

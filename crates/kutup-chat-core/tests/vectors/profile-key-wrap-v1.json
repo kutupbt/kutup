@@ -1,0 +1,60 @@
+{
+  "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+  "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+  "profileKey": "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE=",
+  "profileVersion": "0a4d96996bc75c17a3fbca72157925018249eb8f58fcee884ee5d7199be621f6",
+  "revision": 3,
+  "nonce": "RERERERERERERERERERERERERERERERE",
+  "wrappedKey": "S1VUUEFSMQAAAQAOAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkIApNlplrx1wXo/vKchV5JQGCSeuPWPzuiE7l1xmb5iH2AAAAAAAAAANtVvpvKwcA9dsz4ZkxdYfLBwUJeuKPJvZEhkPXKWwY5ERERERERERERERERERERERERERERERERAAAADAX6M+LVLT4aj1o11rXQTas7Cr0oquNbifSU1U9dCcv1z/C1DlQloLQdiXN5kzmcds=",
+  "refused": [
+    {
+      "case": "another account's key binding",
+      "binding": "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0",
+      "profileVersion": "0a4d96996bc75c17a3fbca72157925018249eb8f58fcee884ee5d7199be621f6",
+      "revision": 3,
+      "wrappedKey": "S1VUUEFSMQAAAQAOAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkIApNlplrx1wXo/vKchV5JQGCSeuPWPzuiE7l1xmb5iH2AAAAAAAAAANtVvpvKwcA9dsz4ZkxdYfLBwUJeuKPJvZEhkPXKWwY5ERERERERERERERERERERERERERERERERAAAADAX6M+LVLT4aj1o11rXQTas7Cr0oquNbifSU1U9dCcv1z/C1DlQloLQdiXN5kzmcds="
+    },
+    {
+      "case": "an address instead of the key binding",
+      "binding": "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+      "profileVersion": "0a4d96996bc75c17a3fbca72157925018249eb8f58fcee884ee5d7199be621f6",
+      "revision": 3,
+      "wrappedKey": "S1VUUEFSMQAAAQAOAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkIApNlplrx1wXo/vKchV5JQGCSeuPWPzuiE7l1xmb5iH2AAAAAAAAAANtVvpvKwcA9dsz4ZkxdYfLBwUJeuKPJvZEhkPXKWwY5ERERERERERERERERERERERERERERERERAAAADAX6M+LVLT4aj1o11rXQTas7Cr0oquNbifSU1U9dCcv1z/C1DlQloLQdiXN5kzmcds="
+    },
+    {
+      "case": "another profile version",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "profileVersion": "713abf911530624636d5638df59d9ead4c54601f1e28a0344737f584da9d9c4a",
+      "revision": 3,
+      "wrappedKey": "S1VUUEFSMQAAAQAOAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkIApNlplrx1wXo/vKchV5JQGCSeuPWPzuiE7l1xmb5iH2AAAAAAAAAANtVvpvKwcA9dsz4ZkxdYfLBwUJeuKPJvZEhkPXKWwY5ERERERERERERERERERERERERERERERERAAAADAX6M+LVLT4aj1o11rXQTas7Cr0oquNbifSU1U9dCcv1z/C1DlQloLQdiXN5kzmcds="
+    },
+    {
+      "case": "another revision",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "profileVersion": "0a4d96996bc75c17a3fbca72157925018249eb8f58fcee884ee5d7199be621f6",
+      "revision": 4,
+      "wrappedKey": "S1VUUEFSMQAAAQAOAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkIApNlplrx1wXo/vKchV5JQGCSeuPWPzuiE7l1xmb5iH2AAAAAAAAAANtVvpvKwcA9dsz4ZkxdYfLBwUJeuKPJvZEhkPXKWwY5ERERERERERERERERERERERERERERERERAAAADAX6M+LVLT4aj1o11rXQTas7Cr0oquNbifSU1U9dCcv1z/C1DlQloLQdiXN5kzmcds="
+    },
+    {
+      "case": "magic changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "profileVersion": "0a4d96996bc75c17a3fbca72157925018249eb8f58fcee884ee5d7199be621f6",
+      "revision": 3,
+      "wrappedKey": "S1VUUEFSMgAAAQAOAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkIApNlplrx1wXo/vKchV5JQGCSeuPWPzuiE7l1xmb5iH2AAAAAAAAAANtVvpvKwcA9dsz4ZkxdYfLBwUJeuKPJvZEhkPXKWwY5ERERERERERERERERERERERERERERERERAAAADAX6M+LVLT4aj1o11rXQTas7Cr0oquNbifSU1U9dCcv1z/C1DlQloLQdiXN5kzmcds="
+    },
+    {
+      "case": "ciphertext changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "profileVersion": "0a4d96996bc75c17a3fbca72157925018249eb8f58fcee884ee5d7199be621f6",
+      "revision": 3,
+      "wrappedKey": "S1VUUEFSMQAAAQAOAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkIApNlplrx1wXo/vKchV5JQGCSeuPWPzuiE7l1xmb5iH2AAAAAAAAAANtVvpvKwcA9dsz4ZkxdYfLBwUJeuKPJvZEhkPXKWwY5ERERERERERERERERERERERERERERERERAAAADAX6M+LVLT4aj1o11rXQTas7Cr0oquNbifSU1U9dCcv1z/C1DlQloLQdiXN5kzmcdo="
+    },
+    {
+      "case": "sealed under another master key",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "profileVersion": "0a4d96996bc75c17a3fbca72157925018249eb8f58fcee884ee5d7199be621f6",
+      "revision": 3,
+      "wrappedKey": "S1VUUEFSMQAAAQAOAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkIApNlplrx1wXo/vKchV5JQGCSeuPWPzuiE7l1xmb5iH2AAAAAAAAAANM6SKNKfgs/tgj5pDE/3QfsarEbk9iIU9KvtoaQQhoTURERERERERERERERERERERERERERERERAAAADBSxUpzlbbPs2Bu8hLZ97eL5EEwKH7906GnZkVn/ZZuWe+P72pD9Tg3B+la4LXhhr4="
+    }
+  ]
+}

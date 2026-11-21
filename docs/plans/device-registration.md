@@ -1,7 +1,10 @@
 # Collaboration devices signed by the account
 
-Status: built on `slate/cli-yjs-sync` for the clean-slate release (wire and
-table changes, folded into the baseline before the wipe).
+Status: **superseded** by [`one-device-list.md`](one-device-list.md) (wipe W5,
+slice 2): collaboration devices are entries of the account's signed manifest,
+and the statements, revocations, leases and announces below are gone. Kept
+for history. It was built on `slate/cli-yjs-sync` for the clean-slate
+release.
 
 A collaboration device is the Ed25519 key a browser tab or the CLI signs
 collaboration frames with. Before this change any holder of a session token

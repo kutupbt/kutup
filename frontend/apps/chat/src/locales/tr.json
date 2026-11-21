@@ -22,9 +22,11 @@
       "waveformLabel": "{{filename}} için ses dalga formu",
       "previewAlt": "{{filename}} önizlemesi",
       "viewer": {
-        "description": "Kutup'un şifreli önbelleğinden yerel olarak doğrulandı. Kapattığında geçici görünüm silinir.",
+        "description": "Bu cihazda çözülüp doğrulandı. Kapattığında geçici görünüm silinir.",
         "opening": "Ek açılıyor",
-        "openFailed": "Bu ek güvenli bir şekilde açılamadı."
+        "openFailed": "Bu ek güvenli bir şekilde açılamadı.",
+        "tooManyStreams": "Bu sekmede çok fazla video ya da ses oynuyor. Bunu oynatmak için birini kapat.",
+        "tooLargeToPlay": "Bu tarayıcı burada akışla oynatamıyor ve bütün olarak açılamayacak kadar büyük. Bunun yerine cihazına kaydet."
       },
       "capture": "Fotoğraf veya video çek",
       "attach": "Dosya ekle",

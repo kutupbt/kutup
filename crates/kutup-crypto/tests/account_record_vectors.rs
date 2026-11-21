@@ -1,0 +1,366 @@
+//! Checked-in vectors for account records: one sealed envelope per purpose,
+//! and for every purpose the envelopes that must be refused, each with the
+//! step that refuses it (`inspect`, which the server runs before storing, or
+//! `open`). The WASM tests read the same file. Regenerate only for a
+//! deliberate format change:
+//! `KUTUP_WRITE_ACCOUNT_RECORD_VECTORS=1 cargo test -p kutup-crypto --test account_record_vectors -- --ignored`.
+
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use serde::{Deserialize, Serialize};
+
+use kutup_crypto::account_record::{
+    self, seal_suite, seal_unchecked_for_vectors, AccountRecordPurpose, AccountRecordSuiteId,
+    Length, MasterKeyGeneration, ObjectPolicy,
+};
+
+const PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/vectors/account-record-v1.json"
+);
+const KEY: [u8; 32] = [0x24; 32];
+const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+const OTHER_BINDING: &str = "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+const NONCE: [u8; 24] = [0x11; 24];
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Vectors {
+    key: String,
+    binding: String,
+    purposes: Vec<PurposeVectors>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PurposeVectors {
+    purpose: u16,
+    object_id: String,
+    plaintext: String,
+    nonce: String,
+    envelope: String,
+    refused: Vec<Refused>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Refused {
+    why: String,
+    /// `inspect`: malformed, refused before any key is used; `open`: well
+    /// formed, refused when opened for this purpose, binding and object.
+    step: String,
+    envelope: String,
+}
+
+fn object_for(purpose: AccountRecordPurpose) -> Vec<u8> {
+    match purpose.policy().object {
+        ObjectPolicy::None => vec![],
+        ObjectPolicy::Required(len) => (0..len as u8).map(|i| 0x3f ^ i).collect(),
+    }
+}
+
+fn plaintext_for(purpose: AccountRecordPurpose) -> Vec<u8> {
+    match purpose.policy().length {
+        Length::Exact(n) => vec![0x42; n],
+        Length::Fixed(_) | Length::Bucket(_) => b"a secret whose length is hidden".to_vec(),
+    }
+}
+
+/// The plaintext padded as the purpose pads it, then made wrong.
+fn padded(purpose: AccountRecordPurpose) -> Vec<u8> {
+    purpose
+        .policy()
+        .length
+        .pad(&plaintext_for(purpose))
+        .unwrap()
+}
+
+fn refused_for(purpose: AccountRecordPurpose, envelope: &[u8]) -> Vec<Refused> {
+    let object = object_for(purpose);
+    // The revision a well-formed envelope of this purpose carries.
+    let rev = purpose.policy().mutable.then_some(1);
+    let unchecked = |plain: &[u8], binding: &str, object: &[u8], revision: Option<u64>| {
+        seal_unchecked_for_vectors(
+            plain,
+            &KEY,
+            purpose,
+            MasterKeyGeneration::FIRST,
+            binding,
+            object,
+            revision,
+            // A chained purpose's revision-1 record names no predecessor.
+            purpose.policy().chained.then_some(&[0u8; 32]),
+            &NONCE,
+        )
+        .unwrap()
+    };
+    let mut refused = Vec::new();
+    let mut add = |why: &str, step: &str, envelope: Vec<u8>| {
+        refused.push(Refused {
+            why: why.into(),
+            step: step.into(),
+            envelope: STANDARD.encode(envelope),
+        })
+    };
+    let mut unknown_suite = envelope.to_vec();
+    unknown_suite[9] = 2;
+    add("an unknown suite", "inspect", unknown_suite);
+    let mut unknown_purpose = envelope.to_vec();
+    unknown_purpose[10..12].copy_from_slice(&0xffffu16.to_be_bytes());
+    add("an unknown purpose", "inspect", unknown_purpose);
+    // The master-key generation (bytes 12..16): never 0, and covered by the
+    // AEAD, so a secret can't pass as another master key's.
+    let mut generation_zero = envelope.to_vec();
+    generation_zero[12..16].copy_from_slice(&0u32.to_be_bytes());
+    add("master-key generation 0", "inspect", generation_zero);
+    let mut generation_relabelled = envelope.to_vec();
+    generation_relabelled[12..16].copy_from_slice(&2u32.to_be_bytes());
+    add(
+        "master-key generation relabelled",
+        "open",
+        generation_relabelled,
+    );
+    let mut upper = envelope.to_vec();
+    upper[18] = b'B';
+    add("binding not a canonical key binding", "inspect", upper);
+    let mut trailing = envelope.to_vec();
+    trailing.push(0);
+    add("trailing byte", "inspect", trailing);
+    // The key commitment (the 32 bytes before the nonce): well formed, but
+    // it no longer matches the key, so the record is refused before the AEAD.
+    let header = account_record::inspect(envelope).unwrap();
+    let commitment_at = envelope.len() - header.ciphertext_len as usize - 4 - 24 - 32;
+    let mut committed = envelope.to_vec();
+    committed[commitment_at] ^= 1;
+    add("key commitment changed", "open", committed);
+    match purpose.policy().object {
+        ObjectPolicy::None => add(
+            "an object id where the purpose has none",
+            "inspect",
+            unchecked(&padded(purpose), BINDING, &[7; 16], rev),
+        ),
+        ObjectPolicy::Required(len) => {
+            add(
+                "no object id",
+                "inspect",
+                unchecked(&padded(purpose), BINDING, &[], rev),
+            );
+            add(
+                "an object id of the wrong length",
+                "inspect",
+                unchecked(&padded(purpose), BINDING, &vec![7; len + 1], rev),
+            );
+        }
+    }
+    if purpose.policy().mutable {
+        add(
+            "no revision",
+            "inspect",
+            unchecked(&padded(purpose), BINDING, &object, None),
+        );
+        // The revision changed in the header: well formed, but the AEAD
+        // covers it, so an older secret cannot pass as newer.
+        let header = account_record::inspect(envelope).unwrap();
+        // A chained header carries the previous digest between the revision
+        // and the commitment.
+        let previous = if purpose.policy().chained { 32 } else { 0 };
+        let last_revision_byte =
+            envelope.len() - header.ciphertext_len as usize - 4 - 24 - 32 - previous - 1;
+        let mut relabelled = envelope.to_vec();
+        relabelled[last_revision_byte] ^= 2;
+        // In a chain, revision 1 names no predecessor and every later one
+        // does, so a relabelled first record no longer parses.
+        let step = if purpose.policy().chained {
+            "inspect-or-open"
+        } else {
+            "open"
+        };
+        add("revision relabelled", step, relabelled);
+    } else {
+        add(
+            "a revision where the purpose has none",
+            "inspect",
+            unchecked(&padded(purpose), BINDING, &object, Some(1)),
+        );
+    }
+    if purpose.policy().chained {
+        // The previous digest changed in the header: the AEAD covers it, so
+        // a record can't be moved to another place in the chain.
+        let header = account_record::inspect(envelope).unwrap();
+        let previous_at = envelope.len() - header.ciphertext_len as usize - 4 - 24 - 32 - 32;
+        let mut moved = envelope.to_vec();
+        moved[previous_at] ^= 1;
+        add("previous digest changed", "inspect-or-open", moved);
+        add(
+            "revision 1 naming a predecessor",
+            "inspect",
+            account_record::seal_unchecked_for_vectors(
+                &padded(purpose),
+                &KEY,
+                purpose,
+                MasterKeyGeneration::FIRST,
+                BINDING,
+                &object,
+                Some(1),
+                Some(&[9u8; 32]),
+                &NONCE,
+            )
+            .unwrap(),
+        );
+    }
+    let mut long = padded(purpose);
+    long.push(0);
+    add(
+        "a length its padding policy never gives",
+        "inspect",
+        unchecked(&long, BINDING, &object, rev),
+    );
+    if !matches!(purpose.policy().length, Length::Exact(_)) {
+        let mut no_marker = padded(purpose);
+        let marker = no_marker.iter().rposition(|&b| b != 0).unwrap();
+        no_marker[marker] = 0x01;
+        add(
+            "padding without its 0x80 marker",
+            "open",
+            unchecked(&no_marker, BINDING, &object, rev),
+        );
+    }
+    add(
+        "sealed for another account",
+        "open",
+        unchecked(&padded(purpose), OTHER_BINDING, &object, rev),
+    );
+    if let Length::Bucket(bucket) = purpose.policy().length {
+        // The header's ciphertext length past the purpose's maximum (a whole
+        // bucket over, so only the maximum refuses it): refused before any
+        // ciphertext is read, so the vector stays small.
+        let header = account_record::inspect(envelope).unwrap();
+        let length_at = envelope.len() - header.ciphertext_len as usize - 4;
+        let over = u32::try_from(purpose.policy().max_len + bucket + 16).unwrap();
+        let mut long = envelope.to_vec();
+        long[length_at..length_at + 4].copy_from_slice(&over.to_be_bytes());
+        add("longer than the purpose's maximum", "inspect", long);
+    }
+    let mut swapped = envelope.to_vec();
+    let other = if purpose == AccountRecordPurpose::PasswordMasterKey {
+        AccountRecordPurpose::RecoveryMasterKey
+    } else {
+        AccountRecordPurpose::PasswordMasterKey
+    };
+    swapped[10..12].copy_from_slice(&other.as_u16().to_be_bytes());
+    add("purpose changed", "inspect-or-open", swapped);
+    refused
+}
+
+fn sealed(purpose: AccountRecordPurpose) -> Vec<u8> {
+    if purpose.policy().chained {
+        // Revision 1 of a chain: it names no predecessor.
+        return account_record::seal_chained(
+            &plaintext_for(purpose),
+            &KEY,
+            purpose,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            &object_for(purpose),
+            1,
+            &[0u8; 32],
+            Some(&NONCE),
+        )
+        .unwrap();
+    }
+    seal_suite(
+        AccountRecordSuiteId::V1,
+        &plaintext_for(purpose),
+        &KEY,
+        purpose,
+        MasterKeyGeneration::FIRST,
+        BINDING,
+        &object_for(purpose),
+        purpose.policy().mutable.then_some(1),
+        &NONCE,
+    )
+    .unwrap()
+}
+
+#[test]
+#[ignore = "writes the vectors file"]
+fn write_vectors() {
+    if std::env::var("KUTUP_WRITE_ACCOUNT_RECORD_VECTORS").as_deref() != Ok("1") {
+        return;
+    }
+    let purposes = AccountRecordPurpose::ALL
+        .iter()
+        .map(|&purpose| {
+            let envelope = sealed(purpose);
+            PurposeVectors {
+                purpose: purpose.as_u16(),
+                object_id: STANDARD.encode(object_for(purpose)),
+                plaintext: STANDARD.encode(plaintext_for(purpose)),
+                nonce: STANDARD.encode(NONCE),
+                refused: refused_for(purpose, &envelope),
+                envelope: STANDARD.encode(envelope),
+            }
+        })
+        .collect();
+    let vectors = Vectors {
+        key: STANDARD.encode(KEY),
+        binding: BINDING.into(),
+        purposes,
+    };
+    std::fs::write(PATH, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
+}
+
+fn open_for(purpose: AccountRecordPurpose, envelope: &[u8], object: &[u8]) -> bool {
+    if purpose.policy().mutable {
+        account_record::open_revision(envelope, &KEY, purpose, BINDING, object).is_ok()
+    } else {
+        account_record::open_object(envelope, &KEY, purpose, BINDING, object).is_ok()
+    }
+}
+
+#[test]
+fn checked_in_vectors_hold() {
+    let v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
+    assert_eq!(v.purposes.len(), AccountRecordPurpose::ALL.len());
+    for p in &v.purposes {
+        let purpose = AccountRecordPurpose::try_from(p.purpose).unwrap();
+        let object = STANDARD.decode(&p.object_id).unwrap();
+        let envelope = STANDARD.decode(&p.envelope).unwrap();
+        assert_eq!(sealed(purpose), envelope, "{purpose:?} seals as checked in");
+        let header = account_record::validate_for(&envelope, purpose, &v.binding, &object).unwrap();
+        assert_eq!(header.revision, purpose.policy().mutable.then_some(1));
+        assert!(open_for(purpose, &envelope, &object), "{purpose:?} opens");
+        assert!(account_record::validate_for(&envelope, purpose, OTHER_BINDING, &object).is_err());
+        assert!(!p.refused.is_empty());
+        // The checked-in refusals are the ones this code makes: no drift.
+        let made = refused_for(purpose, &envelope);
+        assert_eq!(p.refused.len(), made.len(), "{purpose:?}");
+        for (checked_in, made) in p.refused.iter().zip(&made) {
+            assert_eq!(
+                (&checked_in.why, &checked_in.step, &checked_in.envelope),
+                (&made.why, &made.step, &made.envelope),
+                "{purpose:?}"
+            );
+        }
+        for refused in &p.refused {
+            let bad = STANDARD.decode(&refused.envelope).unwrap();
+            let inspected = account_record::inspect(&bad);
+            match refused.step.as_str() {
+                "inspect" => assert!(inspected.is_err(), "{purpose:?}: {}", refused.why),
+                "open" => assert!(inspected.is_ok(), "{purpose:?}: {}", refused.why),
+                _ => {}
+            }
+            assert!(
+                account_record::validate_for(&bad, purpose, &v.binding, &object).is_err()
+                    || refused.step == "open",
+                "{purpose:?}: {}",
+                refused.why
+            );
+            assert!(
+                !open_for(purpose, &bad, &object),
+                "{purpose:?}: {}",
+                refused.why
+            );
+        }
+    }
+}

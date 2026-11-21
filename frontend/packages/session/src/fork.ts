@@ -2,9 +2,9 @@
 // docs/plans/multi-app-web-rewrite.md).
 //
 //   drive (no session) ──requestFork──▶ account/authorize?app=drive&state=S
-//   account (signed in) ──produceFork──▶ POST /api/auth/forks → selector
+//   account (signed in) ──produceFork──▶ POST /api/v1/auth/forks → selector
 //        └─▶ <drive origin>/login#selector=…&sk=<32-byte key>&state=S
-//   drive ──consumeFork──▶ POST /api/auth/forks/consume (Origin-bound, once)
+//   drive ──consumeFork──▶ POST /api/v1/auth/forks/consume (Origin-bound, once)
 //        → opens the SessionFork envelope with `sk`, persists, returns to S's path
 //
 // The key only ever travels in a URL fragment, which browsers never send to a
@@ -39,7 +39,7 @@ export function isForkChild(value: string | null): value is ForkChild {
   return value === 'drive' || value === 'chat' || value === 'maps' || value === 'photos' || value === 'office' || value === 'contacts' || value === 'mail' || value === 'pass' || value === 'calendar'
 }
 
-const STATE_PREFIX = 'kutup-fork:'
+const STATE_PREFIX = 'kutup.session.fork:'
 /** The child app's path that consumes forks. */
 export const FORK_CONSUME_PATH = '/login'
 
@@ -100,8 +100,10 @@ async function mintFork(child: ForkChild, state: string): Promise<string> {
   const clientType = CHILD_CLIENT[child]
   const key = randomBytes(32)
   const payload = encodeKeys({
-    userId: session.userId,
+    accountId: session.accountId,
     masterKey: session.masterKey,
+    masterKeys: session.masterKeys,
+    roots: session.roots,
     privateKey: session.privateKey,
     publicKey: session.publicKey,
     keyBinding: session.envelopeBinding,
@@ -178,7 +180,7 @@ export async function consumeFork(): Promise<string> {
     const { data } = await api.post<{
       accessToken: string
       sessionId: string
-      userId: string
+      accountId: string
       payload: string
     }>('/auth/forks/consume', { selector })
     const plaintext = await openLocalState(
@@ -189,7 +191,7 @@ export async function consumeFork(): Promise<string> {
     )
     const keys = decodeKeys(plaintext)
     plaintext.fill(0)
-    if (keys.userId !== data.userId) throw new Error('the fork belongs to another account')
+    if (keys.accountId !== data.accountId) throw new Error('the fork belongs to another account')
     const activated = await activateSession(keys, data.accessToken, data.sessionId)
     await persistKeys(data.sessionId, activated)
     return returnTo

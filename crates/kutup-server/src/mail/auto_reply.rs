@@ -240,7 +240,7 @@ pub async fn load(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Option<Saved>> {
     let row: Option<Row> = sqlx::query_as(
         "SELECT enabled, repeat, zone, start_local, end_local, days, start_day, end_day,
                 start_minute, end_minute, message_html, message_text, now() AT TIME ZONE zone
-           FROM mail_auto_replies WHERE user_id = $1",
+           FROM mail_auto_replies WHERE account_id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -262,7 +262,7 @@ pub async fn load(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Option<Saved>> {
 /// One message just delivered to an account's own mailbox.
 #[derive(Debug, Clone, Copy)]
 pub struct Delivered {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub message: Uuid,
 }
 
@@ -300,22 +300,10 @@ fn automated_sender(address: &str) -> bool {
         || local.starts_with("bounce")
 }
 
-type MessageRow = (
-    String,
-    String,
-    String,
-    sqlx::types::Json<Vec<Mailbox>>,
-    sqlx::types::Json<Vec<Mailbox>>,
-    String,
-    Option<String>,
-    Vec<String>,
-    String,
-    bool,
-    String,
-);
+type MessageRow = (String, String, Option<Vec<u8>>, String, bool, String);
 
 async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
-    let Some(saved) = load(&state.pool, delivered.user_id).await? else {
+    let Some(saved) = load(&state.pool, delivered.account_id).await? else {
         return Ok(());
     };
     if !saved.is_on() {
@@ -324,35 +312,46 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     let row: Option<MessageRow> = sqlx::query_as(
         // Mail to an old (receiving) address is answered too, always from
         // the account's current one: the old address sends nothing.
-        "SELECT a.address, m.folder, m.from_address, m.to_list, m.cc_list, m.subject,
-                m.message_id, m.references_list,
-                COALESCE(NULLIF(i.display_name, ''), u.username), u.is_admin, cur.address
+        "SELECT a.address, m.folder, m.headers,
+                COALESCE(NULLIF(i.display_name, ''), u.username), u.role <> 'member', cur.address
            FROM mail_messages m
            JOIN mail_addresses a ON a.id = m.address_id
-           JOIN users u ON u.id = a.user_id
-           JOIN mail_addresses cur ON cur.user_id = u.id AND cur.state = 'active'
+           JOIN accounts u ON u.id = a.account_id
+           JOIN mail_addresses cur ON cur.account_id = u.id AND cur.state = 'active'
            LEFT JOIN mail_identities i ON i.address_id = cur.id
-          WHERE m.id = $1 AND m.user_id = $2 AND m.direction = 'inbound'",
+          WHERE m.id = $1 AND m.account_id = $2 AND m.direction = 'inbound'",
     )
     .bind(delivered.message)
-    .bind(delivered.user_id)
+    .bind(delivered.account_id)
     .fetch_optional(&state.pool)
     .await?;
     // Blocked meanwhile, or deleted already.
-    let Some((own, folder, from, to, cc, subject, message_id, references, name, is_admin, current)) =
-        row
-    else {
+    let Some((own, folder, sealed, name, is_admin, current)) = row else {
         return Ok(());
     };
+    let opener = super::sealed::Opener::load(
+        &state.pool,
+        crate::account_data::KeyOwner::Account(delivered.account_id),
+    )
+    .await?;
+    let headers = opener.open(delivered.message, sealed.as_deref());
+    let from = headers.from.map(|m| m.address).unwrap_or_default();
+    let (to, cc, subject, message_id, references) = (
+        headers.to,
+        headers.cc,
+        headers.subject,
+        headers.message_id,
+        headers.references,
+    );
     // Compared as senders are: this server's addresses in any spelling.
     let key = |address: &str| super::sender_key(&state.config.chat_server_name, address);
     // Answered at the address as written; remembered as compared.
     let sender = from.trim().to_ascii_lowercase();
     let sender_key = key(&sender);
-    let named =
-        to.0.iter()
-            .chain(cc.0.iter())
-            .any(|m| key(&m.address) == key(&own));
+    let named = to
+        .iter()
+        .chain(cc.iter())
+        .any(|m| key(&m.address) == key(&own));
     if matches!(folder.as_str(), "spam" | "trash")
         || !named
         || sender.is_empty()
@@ -372,21 +371,37 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
         )
         .await?
         .allows(is_admin)
-            || super::safety::check_send(state, delivered.user_id, 1)
+            || super::safety::check_send(state, delivered.account_id, 1)
                 .await
                 .is_err())
     {
         return Ok(());
     }
-    // Once per sender every RESEND_AFTER_DAYS: the claim is the record.
-    let claimed: Option<String> = sqlx::query_scalar(
-        "INSERT INTO mail_auto_reply_sent (user_id, sender) VALUES ($1, $2)
-         ON CONFLICT (user_id, sender) DO UPDATE SET sent_at = now()
+    // Once per sender every RESEND_AFTER_DAYS: the claim is the record. The
+    // sender is kept as a keyed hash under the account's data key, never its
+    // address (docs/plans/server-personal-data.md, A2).
+    let sender_hash = {
+        let mut conn = state.pool.acquire().await?;
+        super::sealed::key(
+            &mut conn,
+            crate::account_data::KeyOwner::Account(delivered.account_id),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?
+        .lookup_hash(
+            kutup_crypto::server_data::Lookup::MailAutoReplySender,
+            sender_key.as_bytes(),
+        )?
+        .to_vec()
+    };
+    let claimed: Option<Vec<u8>> = sqlx::query_scalar(
+        "INSERT INTO mail_auto_reply_sent (account_id, sender_hash) VALUES ($1, $2)
+         ON CONFLICT (account_id, sender_hash) DO UPDATE SET sent_at = now()
           WHERE mail_auto_reply_sent.sent_at < now() - make_interval(days => $3)
-         RETURNING sender",
+         RETURNING sender_hash",
     )
-    .bind(delivered.user_id)
-    .bind(&sender_key)
+    .bind(delivered.account_id)
+    .bind(&sender_hash)
     .bind(RESEND_AFTER_DAYS)
     .fetch_optional(&state.pool)
     .await?;
@@ -435,16 +450,16 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     };
     if let Err(error) = sent {
         // Not answered: the next message from them may try again.
-        sqlx::query("DELETE FROM mail_auto_reply_sent WHERE user_id = $1 AND sender = $2")
-            .bind(delivered.user_id)
-            .bind(&sender_key)
+        sqlx::query("DELETE FROM mail_auto_reply_sent WHERE account_id = $1 AND sender_hash = $2")
+            .bind(delivered.account_id)
+            .bind(&sender_hash)
             .execute(&state.pool)
             .await?;
         return Err(error);
     }
     keep_in_sent(
         state,
-        delivered.user_id,
+        delivered.account_id,
         &current,
         &raw,
         i32::from(local.is_none()),
@@ -474,9 +489,9 @@ async fn keep_in_sent(
     let id = Uuid::new_v4();
     let key = object_key(user_id, id);
     let size = i64::try_from(ciphertext.len())?;
-    let version = state
+    state
         .storage
-        .put_object_versioned(&key, ByteStream::from(ciphertext), size)
+        .upload(&key, ByteStream::from(ciphertext), size)
         .await?;
     let recorded: anyhow::Result<bool> = async {
         let mut tx = state.pool.begin().await?;
@@ -488,15 +503,14 @@ async fn keep_in_sent(
             &mut tx,
             NewMessage {
                 id,
-                user_id: Some(user_id),
+                account_id: Some(user_id),
                 address_id: recipient.address_id,
                 thread_id: None,
                 direction: "outbound",
                 folder: "sent",
-                protection: "zero_access",
+                protection: "zeroAccess",
                 seen: true,
                 object_key: &key,
-                object_version: &version,
                 size,
                 readable: &readable,
                 bcc: &[],
@@ -513,7 +527,7 @@ async fn keep_in_sent(
     }
     .await;
     if !matches!(recorded, Ok(true)) {
-        if let Err(error) = state.storage.delete_stored(&key, &version).await {
+        if let Err(error) = state.storage.delete(&key).await {
             tracing::warn!(error = %error, "mail: unrecorded auto-reply copy left for the sweep");
         }
     }

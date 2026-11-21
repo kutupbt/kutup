@@ -98,6 +98,10 @@ chmod -R a+rX "$KUTUP_MAIL_KEYS_DIR"
 
 compose down --volumes --remove-orphans
 compose build backend stalwart-setup
+# Stalwart's setup mounts ./nginx/certs; made here, as the user, so Docker
+# doesn't create it as root (the browser gates write their certificates
+# there next).
+mkdir -p "$root_dir/nginx/certs"
 compose up --detach --wait \
   postgres seaweedfs-master seaweedfs-volume seaweedfs-filer seaweedfs-s3 seaweedfs-init \
   backend stalwart mail-sink mail-keys mail-dns
@@ -128,6 +132,13 @@ fi
 curl --fail --silent --show-error --retry 30 --retry-delay 1 \
   --retry-connrefused --retry-all-errors \
   "http://127.0.0.1:$port/api/health" >/dev/null
+# Deleted blobs normally wait two days before they leave the store
+# (docs/self-hosting.md, "Backups"); the purge checks below need them gone
+# within seconds.
+compose exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  --quiet -v ON_ERROR_STOP=1 --command "INSERT INTO site_settings (key, value) VALUES
+    ('server.storage.deleted_blob_retention_seconds', '0'), ('server.storage.deleted_blob_sweep_seconds', '1')
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
 
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_SMTP="127.0.0.1:$smtp_port" \
@@ -144,19 +155,25 @@ purged="$(grep -o 'PURGED-USER [0-9a-f-]*' "$output" | cut -d' ' -f2)"
 [[ "$purged" =~ ^[0-9a-f-]{36}$ ]] || { echo "the test did not report its deleted account" >&2; exit 1; }
 mail_rows="$(compose exec -T postgres psql \
   --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align \
-  --command "SELECT COUNT(*) FROM mail_messages WHERE user_id = '$purged';")"
+  --command "SELECT COUNT(*) FROM mail_messages WHERE account_id = '$purged';")"
 if [[ "$mail_rows" != "0" ]]; then
   echo "account purge left $mail_rows mail rows" >&2
   exit 1
 fi
-mail_objects="$(compose exec -T seaweedfs-filer wget \
-  --header=Accept:application/json --quiet --output-document=- \
-  "http://seaweedfs-filer:8888/buckets/${S3_BUCKET:-kutup-files}/mail/$purged/?pretty=y" \
-  2>/dev/null || true)"
-if [[ "$mail_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]]; then
-  echo "account purge left mail object bytes" >&2
-  exit 1
-fi
+# The purged objects leave the store on the deleted-blob purge's next pass.
+deadline=$((SECONDS + 60))
+while :; do
+  mail_objects="$(compose exec -T seaweedfs-filer wget \
+    --header=Accept:application/json --quiet --output-document=- \
+    "http://seaweedfs-filer:8888/buckets/${S3_BUCKET:-kutup-files}/mail/$purged/?pretty=y" \
+    2>/dev/null || true)"
+  [[ "$mail_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]] || break
+  if (( SECONDS >= deadline )); then
+    echo "account purge left mail object bytes" >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 # The outside copy reached the sink DKIM-signed by Stalwart, with no Bcc.
 outside_id="$(grep -o 'OUTSIDE-MESSAGE-ID [^ ]*' "$output" | cut -d' ' -f2)"

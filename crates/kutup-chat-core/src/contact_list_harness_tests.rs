@@ -31,7 +31,7 @@ fn state_of(person: &Person, peer: &Person) -> Option<ContactState> {
 }
 
 fn block(person: &mut Person, peer: &Person) {
-    let key = person.wrapping_key;
+    let key = person.profile_owner.clone();
     block_on(
         person
             .engine
@@ -44,7 +44,11 @@ fn block(person: &mut Person, peer: &Person) {
 fn list_key(person: &Person) -> (ContactListKey, String) {
     let seed = person.authority_seed;
     (
-        ContactListKey::derive(&[seed; 32]),
+        ContactListKey::new(
+            &[seed; 32],
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([seed; 32]),
+        ),
         format!("{seed:08x}-0000-4000-8000-{seed:012x}"),
     )
 }
@@ -328,7 +332,10 @@ fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
     let (seed, binding) = (alice.authority_seed, list_key(&alice).1);
     alice
         .engine
-        .enable_identity_pins(&[seed; 32], &binding)
+        .enable_identity_pins(
+            &kutup_crypto::master_keys::MasterKeys::first(&[seed; 32]),
+            &binding,
+        )
         .unwrap();
     befriend(&mut alice, &mut bob);
     befriend(&mut alice, &mut carol);
@@ -369,7 +376,7 @@ fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
         .unwrap()
         .is_none());
     let envelope = world.identity_pins.borrow()[&alice.account].1.clone();
-    let key = kutup_crypto::identity_pins::derive_key(&[seed; 32]).unwrap();
+    let key = [seed; 32];
     let (list, _) = kutup_crypto::identity_pins::open(
         &key,
         &binding,

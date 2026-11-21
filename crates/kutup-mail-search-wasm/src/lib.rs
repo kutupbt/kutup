@@ -10,7 +10,10 @@
 //! wrapped store key ([`MailSearch::wrapped_store_key`]); deleting the
 //! database destroys that key and so everything sealed under it.
 
+use kutup_crypto::account_record::AccountRecordPurpose;
+use kutup_crypto::account_roots::ObjectIdKey;
 use kutup_crypto::mail_search::{store_name, MailSearchKeys};
+use kutup_crypto::master_keys::MasterKeys;
 use kutup_search::{DocRef, Found, Hit, Index, NewDoc, Records, DIRECTORY_KEY, INDEX_VERSION};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -99,10 +102,9 @@ mod serde_bytes_compat {
     }
 }
 
-fn master(master_key: &[u8]) -> Result<[u8; 32], JsValue> {
-    master_key
-        .try_into()
-        .map_err(|_| js_error("the master key is 32 bytes"))
+/// The account's master keys as the page hands them (`MasterKeys::encode`).
+fn master_keys(encoded: &[u8]) -> Result<MasterKeys, JsValue> {
+    MasterKeys::decode(encoded).map_err(js_error)
 }
 
 /// One account's index in this browser.
@@ -122,25 +124,41 @@ pub struct MailSearch {
 #[wasm_bindgen]
 impl MailSearch {
     /// The browser database's name for an account (an HMAC under a key from
-    /// its master key; names no one).
+    /// its object-id root; names no one, and survives a master-key rotation).
     #[wasm_bindgen(js_name = storeName)]
-    pub fn store_name(master_key: &[u8]) -> Result<String, JsValue> {
-        store_name(&master(master_key)?).map_err(js_error)
+    pub fn store_name(object_id_key: &[u8]) -> Result<String, JsValue> {
+        store_name(&ObjectIdKey::from_slice(object_id_key).map_err(js_error)?).map_err(js_error)
     }
 
     /// The account's index, empty until [`MailSearch::open_directory`]: under
     /// the store key `wrapped` (as the database keeps it), or under a new one
-    /// when there is none. A wrapped key that does not open is an error; the
-    /// page then deletes the database and starts again.
+    /// when there is none, for the account bound by `binding`
+    /// (`session.envelopeBinding`). A wrapped key that does not open is an
+    /// error; the page then deletes the database and starts again.
     #[wasm_bindgen(constructor)]
-    pub fn new(master_key: &[u8], wrapped: Option<Vec<u8>>) -> Result<MailSearch, JsValue> {
-        let master = master(master_key)?;
+    pub fn new(
+        master_keys_encoded: &[u8],
+        binding: &str,
+        wrapped: Option<Vec<u8>>,
+    ) -> Result<MailSearch, JsValue> {
+        let master = master_keys(master_keys_encoded)?;
         let (keys, wrapped) = match wrapped {
-            Some(wrapped) => (
-                MailSearchKeys::open(&master, &wrapped).map_err(js_error)?,
-                wrapped,
-            ),
-            None => MailSearchKeys::create(&master).map_err(js_error)?,
+            Some(wrapped) => {
+                let keys = MailSearchKeys::open(&master, binding, &wrapped).map_err(js_error)?;
+                // Opened under an older master key (after a rotation): kept
+                // from now on under the current one (`wrappedStoreKey`).
+                let wrapped = master
+                    .reseal_if_older(
+                        &wrapped,
+                        AccountRecordPurpose::MailSearchStoreKey,
+                        binding,
+                        &[],
+                    )
+                    .map_err(js_error)?
+                    .unwrap_or(wrapped);
+                (keys, wrapped)
+            }
+            None => MailSearchKeys::create(&master, binding).map_err(js_error)?,
         };
         Ok(MailSearch {
             keys,

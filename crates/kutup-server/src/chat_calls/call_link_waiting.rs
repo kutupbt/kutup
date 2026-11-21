@@ -30,7 +30,7 @@ use super::call_links::{
     vouched_name, SEALED_NAME_BYTES,
 };
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 /// People who can wait at one meeting at a time.
@@ -144,7 +144,7 @@ pub struct DecideKnockRequest {
 /// still waiting in.
 #[utoipa::path(
     put,
-    path = "/api/chat/call-links/{roomId}/waiting-room",
+    path = "/api/v1/chat/call-links/{roomId}/waiting-room",
     tag = "chat",
     operation_id = "setChatCallLinkWaitingRoom",
     params(("roomId" = String, Path, description = "The link's room id")),
@@ -157,7 +157,7 @@ pub struct DecideKnockRequest {
 )]
 pub(crate) async fn set_waiting_room(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
     Path(room_id): Path<String>,
     Json(request): Json<SetWaitingRoomRequest>,
 ) -> AppResult<StatusCode> {
@@ -166,7 +166,7 @@ pub(crate) async fn set_waiting_room(
     let mut tx = state.pool.begin().await?;
     let updated = sqlx::query(
         "UPDATE chat_call_links SET waiting_room = $3, host_token_hash = $4
-         WHERE room_id = $1 AND owner_user_id = $2",
+         WHERE room_id = decode($1, 'hex') AND owner_account_id = $2",
     )
     .bind(&room_id)
     .bind(owner(&auth)?)
@@ -180,7 +180,7 @@ pub(crate) async fn set_waiting_room(
     }
     if !request.enabled {
         sqlx::query(
-            "UPDATE chat_call_link_knocks SET status = $2 WHERE room_id = $1 AND status = $3",
+            "UPDATE chat_call_link_knocks SET status = $2 WHERE room_id = decode($1, 'hex') AND status = $3",
         )
         .bind(&room_id)
         .bind(ADMITTED)
@@ -195,7 +195,7 @@ pub(crate) async fn set_waiting_room(
 /// Ask to be let into a meeting with a waiting room. No account.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knock",
+    path = "/api/v1/chat/call-links/knock",
     tag = "chat",
     operation_id = "knockChatCallLink",
     request_body = KnockRequest,
@@ -241,7 +241,7 @@ pub(crate) async fn knock(
     .await?;
     sqlx::query(
         "DELETE FROM chat_call_link_knocks
-         WHERE room_id = $1 AND last_seen_at < NOW() - make_interval(secs => $2)",
+         WHERE room_id = decode($1, 'hex') AND last_seen_at < NOW() - make_interval(secs => $2)",
     )
     .bind(&request.room_id)
     .bind(FORGET_SECONDS as f64)
@@ -249,7 +249,7 @@ pub(crate) async fn knock(
     .await?;
     let waiting: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM chat_call_link_knocks
-         WHERE room_id = $1 AND status = $2 AND last_seen_at > NOW() - make_interval(secs => $3)",
+         WHERE room_id = decode($1, 'hex') AND status = $2 AND last_seen_at > NOW() - make_interval(secs => $3)",
     )
     .bind(&request.room_id)
     .bind(WAITING)
@@ -262,7 +262,7 @@ pub(crate) async fn knock(
     let knock_id: Uuid = sqlx::query_scalar(
         "INSERT INTO chat_call_link_knocks
             (room_id, participant_id, label, ticket_hash, seat_hash, account_id)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+         VALUES (decode($1, 'hex'), decode($2, 'hex'), $3, $4, $5, $6) RETURNING id",
     )
     .bind(&request.room_id)
     .bind(&request.participant_id)
@@ -287,7 +287,7 @@ pub(crate) async fn knock(
 /// the knock was decided; then it changes nothing.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knock/leave",
+    path = "/api/v1/chat/call-links/knock/leave",
     tag = "chat",
     operation_id = "leaveChatCallLinkKnock",
     request_body = KnockStatusRequest,
@@ -304,7 +304,7 @@ pub(crate) async fn leave_knock(
     let presented: [u8; 32] = hash(Suite::V1, base64_exact("ticket", &request.ticket, 32)?).into();
     admitted(&state, &request.room_id, &request.access_token).await?;
     let stored: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT ticket_hash FROM chat_call_link_knocks WHERE id = $1 AND room_id = $2",
+        "SELECT ticket_hash FROM chat_call_link_knocks WHERE id = $1 AND room_id = decode($2, 'hex')",
     )
     .bind(request.knock_id)
     .bind(&request.room_id)
@@ -318,7 +318,7 @@ pub(crate) async fn leave_knock(
         // Only a knock still waiting: one already let in or turned away
         // keeps its outcome (a removal, say, must stand).
         sqlx::query(
-            "DELETE FROM chat_call_link_knocks WHERE id = $1 AND room_id = $2 AND status = $3",
+            "DELETE FROM chat_call_link_knocks WHERE id = $1 AND room_id = decode($2, 'hex') AND status = $3",
         )
         .bind(request.knock_id)
         .bind(&request.room_id)
@@ -333,7 +333,7 @@ pub(crate) async fn leave_knock(
 /// receives the SFU token. Asking also says the knocker is still there.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knock/status",
+    path = "/api/v1/chat/call-links/knock/status",
     tag = "chat",
     operation_id = "getChatCallLinkKnockStatus",
     request_body = KnockStatusRequest,
@@ -354,8 +354,8 @@ pub(crate) async fn knock_status(
     type Row = (Vec<u8>, i16, String, Vec<u8>, Vec<u8>, Option<Uuid>);
     let row: Option<Row> = sqlx::query_as(
         "UPDATE chat_call_link_knocks SET last_seen_at = NOW()
-         WHERE id = $1 AND room_id = $2
-         RETURNING ticket_hash, status, participant_id, label, seat_hash, account_id",
+         WHERE id = $1 AND room_id = decode($2, 'hex')
+         RETURNING ticket_hash, status, encode(participant_id, 'hex'), label, seat_hash, account_id",
     )
     .bind(request.knock_id)
     .bind(&request.room_id)
@@ -417,7 +417,7 @@ pub(crate) async fn knock_status(
 /// Who is waiting to be let in, oldest first, for the meeting's hosts.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knocks",
+    path = "/api/v1/chat/call-links/knocks",
     tag = "chat",
     operation_id = "listChatCallLinkKnocks",
     request_body = HostCredentials,
@@ -438,8 +438,8 @@ pub(crate) async fn knocks(
     // The name each vouched-for knocker goes by now.
     let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime, Option<String>)> = sqlx::query_as(
         "SELECT k.id, k.label, k.created_at, u.username
-         FROM chat_call_link_knocks k LEFT JOIN users u ON u.id = k.account_id
-         WHERE k.room_id = $1 AND k.status = $2
+         FROM chat_call_link_knocks k LEFT JOIN accounts u ON u.id = k.account_id
+         WHERE k.room_id = decode($1, 'hex') AND k.status = $2
            AND k.last_seen_at > NOW() - make_interval(secs => $3)
          ORDER BY k.created_at, k.id",
     )
@@ -465,7 +465,7 @@ pub(crate) async fn knocks(
 /// Admit or turn away one person waiting, as a host.
 #[utoipa::path(
     post,
-    path = "/api/chat/call-links/knocks/decide",
+    path = "/api/v1/chat/call-links/knocks/decide",
     tag = "chat",
     operation_id = "decideChatCallLinkKnock",
     request_body = DecideKnockRequest,
@@ -491,7 +491,7 @@ pub(crate) async fn decide(
     .await?;
     let decided = sqlx::query(
         "UPDATE chat_call_link_knocks SET status = $3
-         WHERE id = $1 AND room_id = $2 AND status = $4",
+         WHERE id = $1 AND room_id = decode($2, 'hex') AND status = $4",
     )
     .bind(request.knock_id)
     .bind(&request.room_id)
@@ -509,11 +509,12 @@ pub(crate) async fn decide(
 /// Forget knocks whose knocker stopped asking `FORGET_SECONDS` ago, across
 /// every meeting: a sealed name is not kept longer than the wait needs.
 pub(crate) fn spawn_sweeper(pool: sqlx::PgPool) {
+    crate::job_health::register("chat.meeting_knock_sweep", SWEEP_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(SWEEP_INTERVAL);
         loop {
             tick.tick().await;
-            if let Err(error) = sqlx::query(
+            match sqlx::query(
                 "DELETE FROM chat_call_link_knocks
                  WHERE last_seen_at < NOW() - make_interval(secs => $1)",
             )
@@ -521,7 +522,8 @@ pub(crate) fn spawn_sweeper(pool: sqlx::PgPool) {
             .execute(&pool)
             .await
             {
-                tracing::warn!(%error, "meeting knock sweep failed");
+                Ok(_) => crate::job_health::beat(&pool, "chat.meeting_knock_sweep").await,
+                Err(error) => tracing::warn!(%error, "meeting knock sweep failed"),
             }
         }
     });

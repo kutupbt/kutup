@@ -8,7 +8,7 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { useLibraryContext } from '../library/libraryContext'
 import { DEFAULT_UPLOAD_FOLDER, folderPathName, useSavePreferences } from '../library/preferences'
 
@@ -44,7 +44,7 @@ export function SettingsPage() {
     [index],
   )
 
-  if (!preferences || !index) return <LoadingPanel label={t('settings.loading')} />
+  if (!preferences || !index) return <FormSkeleton label={t('settings.loading')} />
 
   const upload = preferences.uploadFolderId ? index.byId.get(preferences.uploadFolderId) : undefined
   const added = preferences.libraryFolderIds.map((id) => index.byId.get(id)).filter((f): f is Folder => Boolean(f))

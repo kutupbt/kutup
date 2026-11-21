@@ -36,7 +36,7 @@ use crate::AppState;
 /// envelope (base64 grows it by a third).
 const LOG_PAGE_BYTES: usize = 180 * 1024;
 const MAX_LOG_PAGE_CHANGES: i64 = 256;
-const SEEN_PSEUDONYM_DOMAIN: &[u8] = b"kutup/chat-group/seen-pseudonym/v1\0";
+const SEEN_PSEUDONYM_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_GROUP_SEEN_PSEUDONYM_V1;
 /// A change or a read naming an avatar blob the home doesn't hold.
 const AVATAR_MISSING: &str = "avatarMissing";
 
@@ -157,7 +157,7 @@ async fn answer_checked(
     if !remember_nonce(state, request, now).await? {
         return Ok(status(GroupResponseStatusV1::Replayed, now));
     }
-    let limits = group_limits(state);
+    let limits = group_limits(state).await?;
     match request.operation {
         GroupOperationV1::Create => {
             create(
@@ -525,14 +525,14 @@ async fn put_endorsement(
         .load(&mut *tx)
         .await?;
     let digest: [u8; 32] = Hasher::new(Suite::V1)
-        .chain(b"kutup/group-endorsement-upload/v1\0")
+        .chain(kutup_crypto::labels::GROUP_ENDORSEMENT_UPLOAD_V1)
         .chain(group_id)
         .chain(key)
         .finish()
         .into();
     let used = crate::handlers::chat::anonymous_count(
         &mut tx,
-        "group_endorsement_upload",
+        crate::ratelimit::counters::Scope::AnonymousGroupEndorsementUpload,
         &digest,
         1,
         86_400,
@@ -758,11 +758,16 @@ async fn request_status(
     }
 }
 
-pub(crate) fn group_limits(state: &AppState) -> GroupLimits {
-    GroupLimits {
-        max_members: state.config.chat_group_max_members,
-        max_requesting: state.config.chat_group_max_members,
-    }
+/// The home's limits now: the administrators' member limit, read on every
+/// request so a change applies at once.
+pub(crate) async fn group_limits(state: &AppState) -> AppResult<GroupLimits> {
+    let max = crate::site_settings::CHAT_GROUP_MAX_MEMBERS
+        .load(&state.pool)
+        .await? as usize;
+    Ok(GroupLimits {
+        max_members: max,
+        max_requesting: max,
+    })
 }
 
 /// Takes the request's nonce for the clock window; false if it was taken.

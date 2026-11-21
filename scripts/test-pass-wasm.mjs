@@ -6,6 +6,18 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
+/** The account's master keys as a page passes them (Rust `MasterKeys::encode`): `KUTPMKS1`, a count, then each generation and key, newest first. */
+function masterKeySet(...keys) {
+  const out = [Buffer.from('KUTPMKS1'), Buffer.from([keys.length >> 8, keys.length & 0xff])]
+  keys.forEach((key, i) => {
+    const generation = Buffer.alloc(4)
+    generation.writeUInt32BE(keys.length - i)
+    out.push(generation, Buffer.from(key))
+  })
+  return new Uint8Array(Buffer.concat(out))
+}
+
+
 const root = fileURLToPath(new URL('..', import.meta.url))
 const pass = await import(new URL('../frontend/wasm/pass-wasm/kutup_pass_wasm.js', import.meta.url))
 await pass.default({ module_or_path: await readFile(`${root}/frontend/wasm/pass-wasm/kutup_pass_wasm_bg.wasm`) })
@@ -71,7 +83,7 @@ ours.abandonKeyChange()
 assert.ok(pass.Vault.open(ours.save(), 'parola-çğ', null, null))
 ours.changeKey('yeni', false, null, null, false, minute(8))
 // Not kept before Drive holds it: Drive's copy still opens with the old key.
-const keepArgs = [new Uint8Array(32), '6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b', '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', 1, false]
+const keepArgs = [masterKeySet(new Uint8Array(32)), '6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b', '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', 1, false]
 assert.throws(() => ours.keepKey(...keepArgs))
 const rekeyed = ours.save()
 assert.throws(() => ours.keepKey(...keepArgs), /save the vault/)
@@ -116,7 +128,7 @@ assert.throws(() => byHashAgain.changeKey('x', false, 'yeni', null, true, minute
 // Kept vault keys (kutup_pass::kept): the checked-in vectors open, and a key
 // kept from an open vault opens it again, for this account and vault only.
 const vectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/pass-vault-secret-v2.json`, 'utf8'))
-const masterKey = Buffer.from(vectors.masterKey, 'base64')
+const masterKey = masterKeySet(Buffer.from(vectors.masterKey, 'base64'))
 assert.deepEqual(pass.openKept(vectors.sealedChosen, masterKey, vectors.binding, vectors.fileId), {
   passwordHash: vectors.chosenPasswordHash,
   keyFile: vectors.keyFile,
@@ -128,7 +140,7 @@ assert.equal(shown.generatedPassword, vectors.generatedPassword)
 assert.equal(shown.keyFile, null)
 assert.throws(() => pass.openKept(vectors.sealedChosen, masterKey, vectors.binding, '00000000-0000-4000-8000-000000000000'))
 assert.throws(() => pass.openKept(vectors.sealedChosen, masterKey, 'another-binding', vectors.fileId))
-assert.throws(() => pass.openKept(vectors.sealedChosen, new Uint8Array(32), vectors.binding, vectors.fileId))
+assert.throws(() => pass.openKept(vectors.sealedChosen, masterKeySet(new Uint8Array(32)), vectors.binding, vectors.fileId))
 const kept = pass.Vault.open(rekeyed, 'yeni', null, null).keepKey(masterKey, vectors.binding, vectors.fileId, vectors.revision + 5, true)
 const keptKey = pass.openKept(kept, masterKey, vectors.binding, vectors.fileId)
 assert.equal(keptKey.generatedPassword, 'yeni')
@@ -143,8 +155,8 @@ for (const bad of [0, -1, 1.5]) {
 // and the same envelope with the revision changed in its header does not.
 const chosenEnvelope = Buffer.from(vectors.sealedChosen, 'base64')
 assert.equal(pass.openKept(vectors.sealedChosen, masterKey, vectors.binding, vectors.fileId).revision, vectors.revision)
-// Header: ... revision (8 bytes) | nonce (24) | ciphertext length (4) | ciphertext (3121 + 16).
-const lastRevisionByte = chosenEnvelope.length - (3121 + 16) - 4 - 24 - 1
+// Header: ... revision (8 bytes) | key commitment (32) | nonce (24) | ciphertext length (4) | ciphertext (3121 + 16).
+const lastRevisionByte = chosenEnvelope.length - (3121 + 16) - 4 - 24 - 32 - 1
 assert.equal(chosenEnvelope.readBigUInt64BE(lastRevisionByte - 7), BigInt(vectors.revision))
 const relabelled = Buffer.from(chosenEnvelope)
 relabelled[lastRevisionByte] ^= 2

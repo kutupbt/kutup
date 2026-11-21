@@ -1,8 +1,11 @@
-//! Kutup Pass vault secrets (`/api/pass/vault-secrets*`).
+//! Kutup Pass on the server: what has become of each kept key's vault
+//! (`/api/pass/vault-states`). The kept keys themselves are the
+//! account-records scope `passSecrets` ([`super::account_records`]).
 //! Companion to `crates/kutup-server/src/handlers/pass.rs`.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
-use reqwest::Method;
 use serde::Deserialize;
 
 use super::Client;
@@ -18,8 +21,7 @@ pub enum VaultSecretState {
 }
 
 /// One of the caller's sealed vault secrets.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 pub struct VaultSecretRow {
     pub file_id: String,
     /// Base64 of the account envelope (`kutup_crypto::pass_vault`).
@@ -30,45 +32,19 @@ pub struct VaultSecretRow {
 }
 
 impl Client {
-    /// Every one of the caller's vault secrets, each with what has become of
-    /// its vault.
-    pub fn list_vault_secrets(&self) -> Result<Vec<VaultSecretRow>> {
-        let resp = self.request(Method::GET, "/pass/vault-secrets").send()?;
-        super::decode_json(resp)
-    }
-
-    /// Keeps (or replaces) the caller's secret for vault `file_id`, on top
-    /// of the revision the change started from (`base_revision`, 0 for none).
-    /// `false`: another device kept a key first.
-    pub fn put_vault_secret(
-        &self,
-        file_id: &str,
-        envelope: &str,
-        base_revision: u64,
-        head: &str,
-    ) -> Result<bool> {
-        let resp = self
-            .request(Method::PUT, &format!("/pass/vault-secrets/{file_id}"))
-            .json(&serde_json::json!({ "envelope": envelope, "baseRevision": base_revision, "head": head }))
-            .send()?;
-        if resp.status().as_u16() == 409 {
-            return Ok(false);
+    /// What has become of the vault of every key the caller keeps, by file id.
+    pub fn vault_states(&self) -> Result<BTreeMap<String, VaultSecretState>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Row {
+            file_id: String,
+            state: VaultSecretState,
         }
-        super::check_ok(resp)?;
-        Ok(true)
-    }
-
-    /// Forgets the caller's secret for vault `file_id`, with the next account
-    /// head. `false`: another device wrote first.
-    pub fn delete_vault_secret(&self, file_id: &str, head: &str) -> Result<bool> {
-        let resp = self
-            .request(Method::DELETE, &format!("/pass/vault-secrets/{file_id}"))
-            .json(&serde_json::json!({ "head": head }))
-            .send()?;
-        if resp.status().as_u16() == 409 {
-            return Ok(false);
-        }
-        super::check_ok(resp)?;
-        Ok(true)
+        let resp = self.get("/pass/vault-states")?;
+        let rows: Vec<Row> = super::decode_json(resp)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.file_id, row.state))
+            .collect())
     }
 }

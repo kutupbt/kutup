@@ -15,7 +15,9 @@ The wipe already bundles:
 - the Drive block format (#321);
 - one Chat identity per account (#320,
   [`account-identity-key.md`](account-identity-key.md));
-- removing the X25519 suite-1 upgrade path;
+- removing the X25519 suite-1 upgrade path (done 2026-11-19, on
+  `wipe/api-pass`: suite 1 is refused on parse, the manifest's Drive key is
+  X-Wing only, and a Drive key never changes inside an incarnation);
 - the migration squash;
 - removing MLS.
 
@@ -69,6 +71,11 @@ construction: XChaCha20-Poly1305, a 24-byte nonce, an HKDF subkey of the MK,
 AAD over some mix of magic, suite, label, key binding, id and revision, and
 padding to a bucket. Yet no two are the same:
 
+The table is the survey from before W1 (its file:line pointers are of that
+time). Every row but the Pass vault secret, which already was one, is an account
+record now; [`w1-account-record.md`](w1-account-record.md) "Today", column
+"Now", gives each one's purpose and slice.
+
 | Value | Format | Where | Differences |
 |---|---|---|---|
 | Contact card | `KUTCC2` suite 2 | `crypto/contact_card.rs:43,309` | binding and UID in the AAD, not in the header |
@@ -82,7 +89,7 @@ padding to a bucket. Yet no two are the same:
 | Revision-guard seen record | none (48 B) | `crypto/revision_guard.rs:77` | **no magic or suite** |
 | Mail search store-key wrap | `KUTMSW1` | `crypto/mail_search.rs:34` | |
 | Joined meetings | none | `crates/kutup-chat-core/src/call_link.rs:444-528` | **constant AAD only**; binds no account or entry |
-| Chat profile key, own copy | `kutup-chat-profile-wrap-v2` | chat-core `profile.rs` | hand-written HKDF and AEAD in chat-core |
+| Chat profile key, own copy | `kutup/chat-profile/wrap/v2` | chat-core `profile.rs` | hand-written HKDF and AEAD in chat-core |
 | Pass vault secret | `AccountEnvelopeV1` purpose 6 | `crypto/account_envelope.rs` | already the generic one |
 
 `AccountEnvelopeV1` (`KUTPAE1`) already is the right design. It has purposes,
@@ -112,7 +119,8 @@ suite        u16 (W2: the one suite table)
 purpose      u16 closed registry: contactCard, mailName, identityPins,
                  chatGroup, chatContact, photosLibrary, attachmentLedger,
                  accountHead, revisionSeen, joinedMeeting, profileKeyWrap,
-                 passVaultSecret, mailSearchKey, masterKeyWrap, ...
+                 passVaultSecret, mailSearchKey, masterKeyWrap,
+                 organizationPrivateKey (purpose 7 until then), ...
 mk_gen       u32 generation of the master key that sealed it (W6)
 binding      16  users.key_binding (the permanent random binding, never a name)
 object       16  the record id (a UUID, or an HMAC of it for lists the server must not see)
@@ -424,6 +432,9 @@ the integration branch, with the existing live tests per app.
 
 ## W4. Calendar keys on account-level keys
 
+**Built (2026-11-16), option (a),** on `wipe/calendar-keys`: see
+[`calendar.md`](calendar.md), "W4".
+
 ### Today
 
 Calendar E1 (#316 and before) follows Proton Calendar: each calendar has an
@@ -557,7 +568,7 @@ This matches both references:
 
 Four defects remain:
 1. **Derived and also stored.** The Drive X-Wing private key is derivable from
-   the MK and also stored as account-envelope purpose 3 (`DriveHpkePrivateKey`),
+   the MK and also stored as account-envelope purpose 3 (`DriveXwingPrivateKey`),
    with no check that the two agree. One of them should go.
 2. **No MK generation in records.** Rotating the MK is a roadmap item
    ([`account-identity-key.md`](account-identity-key.md), "Device removal": a lost device keeps the MK). Every MK-derived record
@@ -663,6 +674,18 @@ because their tables only hold transient data.
      docs/research/16 (Proton's model).
    - Seal the plaintext metadata that pending uploads and the media cache
      leave visible.
+   - Move the rollback pins that are still plain `localStorage` under the
+     sealed local-state store (a local-state purpose, as `ManifestPins`; in
+     memory when the origin doesn't keep the sign-in): the Photos library
+     pin (`apps/photos/src/features/library/marks.ts`,
+     `kutup.photos.library.pin.v1.*`) and the Chat attachment ledger's pin
+     chain (`fe/chat-core/src/attachment-ledger.ts`,
+     `kutup.chat.attachment-ledger.pin.v1.*`). Pins are sealed, never plain
+     (the Proton browser-storage model).
+     *Done:* both are sealed account records (purpose `LocalChainPin`,
+     docs/plans/w1-account-record.md) in the revision guard's IndexedDB
+     store (`fe/crypto/src/localChainPins.ts`); the old keys are removed on
+     the first pin stored.
 
    Browser data is discarded at the wipe anyway, so format changes here are
    free whenever they land. Size M.

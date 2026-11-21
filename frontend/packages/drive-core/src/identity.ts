@@ -1,11 +1,12 @@
+import type { MasterKeys } from '@kutup/crypto/masterKeys'
 import { useQuery } from '@tanstack/react-query'
-import { deriveAccountIdentityKeys, toBase64 } from '@kutup/crypto'
+import { deriveAccountIdentityKeys, type AccountRoots } from '@kutup/crypto'
 import type { AccountRef } from '@kutup/crypto/accountRef'
 import { loadServerSettings } from '@kutup/session/apps'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 
 export interface DriveIdentity {
-  userId: string
+  accountId: string
   /** `username@server`: this account's current handle. */
   account: string
   /** This account, for good: its server and permanent id (`users.id`). */
@@ -13,7 +14,12 @@ export interface DriveIdentity {
   /** The account's key binding (`session.envelopeBinding`), which its own seals bind. */
   binding: string
   incarnationId: string
+  /** The account's current master key (its own Drive keys are sealed under it). */
   masterKey: Uint8Array
+  /** The account's master keys, which its account records are sealed and opened through. */
+  masterKeys: MasterKeys
+  /** The account's stored roots: its identity (and so its signatures) comes from `roots.identityRoot`. */
+  roots: AccountRoots
   privateKey: Uint8Array
   /** This account's authority, which signs its folders' key histories. */
   authorityPublicKey: string
@@ -28,18 +34,20 @@ export interface DriveIdentity {
 export async function driveIdentityOf(session: Session): Promise<DriveIdentity> {
   const [data, identity] = await Promise.all([
     loadServerSettings<{ chat?: { serverName?: string } }>(),
-    deriveAccountIdentityKeys(toBase64(session.masterKey)),
+    deriveAccountIdentityKeys(session.roots.identityRoot),
   ])
   const serverName = data.chat?.serverName
   if (!serverName) throw new Error('the server did not publish its name')
   if (!session.username) throw new Error('this account has no username')
   return {
-    userId: session.userId,
+    accountId: session.accountId,
     account: `${session.username}@${serverName}`,
-    accountRef: { server: serverName, accountId: session.userId },
+    accountRef: { server: serverName, accountId: session.accountId },
     binding: session.envelopeBinding,
     incarnationId: identity.incarnationId,
     masterKey: session.masterKey,
+    masterKeys: session.masterKeys,
+    roots: session.roots,
     privateKey: session.privateKey,
     authorityPublicKey: identity.authorityPublicKey,
   }

@@ -4,6 +4,17 @@
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
+    /// The owner role's connection (`DATABASE_OWNER_URL`), when the server
+    /// runs as a separate app role (docs/plans/server-personal-data.md, A8):
+    /// migrations, the app role's grants and the retention job use it, and the
+    /// security and admin logs are append-only for the server. `None`: one
+    /// role does everything, and those logs are not append-only.
+    pub database_owner_url: Option<String>,
+    /// A fork's own migrations (`ENTERPRISE_MIGRATIONS`, a directory; off
+    /// unless set): run after the core's, against the schema `enterprise`,
+    /// with their own migrations table (docs/self-hosting.md, "A fork's own
+    /// tables"). The core's baseline holds only core tables.
+    pub enterprise_migrations: Option<std::path::PathBuf>,
     pub jwt_secret: String,
     /// The keys the OPAQUE server setups are sealed under
     /// (`OPAQUE_SETUP_KEYS`, docs/plans/opaque.md §5). Never logged.
@@ -44,13 +55,8 @@ pub struct Config {
     /// SeaweedFS master endpoint probed for real capacity + usage (admin dashboard). Empty
     /// disables the probe (the admin UI then falls back to `storage_total_bytes`).
     pub seaweedfs_master_url: String,
-    /// Days a trashed file/folder is kept before the sweeper purges it permanently.
-    /// From `TRASH_RETENTION_DAYS`; 0 disables the automatic purge.
-    pub trash_retention_days: i64,
     /// Unacked chat ciphertext retention. `0` disables expiry.
     pub chat_mailbox_retention_days: i64,
-    /// Send-id idempotency-record retention. `0` disables expiry.
-    pub chat_send_retention_days: i64,
     /// Chat devices with no authenticated activity for this many days are
     /// expired with their prekeys/mailbox. `0` disables expiry.
     pub chat_device_expiry_days: i64,
@@ -127,6 +133,17 @@ pub struct Config {
     /// `NAME_SWEEP_SECONDS`: how often old addresses are closed and held
     /// names freed on their dates (an hour; seconds on test stacks).
     pub name_sweep_seconds: i64,
+    /// `BACKGROUND_JOBS` (on by default): whether this process runs its
+    /// background jobs (purges, sweeps, retention, the federation and mail
+    /// outboxes). A restore drill starts with them off, so nothing in the
+    /// restored stack deletes or sends before it has been checked
+    /// (scripts/restore-drill.sh).
+    pub background_jobs: bool,
+    /// `OUTBOUND_DELIVERY` (on by default): whether this server sends
+    /// anything to another host under its own identity: federation
+    /// requests, mail, push notifications (`outbound.rs`). A restore drill
+    /// always runs with it off.
+    pub outbound_delivery: bool,
     pub mail_labels_per_account: i64,
     /// Filters an account may have switched on (`MAIL_FILTERS_PER_ACCOUNT`).
     pub mail_filters_per_account: i64,
@@ -160,9 +177,10 @@ pub struct Config {
     /// apps show direct chats only; groups made earlier stay stored,
     /// unreachable.
     pub chat_groups: bool,
-    /// The most members (and open invitations) a group hosted here may have
+    /// The first value of the `chat.group_max_members` site setting, the
+    /// most members (and open invitations) a group hosted here may have
     /// (`CHAT_GROUP_MAX_MEMBERS`, 1 to 256, default 256;
-    /// docs/plans/pairwise-groups.md §7).
+    /// docs/plans/pairwise-groups.md §7). Administrators change it after.
     pub chat_group_max_members: usize,
     /// The most groups this server hosts (`CHAT_GROUP_MAX_GROUPS`, default
     /// 100000): with the per-server creation limit, a peer can't fill it.
@@ -188,6 +206,12 @@ pub struct Config {
     /// Where the map relay keeps its tile cache (`MAPS_CACHE_DIR`;
     /// docs/plans/maps.md). Its size is an administrator setting.
     pub maps_cache_dir: String,
+    /// Map providers' origins browsers may load from directly
+    /// (`KUTUP_MAP_DIRECT_ORIGINS`, comma or space list; the frontend
+    /// container adds the same list to the apps' Content-Security-Policy).
+    /// A provider elsewhere is offered through the relay only; empty (the
+    /// default) relays every provider (docs/content-security-policy.md).
+    pub map_direct_origins: Vec<String>,
     /// STUN servers for Chat calls (`CHAT_STUN_URLS`, comma list).
     pub chat_stun_urls: String,
     /// TURN relays for Chat calls (`CHAT_TURN_URLS`, comma list of
@@ -212,7 +236,7 @@ pub struct Config {
     /// Canonical base64 raw libsignal private key for the active online server
     /// certificate. This purpose-specific key issues only sender certificates.
     pub chat_sealed_sender_online_private_key: String,
-    /// Where each web app lives. Published by `/api/auth/settings` and enforced
+    /// Where each web app lives. Published by `/api/v1/auth/settings` and enforced
     /// for session forks (a fork for `web-drive` is only consumable from `drive`).
     pub apps: AppOrigins,
     /// The relying party id security keys are bound to
@@ -280,7 +304,7 @@ impl AppOrigins {
             ClientType::WebMail => Some(&self.mail),
             ClientType::WebPass => Some(&self.pass),
             ClientType::WebCalendar => Some(&self.calendar),
-            ClientType::Cli => None,
+            ClientType::Cli | ClientType::MailBridge => None,
         }
     }
 }
@@ -295,6 +319,22 @@ fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
         return Err(format!("{name} must be a bare origin without a path"));
     }
     Ok(origin.ascii_serialization())
+}
+
+/// `KUTUP_MAP_DIRECT_ORIGINS`: bare http(s) origins, comma or space
+/// separated, as canonical origins.
+fn map_direct_origins(value: &str) -> Result<Vec<String>, String> {
+    let mut origins = Vec::new();
+    for item in value
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|item| !item.is_empty())
+    {
+        let origin = canonical_origin("KUTUP_MAP_DIRECT_ORIGINS", item)?;
+        if !origins.contains(&origin) {
+            origins.push(origin);
+        }
+    }
+    Ok(origins)
 }
 
 /// The security keys' relying party id: `KUTUP_WEBAUTHN_RP_ID`, else
@@ -373,12 +413,26 @@ pub fn resolve_app_origins(
     Ok(origins)
 }
 
+/// The environment variables that became site settings (docs/plans/w7-schema.md
+/// §13), each with the setting that replaced it. One still set is ignored,
+/// with a warning at start naming the setting to use instead.
+pub(crate) const MOVED_TO_SETTINGS: &[(&str, &str)] = &[
+    ("TRASH_RETENTION_DAYS", "drive.trash_retention_days"),
+    ("CHAT_SEND_RETENTION_DAYS", "chat.send_retention_days"),
+];
+
 impl Config {
     /// Loads config from the environment, panicking on missing required vars or
     /// a too-short JWT secret (mirrors the Go `Load`).
     pub fn load() -> Config {
         let env = Env::process();
         let cfg = Self::from_env(&env);
+        for (name, setting) in env.moved_to_settings() {
+            tracing::warn!(
+                "{name} is set but no longer read: it is the site setting {setting} \
+                 (Administration → Server settings)"
+            );
+        }
         if let Err(errors) = env.finish() {
             eprintln!("kutup-server: the configuration is not valid:");
             for error in errors {
@@ -505,6 +559,19 @@ impl Config {
         let app_env_for_apps = app_env.clone();
         let mut cfg = Config {
             database_url: must_env("DATABASE_URL"),
+            database_owner_url: env.set("DATABASE_OWNER_URL").filter(|url| !url.is_empty()),
+            enterprise_migrations: env.set("ENTERPRISE_MIGRATIONS").and_then(|path| {
+                let path = std::path::PathBuf::from(path.trim());
+                if path.is_dir() {
+                    Some(path)
+                } else {
+                    env.error(format!(
+                        "ENTERPRISE_MIGRATIONS must name a directory, not {}",
+                        path.display()
+                    ));
+                    None
+                }
+            }),
             jwt_secret: must_env("JWT_SECRET"),
             opaque_setup_keys: {
                 let value = env.opaque_setup_keys();
@@ -551,9 +618,7 @@ impl Config {
             seaweedfs_master_url: env
                 .raw("SEAWEEDFS_MASTER_URL")
                 .unwrap_or_else(|| "http://seaweedfs-master:9333".to_string()),
-            trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
             chat_mailbox_retention_days,
-            chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
             chat_media_max_plaintext_bytes: chat_media_max_plaintext_bytes as u64,
             chat_media_delivery_retention_days,
@@ -615,6 +680,8 @@ impl Config {
             name_hold_days: get_env_i64("NAME_HOLD_DAYS", 180),
             old_address_receive_days: get_env_i64("OLD_ADDRESS_RECEIVE_DAYS", 90),
             name_sweep_seconds: get_env_i64("NAME_SWEEP_SECONDS", 3600).clamp(1, 86_400),
+            background_jobs: get_env_bool("BACKGROUND_JOBS", true),
+            outbound_delivery: get_env_bool("OUTBOUND_DELIVERY", true),
             mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             mail_filters_per_account: get_env_i64("MAIL_FILTERS_PER_ACCOUNT", 200),
             mail_sender_rules_per_account: get_env_i64("MAIL_SENDER_RULES_PER_ACCOUNT", 5000),
@@ -644,6 +711,13 @@ impl Config {
             ),
             chat_web_push_subject: get_env("CHAT_WEB_PUSH_SUBJECT", ""),
             maps_cache_dir: get_env("MAPS_CACHE_DIR", ""),
+            map_direct_origins: match map_direct_origins(&get_env("KUTUP_MAP_DIRECT_ORIGINS", "")) {
+                Ok(origins) => origins,
+                Err(error) => {
+                    env.error(error);
+                    Vec::new()
+                }
+            },
             chat_stun_urls: get_env("CHAT_STUN_URLS", ""),
             chat_turn_urls: get_env("CHAT_TURN_URLS", ""),
             chat_turn_secret: get_env("CHAT_TURN_SECRET", ""),
@@ -915,6 +989,16 @@ impl Env {
         (!unknown.is_empty()).then_some(unknown)
     }
 
+    /// Each variable of [`MOVED_TO_SETTINGS`] that is set, with its setting.
+    /// Not a read: `.env.example` no longer lists them.
+    pub(crate) fn moved_to_settings(&self) -> Vec<(&'static str, &'static str)> {
+        MOVED_TO_SETTINGS
+            .iter()
+            .filter(|(name, _)| (self.lookup)(name).is_some())
+            .copied()
+            .collect()
+    }
+
     /// Every problem found, or `Ok` when there was none.
     pub(crate) fn finish(&self) -> Result<(), Vec<String>> {
         let errors = self.errors.take();
@@ -929,6 +1013,22 @@ impl Env {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_direct_origins_are_bare_origins() {
+        assert_eq!(map_direct_origins(""), Ok(Vec::new()));
+        assert_eq!(
+            map_direct_origins(
+                "https://tile.openstreetmap.org, https://TILES.openfreemap.org/ https://tile.openstreetmap.org"
+            ),
+            Ok(vec![
+                "https://tile.openstreetmap.org".to_owned(),
+                "https://tiles.openfreemap.org".to_owned()
+            ])
+        );
+        assert!(map_direct_origins("https://tiles.example.org/styles").is_err());
+        assert!(map_direct_origins("tiles.example.org").is_err());
+    }
 
     #[test]
     fn admin_account_is_read_as_its_owner_meant() {
@@ -1184,7 +1284,7 @@ mod env_tests {
     fn every_bad_value_is_reported_not_defaulted() {
         let found = errors(&[
             ("APP_ENV", "prod"),
-            ("TRASH_RETENTION_DAYS", "thirty"),
+            ("CHAT_DEVICE_EXPIRY_DAYS", "thirty"),
             ("CHAT_GROUPS", "maybe"),
             ("MAIL_OUTSIDE_SENDING", "yes"),
             ("MAIL_DEFAULT_DELAY_SEND_SECONDS", "7"),
@@ -1194,7 +1294,7 @@ mod env_tests {
         ]);
         for name in [
             "APP_ENV",
-            "TRASH_RETENTION_DAYS",
+            "CHAT_DEVICE_EXPIRY_DAYS",
             "CHAT_GROUPS",
             "MAIL_OUTSIDE_SENDING",
             "MAIL_DEFAULT_DELAY_SEND_SECONDS",
@@ -1207,6 +1307,29 @@ mod env_tests {
                 "{name} not reported: {found:?}"
             );
         }
+    }
+
+    /// A variable that became a setting is named with its setting when set,
+    /// and each setting is one the server has.
+    #[test]
+    fn variables_moved_to_settings_are_named_when_set() {
+        let env = Env::from_pairs(&[("TRASH_RETENTION_DAYS", "30"), ("PORT", "1")]);
+        assert_eq!(
+            env.moved_to_settings(),
+            vec![("TRASH_RETENTION_DAYS", "drive.trash_retention_days")]
+        );
+        assert!(Env::from_pairs(&[]).moved_to_settings().is_empty());
+        for (_, setting) in MOVED_TO_SETTINGS {
+            assert!(
+                crate::site_settings::numeric_settings().any(|s| s.key == *setting),
+                "{setting} is no setting"
+            );
+        }
+        // Setting one is no error: the server starts, ignoring it.
+        assert_eq!(
+            errors(&[("CHAT_SEND_RETENTION_DAYS", "30")]),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -1320,6 +1443,9 @@ mod env_example {
         ("POSTGRES_PASSWORD", "docker-compose.yml"),
         ("POSTGRES_DB", "docker-compose.yml"),
         ("POSTGRES_USER", "docker-compose.yml"),
+        ("POSTGRES_APP_USER", "docker-compose.yml"),
+        ("POSTGRES_APP_PASSWORD", "docker-compose.yml"),
+        ("KUTUP_CSP_ENFORCE", "docker-compose.yml"),
         ("KUTUP_HTTP_PORT", "docker-compose.yml"),
         ("KUTUP_HTTPS_PORT", "docker-compose.yml"),
         ("CHAT_TURN_REALM", "docker-compose.yml"),
@@ -1337,14 +1463,23 @@ mod env_example {
             "KUTUP_STALWART_SETUP_IMAGE",
             "docker-compose.mail-images.yml",
         ),
-        ("KUTUP_BACKUP_PASSPHRASE", "scripts/backup-postgres.sh"),
+        ("BACKUP_S3_ENDPOINT", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_BUCKET", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_ACCESS_KEY", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_SECRET_KEY", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_REGION", "scripts/backup-lib.sh"),
+        ("KUTUP_BACKUP_AGE_RECIPIENT", "scripts/backup-lib.sh"),
         ("KUTUP_BACKUP_KEEP_DAYS", "scripts/backup-postgres.sh"),
+        ("KUTUP_BACKUP_PREFIX", "scripts/backup-postgres.sh"),
+        ("KUTUP_MAIL_BACKUP_PREFIX", "scripts/backup-stalwart.sh"),
     ];
 
     /// Read by the server, but not from `.env` under Compose: it builds or
     /// fixes them itself (DATABASE_URL from POSTGRES_*, the cache directory,
     /// the port and mail's addresses inside its network, OPAQUE_SETUP_KEYS in
-    /// place of the file) or only test stacks set them.
+    /// place of the file), a fork's image sets them (ENTERPRISE_MIGRATIONS: a
+    /// blank one passed from `.env` would turn its migrations off) or only test
+    /// stacks set them.
     const NOT_FROM_ENV_FILE: &[&str] = &[
         "DATABASE_URL",
         "MAPS_CACHE_DIR",
@@ -1353,6 +1488,7 @@ mod env_example {
         "MAIL_SUBMISSION_ADDR",
         "OPAQUE_SETUP_KEYS_FILE",
         "MAIL_TEST_KEY_ORIGIN",
+        "ENTERPRISE_MIGRATIONS",
     ];
 
     /// The compose files a self-hoster combines (docs/self-hosting.md).
@@ -1467,6 +1603,21 @@ mod env_example {
             unread.is_empty(),
             "in .env.example but read by nothing (or add it to OUTSIDE_THE_SERVER): {unread:?}"
         );
+    }
+
+    /// A variable that became a setting is read by nothing and isn't offered
+    /// in `.env.example`.
+    #[test]
+    fn variables_moved_to_settings_are_gone() {
+        let reads = server_reads();
+        let listed = listed();
+        for (name, _) in MOVED_TO_SETTINGS {
+            assert!(!reads.contains(*name), "{name} is still read");
+            assert!(
+                !listed.iter().any(|l| l == name),
+                "{name} is in .env.example"
+            );
+        }
     }
 
     #[test]

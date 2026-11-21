@@ -55,7 +55,7 @@ FederationIdentityDocumentV1 {
 The current signature covers, in order:
 
 ```text
-"kutup-federation-identity-document-v1\0"
+"kutup/federation/identity-document/v1\0"
 identityVersion:u16
 server:length-prefixed
 sequence:u64
@@ -68,7 +68,7 @@ issuedAt:i64
 ```
 
 The document hash is SHA-256 over
-`"kutup-federation-identity-document-hash-v1\0" || signingBytes`. Signatures
+`"kutup/federation/identity-document-hash/v1\0" || signingBytes`. Signatures
 authenticate the canonical payload but are not included in its hash.
 
 Genesis is sequence zero, has neither predecessor field, and is self-signed.
@@ -86,6 +86,7 @@ signature fail closed.
 ```text
 FederationDiscoveryV2 {
   fedVersion: 2,
+  fedVersions: [2],
   server,
   apiBase,
   capabilities: ["chat.v2", "drive.v1", "identity.v1"],
@@ -96,6 +97,11 @@ FederationDiscoveryV2 {
   signature
 }
 ```
+
+`fedVersions` lists every federation protocol version the server serves;
+each lives under `/api/fed/v{n}/` (today `/api/fed/v2/`). A sender uses the
+highest version both servers list; a request under a version the receiver
+doesn't serve answers `426 federationVersionUnsupported` with `supported`.
 
 Capabilities are unique and byte-sorted; `identity.v1` is mandatory. `apiBase`
 is canonical HTTPS without credentials, query, fragment, a default `:443`, or
@@ -138,8 +144,10 @@ Refusals are counted in the origin's rate like deliveries.
 The identity's current key signs these deterministic bytes:
 
 ```text
-"kutup-federation-discovery-v2\0"
+"kutup/federation/discovery/v2\0"
 fedVersion:u16
+fedVersionCount:u16
+each served version:u16
 server:length-prefixed
 apiBase:length-prefixed
 capabilityCount:u16

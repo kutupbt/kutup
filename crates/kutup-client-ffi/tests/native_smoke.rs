@@ -2,10 +2,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use kutup_chat_proto::{AccountManifestPublicationV2, AccountManifestV2};
+use kutup_chat_proto::{AccountManifestPublicationV3, AccountManifestV3};
 use kutup_client_ffi::{
     open_native_chat_client, ChatHttpClient, ChatHttpMethod, ChatHttpRequest, ChatHttpResponse,
-    KutupChatError,
+    KutupChatError, NativeAccountKeys,
 };
 
 struct MockHttp {
@@ -33,7 +33,7 @@ impl ChatHttpClient for MockHttp {
         match (request.method, request.path.as_str()) {
             // The account's first device re-registers: the server takes its
             // manifest as the head and answers device 1.
-            (ChatHttpMethod::Post, "/chat/device") => {
+            (ChatHttpMethod::Post, "/chat/devices") => {
                 assert!(request.chat_device.is_none(), "a registration has no credential header");
                 self.registrations.fetch_add(1, Ordering::Relaxed);
                 let body = request.body_json.expect("registration body");
@@ -46,23 +46,20 @@ impl ChatHttpClient for MockHttp {
                 *self.registration.lock().unwrap() = Some(value);
                 Ok(ChatHttpResponse {
                     status: 201,
-                    body_json: r#"{"deviceId":1}"#.into(),
-                })
+                    body_json: r#"{"deviceId":1}"#.into(), instance_id: None, })
             }
             (ChatHttpMethod::Get, "/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/manifest?server=chat.test") => {
                 let manifest = self.manifest.lock().unwrap().clone();
                 Ok(match manifest {
                     Some(body_json) => ChatHttpResponse {
                         status: 200,
-                        body_json,
-                    },
+                        body_json, instance_id: None, },
                     // The server's own "no manifest": the account's first
                     // device re-registers.
                     None => ChatHttpResponse {
                         status: 404,
                         body_json: r#"{"error":"chat manifest not found","code":"noManifest"}"#
-                            .into(),
-                    },
+                            .into(), instance_id: None, },
                 })
             }
             (ChatHttpMethod::Post, "/chat/manifest") => {
@@ -76,16 +73,15 @@ impl ChatHttpClient for MockHttp {
                 self.authenticated.fetch_add(1, Ordering::Relaxed);
                 let body_json = request.body_json.expect("manifest body");
                 *self.manifest.lock().unwrap() = Some(body_json.clone());
-                let manifest: AccountManifestV2 = serde_json::from_str(&body_json).unwrap();
-                let response = AccountManifestPublicationV2 { manifest };
+                let manifest: AccountManifestV3 = serde_json::from_str(&body_json).unwrap();
+                let response = AccountManifestPublicationV3 { manifest };
                 Ok(ChatHttpResponse {
                     status: 200,
-                    body_json: serde_json::to_string(&response).unwrap(),
-                })
+                    body_json: serde_json::to_string(&response).unwrap(), instance_id: None, })
             }
             (ChatHttpMethod::Get, "/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/keys?syncDeviceId=1&server=chat.test") => {
                 let registration = self.registration.lock().unwrap().clone().unwrap();
-                let manifest: AccountManifestV2 = serde_json::from_str(
+                let manifest: AccountManifestV3 = serde_json::from_str(
                     self.manifest
                         .lock()
                         .unwrap()
@@ -107,9 +103,13 @@ impl ChatHttpClient for MockHttp {
                         }],
                         "manifest": manifest
                     })
-                    .to_string(),
-                })
+                    .to_string(), instance_id: None, })
             }
+            // The sign-in this device is under: what a new device's manifest
+            // entry names.
+            (ChatHttpMethod::Get, "/account/devices/session") => Ok(ChatHttpResponse {
+                status: 200,
+                body_json: r#"{"session":"5f0c6c1e8a3b4d2e9f710b1c2d3e4f505f0c6c1e8a3b4d2e9f710b1c2d3e4f50","nextDeviceId":1}"#.into(), instance_id: None, }),
             _ => Err(KutupChatError::Transport {
                 message: format!("unexpected request: {:?} {}", request.method, request.path),
             }),
@@ -126,12 +126,35 @@ fn encrypted_install_registers_once_and_reopens() {
     let database = database.to_string_lossy().into_owned();
     let http = Arc::new(MockHttp::new());
 
+    // The account's root records under its master key [9; 32], and its
+    // authority (docs/plans/identity-root.md).
+    let roots = {
+        let roots = kutup_crypto::account_roots::AccountRoots::generate();
+        let records = roots
+            .seal(
+                &[9; 32],
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+            )
+            .unwrap();
+        let authority = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
+            .unwrap()
+            .authority_public_key()
+            .to_vec();
+        (records, authority)
+    };
     let first = futures_executor::block_on(open_native_chat_client(
         database.clone(),
         vec![3; 32],
         ALICE.into(),
-        vec![9; 32],
-        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        NativeAccountKeys {
+            master_key: vec![9; 32],
+            master_key_generation: 1,
+            master_keyring: Vec::new(),
+            root_records: roots.0.clone(),
+            authority_public_key: roots.1.clone(),
+            binding: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        },
         http.clone(),
     ))
     .unwrap();
@@ -168,8 +191,14 @@ fn encrypted_install_registers_once_and_reopens() {
         database.clone(),
         vec![4; 32],
         ALICE.into(),
-        vec![9; 32],
-        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        NativeAccountKeys {
+            master_key: vec![9; 32],
+            master_key_generation: 1,
+            master_keyring: Vec::new(),
+            root_records: roots.0.clone(),
+            authority_public_key: roots.1.clone(),
+            binding: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        },
         http.clone(),
     ));
     assert!(matches!(wrong_key, Err(KutupChatError::Storage { .. })));
@@ -178,8 +207,14 @@ fn encrypted_install_registers_once_and_reopens() {
         database,
         vec![3; 32],
         ALICE.into(),
-        vec![9; 32],
-        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        NativeAccountKeys {
+            master_key: vec![9; 32],
+            master_key_generation: 1,
+            master_keyring: Vec::new(),
+            root_records: roots.0.clone(),
+            authority_public_key: roots.1.clone(),
+            binding: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        },
         http.clone(),
     ))
     .unwrap();
@@ -191,4 +226,57 @@ fn encrypted_install_registers_once_and_reopens() {
         futures_executor::block_on(second.history()),
         Err(KutupChatError::Closed)
     ));
+}
+
+/// After a master-key rotation the app holds the new key and its generation,
+/// and the keyring reaches the old one: roots sealed before the rotation still
+/// open. A keyring that reaches past the key held is refused (another device
+/// rotated it), before any database is touched.
+#[test]
+fn the_keyring_opens_roots_sealed_before_a_rotation() {
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
+    let roots = kutup_crypto::account_roots::AccountRoots::generate();
+    let records = roots.seal(&[9; 32], first, BINDING).unwrap();
+    let authority = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
+        .unwrap()
+        .authority_public_key()
+        .to_vec();
+    let keyring =
+        kutup_crypto::master_keys::MasterKeys::seal_keyring(&[10; 32], &[9; 32], first, BINDING)
+            .unwrap();
+    let open = |master_key: Vec<u8>, generation: u32, keyring: Vec<Vec<u8>>| {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("chat.sqlite");
+        futures_executor::block_on(open_native_chat_client(
+            database.to_string_lossy().into_owned(),
+            vec![3; 32],
+            ALICE.into(),
+            NativeAccountKeys {
+                master_key,
+                master_key_generation: generation,
+                master_keyring: keyring,
+                root_records: records.clone(),
+                authority_public_key: authority.clone(),
+                binding: BINDING.into(),
+            },
+            Arc::new(MockHttp::new()),
+        ))
+    };
+    let client = open(vec![10; 32], 2, vec![keyring.clone()]).unwrap();
+    futures_executor::block_on(client.shutdown()).unwrap();
+    // Without the keyring the old key is out of reach.
+    assert!(matches!(
+        open(vec![10; 32], 2, Vec::new()),
+        Err(KutupChatError::InvalidInput { .. })
+    ));
+    // The old key with the newer keyring: stale.
+    match open(vec![9; 32], 1, vec![keyring]) {
+        Err(KutupChatError::InvalidInput { message }) => assert!(
+            message.contains(kutup_crypto::master_keys::MASTER_KEY_STALE),
+            "{message}"
+        ),
+        Err(other) => panic!("expected a stale key, got {other:?}"),
+        Ok(_) => panic!("expected a stale key, got a client"),
+    }
 }

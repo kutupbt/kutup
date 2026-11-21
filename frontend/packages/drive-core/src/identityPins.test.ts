@@ -1,3 +1,4 @@
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The crypto is Rust's (kutup-crypto vectors); here, its decisions are
@@ -26,6 +27,7 @@ interface Pin {
 
 interface Rename {
   incarnationId: string
+  accountId: string
   sequence: number
   previous: string
   current: string
@@ -47,15 +49,17 @@ const holds = (pin: Pin, address: string) => {
 }
 
 // Rust's account_rename::verify_chain, modelled: a statement "verifies" when
-// signed by the authority, and each starts where the one before ended.
-function verifyChain(authority: string, chain: Rename[]) {
+// signed by the authority for the account id asked about, and each starts
+// where the one before ended.
+function verifyChain(authority: string, accountId: string, chain: Rename[]) {
   if (chain.length === 0) throw new Error('empty chain')
   chain.forEach((statement, i) => {
     if (statement.signature !== `signed-by-${authority}` || statement.sequence !== i + 1) throw new Error('chain does not verify')
+    if (statement.accountId !== accountId) throw new Error('signed for another account')
     if (i > 0 && statement.previous !== chain[i - 1].current) throw new Error('chain does not verify')
   })
   const addresses = [chain[0].previous, ...chain.map((statement) => statement.current)]
-  return { incarnationId: `inc-${authority}`, first: addresses[0], current: addresses.at(-1)!, addresses, sequence: chain.length, digests: [] }
+  return { incarnationId: `inc-${authority}`, accountId, first: addresses[0], current: addresses.at(-1)!, addresses, sequence: chain.length, digests: [] }
 }
 
 // Rust's IdentityPinsV2::at: those holding the address first, by when seen.
@@ -85,7 +89,13 @@ function continues(pin: GroupPinModel, chain: { signers: string[]; digests: stri
 
 vi.mock('@kutup/crypto/accountRename', () => ({
   foldAddress: vi.fn((address: string) => Promise.resolve(fold(address))),
-  verifyAccountRenameChain: vi.fn((authority: string, chain: Rename[]) => Promise.resolve(verifyChain(authority, chain))),
+  verifyAccountRenameChain: vi.fn((authority: string, accountId: string, chain: Rename[]) => {
+    try {
+      return Promise.resolve(verifyChain(authority, accountId, chain))
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+    }
+  }),
 }))
 
 vi.mock('@kutup/crypto/accountRef', () => ({ sameAccount: (a: Ref, b: Ref) => sameRef(a, b) }))
@@ -158,7 +168,7 @@ vi.mock('@kutup/crypto/identityPins', () => ({
     const pin = pins[i]
     let view
     try {
-      view = verifyChain(pin.authorityPublicKey, chain)
+      view = verifyChain(pin.authorityPublicKey, account.accountId, chain)
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)))
     }
@@ -217,31 +227,42 @@ const server = {
   heldNames: new Map<string, unknown>(),
 }
 
-// The account head (docs/plans/rollback-protection.md), its rules kept
-// small: an index of the one `pins` value, covered or not, and listed writes
-// redone on a conflict as the real client does. Its own tests are in
-// @kutup/session/accountHead.test.ts.
-const head = vi.hoisted(() => ({ covered: false, revision: 0, blocked: false, sent: [] as string[] }))
+// The account head and its records (docs/plans/account-records.md), kept
+// small: the one `pins` record as the fake server holds it, covered by the
+// head or not, and batches redone on a conflict as the real client does.
+// Its own tests are in @kutup/session/accountHead.test.ts.
+const head = vi.hoisted(() => ({ covered: false, revision: 0, blocked: false, sent: [] as string[], store: null as unknown as (base: number, envelope: string, head: string) => Promise<void> }))
 vi.mock('@kutup/session/accountHead', async () => {
   const actual = await vi.importActual<typeof import('@kutup/session/accountHead')>('@kutup/session/accountHead')
-  const index = () => new actual.VerifiedIndex('pins', head.covered, head.covered ? [['pins', head.revision]] : [], null)
+  const { ScopeRecords } = await vi.importActual<typeof import('@kutup/session/accountRecords')>('@kutup/session/accountRecords')
+  const copy = () => {
+    const records = new ScopeRecords('pins')
+    if (server.pins) records.records.set('pins', { revision: server.pins.revision, envelope: server.pins.envelope })
+    // A head that covers the scope vouches for exactly one revision.
+    if (head.covered && (server.pins?.revision ?? 0) !== head.revision) throw new actual.IndexMismatchError('pins')
+    return records
+  }
   const conflicted = (error: unknown) => {
     const code = (error as { response?: { status?: number; data?: { code?: string } } }).response?.data?.code
-    return code === 'head_conflict' || code === 'revision_conflict'
+    return code === 'headConflict' || code === 'revisionConflict'
   }
   const client = {
-    verifiedIndex: () => (head.blocked ? Promise.reject(new actual.HeadBlockedError('fork')) : Promise.resolve(index())),
-    listedWrite: async <T,>(_scope: string, edit: (i: InstanceType<typeof actual.VerifiedIndex>, attempt: number) => Promise<{ changes: [string, number | null][]; send: (h: string) => Promise<T> } | null>) => {
+    records: () => (head.blocked ? Promise.reject(new actual.HeadBlockedError('fork')) : Promise.resolve().then(copy)),
+    recordsWrite: async <T,>(_scope: string, edit: (copy: InstanceType<typeof ScopeRecords>, attempt: number) => Promise<{ puts: { id: string; revision: number; envelope: string }[]; deletes: string[]; done: T } | null>) => {
       for (let attempt = 1; ; attempt++) {
         if (head.blocked) throw new actual.HeadBlockedError('fork')
-        const change = await edit(index(), attempt)
+        const records = copy()
+        const change = await edit(records, attempt)
         if (!change) return undefined
+        const batch = records.plan(change)
+        const put = batch.puts[0]
+        if (!put) return change.done
         try {
           const sealed = `head-${head.sent.length + 1}`
-          const result = await change.send(sealed)
+          await head.store(put.baseRevision, put.envelope, sealed)
           head.sent.push(sealed)
-          head.revision = change.changes[0][1] ?? 0
-          return result
+          head.revision = put.revision
+          return change.done
         } catch (error) {
           if (conflicted(error) && attempt < 5) continue
           throw error
@@ -255,13 +276,36 @@ vi.mock('@kutup/session/accountHead', async () => {
 vi.mock('@kutup/session/client', () => {
   const notFound = () => Object.assign(new Error('404'), { isAxiosError: true, response: { status: 404 } })
   const conflict = () =>
-    Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict' } } })
+    Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revisionConflict' } } })
+  // The server's side of a pins batch: stored only on top of the revision it started from.
+  head.store = (baseRevision: number, envelope: string, sealedHead: string) => {
+    const body = { baseRevision, envelope, head: sealedHead }
+    server.puts++
+    server.heads.push(body.head)
+    if (server.conflictOnce) {
+      server.conflictOnce = false
+      // Another app stored revision 1 with a pin of its own.
+      server.pins = {
+        revision: 1,
+        envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [{ account: { server: 'kutup.dev', accountId: 'acct-C' }, authorityPublicKey: 'C', state: 'seen', since: '2026-10-10T00:00:00Z', addresses: [{ address: 'carol@kutup.dev', seenAt: '2026-10-10T00:00:00Z' }] }] } }),
+      }
+      return Promise.reject(conflict())
+    }
+    // Stored only on top of the revision the write started from, newer than it.
+    const revision = (JSON.parse(body.envelope) as { revision: number }).revision
+    if (body.baseRevision !== (server.pins?.revision ?? 0) || revision <= body.baseRevision) return Promise.reject(conflict())
+    server.pins = { revision, envelope: body.envelope }
+    return Promise.resolve()
+  }
   return {
     default: {
       get: vi.fn((url: string) => {
-        if (url === '/user/identity-pins') return server.pins ? Promise.resolve({ data: server.pins }) : Promise.reject(notFound())
-        if (url.startsWith('/users/renames/')) {
-          const found = server.renames.get(decodeURIComponent(url.slice('/users/renames/'.length)))
+        if (url === '/account/records/pins?after=0') {
+          const records = server.pins ? [{ id: 'pins', revision: server.pins.revision, envelope: server.pins.envelope, seq: 1 }] : []
+          return Promise.resolve({ data: { records, deleted: [], next: records.length, more: false, resync: false, head: 'h', basis: null } })
+        }
+        if (/^\/accounts\/by-address\/[^/]+\/renames$/.test(url)) {
+          const found = server.renames.get(decodeURIComponent(url.split('/')[3] ?? ''))
           return Promise.resolve({ data: found ?? { version: 1, chains: [] } })
         }
         const held = server.heldNames.get(decodeURIComponent(url.split('/').pop()!))
@@ -274,27 +318,9 @@ vi.mock('@kutup/session/client', () => {
         return person ? Promise.resolve({ data: person }) : Promise.reject(notFound())
       }),
       post: vi.fn((url: string, body: { accounts: string[] }) => {
-        if (url !== '/users/drive-identities') return Promise.reject(new Error(url))
+        if (url !== '/drive/identities') return Promise.reject(new Error(url))
         server.batches.push(body.accounts)
         return Promise.resolve({ data: body.accounts.flatMap((a) => server.people.get(a) ?? []) })
-      }),
-      put: vi.fn((_url: string, body: { baseRevision: number; envelope: string; head?: string }) => {
-        server.puts++
-        server.heads.push(body.head)
-        if (server.conflictOnce) {
-          server.conflictOnce = false
-          // Another app stored revision 1 with a pin of its own.
-          server.pins = {
-            revision: 1,
-            envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [{ account: { server: 'kutup.dev', accountId: 'acct-C' }, authorityPublicKey: 'C', state: 'seen', since: '2026-10-10T00:00:00Z', addresses: [{ address: 'carol@kutup.dev', seenAt: '2026-10-10T00:00:00Z' }] }] } }),
-          }
-          return Promise.reject(conflict())
-        }
-        // Stored only on top of the revision the write started from, newer than it.
-        const revision = (JSON.parse(body.envelope) as { revision: number }).revision
-        if (body.baseRevision !== (server.pins?.revision ?? 0) || revision <= body.baseRevision) return Promise.reject(conflict())
-        server.pins = { revision, envelope: body.envelope }
-        return Promise.resolve({ data: null })
       }),
     },
   }
@@ -326,14 +352,16 @@ import {
   verifyPerson,
 } from './identityPins'
 import type { DriveIdentity } from './identity'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const me: DriveIdentity = {
-  userId: 'me-id',
+  accountId: 'me-id',
   account: 'me@kutup.dev',
   accountRef: { server: 'kutup.dev', accountId: 'me-id' },
   binding: ME_BINDING,
   incarnationId: 'inc-ME',
-  masterKey: new Uint8Array(32),
+  masterKey: new Uint8Array(32), masterKeys: firstMasterKeys(new Uint8Array(32)),
+  roots: testRoots(0),
   privateKey: new Uint8Array(32),
   authorityPublicKey: 'ME',
 }
@@ -352,7 +380,7 @@ function publish(
     server: address.split('@')[1],
     accountId: id,
     accountAuthorityPublicKey: authority,
-    driveHpkePublicKey: hpke,
+    driveXwingPublicKey: hpke,
     driveSigningPublicKey: signing,
     driveKeyBinding: bound ? `bound-by-${authority}` : undefined,
     identitySuite: suite,
@@ -397,7 +425,7 @@ describe('checkIdentity', () => {
     publish('bob@kutup.dev', 'B')
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveSigningPublicKey: 'B-sign' })).toEqual({ kind: 'ok', verified: false })
     expect(storedPins()).toMatchObject([{ id: 'acct-B', authorityPublicKey: 'B', addresses: ['bob@kutup.dev'] }])
-    expect(await checkIdentity(me, 'bob@kutup.dev', { driveHpkePublicKey: 'B-hpke' })).toEqual({ kind: 'ok', verified: false })
+    expect(await checkIdentity(me, 'bob@kutup.dev', { driveXwingPublicKey: 'B-hpke' })).toEqual({ kind: 'ok', verified: false })
     expect(server.puts).toBe(1)
   })
 
@@ -406,9 +434,9 @@ describe('checkIdentity', () => {
     // A share signed with a key that is not Bob's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveSigningPublicKey: 'EVIL-sign' })).toEqual({ kind: 'invalid' })
     // A recipient key that is not Bob's.
-    expect(await checkIdentity(me, 'bob@kutup.dev', { driveHpkePublicKey: 'EVIL-hpke' })).toEqual({ kind: 'invalid' })
+    expect(await checkIdentity(me, 'bob@kutup.dev', { driveXwingPublicKey: 'EVIL-hpke' })).toEqual({ kind: 'invalid' })
     // A binding by another authority than the one published.
-    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', server: 'kutup.dev', accountId: 'acct-E', accountAuthorityPublicKey: 'E', driveHpkePublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B', identitySuite: 2, driveKeyBindingEpoch: 1 })
+    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', server: 'kutup.dev', accountId: 'acct-E', accountAuthorityPublicKey: 'E', driveXwingPublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B', identitySuite: 2, driveKeyBindingEpoch: 1 })
     expect(await checkIdentity(me, 'eve@kutup.dev')).toEqual({ kind: 'invalid' })
     // An incarnation that is not this authority's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { incarnationId: 'inc-OTHER' })).toEqual({ kind: 'invalid' })
@@ -567,7 +595,7 @@ function answer(address: string, authority: string, label = address): AccountAns
     accountId: `acct-${authority}`,
     accountIncarnationId: `inc-${authority}`,
     accountAuthorityPublicKey: authority,
-    driveHpkePublicKey: `${authority}-hpke`,
+    driveXwingPublicKey: `${authority}-hpke`,
     driveSigningPublicKey: `${authority}-sign`,
     driveKeyBinding: `bound-by-${authority}`,
     identitySuite: 2,
@@ -601,6 +629,25 @@ describe('a share is checked by the address typed, against the one answer it sea
     await expect(confirmRecipient(me, 'bob@kutup.dev', forged)).rejects.toMatchObject({ status: { kind: 'invalid' } })
     const elsewhere = { ...answer('bob@kutup.dev', 'B'), server: 'other.dev' }
     await expect(confirmRecipient(me, 'bob@kutup.dev', elsewhere)).rejects.toMatchObject({ status: { kind: 'invalid' } })
+  })
+
+  it('refuses a mirror: a pinned person’s account id and keys served by another server, also when the list can’t be written', async () => {
+    publish('ada@kutup.dev', 'A')
+    await checkIdentity(me, 'ada@kutup.dev')
+    newPage()
+    const puts = server.puts
+    // Another server mints Ada's account id and serves her whole public
+    // identity (identity-rotation.md §6): it verifies, and is refused, since
+    // her authority is pinned for her account.
+    const mirror = answer('ada@mirror.test', 'A')
+    expect(mirror.accountId).toBe('acct-A')
+    await expect(confirmRecipient(me, 'ada@mirror.test', mirror)).rejects.toMatchObject({ status: { kind: 'invalid' } })
+    // Writes stopped (another history): still refused, not taken as new.
+    head.blocked = true
+    newPage()
+    await expect(confirmRecipient(me, 'ada@mirror.test', mirror)).rejects.toMatchObject({ status: { kind: 'invalid' } })
+    expect(server.puts).toBe(puts)
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada@kutup.dev'] }])
   })
 
   it('takes a first-met account and pins it at the typed address', async () => {
@@ -718,10 +765,14 @@ describe('verifyPerson', () => {
   })
 })
 
-/** The chain of `authority`'s account through `addresses`, oldest first, signed by it (or `by`). */
-function chainOf(authority: string, addresses: string[], by = authority): Rename[] {
+/**
+ * The chain of `authority`'s account through `addresses`, oldest first,
+ * signed by it (or `by`) for its account id (or `account`).
+ */
+function chainOf(authority: string, addresses: string[], by = authority, account = `acct-${authority}`): Rename[] {
   return addresses.slice(1).map((current, i) => ({
     incarnationId: `inc-${authority}`,
+    accountId: account,
     sequence: i + 1,
     previous: addresses[i],
     current,
@@ -887,10 +938,10 @@ describe('shared mailboxes (Mail’s key checks)', () => {
 
 describe('followAccountRenames (Chat\'s rename line)', () => {
   const ADA = { server: 'kutup.dev', accountId: 'acct-A' }
-  /** Ada's chain from ada.l to `to`, each step signed `by` at `at` (ms). */
-  function chainAt(to: string[], at: number, by = 'A') {
+  /** Ada's chain from ada.l to `to`, each step signed `by` for `account` at `at` (ms). */
+  function chainAt(to: string[], at: number, by = 'A', account = 'acct-A') {
     const addresses = ['ada.l@kutup.dev', ...to]
-    const steps = chainOf('A', addresses, by).map((step) => ({ ...step, issuedAtMs: at }))
+    const steps = chainOf('A', addresses, by, account).map((step) => ({ ...step, issuedAtMs: at }))
     return { version: 1, chains: [{ incarnationId: 'inc-A', authorityPublicKey: 'A', current: addresses.at(-1)!, state: 'current', chain: steps }] }
   }
 
@@ -926,6 +977,9 @@ describe('followAccountRenames (Chat\'s rename line)', () => {
     expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
     server.renames.set('ada.lovelace@kutup.dev', chainAt(['ada.other@kutup.dev'], Date.now() + 60_000))
     expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
+    // Ada's authority's chain, but about another account id: not Ada's.
+    server.renames.set('ada.lovelace@kutup.dev', chainAt(['ada.lovelace@kutup.dev'], Date.now() + 60_000, 'A', 'acct-Z'))
+    expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
     expect(await followAccountRenames(me, { server: 'kutup.dev', accountId: 'acct-Z' }, 'zed@kutup.dev')).toEqual([])
     expect(server.puts).toBe(puts)
     expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev'] }])
@@ -939,8 +993,12 @@ describe('followAccountRenames (Chat\'s rename line)', () => {
       { from: 'ada.l@kutup.dev', to: 'ada.lovelace@kutup.dev', sequence: 1, issuedAtMs: expect.any(Number) as number },
     ])
     expect(server.puts).toBe(puts)
-    // Another authority's chain, or a rename from before the meeting: nothing.
+    // Another authority's chain, one about another account, or a rename
+    // from before the meeting: nothing.
     expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev', { authorityPublicKey: 'M', since: met })).toEqual([])
+    expect(
+      await followAccountRenames(me, { server: 'kutup.dev', accountId: 'acct-Z' }, 'ada.lovelace@kutup.dev', { authorityPublicKey: 'A', since: met }),
+    ).toEqual([])
     expect(
       await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev', { authorityPublicKey: 'A', since: new Date(Date.now() + 60_000).toISOString() }),
     ).toEqual([])

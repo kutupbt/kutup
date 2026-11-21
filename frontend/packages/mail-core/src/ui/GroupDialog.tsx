@@ -68,7 +68,7 @@ export function GroupDialog({
 
   useEffect(() => {
     if (!detail.data || members) return
-    setMembersDraft(detail.data.members.map(({ userId, address, role, canSendAs }) => ({ userId, address, role, canSendAs })))
+    setMembersDraft(detail.data.members.map(({ accountId, address, role, canSendAs }) => ({ accountId, address, role, canSendAs })))
     setDisplayName(detail.data.group.displayName)
     setDescription(detail.data.group.description)
     setPostPolicy(detail.data.group.postPolicy)
@@ -95,7 +95,7 @@ export function GroupDialog({
         setProblem(t('mailGroups.noAccount', { address }))
         return
       }
-      setMembersDraft([...members, { userId: account.userId, address: account.address, role: 'member', canSendAs: false }])
+      setMembersDraft([...members, { accountId: account.accountId, address: account.address, role: 'member', canSendAs: false }])
       setAdding('')
     } catch (error) {
       setProblem(apiErrorMessage(error, t('common.tryAgain')))
@@ -121,7 +121,7 @@ export function GroupDialog({
         (shared && group.needsNewSigner) ||
         members.length !== detail.data.members.length ||
         members.some((m) => {
-          const before = detail.data.members.find((c) => c.userId === m.userId)
+          const before = detail.data.members.find((c) => c.accountId === m.accountId)
           return !before || before.role !== m.role || before.canSendAs !== m.canSendAs || before.needsKeys
         })
       if (changed) {
@@ -199,13 +199,13 @@ export function GroupDialog({
                 {members.map((member) => {
                   const locked = !canEdit || (member.role === 'owner' && !canChangeOwners)
                   return (
-                    <li key={member.userId} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                    <li key={member.accountId} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
                       <span className="min-w-0 flex-1 truncate">{member.address}</span>
                       <Select
                         value={member.role}
                         disabled={locked}
                         onValueChange={(value) =>
-                          setMembersDraft(members.map((m) => (m.userId === member.userId ? { ...m, role: value as GroupRole } : m)))
+                          setMembersDraft(members.map((m) => (m.accountId === member.accountId ? { ...m, role: value as GroupRole } : m)))
                         }
                       >
                         <SelectTrigger className="w-32" aria-label={t('mailGroups.roleOf', { address: member.address })}>
@@ -225,7 +225,7 @@ export function GroupDialog({
                             checked={member.canSendAs}
                             disabled={locked}
                             onCheckedChange={(on) =>
-                              setMembersDraft(members.map((m) => (m.userId === member.userId ? { ...m, canSendAs: on === true } : m)))
+                              setMembersDraft(members.map((m) => (m.accountId === member.accountId ? { ...m, canSendAs: on === true } : m)))
                             }
                           />
                           {t('mailGroups.canSendAs')}
@@ -236,7 +236,7 @@ export function GroupDialog({
                           variant="ghost"
                           size="icon"
                           aria-label={t('mailGroups.remove', { address: member.address })}
-                          onClick={() => setMembersDraft(members.filter((m) => m.userId !== member.userId))}
+                          onClick={() => setMembersDraft(members.filter((m) => m.accountId !== member.accountId))}
                         >
                           <Trash2 />
                         </Button>

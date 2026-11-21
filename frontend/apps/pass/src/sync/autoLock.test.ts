@@ -11,13 +11,13 @@ describe('auto-lock', () => {
   })
 
   it('defaults to 15 minutes and keeps a choice on this device', () => {
-    localStorage.removeItem('kutup-pass-auto-lock-minutes')
+    localStorage.removeItem('kutup.pass.autoLockMinutes')
     expect(autoLockMinutes()).toBe(DEFAULT_AUTO_LOCK)
     setAutoLockMinutes(5)
     expect(autoLockMinutes()).toBe(5)
     setAutoLockMinutes(0)
     expect(autoLockMinutes()).toBe(0)
-    localStorage.setItem('kutup-pass-auto-lock-minutes', '7')
+    localStorage.setItem('kutup.pass.autoLockMinutes', '7')
     expect(autoLockMinutes()).toBe(DEFAULT_AUTO_LOCK)
   })
 })

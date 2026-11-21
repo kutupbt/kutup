@@ -118,12 +118,19 @@ impl FederationStack {
     /// unbounded operational table.
     pub fn spawn_maintenance(&self) {
         let replay = self.replay.clone();
+        let pool = self.pool.clone();
+        const EVERY: Duration = Duration::from_secs(60 * 60);
+        crate::job_health::register("federation.replay_purge", EVERY);
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(60 * 60));
+            let mut tick = tokio::time::interval(EVERY);
             loop {
                 tick.tick().await;
-                if let Err(error) = replay.purge_expired(OffsetDateTime::now_utc()).await {
-                    tracing::warn!(%error, "failed to purge expired federation replay reservations");
+                match replay.purge_expired(OffsetDateTime::now_utc()).await {
+                    Ok(_) => crate::job_health::beat(&pool, "federation.replay_purge").await,
+                    Err(error) => tracing::warn!(
+                        %error,
+                        "failed to purge expired federation replay reservations"
+                    ),
                 }
             }
         });

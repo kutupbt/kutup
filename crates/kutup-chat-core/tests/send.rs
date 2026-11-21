@@ -15,13 +15,16 @@ use kutup_chat_core::{
     ContactState, Engine, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    AccountManifestDeviceV2, AccountManifestHistoryPageV2, AccountManifestPublicationV2,
-    AccountManifestV2, AccountPreKeyBundlesResponse, DeliveredEnvelope, DeviceListMismatch,
+    AccountManifestDeviceV3, AccountManifestHistoryPageV3, AccountManifestPublicationV3,
+    AccountManifestV3, AccountPreKeyBundlesResponse, DeliveredEnvelope, DeviceListMismatch,
     DevicePreKeyBundle, DirectChatSuiteId, MailboxPage, OwnChatProfileResponse,
     PutChatProfileRequest, ReceiptState, RegisterChatDeviceRequestV2, SendMessagesRequest,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
+
+/// The `session` hash test servers give every device.
+const DEVICE_SESSION: &str = "5151515151515151515151515151515151515151515151515151515151515151";
 
 // ----- test helpers -----
 
@@ -60,17 +63,17 @@ fn sign(
     sequence: u64,
     previous_hash: Option<String>,
     identity_key: String,
-    devices: Vec<AccountManifestDeviceV2>,
+    devices: Vec<AccountManifestDeviceV3>,
     issued_at: &str,
-) -> AccountManifestV2 {
+) -> AccountManifestV3 {
     let binding = binding_for(&identity_key, authority);
     authority
         .sign_manifest_with_binding(
             account.parse().unwrap(),
             sequence,
             previous_hash,
-            identity_key,
-            binding,
+            Some(identity_key),
+            Some(binding),
             devices,
             issued_at,
         )
@@ -211,11 +214,11 @@ fn wrap(env: &kutup_chat_proto::OutgoingEnvelope, sender: &str) -> DeliveredEnve
 struct MockServer {
     /// Each `fetch_bundles` pops the front; the last entry repeats.
     fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
-    manifest_script: RefCell<Vec<Option<AccountManifestV2>>>,
+    manifest_script: RefCell<Vec<Option<AccountManifestV3>>>,
     sync_fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
-    sync_manifest_script: RefCell<Vec<Option<AccountManifestV2>>>,
-    own_manifest: RefCell<Option<AccountManifestV2>>,
-    manifest_history: RefCell<Vec<AccountManifestV2>>,
+    sync_manifest_script: RefCell<Vec<Option<AccountManifestV3>>>,
+    own_manifest: RefCell<Option<AccountManifestV3>>,
+    manifest_history: RefCell<Vec<AccountManifestV3>>,
     active: RefCell<Vec<(u32, u32)>>,
     sync_active: RefCell<Vec<(u32, u32)>>,
     fail_sends: RefCell<u32>,
@@ -231,7 +234,7 @@ struct MockServer {
     /// The manifests the server's own authority keeps for an account whose
     /// test scripts none: a new linked sequence whenever its devices or its
     /// identity change.
-    synthesized: RefCell<std::collections::BTreeMap<String, Vec<AccountManifestV2>>>,
+    synthesized: RefCell<std::collections::BTreeMap<String, Vec<AccountManifestV3>>>,
 }
 
 impl MockServer {
@@ -241,13 +244,13 @@ impl MockServer {
         &self,
         account: &str,
         devices: Vec<DevicePreKeyBundle>,
-        manifest: Option<AccountManifestV2>,
+        manifest: Option<AccountManifestV3>,
         current: Option<(u32, u32)>,
     ) -> AccountPreKeyBundlesResponse {
         let manifest = manifest.unwrap_or_else(|| self.synthesize(account, &devices, current));
         AccountPreKeyBundlesResponse {
             account: manifest.account.clone(),
-            identity_key: manifest.identity_key.clone(),
+            identity_key: manifest.identity_key.clone().unwrap_or_default(),
             devices: v2(devices),
             manifest,
         }
@@ -258,50 +261,55 @@ impl MockServer {
         account: &str,
         devices: &[DevicePreKeyBundle],
         current: Option<(u32, u32)>,
-    ) -> AccountManifestV2 {
+    ) -> AccountManifestV3 {
         let identity = devices
             .first()
             .map(|bundle| bundle.identity_key.clone())
             .or_else(|| identity_of(account))
             .expect("a test account has an identity");
-        let mut listed: Vec<AccountManifestDeviceV2> = devices
+        let mut listed: Vec<AccountManifestDeviceV3> = devices
             .iter()
-            .map(|bundle| AccountManifestDeviceV2 {
-                device_id: bundle.device_id,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: bundle.registration_id,
-                mls: None,
+            .map(|bundle| {
+                AccountManifestDeviceV3::chat(
+                    bundle.device_id,
+                    DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    bundle.registration_id,
+                    "51".repeat(32),
+                )
             })
             .collect();
         if let Some((device_id, registration_id)) = current {
             if !listed.iter().any(|device| device.device_id == device_id) {
-                listed.push(AccountManifestDeviceV2 {
+                listed.push(AccountManifestDeviceV3::chat(
                     device_id,
-                    direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    DirectChatSuiteId::PqxdhTripleRatchetV1,
                     registration_id,
-                    mls: None,
-                });
+                    "51".repeat(32),
+                ));
             }
         }
         // An account the test serves no device of still has its one.
         if listed.is_empty() {
-            listed.push(AccountManifestDeviceV2 {
-                device_id: 1,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: 1,
-                mls: None,
-            });
+            listed.push(AccountManifestDeviceV3::chat(
+                1,
+                DirectChatSuiteId::PqxdhTripleRatchetV1,
+                1,
+                "51".repeat(32),
+            ));
         }
         listed.sort_by_key(|device| device.device_id);
         let mut chains = self.synthesized.borrow_mut();
         let chain = chains.entry(account.to_string()).or_default();
         if let Some(last) = chain.last() {
-            if last.identity_key == identity && last.devices == listed {
+            if last.identity_key.as_deref() == Some(identity.as_str()) && last.devices == listed {
                 return last.clone();
             }
         }
         let next = sign(
-            &AccountAuthority::derive(&[11; 32]).unwrap(),
+            &AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+                [11; 32],
+            ))
+            .unwrap(),
             account,
             chain.last().map_or(1, |last| last.sequence + 1),
             chain.last().map(|last| last.manifest_hash().unwrap()),
@@ -325,10 +333,10 @@ impl MockServer {
     fn set_sync_active(&self, active: Vec<(u32, u32)>) {
         *self.sync_active.borrow_mut() = active;
     }
-    fn script_manifests(&self, manifests: Vec<Option<AccountManifestV2>>) {
+    fn script_manifests(&self, manifests: Vec<Option<AccountManifestV3>>) {
         *self.manifest_script.borrow_mut() = manifests;
     }
-    fn script_sync_manifests(&self, manifests: Vec<Option<AccountManifestV2>>) {
+    fn script_sync_manifests(&self, manifests: Vec<Option<AccountManifestV3>>) {
         *self.sync_manifest_script.borrow_mut() = manifests;
     }
     /// The envelopes of the most recent accepted send.
@@ -420,7 +428,14 @@ impl ChatTransport for MockServer {
         Ok(self.respond(username, devices, manifest, Some(current)))
     }
 
-    async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV2>> {
+    async fn fetch_device_session(&self) -> Result<kutup_chat_proto::DeviceSessionResponseV1> {
+        Ok(kutup_chat_proto::DeviceSessionResponseV1 {
+            session: DEVICE_SESSION.into(),
+            next_device_id: 1,
+        })
+    }
+
+    async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV3>> {
         Ok(self.own_manifest.borrow().clone())
     }
 
@@ -430,7 +445,7 @@ impl ChatTransport for MockServer {
         _from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV2> {
+    ) -> Result<AccountManifestHistoryPageV3> {
         let synthesized = self
             .synthesized
             .borrow()
@@ -447,7 +462,7 @@ impl ChatTransport for MockServer {
             })
             .cloned()
             .collect::<Vec<_>>();
-        Ok(AccountManifestHistoryPageV2 {
+        Ok(AccountManifestHistoryPageV3 {
             account: manifests
                 .first()
                 .map(|manifest| manifest.account.clone())
@@ -461,8 +476,8 @@ impl ChatTransport for MockServer {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestPublicationV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestPublicationV3> {
         *self.own_manifest.borrow_mut() = Some(manifest.clone());
         let mut history = self.manifest_history.borrow_mut();
         if history
@@ -471,7 +486,7 @@ impl ChatTransport for MockServer {
         {
             history.push(manifest.clone());
         }
-        Ok(AccountManifestPublicationV2 {
+        Ok(AccountManifestPublicationV3 {
             manifest: manifest.clone(),
         })
     }
@@ -631,7 +646,11 @@ impl ChatTransport for MockServer {
             .collect();
         let more = envelopes.len() > limit as usize;
         envelopes.truncate(limit as usize);
-        Ok(MailboxPage { envelopes, more })
+        Ok(MailboxPage {
+            envelopes,
+            more,
+            unsupported: Vec::new(),
+        })
     }
 
     async fn ack(&self, _device_id: u32, ids: &[String]) -> Result<()> {
@@ -657,11 +676,14 @@ fn decrypt_for<R: Rng + CryptoRng>(
     block_on(dst.decrypt(from, &wrap(env, &from.name()), rng)).unwrap()
 }
 
-fn signed_manifest(account: &str, bundle: &DevicePreKeyBundle) -> AccountManifestV2 {
+fn signed_manifest(account: &str, bundle: &DevicePreKeyBundle) -> AccountManifestV3 {
     signed_manifest_with_authority(
         account,
         bundle,
-        &AccountAuthority::derive(&[11; 32]).unwrap(),
+        &AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+            [11; 32],
+        ))
+        .unwrap(),
     )
 }
 
@@ -669,19 +691,19 @@ fn signed_manifest_with_authority(
     account: &str,
     bundle: &DevicePreKeyBundle,
     authority: &AccountAuthority,
-) -> AccountManifestV2 {
+) -> AccountManifestV3 {
     sign(
         authority,
         account,
         1,
         None,
         bundle.identity_key.clone(),
-        vec![AccountManifestDeviceV2 {
-            device_id: bundle.device_id,
-            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-            registration_id: bundle.registration_id,
-            mls: None,
-        }],
+        vec![AccountManifestDeviceV3::chat(
+            bundle.device_id,
+            DirectChatSuiteId::PqxdhTripleRatchetV1,
+            bundle.registration_id,
+            "51".repeat(32),
+        )],
         "2026-07-15T12:00:00Z",
     )
 }
@@ -695,7 +717,10 @@ fn signed_manifest_with_authority(
 fn local_devices_extend_only_the_prior_account_signed_manifest() {
     let mut rng = test_rng();
     let server = Rc::new(MockServer::default());
-    let authority = AccountAuthority::derive(&[12; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([12; 32]),
+    )
+    .unwrap();
     let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
 
     let first_session = device(account, 1, &mut rng);
@@ -706,12 +731,12 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
         1,
         None,
         first_session.account_identity_key(),
-        vec![AccountManifestDeviceV2 {
-            device_id: 1,
-            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-            registration_id: reg_id(&first_session),
-            mls: None,
-        }],
+        vec![AccountManifestDeviceV3::chat(
+            1,
+            DirectChatSuiteId::PqxdhTripleRatchetV1,
+            reg_id(&first_session),
+            "51".repeat(32),
+        )],
         "2026-07-15T12:00:00Z",
     );
     *server.own_manifest.borrow_mut() = Some(registered.clone());
@@ -737,7 +762,8 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
     assert_eq!(v2.devices.len(), 2);
     assert_eq!(v2.devices[0], v1.devices[0]);
     assert_eq!(v2.devices[1].device_id, 2);
-    assert!(v2.devices[1].mls.is_none());
+    // A new entry's sign-in, as the server says.
+    assert_eq!(v2.devices[1].session, DEVICE_SESSION);
 
     let v3 =
         block_on(second.revoke_manifest_device(&authority, 1, "2026-07-15T12:02:00Z")).unwrap();
@@ -757,113 +783,6 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
         block_on(stranger.sync_own_manifest(&authority, "2026-07-15T12:03:00Z")),
         Err(ChatError::Trust(_))
     ));
-}
-
-/// A manifest whose device entry still carries the keys of the MLS groups
-/// Kutup no longer has reads and verifies; the device's next manifest drops
-/// them.
-#[test]
-fn a_legacy_mls_entry_verifies_and_the_next_manifest_drops_it() {
-    use base64::Engine as _;
-    let mut rng = test_rng();
-    let server = Rc::new(MockServer::default());
-    let authority = AccountAuthority::derive(&[13; 32]).unwrap();
-    let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
-    let session = device(account, 1, &mut rng);
-    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-    let legacy = kutup_chat_proto::LegacyMlsDeviceV1 {
-        suite: 0x0003,
-        credential_public_key: b64(ed25519_dalek::SigningKey::from_bytes(&[5; 32])
-            .verifying_key()
-            .as_bytes()),
-        anonymous_delivery_public_key: b64(&[6; 32]),
-    };
-    // A manifest from before the MLS removal (a re-sign now clears the field).
-    let identity_key = session.account_identity_key();
-    let binding = binding_for(&identity_key, &authority);
-    let registered = authority
-        .sign_legacy_manifest_for_testing(
-            account.parse().unwrap(),
-            1,
-            None,
-            identity_key,
-            binding,
-            vec![AccountManifestDeviceV2 {
-                device_id: 1,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: reg_id(&session),
-                mls: Some(legacy),
-            }],
-            "2026-07-15T12:00:00Z",
-        )
-        .unwrap();
-    assert!(registered.devices[0].mls.is_some());
-    let read: AccountManifestV2 =
-        serde_json::from_str(&serde_json::to_string(&registered).unwrap()).unwrap();
-    assert_eq!(read, registered);
-    kutup_chat_core::verify_manifest(&read).unwrap();
-    *server.own_manifest.borrow_mut() = Some(registered.clone());
-    server
-        .manifest_history
-        .borrow_mut()
-        .push(registered.clone());
-
-    let mut engine = Engine::new(session, server);
-    let next = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:00:30Z")).unwrap();
-    assert_eq!(next.sequence, 2);
-    assert!(next.devices[0].mls.is_none());
-    assert_eq!(
-        next.previous_hash.as_deref(),
-        Some(registered.manifest_hash().unwrap().as_str())
-    );
-}
-
-#[test]
-fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
-    use base64::Engine as _;
-    let mut rng = test_rng();
-    let server = Rc::new(MockServer::default());
-    let master = [12; 32];
-    let authority = AccountAuthority::derive(&master).unwrap();
-    let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
-    let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-    let session = device_in(db.clone(), account, 1, &mut rng);
-    let local = session.manifest_device();
-    // The account's manifest from before its upgrade: this very device, and
-    // the old X25519 Drive key (suite 1).
-    let mut before = sign(
-        &authority,
-        account,
-        1,
-        None,
-        session.account_identity_key(),
-        vec![local],
-        "2026-07-15T12:00:00Z",
-    );
-    before.drive.suite = kutup_chat_proto::AccountIdentitySuiteId::X25519Ed25519V1;
-    before.drive.hpke_public_key = base64::engine::general_purpose::STANDARD.encode([5u8; 32]);
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
-    before.signature = base64::engine::general_purpose::STANDARD.encode(
-        identity
-            .authority_signing_key()
-            .sign(&before.signing_bytes().unwrap()),
-    );
-    before.verify().unwrap();
-    *server.own_manifest.borrow_mut() = Some(before.clone());
-    server.manifest_history.borrow_mut().push(before.clone());
-
-    let mut engine = Engine::new(session, server);
-    let next = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:01:00Z")).unwrap();
-    assert_eq!(next.sequence, 2);
-    assert_eq!(
-        next.previous_hash.as_deref(),
-        Some(before.manifest_hash().unwrap().as_str())
-    );
-    assert_eq!(next.drive, authority.drive_keys());
-    assert_eq!(next.devices, before.devices);
-    // Then nothing more to publish.
-    let again = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:02:00Z")).unwrap();
-    assert_eq!(again.sequence, 2);
 }
 
 #[test]
@@ -1175,7 +1094,10 @@ fn production_engine_rejects_a_bundle_device_not_in_the_manifest() {
 #[test]
 fn first_contact_safety_number_authenticates_and_pins_the_remote_manifest() {
     let mut rng = test_rng();
-    let peer_authority = AccountAuthority::derive(&[40; 32]).unwrap();
+    let peer_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([40; 32]),
+    )
+    .unwrap();
     let bob = device(
         "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
         1,
@@ -1222,23 +1144,29 @@ fn a_forged_authority_over_a_real_identity_is_never_verified_by_a_scan() {
     let mut rng = test_rng();
     let bob_account = "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test";
     let alice_account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
-    let real_authority = AccountAuthority::derive(&[41; 32]).unwrap();
-    let forged_authority = AccountAuthority::derive(&[66; 32]).unwrap();
+    let real_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([41; 32]),
+    )
+    .unwrap();
+    let forged_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([66; 32]),
+    )
+    .unwrap();
     let bob = device(bob_account, 1, &mut rng);
     let bob_bundle = bundle_of(&bob, 1);
-    let devices = vec![AccountManifestDeviceV2 {
-        device_id: 1,
-        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-        registration_id: bob_bundle.registration_id,
-        mls: None,
-    }];
+    let devices = vec![AccountManifestDeviceV3::chat(
+        1,
+        DirectChatSuiteId::PqxdhTripleRatchetV1,
+        bob_bundle.registration_id,
+        "51".repeat(32),
+    )];
     let forged = forged_authority
         .sign_manifest_with_binding(
             bob_account.parse().unwrap(),
             1,
             None,
-            bob_bundle.identity_key.clone(),
-            binding_for(&bob_bundle.identity_key, &real_authority),
+            Some(bob_bundle.identity_key.clone()),
+            Some(binding_for(&bob_bundle.identity_key, &real_authority)),
             devices.clone(),
             "2026-07-15T12:00:00Z",
         )
@@ -1272,7 +1200,7 @@ fn a_forged_authority_over_a_real_identity_is_never_verified_by_a_scan() {
         incarnation_id: String::new(),
         authority_key_id: String::new(),
         self_authority_key: String::new(),
-        drive_hpke_public_key: String::new(),
+        drive_xwing_public_key: String::new(),
         drive_share_signing_public_key: String::new(),
         highest_sequence: 1,
         manifest_hash: String::new(),
@@ -1337,9 +1265,18 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
         "kutup-chat-account-reset-{}.db",
         OsRng.unwrap_err().try_next_u64().unwrap()
     ));
-    let local_authority = AccountAuthority::derive(&[31; 32]).unwrap();
-    let old_authority = AccountAuthority::derive(&[41; 32]).unwrap();
-    let new_authority = AccountAuthority::derive(&[42; 32]).unwrap();
+    let local_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([31; 32]),
+    )
+    .unwrap();
+    let old_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([41; 32]),
+    )
+    .unwrap();
+    let new_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([42; 32]),
+    )
+    .unwrap();
     let bob_old = device(
         "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
         1,
@@ -1481,7 +1418,7 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
         incarnation_id: String::new(),
         authority_key_id: String::new(),
         self_authority_key: local_authority.public_key_base64(),
-        drive_hpke_public_key: String::new(),
+        drive_xwing_public_key: String::new(),
         drive_share_signing_public_key: String::new(),
         highest_sequence: 1,
         manifest_hash: String::new(),
@@ -3332,12 +3269,18 @@ fn explicit_contact_state_converges_over_authenticated_linked_device_sync() {
     server.set_sync_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
 
     let mut first = Engine::new_for_development(alice1, server.clone());
-    let local = block_on(first.block_contact(
-        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
-        &[0; 32],
-        "2026-07-16T10:05:00Z",
-        &mut rng,
-    ))
+    let local = block_on(
+        first.block_contact(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+            &kutup_chat_core::profile_owner_key(
+                &kutup_crypto::master_keys::MasterKeys::first(&[0; 32]),
+                "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+            )
+            .unwrap(),
+            "2026-07-16T10:05:00Z",
+            &mut rng,
+        ),
+    )
     .unwrap();
     assert_eq!(local.state, ContactState::Blocked);
     assert!(!local.sync_pending);
@@ -3383,7 +3326,11 @@ fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
         ),
         server.clone(),
     );
-    let wrapping = kutup_chat_core::derive_wrapping_key(&[42; 32], ALICE_BINDING).unwrap();
+    let wrapping = kutup_chat_core::profile_owner_key(
+        &kutup_crypto::master_keys::MasterKeys::first(&[42; 32]),
+        ALICE_BINDING,
+    )
+    .unwrap();
     assert!(block_on(alice.initialize_profile(&wrapping, "Alice", &mut rng)).is_err());
 
     let first = ChatContent::text_with_id(
@@ -3602,9 +3549,9 @@ fn synced_pins(
     pins: Vec<kutup_crypto::identity_pins::IdentityPinV2>,
 ) -> kutup_chat_core::IdentityPinsRecord {
     use base64::Engine as _;
-    let key = kutup_crypto::identity_pins::derive_key(owner_master).unwrap();
     let sealed = kutup_crypto::identity_pins::seal(
-        &key,
+        owner_master,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         ALICE_BINDING,
         1,
         &kutup_crypto::identity_pins::IdentityPinsV2 {
@@ -3641,8 +3588,14 @@ fn pin_of(
 fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
     use kutup_crypto::identity_pins::PinState;
     let master = [30u8; 32];
-    let bob_authority = AccountAuthority::derive(&[40; 32]).unwrap();
-    let other_authority = AccountAuthority::derive(&[41; 32]).unwrap();
+    let bob_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([40; 32]),
+    )
+    .unwrap();
+    let other_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([41; 32]),
+    )
+    .unwrap();
     let open = |pins: Option<kutup_chat_core::IdentityPinsRecord>| {
         let mut rng = test_rng();
         let bob = device(
@@ -3666,7 +3619,12 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
             ),
             server.clone(),
         );
-        alice.enable_identity_pins(&master, ALICE_BINDING).unwrap();
+        alice
+            .enable_identity_pins(
+                &kutup_crypto::master_keys::MasterKeys::first(&master),
+                ALICE_BINDING,
+            )
+            .unwrap();
         (alice, server)
     };
 

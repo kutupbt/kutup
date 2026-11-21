@@ -92,7 +92,7 @@ everything on one machine:
 - groups: `CHAT_GROUPS=true`, with federation and sealed sender on.
 
 JSON values need single quotes when the file is sourced by a shell.
-`GET /api/auth/settings` → `chat` shows what is advertised.
+`GET /api/v1/auth/settings` → `chat` shows what is advertised.
 
 ### Database migrations
 
@@ -100,8 +100,11 @@ Migrations live in `crates/kutup-server/migrations/` (sqlx's reversible
 `.up.sql` / `.down.sql` pairs) and are **embedded into the binary at compile
 time** via `sqlx::migrate!()`, then applied automatically on startup.
 
-The chain starts at `20261013000000_baseline`: every migration up to the
-clean-slate release, squashed into one schema. `scripts/check-migration-baseline.sh
+The chain starts at `20261112000000_baseline`: every migration up to the
+wipe-2 release, squashed into one schema (docs/plans/w7-schema.md; the
+clean-slate release's `20261013000000_baseline` was squashed into it). It was
+proven equal to the chain at the squash commit, then edited in place by W7
+before anything applied it; from the wipe-2 release on it is never edited. `scripts/check-migration-baseline.sh
 <old-ref>` proves a squash equal to the chain it replaces (both applied to an
 empty Postgres 16, compared by schema and rows), and `--generate` writes it.
 Plans under `docs/plans/` name migrations as they were written before the
@@ -146,7 +149,7 @@ are embedded at compile time, **rebuild** the server after adding one.
 ### OpenAPI
 
 The server generates its OpenAPI document with [`utoipa`](https://github.com/juhaku/utoipa)
-and serves the machine-readable JSON at `GET /api-docs/openapi.json`. Every HTTP
+and serves the machine-readable JSON at `GET /api/v1/openapi.json`. Every HTTP
 operation has a path annotation, and a coverage test keeps the generated route set aligned
 with the Axum router. An interactive Swagger UI is deferred (see `docs/roadmap.md`).
 
@@ -192,6 +195,23 @@ KUTUP_SERVER=… ./scripts/verify-cli.sh          # the kutup CLI's Drive round 
 KUTUP_SERVER=… ./scripts/verify-pass-sync.sh    # two machines edit one KeePass vault offline (Kutup Pass K1)
 KUTUP_SERVER=… ./scripts/verify-pass-ssh.sh     # the kutup SSH agent against OpenSSH (Kutup Pass K3b)
 pnpm -C frontend run test:pass-wasm             # Kutup Pass WASM: edits, saves, merges (after build:wasm)
+```
+
+The frontend image checks the nginx sites `frontend/docker/40-kutup-hosts.sh`
+writes, report-only and enforced, with `nginx -t` when it is built. To check
+them without building it, write them and test them in the image's nginx
+(Alpine's, with its brotli module; the `apk add` needs the network):
+
+```sh
+d=$(mktemp -d)
+for e in 0 1; do
+  KUTUP_NGINX_CONF=$d/kutup-$e.conf KUTUP_BASE_DOMAIN=example.test \
+    CHAT_SFU_URL=wss://sfu.example.test KUTUP_MAP_DIRECT_ORIGINS=https://tile.example.test \
+    KUTUP_CSP_ENFORCE=$e sh frontend/docker/40-kutup-hosts.sh
+done
+docker run --rm -v "$d:/sites:ro" -v "$PWD/frontend/docker/nginx.conf:/etc/nginx/nginx.conf:ro" alpine:3.23 \
+  sh -c 'apk add -q --no-cache nginx nginx-mod-http-brotli && mkdir -p /run/nginx /etc/nginx/conf.d &&
+    for e in 0 1; do cp /sites/kutup-$e.conf /etc/nginx/conf.d/kutup.conf && nginx -t || exit 1; done'
 ```
 
 The backup integration script owns a disposable Compose project and covers the
@@ -289,7 +309,7 @@ reverse proxy on port 80 routes by host name to each server's `PORT`:
   KUTUP_API_TARGET=http://localhost:3101 pnpm -C apps/photos dev` serves
   `http://photos.fa.localhost:5378`.
 - **Admission:** an admin of each server opens the feature to other servers
-  (Account → Admin → Federation, or `PUT /api/admin/federation` with
+  (Account → Admin → Federation, or `PUT /api/v1/admin/federation` with
   `{"globalEnabled": true, "feature": "drive", "mode": "open", "minimumTrust": "tofu"}`).
 
 ### Building for production
@@ -327,7 +347,7 @@ kutup/
 │   ├── kutup-cli/           # The `kutup` CLI (clap)
 │   │   └── src/{commands,api,session,syncengine,transfer}/  # commands, HTTP client, session store, sync
 │   ├── kutup-crypto/        # Canonical Kutup-owned E2EE formats
-│   │   ├── src/{kdf,account_envelope,drive_envelope,drive_object,named_share,stream,envelope}.rs
+│   │   ├── src/{kdf,account_record,drive_envelope,drive_object,named_share,stream,envelope}.rs
 │   │   └── tests/vectors/   # Checked-in byte-parity vectors
 │   ├── kutup-crypto-wasm/   # Browser bindings for canonical crypto (built twice: crypto, and crypto-calendar with calendars)
 │   ├── kutup-chat-proto/    # Typed Chat wire DTOs and validation
@@ -367,7 +387,7 @@ kutup/
 
 ### Orphan-blob sweep
 
-Periodic admin task that walks the bucket for Drive objects no row references any more and deletes every stored version of each: a crash between storing and committing (an upload, a completed tus multipart, a version), a purge or retention pass whose object delete failed, a pruned original or retired version left behind. Drive keeps everything of a file under `files/{file}/…` — `original` (the upload, a peer's too), `versions/…`, `assets/…`, `thumbnails/…` — and the sweep looks only at that shape, never at anything else (Chat's and Mail's keys included).
+Periodic admin task that walks the bucket for Drive objects no row references any more and deletes them (after the deleted-blob wait): a crash between storing and committing (an upload, a completed tus multipart, a version), a purge or retention pass whose object delete failed, a pruned original, retired version or replaced thumbnail left behind. Drive keeps everything of a file under `files/{file}/…` — `revisions/{revisionId}` (the first upload, a peer's too, and every version), `assets/{assetId}`, `thumbnails/{variant}/{objectId}` — and the sweep derives each row's key from its ids the way the writers do, and looks only at that shape, never at anything else (Chat's and Mail's keys included).
 
 Subcommand on the existing `kutup-server` binary — same Docker image, same env vars, same DB pool.
 
@@ -448,7 +468,7 @@ The sweep does **not** persist progress — a crash mid-run means rerunning from
 - All cryptographic operations go in `src/crypto/`. Components and pages must not call libsodium directly.
 - KDF (Argon2id) runs in `src/workers/kdf.worker.ts` to avoid blocking the main thread.
 - State management uses Redux Toolkit slices. Keep slices thin — business logic goes in thunks or service functions.
-- API calls go through `src/api/client.ts`, which handles token injection and refresh.
+- API calls go through `src/api/v1/client.ts`, which handles token injection and refresh.
 - Use semantic theme roles and the responsive ownership boundaries documented
   in [`frontend.md`](frontend.md). A viewport change must not remount services
   or trigger a mutation.

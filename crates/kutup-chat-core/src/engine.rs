@@ -31,7 +31,7 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    AccountManifestV2, AccountRef, ChatContent, ContactControlBody, ContactState, OutgoingEnvelope,
+    AccountManifestV3, AccountRef, ChatContent, ContactControlBody, ContactState, OutgoingEnvelope,
     PreKeyCountResponse, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SendMessagesRequest,
 };
 
@@ -110,6 +110,9 @@ pub struct ReceiveReport {
     /// Mailbox ids that could not be decrypted and were given up on, with
     /// the sender's session refreshed where that was due.
     pub repaired: Vec<String>,
+    /// Mailbox ids of envelopes whose type or suite is newer than this
+    /// client: left on the server unread ("update Kutup").
+    pub unsupported: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -248,6 +251,9 @@ pub struct Engine {
     pub(crate) group_list: Option<crate::group_list::GroupListSync>,
     /// The account's Chat contact list (`enable_contact_list`).
     pub(crate) contact_list: Option<crate::contact_list::ContactListSync>,
+    /// When this device last read the account's lists (`records_sync`; 0:
+    /// not this run).
+    pub(crate) records_read_at_ms: i64,
     /// First-seen identity pins waiting for their delayed write, by peer
     /// (docs/plans/chat-contacts-sync.md, "The pin list follows the same
     /// rule"). A pin lost to a reload is due again at the next contact.
@@ -358,6 +364,7 @@ impl Engine {
             identity_pins: None,
             group_list: None,
             contact_list: None,
+            records_read_at_ms: 0,
             pins_due: BTreeMap::new(),
             group_keys: None,
         }
@@ -373,9 +380,14 @@ impl Engine {
     /// Share identities with the account's other apps through its synced
     /// identity pins (docs/plans/drive-identity-pins.md). The list is sealed
     /// to the account's key binding (`binding`), never to its address.
-    pub fn enable_identity_pins(&mut self, master_key: &[u8; 32], binding: &str) -> Result<()> {
+    pub fn enable_identity_pins(
+        &mut self,
+        master_keys: &kutup_crypto::master_keys::MasterKeys,
+        binding: &str,
+    ) -> Result<()> {
         self.identity_pins = Some(crate::identity_sync::IdentityPinsSync::new(
-            binding, master_key,
+            binding,
+            master_keys,
         )?);
         Ok(())
     }
@@ -595,6 +607,23 @@ impl Engine {
         Ok(self.self_account()?.to_string())
     }
 
+    /// The account's own head as its server gives it, checked against the
+    /// newest own manifest this installation accepted
+    /// ([`crate::account_identity::check_own_head`]). Every path that signs
+    /// the account's next manifest builds on this.
+    pub(crate) async fn own_head(&self) -> Result<Option<AccountManifestV3>> {
+        let account = self.self_account()?;
+        let head = Rc::clone(&self.transport)
+            .fetch_manifest(self.session.user())
+            .await?;
+        let trust = match self.session.manifest_trust(&account.to_string()).await? {
+            Some(trust) => Some(trust),
+            None => self.session.manifest_trust(self.session.user()).await?,
+        };
+        crate::account_identity::check_own_head(trust.as_ref(), head.as_ref(), &account, None)?;
+        Ok(head)
+    }
+
     /// This account, as its manifest names it.
     pub(crate) fn self_account(&self) -> Result<AccountRef> {
         crate::address::parse_account(self.session.user())
@@ -788,7 +817,7 @@ impl Engine {
     /// survive transport failures in the local profile record.
     pub async fn initialize_profile<R: Rng + CryptoRng>(
         &mut self,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         default_display_name: &str,
         rng: &mut R,
     ) -> Result<LocalProfile> {
@@ -801,7 +830,7 @@ impl Engine {
                     > (local.revision, local.source_device_id) =>
             {
                 let mut adopted =
-                    crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?;
+                    crate::profile::open_own_profile(&remote, owner, &canonical_self)?;
                 // The account app changed the profile: it cannot tell
                 // contacts, so this device fans the key out and they refetch.
                 if remote.source_device_id == kutup_chat_proto::ACCOUNT_PROFILE_SOURCE
@@ -815,20 +844,20 @@ impl Engine {
             }
             (Some(local), _) => local,
             (None, Some(remote)) => {
-                crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?
+                crate::profile::open_own_profile(&remote, owner, &canonical_self)?
             }
             (None, None) => crate::profile::create_local_profile(
                 default_display_name,
                 None,
                 None,
                 self.session.device_id(),
-                wrapping_key,
+                owner,
                 &canonical_self,
                 rng,
             )?,
         };
         self.session.save_local_profile(selected).await?;
-        self.flush_profile(wrapping_key, "1970-01-01T00:00:00Z", rng)
+        self.flush_profile(owner, "1970-01-01T00:00:00Z", rng)
             .await?;
         self.session
             .local_profile()
@@ -843,7 +872,7 @@ impl Engine {
         avatar: Option<Vec<u8>>,
         avatar_content_type: Option<String>,
         about: Option<String>,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         sent_at: &str,
         rng: &mut R,
     ) -> Result<LocalProfile> {
@@ -861,13 +890,13 @@ impl Engine {
                 avatar_content_type,
                 about,
                 source_device_id: self.session.device_id(),
-                wrapping_key,
+                owner,
                 canonical_recipient: &canonical_self,
             },
             rng,
         )?;
         self.session.save_local_profile(updated).await?;
-        self.flush_profile(wrapping_key, sent_at, rng).await?;
+        self.flush_profile(owner, sent_at, rng).await?;
         self.session
             .local_profile()
             .await?
@@ -878,7 +907,7 @@ impl Engine {
     /// version, then redistribute only to still-authorized conversations.
     pub async fn rotate_profile_key<R: Rng + CryptoRng>(
         &mut self,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         sent_at: &str,
         rng: &mut R,
     ) -> Result<LocalProfile> {
@@ -891,12 +920,12 @@ impl Engine {
         let rotated = crate::profile::rotate_local_profile(
             &current,
             self.session.device_id(),
-            wrapping_key,
+            owner,
             &canonical_self,
             rng,
         )?;
         self.session.save_local_profile(rotated).await?;
-        self.flush_profile(wrapping_key, sent_at, rng).await?;
+        self.flush_profile(owner, sent_at, rng).await?;
         // The groups' members deliver with the profile key in this account's
         // entry: each group gets the new one (best effort; each group's next
         // opening tries again).
@@ -914,7 +943,7 @@ impl Engine {
     /// Publish a crash-surviving encrypted profile and fan out its current key.
     pub async fn flush_profile<R: Rng + CryptoRng>(
         &mut self,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         sent_at: &str,
         rng: &mut R,
     ) -> Result<()> {
@@ -959,13 +988,12 @@ impl Engine {
                     {
                         return Err(publish_error);
                     }
-                    let remote =
-                        crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?;
+                    let remote = crate::profile::open_own_profile(&remote, owner, &canonical_self)?;
                     let rebased = crate::profile::rebase_local_profile(
                         &profile,
                         &remote,
                         self.session.device_id(),
-                        wrapping_key,
+                        owner,
                         &canonical_self,
                         rng,
                     )?;
@@ -1064,7 +1092,7 @@ impl Engine {
     pub async fn block_contact<R: Rng + CryptoRng>(
         &mut self,
         peer: &str,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         sent_at: &str,
         rng: &mut R,
     ) -> Result<ContactRecord> {
@@ -1077,7 +1105,7 @@ impl Engine {
         // contacts. A publication failure is surfaced and its exact encrypted
         // upload remains durable for reconciliation.
         if self.session.local_profile().await?.is_some() {
-            self.rotate_profile_key(wrapping_key, sent_at, rng).await?;
+            self.rotate_profile_key(owner, sent_at, rng).await?;
         }
         let _ = self.flush_contact_syncs(sent_at, rng).await;
         Ok(self.session.contact(peer).await?.unwrap_or(record))
@@ -1169,11 +1197,10 @@ impl Engine {
         &mut self,
         authority: &AccountAuthority,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         let transport = Rc::clone(&self.transport);
-        let current = transport.fetch_manifest(self.session.user()).await?;
+        let current = self.own_head().await?;
         let canonical_self = self.self_account()?;
-        let local = self.session.manifest_device();
         let issued_at = issued_at.into();
         let candidate = match current {
             // The account's first manifest comes with its re-registration
@@ -1200,40 +1227,60 @@ impl Engine {
                 }
                 // The identity rule: this device holds the account's identity,
                 // or it has been reset away from it and must not sign.
-                if current.identity_key != self.session.account_identity_key() {
+                if current.identity_key.as_deref()
+                    != Some(self.session.account_identity_key().as_str())
+                {
                     return Err(ChatError::Trust(
                         "the account's identity is not this device's".into(),
                     ));
                 }
                 let mut devices = current.devices.clone();
-                match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
+                let device_id = self.session.device_id();
+                let listed = devices.binary_search_by_key(&device_id, |device| device.device_id);
+                // Listed: its sign-in stays the entry's. New: the server
+                // says which sign-in this is.
+                let session = match listed {
+                    Ok(index) => devices[index].session.clone(),
+                    Err(_) => transport.fetch_device_session().await?.session,
+                };
+                let local = self.session.manifest_device(session);
+                match listed {
                     // Unchanged, unless the account's Drive keys moved on (an
                     // upgrade to X-Wing, docs/plans/pq-shares.md): then the
-                    // next manifest carries them. A device entry still holding
-                    // legacy MLS keys is signed again too, which drops them.
+                    // next manifest carries them.
+                    // So are what it reads: an update that reads something
+                    // new lists itself again with it (format-evolution rule 8).
                     Ok(index)
-                        if devices[index].registration_id == local.registration_id
-                            && devices[index].mls == local.mls
+                        if devices[index].kind == local.kind
+                            && devices[index].chat == local.chat
+                            && devices[index].capabilities == local.capabilities
                             && current.drive == authority.drive_keys() =>
                     {
                         current
                     }
                     location => {
                         match location {
-                            Ok(index) => devices[index] = local,
+                            // Its Chat keys renewed; a frame key it holds stays.
+                            Ok(index) => {
+                                devices[index].chat = local.chat;
+                                devices[index].capabilities = local.capabilities;
+                            }
                             Err(index) => devices.insert(index, local),
                         }
                         let next_sequence = current.sequence.checked_add(1).ok_or_else(|| {
                             ChatError::Trust("manifest sequence is exhausted".into())
                         })?;
-                        let next = authority.sign_manifest_with_binding(
-                            canonical_self.clone(),
-                            next_sequence,
-                            Some(current.manifest_hash().map_err(ChatError::Trust)?),
-                            current.identity_key.clone(),
-                            current.identity_binding.clone(),
-                            devices,
-                            issued_at,
+                        let next = authority.keep_from_head(
+                            authority.sign_manifest_with_binding(
+                                canonical_self.clone(),
+                                next_sequence,
+                                Some(current.manifest_hash().map_err(ChatError::Trust)?),
+                                current.identity_key.clone(),
+                                current.identity_binding.clone(),
+                                devices,
+                                issued_at,
+                            )?,
+                            Some(&current),
                         )?;
                         next.verify_successor(Some(&current))
                             .map_err(ChatError::Trust)?;
@@ -1271,15 +1318,15 @@ impl Engine {
         authority: &AccountAuthority,
         device_id: u32,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         if device_id == self.session.device_id() {
             return Err(ChatError::Invalid(
                 "the current device cannot revoke itself from the account manifest".into(),
             ));
         }
         let transport = Rc::clone(&self.transport);
-        let current = transport
-            .fetch_manifest(self.session.user())
+        let current = self
+            .own_head()
             .await?
             .ok_or_else(|| ChatError::Trust("account manifest is unavailable".into()))?;
         current.verify().map_err(ChatError::Trust)?;
@@ -1311,14 +1358,17 @@ impl Engine {
             .sequence
             .checked_add(1)
             .ok_or_else(|| ChatError::Trust("manifest sequence is exhausted".into()))?;
-        let candidate = authority.sign_manifest_with_binding(
-            canonical_self.clone(),
-            next_sequence,
-            Some(current.manifest_hash().map_err(ChatError::Trust)?),
-            current.identity_key.clone(),
-            current.identity_binding.clone(),
-            devices,
-            issued_at,
+        let candidate = authority.keep_from_head(
+            authority.sign_manifest_with_binding(
+                canonical_self.clone(),
+                next_sequence,
+                Some(current.manifest_hash().map_err(ChatError::Trust)?),
+                current.identity_key.clone(),
+                current.identity_binding.clone(),
+                devices,
+                issued_at,
+            )?,
+            Some(&current),
         )?;
         candidate
             .verify_successor(Some(&current))
@@ -1804,14 +1854,25 @@ impl Engine {
 
         loop {
             let page = transport.drain(device_id, after, DRAIN_LIMIT).await?;
+            // Envelopes of a type or suite newer than this client are paged
+            // past, not acknowledged: the server keeps them for this device
+            // once it updates (docs/plans/format-evolution.md).
+            let skipped = page.unsupported.iter().map(|item| item.cursor).max();
+            report
+                .unsupported
+                .extend(page.unsupported.iter().map(|item| item.id.clone()));
             if page.envelopes.is_empty() {
+                if page.more && skipped.is_some() {
+                    after = after.max(skipped);
+                    continue;
+                }
                 break;
             }
             let received_at = self.now_ms();
             self.session
                 .journal_envelopes(&page.envelopes, received_at)
                 .await?;
-            after = self.session.last_cursor().await?;
+            after = self.session.last_cursor().await?.max(skipped);
             let ids: Vec<String> = page.envelopes.iter().map(|item| item.id.clone()).collect();
             self.process_inbound(Some(&ids), &mut report, rng).await?;
             if !page.more {
@@ -3155,8 +3216,8 @@ impl Engine {
     pub(crate) async fn accept_current_manifest_evidence(
         &mut self,
         account: &str,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestV3> {
         let prior_manifest = self.session.manifest_trust(account).await?;
         let manifest_trust =
             match verify_manifest_evidence(account, manifest, prior_manifest.as_ref()) {
@@ -3191,7 +3252,7 @@ impl Engine {
     async fn recover_manifest_history(
         &self,
         peer: &str,
-        pending_manifest: &AccountManifestV2,
+        pending_manifest: &AccountManifestV3,
         prior_trust: Option<&crate::ManifestTrust>,
     ) -> Result<(
         crate::ManifestTrust,
@@ -3238,7 +3299,7 @@ impl Engine {
     async fn quarantine_manifest_failure(
         &mut self,
         peer: &str,
-        pending_manifest: Option<&AccountManifestV2>,
+        pending_manifest: Option<&AccountManifestV3>,
         prior_trust: Option<&crate::ManifestTrust>,
         error: &ChatError,
     ) -> Result<()> {
@@ -3294,7 +3355,7 @@ fn profile_key_send_id(peer: &str, profile: &LocalProfile) -> Result<String> {
     use sha2::{Digest, Sha256};
     let version = crate::profile::profile_version(&profile.key)?;
     let mut digest = Sha256::new();
-    digest.update(b"kutup-profile-key-update-v1\0");
+    digest.update(kutup_crypto::labels::CHAT_PROFILE_KEY_UPDATE_V1);
     digest.update(peer.as_bytes());
     digest.update(version.as_bytes());
     digest.update(profile.revision.to_be_bytes());

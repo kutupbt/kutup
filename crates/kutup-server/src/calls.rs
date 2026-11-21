@@ -8,7 +8,7 @@
 //! (username `<expiry>:<opaque id>`, password `base64(HMAC-SHA1(secret,
 //! username))`), so the relay needs no account database.
 
-use kutup_crypto::primitives::{hash, Suite};
+use kutup_crypto::primitives::Suite;
 use std::sync::LazyLock;
 
 use axum::extract::State;
@@ -22,7 +22,7 @@ use serde::Serialize;
 use sha1::Sha1;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
@@ -69,7 +69,17 @@ fn split_urls(value: &str) -> Vec<String> {
 // Adapter: coturn's REST-API credential is HMAC-SHA1.
 #[allow(clippy::disallowed_types)]
 fn turn_credential(secret: &str, user_id: &str, expires_at: i64) -> (String, String) {
-    let pseudonym = hex::encode(&hash(Suite::V1, format!("kutup-turn:{secret}:{user_id}"))[..12]);
+    let pseudonym = hex::encode(
+        &kutup_crypto::primitives::mac(
+            Suite::V1,
+            secret.as_bytes(),
+            &[
+                kutup_crypto::labels::CALLS_TURN_PSEUDONYM_V1,
+                user_id.as_bytes(),
+            ],
+        )
+        .as_ref()[..12],
+    );
     let username = format!("{expires_at}:{pseudonym}");
     let mut mac =
         Hmac::<Sha1>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
@@ -79,7 +89,7 @@ fn turn_credential(secret: &str, user_id: &str, expires_at: i64) -> (String, Str
 
 #[utoipa::path(
     get,
-    path = "/api/chat/call-servers",
+    path = "/api/v1/chat/call-servers",
     tag = "chat",
     operation_id = "getChatCallServers",
     responses(
@@ -90,9 +100,9 @@ fn turn_credential(secret: &str, user_id: &str, expires_at: i64) -> (String, Str
 )]
 pub async fn call_servers(
     State(state): State<AppState>,
-    auth: AuthUser,
+    auth: AuthAccount,
 ) -> AppResult<Json<CallServersResponse>> {
-    if !REQUESTS.allow(&auth.user_id) {
+    if !REQUESTS.allow(&auth.account_id) {
         return Err(AppError::too_many_requests("too many call server requests"));
     }
     let config = &state.config;
@@ -111,7 +121,7 @@ pub async fn call_servers(
     if relay {
         let until = time::OffsetDateTime::now_utc().unix_timestamp() + CREDENTIAL_TTL_SECONDS;
         let (username, credential) =
-            turn_credential(&config.chat_turn_secret, &auth.user_id, until);
+            turn_credential(&config.chat_turn_secret, &auth.account_id, until);
         ice_servers.push(IceServer {
             urls: turn,
             username: Some(username),

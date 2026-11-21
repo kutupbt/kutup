@@ -15,7 +15,7 @@ use futures_util::StreamExt as _;
 use kutup_chat_proto::{
     repeated_use_keys_digest, AccountIdentityDistributionRequest, AccountPreKeyBundlesResponse,
     DeviceRegistrationV1, DirectChatSuiteId, DistributedDeviceKeysV1, EnvelopeType,
-    OutgoingEnvelope, ProvisionEnvelopeV1, ProvisioningSocketMessage, CHAT_DEVICE_HEADER,
+    OutgoingEnvelope, ProvisionEnvelopeV1, ProvisioningSocketMessage, DEVICE_HEADER,
 };
 use libsignal_protocol::IdentityKeyPair;
 use reqwest::blocking::Client;
@@ -49,7 +49,7 @@ fn bundles(
 ) -> AccountPreKeyBundlesResponse {
     let r = c
         .get(format!(
-            "{base}/api/chat/accounts/{}/keys",
+            "{base}/api/v1/chat/accounts/{}/keys",
             of.account.account_id
         ))
         .bearer_auth(&asker.token)
@@ -69,7 +69,7 @@ fn a_first_device_reregisters_and_a_second_links() {
     // "re-register as the first device"; an unknown account is another 404.
     let manifest_of = |id: &str| {
         code(
-            c.get(format!("{base}/api/chat/accounts/{id}/manifest"))
+            c.get(format!("{base}/api/v1/chat/accounts/{id}/manifest"))
                 .bearer_auth(&ada.token)
                 .send()
                 .unwrap(),
@@ -94,7 +94,7 @@ fn a_first_device_reregisters_and_a_second_links() {
     .unwrap();
     body.as_object_mut().unwrap().remove("registration");
     let r = c
-        .post(format!("{base}/api/chat/device"))
+        .post(format!("{base}/api/v1/chat/devices"))
         .bearer_auth(&ada.token)
         .json(&body)
         .send()
@@ -135,7 +135,7 @@ fn a_first_device_reregisters_and_a_second_links() {
 
     // Device-bound calls need the device's credential.
     let r = c
-        .post(format!("{base}/api/chat/link-tokens"))
+        .post(format!("{base}/api/v1/chat/link-tokens"))
         .bearer_auth(&ada.token)
         .send()
         .unwrap();
@@ -146,7 +146,7 @@ fn a_first_device_reregisters_and_a_second_links() {
     };
     let (status, answer) = code(
         wrong
-            .auth(c.post(format!("{base}/api/chat/link-tokens")))
+            .auth(c.post(format!("{base}/api/v1/chat/link-tokens")))
             .bearer_auth(&ada.token)
             .send()
             .unwrap(),
@@ -192,7 +192,7 @@ fn a_first_device_reregisters_and_a_second_links() {
 
     // keys/check: the device's own keys match; another digest doesn't.
     let r = first
-        .auth(c.post(format!("{base}/api/chat/keys/check")))
+        .auth(c.post(format!("{base}/api/v1/chat/keys/check")))
         .bearer_auth(&ada.token)
         .json(&json!({ "digest": hex::encode([0u8; 32]) }))
         .send()
@@ -211,11 +211,12 @@ fn a_first_device_reregisters_and_a_second_links() {
         drive: ada.drive.clone(),
         devices: ada.devices.clone(),
         head: ada.head.clone(),
+        session: ada.session.clone(),
     };
     let manifest = stray.next_manifest(&[&first, &second]);
     let (status, answer) = code(
         first
-            .auth(c.post(format!("{base}/api/chat/manifest")))
+            .auth(c.post(format!("{base}/api/v1/chat/manifest")))
             .bearer_auth(&ada.token)
             .json(&manifest)
             .send()
@@ -235,7 +236,7 @@ fn keys_check_agrees_with_what_was_uploaded() {
     // Rotate both repeated-use keys, then check them.
     let (signed, last_resort, _, _) = device_keys(&ada.identity);
     let r = first
-        .auth(c.put(format!("{base}/api/chat/keys?deviceId={}", first.id)))
+        .auth(c.put(format!("{base}/api/v1/chat/keys?deviceId={}", first.id)))
         .bearer_auth(&ada.token)
         .json(&json!({ "signedPreKey": signed, "lastResortKyberPreKey": last_resort }))
         .send()
@@ -249,7 +250,7 @@ fn keys_check_agrees_with_what_was_uploaded() {
         &STANDARD.decode(&last_resort.public_key).unwrap(),
     );
     let r = first
-        .auth(c.post(format!("{base}/api/chat/keys/check")))
+        .auth(c.post(format!("{base}/api/v1/chat/keys/check")))
         .bearer_auth(&ada.token)
         .json(&json!({ "digest": hex::encode(digest) }))
         .send()
@@ -260,7 +261,7 @@ fn keys_check_agrees_with_what_was_uploaded() {
     let (foreign, _, _, _) = device_keys(&other);
     let (status, answer) = code(
         first
-            .auth(c.put(format!("{base}/api/chat/keys?deviceId={}", first.id)))
+            .auth(c.put(format!("{base}/api/v1/chat/keys?deviceId={}", first.id)))
             .bearer_auth(&ada.token)
             .json(&json!({ "signedPreKey": foreign }))
             .send()
@@ -290,6 +291,7 @@ fn distribution(
             })
             .collect(),
         head: ada.head.clone(),
+        session: ada.session.clone(),
     };
     let listed: Vec<&ChatDevice> = next.devices.iter().collect();
     let manifest = next.next_manifest(&listed);
@@ -344,7 +346,7 @@ fn a_distribution_gives_the_kept_devices_a_new_identity() {
     let new_identity = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
     let put = |request: &AccountIdentityDistributionRequest| {
         first
-            .auth(c.put(format!("{base}/api/chat/account-identity")))
+            .auth(c.put(format!("{base}/api/v1/chat/account-identity")))
             .bearer_auth(&ada.token)
             .json(request)
             .send()
@@ -394,7 +396,7 @@ fn a_distribution_gives_the_kept_devices_a_new_identity() {
     assert!(fetched.devices.iter().all(|d| d.one_time_pre_key.is_none()));
     // The third device's credential no longer works.
     let r = third
-        .auth(c.post(format!("{base}/api/chat/link-tokens")))
+        .auth(c.post(format!("{base}/api/v1/chat/link-tokens")))
         .bearer_auth(&ada.token)
         .send()
         .unwrap();
@@ -405,7 +407,7 @@ fn a_distribution_gives_the_kept_devices_a_new_identity() {
         ..second.clone()
     };
     let page: Value = renamed
-        .auth(c.get(format!("{base}/api/chat/messages?deviceId=2")))
+        .auth(c.get(format!("{base}/api/v1/chat/messages?deviceId=2")))
         .bearer_auth(&ada.token)
         .send()
         .unwrap()
@@ -418,7 +420,7 @@ fn a_distribution_gives_the_kept_devices_a_new_identity() {
     );
     // Taken, as the device takes it (the mailbox sweep is server-wide).
     let r = renamed
-        .auth(c.post(format!("{base}/api/chat/messages/ack?deviceId=2")))
+        .auth(c.post(format!("{base}/api/v1/chat/messages/ack?deviceId=2")))
         .bearer_auth(&ada.token)
         .json(&json!({ "ids": [page["envelopes"][0]["id"]] }))
         .send()
@@ -436,20 +438,22 @@ fn a_manifest_without_its_identitys_binding_is_refused() {
     let mut ada = account(&c, &base);
     let (registration_id, credential) = (4242, [7u8; 32]);
     let device = ChatDevice {
-        id: kutup_chat_proto::REREGISTRATION_DEVICE_ID,
+        id: 1, // a new account's first device id
         registration_id,
         credential,
     };
     let mut forged = ada.next_manifest(&[&device]);
     let other = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
-    forged.identity_binding = STANDARD.encode(
-        other
-            .private_key()
-            .calculate_signature(
-                &forged.identity_binding_bytes().unwrap(),
-                &mut kutup_crypto::primitives::Rng,
-            )
-            .unwrap(),
+    forged.identity_binding = Some(
+        STANDARD.encode(
+            other
+                .private_key()
+                .calculate_signature(
+                    &forged.identity_binding_bytes().unwrap(),
+                    &mut kutup_crypto::primitives::Rng,
+                )
+                .unwrap(),
+        ),
     );
     ada.sign(&mut forged);
     let body = ada.registration(
@@ -488,13 +492,15 @@ fn a_reregistration_drops_every_other_device() {
     let mut ada = account(&c, &base);
     let first = ada.reregister(&c, &base);
     let second = ada.link(&c, &base, &first);
-    // Every device lost: a new device takes a new identity as device 1.
+    // Every device lost: a new device takes a new identity under the
+    // account's next id, not a freed one (docs/plans/one-device-list.md,
+    // "Device ids").
     ada.identity = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
     let again = ada.reregister(&c, &base);
-    assert_eq!(again.id, 1);
+    assert_eq!(again.id, 3);
     for gone in [&first, &second] {
         let r = gone
-            .auth(c.post(format!("{base}/api/chat/link-tokens")))
+            .auth(c.post(format!("{base}/api/v1/chat/link-tokens")))
             .bearer_auth(&ada.token)
             .send()
             .unwrap();
@@ -523,14 +529,14 @@ fn a_provisioning_message_reaches_the_new_device_once() {
         (bob, device)
     };
     let ticket: Value = c
-        .post(format!("{base}/api/chat/provisioning/ticket"))
+        .post(format!("{base}/api/v1/chat/provisioning/ticket"))
         .bearer_auth(&ada.token)
         .send()
         .unwrap()
         .json()
         .unwrap();
     let url = format!(
-        "{}/api/chat/provisioning?ticket={}",
+        "{}/api/v1/chat/provisioning?ticket={}",
         base.replacen("http", "ws", 1),
         ticket["ticket"].as_str().unwrap()
     );
@@ -560,12 +566,12 @@ fn a_provisioning_message_reaches_the_new_device_once() {
         let relay = |device: &ChatDevice, token: &str| {
             let c = c.clone();
             let header = device.header();
-            let url = format!("{base}/api/chat/provisioning/{address}");
+            let url = format!("{base}/api/v1/chat/provisioning/{address}");
             let token = token.to_owned();
             let body = json!({ "envelope": envelope });
             std::thread::spawn(move || {
                 c.put(url)
-                    .header(CHAT_DEVICE_HEADER, header)
+                    .header(DEVICE_HEADER, header)
                     .bearer_auth(token)
                     .json(&body)
                     .send()
@@ -607,7 +613,7 @@ fn unused_provisioning_tickets_count_against_the_socket_cap() {
     let c = common::client();
     let ada = account(&c, &base);
     let ticket = || {
-        c.post(format!("{base}/api/chat/provisioning/ticket"))
+        c.post(format!("{base}/api/v1/chat/provisioning/ticket"))
             .bearer_auth(&ada.token)
             .send()
             .unwrap()
@@ -681,7 +687,7 @@ fn send(
     code(
         from.1
             .auth(c.post(format!(
-                "{base}/api/chat/accounts/{}/messages",
+                "{base}/api/v1/chat/accounts/{}/messages",
                 to.account.account_id
             )))
             .bearer_auth(&from.0.token)
@@ -737,7 +743,7 @@ fn replays_of_identity_changes_change_nothing() {
     for _ in 0..2 {
         let (status, answer) = code(
             first
-                .auth(c.put(format!("{base}/api/chat/account-identity")))
+                .auth(c.put(format!("{base}/api/v1/chat/account-identity")))
                 .bearer_auth(&ada.token)
                 .json(&request)
                 .send()
@@ -750,7 +756,7 @@ fn replays_of_identity_changes_change_nothing() {
         ..second.clone()
     };
     let page: Value = kept
-        .auth(c.get(format!("{base}/api/chat/messages?deviceId=2")))
+        .auth(c.get(format!("{base}/api/v1/chat/messages?deviceId=2")))
         .bearer_auth(&ada.token)
         .send()
         .unwrap()
@@ -759,7 +765,7 @@ fn replays_of_identity_changes_change_nothing() {
     let envelopes = page["envelopes"].as_array().unwrap();
     assert_eq!(envelopes.len(), 1, "{page}");
     let r = kept
-        .auth(c.post(format!("{base}/api/chat/messages/ack?deviceId=2")))
+        .auth(c.post(format!("{base}/api/v1/chat/messages/ack?deviceId=2")))
         .bearer_auth(&ada.token)
         .json(&json!({ "ids": [envelopes[0]["id"]] }))
         .send()
@@ -797,7 +803,7 @@ fn replays_of_identity_changes_change_nothing() {
     assert_eq!(answer["code"], "manifestConflict");
     // The device made first still works.
     let r = device
-        .auth(c.post(format!("{base}/api/chat/link-tokens")))
+        .auth(c.post(format!("{base}/api/v1/chat/link-tokens")))
         .bearer_auth(&bob.token)
         .send()
         .unwrap();
@@ -831,7 +837,7 @@ fn racing_distributions_apply_once() {
                 let (c, base, first, token) = (&c, &base, &first, &ada.token);
                 scope.spawn(move || {
                     first
-                        .auth(c.put(format!("{base}/api/chat/account-identity")))
+                        .auth(c.put(format!("{base}/api/v1/chat/account-identity")))
                         .bearer_auth(token)
                         .json(request)
                         .send()
@@ -871,7 +877,7 @@ fn expiry_of_tokens_and_devices() {
         .block_on(
             sqlx::query(
                 "UPDATE chat_link_tokens SET expires_at = now() - interval '1 second'
-                  WHERE user_id = $1",
+                  WHERE account_id = $1",
             )
             .bind(user_id)
             .execute(&pool),
@@ -891,7 +897,7 @@ fn expiry_of_tokens_and_devices() {
     runtime
         .block_on(
             sqlx::query(
-                "UPDATE chat_devices SET expired_at = now() WHERE user_id = $1 AND device_id = 2",
+                "UPDATE account_devices SET expired_at = now() WHERE account_id = $1 AND device_id = 2",
             )
             .bind(user_id)
             .execute(&pool),

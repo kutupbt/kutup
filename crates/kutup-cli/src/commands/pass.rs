@@ -60,9 +60,9 @@ pub fn run(profile: &str, json: bool, cmd: &PassCmd) -> Result<()> {
 }
 
 fn locate(ctx: &crate::context::Ctx, file_id: &str) -> Result<FoundFile> {
-    let master_key = ctx.session.master_key_bytes()?;
+    let roots = ctx.session.roots()?;
     let cols = ctx.client.list_collections()?;
-    locate_file(&ctx.client, &master_key, &ctx.session, &cols, file_id)
+    locate_file(&ctx.client, &roots, &ctx.session, &cols, file_id)
 }
 
 fn keep(
@@ -100,10 +100,10 @@ fn keep(
             },
         ))
     };
-    let master_key = ctx.session.master_key_bytes()?;
     keep_secret(
         &ctx.client,
-        &master_key,
+        &ctx.session.master_keys()?,
+        &ctx.session.roots()?,
         ctx.session.binding(),
         &crate::config::data_dir(profile)?,
         file_id,
@@ -127,7 +127,8 @@ fn secrets(
 ) -> Result<Vec<crate::api::pass::VaultSecretRow>> {
     verified_secrets(
         &ctx.client,
-        &ctx.session.master_key_bytes()?,
+        &ctx.session.master_keys()?,
+        &ctx.session.roots()?,
         ctx.session.binding(),
         &crate::config::data_dir(profile)?,
     )
@@ -183,13 +184,14 @@ fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
             .into_iter()
             .find(|row| row.file_id == file_id)
         {
-            let generated = kutup_crypto::account_envelope::decode_canonical_b64(&row.envelope)
+            let generated = kutup_crypto::account_record::decode_canonical_b64(&row.envelope)
                 .ok()
                 .zip(uuid::Uuid::parse_str(file_id).ok())
                 .and_then(|(envelope, id)| {
+                    let keys = ctx.session.master_keys().ok()?;
                     kutup_pass::kept::open(
                         &envelope,
-                        &ctx.session.master_key_bytes().ok()?,
+                        keys.key_for(&envelope).ok()?,
                         ctx.session.binding(),
                         id.as_bytes(),
                     )
@@ -206,7 +208,8 @@ fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
     }
     forget_secret(
         &ctx.client,
-        &ctx.session.master_key_bytes()?,
+        &ctx.session.master_keys()?,
+        &ctx.session.roots()?,
         ctx.session.binding(),
         &crate::config::data_dir(profile)?,
         file_id,
@@ -228,11 +231,12 @@ fn show_key(profile: &str, json: bool, file_id: &str) -> Result<()> {
         .into_iter()
         .find(|row| row.file_id == file_id)
         .ok_or_else(|| anyhow::anyhow!("your account keeps no key for vault {file_id}"))?;
-    let envelope = kutup_crypto::account_envelope::decode_canonical_b64(&row.envelope)?;
+    let envelope = kutup_crypto::account_record::decode_canonical_b64(&row.envelope)?;
     let id = uuid::Uuid::parse_str(file_id).context("a vault's file id is a UUID")?;
+    let keys = ctx.session.master_keys()?;
     let kept = kutup_pass::kept::open(
         &envelope,
-        &ctx.session.master_key_bytes()?,
+        keys.key_for(&envelope)?,
         ctx.session.binding(),
         id.as_bytes(),
     )

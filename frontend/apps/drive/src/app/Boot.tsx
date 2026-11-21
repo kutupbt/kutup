@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { bootChildApp } from '@kutup/session/childBoot'
 import { KeyBindingMismatchError } from '@kutup/session/profile'
 import { Alert } from '@kutup/ui/components/alert'
@@ -22,6 +22,14 @@ export function Boot({ children }: { children: ReactNode }) {
   const navigateNow = useNavigate()
   const navigate = useRef(navigateNow)
   navigate.current = navigateNow
+  // The router applies a navigation in a transition, after this component's
+  // own state: until the fork's `next` is the location, the routes would
+  // render at /login (Mail's `/:folder` sent that to the inbox, over the deep
+  // link). The location's key when `next` was asked for; null once moved on.
+  const location = useLocation()
+  const locationKey = useRef(location.key)
+  locationKey.current = location.key
+  const landing = useRef<string | null>(null)
   const [state, setState] = useState<State>({ kind: 'loading' })
 
   const run = useCallback(() => {
@@ -29,7 +37,10 @@ export function Boot({ children }: { children: ReactNode }) {
     bootChildApp('drive')
       .then((result) => {
         if (result.kind === 'redirecting') return
-        if (result.next) void navigate.current(result.next, { replace: true })
+        if (result.next) {
+          landing.current = locationKey.current
+          void navigate.current(result.next, { replace: true })
+        }
         setState({ kind: 'ready' })
       })
       .catch((error: unknown) =>
@@ -39,6 +50,10 @@ export function Boot({ children }: { children: ReactNode }) {
 
   useEffect(run, [run])
 
+  if (state.kind === 'ready' && landing.current !== null) {
+    if (location.key === landing.current) return <LoadingPanel label={t('boot.opening')} />
+    landing.current = null
+  }
   if (state.kind === 'loading') return <LoadingPanel label={t('boot.opening')} />
   if (state.kind === 'error') {
     return (

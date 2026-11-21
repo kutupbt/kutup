@@ -12,7 +12,6 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use kutup_crypto::collection_keyring::{self, EpochLinkV1};
-use kutup_crypto::identity::AccountIdentityKeysV1;
 use serde::Deserialize;
 
 use crate::api::{Client, Collection};
@@ -41,13 +40,13 @@ impl Keyring {
         client: &Client,
         col: &Collection,
         current_key: &[u8],
-        master_key: &[u8],
+        session: &crate::session::Session,
     ) -> Result<Keyring> {
         Self::load_from(
             client,
-            &format!("/collections/{}/epochs", col.id),
+            &format!("/drive/collections/{}/epochs", col.id),
             &col.id,
-            &col.owner_user_id,
+            &col.owner_account_id,
             col.key_epoch,
             Some(&col.epoch_statement_hash),
             current_key,
@@ -58,12 +57,7 @@ impl Keyring {
                         .ok_or_else(|| anyhow!("share owner authority is missing"))
                         .and_then(decode_key)
                 } else {
-                    let master: &[u8; 32] = master_key
-                        .try_into()
-                        .context("master key must be 32 bytes")?;
-                    Ok(AccountIdentityKeysV1::derive(master)?
-                        .authority_public_key()
-                        .to_vec())
+                    Ok(session.identity()?.authority_public_key().to_vec())
                 }
             },
         )
@@ -74,7 +68,7 @@ impl Keyring {
         client: &Client,
         history_path: &str,
         collection_id: &str,
-        owner_user_id: &str,
+        owner_account_id: &str,
         key_epoch: u32,
         statement_hash: Option<&str>,
         current_key: &[u8],
@@ -103,7 +97,7 @@ impl Keyring {
         let keys = collection_keyring::unlock(
             current_key,
             collection_id,
-            owner_user_id,
+            owner_account_id,
             &authority()?,
             &chain,
         )

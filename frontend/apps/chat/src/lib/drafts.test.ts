@@ -1,3 +1,4 @@
+import { firstMasterKeys, masterKeysBytes } from '@kutup/crypto/masterKeys'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SealedStorage } from '@kutup/chat-core/sealedStorage'
 import { setSealedStorage } from '../state/sealedState'
@@ -20,7 +21,7 @@ describe('drafts', () => {
   let storage: SealedStorage
   beforeEach(() => {
     window.localStorage.clear()
-    storage = new SealedStorage(wasm, new Uint8Array(32), 'scope-a')
+    storage = new SealedStorage(wasm, masterKeysBytes(firstMasterKeys(new Uint8Array(32))), 'scope-a')
     setSealedStorage(storage)
   })
   afterEach(() => setSealedStorage(null))
@@ -35,7 +36,7 @@ describe('drafts', () => {
 
   it('belongs to the open account only, and goes on sign-out', () => {
     setDraft('group:g1', { text: 'plan', picks: [] })
-    setSealedStorage(new SealedStorage(wasm, new Uint8Array(32), 'scope-b'))
+    setSealedStorage(new SealedStorage(wasm, masterKeysBytes(firstMasterKeys(new Uint8Array(32))), 'scope-b'))
     expect(getDraft('group:g1')).toBeUndefined()
     setSealedStorage(storage)
     expect(getDraft('group:g1')?.text).toBe('plan')

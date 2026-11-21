@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use kutup_chat_proto::PutChatProfileRequest;
-use kutup_chat_proto::{AccountManifestV2, ContactState};
+use kutup_chat_proto::{AccountManifestV3, ContactState};
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod indexed_db;
@@ -400,7 +400,7 @@ pub struct ManifestTrust {
     pub incarnation_id: String,
     pub authority_key_id: String,
     pub self_authority_key: String,
-    pub drive_hpke_public_key: String,
+    pub drive_xwing_public_key: String,
     pub drive_share_signing_public_key: String,
     pub highest_sequence: u64,
     pub manifest_hash: String,
@@ -439,7 +439,7 @@ pub struct ManifestTrust {
 pub struct AccountManifestHistoryRecord {
     pub peer: String,
     pub sequence: u64,
-    pub manifest: AccountManifestV2,
+    pub manifest: AccountManifestV3,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

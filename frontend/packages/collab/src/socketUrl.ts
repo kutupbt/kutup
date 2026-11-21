@@ -1,14 +1,17 @@
-import { freshAccessToken } from '@kutup/session/client'
+import { deviceTicket } from '@kutup/session/devices'
+import { withClientParam } from '@kutup/session/clientVersion'
 import { getOrCreateTabId } from './identity'
 
 /**
- * The collab WebSocket for a file on this app's own origin (`/api` is
- * same-origin in every Kutup web app), with a token fresh enough to connect,
- * naming this tab (`getOrCreateTabId`): the room's peer list carries it.
+ * The collab WebSocket for a file, with a single-use ticket for `device`
+ * (`POST /api/v1/account/devices/tickets`: a browser can't set the device header on a
+ * socket), naming this tab (`getOrCreateTabId`): the room's peer list
+ * carries it. Asked again before every connect, reconnects included: a ticket
+ * is good once, for a minute. `/api` is same-origin in every Kutup web app.
  */
-export async function collabSocketUrl(fileId: string, deviceId: number, base = `/files/${encodeURIComponent(fileId)}`): Promise<string> {
-  const token = await freshAccessToken()
+export async function collabSocketUrl(device: { header: string }, base: string): Promise<string> {
+  const ticket = await deviceTicket(device.header)
   const origin = window.location.origin.replace(/^http/, 'ws')
   // A file on another server: its route through this one (the same suffix).
-  return `${origin}/api${base}/collab/ws?token=${encodeURIComponent(token)}&deviceId=${deviceId}&tab=${getOrCreateTabId()}`
+  return withClientParam(`${origin}/api/v1${base}/collab/ws?ticket=${encodeURIComponent(ticket)}&tab=${getOrCreateTabId()}`)
 }

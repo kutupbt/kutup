@@ -4,11 +4,14 @@
 // Account renames (docs/plans/username-renames.md): the format and its checks
 // are Rust's (kutup-crypto account_rename); this is the browser's door to them.
 
+import type { IdentityRoot } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
 
 /** One signed rename, as the server stores and serves it. */
 export interface AccountRenameV1 {
   incarnationId: string
+  /** The account's permanent id: signed, so a chain names the one account it is about. */
+  accountId: string
   sequence: number
   previous: string
   current: string
@@ -19,6 +22,7 @@ export interface AccountRenameV1 {
 /** What a verified chain says: where the account is now and where it has been. */
 export interface RenameChainView {
   incarnationId: string
+  accountId: string
   first: string
   current: string
   /** Every address the account has had, oldest first. */
@@ -55,30 +59,37 @@ export async function addressFolder(): Promise<(address: string) => string | nul
   return (address) => wasm.foldAddress(address) ?? null
 }
 
-/** The next rename of this account, signed with its authority (from the master key). */
+/**
+ * The next rename of this account (`accountId`, its permanent id), signed with
+ * its authority (from its identity root).
+ */
 export async function signAccountRename(
-  masterKeyBase64: string,
+  identityRoot: IdentityRoot,
+  accountId: string,
   sequence: number,
   previous: string,
   current: string,
   issuedAtMs: number,
 ): Promise<AccountRenameV1> {
-  const json = (await getCryptoWasm()).signAccountRename(masterKeyBase64, sequence, previous, current, issuedAtMs)
+  const json = (await getCryptoWasm()).signAccountRename(identityRoot, accountId, sequence, previous, current, issuedAtMs)
   return JSON.parse(json) as AccountRenameV1
 }
 
 /**
- * Verifies a rename chain against the account's authority key. Pass the
+ * Verifies a rename chain against the account's authority key and the
+ * account id it was looked up for (every statement must name it). Pass the
  * digests of a chain verified before: the new one must extend it, or this
  * throws (a rolled-back or rewritten chain).
  */
 export async function verifyAccountRenameChain(
   authorityPublicKey: string,
+  accountId: string,
   chain: readonly AccountRenameV1[],
   knownDigests?: readonly string[],
 ): Promise<RenameChainView> {
   return (await getCryptoWasm()).verifyAccountRenameChain(
     authorityPublicKey,
+    accountId,
     JSON.stringify(chain),
     knownDigests ? JSON.stringify(knownDigests) : null,
   )

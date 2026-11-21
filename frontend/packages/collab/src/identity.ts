@@ -14,7 +14,7 @@ export const CURSOR_COLORS_20 = [
   '#ec4899', '#f43f5e', '#64748b', '#525252', '#0f766e',
 ]
 
-const COLOR_PREF_KEY = 'kutup_cursor_color_v1'
+const COLOR_PREF_KEY = 'kutup.collab.cursorColor'
 
 function randomHex(bytes: number): string {
   const arr = new Uint8Array(bytes)

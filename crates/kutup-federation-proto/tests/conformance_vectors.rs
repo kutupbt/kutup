@@ -163,3 +163,106 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
         )
         .unwrap();
 }
+
+/// Rewrites the derived parts of the vector (documents, hashes, signatures)
+/// from its seeds and inputs: only for a deliberate format change, such as a
+/// label's (docs/plans/w6-key-hierarchy.md §3). `KUTUP_WRITE_FEDERATION_VECTORS=1`.
+#[test]
+#[ignore = "writes the vectors file"]
+fn write_vectors() {
+    if std::env::var("KUTUP_WRITE_FEDERATION_VECTORS").as_deref() != Ok("1") {
+        return;
+    }
+    let mut vector: Value = serde_json::from_str(VECTOR).unwrap();
+    let genesis_key = seed(&vector["identity"], "genesisSeedBase64");
+    let rotated_key = seed(&vector["identity"], "rotatedSeedBase64");
+    let genesis =
+        FederationIdentityDocumentV1::genesis("alpha.example", 1_700_000_000, &genesis_key)
+            .unwrap();
+    let rotation =
+        FederationIdentityDocumentV1::rotate(&genesis, 1_700_000_100, &genesis_key, &rotated_key)
+            .unwrap();
+    let identity = &mut vector["identity"];
+    identity["genesis"] = serde_json::to_value(&genesis).unwrap();
+    identity["genesisDocumentHash"] = Value::from(genesis.document_hash().unwrap());
+    identity["rotation"] = serde_json::to_value(&rotation).unwrap();
+    identity["rotationDocumentHash"] = Value::from(rotation.document_hash().unwrap());
+    identity["rotationFingerprint"] =
+        Value::from(grouped_fingerprint(&rotation.key.key_id).unwrap());
+    let discovery = FederationDiscoveryV2::sign(
+        "alpha.example",
+        "https://federation.alpha.example/api/fed",
+        vec![
+            FederationCapabilityId::identity_v1(),
+            FederationCapabilityId::drive_v1(),
+            FederationCapabilityId::chat_v2(),
+        ],
+        rotation,
+        1_700_000_200,
+        1_700_003_800,
+        &rotated_key,
+    )
+    .unwrap();
+    vector["discovery"] = serde_json::to_value(&discovery).unwrap();
+
+    let http = vector["httpSignature"].clone();
+    let request_value = &http["request"];
+    let request = FederationHttpRequest {
+        method: request_value["method"].as_str().unwrap().into(),
+        authority: request_value["authority"].as_str().unwrap().into(),
+        path: request_value["path"].as_str().unwrap().into(),
+        query: request_value["query"].as_str().unwrap().into(),
+        content_type: request_value["contentType"].as_str().unwrap().into(),
+        body: body(request_value),
+        federation_version: FederationProtocolVersion::V2,
+        feature: FederationFeature::ChatV2,
+        origin: request_value["origin"].as_str().unwrap().into(),
+        destination: request_value["destination"].as_str().unwrap().into(),
+    };
+    let signed_request = FederationSignedRequest::sign(
+        request,
+        "01HZX-test-nonce",
+        1_700_000_300,
+        1_700_000_600,
+        &rotated_key,
+    )
+    .unwrap();
+    let verified_request = FederationVerifiedRequest::verify(
+        signed_request.request.clone(),
+        signed_request.headers.clone(),
+        &rotated_key.verifying_key().to_array::<32>(),
+        1_700_000_400,
+    )
+    .unwrap();
+    let response_value = &http["response"];
+    let response = FederationHttpResponse {
+        status: response_value["status"].as_u64().unwrap() as u16,
+        content_type: response_value["contentType"].as_str().unwrap().into(),
+        body: body(response_value),
+        federation_version: FederationProtocolVersion::V2,
+        feature: FederationFeature::ChatV2,
+        origin: response_value["origin"].as_str().unwrap().into(),
+        destination: response_value["destination"].as_str().unwrap().into(),
+    };
+    let response_key = seed(&http, "responseSignerSeedBase64");
+    let response_headers = verified_request
+        .sign_response(&response, 1_700_000_401, 1_700_000_601, &response_key)
+        .unwrap();
+    let out = &mut vector["httpSignature"];
+    out["requestHeaders"] = serde_json::to_value(&signed_request.headers).unwrap();
+    out["requestSignatureBase"] = Value::from(signed_request.signature_base().unwrap());
+    out["responseHeaders"] = serde_json::to_value(&response_headers).unwrap();
+    out["responseSignatureBase"] = Value::from(
+        verified_request
+            .response_signature_base(&response, &response_headers)
+            .unwrap(),
+    );
+    std::fs::write(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/test-vectors/federation-v2.json"
+        ),
+        serde_json::to_string_pretty(&vector).unwrap() + "\n",
+    )
+    .unwrap();
+}

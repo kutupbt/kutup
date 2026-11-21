@@ -14,7 +14,7 @@ function row(patch: Partial<MailMessage> = {}): MailMessage {
     labels: [],
     seen: true,
     starred: false,
-    protection: 'end_to_end',
+    protection: 'endToEnd',
     size: 100,
     receivedAt: new Date(Date.UTC(2026, 9, 1) + n * 60_000).toISOString(),
     sentAt: null,

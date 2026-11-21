@@ -3,7 +3,7 @@
 // (`docker compose --profile sfu`), so these skip on a stack without one.
 
 import { readFileSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openChats, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 
@@ -47,7 +47,7 @@ test('someone without an account joins a scheduled meeting through its link', as
   await chat.getByTestId('chat-meeting-title').fill(title)
   await chat.getByTestId('chat-meeting-date').fill('2031-05-06')
   await chat.getByTestId('chat-meeting-time').fill('14:30')
-  const registration = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/chat/call-links')
+  const registration = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/v1/chat/call-links')
   await chat.getByTestId('chat-meeting-save').click()
   const registeredBody = (await registration).postData() ?? ''
   const registered = JSON.parse(registeredBody) as Record<string, unknown>
@@ -88,7 +88,7 @@ test('someone without an account joins a scheduled meeting through its link', as
   await join(guest, 'Guest Gül', true)
   // The fragment never left the browser, and no sign-in was asked for.
   expect(requests.some((sent) => sent.includes(url.split('#')[1]))).toBe(false)
-  expect(requests.some((sent) => /\/login|\/api\/auth\/forks/.test(sent))).toBe(false)
+  expect(requests.some((sent) => /\/login|\/api\/v1\/auth\/forks/.test(sent))).toBe(false)
 
   // The owner joins from the list.
   const popup = ownerContext.waitForEvent('page')
@@ -140,7 +140,7 @@ test('someone without an account joins a scheduled meeting through its link', as
   await expect(guest.getByTestId('chat-meeting-message')).toHaveCount(0)
   await guest.getByTestId('chat-link-call-leave').click()
   // The owner's leave button asks which: leave, or end it for everyone.
-  const recorded = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/chat/joined-meetings')
+  const recorded = chat.waitForRequest((sent) => sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/v1/account/records')
   await ownerCall.getByTestId('chat-link-call-leave-menu').click()
   await ownerCall.getByTestId('chat-link-call-leave').click()
   await expect(ownerCall.getByTestId('chat-link-call-left')).toBeVisible({ timeout: 30_000 })
@@ -152,7 +152,7 @@ test('someone without an account joins a scheduled meeting through its link', as
   const entry = chat.locator(`[data-testid="chat-meeting-history-entry"][data-title="${title}"]`)
   await expect(entry).toHaveCount(1, { timeout: 30_000 })
   await expect(entry.getByTestId('chat-meeting-rejoin')).toHaveAttribute('href', url)
-  await expect.poll(() => chat.evaluate(() => localStorage.getItem('kutup-meeting-history')), { timeout: 30_000 }).toBe('[]')
+  await expect.poll(() => chat.evaluate(() => localStorage.getItem('kutup.chat.meetingHistory')), { timeout: 30_000 }).toBe('[]')
   const recordedBody = (await recorded).postData() ?? ''
   expect(Object.keys(JSON.parse(recordedBody) as Record<string, unknown>).sort()).toEqual(['entry', 'id'])
   expect(recordedBody).not.toContain('Team sync')
@@ -161,7 +161,7 @@ test('someone without an account joins a scheduled meeting through its link', as
   await expect(entry).toHaveCount(1, { timeout: 60_000 })
   // The guest has no account: their stays are kept nowhere, so they cannot
   // end up in the list of whoever signs in to this browser next.
-  expect(await guest.evaluate(() => localStorage.getItem('kutup-meeting-history'))).toBeNull()
+  expect(await guest.evaluate(() => localStorage.getItem('kutup.chat.meetingHistory'))).toBeNull()
 
   // Renaming it changes what a holder of the link sees.
   await meeting(chat, title).getByTestId('chat-meeting-edit').click()
@@ -263,7 +263,7 @@ test('after its owner signs out, their meeting in that browser waits like anyone
   await signedOut.goto(url)
   await expect(signedOut.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
   await expect(signedOut.getByTestId('chat-link-call-has-waiting-room')).toBeVisible()
-  expect(await signedOut.evaluate(() => localStorage.getItem('kutup-meeting-hosts'))).toBeNull()
+  expect(await signedOut.evaluate(() => localStorage.getItem('kutup.chat.meetingHosts'))).toBeNull()
   await context.close()
 })
 
@@ -299,7 +299,7 @@ test('a meeting with a waiting room lets in only whom its owner admits', async (
   const guest = await guestContext.newPage()
   let tokenRequest: { roomId: string; accessToken: string } | null = null
   guest.on('request', (sent) => {
-    if (new URL(sent.url()).pathname === '/api/chat/call-links/info') tokenRequest = sent.postDataJSON() as typeof tokenRequest
+    if (new URL(sent.url()).pathname === '/api/v1/chat/call-links/info') tokenRequest = sent.postDataJSON() as typeof tokenRequest
   })
   await guest.goto(url)
   await expect(guest.getByTestId('chat-link-call-has-waiting-room')).toBeVisible({ timeout: 60_000 })
@@ -404,7 +404,7 @@ test('hosts remove and mute people and stop a screen share; the owner names co-h
   let asHelper: { roomId: string; accessToken: string; sfuToken: string } | null = null
   let ownerId: string | null = null
   helper.on('response', async (response) => {
-    if (new URL(response.url()).pathname !== '/api/chat/call-links/roles' || !response.ok()) return
+    if (new URL(response.url()).pathname !== '/api/v1/chat/call-links/roles' || !response.ok()) return
     asHelper = response.request().postDataJSON() as typeof asHelper
     const { roles } = (await response.json()) as { roles: { participantId: string; role: string }[] }
     ownerId = roles.find((entry) => entry.role === 'owner')?.participantId ?? ownerId
@@ -419,7 +419,7 @@ test('hosts remove and mute people and stop a screen share; the owner names co-h
   // The SFU token this one is given is kept, to try it again once removed.
   let pestAccess: { url: string; token: string } | null = null
   pest.on('response', async (response) => {
-    if (new URL(response.url()).pathname === '/api/chat/call-links/token' && response.ok()) pestAccess = (await response.json()) as typeof pestAccess
+    if (new URL(response.url()).pathname === '/api/v1/chat/call-links/token' && response.ok()) pestAccess = (await response.json()) as typeof pestAccess
   })
   await pest.goto(url)
   await expect(pest.getByTestId('chat-link-call-name')).toBeVisible({ timeout: 60_000 })
@@ -646,7 +646,7 @@ test('a changed or incomplete link is refused before anything is sent', async ({
   const page = await context.newPage()
   const api: string[] = []
   page.on('request', (sent) => {
-    if (new URL(sent.url()).pathname.startsWith('/api/chat/')) api.push(sent.url())
+    if (new URL(sent.url()).pathname.startsWith('/api/v1/chat/')) api.push(sent.url())
   })
   await page.goto(appUrl('chat', '/call#not-a-link'))
   await expect(page.getByRole('heading', { name: 'This is not a meeting link' })).toBeVisible({ timeout: 60_000 })

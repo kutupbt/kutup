@@ -23,14 +23,26 @@ pub struct Patched {
     pub version_id: String,
 }
 
-/// The `Upload-Metadata` of a version upload.
+/// The body of a revision's commit.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitRevision {
+    pub metadata_envelope: String,
+    pub metadata_revision: u64,
+    pub revision_content_envelope: String,
+    /// A new file committed under another name than its upload started with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_hash: Option<String>,
+}
+
+/// The `Upload-Metadata` of a version upload (the block format: its
+/// metadata comes with the commit).
 #[derive(Debug, Default, Clone)]
 pub struct VersionUploadMeta {
     pub version_of: String,
-    /// The file's metadata at `metadata_revision`: its new size and sha256.
-    pub metadata_envelope: String,
-    /// The file's next metadata revision.
-    pub metadata_revision: u64,
+    /// The revision the blob is sealed as: the version's id, and the
+    /// upload's.
+    pub revision_id: String,
     /// The new content's hash in its folder.
     pub content_hash: Option<String>,
     /// A version id or `original`: stored only if the file still holds it.
@@ -38,36 +50,35 @@ pub struct VersionUploadMeta {
 }
 
 impl Client {
-    /// Opens a new tus session; `total_bytes` is the ciphertext byte count.
-    /// Returns `(upload_id, file_id)` — the upload id from the `Location`
-    /// header and the pre-allocated file id from the `{"fileId": …}` body
-    /// (used by resume to detect an upload that finished before we could
-    /// clear local state). Mirrors `TusCreate`.
-    #[allow(clippy::too_many_arguments)]
+    /// Opens a new file's tus upload in the block format; `total_bytes` is
+    /// the object's length. Exactly `fileId, collectionId, fileKeyEnvelope,
+    /// nameHash, revisionId`: the metadata comes with the commit, once the
+    /// manifest's digest is known (docs/api.md, "Uploaded revisions and the
+    /// commit"). Returns `(upload_id, file_id)`: the upload id from the
+    /// `Location` header and the file id the `{"fileId": …}` body echoes.
     pub fn tus_create(
         &self,
         total_bytes: i64,
         file_id: &str,
         collection_id: &str,
-        metadata_envelope: &str,
         file_key_envelope: &str,
         name_hash: &str,
+        revision_id: &str,
     ) -> Result<(String, String)> {
-        // Upload-Metadata values are base64 per the tus spec (the metadata
-        // strings are themselves already base64 — double-encoded, matching Go).
-        // The name's hash keeps it unique in the folder
-        // (docs/plans/drive-unique-names.md).
+        // Upload-Metadata values are base64 per the tus spec (the envelope is
+        // itself base64 — double-encoded). The name's hash keeps it unique in
+        // the folder (docs/plans/drive-unique-names.md).
         let upload_meta = [
             format!("fileId {}", b64(file_id.as_bytes())),
             format!("collectionId {}", b64(collection_id.as_bytes())),
-            format!("metadataEnvelope {}", b64(metadata_envelope.as_bytes())),
             format!("fileKeyEnvelope {}", b64(file_key_envelope.as_bytes())),
             format!("nameHash {}", b64(name_hash.as_bytes())),
+            format!("revisionId {}", b64(revision_id.as_bytes())),
         ]
         .join(",");
 
         let resp = self
-            .upload_request(Method::POST, "/uploads/")
+            .upload_request(Method::POST, "/drive/uploads/")
             .header("Tus-Resumable", TUS_VERSION)
             .header("Upload-Length", total_bytes.to_string())
             .header("Upload-Metadata", upload_meta)
@@ -98,7 +109,7 @@ impl Client {
     /// the session no longer exists (finished or swept). Mirrors `TusHead`.
     pub fn tus_head(&self, upload_id: &str) -> Result<Option<(i64, i64)>> {
         let resp = self
-            .request(Method::HEAD, &format!("/uploads/{upload_id}"))
+            .request(Method::HEAD, &format!("/drive/uploads/{upload_id}"))
             .header("Tus-Resumable", TUS_VERSION)
             .send()?;
         match resp.status().as_u16() {
@@ -123,7 +134,7 @@ impl Client {
     pub fn tus_patch_landed(&self, upload_id: &str, offset: i64, body: Vec<u8>) -> Result<Patched> {
         let len = body.len();
         let resp = self
-            .upload_request(Method::PATCH, &format!("/uploads/{upload_id}"))
+            .upload_request(Method::PATCH, &format!("/drive/uploads/{upload_id}"))
             .header("Tus-Resumable", TUS_VERSION)
             .header("Upload-Offset", offset.to_string())
             .header("Content-Type", "application/offset+octet-stream")
@@ -153,14 +164,7 @@ impl Client {
     pub fn tus_create_version(&self, total_bytes: i64, meta: &VersionUploadMeta) -> Result<String> {
         let mut upload_meta = vec![
             format!("versionOf {}", b64(meta.version_of.as_bytes())),
-            format!(
-                "metadataEnvelope {}",
-                b64(meta.metadata_envelope.as_bytes())
-            ),
-            format!(
-                "metadataRevision {}",
-                b64(meta.metadata_revision.to_string().as_bytes())
-            ),
+            format!("revisionId {}", b64(meta.revision_id.as_bytes())),
         ];
         if let Some(hash) = &meta.content_hash {
             upload_meta.push(format!("contentHash {}", b64(hash.as_bytes())));
@@ -169,7 +173,7 @@ impl Client {
             upload_meta.push(format!("basedOn {}", b64(based_on.as_bytes())));
         }
         let resp = self
-            .upload_request(Method::POST, "/uploads/")
+            .upload_request(Method::POST, "/drive/uploads/")
             .header("Tus-Resumable", TUS_VERSION)
             .header("Upload-Length", total_bytes.to_string())
             .header("Upload-Metadata", upload_meta.join(","))
@@ -184,10 +188,28 @@ impl Client {
             .ok_or_else(|| anyhow::anyhow!("tus create version: no versionId"))
     }
 
+    /// Makes an uploaded revision current with the file's next metadata
+    /// (`POST /files/{id}/revisions/{revisionId}/commit`).
+    pub fn commit_revision(
+        &self,
+        file_id: &str,
+        revision_id: &str,
+        body: &CommitRevision,
+    ) -> Result<()> {
+        let resp = self.post_json(
+            &format!("/drive/files/{file_id}/revisions/{revision_id}/commit"),
+            body,
+        )?;
+        if resp.status().as_u16() >= 400 {
+            return Err(api_error(resp)).context("commit the upload");
+        }
+        Ok(())
+    }
+
     /// Cancels an in-flight upload (best-effort). Mirrors `TusDelete`.
     pub fn tus_delete(&self, upload_id: &str) -> Result<()> {
         let resp = self
-            .request(Method::DELETE, &format!("/uploads/{upload_id}"))
+            .request(Method::DELETE, &format!("/drive/uploads/{upload_id}"))
             .header("Tus-Resumable", TUS_VERSION)
             .send()?;
         let code = resp.status().as_u16();

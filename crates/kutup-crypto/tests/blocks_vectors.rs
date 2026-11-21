@@ -14,6 +14,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
+use kutup_crypto::blocks::SignerIdentity;
 use kutup_crypto::blocks::{
     block_count, block_plaintext_len, BlockFamily, BlockKeys, BlockSealer, NONCE_LEN,
 };
@@ -30,7 +31,10 @@ const B: u64 = kutup_crypto::blocks::BLOCK_SIZE as u64;
 const KEY: [u8; 32] = [0x42; 32];
 const MANIFEST_NONCE: [u8; NONCE_LEN] = [0x5a; NONCE_LEN];
 const SIGNER_SEED: [u8; 32] = [0x09; 32];
-const ACCOUNT: [u8; 16] = [0x03; 16];
+const ACCOUNT: SignerIdentity = SignerIdentity {
+    account_id: [0x03; 16],
+    incarnation_id: [0x05; 32],
+};
 const FILE: &str = "11111111-1111-4111-8111-111111111111";
 const REVISION: &str = "22222222-2222-4222-8222-222222222222";
 const ATTACHMENT: &str = "66666666-6666-4666-8666-666666666666";
@@ -45,6 +49,7 @@ struct Vectors {
     signer_seed: String,
     signer_public_key: String,
     account_id: String,
+    incarnation_id: String,
     cases: Vec<Case>,
 }
 
@@ -97,7 +102,7 @@ fn seal(
     header: &[u8],
     mut sealer: BlockSealer<'_>,
     plaintext: &[u8],
-    signer: Option<(&SigningKey, [u8; 16])>,
+    signer: Option<(&SigningKey, SignerIdentity)>,
 ) -> (Case, Vec<u8>, [u8; 32]) {
     let size = plaintext.len() as u64;
     let mut object = header.to_vec();
@@ -160,6 +165,9 @@ fn computed() -> Vectors {
             drive_blocks::open_file(&object, &KEY, drive_context(), &content, size).unwrap();
         assert_eq!(*opened, plaintext, "{name}");
         manifest.verify_signer(&signer.verifying_key()).unwrap();
+        let named = manifest.signer.as_ref().unwrap();
+        assert_eq!(named.account_id, ACCOUNT.account_id, "{name}");
+        assert_eq!(named.incarnation_id, ACCOUNT.incarnation_id, "{name}");
         assert_eq!(object.len() as u64, drive_blocks::blob_len(size).unwrap());
         cases.push(case);
     }
@@ -211,7 +219,8 @@ fn computed() -> Vectors {
         manifest_nonce: STANDARD.encode(MANIFEST_NONCE),
         signer_seed: STANDARD.encode(SIGNER_SEED),
         signer_public_key: STANDARD.encode(signer.verifying_key().to_bytes()),
-        account_id: STANDARD.encode(ACCOUNT),
+        account_id: STANDARD.encode(ACCOUNT.account_id),
+        incarnation_id: hex::encode(ACCOUNT.incarnation_id),
         cases,
     }
 }

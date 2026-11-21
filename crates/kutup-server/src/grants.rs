@@ -36,6 +36,13 @@ pub enum Purpose {
     Rotate,
     /// A new username, or dropping a held one (docs/plans/username-renames.md).
     Rename,
+    /// Closing the account (docs/plans/server-personal-data.md, A5).
+    Close,
+    /// Keeping a closing account: a sign-in that passed every step (no session).
+    Keep,
+    /// A new master key (docs/plans/mk-rotation-exercise.md): the password
+    /// registered again with it, all in one transaction.
+    MasterKeyRotation,
 }
 
 impl Purpose {
@@ -48,6 +55,9 @@ impl Purpose {
             Purpose::Recovery => "recovery",
             Purpose::Rotate => "rotate",
             Purpose::Rename => "rename",
+            Purpose::Close => "close",
+            Purpose::Keep => "keep",
+            Purpose::MasterKeyRotation => "masterKeyRotation",
         }
     }
 
@@ -59,6 +69,8 @@ impl Purpose {
             "totp" => Purpose::Totp,
             "adminReset" => Purpose::AdminReset,
             "rename" => Purpose::Rename,
+            "close" => Purpose::Close,
+            "masterKeyRotation" => Purpose::MasterKeyRotation,
             _ => return None,
         })
     }
@@ -67,9 +79,9 @@ impl Purpose {
 /// A grant as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Grant {
-    pub user_id: Uuid,
+    pub account_id: Uuid,
     pub session_id: Option<Uuid>,
-    pub target_user_id: Option<Uuid>,
+    pub target_account_id: Option<Uuid>,
 }
 
 fn hash(token: &str) -> Option<Vec<u8>> {
@@ -91,7 +103,7 @@ pub async fn issue<'e, E: sqlx::PgExecutor<'e>>(
     kutup_crypto::primitives::random(&mut raw);
     let token = format!("{PREFIX}{}", URL_SAFE_NO_PAD.encode(raw));
     sqlx::query(
-        "INSERT INTO auth_grants (token_hash, user_id, purpose, session_id, target_user_id, expires_at)
+        "INSERT INTO auth_grants (token_hash, account_id, purpose, session_id, target_account_id, expires_at)
          VALUES ($1, $2, $3, $4, $5, now() + make_interval(mins => $6))",
     )
     .bind(primitives::hash(Suite::V1, token.as_bytes()).to_vec())
@@ -116,7 +128,7 @@ pub async fn peek<'e, E: sqlx::PgExecutor<'e>>(
         return Ok(None);
     };
     let row: Option<(String, Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
-        "SELECT purpose, user_id, session_id, target_user_id FROM auth_grants
+        "SELECT purpose, account_id, session_id, target_account_id FROM auth_grants
          WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()",
     )
     .bind(hash)
@@ -128,9 +140,9 @@ pub async fn peek<'e, E: sqlx::PgExecutor<'e>>(
             Some((
                 *purpose,
                 Grant {
-                    user_id,
+                    account_id: user_id,
                     session_id,
-                    target_user_id,
+                    target_account_id: target_user_id,
                 },
             ))
         }),
@@ -151,7 +163,7 @@ pub async fn take<'e, E: sqlx::PgExecutor<'e>>(
     let row: Option<(String, Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
         "UPDATE auth_grants SET used_at = now()
          WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() AND purpose = ANY($2)
-         RETURNING purpose, user_id, session_id, target_user_id",
+         RETURNING purpose, account_id, session_id, target_account_id",
     )
     .bind(hash)
     .bind(&names)
@@ -163,9 +175,9 @@ pub async fn take<'e, E: sqlx::PgExecutor<'e>>(
             Some((
                 *purpose,
                 Grant {
-                    user_id,
+                    account_id: user_id,
                     session_id,
-                    target_user_id,
+                    target_account_id: target_user_id,
                 },
             ))
         }),
@@ -185,12 +197,12 @@ pub async fn take_for_session<'e, E: sqlx::PgExecutor<'e>>(
     executor: E,
     token: &str,
     purpose: Purpose,
-    user: &crate::middleware::AuthUser,
+    user: &crate::middleware::AuthAccount,
 ) -> crate::error::AppResult<()> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
+    let user_id = crate::handlers::trusted_uuid(&user.account_id)?;
     match take(executor, token, &[purpose]).await? {
         Some((_, grant))
-            if grant.user_id == user_id && grant.session_id == Some(user.session.session_id) =>
+            if grant.account_id == user_id && grant.session_id == Some(user.session.session_id) =>
         {
             Ok(())
         }
@@ -204,28 +216,35 @@ pub async fn end_all(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
 ) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM auth_grants WHERE user_id = $1 OR target_user_id = $1")
+    sqlx::query("DELETE FROM auth_grants WHERE account_id = $1 OR target_account_id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM opaque_login_states WHERE user_id = $1")
+    sqlx::query("DELETE FROM opaque_login_states WHERE account_id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
     Ok(())
 }
 
-/// Drops used and expired grants and expired sign-ins.
+/// Drops used and expired grants and expired sign-ins. A session sign-in
+/// that expired never finished: a wrong password in its account's log
+/// (`handlers::opaque`, "never finished").
 pub async fn sweep(pool: &sqlx::PgPool) -> sqlx::Result<u64> {
     let grants = sqlx::query(
         "DELETE FROM auth_grants WHERE expires_at <= now() OR used_at < now() - interval '1 hour'",
     )
     .execute(pool)
     .await?;
-    let logins = sqlx::query("DELETE FROM opaque_login_states WHERE expires_at <= now()")
-        .execute(pool)
-        .await?;
-    Ok(grants.rows_affected() + logins.rows_affected())
+    let logins: Vec<(Option<Uuid>, String)> = sqlx::query_as(
+        "DELETE FROM opaque_login_states WHERE expires_at <= now() RETURNING account_id, purpose",
+    )
+    .fetch_all(pool)
+    .await?;
+    let swept = grants.rows_affected() + logins.len() as u64;
+    let accounts = crate::handlers::opaque::unfinished_sessions(logins);
+    crate::handlers::opaque::record_unfinished_now(pool, &accounts).await;
+    Ok(swept)
 }
 
 #[cfg(test)]
@@ -243,10 +262,87 @@ mod tests {
 
     #[test]
     fn reauth_may_ask_for_these_only() {
-        for name in ["pass", "passwordChange", "totp", "adminReset", "rename"] {
+        for name in [
+            "pass",
+            "passwordChange",
+            "totp",
+            "adminReset",
+            "rename",
+            "close",
+        ] {
             assert_eq!(Purpose::for_reauth(name).unwrap().as_str(), name);
         }
         assert_eq!(Purpose::for_reauth("recovery"), None);
         assert_eq!(Purpose::for_reauth("rotate"), None);
+        assert_eq!(Purpose::for_reauth("keep"), None);
+    }
+
+    /// A session sign-in that expired unfinished is a wrong password in its
+    /// account's log; an expired one for no account, or a reauth, is not.
+    #[tokio::test]
+    async fn live_an_expired_sign_in_is_a_failed_one() {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .unwrap();
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO accounts (id, username, identity_suite, drive_key_binding_epoch, master_key_generation) VALUES ($1, $2, 2, 1, 1)")
+            .bind(user)
+            .bind(format!("expired{}", &user.simple().to_string()[..12]))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let session = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO auth_sessions (id, account_id, client_type, refresh_token_hash, expires_at)
+             VALUES ($1, $2, 'cli', $3, now() + interval '1 hour')",
+        )
+        .bind(session)
+        .bind(user)
+        .bind([session.as_bytes().as_slice(), session.as_bytes().as_slice()].concat())
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Two session sign-ins of the account, one for no account, one reauth.
+        for (user_id, purpose, session_id, grant_for) in [
+            (Some(user), "session", None, None),
+            (Some(user), "session", None, None),
+            (None, "session", None, None),
+            (Some(user), "reauth", Some(session), Some("pass")),
+        ] {
+            sqlx::query(
+                "INSERT INTO opaque_login_states (login_id, canonical_name, account_id, purpose,
+                     session_id, grant_for, source, lockout_key, server_key_id, sealed_state,
+                     expires_at)
+                 VALUES ($1, 'name', $2, $3, $4, $5, 'test', '', 1, '', now() - interval '1 second')",
+            )
+            .bind(Uuid::new_v4())
+            .bind(user_id)
+            .bind(purpose)
+            .bind(session_id)
+            .bind(grant_for)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sweep(&pool).await.unwrap();
+        let events: Vec<(String, i32)> = sqlx::query_as(
+            "SELECT kind, count FROM account_security_events WHERE subject_account_id = $1",
+        )
+        .bind(user)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(events, vec![("signInFailedPassword".to_owned(), 2)]);
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }

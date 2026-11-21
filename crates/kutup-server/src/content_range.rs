@@ -4,7 +4,7 @@
 //! whole object when no range applies (none asked, several asked, a malformed
 //! one, or an `If-Range` that no longer matches). The ETag is the revision
 //! id, which names immutable bytes. One answer carries at most
-//! `drive_stream_response_max_bytes`: a longer range is answered in part, as
+//! `drive.stream_response_max_bytes`: a longer range is answered in part, as
 //! `Content-Range` then says: its first part, or for a suffix (the end of
 //! the object) its last.
 

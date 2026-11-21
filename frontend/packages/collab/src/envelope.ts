@@ -15,11 +15,30 @@ export const KIND = {
 
 export type Kind = typeof KIND[keyof typeof KIND]
 
-export interface OpenedCollabFrameV1 {
+/** A frame as opened: its sender, its public header and its plaintext. */
+export interface OpenedCollabFrame {
+  /**
+   * The sender's account (`aci:<uuid>@<server>`), as the server delivered
+   * it. The signature covers it; recipients check that against the
+   * sender's manifest from slice 3 on.
+   */
+  sender: string
   kind: number
   keyGeneration: number
   docKeyId: number
-  senderDeviceId: bigint
+  /** The sender's device, 1..127 within its account. */
+  deviceId: number
+  /** The sender's manifest when it sealed the frame. */
+  manifestSequence: bigint
   sequence: bigint
   plaintext: Uint8Array
+}
+
+/**
+ * One device in a room: device ids are per account, so a peer is its
+ * account and device together. A delivered frame's sender and device id
+ * give the same key as the server's peer list (`account`, `deviceId`).
+ */
+export function peerKey(account: string, deviceId: number): string {
+  return `${account}#${deviceId}`
 }

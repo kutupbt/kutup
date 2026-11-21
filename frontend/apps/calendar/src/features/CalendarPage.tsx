@@ -8,7 +8,7 @@ import { addDays, isCivilDate, step, viewDays, type CivilDate } from '@kutup/cal
 import { localToUtc } from '@kutup/crypto/calendar'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { CalendarSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { ghostCovers, pressDays, pressShiftDays, type DaySpanGhost } from './DaySpan'
@@ -85,7 +85,7 @@ export function CalendarPage() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
-  if (!date || calendars.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (!date || calendars.isPending) return <CalendarSkeleton label={t('common.loading')} />
   if (calendars.isError) return <Alert variant="error">{apiErrorMessage(calendars.error, t('calendars.loadFailed'))}</Alert>
 
   const unreadable = (calendars.data.unreadable ?? 0) + (events.data?.unreadable ?? 0)

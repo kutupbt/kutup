@@ -1,20 +1,22 @@
+import type { IdentityRoot } from './accountRoots'
 import { toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
 
+/** A collection's epoch statement, signed by the account's authority (from its identity root). */
 export async function createCollectionEpochStatement(
-  masterKey: Uint8Array,
+  identityRoot: IdentityRoot,
   collectionKey: Uint8Array,
   collectionId: string,
-  ownerUserId: string,
+  ownerAccountId: string,
   epoch: number,
   previousStatementHash?: string,
 ): Promise<string> {
   const module = await getCryptoWasm()
   return module.createCollectionEpochStatement(
-    toBase64(masterKey),
+    identityRoot,
     toBase64(collectionKey),
     collectionId,
-    ownerUserId,
+    ownerAccountId,
     epoch,
     previousStatementHash ?? '',
   )
@@ -25,7 +27,7 @@ export async function verifyCollectionEpochStatement(
   authorityPublicKeyBase64: string,
   collectionKey: Uint8Array,
   collectionId: string,
-  ownerUserId: string,
+  ownerAccountId: string,
   epoch: number,
   previousStatementHash?: string,
 ): Promise<string> {
@@ -35,7 +37,7 @@ export async function verifyCollectionEpochStatement(
     authorityPublicKeyBase64,
     toBase64(collectionKey),
     collectionId,
-    ownerUserId,
+    ownerAccountId,
     epoch,
     previousStatementHash ?? '',
   )

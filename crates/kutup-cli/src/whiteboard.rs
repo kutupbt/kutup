@@ -68,6 +68,7 @@ pub fn extract_and_upload(
     }
     // The whole scene is a whiteboard's version, with its size, SHA-256 and
     // content hash.
+    let identity = crate::drive_signer::identity(client)?;
     let landed = crate::version_upload::upload_version(
         client,
         &crate::version_upload::NoRecords,
@@ -80,6 +81,7 @@ pub fn extract_and_upload(
             based_on: None,
             progress: crate::uploader::Progress::Quiet,
             crashed_after_secs: crate::version_upload::FILE_CRASHED_AFTER_SECS,
+            signer: identity.signer(),
         },
     )
     .context("store version")?;

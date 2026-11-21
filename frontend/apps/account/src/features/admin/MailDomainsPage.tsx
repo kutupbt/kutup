@@ -12,7 +12,8 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
@@ -23,7 +24,7 @@ import { adminKey } from './api'
 // §11): every custom domain with its owner and states, approving them in
 // the `approve` mode, deactivating one (its name blocked until lifted), the
 // blocked names, the DKIM keys' records to publish, and every
-// `mail_domains.*` setting. Proton has no counterpart: its operators run
+// `mail.domains.*` setting. Proton has no counterpart: its operators run
 // this out of sight.
 
 interface DkimKey {
@@ -69,24 +70,24 @@ interface DomainBlock {
 
 /** The numeric settings, in the order the page shows them; their ranges come from the server. */
 const NUMBERS = [
-  'mail_domains.per_account',
-  'mail_domains.addresses_per_account',
-  'mail_domains.on_server',
-  'mail_domains.adds_per_day',
-  'mail_domains.pending_days',
-  'mail_domains.catch_all_per_day',
-  'mail_domains.grace_warn_days',
-  'mail_domains.grace_stopped_hours',
-  'mail_domains.refreshes_at_once',
-  'mail_domains.check_timeout_seconds',
+  'mail.domains.per_organization',
+  'mail.domains.addresses_per_account',
+  'mail.domains.on_server',
+  'mail.domains.adds_per_day',
+  'mail.domains.pending_days',
+  'mail.domains.catch_all_per_day',
+  'mail.domains.grace_warn_days',
+  'mail.domains.grace_stopped_hours',
+  'mail.domains.refreshes_at_once',
+  'mail.domains.check_timeout_seconds',
 ] as const
 
 const domainsAdminKey = [...adminKey, 'mail', 'domains'] as const
 const blocksKey = [...domainsAdminKey, 'blocks'] as const
 
-/** The settings' i18n key: `mail_domains.per_account` → `perAccount`. */
+/** The settings' i18n key: `mail.domains.per_organization` → `perOrganization`. */
 function settingKey(key: string): string {
-  return key.replace('mail_domains.', '').replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+  return key.replace('mail.domains.', '').replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
 }
 
 export function MailDomainsPage() {
@@ -120,10 +121,10 @@ export function MailDomainsPage() {
   })
   const [ending, setEnding] = useState<AdminDomain | null>(null)
 
-  if (view.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (view.isPending) return <ListSkeleton label={t('common.loading')} rows={4} />
   if (view.isError) return <Alert variant="error">{apiErrorMessage(view.error, t('common.tryAgain'))}</Alert>
   const data = view.data
-  const mode = data.settings['mail_domains.mode'] ?? 'everyone'
+  const mode = data.settings['mail.domains.mode'] ?? 'everyone'
 
   return (
     <PageBody>
@@ -292,7 +293,7 @@ export function MailDomainsPage() {
   )
 }
 
-/** Every `mail_domains.*` setting, checked against its range, saved together. */
+/** Every `mail.domains.*` setting, checked against its range, saved together. */
 function SettingsForm({ settings, ranges, onSaved }: { settings: Record<string, string>; ranges: AdminDomains['ranges']; onSaved: () => void }) {
   const { t } = useTranslation()
   const [values, setValues] = useState(settings)
@@ -318,7 +319,7 @@ function SettingsForm({ settings, ranges, onSaved }: { settings: Record<string, 
       </h2>
       <Field label={t('admin.mailDomains.settings.mode')} description={t('admin.mailDomains.settings.modeHint')}>
         {(props) => (
-          <Select value={values['mail_domains.mode'] ?? 'everyone'} onValueChange={(mode) => setValues({ ...values, 'mail_domains.mode': mode })}>
+          <Select value={values['mail.domains.mode'] ?? 'everyone'} onValueChange={(mode) => setValues({ ...values, 'mail.domains.mode': mode })}>
             <SelectTrigger {...props} className="w-64">
               <SelectValue />
             </SelectTrigger>
@@ -334,7 +335,7 @@ function SettingsForm({ settings, ranges, onSaved }: { settings: Record<string, 
       </Field>
       <Field label={t('admin.mailDomains.settings.catchAll')}>
         {(props) => (
-          <Select value={values['mail_domains.catch_all'] ?? '1'} onValueChange={(on) => setValues({ ...values, 'mail_domains.catch_all': on })}>
+          <Select value={values['mail.domains.catch_all'] ?? '1'} onValueChange={(on) => setValues({ ...values, 'mail.domains.catch_all': on })}>
             <SelectTrigger {...props} className="w-64">
               <SelectValue />
             </SelectTrigger>

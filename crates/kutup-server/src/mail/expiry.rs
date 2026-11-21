@@ -27,12 +27,14 @@ const ALL_FOLDERS: [&str; 9] = [
 
 /// Deletes expired mail every 30 seconds.
 pub fn spawn(state: AppState) {
+    crate::job_health::register("mail.expiry", TICK);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(TICK);
         loop {
             tick.tick().await;
-            if let Err(error) = once(&state).await {
-                tracing::warn!(error = %error, "mail: deleting expired mail failed");
+            match once(&state).await {
+                Ok(_) => crate::job_health::beat(&state.pool, "mail.expiry").await,
+                Err(error) => tracing::warn!(error = %error, "mail: deleting expired mail failed"),
             }
         }
     });
@@ -43,8 +45,9 @@ pub async fn once(state: &AppState) -> anyhow::Result<u64> {
     let mut deleted = 0;
     loop {
         let due: Vec<(Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
-            "SELECT id, user_id, group_id FROM mail_messages
+            "SELECT id, account_id, group_id FROM mail_messages
               WHERE expires_at IS NOT NULL AND expires_at <= now()
+                AND (account_id IS NULL OR NOT kutup_account_held(account_id))
               ORDER BY expires_at LIMIT 500",
         )
         .fetch_all(&state.pool)

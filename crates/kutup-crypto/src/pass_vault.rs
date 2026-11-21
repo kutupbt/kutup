@@ -3,7 +3,7 @@
 //! A vault is a KeePass file in Drive with its own composite key (a password,
 //! a key file, or both), so KeePass apps keep opening it. Kutup Pass and
 //! `kutup sync` unlock it with the Kutup sign-in, as Proton Pass does: the
-//! vault's key is kept in an [`account_envelope`] under the master key
+//! vault's key is kept in an [`account_record`] under the master key
 //! (purpose `PassVaultSecret`, the vault's file id as the header's object),
 //! one per person and vault, stored by the server and unreadable to it.
 //!
@@ -25,10 +25,10 @@
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::account_envelope::{self, AccountEnvelopePurpose};
+use crate::account_record::{self, AccountRecordPurpose};
 use crate::error::{CryptoError, Result};
 
-const DOMAIN: &[u8] = b"kutup/pass-vault-secret/v2\0";
+const DOMAIN: &[u8] = crate::labels::PASS_VAULT_SECRET_V2;
 const HAS_PASSWORD_HASH: u8 = 1;
 const HAS_KEY_FILE: u8 = 2;
 const HAS_GENERATED_PASSWORD: u8 = 4;
@@ -185,18 +185,21 @@ fn take_value<'a>(rest: &mut &'a [u8]) -> Result<&'a [u8]> {
 }
 
 /// Seals revision `revision` of the secret of vault `file_id` (the Drive
-/// file's UUID bytes) under the master key, for the account's key binding.
+/// file's UUID bytes) under the master key of `generation`, for the
+/// account's key binding.
 pub fn seal_vault_secret(
     master_key: &[u8],
+    generation: account_record::MasterKeyGeneration,
     binding: &str,
     file_id: &[u8; 16],
     revision: u64,
     secret: &VaultSecret,
 ) -> Result<Vec<u8>> {
-    account_envelope::seal_revision(
+    account_record::seal_revision(
         &payload(file_id, secret)?,
         master_key,
-        AccountEnvelopePurpose::PassVaultSecret,
+        AccountRecordPurpose::PassVaultSecret,
+        generation,
         binding,
         file_id,
         revision,
@@ -206,17 +209,19 @@ pub fn seal_vault_secret(
 /// [`seal_vault_secret`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_vault_secret_with_nonce(
     master_key: &[u8],
+    generation: account_record::MasterKeyGeneration,
     binding: &str,
     file_id: &[u8; 16],
     revision: u64,
     secret: &VaultSecret,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
-    account_envelope::seal_suite(
-        account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
+    account_record::seal_suite(
+        account_record::AccountRecordSuiteId::V1,
         &payload(file_id, secret)?,
         master_key,
-        AccountEnvelopePurpose::PassVaultSecret,
+        AccountRecordPurpose::PassVaultSecret,
+        generation,
         binding,
         file_id,
         Some(revision),
@@ -232,10 +237,10 @@ pub fn open_vault_secret(
     binding: &str,
     file_id: &[u8; 16],
 ) -> Result<(VaultSecret, u64)> {
-    let (plain, revision) = account_envelope::open_revision(
+    let (plain, revision) = account_record::open_revision(
         envelope,
         master_key,
-        AccountEnvelopePurpose::PassVaultSecret,
+        AccountRecordPurpose::PassVaultSecret,
         binding,
         file_id,
     )?;
@@ -317,7 +322,15 @@ mod tests {
             VaultSecret::generated("abcd-efgh-ijkl", None),
             VaultSecret::generated("abcd-efgh-ijkl", Some(b"kf")),
         ] {
-            let sealed = seal_vault_secret(&MASTER, BINDING, &VAULT, 7, &s).unwrap();
+            let sealed = seal_vault_secret(
+                &MASTER,
+                crate::account_record::MasterKeyGeneration::FIRST,
+                BINDING,
+                &VAULT,
+                7,
+                &s,
+            )
+            .unwrap();
             assert_eq!(
                 open_vault_secret(&sealed, &MASTER, BINDING, &VAULT).unwrap(),
                 (s, 7)
@@ -330,11 +343,19 @@ mod tests {
     #[allow(clippy::disallowed_types)]
     fn a_chosen_password_is_kept_only_as_keepass_hashes_it() {
         let s = VaultSecret::chosen(Some("parola-çğ"), None);
-        let sealed = seal_vault_secret(&MASTER, BINDING, &VAULT, 7, &s).unwrap();
-        let (plain, _) = account_envelope::open_revision(
+        let sealed = seal_vault_secret(
+            &MASTER,
+            crate::account_record::MasterKeyGeneration::FIRST,
+            BINDING,
+            &VAULT,
+            7,
+            &s,
+        )
+        .unwrap();
+        let (plain, _) = account_record::open_revision(
             &sealed,
             &MASTER,
-            AccountEnvelopePurpose::PassVaultSecret,
+            AccountRecordPurpose::PassVaultSecret,
             BINDING,
             &VAULT,
         )
@@ -360,6 +381,7 @@ mod tests {
     fn bound_to_the_vault_the_account_and_the_key() {
         let sealed = seal_vault_secret(
             &MASTER,
+            crate::account_record::MasterKeyGeneration::FIRST,
             BINDING,
             &VAULT,
             7,
@@ -380,10 +402,11 @@ mod tests {
     /// Seals `payload` as a vault secret's envelope as is, to hand the
     /// parser what sealing never makes.
     fn sealed_raw(payload: &[u8]) -> Vec<u8> {
-        account_envelope::seal_revision(
+        account_record::seal_revision(
             payload,
             &MASTER,
-            AccountEnvelopePurpose::PassVaultSecret,
+            AccountRecordPurpose::PassVaultSecret,
+            crate::account_record::MasterKeyGeneration::FIRST,
             BINDING,
             &VAULT,
             7,
@@ -412,9 +435,16 @@ mod tests {
         ]
         .iter()
         .map(|s| {
-            seal_vault_secret(&MASTER, BINDING, &VAULT, 7, s)
-                .unwrap()
-                .len()
+            seal_vault_secret(
+                &MASTER,
+                crate::account_record::MasterKeyGeneration::FIRST,
+                BINDING,
+                &VAULT,
+                7,
+                s,
+            )
+            .unwrap()
+            .len()
         })
         .collect();
         assert_eq!(sizes.len(), 1, "{sizes:?}");
@@ -445,22 +475,26 @@ mod tests {
             p.extend_from_slice(&[0, 0]);
             assert!(open(&p).is_err(), "empty, flags {flags}");
         }
-        // Another vault's id, or the v1 domain.
+        // Another vault's id.
         let mut other = DOMAIN.to_vec();
         other.extend_from_slice(&[2; 16]);
         other.push(HAS_PASSWORD_HASH);
         other.extend_from_slice(&[3; 32]);
         assert!(open(&other).is_err());
-        let mut v1 = b"kutup/pass-vault-secret/v1\0".to_vec();
-        v1.extend_from_slice(&VAULT);
-        v1.push(1);
-        v1.extend_from_slice(&[0, 1, b'p']);
-        assert!(open(&v1).is_err());
     }
 
     #[test]
     fn refuses_empty_doubled_and_oversized_secrets() {
-        let seal = |s: &VaultSecret| seal_vault_secret(&MASTER, BINDING, &VAULT, 7, s);
+        let seal = |s: &VaultSecret| {
+            seal_vault_secret(
+                &MASTER,
+                crate::account_record::MasterKeyGeneration::FIRST,
+                BINDING,
+                &VAULT,
+                7,
+                s,
+            )
+        };
         assert!(seal(&VaultSecret::chosen(None, None)).is_err());
         let mut both = VaultSecret::chosen(Some("a"), None);
         both.generated_password = Some(Zeroizing::new("b".into()));

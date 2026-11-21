@@ -31,7 +31,7 @@ export function ReportLinkDialog({ token, open, onClose }: { token: string; open
   function send() {
     setStatus('sending')
     api
-      .post(`/share/${encodeURIComponent(token)}/report`, {
+      .post(`/drive/public-links/${encodeURIComponent(token)}/report`, {
         reason,
         details: details.trim(),
         link: shareLink ? window.location.href : null,

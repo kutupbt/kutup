@@ -91,6 +91,7 @@
     "loading": "Açılıyor…",
     "loadingVideo": "Video indiriliyor…",
     "videoTooLarge": "Bu video burada oynatmak için fazla büyük. İzlemek için indirin.",
+    "tooManyStreams": "Bu sekmede çok fazla video oynuyor. Bunu oynatmak için birini kapatın.",
     "failed": "Bu açılamadı. Yeniden deneyin ya da indirin.",
     "cannotDraw": "Bu tarayıcı bu biçimi gösteremiyor. Önizlemesi gösteriliyor.",
     "showingPreview": "Önizleme gösteriliyor: özgün dosya burada açmak için fazla büyük.",
@@ -318,9 +319,14 @@
       "notFound": "Bağlantı yok ya da albüm silinmiş veya bağlantı kaldırılmış.",
       "expired": "Bağlantının süresi dolmuş.",
       "removed": "Sunucunun yöneticileri bu bağlantıyı kaldırdı.",
+      "blocked": "Sunucunun işletmecileri bu bağlantıyı engelledi.",
+      "blockedLegal": "Bu bağlantı hukuki nedenlerle kullanılamıyor: sunucunun işletmecileri bir yasal karar üzerine engelledi.",
+      "sharingOff": "Herkese açık bağlantılar şu an bu sunucuda kapalı.",
+      "signInRequired": "Bu sunucuda herkese açık bağlantılar yalnızca oturum açmış kişiler için açılır. Oturum açın, sonra bağlantıyı yeniden açın.",
       "badKey": "Bağlantının anahtarı bu albümü açmıyor. Bağlantının tamamını isteyin.",
       "notAlbum": "Bu bağlantı bir albüme değil.",
-      "other": "Bir şeyler ters gitti. Yeniden deneyin."
+      "other": "Bir şeyler ters gitti. Yeniden deneyin.",
+      "newerLink": "Bu bağlantı daha yeni bir Kutup gerektiriyor. Bu sunucunun çalıştırdığından daha yeni bir Kutup sürümüyle oluşturulmuş."
     }
   }
 }

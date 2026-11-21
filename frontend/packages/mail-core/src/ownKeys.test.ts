@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
+import { toBase64 } from '@kutup/crypto/base64'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../crypto/src/rustWasm', async () => {
   const [{ readFile }, module] = await Promise.all([
@@ -11,19 +13,20 @@ vi.mock('../../crypto/src/rustWasm', async () => {
 })
 vi.mock('@kutup/session/client', () => ({ default: {} }))
 
-import { generateMailAddressKey, MAIL_KEY_FLAGS, signMailKeyList, toBase64 } from '@kutup/crypto'
+import { generateMailAddressKey, MAIL_KEY_FLAGS, signMailKeyList } from '@kutup/crypto'
 import { resetRevisionGuardsForTesting } from '@kutup/crypto/revisionGuard'
 import { checkedAddresses, missingKeys, OwnKeyListRolledBack } from './keyList'
 import { randomBytes } from '@kutup/crypto/random'
+import { asIdentityRoot, testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const both = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete
 const BINDING = crypto.randomUUID()
 
 /** An address row as the server lists it, with its key and the list the account signed (sequence `sequence`). */
 async function ownRow(masterKey: Uint8Array, address: string, sequence = 1, listed = address) {
-  const master = toBase64(masterKey)
-  const key = await generateMailAddressKey(master, BINDING, address)
-  const list = await signMailKeyList(master, {
+  const key = await generateMailAddressKey(firstMasterKeys(masterKey), BINDING, address)
+  // The tests' identity root is the same bytes as the master key.
+  const list = await signMailKeyList(asIdentityRoot(toBase64(masterKey)), {
     address: listed,
     sequence,
     // A later list follows one before it (any hash will do here).
@@ -48,7 +51,7 @@ beforeEach(() => resetRevisionGuardsForTesting())
 
 describe('the account’s own addresses, checked against its own authority', () => {
   const masterKey = randomBytes(32)
-  const session = { masterKey, userId: 'me' }
+  const session = { masterKeys: firstMasterKeys(masterKey), roots: testRoots(masterKey), accountId: 'me', envelopeBinding: BINDING }
 
   it('names a key the account only when its public key has the signed fingerprints', async () => {
     const { row } = await ownRow(masterKey, 'ada@kutup.test')
@@ -57,7 +60,7 @@ describe('the account’s own addresses, checked against its own authority', () 
     expect(checked.keys[0].listed).toBe(true)
     expect(missingKeys(checked)).toEqual([])
     // The server swaps in a key of its own under the signed fingerprints.
-    const other = await generateMailAddressKey(toBase64(randomBytes(32)), BINDING, 'ada@kutup.test')
+    const other = await generateMailAddressKey(firstMasterKeys(randomBytes(32)), BINDING, 'ada@kutup.test')
     const [swapped] = await checkedAddresses(session, [{ ...row, keys: [{ ...row.keys[0], publicKey: other.publicKey }] }])
     expect(swapped.keys[0].listed).toBe(false)
     expect(missingKeys(swapped).map((entry) => entry.fingerprint)).toEqual([row.keys[0].fingerprint])
@@ -87,7 +90,7 @@ describe('the account’s own addresses, checked against its own authority', () 
     // first list at sequence 1 is no rollback of the old one's 5.
     const reset = randomBytes(32)
     const { row: fresh } = await ownRow(reset, 'max@kutup.test', 1)
-    const [checked] = await checkedAddresses({ masterKey: reset, userId: 'me' }, [fresh], { strict: true })
+    const [checked] = await checkedAddresses({ masterKeys: firstMasterKeys(reset), roots: testRoots(reset), accountId: 'me', envelopeBinding: BINDING }, [fresh], { strict: true })
     expect(checked.verifiedList?.sequence).toBe(1)
     // The old authority's count still stands.
     const { row: older } = await ownRow(masterKey, 'max@kutup.test', 4)

@@ -3,7 +3,7 @@
 // lock and never lets go or says it is alive, as a frozen tab does; her other
 // tab must take it over and keep working, instead of waiting for ever.
 
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { apiUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 
@@ -29,7 +29,7 @@ test('a tab frozen while holding the chat lock does not stall the other tabs', a
     const request = locks.request.bind(locks) as (...args: unknown[]) => Promise<unknown>
     window.__chatEngineLocks = new Set()
     locks.request = ((name: string, ...rest: unknown[]) => {
-      if (/^kutup-chat-engine:/.test(name) && !/:attachment-ledger$/.test(name)) {
+      if (/^kutup\.chat\.engine:/.test(name)) {
         window.__chatEngineLocks!.add(name)
       }
       return request(name, ...rest)

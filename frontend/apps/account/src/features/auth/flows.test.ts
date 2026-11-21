@@ -7,13 +7,29 @@ vi.mock('@kutup/session/client', () => ({ default: { post, get: vi.fn() } }))
 vi.mock('@kutup/session/persist', () => ({ persistKeys: vi.fn() }))
 const crypto_ = vi.hoisted(() => ({
   toBase64: () => 'master',
-  decryptPrivateKey: vi.fn(() => Promise.resolve(new Uint8Array(32))),
-  generateAccountKeySet: vi.fn((binding: string) => Promise.resolve({ mnemonic: 'words', masterKey: new Uint8Array(32), recoveryProof: `proof-${binding}` })),
+  driveKeysOf: vi.fn(() => Promise.resolve({ publicKey: 'p', privateKey: new Uint8Array(32) })),
+  generateAccountKeySet: vi.fn((binding: string) => Promise.resolve({ mnemonic: 'words', masterKey: new Uint8Array(32), roots: testRoots(0), recoveryProof: `proof-${binding}` })),
   rebindAccountKeySet: vi.fn((keys: { mnemonic: string }, binding: string) =>
-    Promise.resolve({ mnemonic: keys.mnemonic, masterKey: new Uint8Array(32), recoveryProof: `proof-${binding}`, recoveryKeyEnvelope: `recovery-${binding}` }),
+    Promise.resolve({ mnemonic: keys.mnemonic, masterKey: new Uint8Array(32), roots: testRoots(0), recoveryProof: `proof-${binding}`, recoveryKeyEnvelope: `recovery-${binding}` }),
   ),
 }))
 vi.mock('@kutup/crypto', () => crypto_)
+const roots_ = vi.hoisted(() => ({
+  openAccountRoots: vi.fn(() =>
+    Promise.resolve({ identityGeneration: 1, identityRoot: 'id', driveGeneration: 1, driveRoot: 'd', pseudonymGeneration: 1, pseudonymRoot: 'p', callLinkGeneration: 1, callLinkRoot: 'c', objectIdGeneration: 1, objectIdKey: 'o' }),
+  ),
+  isIdentityRootMismatch: (error: unknown) => String(error).includes('identityRootMismatch'),
+}))
+vi.mock('@kutup/crypto/accountRoots', () => roots_)
+// The set the keyring gives (its own tests are Rust's and the WASM's).
+const masterKeys_ = vi.hoisted(() => ({
+  openMasterKeys: vi.fn(() => Promise.resolve('master-keys')),
+  masterKeyGeneration: () => 1,
+  currentMasterKeyAt: () => ({ key: new Uint8Array(32).fill(7), generation: 1 }),
+  firstMasterKeys: () => 'first-master-keys',
+  FIRST_MASTER_KEY_GENERATION: 1,
+}))
+vi.mock('@kutup/crypto/masterKeys', () => masterKeys_)
 const registrar = vi.hoisted(() => ({ register: vi.fn(), close: vi.fn() }))
 vi.mock('@kutup/crypto/opaqueWorker', () => ({ startOpaqueRegistration: vi.fn(() => Promise.resolve(registrar)) }))
 const signDriveKeyBinding = vi.hoisted(() => vi.fn(() => Promise.resolve('binding')))
@@ -33,8 +49,11 @@ vi.mock('@kutup/session/opaque', () => opaque)
 // What it activated: the keys given (the session layer's upgrade is tested there).
 const activateSession = vi.hoisted(() => vi.fn((keys: unknown) => Promise.resolve(keys)))
 vi.mock('@kutup/session/profile', () => ({ activateSession }))
+const store = vi.hoisted(() => ({ setAccessToken: vi.fn(), clearSession: vi.fn() }))
+vi.mock('@kutup/session/store', () => store)
 
-import { abandonTotp, completeTotp, generateAccountKeys, registerAndSignIn, RegistrationConflictError, signIn } from './flows'
+import { abandonTotp, AccountKeysMismatchError, completeTotp, generateAccountKeys, registerAndSignIn, RegistrationConflictError, signIn } from './flows'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 function refused(status: number, code?: string): AxiosError {
   const response = { status, data: code ? { error: 'refused', code } : { error: 'slow down' }, headers: {}, config: { headers: new AxiosHeaders() }, statusText: '' } as AxiosResponse
@@ -50,6 +69,7 @@ const keys = () =>
     accountIdProof: 'proof',
     mnemonic: 'words',
     masterKey: new Uint8Array(32),
+    roots: testRoots(0),
     privateKey: new Uint8Array(32),
     publicKey: new Uint8Array(32),
     keyBinding: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70',
@@ -71,9 +91,41 @@ function openSignIn() {
   return { request: 'ke1', finish: vi.fn(), openMasterKey: vi.fn(() => Promise.resolve(new Uint8Array(32))), register: vi.fn(), close: vi.fn() }
 }
 
-const session = { accessToken: 'a', sessionId: 's', userId: 'u', username: 'alice', masterKeyEnvelope: 'm', drivePrivateKeyEnvelope: 'd', publicKey: 'p', keyBinding: 'kb' }
+const session = { accessToken: 'a', sessionId: 's', accountId: 'u', username: 'alice', masterKeyEnvelope: 'm', driveXwingPublicKey: 'p', keyBinding: 'kb' }
 
 describe('signIn', () => {
+  it('ends the sign-in and drops the keys when the server publishes another Drive key', async () => {
+    const masterKey = new Uint8Array(32).fill(7)
+    const driveKey = new Uint8Array(32).fill(9)
+    const opened = { ...openSignIn(), openMasterKey: vi.fn(() => Promise.resolve(masterKey)) }
+    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, driveXwingPublicKey: 'other' }, signIn: opened })
+    crypto_.driveKeysOf.mockResolvedValueOnce({ publicKey: 'p', privateKey: driveKey })
+    post.mockResolvedValue({ data: {} })
+    await expect(signIn('alice', 'pw')).rejects.toThrow('another Drive key')
+    expect(store.setAccessToken).toHaveBeenCalledWith('a')
+    expect(post).toHaveBeenCalledWith('/auth/logout')
+    expect(store.clearSession).toHaveBeenCalled()
+    expect(masterKey.every((byte) => byte === 0)).toBe(true)
+    expect(driveKey.every((byte) => byte === 0)).toBe(true)
+    expect(activateSession).not.toHaveBeenCalled()
+    expect(opened.close).toHaveBeenCalled()
+  })
+
+  it('refuses keys whose newest identity root is not the account’s, and ends the sign-in', async () => {
+    const masterKey = new Uint8Array(32).fill(7)
+    const opened = { ...openSignIn(), openMasterKey: vi.fn(() => Promise.resolve(masterKey)) }
+    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, accountRoots: ['r'], accountAuthorityPublicKey: 'a' }, signIn: opened })
+    roots_.openAccountRoots.mockRejectedValueOnce(new Error('identityRootMismatch: the newest identity root (generation 2) does not derive this account\'s authority'))
+    post.mockResolvedValue({ data: {} })
+    await expect(signIn('alice', 'pw')).rejects.toBeInstanceOf(AccountKeysMismatchError)
+    expect(roots_.openAccountRoots).toHaveBeenCalledWith('master-keys', 'kb', ['r'], 'a')
+    expect(post).toHaveBeenCalledWith('/auth/logout')
+    expect(store.clearSession).toHaveBeenCalled()
+    expect(masterKey.every((byte) => byte === 0)).toBe(true)
+    expect(activateSession).not.toHaveBeenCalled()
+    expect(opened.close).toHaveBeenCalled()
+  })
+
   it('registers nothing again unless the server asks, and ends the sign-in', async () => {
     const opened = openSignIn()
     opaque.opaqueLogin.mockResolvedValue({ data: session, signIn: opened })
@@ -87,7 +139,7 @@ describe('signIn', () => {
     opaque.opaqueLogin.mockResolvedValue({ data: { ...session, rotate: true, grant: 'kg1_rotate' }, signIn: opened })
     opaque.reregisterWith.mockRejectedValue(new Error('offline'))
     await expect(signIn('alice', 'pw')).resolves.toEqual({ kind: 'signedIn' })
-    expect(opaque.reregisterWith).toHaveBeenCalledWith(opened, 'kb', expect.any(Uint8Array), 'kg1_rotate')
+    expect(opaque.reregisterWith).toHaveBeenCalledWith(opened, 'kb', { key: expect.any(Uint8Array), generation: 1 }, 'kg1_rotate')
     expect(opened.close).toHaveBeenCalled()
   })
 
@@ -102,7 +154,7 @@ describe('signIn', () => {
     post.mockResolvedValue({ data: { ...session, rotate: true, grant: 'kg1_rotate' } })
     opaque.reregisterWith.mockResolvedValue(undefined)
     await completeTotp(result.challenge, '123456')
-    expect(opaque.reregisterWith).toHaveBeenCalledWith(opened, 'kb', expect.any(Uint8Array), 'kg1_rotate')
+    expect(opaque.reregisterWith).toHaveBeenCalledWith(opened, 'kb', { key: expect.any(Uint8Array), generation: 1 }, 'kg1_rotate')
     expect(opened.close).toHaveBeenCalled()
   })
 
@@ -138,7 +190,7 @@ describe('generateAccountKeys', () => {
 
 describe('registerAndSignIn', () => {
   it('creates the account once, and its session comes with it; the password worker ends', async () => {
-    post.mockResolvedValue({ data: { userId: 'u1', accessToken: 'a', sessionId: 's' } })
+    post.mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a', sessionId: 's' } })
     activateSession.mockRejectedValueOnce(new Error('storage'))
     const k = keys()
     await expect(registerAndSignIn('a', k)).rejects.toThrow('storage')
@@ -167,7 +219,7 @@ describe('registerAndSignIn', () => {
   })
 
   it('registers again after a failed registration', async () => {
-    post.mockRejectedValueOnce(refused(429)).mockResolvedValue({ data: { userId: 'u1', accessToken: 'a' } })
+    post.mockRejectedValueOnce(refused(429)).mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a' } })
     const k = keys()
     await expect(registerAndSignIn('a', k)).rejects.toBeInstanceOf(AxiosError)
     await registerAndSignIn('a', k)
@@ -175,12 +227,12 @@ describe('registerAndSignIn', () => {
   })
 
   it('a record made under a server key since changed is made again, same binding, and sent once more', async () => {
-    post.mockRejectedValueOnce(refused(409, 'opaqueKeyStale')).mockResolvedValue({ data: { userId: 'u1', accessToken: 'a' } })
+    post.mockRejectedValueOnce(refused(409, 'opaqueKeyStale')).mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a' } })
     const second = '22222222-2222-4222-8222-222222222222'
     opaque.registerWith.mockResolvedValue({ opaqueRecord: 'record-2', opaqueServerKeyId: 2, masterKeyEnvelope: 'envelope-2', accountId: second, accountIdProof: 'proof-2' })
     const k = keys()
     await registerAndSignIn('a', k)
-    expect(opaque.registerWith).toHaveBeenCalledWith(registrar, k.keyBinding, k.masterKey, null)
+    expect(opaque.registerWith).toHaveBeenCalledWith(registrar, k.keyBinding, { key: k.masterKey, generation: 1 }, null)
     // The new start minted a new id: the binding names that one.
     expect(post.mock.calls[1][1]).toMatchObject({ keyBinding: k.keyBinding, opaqueRecord: 'record-2', opaqueServerKeyId: 2, accountId: second, accountIdProof: 'proof-2' })
     expect(signDriveKeyBinding).toHaveBeenLastCalledWith(expect.any(String), { server: 'kutup.dev', accountId: second }, 1)
@@ -188,7 +240,7 @@ describe('registerAndSignIn', () => {
   })
 
   it('a binding taken meanwhile is drawn again: the records sealed again, the phrase kept', async () => {
-    post.mockRejectedValueOnce(refused(409, 'keyBindingTaken')).mockResolvedValue({ data: { userId: 'u1', accessToken: 'a' } })
+    post.mockRejectedValueOnce(refused(409, 'keyBindingTaken')).mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a' } })
     opaque.registerWith.mockResolvedValue({ opaqueRecord: 'record-2', opaqueServerKeyId: 1, masterKeyEnvelope: 'envelope-2' })
     const k = keys()
     await registerAndSignIn('a', k)
@@ -210,7 +262,7 @@ describe('registerAndSignIn', () => {
 
 describe('completeSetup', () => {
   it('sends the new keys with their Drive key binding', async () => {
-    post.mockResolvedValue({ data: { userId: 'u1', accessToken: 'a', sessionId: 's' } })
+    post.mockResolvedValue({ data: { accountId: 'u1', accessToken: 'a', sessionId: 's' } })
     const { completeSetup } = await import('./flows')
     const accountId = '33333333-3333-4333-8333-333333333333'
     await completeSetup({ name: 'a@kutup.dev', username: 'a', accountId, setupToken: 'setup' }, keys())

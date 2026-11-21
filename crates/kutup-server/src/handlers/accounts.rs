@@ -1,7 +1,7 @@
 //! Accounts by their permanent id (docs/plans/account-ids.md): what a client
 //! holding someone's (server, account id) asks to show them by their address
 //! now, or to read their identity again. Names reach an id only through the
-//! address lookup (`/api/users/by-address`); everything else asks by id.
+//! address lookup (`/api/v1/accounts/by-address`); everything else asks by id.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -22,7 +22,7 @@ use crate::drive_federation::{
 use kutup_crypto::account_ref::AccountRef;
 
 use crate::error::{AppError, AppResult};
-use crate::middleware::AuthUser;
+use crate::middleware::AuthAccount;
 use crate::AppState;
 
 const MAX_IDENTITY_RESPONSE_BYTES: usize = 64 * 1024;
@@ -38,6 +38,7 @@ pub struct ByIdQuery {
 pub(crate) async fn local_identity(
     state: &AppState,
     id: Uuid,
+    for_peer: bool,
 ) -> AppResult<Option<AccountLookupResponse>> {
     type Row = (
         String,
@@ -50,12 +51,17 @@ pub(crate) async fn local_identity(
         i32,
     );
     let row: Option<Row> = sqlx::query_as(
-        "SELECT username, public_key, account_incarnation_id, drive_signing_public_key,
-                account_authority_public_key, drive_key_binding, identity_suite,
+        "SELECT username, kutup_b64(drive_xwing_public_key), encode(account_incarnation_id, 'hex'),
+                kutup_b64(drive_signing_public_key),
+                kutup_b64(account_authority_public_key), kutup_b64(drive_key_binding), identity_suite,
                 drive_key_binding_epoch
-           FROM users WHERE id = $1 AND is_active AND NOT is_first_login AND username IS NOT NULL",
+           FROM accounts WHERE id = $1 AND state = 'active' AND keys_set_up_at IS NOT NULL AND username IS NOT NULL
+            -- To another server, an account that doesn't talk to other
+            -- servers is no account (crate::federation_switch).
+            AND (NOT $2 OR kutup_account_federates(id))",
     )
     .bind(id)
+    .bind(for_peer)
     .fetch_optional(&state.pool)
     .await?;
     let server = state.config.chat_server_name.clone();
@@ -66,7 +72,7 @@ pub(crate) async fn local_identity(
                 username,
                 server,
                 account_id: id.to_string(),
-                drive_hpke_public_key: hpke,
+                drive_xwing_public_key: hpke,
                 account_incarnation_id: incarnation,
                 drive_signing_public_key: signing,
                 account_authority_public_key: authority,
@@ -131,7 +137,7 @@ pub(crate) fn forget_remote(server: &str, incarnation_id: &str) {
     });
 }
 
-/// `GET /api/users/by-id/{accountId}?server=` — an account by its permanent
+/// `GET /api/v1/accounts/{accountId}?server=` — an account by its permanent
 /// id: its address now (server-asserted, shown as a label) and its identity.
 /// Another server's is asked of it through federation (its pinned identity,
 /// never a URL from the query): one fetch per account at a time, whose
@@ -140,7 +146,7 @@ pub(crate) fn forget_remote(server: &str, incarnation_id: &str) {
 /// so nobody's lookups use up anyone else's.
 #[utoipa::path(
     get,
-    path = "/api/users/by-id/{accountId}",
+    path = "/api/v1/accounts/{accountId}",
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("accountId" = String, Path, description = "Permanent account id"), ByIdQuery),
@@ -151,7 +157,7 @@ pub(crate) fn forget_remote(server: &str, incarnation_id: &str) {
 )]
 pub async fn by_id(
     State(state): State<AppState>,
-    user: AuthUser,
+    user: AuthAccount,
     Path(account_id): Path<String>,
     Query(query): Query<ByIdQuery>,
 ) -> AppResult<Response> {
@@ -161,12 +167,19 @@ pub async fn by_id(
     let person = crate::account_ids::remote(&server, &account_id)?;
     if person.server == local_server {
         let id = Uuid::parse_str(&person.account_id).expect("canonical");
-        return local_identity(&state, id)
+        return local_identity(&state, id, false)
             .await?
             .map(|found| Json(found).into_response())
             .ok_or_else(|| AppError::not_found("no such account"));
     }
-    remote_account(&state, &user.user_id, &person)
+    // Another server: only for an account that talks to them
+    // (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.account_id)?,
+    )
+    .await?;
+    remote_account(&state, &user.account_id, &person)
         .await?
         .map(|found| Json(found).into_response())
         .ok_or_else(|| AppError::not_found("no such account"))
@@ -212,7 +225,7 @@ async fn fetch(state: &AppState, person: &AccountRef) -> AppResult<Fetched> {
             &person.server,
             drive_spec(
                 reqwest::Method::GET,
-                format!("/api/fed/drive/accounts/{}", person.account_id),
+                format!("/api/fed/v2/drive/accounts/{}", person.account_id),
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 None,
@@ -244,12 +257,12 @@ async fn fetch(state: &AppState, person: &AccountRef) -> AppResult<Fetched> {
     Ok(Fetched::Found(Box::new(remote)))
 }
 
-/// `GET /api/fed/drive/accounts/{accountId}` — signed: this server's account
+/// `GET /api/fed/v2/drive/accounts/{accountId}` — signed: this server's account
 /// by its permanent id, for a peer whose user holds it.
 #[utoipa::path(
     get,
-    path = "/api/fed/drive/accounts/{accountId}",
-    tag = "drive federation",
+    path = "/api/fed/v2/drive/accounts/{accountId}",
+    tag = "drive.federation",
     params(("accountId" = String, Path)),
     responses(
         (status = 200, description = "The account", body = AccountLookupResponse),
@@ -262,7 +275,7 @@ pub async fn fed_by_id(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let path = format!("/api/fed/drive/accounts/{account_id}");
+    let path = format!("/api/fed/v2/drive/accounts/{account_id}");
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -278,6 +291,7 @@ pub async fn fed_by_id(
         local_identity(
             &state,
             Uuid::parse_str(&person.account_id).expect("canonical"),
+            true,
         )
         .await?
         .ok_or_else(|| AppError::not_found("no such account"))
@@ -327,7 +341,7 @@ mod tests {
             server: server.into(),
             account_id: id.into(),
             account: format!("old_name@{server}"),
-            drive_hpke_public_key: String::new(),
+            drive_xwing_public_key: String::new(),
             account_incarnation_id: incarnation.into(),
             drive_signing_public_key: String::new(),
             account_authority_public_key: String::new(),

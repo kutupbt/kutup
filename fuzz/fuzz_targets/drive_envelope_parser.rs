@@ -3,20 +3,11 @@
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES};
 use kutup_crypto::envelope;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    if data.len() >= FILE_BLOB_HEADER_BYTES {
-        let header = &data[..FILE_BLOB_HEADER_BYTES];
-        let _ = drive_object::inspect_file_blob_header(header);
-        let context = DriveFileBlobContextV1::new("22222222-2222-4222-8222-222222222222", 1)
-            .expect("fixed fuzz context is valid");
-        let _ = drive_object::validate_file_blob_header(header, context);
-        let _ = drive_object::decrypt_file_blob(data, &[0x5a; 32], context);
-    }
     if let Ok(statement) = CollectionEpochStatementV1::decode(data) {
         let _ = statement.verify_authority(&[0x41; 32]);
         let _ = statement.verify_collection_key(&[0x42; 32]);
@@ -39,7 +30,10 @@ fuzz_target!(|data: &[u8]| {
         );
     }
     let _ = envelope::Frame::unpack(data);
-    let _ = envelope::verify(data, &[0x41; 32]);
+    let sender = AccountRef::new("a.test", "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70")
+        .expect("fixed fuzz account is valid");
+    let _ = envelope::verify(data, &sender, &[0x41; 32]);
+    let _ = envelope::delivered(data);
     let _ = envelope::open(data, &[0x42; 32], "22222222-2222-4222-8222-222222222222", 1);
     let _ = drive_envelope::inspect(data);
     for purpose in [

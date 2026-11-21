@@ -48,10 +48,15 @@ pub struct GroupAccountKeys {
 }
 
 impl GroupAccountKeys {
-    pub fn derive(master_key: &[u8; 32]) -> crate::error::Result<Self> {
+    /// From the account's identity root and group pseudonym root (stored
+    /// roots, docs/plans/identity-root.md).
+    pub fn derive(
+        identity_root: &kutup_crypto::account_roots::IdentityRoot,
+        pseudonym_root: &kutup_crypto::account_roots::GroupPseudonymRoot,
+    ) -> crate::error::Result<Self> {
         Ok(Self {
-            authority: crate::manifest::AccountAuthority::derive(master_key)?,
-            pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey::derive(master_key),
+            authority: crate::manifest::AccountAuthority::derive(identity_root)?,
+            pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey::derive(pseudonym_root),
         })
     }
 }
@@ -286,8 +291,15 @@ pub fn home_of(pin: &GroupHomePinV1) -> kutup_crypto::chat_group::GroupHome<'_> 
 }
 
 /// The master key `master_key` (base64) of the group `group_id` at `home`:
-/// refused unless the key at that home is that group's. A member who keeps
-/// the key can't move the group to a home of theirs.
+/// refused unless the key at that home is that group's. The id binds the
+/// home's identity document (hash and sequence), not the server's name
+/// (docs/plans/identity-rotation.md §6), so a member who keeps the key can't
+/// move the group to a home of another identity. The name `home` gives is
+/// checked where the home is reached: its identity history, fetched from
+/// that server, must follow from the pinned document, which names its server
+/// under the home's signature (`GatewayCache::refresh`, before any request,
+/// and the recovery's check), so a pin naming another server with the true
+/// document gets nothing signed sent there.
 pub fn master_at(
     master_key: &str,
     group_id: &str,

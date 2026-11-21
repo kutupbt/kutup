@@ -1,4 +1,5 @@
-import { sealedAt } from '@kutup/drive-core/keyring'
+import { currentContentOf } from '@kutup/drive-core/keyring'
+import { driveStreamLimits } from '@kutup/files/stream/limits'
 import { contentPath, fileLocation, folderLocation } from '@kutup/drive-core/model'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
 import { openDownloadSink } from '@kutup/files/download/streamDownload'
@@ -18,11 +19,16 @@ export async function downloadPhoto(photo: Photo): Promise<void> {
   const { folder, file } = photo
   if (!file.fileKey || !file.name) throw new Error('file is not open')
   // The save picker needs the click's user activation: ask for it first.
-  const sink = await openDownloadSink({ filename: file.name, mimeType: file.mimeType })
+  const sink = await openDownloadSink({
+    filename: file.name,
+    mimeType: file.mimeType,
+    expectedPlainSize: file.size,
+    blobFallbackMaxBytes: async () => (await driveStreamLimits()).blobFallbackMaxBytes,
+  })
   try {
     const url = `${await resolveApiBase()}${contentPath(fileLocation(folder), file.id)}`
-    const sealed = await sealedAt(file, file.contentKeyGeneration)
-    for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken())) {
+    const current = await currentContentOf(file)
+    for await (const { plain } of fetchDecryptedChunks(url, current.fileKey, current.expected, await freshAccessToken())) {
       await sink.write(plain)
     }
     await sink.finalize()
@@ -52,15 +58,15 @@ export async function downloadPhotosZip(
   const used = new Set<string>()
   const entries: ZipFile[] = []
   for (const { folder, file } of photos) {
-    if (!file.fileKey || !file.name) continue
-    const sealed = await sealedAt(file, file.contentKeyGeneration)
+    if (!file.fileKey || !file.name || !file.content) continue
+    const current = await currentContentOf(file)
     const location = folderLocation(folder)
     entries.push({
       id: file.id,
-      keyGeneration: sealed.context.generation,
+      expected: current.expected,
       name: uniqueName(file.name, used),
       size: file.size,
-      fileKey: sealed.fileKey,
+      fileKey: current.fileKey,
       ...(location.kind === 'remote' ? { isRemote: true, remoteShareId: location.shareId } : {}),
     })
   }

@@ -17,7 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::AppState;
 
 /// The site setting that holds the mode.
-pub const MODE_SETTING: &str = "registration_mode";
+pub const MODE_SETTING: &str = "account.registration_mode";
 
 /// Who may register.
 #[derive(
@@ -146,7 +146,10 @@ pub fn hash(key: &[u8; 32], canonical: &str) -> [u8; 32] {
     kutup_crypto::primitives::mac(
         kutup_crypto::primitives::Suite::V1,
         key,
-        &[b"kutup/registration-code/v1\0", canonical.as_bytes()],
+        &[
+            kutup_crypto::labels::REGISTRATION_CODE_V1,
+            canonical.as_bytes(),
+        ],
     )
     .to_array()
 }
@@ -224,7 +227,7 @@ pub async fn record_use(
     code_id: Uuid,
     user_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO registration_code_uses (code_id, user_id) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO registration_code_uses (code_id, account_id) VALUES ($1, $2)")
         .bind(code_id)
         .bind(user_id)
         .execute(&mut **tx)

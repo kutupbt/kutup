@@ -1,7 +1,9 @@
 # Security log: sign-ins and two-step changes
 
-Status: draft for review by the main session (2026-10-17). No code before it
-is accepted.
+Status: **superseded** (2026-11-06) by
+[`server-personal-data.md`](server-personal-data.md), A8: it keeps this
+draft's sign-in events and folding, and drops the `advanced` mode and its `ip`
+column (no table stores IPs). Kept for its reasoning.
 
 The account's security log (`account_security_events`,
 `GET /api/user/security-events`, Account → Security) records today what

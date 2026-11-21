@@ -8,7 +8,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Card } from '@kutup/ui/components/card'
 import { Mono } from '@kutup/ui/components/mono'
 import { Section } from '@kutup/ui/components/page'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
 
@@ -29,7 +29,7 @@ export function ChatDevicesSection() {
   const { t, i18n } = useTranslation()
   const devices = useQuery({
     queryKey: ['chat-devices'],
-    queryFn: async () => (await api.get<{ devices: ChatDevice[] }>('/chat/device')).data.devices,
+    queryFn: async () => (await api.get<{ devices: ChatDevice[] }>('/chat/devices')).data.devices,
   })
   const manage = appUrl('chat', '/settings/devices')
 
@@ -47,7 +47,7 @@ export function ChatDevicesSection() {
       }
     >
       {devices.isError ? <Alert variant="error">{apiErrorMessage(devices.error, t('common.tryAgain'))}</Alert> : null}
-      {devices.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+      {devices.isPending ? <ListSkeleton label={t('common.loading')} rows={3} /> : null}
       {devices.data && devices.data.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t('settings.chatDevices.none')}</p>
       ) : null}

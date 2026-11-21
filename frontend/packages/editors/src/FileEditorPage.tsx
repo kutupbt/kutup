@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { lostUnsentEdits } from './replacedNotice'
-import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fileKind } from '@kutup/drive-core/kinds'
 import { kindTileSvg } from '@kutup/drive-ui/kindTile'
 import { appUrl } from '@kutup/session/apps'
@@ -21,8 +20,9 @@ import { formatBytes } from '@kutup/ui/lib/format'
 import { NameDialog } from '@kutup/drive-ui/NameDialog'
 import { downloadFile, FsaRequiredError } from './files/downloads'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
-import { fileKeyAt, sealedAt } from '@kutup/drive-core/keyring'
+import { currentContentOf, fileKeyAt, versionContentOf } from '@kutup/drive-core/keyring'
 import { rekeyFile } from '@kutup/drive-core/rekey'
+import { openPlayback, type PlaybackFallback } from '@kutup/drive-core/playback'
 import { shareRole, useSharedFiles, type ShareRole } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
@@ -30,9 +30,9 @@ import { personOf, usePeople } from '@kutup/drive-core/people'
 import type { ClaimedKeys } from '@kutup/drive-core/identityPins'
 import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
 import { IdentityBanner, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
-import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
+import { collabBase, contentPath, fileLocation, fileMetadataOf, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom, passVaultUrl } from './paths'
-import { contentAt, currentContent } from './content'
+import { contentAt, currentContent, versionToOpen } from './content'
 import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
 import { editorKindFor, extensionOf, type EditorKind } from '@kutup/drive-core/editorKind'
@@ -55,8 +55,9 @@ import type { WhiteboardEditorHandle } from './whiteboard/WhiteboardEditor'
 import { hash } from '@kutup/crypto/hash'
 
 /**
- * Decrypted content lives entirely in tab memory, so a 2 GB video would take
- * the tab down. Anything larger is downloaded instead of opened.
+ * Decrypted content lives entirely in tab memory, so a large picture or PDF
+ * would take the tab down. Anything larger is downloaded instead of opened.
+ * Video and audio stream instead, whatever their size.
  */
 const MAX_OPEN_BYTES = 100 * 1024 * 1024
 
@@ -69,7 +70,7 @@ type Opened =
   /** Nothing in the browser opens it: offer the download. */
   | { kind: 'none' }
 
-type Failure = 'notFound' | 'undecryptable' | 'tooLarge' | 'loadFailed' | 'waitingForOwner'
+type Failure = 'notFound' | 'undecryptable' | 'tooLarge' | 'mediaTooLarge' | 'busy' | 'loadFailed' | 'waitingForOwner'
 
 interface Keys {
   /** Where new saves and frames go: the file's current key and generation. */
@@ -197,11 +198,15 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
     const target: SnapshotTarget = {
       fileKey: f.fileKey,
       context: { fileId: f.id, generation: f.keyGeneration },
+      // Each whole-file save commits the file's next metadata on top of this.
+      file: { collectionId: f.collectionId, metadataRevision: f.metadataRevision, metadata: f.content ? fileMetadataOf(f) : null },
     }
     const keyOf = (generation: number) => fileKeyAt(f, generation)
 
     let cancelled = false
     let blobUrl: string | null = null
+    let closePlayback: (() => void) | null = null
+    const controller = new AbortController()
     void (async () => {
       const location = fileLocation(container)
       const remote = location.kind !== 'local'
@@ -230,6 +235,31 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
         setOpened({ kind: 'none' })
         return
       }
+      // Video and audio stream (docs/plans/drive-block-format.md §4): a
+      // seek fetches one block, and the file's size doesn't matter.
+      if (!editor && (viewer?.kind === 'video' || viewer?.kind === 'audio')) {
+        try {
+          // A stream that fails before it plays is replaced by a whole download.
+          const replaced = (next: PlaybackFallback) => {
+            if (cancelled) return
+            if (next.kind === 'ready') setOpened({ kind: 'viewer', blobUrl: next.src, mimeType: viewer.mimeType })
+            else setFailure(next.kind === 'busy' ? 'busy' : next.kind === 'tooLarge' ? 'mediaTooLarge' : 'loadFailed')
+          }
+          const playback = await openPlayback(container, f, controller.signal, undefined, replaced)
+          if (cancelled) {
+            if (playback.kind === 'ready') playback.close()
+            return
+          }
+          if (playback.kind === 'ready') {
+            closePlayback = playback.close
+            setKeys({ target, fileKeyAt: keyOf })
+            setOpened({ kind: 'viewer', blobUrl: playback.src, mimeType: viewer.mimeType })
+          } else setFailure(playback.kind === 'busy' ? 'busy' : 'mediaTooLarge')
+        } catch {
+          if (!cancelled) setFailure('loadFailed')
+        }
+        return
+      }
       if (f.size > MAX_OPEN_BYTES) {
         setFailure('tooLarge')
         return
@@ -246,12 +276,12 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
           if (content.kind === 'version') base = { versionId: content.versionId, seq: content.seqAtSnapshot }
           bytes =
             content.kind === 'version'
-              ? await loadVersionBytes(await sealedAt(f, content.keyGeneration), content.path)
-              : await loadOriginal(location, f, await sealedAt(f, f.contentKeyGeneration))
+              ? await loadVersionBytes(await versionToOpen(f, content), content.path)
+              : await loadOriginal(location, f)
         } else {
           // Notes pick their latest version up themselves; the upload only
           // seeds a note that has never been edited.
-          bytes = await loadOriginal(location, f, await sealedAt(f, f.contentKeyGeneration))
+          bytes = await loadOriginal(location, f)
         }
         if (cancelled) return
         setKeys({ target, fileKeyAt: keyOf })
@@ -269,6 +299,8 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
     })()
     return () => {
       cancelled = true
+      controller.abort()
+      closePlayback?.()
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
   }, [picked, queryClient, reopen, openAt])
@@ -374,7 +406,7 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
         mayRename={
           liveFolder.source === 'file'
             ? liveFolder.canUpload
-            : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderUserId === session.userId)
+            : liveFolder.canManage || (liveFolder.canDelete && liveFile.uploaderAccountId === session.accountId)
         }
         onRestored={(bytes, base) => {
           if (opened.kind === 'office' || opened.kind === 'whiteboard') {
@@ -408,9 +440,9 @@ function officeWarmType(file: DriveFile | undefined, folder: Folder | undefined)
   return ext === 'docx' || ext === 'xlsx' || ext === 'pptx' ? ext : null
 }
 
-async function loadOriginal(location: FileLocation, file: DriveFile, target: SnapshotTarget): Promise<Uint8Array> {
-  const { data } = await api.get<ArrayBuffer>(contentPath(location, file.id), { responseType: 'arraybuffer' })
-  return decryptFileBlobV1(new Uint8Array(data), target.fileKey, target.context)
+/** The file's current content, opened against what its metadata commits to. */
+async function loadOriginal(location: FileLocation, file: DriveFile): Promise<Uint8Array> {
+  return loadVersionBytes(await currentContentOf(file), contentPath(location, file.id))
 }
 
 function useDownload(folder: Folder | undefined, file: DriveFile | undefined) {
@@ -471,7 +503,9 @@ function FailurePanel({ failure, folder, file }: { failure: Failure; folder?: Fo
           size: formatBytes(file?.size ?? 0, i18n.language),
           limit: formatBytes(MAX_OPEN_BYTES, i18n.language),
         })
-      : t(`file.${failure}`)
+      : failure === 'mediaTooLarge'
+        ? t('file.mediaTooLarge', { size: formatBytes(file?.size ?? 0, i18n.language) })
+        : t(`file.${failure}`)
   return (
     <div className="flex min-h-svh items-center justify-center bg-background p-6">
       <div className="max-w-md space-y-4 text-center">
@@ -483,7 +517,7 @@ function FailurePanel({ failure, folder, file }: { failure: Failure; folder?: Fo
               <ArrowLeft /> {back.app === 'office' ? t('file.backToOffice') : t('file.backToDrive')}
             </BackLink>
           </Button>
-          {failure === 'tooLarge' ? (
+          {failure === 'tooLarge' || failure === 'mediaTooLarge' ? (
             <Button onClick={() => void download()}>
               <Download /> {t('file.actions.download')}
             </Button>
@@ -562,6 +596,8 @@ function Workspace({
           <TextCollabEditor
             {...common}
             initialContent={opened.initialText}
+            contentRevisionId={file.content?.revisionId ?? null}
+            metadataTarget={keys.target}
             readOnly={readOnly}
             base={location.kind === 'local' ? undefined : collabBase(location, file.id)}
           />
@@ -640,10 +676,7 @@ function Workspace({
                 // A version opens with the key generation it was saved under.
                 const version = (await listVersions(file.id)).find((v) => v.id === versionId)
                 if (!version) throw new Error('version not found')
-                return loadVersionBytes(
-                  await sealedAt(file, version.keyGeneration),
-                  `/files/${file.id}/versions/${versionId}/download`,
-                )
+                return loadVersionBytes(await versionContentOf(file, version), `/drive/files/${file.id}/versions/${versionId}/download`)
               }}
               kind={wholeFile}
               keys={keys}
@@ -787,6 +820,7 @@ function WholeFileActions({
   onRestored: (bytes: Uint8Array, base: SessionBase) => void
 }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [saving, setSaving] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [naming, setNaming] = useState(false)
@@ -829,6 +863,8 @@ function WholeFileActions({
         }
         const { id: versionId } = await saveSnapshot(keys.target, bytes, { ...opts, position })
         settle?.(true)
+        // The file's metadata moved on (its size and content): listings read it again.
+        void queryClient.invalidateQueries({ queryKey: filesKey(keys.target.file.collectionId) })
         lastSaved.current = { digest, versionId }
         if (kind === 'whiteboard') redrawWhiteboard(keys.target, versionId, bytes)
         if (kind === 'office' && officePdf) redrawOffice(keys.target, versionId, officePdf, isSpreadsheet)
@@ -846,7 +882,7 @@ function WholeFileActions({
         setSaving(false)
       }
     },
-    [getBytes, keys.target, kind, officePdf, isSpreadsheet, logPosition, t],
+    [getBytes, keys.target, kind, officePdf, isSpreadsheet, logPosition, queryClient, t],
   )
 
   // Ctrl/Cmd+S anywhere on the page. OnlyOffice runs in a frame and forwards
@@ -882,6 +918,7 @@ function WholeFileActions({
       // the log so far (edits to what it replaces) is behind it.
       const position = logPosition?.() ?? null
       const restored = await saveSnapshot(keys.target, old, { label: t('editor.restoredLabel', { time }), position })
+      void queryClient.invalidateQueries({ queryKey: filesKey(keys.target.file.collectionId) })
       toast.success(t('editor.restored'), { id })
       onRestored(old, { versionId: restored.id, seq: restored.seqAtSnapshot })
     } catch (error) {
@@ -968,7 +1005,8 @@ function redrawWhiteboard(target: SnapshotTarget, versionId: string, bytes: Uint
     const png = await exportScene(json)
     if (!png) return false
     return storeThumbnails(
-      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation },
+      // Drawn from the version just saved, now the file's content.
+      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation, revisionId: versionId },
       await thumbnailsOfDrawing(png),
       versionId,
     )
@@ -986,7 +1024,7 @@ function redrawOffice(target: SnapshotTarget, versionId: string, pdf: () => Prom
     const png = await renderPdfFirstPageV1(bytes.slice().buffer, THUMBNAIL_MAX_SIDE.lg, undefined, trim ? { trim: 'corner' } : {})
     if (!png) return false
     return storeThumbnails(
-      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation },
+      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation, revisionId: versionId },
       await thumbnailsOfPicture(png, true),
       versionId,
     )

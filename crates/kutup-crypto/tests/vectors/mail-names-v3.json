@@ -1,0 +1,61 @@
+{
+  "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+  "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+  "kind": "folder",
+  "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+  "revision": 1791633600000,
+  "name": "İş başvuruları",
+  "nonce": "RERERERERERERERERERERERERERERERE",
+  "sealed": "S1VUUEFSMQAAAQAYAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkEQE/HJpSa35PDp0aLDtNXm9wAAABoSWvLgADTtSqgFpMVxY18O7M2jHk6cYZHSURyXtylg9SN15nqURERERERERERERERERERERERERERERERAAAARDVbGOS5cQgUCJF9gAUamgogzq283hk6h01nuvPdZFXNpX/Mwutdre1bznd2axQg5LCHEotcQjxkPxT4iMuNKTZwTGk3rsqHPFeRO/nMaeALy5q4MahVBd58zD4s6Qg8dURecVsXXeaDhnoXNHWesnOYODno3rQBbtBlYt1OhGwYFwpaK2vwBeUtVnKk7Hp8rbjXeH/meDxsD2R5ElyGJscDtIQbH72s7Vhx30jgbZXcaTpugiY3j0In1EJrzRnsACkAh7JzeSDFUH/3HZmLsxI8dgHQ+MpnjAt0YF8ctSM3ty9yAt44H0j0zViSIirB15fD5By4wCWDFic0+6CqSVFO0y9v/c9aghFqeHlnmgZ2g==",
+  "refused": [
+    {
+      "case": "another account's key binding",
+      "binding": "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUUEFSMQAAAQAYAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkEQE/HJpSa35PDp0aLDtNXm9wAAABoSWvLgADTtSqgFpMVxY18O7M2jHk6cYZHSURyXtylg9SN15nqURERERERERERERERERERERERERERERERAAAARDVbGOS5cQgUCJF9gAUamgogzq283hk6h01nuvPdZFXNpX/Mwutdre1bznd2axQg5LCHEotcQjxkPxT4iMuNKTZwTGk3rsqHPFeRO/nMaeALy5q4MahVBd58zD4s6Qg8dURecVsXXeaDhnoXNHWesnOYODno3rQBbtBlYt1OhGwYFwpaK2vwBeUtVnKk7Hp8rbjXeH/meDxsD2R5ElyGJscDtIQbH72s7Vhx30jgbZXcaTpugiY3j0In1EJrzRnsACkAh7JzeSDFUH/3HZmLsxI8dgHQ+MpnjAt0YF8ctSM3ty9yAt44H0j0zViSIirB15fD5By4wCWDFic0+6CqSVFO0y9v/c9aghFqeHlnmgZ2g=="
+    },
+    {
+      "case": "the account's address instead of its binding",
+      "binding": "alice@kutup.dev",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUUEFSMQAAAQAYAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkEQE/HJpSa35PDp0aLDtNXm9wAAABoSWvLgADTtSqgFpMVxY18O7M2jHk6cYZHSURyXtylg9SN15nqURERERERERERERERERERERERERERERERAAAARDVbGOS5cQgUCJF9gAUamgogzq283hk6h01nuvPdZFXNpX/Mwutdre1bznd2axQg5LCHEotcQjxkPxT4iMuNKTZwTGk3rsqHPFeRO/nMaeALy5q4MahVBd58zD4s6Qg8dURecVsXXeaDhnoXNHWesnOYODno3rQBbtBlYt1OhGwYFwpaK2vwBeUtVnKk7Hp8rbjXeH/meDxsD2R5ElyGJscDtIQbH72s7Vhx30jgbZXcaTpugiY3j0In1EJrzRnsACkAh7JzeSDFUH/3HZmLsxI8dgHQ+MpnjAt0YF8ctSM3ty9yAt44H0j0zViSIirB15fD5By4wCWDFic0+6CqSVFO0y9v/c9aghFqeHlnmgZ2g=="
+    },
+    {
+      "case": "another kind",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "label",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUUEFSMQAAAQAYAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkEQE/HJpSa35PDp0aLDtNXm9wAAABoSWvLgADTtSqgFpMVxY18O7M2jHk6cYZHSURyXtylg9SN15nqURERERERERERERERERERERERERERERERAAAARDVbGOS5cQgUCJF9gAUamgogzq283hk6h01nuvPdZFXNpX/Mwutdre1bznd2axQg5LCHEotcQjxkPxT4iMuNKTZwTGk3rsqHPFeRO/nMaeALy5q4MahVBd58zD4s6Qg8dURecVsXXeaDhnoXNHWesnOYODno3rQBbtBlYt1OhGwYFwpaK2vwBeUtVnKk7Hp8rbjXeH/meDxsD2R5ElyGJscDtIQbH72s7Vhx30jgbZXcaTpugiY3j0In1EJrzRnsACkAh7JzeSDFUH/3HZmLsxI8dgHQ+MpnjAt0YF8ctSM3ty9yAt44H0j0zViSIirB15fD5By4wCWDFic0+6CqSVFO0y9v/c9aghFqeHlnmgZ2g=="
+    },
+    {
+      "case": "another id",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "00000000-0000-4000-8000-000000000000",
+      "sealed": "S1VUUEFSMQAAAQAYAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkEQE/HJpSa35PDp0aLDtNXm9wAAABoSWvLgADTtSqgFpMVxY18O7M2jHk6cYZHSURyXtylg9SN15nqURERERERERERERERERERERERERERERERAAAARDVbGOS5cQgUCJF9gAUamgogzq283hk6h01nuvPdZFXNpX/Mwutdre1bznd2axQg5LCHEotcQjxkPxT4iMuNKTZwTGk3rsqHPFeRO/nMaeALy5q4MahVBd58zD4s6Qg8dURecVsXXeaDhnoXNHWesnOYODno3rQBbtBlYt1OhGwYFwpaK2vwBeUtVnKk7Hp8rbjXeH/meDxsD2R5ElyGJscDtIQbH72s7Vhx30jgbZXcaTpugiY3j0In1EJrzRnsACkAh7JzeSDFUH/3HZmLsxI8dgHQ+MpnjAt0YF8ctSM3ty9yAt44H0j0zViSIirB15fD5By4wCWDFic0+6CqSVFO0y9v/c9aghFqeHlnmgZ2g=="
+    },
+    {
+      "case": "revision changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUUEFSMQAAAQAYAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkEQE/HJpSa35PDp0aLDtNXm9wAAABoSWvLgEDTtSqgFpMVxY18O7M2jHk6cYZHSURyXtylg9SN15nqURERERERERERERERERERERERERERERERAAAARDVbGOS5cQgUCJF9gAUamgogzq283hk6h01nuvPdZFXNpX/Mwutdre1bznd2axQg5LCHEotcQjxkPxT4iMuNKTZwTGk3rsqHPFeRO/nMaeALy5q4MahVBd58zD4s6Qg8dURecVsXXeaDhnoXNHWesnOYODno3rQBbtBlYt1OhGwYFwpaK2vwBeUtVnKk7Hp8rbjXeH/meDxsD2R5ElyGJscDtIQbH72s7Vhx30jgbZXcaTpugiY3j0In1EJrzRnsACkAh7JzeSDFUH/3HZmLsxI8dgHQ+MpnjAt0YF8ctSM3ty9yAt44H0j0zViSIirB15fD5By4wCWDFic0+6CqSVFO0y9v/c9aghFqeHlnmgZ2g=="
+    },
+    {
+      "case": "nonce changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUUEFSMQAAAQAYAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkEQE/HJpSa35PDp0aLDtNXm9wAAABoSWvLgADTtSqgFpMVxY18O7M2jHk6cYZHSURyXtylg9SN15nqURERERERERERERERERERERERERERERERQAAARDVbGOS5cQgUCJF9gAUamgogzq283hk6h01nuvPdZFXNpX/Mwutdre1bznd2axQg5LCHEotcQjxkPxT4iMuNKTZwTGk3rsqHPFeRO/nMaeALy5q4MahVBd58zD4s6Qg8dURecVsXXeaDhnoXNHWesnOYODno3rQBbtBlYt1OhGwYFwpaK2vwBeUtVnKk7Hp8rbjXeH/meDxsD2R5ElyGJscDtIQbH72s7Vhx30jgbZXcaTpugiY3j0In1EJrzRnsACkAh7JzeSDFUH/3HZmLsxI8dgHQ+MpnjAt0YF8ctSM3ty9yAt44H0j0zViSIirB15fD5By4wCWDFic0+6CqSVFO0y9v/c9aghFqeHlnmgZ2g=="
+    },
+    {
+      "case": "ciphertext changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUUEFSMQAAAQAYAAAAAQAkM2YyYTZjMWUtOGI0ZC00ZTdhLTljNWYtMWQyZTNhNGI1YzZkEQE/HJpSa35PDp0aLDtNXm9wAAABoSWvLgADTtSqgFpMVxY18O7M2jHk6cYZHSURyXtylg9SN15nqURERERERERERERERERERERERERERERERAAAARDVbGOS5cQgUCJF9gAUamgogzq283hk6h01nuvPdZFXNpX/Mwutdre1bznd2axQg5LCHEotcQjxkPxT4iMuNKTZwTGk3rsqHPFeRO/nMaeALy5q4MahVBd58zD4s6Qg8dURecVsXXeaDhnoXNHWesnOYODno3rQBbtBlYt1OhGwYFwpaK2vwBeUtVnKk7Hp8rbjXeH/meDxsD2R5ElyGJscDtIQbH72s7Vhx30jgbZXcaTpugiY3j0In1EJrzRnsACkAh7JzeSDFUH/3HZmLsxI8dgHQ+MpnjAt0YF8ctSM3ty9yAt44H0j0zViSIirB15fD5By4wCWDFic0+6CqSVFO0y9v/c9aghFqeHlnmgZ2w=="
+    }
+  ]
+}

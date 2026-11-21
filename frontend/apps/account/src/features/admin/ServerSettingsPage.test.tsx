@@ -21,10 +21,11 @@ const settings = {
   chatGroupAvatarPendingSeconds: 3600,
   passVaultMaxBytes: 64 * 1024 * 1024,
   driveStreamCacheBlocks: 3,
+  driveVersionRetentionChoices: [7, 30, 90],
 }
 const registry = [
   {
-    key: 'drive_stream_cache_blocks',
+    key: 'drive.stream_cache_blocks',
     field: 'driveStreamCacheBlocks',
     section: 'drive',
     unit: 'count',
@@ -40,7 +41,14 @@ const registry = [
 describe('Administration → Server settings', () => {
   it("takes each whole-number field and its range from the server's registry", async () => {
     get.mockImplementation((path: string) =>
-      Promise.resolve({ data: path === '/admin/settings/registry' ? { settings: registry } : settings }),
+      Promise.resolve({
+        data:
+          path === '/admin/settings/registry'
+            ? { settings: registry }
+            : path === '/admin/client-versions'
+              ? { release: '2026.1120.0', clients: [{ clientType: 'cli', floor: null, minimum: '0.0.14', effective: '0.0.14' }] }
+              : settings,
+      }),
     )
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -51,5 +59,9 @@ describe('Administration → Server settings', () => {
     expect(field.getAttribute('min')).toBe('2')
     expect(field.getAttribute('max')).toBe('9')
     expect((field as HTMLInputElement).value).toBe('3')
+    // The oldest client versions accepted, one row per client type.
+    expect(await screen.findByLabelText(/Command line/)).toHaveProperty('value', '0.0.14')
+    const choices = await screen.findByLabelText(/Version retention choices/)
+    expect((choices as HTMLInputElement).value).toBe('7, 30, 90')
   })
 })

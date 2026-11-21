@@ -1,6 +1,6 @@
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
-import { atTopLevel, asNameTaken, canonicalName, inFolder, nameHashIn } from '@kutup/drive-core/names'
+import { atTopLevel, asNameTaken, canonicalName, inFolder, nameFieldsIn } from '@kutup/drive-core/names'
 import { isWithin, namesIn } from './copy'
 import { MoveNameTakenError } from '@kutup/drive-core/move'
 
@@ -35,12 +35,12 @@ export function moveRefusal(index: FolderIndex, source: MoveSource, dest: Folder
   if (source.file) {
     if (dest.id === from.id) return 'alreadyThere'
     if (!from.canUpload || !dest.canUpload) return 'readOnly'
-    if (dest.ownerUserId !== from.ownerUserId) return 'otherOwner'
+    if (dest.ownerAccountId !== from.ownerAccountId) return 'otherOwner'
     return null
   }
   // A folder: only its owner moves it, and only among their own folders.
   if (!from.canManage || from.source !== 'owned') return 'notOwner'
-  if (dest.source !== 'owned' || dest.ownerUserId !== from.ownerUserId) return 'otherOwner'
+  if (dest.source !== 'owned' || dest.ownerAccountId !== from.ownerAccountId) return 'otherOwner'
   if (isWithin(index, dest, from)) return 'intoItself'
   if (from.parentId === dest.id) return 'alreadyThere'
   return null
@@ -48,13 +48,13 @@ export function moveRefusal(index: FolderIndex, source: MoveSource, dest: Folder
 
 /** Put a folder under `parent`, or at the top level (null). Owner only. */
 export async function moveFolder(folder: Folder, parent: Folder | null): Promise<void> {
-  const masterKey = getSession()?.masterKey
-  const place = parent ? inFolder(parent) : masterKey ? atTopLevel(masterKey) : null
+  const roots = getSession()?.roots
+  const place = parent ? inFolder(parent) : roots ? atTopLevel(roots) : null
   if (!place || !folder.name) throw new Error('folder is not open')
   try {
-    await api.post(`/collections/${folder.id}/move`, {
+    await api.post(`/drive/collections/${folder.id}/move`, {
       parentCollectionId: parent?.id ?? null,
-      nameHash: await nameHashIn(place, folder.name),
+      ...(await nameFieldsIn(place, folder.name)),
     })
   } catch (error) {
     if (asNameTaken(error)) throw new MoveNameTakenError()

@@ -1,17 +1,18 @@
 //! Checked-in vectors for sealed mail names (docs/plans/mail-filters.md):
-//! suite 2, bound to the account's key binding, with the values that must be
-//! refused. Regenerate only for a deliberate format change:
+//! account records (purpose `MailName`, object kind ‖ id), bound to the
+//! account's key binding, with the values that must be refused. Regenerate only for a deliberate format change:
 //! `KUTUP_WRITE_MAIL_NAME_VECTORS=1 cargo test -p kutup-crypto --test mail_names_vectors -- --ignored`.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-use kutup_crypto::mail_names::{derive_names_key, open_name, seal_name_with_nonce, MailNameKind};
+use kutup_crypto::account_record::{self, MasterKeyGeneration};
+use kutup_crypto::mail_names::{open_name, seal_name_with_nonce, validate_name, MailNameKind};
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/vectors/mail-names-v2.json"
+    "/tests/vectors/mail-names-v3.json"
 );
 
 #[derive(Serialize, Deserialize)]
@@ -20,7 +21,6 @@ struct Vectors {
     master_key: String,
     /// The account's key binding, which the name binds.
     binding: String,
-    names_key: String,
     kind: String,
     id: String,
     /// The name's revision, in its header and bound.
@@ -49,9 +49,6 @@ const OTHER_BINDING: &str = "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0";
 const ADDRESS: &str = "alice@kutup.dev";
 /// 2026-10-10T12:00:00Z in unix milliseconds.
 const REVISION: u64 = 1_791_633_600_000;
-/// The same name as suite 1 sealed it (bound to `alice@kutup.dev`).
-const SUITE_1_SEALED: &str =
-    "S1VUTU4xAAAAAURERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N2US+HHd4Zhsmta6A6Z/LTk=";
 
 fn refused(sealed: &[u8]) -> Vec<Refused> {
     let case = |case: &str, binding: &str, kind: &str, id: &str, sealed: &[u8]| Refused {
@@ -61,17 +58,15 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
         id: id.into(),
         sealed: STANDARD.encode(sealed),
     };
-    let mut magic = sealed.to_vec();
-    magic[5] = b'1';
-    let mut suite = sealed.to_vec();
-    suite[9] = 1;
+    // The record's header ends with revision ‖ nonce ‖ length.
+    let header = account_record::inspect(sealed).unwrap();
+    let length_at = sealed.len() - header.ciphertext_len as usize - 4;
     let mut revision = sealed.to_vec();
-    revision[17] ^= 1;
+    revision[length_at - 24 - 32 - 1] ^= 1;
     let mut nonce = sealed.to_vec();
-    nonce[18] ^= 1;
+    nonce[length_at - 1] ^= 1;
     let mut tag = sealed.to_vec();
     *tag.last_mut().unwrap() ^= 1;
-    let old = STANDARD.decode(SUITE_1_SEALED).unwrap();
     vec![
         case(
             "another account's key binding",
@@ -89,19 +84,9 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
         ),
         case("another kind", BINDING, "label", ID, sealed),
         case("another id", BINDING, "folder", OTHER_ID, sealed),
-        case("magic changed", BINDING, "folder", ID, &magic),
-        case("suite changed", BINDING, "folder", ID, &suite),
         case("revision changed", BINDING, "folder", ID, &revision),
         case("nonce changed", BINDING, "folder", ID, &nonce),
         case("ciphertext changed", BINDING, "folder", ID, &tag),
-        case("suite 1, bound to the address", BINDING, "folder", ID, &old),
-        case(
-            "suite 1, opened with the address",
-            ADDRESS,
-            "folder",
-            ID,
-            &old,
-        ),
     ]
 }
 
@@ -125,11 +110,12 @@ fn write_vectors() {
         return;
     }
     let master = [0x5au8; 32];
-    let key = derive_names_key(&master).unwrap();
+    let key = master;
     let nonce = [0x44u8; 24];
     let name = "İş başvuruları";
     let sealed = seal_name_with_nonce(
         &key,
+        MasterKeyGeneration::FIRST,
         BINDING,
         MailNameKind::Folder,
         &id_bytes(),
@@ -141,7 +127,6 @@ fn write_vectors() {
     let vectors = Vectors {
         master_key: STANDARD.encode(master),
         binding: BINDING.into(),
-        names_key: STANDARD.encode(*key),
         kind: "folder".into(),
         id: ID.into(),
         revision: REVISION,
@@ -161,12 +146,12 @@ fn vectors_hold() {
         .unwrap()
         .try_into()
         .unwrap();
-    let key = derive_names_key(&master).unwrap();
-    assert_eq!(STANDARD.encode(*key), vectors.names_key);
+    let key = master;
     let nonce: [u8; 24] = STANDARD.decode(&vectors.nonce).unwrap().try_into().unwrap();
     let kind = MailNameKind::parse(&vectors.kind).unwrap();
     let sealed = seal_name_with_nonce(
         &key,
+        MasterKeyGeneration::FIRST,
         &vectors.binding,
         kind,
         &id_bytes(),
@@ -176,6 +161,10 @@ fn vectors_hold() {
     )
     .unwrap();
     assert_eq!(STANDARD.encode(&sealed), vectors.sealed);
+    assert_eq!(
+        validate_name(&sealed, &vectors.binding, kind, &id_bytes()).unwrap(),
+        vectors.revision
+    );
     assert_eq!(
         open_name(&key, &vectors.binding, kind, &id_bytes(), &sealed).unwrap(),
         (vectors.name.clone(), vectors.revision)
@@ -215,6 +204,7 @@ fn vectors_hold() {
     // The address is not a key binding: nothing seals to it.
     assert!(seal_name_with_nonce(
         &key,
+        MasterKeyGeneration::FIRST,
         ADDRESS,
         kind,
         &id_bytes(),

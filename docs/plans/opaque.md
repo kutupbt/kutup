@@ -73,7 +73,7 @@ record binds), never the username.
 never reaches the server.
 - `kek = HKDF-SHA256(salt = "kutup/opaque/export/v1\0", ikm = export_key,
   info = "kutup/opaque/master-key-kek/v1\0" ‖ key_binding)`, 32 bytes.
-- The master key envelope stays `AccountEnvelopePurpose::PasswordMasterKey`, sealed
+- The master key envelope stays `AccountRecordPurpose::PasswordMasterKey`, sealed
   under `kek` and bound to `key_binding`, as today. Only where `kek` comes from
   changes.
 - Any later use of the export key gets its own HKDF info.
@@ -107,7 +107,7 @@ attack. So:
   `opaque_server_setups (key_id smallint PK, sealed_setup bytea, created_at,
   retired_at)`, sealed with XChaCha20-Poly1305 under a key that is neither in the
   database nor in its backups. The AAD is
-  `"kutup/opaque-setup/v1\0" ‖ key_id`.
+  `"kutup/opaque/setup/v1\0" ‖ key_id`.
 - **The key** is `OPAQUE_SETUP_KEYS`: a comma list of `id:base64(32 bytes)`, in env
   or a secret file, loaded and checked like `JWT_SECRET` (`check-config`: present,
   well formed, at least one key). The highest id is the current one.

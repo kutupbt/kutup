@@ -35,7 +35,7 @@ fn by_id(
     account_id: &str,
     server: Option<&str>,
 ) -> reqwest::blocking::Response {
-    let mut request = bearer(c.get(format!("{base}/api/users/by-id/{account_id}")), token);
+    let mut request = bearer(c.get(format!("{base}/api/v1/accounts/{account_id}")), token);
     if let Some(server) = server {
         request = request.query(&[("server", server)]);
     }
@@ -94,12 +94,14 @@ fn sign_up_takes_only_the_id_minted_for_it() {
     let (status, _) = refused(
         sign_up(&c, &base, true, name(), None, None, |body| {
             // The sign-up's own keys (the body's), bound to another account.
-            let identity =
-                kutup_crypto::identity::AccountIdentityKeysV1::derive(&[7u8; 32]).unwrap();
+            let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+                &kutup_crypto::account_roots::IdentityRoot::from_bytes([7u8; 32]),
+            )
+            .unwrap();
             body["accountAuthorityPublicKey"] = json!(b64(&identity.authority_public_key()));
             body["accountAuthorityKeyId"] = json!(identity.authority_key_id());
             body["accountIncarnationId"] = json!(identity.incarnation_id());
-            body["publicKey"] = json!(b64(&identity.drive_hpke_public_key()));
+            body["driveXwingPublicKey"] = json!(b64(&identity.drive_xwing_public_key()));
             body["driveSigningPublicKey"] = json!(b64(&identity.drive_signing_public_key()));
             body["driveKeyBinding"] = json!(b64(&kutup_crypto::drive_key_binding::sign(
                 &identity, &other, 1
@@ -127,7 +129,7 @@ fn a_deleted_accounts_id_is_never_given_again() {
     let sent = sent.unwrap();
     let token = admin_token(&c, &base, admin_password, admin_name);
     let r = bearer(
-        c.delete(format!("{base}/api/admin/users/{}", user.id)),
+        c.delete(format!("{base}/api/v1/admin/accounts/{}", user.id)),
         &token,
     )
     .send()
@@ -193,7 +195,7 @@ fn accounts_are_found_by_id_and_keep_it_through_a_rename() {
     );
     // Signed in only.
     assert_eq!(
-        c.get(format!("{base}/api/users/by-id/{}", alice.id))
+        c.get(format!("{base}/api/v1/accounts/{}", alice.id))
             .send()
             .unwrap()
             .status(),
@@ -221,7 +223,7 @@ fn accounts_are_found_by_id_and_keep_it_through_a_rename() {
         &alice.person,
         &key("accountAuthorityPublicKey"),
         after["driveKeyBindingEpoch"].as_u64().unwrap() as u32,
-        &b64_decode(after["driveHpkePublicKey"].as_str().unwrap())
+        &b64_decode(after["driveXwingPublicKey"].as_str().unwrap())
             .try_into()
             .unwrap(),
         &key("driveSigningPublicKey"),
@@ -231,7 +233,7 @@ fn accounts_are_found_by_id_and_keep_it_through_a_rename() {
     // The new address leads to the same account.
     let lookup: Value = bearer(
         c.get(format!(
-            "{base}/api/users/by-address/{to}@{}",
+            "{base}/api/v1/accounts/by-address/{to}@{}",
             alice.person.server
         )),
         &bob.token,

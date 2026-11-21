@@ -93,12 +93,12 @@ pub fn unpad_group_avatar(body: &[u8]) -> Result<Vec<u8>, String> {
     Ok(blob.to_vec())
 }
 
-const KEY_CONFIG_DOMAIN: &[u8] = b"kutup/chat-group/gateway-key-config/v1\0";
-const REQUEST_DOMAIN: &[u8] = b"kutup/chat-group/request/v1\0";
-const LINK_PROOF_DOMAIN: &[u8] = b"kutup/chat-group/link-request/v1\0";
-const NOTARY_DOMAIN: &[u8] = b"kutup/chat-group/notary/v1\0";
-const BODY_HASH_DOMAIN: &[u8] = b"kutup/chat-group/request-body/v1\0";
-const KEY_CONFIG_HASH_DOMAIN: &[u8] = b"kutup/chat-group/gateway-key-config-hash/v1\0";
+const KEY_CONFIG_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_GROUP_GATEWAY_KEY_CONFIG_V1;
+const REQUEST_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_GROUP_REQUEST_V1;
+const LINK_PROOF_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_GROUP_LINK_REQUEST_V1;
+const NOTARY_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_GROUP_NOTARY_V1;
+const BODY_HASH_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_GROUP_REQUEST_BODY_V1;
+const KEY_CONFIG_HASH_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_GROUP_GATEWAY_KEY_CONFIG_HASH_V1;
 
 // --- encoding ----------------------------------------------------------------
 

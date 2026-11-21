@@ -214,7 +214,7 @@ labels (F1), 113 filters and their runs (F2), 114 the sender lists (F3).
 - A rename (of a folder, label or filter) sends the new sealed `name` with
   `baseNameRevision`, the revision of the name it started from; the new
   name's revision must be above it, and a rename that started from another
-  name gets `409` with `code: "revision_conflict"` (the browser reads again
+  name gets `409` with `code: "revisionConflict"` (the browser reads again
   and renames once more; docs/plans/sealed-revisions.md).
 - `PATCH /api/mail/messages` takes `folder: {custom: id}`, `addLabels`,
   `removeLabels`; the list and counts take a folder or a label.
@@ -253,7 +253,7 @@ labels (F1), 113 filters and their runs (F2), 114 the sender lists (F3).
    DMARC for allow; "Block messages from this sender" on the person card and
    the list's right click; Settings → Block and allow. Built on
    `feat/mail-filters-f3`, stacked on F2.
-4. **F4 Sieve** import and export of the subset; folders, labels and
+4. **F4 Sieve** import and export of the subset (built: `mail-core/src/sieve.ts`, spec 174); folders, labels and
    filters for shared mailboxes.
 
 ## Tests

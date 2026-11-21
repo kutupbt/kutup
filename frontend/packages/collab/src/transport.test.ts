@@ -88,6 +88,51 @@ describe('CollabTransport — URL factory', () => {
   })
 })
 
+describe('CollabTransport — refused device', () => {
+  it('has the device checked when no ticket can be had twice in a row', async () => {
+    let asked = 0
+    const onRefused = vi.fn(async () => {})
+    const t = new CollabTransport({
+      url: async () => {
+        asked += 1
+        throw new Error('401 deviceCredential')
+      },
+      wsFactory: () => new FakeWs() as unknown as WebSocket,
+      onFrame: () => {},
+      onHello: () => {},
+      onError: () => {},
+      onRefused,
+    })
+    await vi.waitFor(() => expect(onRefused).toHaveBeenCalledTimes(1), { timeout: 5000 })
+    expect(asked).toBe(2)
+    t.close()
+  })
+
+  it('has the device checked when sockets close before they open', async () => {
+    const sockets: FakeWs[] = []
+    const onRefused = vi.fn(async () => {})
+    const t = new CollabTransport({
+      url: async () => 'ws://x',
+      wsFactory: () => {
+        const ws = new FakeWs()
+        sockets.push(ws)
+        return ws as unknown as WebSocket
+      },
+      onFrame: () => {},
+      onHello: () => {},
+      onError: () => {},
+      onRefused,
+    })
+    await vi.waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0]!.emit('close')
+    await vi.waitFor(() => expect(sockets).toHaveLength(2), { timeout: 5000 })
+    expect(onRefused).not.toHaveBeenCalled()
+    sockets[1]!.emit('close')
+    await vi.waitFor(() => expect(onRefused).toHaveBeenCalledTimes(1))
+    t.close()
+  })
+})
+
 /** A socket that can deliver messages. */
 class MessageWs {
   binaryType = ''

@@ -164,12 +164,14 @@ Until then, a photo sorts by when it was uploaded.
 These are yours, not the photo's: a favourite from a shared folder is
 private to you. They are kept in one encrypted **library record** per
 account:
-- **Key:** a random library key, sealed with the account key (new account
-  envelope purpose).
-- **Record:** file id sets for favourites, archived and hidden, sealed under
-  that key (new Drive envelope purpose), with a revision.
+- **Record:** file id sets for favourites, archived and hidden, as one
+  account record (purpose `PhotosLibrary`,
+  docs/plans/w1-account-record.md) under the master key, bound to the
+  account's key binding, in the account-records store's `photosLibrary`
+  scope (docs/plans/account-records.md, W3 slice 6): a random record id
+  and a revision, covered by the account head.
 - **Two devices changing it at once:** the second write is refused, and that
-  device merges and writes again.
+  device reads again and redoes its change.
 - **What the server learns:** only that a record exists and its size. Ente's
   favourites are a collection its server can see.
 
@@ -341,7 +343,9 @@ The design comes in its own plan.
 
 - **The library record:** `photos_library` in `kutup-crypto` (vector
   `photosLibrary`, WASM), `GET`/`PUT /api/photos/library` with
-  compare-and-swap (migration 067). Every change is a function of the
+  compare-and-swap (migration 067). Since W3 slice 6 (migration
+  `20261111210000`) it is the account-records `photosLibrary` scope, and
+  those routes are gone. Every change is a function of the
   marks, replayed on the newer record after a `409`: two browsers marking
   photos at the same moment keep both changes (checked in a browser).
 - **Favourites, Archive, Hidden:** pages of their own; a heart on favourite

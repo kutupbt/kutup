@@ -18,8 +18,8 @@ kutup-crypto = { path = "../crates/kutup-crypto", default-features = false, feat
 kutup-federation-proto = { path = "../crates/kutup-federation-proto" }
 
 [[bin]]
-name = "account_envelope_parser"
-path = "fuzz_targets/account_envelope_parser.rs"
+name = "account_record_parser"
+path = "fuzz_targets/account_record_parser.rs"
 test = false
 doc = false
 bench = false

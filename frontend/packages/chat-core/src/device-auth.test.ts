@@ -9,22 +9,23 @@ describe('isDeviceBoundChatRoute', () => {
       '/chat/link-tokens',
       '/chat/provisioning/abc',
       '/chat/account-identity',
-      '/chat/ws-ticket?deviceId=2',
-      '/chat/device/2',
+      '/account/devices/tickets',
+      '/chat/devices/2',
     ]) {
       expect(isDeviceBoundChatRoute(url, 'post'), url).toBe(true)
     }
-    expect(isDeviceBoundChatRoute('/chat/device', 'get')).toBe(true)
+    expect(isDeviceBoundChatRoute('/chat/devices', 'get')).toBe(true)
   })
 
   it('never on the registration, the provisioning ticket, anonymous routes or other apps', () => {
-    expect(isDeviceBoundChatRoute('/chat/device', 'post')).toBe(false)
-    expect(isDeviceBoundChatRoute('/chat/device', 'POST')).toBe(false)
+    expect(isDeviceBoundChatRoute('/chat/devices', 'post')).toBe(false)
+    expect(isDeviceBoundChatRoute('/chat/devices', 'POST')).toBe(false)
     expect(isDeviceBoundChatRoute('/chat/provisioning/ticket', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute('/chat/anonymous/messages', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute('/chat/anonymous/accounts/x/keys?server=a', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute('/chat/anonymous/messages/multi', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute('/drive/files', 'get')).toBe(false)
+    expect(isDeviceBoundChatRoute('/account/devices', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute(undefined, 'get')).toBe(false)
   })
 })

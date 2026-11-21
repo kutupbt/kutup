@@ -1,204 +1,173 @@
-// Browser adapter for the canonical Rust Chat-media headers, derivations, and
-// ledger envelopes. The existing bounded libsodium secretstream adapter owns
-// only incremental I/O; it does not select suites or construct persistent AAD.
+// Browser adapter for Chat attachments in the block format
+// (docs/chat-media.md, docs/plans/drive-block-format.md §2): Chat-media
+// suite 2, `KUTPCM2`. Every block is sealed and opened in Rust
+// (`kutup-crypto` chat_media_blocks.rs through `kutup-crypto-wasm`); the
+// manifest is unsigned because the E2EE descriptor commits to its SHA-256.
+// The ledger envelopes below are Rust-owned account records.
 
+import type { MasterKeys } from './masterKeys'
 import { fromBase64, toBase64 } from './base64'
-import { getCryptoWasm } from './rustWasm'
-import {
-  ABYTES,
-  HEADER_BYTES as SECRETSTREAM_HEADER_BYTES,
-  PLAIN_CHUNK,
-  newStreamEncryptor,
-  type StreamEncryptor,
-} from './streamEncryptor'
-import { newStreamDecryptor, type StreamDecryptor } from './streamDecryptor'
+import { getCryptoWasm, type WasmBlockEncryptor, type WasmBlockReader } from './rustWasm'
 
-export const CHAT_MEDIA_SUITE_V1 = 1
-export const CHAT_MEDIA_OBJECT_HEADER_BYTES = 28
-export const CHAT_MEDIA_OBJECT_PREFIX_BYTES =
-  CHAT_MEDIA_OBJECT_HEADER_BYTES + SECRETSTREAM_HEADER_BYTES
-export const CHAT_MEDIA_CIPHER_CHUNK_BYTES = PLAIN_CHUNK + ABYTES
+/** The Chat-media suite every new attachment is sealed under. */
+export const CHAT_MEDIA_SUITE = 2
 export const MAX_CHAT_MEDIA_PLAINTEXT_BYTES = 2 * 1024 * 1024 * 1024
 
-export interface ChatMediaStreamEncryptorV1 {
-  readonly prefix: Uint8Array
-  push(plain: Uint8Array, isLast: boolean): Uint8Array
-}
-
-export function chatMediaCipherSize(plaintextBytes: number): number {
-  if (!Number.isSafeInteger(plaintextBytes) || plaintextBytes < 0 ||
-      plaintextBytes > MAX_CHAT_MEDIA_PLAINTEXT_BYTES) {
-    throw new Error('Chat-media plaintext length is outside V1')
+function checkSize(plaintextBytes: number): void {
+  if (!Number.isSafeInteger(plaintextBytes) || plaintextBytes < 0 || plaintextBytes > MAX_CHAT_MEDIA_PLAINTEXT_BYTES) {
+    throw new Error('Chat-media plaintext length is outside the attachment limit')
   }
-  const chunks = Math.max(1, Math.ceil(plaintextBytes / PLAIN_CHUNK))
-  return CHAT_MEDIA_OBJECT_PREFIX_BYTES + plaintextBytes + ABYTES * chunks
 }
 
-async function prepare(
+/** Where everything sits in a Chat attachment: the header, the 4 MiB blocks and the trailer. */
+export async function chatMediaLayout(): Promise<{ headerBytes: number; blockSize: number; blockOverhead: number; trailerBytes: number }> {
+  return (await getCryptoWasm()).blockLayout('chatMedia')
+}
+
+/**
+ * A block encryptor for one attachment of `size` plaintext bytes: its
+ * `header()` first, then `sealNext` for each block in order, then `finish()`
+ * (the sealed manifest and trailer), after which `manifestSha256` is what
+ * the descriptor carries. The caller frees it.
+ */
+export async function newChatMediaBlockEncryptor(attachmentKey: Uint8Array, attachmentId: string, size: number): Promise<WasmBlockEncryptor> {
+  checkSize(size)
+  return (await getCryptoWasm()).chatMediaBlockEncryptor(toBase64(attachmentKey), attachmentId, size)
+}
+
+/** The sealed object's length for `size` plaintext bytes. */
+export async function chatMediaObjectLength(size: number): Promise<number> {
+  const encryptor = await newChatMediaBlockEncryptor(new Uint8Array(32), '00000000-0000-4000-8000-000000000000', size)
+  try {
+    return encryptor.objectLength
+  } finally {
+    encryptor.free()
+  }
+}
+
+/**
+ * A reader of one attachment: the header must name it and the sealed
+ * manifest must be the one the descriptor commits to (`manifestSha256`,
+ * canonical base64). Blocks open by index, each checked against the
+ * manifest's hash first. The caller frees it.
+ */
+export async function openChatMediaReader(
   attachmentKey: Uint8Array,
   attachmentId: string,
-): Promise<{ objectHeader: Uint8Array; streamKey: Uint8Array }> {
-  const module = await getCryptoWasm()
-  const prepared = module.prepareChatMediaObject(toBase64(attachmentKey), attachmentId)
-  const objectHeader = fromBase64(prepared.objectHeader)
-  const streamKey = fromBase64(prepared.streamKey)
-  if (objectHeader.length !== CHAT_MEDIA_OBJECT_HEADER_BYTES || streamKey.length !== 32) {
-    throw new Error('Rust returned malformed Chat-media material')
-  }
-  return { objectHeader, streamKey }
+  manifestSha256: string,
+  header: Uint8Array,
+  sealedManifest: Uint8Array,
+): Promise<WasmBlockReader> {
+  return (await getCryptoWasm()).chatMediaBlockReader(toBase64(attachmentKey), attachmentId, manifestSha256, header, sealedManifest)
 }
 
-export async function newChatMediaStreamEncryptorV1(
-  attachmentKey: Uint8Array,
-  attachmentId: string,
-): Promise<ChatMediaStreamEncryptorV1> {
-  const { objectHeader, streamKey } = await prepare(attachmentKey, attachmentId)
-  const encryptor: StreamEncryptor = await newStreamEncryptor(streamKey, objectHeader)
-  const prefix = new Uint8Array(CHAT_MEDIA_OBJECT_PREFIX_BYTES)
-  prefix.set(objectHeader)
-  prefix.set(encryptor.header, CHAT_MEDIA_OBJECT_HEADER_BYTES)
-  return { prefix, push: encryptor.push }
-}
-
-export async function openChatMediaStreamV1(
-  prefix: Uint8Array,
-  attachmentKey: Uint8Array,
-  expectedAttachmentId: string,
-): Promise<StreamDecryptor> {
-  if (prefix.length !== CHAT_MEDIA_OBJECT_PREFIX_BYTES) {
-    throw new Error(`Chat-media prefix must be ${CHAT_MEDIA_OBJECT_PREFIX_BYTES} bytes`)
-  }
-  const objectHeader = prefix.subarray(0, CHAT_MEDIA_OBJECT_HEADER_BYTES)
-  const streamHeader = prefix.subarray(CHAT_MEDIA_OBJECT_HEADER_BYTES)
-  const module = await getCryptoWasm()
-  const streamKey = fromBase64(module.openChatMediaObjectHeader(
-    toBase64(objectHeader),
-    toBase64(attachmentKey),
-    expectedAttachmentId,
-  ))
-  return newStreamDecryptor(streamKey, streamHeader, objectHeader)
-}
-
-export async function encryptChatMediaV1(
+/** A whole attachment sealed at once, with the manifest digest its descriptor carries. */
+export async function sealChatMedia(
   plaintext: Uint8Array,
   attachmentKey: Uint8Array,
   attachmentId: string,
-): Promise<Uint8Array> {
-  chatMediaCipherSize(plaintext.length)
-  const encryptor = await newChatMediaStreamEncryptorV1(attachmentKey, attachmentId)
-  const frames: Uint8Array[] = [encryptor.prefix]
-  if (plaintext.length === 0) {
-    frames.push(encryptor.push(new Uint8Array(), true))
-  } else {
-    for (let offset = 0; offset < plaintext.length; offset += PLAIN_CHUNK) {
-      const end = Math.min(offset + PLAIN_CHUNK, plaintext.length)
-      frames.push(encryptor.push(plaintext.subarray(offset, end), end === plaintext.length))
+): Promise<{ bytes: Uint8Array; manifestSha256: string }> {
+  const encryptor = await newChatMediaBlockEncryptor(attachmentKey, attachmentId, plaintext.length)
+  try {
+    const parts: Uint8Array[] = [encryptor.header()]
+    let at = 0
+    for (let index = 0; index < encryptor.blockCount; index++) {
+      const length = encryptor.blockLength(index)
+      parts.push(encryptor.sealNext(plaintext.subarray(at, at + length)))
+      at += length
     }
+    parts.push(encryptor.finish())
+    const bytes = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0))
+    let offset = 0
+    for (const part of parts) {
+      bytes.set(part, offset)
+      offset += part.length
+    }
+    return { bytes, manifestSha256: encryptor.manifestSha256! }
+  } finally {
+    encryptor.free()
   }
-  const output = new Uint8Array(frames.reduce((sum, frame) => sum + frame.length, 0))
-  let offset = 0
-  for (const frame of frames) {
-    output.set(frame, offset)
-    offset += frame.length
-  }
-  return output
 }
 
-export async function decryptChatMediaV1(
-  ciphertext: Uint8Array,
+/** Opens a whole attachment whose sealed manifest has the descriptor's digest. */
+export async function openChatMedia(
+  object: Uint8Array,
   attachmentKey: Uint8Array,
-  expectedAttachmentId: string,
+  attachmentId: string,
+  manifestSha256: string,
 ): Promise<Uint8Array> {
-  if (ciphertext.length < CHAT_MEDIA_OBJECT_PREFIX_BYTES + ABYTES) {
-    throw new Error('Chat-media object is truncated')
-  }
-  const decryptor = await openChatMediaStreamV1(
-    ciphertext.subarray(0, CHAT_MEDIA_OBJECT_PREFIX_BYTES),
+  const module = await getCryptoWasm()
+  const layout = module.blockLayout('chatMedia')
+  if (object.length < layout.headerBytes + layout.trailerBytes) throw new Error('Chat-media object is truncated')
+  const manifestLength = module.blockTrailerManifestLength('chatMedia', object.subarray(object.length - layout.trailerBytes))
+  const manifestStart = object.length - layout.trailerBytes - manifestLength
+  if (manifestStart < layout.headerBytes) throw new Error('Chat-media manifest does not fit the object')
+  const reader = await openChatMediaReader(
     attachmentKey,
-    expectedAttachmentId,
+    attachmentId,
+    manifestSha256,
+    object.subarray(0, layout.headerBytes),
+    object.subarray(manifestStart, object.length - layout.trailerBytes),
   )
-  const chunks: Uint8Array[] = []
-  let offset = CHAT_MEDIA_OBJECT_PREFIX_BYTES
-  let sawFinal = false
-  while (offset < ciphertext.length) {
-    const end = Math.min(offset + CHAT_MEDIA_CIPHER_CHUNK_BYTES, ciphertext.length)
-    const result = decryptor.pull(ciphertext.subarray(offset, end))
-    chunks.push(result.plain)
-    offset = end
-    if (result.isFinal) {
-      sawFinal = true
-      if (offset !== ciphertext.length) throw new Error('Chat-media has bytes after FINAL')
-    } else if (offset === ciphertext.length) {
-      throw new Error('Chat-media ended before FINAL')
+  try {
+    if (reader.objectLength !== object.length) throw new Error('Chat-media object length is not its manifest\'s')
+    const out = new Uint8Array(reader.size)
+    let at = 0
+    for (let index = 0; index < reader.blockCount; index++) {
+      const start = reader.blockOffset(index)
+      const plain = reader.openBlock(index, object.subarray(start, start + reader.sealedBlockLength(index)))
+      out.set(plain, at)
+      at += plain.length
     }
+    return out
+  } finally {
+    reader.free()
   }
-  if (!sawFinal) throw new Error('Chat-media has no FINAL frame')
-  const output = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0))
-  let plainOffset = 0
-  for (const chunk of chunks) {
-    output.set(chunk, plainOffset)
-    plainOffset += chunk.length
-  }
-  return output
 }
 
-export async function deriveChatAttachmentLedgerKey(masterKey: Uint8Array): Promise<Uint8Array> {
-  return fromBase64((await getCryptoWasm()).deriveChatAttachmentLedgerKey(toBase64(masterKey)))
+/**
+ * Whose ledger: the account's master key and its key binding
+ * (`session.envelopeBinding`); each record is an account record of that
+ * account (docs/chat-media.md).
+ */
+export interface ChatAttachmentLedgerOwner {
+  /** The account's master keys (`session.masterKeys`). */
+  masterKeys: MasterKeys
+  binding: string
 }
 
-export interface ChatAttachmentLedgerContextV1 {
-  accountIncarnationId: string
-  entityId: string
-  revision: bigint
-  previousEnvelopeDigest?: string
-}
-
+/**
+ * Seal one ledger entity's record (the account-records `chatAttachments`
+ * scope; `entityId` is its random record id) as `revision`.
+ */
 export async function sealChatAttachmentLedger(
   plaintext: Uint8Array,
-  ledgerKey: Uint8Array,
-  context: ChatAttachmentLedgerContextV1,
+  owner: ChatAttachmentLedgerOwner,
+  entityId: string,
+  revision: number,
 ): Promise<string> {
   return (await getCryptoWasm()).sealChatAttachmentLedger(
     toBase64(plaintext),
-    toBase64(ledgerKey),
-    context.accountIncarnationId,
-    context.entityId,
-    context.revision,
-    context.previousEnvelopeDigest ?? '',
+    owner.masterKeys,
+    owner.binding,
+    entityId,
+    revision,
   )
 }
 
+/** Open the record `entityId`: its plaintext and the revision it was sealed at. */
 export async function openChatAttachmentLedger(
   envelope: string,
-  ledgerKey: Uint8Array,
-  expected: ChatAttachmentLedgerContextV1,
-): Promise<Uint8Array> {
-  return fromBase64((await getCryptoWasm()).openChatAttachmentLedger(
+  owner: ChatAttachmentLedgerOwner,
+  entityId: string,
+): Promise<{ plaintext: Uint8Array; revision: number }> {
+  const opened = (await getCryptoWasm()).openChatAttachmentLedger(
     envelope,
-    toBase64(ledgerKey),
-    expected.accountIncarnationId,
-    expected.entityId,
-    expected.revision,
-    expected.previousEnvelopeDigest ?? '',
-  ))
-}
-
-export async function chatAttachmentLedgerEnvelopeDigest(envelope: string): Promise<string> {
-  return (await getCryptoWasm()).chatAttachmentLedgerEnvelopeDigest(envelope)
-}
-
-export interface ChatAttachmentLedgerHeaderV1 {
-  suite: number
-  accountIncarnationId: string
-  entityId: string
-  revision: string
-  previousEnvelopeDigest: string
-}
-
-export async function inspectChatAttachmentLedgerEnvelope(
-  envelope: string,
-): Promise<ChatAttachmentLedgerHeaderV1> {
-  return (await getCryptoWasm()).inspectChatAttachmentLedgerEnvelope(envelope)
+    owner.masterKeys,
+    owner.binding,
+    entityId,
+  )
+  return { plaintext: fromBase64(opened.plaintext), revision: opened.revision }
 }
 
 export async function encodeChatAttachmentLedgerEntry(entry: unknown): Promise<Uint8Array> {

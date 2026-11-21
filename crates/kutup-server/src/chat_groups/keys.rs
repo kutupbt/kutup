@@ -16,7 +16,7 @@ use crate::error::{AppError, AppResult};
 pub(crate) const EPOCH_SECS: i64 = 7 * 24 * 60 * 60;
 
 /// The KEM is in the label: the derived seed is an X-Wing seed.
-const KEY_INFO: &[u8] = b"kutup/chat-group/gateway-key/v2-xwing\0";
+const KEY_INFO: &[u8] = kutup_crypto::labels::CHAT_GROUP_GATEWAY_KEY_XWING_V2;
 
 fn epoch_of(now: i64) -> i64 {
     now.div_euclid(EPOCH_SECS)

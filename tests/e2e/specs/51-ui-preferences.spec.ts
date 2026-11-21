@@ -1,8 +1,8 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, openDrive, registerAccount, signIn } from '../fixtures/apps'
 
 const PASSWORD = 'Deneme123*UiPreferencesPassword'
-const PREFERENCES = /\/api\/account\/ui-preferences$/
+const PREFERENCES = /\/api\/v1\/account\/ui-preferences$/
 
 function saved(page: Page) {
   return page.waitForResponse((r) => r.request().method() === 'PUT' && PREFERENCES.test(new URL(r.url()).pathname))

@@ -6,14 +6,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { revisionGuard } from '@kutup/crypto'
 import { fromBase64 } from '@kutup/crypto/base64'
-import {
-  accountHead,
-  HeadBlockedError,
-  NotInVerifiedIndexError,
-  type VerifiedIndex,
-} from '@kutup/session/accountHead'
+import { accountHead, HeadBlockedError } from '@kutup/session/accountHead'
+import { ScopeRecords, type RecordsPage } from '@kutup/session/accountRecords'
 import api from '@kutup/session/client'
 import { getSession, type Session } from '@kutup/session/store'
+import { masterKeysBytes } from '@kutup/crypto/masterKeys'
 import { openKept, resealKeptKey, type KeptKey, type VaultHandle } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
 
@@ -37,7 +34,6 @@ export interface SecretRow {
   state: SecretState
   /** The revision in the envelope's header, as the server read it. */
   revision: number
-  updatedAt: string
   /**
    * The revision the account head vouches for (docs/plans/rollback-protection.md),
    * when it covers the vault secrets: the key must open at exactly this one.
@@ -50,48 +46,59 @@ const KEPT_SCOPE = 'pass-vault-secret'
 
 export const secretsKey = ['pass', 'vault-secrets'] as const
 
-/** The vault secrets are the account head's `passSecrets` scope, one value per vault file. */
-const HEAD_SCOPE = 'passSecrets'
+/**
+ * The vault secrets are the account-records scope `passSecrets`
+ * (docs/plans/account-records.md), one record per vault file, under the
+ * account head.
+ */
+const SCOPE = 'passSecrets'
 
 function headFor(session: Session) {
   return accountHead(session)
 }
 
 /**
- * The head's index of the vault secrets, or null when it cannot vouch (this
- * app is blocked on another history: reads go on, held to this browser's own
+ * The scope's records, read without the head: only while this app is
+ * blocked on another history (reads go on, held to this browser's own
  * guard, and the banner says why).
  */
-async function secretsIndex(session: Session): Promise<VerifiedIndex | null> {
-  try {
-    return await (await headFor(session)).verifiedIndex(HEAD_SCOPE)
-  } catch (error) {
-    if (error instanceof HeadBlockedError) return null
-    throw error
+async function unverifiedRecords(): Promise<ScopeRecords> {
+  const copy = new ScopeRecords(SCOPE)
+  for (let pages = 0; pages < 10_000; pages++) {
+    const page = (await api.get<RecordsPage>(`/account/records/${SCOPE}?after=${copy.cursor}`)).data
+    if (copy.merge(page) === 'done') return copy
   }
+  throw new Error('the vault secrets did not end')
 }
 
 /**
  * The account's vault secrets in use (those of vaults open to it), held to
- * the head: the whole list, every state, with one more or one fewer than
- * the head vouches for is refused (read again once first, for a write
- * landing between the two reads), and each row carries the revision it must
- * open at. Refused, no kept key is used: vaults open with their password.
+ * the head: every page's head verified and the whole scope checked against
+ * it (one more, one fewer or another revision is refused), and each row
+ * carries the revision it must open at. Refused, no kept key is used:
+ * vaults open with their password. What has become of each vault (in the
+ * trash, out of reach) the server says apart, from its Drive rows.
  */
 export async function loadVaultSecrets(session: Session): Promise<SecretRow[]> {
-  for (let attempt = 0; ; attempt++) {
-    const index = await secretsIndex(session)
-    const rows = (await api.get<SecretRow[]>('/pass/vault-secrets')).data
-    try {
-      index?.expectListing(rows.map((row) => row.fileId))
-    } catch (error) {
-      if (error instanceof NotInVerifiedIndexError && attempt === 0) continue
-      throw error
-    }
-    return rows
-      .filter((row) => row.state === 'open')
-      .map((row) => (index?.covered ? { ...row, vouched: index.revision(row.fileId) } : row))
+  let copy: ScopeRecords
+  let verified = true
+  try {
+    copy = await (await headFor(session)).records(SCOPE)
+  } catch (error) {
+    if (!(error instanceof HeadBlockedError)) throw error
+    copy = await unverifiedRecords()
+    verified = false
   }
+  const states = new Map((await api.get<{ fileId: string; state: SecretState }[]>('/pass/vault-states')).data.map((row) => [row.fileId, row.state]))
+  return [...copy.records]
+    .map(([fileId, record]): SecretRow => ({
+      fileId,
+      envelope: record.envelope,
+      state: states.get(fileId) ?? 'gone',
+      revision: record.revision,
+      ...(verified ? { vouched: record.revision } : {}),
+    }))
+    .filter((row) => row.state === 'open')
 }
 
 export function useVaultSecrets() {
@@ -109,7 +116,7 @@ async function openRow(session: Session, rows: SecretRow[] | undefined, fileId: 
   const row = rows?.find((r) => r.fileId === fileId)
   if (!row) return null
   try {
-    const kept = await openKept(row.envelope, session.masterKey, session.envelopeBinding, fileId)
+    const kept = await openKept(row.envelope, masterKeysBytes(session.masterKeys), session.envelopeBinding, fileId)
     // Not the one the account head vouches for: rolled back, or brought back.
     if (row.vouched !== undefined && kept.revision !== row.vouched) return null
     // Older than one this browser has seen: the server replaying an old key.
@@ -166,16 +173,11 @@ export interface SealedKey {
  * head's index then lists this very revision, and nothing is sent again.
  */
 export async function putKeptKey(session: Session, fileId: string, sealed: SealedKey): Promise<void> {
-  await (await headFor(session)).listedWrite(HEAD_SCOPE, (index) =>
+  await (await headFor(session)).recordsWrite(SCOPE, (copy) =>
     Promise.resolve(
-      index.revision(fileId) === sealed.revision
+      copy.records.get(fileId)?.revision === sealed.revision
         ? null
-        : {
-            changes: [[fileId, sealed.revision]] as const,
-            send: async (head: string) => {
-              await api.put(`/pass/vault-secrets/${fileId}`, { envelope: sealed.envelope, baseRevision: sealed.base, head })
-            },
-          },
+        : { puts: [{ id: fileId, revision: sealed.revision, envelope: sealed.envelope }], deletes: [], done: undefined },
     ),
   )
   // Stored: remembering it here is best effort (a store that fails only
@@ -196,7 +198,7 @@ export async function keepCopiedKey(session: Session, rows: SecretRow[] | undefi
   if (!(await openRow(session, rows, from))) return false
   const row = rows!.find((r) => r.fileId === from)!
   const revision = await revisionGuard(session).next(KEPT_SCOPE, to, 0)
-  const envelope = await resealKeptKey(row.envelope, session.masterKey, session.envelopeBinding, from, to, revision)
+  const envelope = await resealKeptKey(row.envelope, masterKeysBytes(session.masterKeys), session.envelopeBinding, from, to, revision)
   await putKeptKey(session, to, { envelope, revision, base: 0 })
   return true
 }
@@ -204,7 +206,7 @@ export async function keepCopiedKey(session: Session, rows: SecretRow[] | undefi
 /** Seals the key of the vault open in `vault` to replace the kept one at `base`. */
 export async function sealVaultKey(session: Session, fileId: string, vault: VaultHandle, base: number, generated = false): Promise<SealedKey> {
   const revision = await revisionGuard(session).next(KEPT_SCOPE, fileId, base)
-  const envelope = await vault.keepKey(session.masterKey, session.envelopeBinding, fileId, revision, generated)
+  const envelope = await vault.keepKey(masterKeysBytes(session.masterKeys), session.envelopeBinding, fileId, revision, generated)
   return { envelope, revision, base }
 }
 
@@ -217,25 +219,16 @@ export async function sealVaultKey(session: Session, fileId: string, vault: Vaul
  * as it is, to be shown.
  */
 export async function keepVaultKey(session: Session, fileId: string, vault: VaultHandle, generated = false): Promise<void> {
-  let kept: number | null = null
-  await (await headFor(session)).listedWrite(HEAD_SCOPE, async (index, attempt) => {
-    const now = (await api.get<SecretRow[]>('/pass/vault-secrets')).data.find((r) => r.fileId === fileId)
-    if (attempt > 1 && now && (await vault.keptKeyIsMine(now.envelope, session.masterKey, session.envelopeBinding, fileId))) {
-      // Another device kept this same key first: nothing to do.
-      kept = now.revision
-      return null
+  const kept = await (await headFor(session)).recordsWrite(SCOPE, async (copy, attempt) => {
+    const now = copy.records.get(fileId)
+    if (attempt > 1 && now && (await vault.keptKeyIsMine(now.envelope, masterKeysBytes(session.masterKeys), session.envelopeBinding, fileId))) {
+      // Another device kept this same key first: nothing to send.
+      return { puts: [], deletes: [], done: now.revision }
     }
     const sealed = await sealVaultKey(session, fileId, vault, now?.revision ?? 0, generated)
-    if (index.revision(fileId) === sealed.revision) return null
-    return {
-      changes: [[fileId, sealed.revision]],
-      send: async (head) => {
-        await api.put(`/pass/vault-secrets/${fileId}`, { envelope: sealed.envelope, baseRevision: sealed.base, head })
-        kept = sealed.revision
-      },
-    }
+    return { puts: [{ id: fileId, revision: sealed.revision, envelope: sealed.envelope }], deletes: [], done: sealed.revision }
   })
-  if (kept !== null) await revisionGuard(session).accept(KEPT_SCOPE, fileId, kept)
+  if (kept !== undefined) await revisionGuard(session).accept(KEPT_SCOPE, fileId, kept)
 }
 
 export function useKeepVaultKey() {
@@ -248,17 +241,8 @@ export function useKeepVaultKey() {
 
 /** Forgets the kept key of vault `fileId`, with the next account head (gone already: nothing to do). */
 export async function forgetVaultKey(session: Session, fileId: string): Promise<void> {
-  await (await headFor(session)).listedWrite(HEAD_SCOPE, (index) =>
-    Promise.resolve(
-      index.revision(fileId) === undefined
-        ? null
-        : {
-            changes: [[fileId, null]] as const,
-            send: async (head: string) => {
-              await api.delete(`/pass/vault-secrets/${fileId}`, { data: { head } })
-            },
-          },
-    ),
+  await (await headFor(session)).recordsWrite(SCOPE, (copy) =>
+    Promise.resolve(copy.records.has(fileId) ? { puts: [], deletes: [fileId], done: undefined } : null),
   )
 }
 

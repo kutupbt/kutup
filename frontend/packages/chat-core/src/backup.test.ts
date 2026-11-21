@@ -1,11 +1,12 @@
 // @vitest-environment node
+import { firstMasterKeys } from '@kutup/crypto/masterKeys'
 import 'fake-indexeddb/auto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@kutup/crypto/accountEnvelope', () => ({
-  ACCOUNT_ENVELOPE_PURPOSE: { chatBackupRoot: 4 },
-  openAccountEnvelope: vi.fn(async () => new Uint8Array(32).fill(7)),
-  sealAccountEnvelope: vi.fn(async () => 'sealed-root'),
+vi.mock('@kutup/crypto/accountRecord', () => ({
+  ACCOUNT_RECORD_PURPOSE: { chatBackupRoot: 13 },
+  openMasterKeyRecord: vi.fn(async () => new Uint8Array(32).fill(7)),
+  sealAccountRecord: vi.fn(async () => 'sealed-root'),
 }))
 
 vi.mock('@kutup/crypto/identity', () => ({
@@ -51,13 +52,18 @@ vi.mock('@kutup/crypto/rustWasm', () => ({
       mediaId: `media-${attachmentId}`,
       paddedPlaintextBytes: 256n,
       outerEncryptionKey: 'outer',
-      objectHeader: '',
+    }),
+    chatBackupMediaBlockEncryptor: (_root: string, _account: string, _backup: string, attachmentId: string) => ({
+      mediaId: `media-${attachmentId}`,
+      objectLength: 400,
+      free: () => undefined,
     }),
   })),
 }))
 
 import {
   ChatBackupCoordinator,
+  type BackupMediaReceipt,
   type BackupMediaSource,
   type BackupStatusResponse,
   type ChatBackupRuntime,
@@ -68,6 +74,7 @@ import { testSealer } from './testSealer'
 import { getAll, openBackupStore, putValue, type BackupOutboxEntry } from './backup-store'
 import { conversationKey } from './identity'
 import type { ChangeMark, ChatHistoryEntry } from './types'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const zeroDigest = '0'.repeat(64)
 const openCoordinators: ChatBackupCoordinator[] = []
@@ -194,15 +201,16 @@ class ScriptedTransport implements ChatBackupTransport {
   /** The next media copies fail with the server's error. */
   copyFailures = 0
   readonly copyRequests: Parameters<ChatBackupTransport['copyMedia']>[0][] = []
-  async copyMedia(request: Parameters<ChatBackupTransport['copyMedia']>[0]): Promise<void> {
+  async copyMedia(request: Parameters<ChatBackupTransport['copyMedia']>[0]): Promise<BackupMediaReceipt> {
     this.copyRequests.push(structuredClone(request))
     if (this.copyFailures > 0) {
       this.copyFailures -= 1
       throw Object.assign(new Error('server error'), { response: { status: 500 } })
     }
+    return { mediaId: request.mediaId, ciphertextBytes: 400, ciphertextSha256: 'c'.repeat(64), manifestSha256: 'C'.repeat(43) + '=', alreadyStored: false }
   }
-  async uploadMedia(): Promise<void> {}
-  async downloadMedia(): Promise<never> { throw new Error('no media') }
+  async uploadMedia(): Promise<BackupMediaReceipt> { throw new Error('no upload') }
+  async downloadMediaRange(): Promise<never> { throw new Error('no media') }
   async reconcileMedia(
     request: Parameters<ChatBackupTransport['reconcileMedia']>[0],
   ): Promise<void> { this.reconciliationRequests.push(structuredClone(request)) }
@@ -242,18 +250,20 @@ function mediaHistoryEntry(): ChatHistoryEntry {
       ...entry.content,
       attachment: {
         version: 1,
-        suite: 1,
+        suite: 2,
         attachmentId: '55555555-5555-4555-8555-555555555555',
         originDomain: 'kutup.dev',
         retrievalToken: 'opaque-token',
         ciphertextBytes: 128,
         ciphertextSha256: 'a'.repeat(64),
+        manifestSha256: 'A'.repeat(43) + '=',
         attachmentKey: Buffer.alloc(32, 6).toString('base64'),
         plaintextBytes: 7,
         filename: 'protected.txt',
         mimeType: 'text/plain',
         mediaClass: 'file',
         backupMediaId: 'b'.repeat(64),
+        backupMediaManifestSha256: 'B'.repeat(43) + '=',
         backupMediaReferenceId: '66666666-6666-4666-8666-666666666666',
       },
     },
@@ -291,7 +301,8 @@ async function open(
   const coordinator = await ChatBackupCoordinator.open({
     databaseName,
     envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
-    masterKey: new Uint8Array(32).fill(3),
+    masterKeys: firstMasterKeys(new Uint8Array(32).fill(3)),
+    roots: testRoots(3),
     deviceId,
     history,
     manifestSequence: async () => 1,
@@ -314,7 +325,8 @@ async function openWithRetries(
   const coordinator = await ChatBackupCoordinator.open({
     databaseName,
     envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
-    masterKey: new Uint8Array(32).fill(3),
+    masterKeys: firstMasterKeys(new Uint8Array(32).fill(3)),
+    roots: testRoots(3),
     deviceId: 9,
     history,
     manifestSequence: async () => 1,
@@ -1096,7 +1108,8 @@ describe('ChatBackupCoordinator collection by conversation', () => {
       const coordinator = await ChatBackupCoordinator.open({
         databaseName: database,
         envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
-        masterKey: new Uint8Array(32).fill(3),
+        masterKeys: firstMasterKeys(new Uint8Array(32).fill(3)),
+    roots: testRoots(3),
         deviceId: 9,
         history: async () => history,
         manifestSequence: async () => 1,
@@ -1125,9 +1138,9 @@ describe('ChatBackupCoordinator collection by conversation', () => {
   it('queues what reading everything would, reading only what changed', async () => {
     const world = await pair()
     const attachment = {
-      version: 1 as const, suite: 1 as const, attachmentId: '55555555-5555-4555-8555-555555555555',
+      version: 1 as const, suite: 2 as const, attachmentId: '55555555-5555-4555-8555-555555555555',
       originDomain: 'kutup.dev', retrievalToken: 'opaque-token', ciphertextBytes: 128,
-      ciphertextSha256: 'a'.repeat(64), attachmentKey: Buffer.alloc(32, 6).toString('base64'),
+      ciphertextSha256: 'a'.repeat(64), manifestSha256: 'A'.repeat(43) + '=', attachmentKey: Buffer.alloc(32, 6).toString('base64'),
       plaintextBytes: 7, filename: 'photo.txt', mimeType: 'text/plain', mediaClass: 'file' as const,
     }
     const a1 = message(1, 'a', 'hello')
@@ -1174,7 +1187,9 @@ describe('ChatBackupCoordinator collection by conversation', () => {
     world.addSource(attachment.attachmentId)
     world.commit([])
     const protectedRecord = await step(['group:c'])
-    expect(protectedRecord).toMatchObject([{ content: { attachment: { backupMediaId: `media-${attachment.attachmentId}` } } }])
+    expect(protectedRecord).toMatchObject([{
+      content: { attachment: { backupMediaId: `media-${attachment.attachmentId}`, backupMediaManifestSha256: 'C'.repeat(43) + '=' } },
+    }])
 
     // Nothing at all changed: nothing read, nothing queued.
     world.commit([])

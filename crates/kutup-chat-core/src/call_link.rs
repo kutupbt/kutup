@@ -25,8 +25,11 @@
 //! The formats are kutup-crypto's (`kutup_crypto::chat_call_link`,
 //! docs/plans/chat-crypto-move.md); this module keeps Chat's API and errors.
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use kutup_crypto::chat_call_link as crypto;
 use kutup_crypto::error::CryptoError;
+use kutup_crypto::master_keys::MasterKeys;
 use zeroize::Zeroizing;
 
 use crate::error::{ChatError, Result};
@@ -59,20 +62,35 @@ pub fn new_call_link_nonce() -> String {
     crypto::new_call_link_nonce()
 }
 
+/// The owner's call-link root (a stored root, standard base64 of 32 bytes).
+fn call_link_root(base64: &str) -> Result<kutup_crypto::account_roots::CallLinkRoot> {
+    use base64::Engine as _;
+    let bytes = Zeroizing::new(
+        base64::engine::general_purpose::STANDARD
+            .decode(base64)
+            .map_err(|_| ChatError::Invalid("the call-link root is not base64".into()))?,
+    );
+    kutup_crypto::account_roots::CallLinkRoot::from_slice(&bytes).map_err(invalid)
+}
+
 /// The secret of the link its owner made with `nonce` (32 lowercase hex
-/// characters), from the owner's account master key (standard base64, 32
-/// bytes). Only the owner can compute it, on any of their devices.
-pub fn owner_call_link_secret(master_key: &str, nonce: &str) -> Result<Zeroizing<String>> {
-    crypto::owner_call_link_secret(master_key, nonce).map_err(invalid)
+/// characters), from the owner's call-link root (standard base64, 32 bytes;
+/// docs/plans/identity-root.md). Only the owner can compute it, on any of
+/// their devices.
+pub fn owner_call_link_secret(call_link_root_b64: &str, nonce: &str) -> Result<Zeroizing<String>> {
+    crypto::owner_call_link_secret(&call_link_root(call_link_root_b64)?, nonce).map_err(invalid)
 }
 
 /// The owner's proof of being a meeting's host (standard base64, 32 bytes),
-/// from the account master key and the meeting's nonce. Unlike the link's
+/// from the owner's call-link root and the meeting's nonce. Unlike the link's
 /// secret, nobody the link is shared with can compute it. The host stores
 /// only its SHA-256: presenting the token lets the owner into a meeting
 /// with a waiting room, and lets them admit the people waiting.
-pub fn owner_call_link_host_token(master_key: &str, nonce: &str) -> Result<Zeroizing<String>> {
-    crypto::owner_call_link_host_token(master_key, nonce).map_err(invalid)
+pub fn owner_call_link_host_token(
+    call_link_root_b64: &str,
+    nonce: &str,
+) -> Result<Zeroizing<String>> {
+    crypto::owner_call_link_host_token(&call_link_root(call_link_root_b64)?, nonce).map_err(invalid)
 }
 
 /// What the host stores of a token: its SHA-256 (standard base64).
@@ -141,15 +159,36 @@ pub fn parse_call_link_fragment(fragment: &str) -> Result<Zeroizing<String>> {
     crypto::parse_call_link_fragment(fragment).map_err(invalid)
 }
 
-/// Seal one stay for the account's own list.
-pub fn seal_joined_meeting(master_key: &str, entry: &JoinedMeetingV1) -> Result<String> {
-    crypto::seal_joined_meeting(master_key, entry).map_err(invalid)
+/// Seal one stay for the account's own list, as the row `id`, under the
+/// account's current master key.
+pub fn seal_joined_meeting(
+    master_keys: &MasterKeys,
+    binding: &str,
+    id: &str,
+    entry: &JoinedMeetingV1,
+) -> Result<String> {
+    let current = Zeroizing::new(STANDARD.encode(master_keys.current()));
+    crypto::seal_joined_meeting(&current, master_keys.generation(), binding, id, entry)
+        .map_err(invalid)
 }
 
-/// A record that does not open was not sealed by this account. An unusable
-/// master key is the caller's.
-pub fn open_joined_meeting(master_key: &str, sealed: &str) -> Result<JoinedMeetingV1> {
-    crypto::open_joined_meeting(master_key, sealed).map_err(|error| match error {
+/// A record that does not open was not sealed by this account for row `id`.
+/// One sealed under a newer master key than the set holds is the caller's
+/// (`masterKeyStale`): this device signs in again.
+pub fn open_joined_meeting(
+    master_keys: &MasterKeys,
+    binding: &str,
+    id: &str,
+    sealed: &str,
+) -> Result<JoinedMeetingV1> {
+    let bytes = STANDARD
+        .decode(sealed)
+        .map_err(|_| ChatError::Content("sealed joined meeting is malformed".into()))?;
+    let header = kutup_crypto::account_record::inspect(&bytes)
+        .map_err(|_| ChatError::Content("sealed joined meeting is malformed".into()))?;
+    let key = master_keys.at(header.generation).map_err(invalid)?;
+    let key = Zeroizing::new(STANDARD.encode(key));
+    crypto::open_joined_meeting(&key, binding, id, sealed).map_err(|error| match error {
         CryptoError::InvalidInput(message) if message.starts_with("account master key") => {
             ChatError::Invalid(message)
         }
@@ -159,11 +198,19 @@ pub fn open_joined_meeting(master_key: &str, sealed: &str) -> Result<JoinedMeeti
 
 #[cfg(test)]
 mod tests {
-    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use sha2::{Digest as _, Sha256};
 
     use super::*;
+
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    const JOINED_ID: &str = "ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8";
+
+    /// The master-key set of one first-generation key, from its base64.
+    fn first(master_b64: &str) -> MasterKeys {
+        let key: [u8; 32] = STANDARD.decode(master_b64).unwrap().try_into().unwrap();
+        MasterKeys::first(&key)
+    }
 
     /// The call-link formats' canonical vectors
     /// (`crates/kutup-crypto/tests/vectors/call-link-v1.json`), made from this
@@ -217,7 +264,12 @@ mod tests {
                 "name": { "plaintext": "Ayşe", "sealed": keys.seal_name("Ayşe").unwrap() },
                 "info": { "plaintext": info, "sealed": keys.seal_info(&info).unwrap() },
                 "message": { "plaintext": message, "sealed": keys.seal_message(&message).unwrap() },
-                "joined": { "plaintext": joined, "sealed": seal_joined_meeting(&master, &joined).unwrap() },
+                "joined": {
+                    "binding": BINDING,
+                    "id": JOINED_ID,
+                    "plaintext": joined,
+                    "sealed": seal_joined_meeting(&first(&master), BINDING, JOINED_ID, &joined).unwrap(),
+                },
             });
             std::fs::write(path, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
         }
@@ -250,7 +302,13 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(
-                open_joined_meeting(&text("masterKey"), &sealed("joined")).unwrap()
+                open_joined_meeting(
+                    &first(&text("masterKey")),
+                    BINDING,
+                    JOINED_ID,
+                    &sealed("joined")
+                )
+                .unwrap()
             )
             .unwrap(),
             v["joined"]["plaintext"]
@@ -267,26 +325,80 @@ mod tests {
             joined_at_ms: 1_700_000_000_000,
             seconds: 754,
         };
-        let sealed = seal_joined_meeting(&master, &entry).unwrap();
+        let sealed = seal_joined_meeting(&first(&master), BINDING, JOINED_ID, &entry).unwrap();
         assert_eq!(
             STANDARD.decode(&sealed).unwrap().len(),
             JOINED_MEETING_SEALED_BYTES
         );
-        assert_ne!(sealed, seal_joined_meeting(&master, &entry).unwrap());
-        assert_eq!(open_joined_meeting(&master, &sealed).unwrap(), entry);
-        assert!(open_joined_meeting(&STANDARD.encode([0x12u8; 32]), &sealed).is_err());
+        assert_ne!(
+            sealed,
+            seal_joined_meeting(&first(&master), BINDING, JOINED_ID, &entry).unwrap()
+        );
+        assert_eq!(
+            open_joined_meeting(&first(&master), BINDING, JOINED_ID, &sealed).unwrap(),
+            entry
+        );
+        assert!(open_joined_meeting(
+            &MasterKeys::first(&[0x12u8; 32]),
+            BINDING,
+            JOINED_ID,
+            &sealed
+        )
+        .is_err());
+        // Another row's id, or another account: refused.
+        assert!(open_joined_meeting(&first(&master), BINDING, &"ab".repeat(16), &sealed).is_err());
+        assert!(open_joined_meeting(
+            &first(&master),
+            "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
+            JOINED_ID,
+            &sealed
+        )
+        .is_err());
         let mut bytes = STANDARD.decode(&sealed).unwrap();
         *bytes.last_mut().unwrap() ^= 1;
-        assert!(open_joined_meeting(&master, &STANDARD.encode(bytes)).is_err());
+        assert!(
+            open_joined_meeting(&first(&master), BINDING, JOINED_ID, &STANDARD.encode(bytes))
+                .is_err()
+        );
 
         let without_link = JoinedMeetingV1 {
             fragment: "nope".into(),
             ..entry.clone()
         };
-        assert!(seal_joined_meeting(&master, &without_link).is_err());
+        assert!(seal_joined_meeting(&first(&master), BINDING, JOINED_ID, &without_link).is_err());
         // Not a value the link's own keys open: a different key and purpose.
         let keys = CallLinkKeys::derive(&STANDARD.encode([0x42u8; 32])).unwrap();
         assert!(keys.open_info(&sealed).is_err());
+    }
+
+    #[test]
+    fn a_joined_meeting_follows_a_master_key_rotation() {
+        let entry = JoinedMeetingV1 {
+            fragment: call_link_fragment(&STANDARD.encode([0x42u8; 32])).unwrap(),
+            title: "Weekly sync".into(),
+            joined_at_ms: 1_700_000_000_000,
+            seconds: 754,
+        };
+        let before = MasterKeys::first(&[0x11u8; 32]);
+        let old = seal_joined_meeting(&before, BINDING, JOINED_ID, &entry).unwrap();
+        let after = before.rotated(&[0x13u8; 32]).unwrap();
+        // The old record opens through the keyring; a new one is sealed
+        // under the new key, which a device on the old key cannot open.
+        assert_eq!(
+            open_joined_meeting(&after, BINDING, JOINED_ID, &old).unwrap(),
+            entry
+        );
+        let new = seal_joined_meeting(&after, BINDING, JOINED_ID, &entry).unwrap();
+        assert_eq!(
+            open_joined_meeting(&after, BINDING, JOINED_ID, &new).unwrap(),
+            entry
+        );
+        match open_joined_meeting(&before, BINDING, JOINED_ID, &new) {
+            Err(ChatError::Invalid(message)) => {
+                assert!(message.contains(kutup_crypto::master_keys::MASTER_KEY_STALE))
+            }
+            other => panic!("expected a stale key, got {other:?}"),
+        }
     }
 
     fn secret(byte: u8) -> String {

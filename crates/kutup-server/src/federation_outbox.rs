@@ -114,7 +114,7 @@ pub async fn park_for_upgrade(
         id,
         sequence,
         Duration::from_secs(seconds.max(1) as u64),
-        "peer_unsupported",
+        "peerUnsupported",
         error,
     )
     .await
@@ -222,6 +222,10 @@ pub fn spawn_worker(state: AppState) {
                 .load(&state.pool)
                 .await
                 .unwrap_or(crate::site_settings::FEDERATION_WORKER_SECONDS.default);
+            crate::job_health::register(
+                "federation.outbox",
+                Duration::from_secs(seconds.max(1) as u64),
+            );
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(seconds.max(1) as u64)) => {}
                 _ = WAKE.notified() => {}
@@ -234,6 +238,9 @@ pub fn spawn_worker(state: AppState) {
                 crate::chat_media_federation::flush_due(&state),
                 crate::remote_renames::deliver_due(&state),
             );
+            if chat.is_ok() && sealed.is_ok() && media.is_ok() && renames.is_ok() {
+                crate::job_health::beat(&state.pool, "federation.outbox").await;
+            }
             match chat {
                 Ok(completed) if completed > 0 => {
                     tracing::info!(completed, "chat federation delivered queued sends");
@@ -321,7 +328,7 @@ pub async fn prior(
     sequence: i64,
 ) -> AppResult<Option<InboundRecord>> {
     Ok(sqlx::query_as(
-        "SELECT transaction_id, digest, status, answer FROM federation_inbound
+        "SELECT transaction_id, encode(digest, 'hex') AS digest, status, answer FROM federation_inbound
          WHERE kind = $1 AND origin = $2 AND sequence = $3",
     )
     .bind(kind.as_str())
@@ -348,7 +355,7 @@ pub async fn record(
     let recorded = sqlx::query(
         "INSERT INTO federation_inbound
              (kind, origin, sequence, transaction_id, digest, status, answer)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
+         VALUES ($1, $2, $3, $4, decode($5, 'hex'), $6, $7) ON CONFLICT DO NOTHING",
     )
     .bind(kind.as_str())
     .bind(origin)
