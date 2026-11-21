@@ -479,6 +479,8 @@ jobs:
       # Numbers-only Drive diagnostics pass the sanitized reporter (spec 30's
       # page after its reload: tests/e2e/safe-reporter.ts).
       KUTUP_E2E_DRIVE_DIAGNOSTICS: "1"
+      # And the collaboration ones (spec 02's tabs when a sync check fails).
+      KUTUP_E2E_COLLAB_DIAGNOSTICS: "1"
       POSTGRES_PASSWORD: workspace-browser-ci-postgres
       JWT_SECRET: workspace-browser-ci-jwt-secret-at-least-32-bytes
       OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
