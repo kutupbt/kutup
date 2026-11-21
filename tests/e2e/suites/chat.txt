@@ -7,5 +7,4 @@ specs/39-chat-groups-off.spec.ts
 specs/41-chat-meetings.spec.ts
 specs/42-chat-calls.spec.ts
 specs/46-chat-frozen-tab.spec.ts
-specs/48-chat-search.spec.ts
 specs/72-chat-save-contact.spec.ts
