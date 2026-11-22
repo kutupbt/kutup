@@ -136,16 +136,21 @@ s3 s3 cp --only-show-errors "/work/$name" "s3://$bucket/$prefix/$name"
 echo "backup: stored $prefix/$name ($size bytes)"
 
 # The account data keys and the destruction log, apart (an empty schema
-# still dumps).
-key_name="kutup-keys-$stamp.dump.age"
-docker compose exec -T postgres pg_dump -U "${database_user:-kutup}" -d "${database:-kutup}" -Fc \
-  --schema=account_keys > "$work_dir/keys.dump"
-[ -s "$work_dir/keys.dump" ] || fail "the key dump is empty"
-encrypt "$work_dir/keys.dump" "$work_dir/$key_name"
-rm -f "$work_dir/keys.dump"
-chmod a+r "$work_dir/$key_name"
-s3 s3 cp --only-show-errors "/work/$key_name" "s3://$bucket/$key_prefix/$key_name"
-echo "backup: stored $key_prefix/$key_name"
+# still dumps). An older chain's database (backed up once, right before a
+# wipe) has no account_keys schema: its whole content is in the dump above.
+if database_predates_baseline; then
+  echo "backup: the database predates the baseline (no account_keys schema); key dump skipped"
+else
+  key_name="kutup-keys-$stamp.dump.age"
+  docker compose exec -T postgres pg_dump -U "${database_user:-kutup}" -d "${database:-kutup}" -Fc \
+    --schema=account_keys > "$work_dir/keys.dump"
+  [ -s "$work_dir/keys.dump" ] || fail "the key dump is empty"
+  encrypt "$work_dir/keys.dump" "$work_dir/$key_name"
+  rm -f "$work_dir/keys.dump"
+  chmod a+r "$work_dir/$key_name"
+  s3 s3 cp --only-show-errors "/work/$key_name" "s3://$bucket/$key_prefix/$key_name"
+  echo "backup: stored $key_prefix/$key_name"
+fi
 # Recorded once both are stored: a database dump without its keys can't be
 # restored.
 record_run database "$name" "$size"
