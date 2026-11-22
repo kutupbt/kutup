@@ -221,18 +221,57 @@ export async function submitThroughRateLimit(
   // A failure the page reports ends the wait at once, with its own words,
   // rather than after the timeout.
   const broken = page.getByRole('alert').filter({ hasText: BROKEN })
-  for (let attempt = 1; ; attempt++) {
-    const retrying = await limited.isVisible()
-    if (refill) await refill()
-    await page.getByRole('button', { name: button, exact: true }).click()
-    // The previous attempt's message stays until this one is under way.
-    if (retrying) await expect(limited).toBeHidden({ timeout: 30_000 })
-    await expect(done.or(limited).or(broken).first()).toBeVisible({ timeout: 120_000 })
-    if (await done.isVisible()) return
-    if (await broken.isVisible()) throw new Error(`${button}: ${(await broken.first().innerText()).trim()}`)
-    if (attempt === 8) throw new Error(`${button}: still rate limited after ${attempt} attempts`)
-    await page.waitForTimeout(8_000)
+  // The statuses of this attempt's sign-in and registration calls, for the
+  // diagnostic below (numbers only).
+  const statuses: number[] = []
+  const onResponse = (response: import('@playwright/test').Response) => {
+    if (new URL(response.url()).pathname.startsWith('/api/v1/auth/')) statuses.push(response.status())
   }
+  page.on('response', onResponse)
+  try {
+    for (let attempt = 1; ; attempt++) {
+      statuses.length = 0
+      const retrying = await limited.isVisible()
+      if (refill) await refill()
+      await page.getByRole('button', { name: button, exact: true }).click()
+      // The previous attempt's message stays until this one is under way.
+      if (retrying) await expect(limited).toBeHidden({ timeout: 30_000 })
+      try {
+        await expect(done.or(limited).or(broken).first()).toBeVisible({ timeout: 120_000 })
+      } catch (error) {
+        await reportStuckSubmit(page, button, attempt, statuses)
+        throw error
+      }
+      if (await done.isVisible()) return
+      if (await broken.isVisible()) throw new Error(`${button}: ${(await broken.first().innerText()).trim()}`)
+      if (attempt === 8) throw new Error(`${button}: still rate limited after ${attempt} attempts`)
+      await page.waitForTimeout(8_000)
+    }
+  } finally {
+    page.off('response', onResponse)
+  }
+}
+
+/**
+ * A sign-in or registration step that showed nothing for its whole wait:
+ * where the page stood, in numbers and fixed words only (the button's own
+ * label, its path, counts and HTTP statuses), so the sanitized reporter
+ * passes it with KUTUP_E2E_ACCOUNT_DIAGNOSTICS=1.
+ */
+async function reportStuckSubmit(page: Page, button: string, attempt: number, statuses: number[]): Promise<void> {
+  if (page.isClosed()) {
+    console.log(`ACCOUNT DIAGNOSTIC submit button=${JSON.stringify(button)} attempt=${attempt} closed=1`)
+    return
+  }
+  const control = page.getByRole('button', { name: button, exact: true })
+  const buttons = await control.count().catch(() => -1)
+  const enabled = buttons > 0 ? await control.first().isEnabled().catch(() => false) : false
+  const alerts = await page.getByRole('alert').count().catch(() => -1)
+  const headings = await page.getByRole('heading').count().catch(() => -1)
+  const path = new URL(page.url()).pathname.replace(/[0-9a-f-]{36}/g, ':id')
+  console.log(
+    `ACCOUNT DIAGNOSTIC submit button=${JSON.stringify(button)} attempt=${attempt} path=${path} buttons=${buttons} enabled=${enabled ? 1 : 0} alerts=${alerts} headings=${headings} authStatuses=${statuses.join(',') || 'none'}`,
+  )
 }
 
 /**

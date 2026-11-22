@@ -53,6 +53,10 @@ export default class SafeReporter implements Reporter {
         process.env.KUTUP_E2E_DRIVE_DIAGNOSTICS === '1'
         && line.startsWith('DRIVE DIAGNOSTIC ')
       ) console.log(line)
+      if (
+        process.env.KUTUP_E2E_ACCOUNT_DIAGNOSTICS === '1'
+        && line.startsWith('ACCOUNT DIAGNOSTIC ')
+      ) console.log(line)
     }
   }
 

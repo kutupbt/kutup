@@ -201,6 +201,9 @@ jobs:
       # must accept it for service-worker scripts too, which Playwright's
       # ignoreHTTPSErrors does not cover (media streaming, ONLYOFFICE).
       E2E_TRUST_LOCAL_CERT: "1"
+      # A stuck sign-in or registration step reports where it stood
+      # (numbers only; tests/e2e/fixtures/apps.ts submitThroughRateLimit).
+      KUTUP_E2E_ACCOUNT_DIAGNOSTICS: "1"
       # Numbers-only Chat diagnostics pass the sanitized reporter (spec 169's
       # restore facts: tests/e2e/safe-reporter.ts).
       KUTUP_E2E_CHAT_DIAGNOSTICS: "1"
@@ -327,6 +330,9 @@ jobs:
       # must accept it for service-worker scripts too, which Playwright's
       # ignoreHTTPSErrors does not cover (media streaming, ONLYOFFICE).
       E2E_TRUST_LOCAL_CERT: "1"
+      # A stuck sign-in or registration step reports where it stood
+      # (numbers only; tests/e2e/fixtures/apps.ts submitThroughRateLimit).
+      KUTUP_E2E_ACCOUNT_DIAGNOSTICS: "1"
       POSTGRES_PASSWORD: mail-browser-ci-postgres
       JWT_SECRET: mail-browser-ci-jwt-secret-at-least-32-bytes
       OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
@@ -476,6 +482,9 @@ jobs:
       # must accept it for service-worker scripts too, which Playwright's
       # ignoreHTTPSErrors does not cover (media streaming, ONLYOFFICE).
       E2E_TRUST_LOCAL_CERT: "1"
+      # A stuck sign-in or registration step reports where it stood
+      # (numbers only; tests/e2e/fixtures/apps.ts submitThroughRateLimit).
+      KUTUP_E2E_ACCOUNT_DIAGNOSTICS: "1"
       # Numbers-only Drive diagnostics pass the sanitized reporter (spec 30's
       # page after its reload: tests/e2e/safe-reporter.ts).
       KUTUP_E2E_DRIVE_DIAGNOSTICS: "1"
