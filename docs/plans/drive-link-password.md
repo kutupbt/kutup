@@ -84,7 +84,7 @@ target back under the public `S`.
 
 ### Server
 
-One additive migration (`20261201000000_drive_link_password`) on
+One additive migration (`20261203000000_drive_link_password`) on
 `drive_public_shares`: `key_revision` (default 1), `password_salt`,
 `password_operations`, `password_memory`, `password_verifier`,
 `password_link_key_envelope`, `owner_secret_envelope`, with a CHECK that
