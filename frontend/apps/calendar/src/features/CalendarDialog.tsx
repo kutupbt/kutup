@@ -16,6 +16,7 @@ import { useMailAccount } from '@kutup/mail-core/api'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
+import { Checkbox } from '@kutup/ui/components/checkbox'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Input } from '@kutup/ui/components/input'
@@ -24,6 +25,8 @@ import { Textarea } from '@kutup/ui/components/textarea'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { ReminderList } from './reminders/ReminderList'
+import { useQuery } from '@tanstack/react-query'
+import { compactKeys, COMPACT_AT, keyGenerationCap, leaveCalendar } from './sharing/client'
 import { hasRepeats } from './reminders/triggers'
 
 /** Kutup-crypto's limits on a calendar's name and description. */
@@ -43,6 +46,8 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
   const [confirming, setConfirming] = useState(false)
   // Proton's event defaults: this member's, for timed and all-day events.
   const [defaults, setDefaults] = useState<DefaultReminders>({ timed: [], allDay: [] })
+  // Others may see when this member is busy from it (times only; E3e).
+  const [shareBusy, setShareBusy] = useState(false)
   const owner = !calendar || (calendar.permissions & PERMISSION.owner) !== 0
 
   const save = useCalendarMutation(async () => {
@@ -52,12 +57,26 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
       ...(owner && (name.trim() !== calendar.name || description !== calendar.description) ? { name: name.trim(), description } : {}),
       ...(color !== calendar.color ? { color } : {}),
       ...(JSON.stringify(defaults) !== JSON.stringify(calendar.defaultReminders) ? { defaultReminders: defaults } : {}),
+      ...(calendar.owned && shareBusy !== calendar.shareBusy ? { shareBusy } : {}),
     })
     return calendar.id
   })
   const remove = useCalendarMutation(async () => {
     if (calendar) await deleteCalendar(session, calendar)
   })
+  // A member leaves what someone else owns (docs/plans/calendar-e3.md §1).
+  const leave = useCalendarMutation(async () => {
+    if (calendar) await leaveCalendar(session, calendar)
+  })
+  const [leaving, setLeaving] = useState(false)
+  // The owner tidies old key generations away (compaction): offered while
+  // the calendar holds more than one, urged near the site's cap.
+  const cap = useQuery({ queryKey: ['calendar', 'keyGenerationCap'], enabled: !!calendar?.owned, queryFn: keyGenerationCap, staleTime: 60_000 })
+  const compact = useCalendarMutation(async () => {
+    if (calendar) return compactKeys(calendar)
+    return 0
+  })
+  const nearCap = !!calendar && !!cap.data && calendar.keyGenerations >= cap.data * COMPACT_AT
 
   useEffect(() => {
     if (!open) return
@@ -65,6 +84,7 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
     setDescription(calendar?.description ?? '')
     setColor(calendar?.color ?? CALENDAR_COLORS[Math.floor(Math.random() * CALENDAR_COLORS.length)])
     setDefaults(calendar?.defaultReminders ?? { timed: [], allDay: [] })
+    setShareBusy(calendar?.shareBusy ?? false)
     save.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset once per opening
   }, [open, calendar])
@@ -141,6 +161,35 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
                   <Label>{t('reminders.defaults.allDay')}</Label>
                   <ReminderList id="calendar-all-day" allDay reminders={defaults.allDay} max={MAX_DEFAULT_REMINDERS} onChange={(allDay) => setDefaults((d) => ({ ...d, allDay }))} />
                 </div>
+                {calendar?.owned && calendar.keyGenerations > 1 ? (
+                  <div className="space-y-1.5" data-testid="calendar-key-generations">
+                    <p className="text-xs text-muted-foreground">
+                      {cap.data ? t('calendars.keys.count', { count: calendar.keyGenerations, cap: cap.data }) : t('calendars.keys.countBare', { count: calendar.keyGenerations })}
+                    </p>
+                    {nearCap ? <Alert variant="warn">{t('calendars.keys.nearCap')}</Alert> : null}
+                    {compact.error ? <Alert variant="error">{apiErrorMessage(compact.error, t('calendars.keys.failed'))}</Alert> : null}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      loading={compact.isPending}
+                      onClick={() => compact.mutate(undefined, { onSuccess: (count) => toast.success(t('calendars.keys.done', { count })) })}
+                      data-testid="calendar-compact"
+                    >
+                      {t('calendars.keys.compact')}
+                    </Button>
+                  </div>
+                ) : null}
+                {/* Busy times are answered from the calendars one owns: a member can't show the owner's. */}
+                {calendar?.owned ? (
+                  <div className="flex items-start gap-2">
+                    <Checkbox id="calendar-share-busy" checked={shareBusy} onCheckedChange={(v) => setShareBusy(v === true)} className="mt-0.5" data-testid="calendar-share-busy" />
+                    <div className="space-y-0.5">
+                      <Label htmlFor="calendar-share-busy">{t('busy.share')}</Label>
+                      <p className="text-xs text-muted-foreground">{t('busy.shareHint')}</p>
+                    </div>
+                  </div>
+                ) : null}
                 {hasRepeats(defaults.timed) || hasRepeats(defaults.allDay) ? (
                   <p className="text-xs text-destructive" role="alert">
                     {t('reminders.picker.repeats')}
@@ -149,11 +198,18 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
               </>
             ) : null}
             <p className="text-xs text-muted-foreground">{t('calendars.encrypted')}</p>
+            {calendar && !calendar.owned && calendar.owner ? (
+              <p className="text-xs text-muted-foreground">{t('sharing.sharedBy', { address: calendar.owner.address })}</p>
+            ) : null}
             {save.error ? <Alert variant="error">{apiErrorMessage(save.error, t('calendars.saveFailed'))}</Alert> : null}
             <DialogFooter className="sm:justify-between">
               {calendar && (calendar.permissions & PERMISSION.superOwner) !== 0 ? (
                 <Button type="button" variant="ghost" onClick={() => setConfirming(true)} data-testid="calendar-delete">
                   {t('calendars.delete')}
+                </Button>
+              ) : calendar && !calendar.owned ? (
+                <Button type="button" variant="ghost" onClick={() => setLeaving(true)} data-testid="calendar-leave">
+                  {t('sharing.leave')}
                 </Button>
               ) : (
                 <span />
@@ -170,6 +226,27 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
           </form>
         </DialogContent>
       </Dialog>
+      {calendar && !calendar.owned ? (
+        <ConfirmDestructive
+          open={leaving}
+          onOpenChange={setLeaving}
+          title={t('sharing.leaveTitle', { name: calendar.name })}
+          description={t('sharing.leaveDescription')}
+          submit={t('sharing.leave')}
+          pending={leave.isPending}
+          error={leave.error}
+          errorFallback={t('sharing.errors.saveFailed')}
+          onConfirm={() =>
+            leave.mutate(undefined, {
+              onSuccess: () => {
+                setLeaving(false)
+                onOpenChange(false)
+                toast.success(t('sharing.left', { name: calendar.name }))
+              },
+            })
+          }
+        />
+      ) : null}
       {calendar ? (
         <ConfirmDestructive
           open={confirming}

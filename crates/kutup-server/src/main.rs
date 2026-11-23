@@ -18,6 +18,7 @@ mod audit_log;
 mod auth_check;
 mod blob_purge;
 mod calendar_alarms;
+mod calendar_busy;
 mod calendar_reminders;
 mod calls;
 mod change_feed;
@@ -1351,6 +1352,91 @@ fn build_router(state: AppState) -> Router {
             get(handlers::calendar::event),
         )
         .route(
+            "/api/v1/calendar/calendars/:id/keys",
+            get(handlers::calendar_sharing::keys),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/keys/rotate",
+            post(handlers::calendar_sharing::rotate),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/keys/prune",
+            post(handlers::calendar_sharing::prune),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/events/stale",
+            get(handlers::calendar_sharing::stale_events),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/events/rewrap",
+            post(handlers::calendar_sharing::rewrap),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/members",
+            get(handlers::calendar_sharing::members),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/members/:accountId",
+            patch(handlers::calendar_sharing::change_member)
+                .delete(handlers::calendar_sharing::leave),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/invitations",
+            post(handlers::calendar_sharing::invite),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/invitations/:invitationId",
+            delete(handlers::calendar_sharing::revoke),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/links",
+            get(handlers::calendar_sharing::links).post(handlers::calendar_sharing::create_link),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/links/:linkId",
+            delete(handlers::calendar_sharing::delete_link),
+        )
+        .route(
+            "/api/v1/calendar/invitations",
+            get(handlers::calendar_sharing::invitations),
+        )
+        .route(
+            "/api/v1/calendar/invitations/:id/accept",
+            post(handlers::calendar_sharing::accept),
+        )
+        .route(
+            "/api/v1/calendar/invitations/:id/decline",
+            post(handlers::calendar_sharing::decline),
+        )
+        .route(
+            "/api/v1/calendar/tombstones",
+            get(handlers::calendar_sharing::tombstones),
+        )
+        .route(
+            "/api/v1/calendar/tombstones/:calendarId",
+            delete(handlers::calendar_sharing::delete_tombstone),
+        )
+        .route(
+            "/api/v1/calendar/busy",
+            get(handlers::calendar_sharing::busy),
+        )
+        .route(
+            "/api/v1/calendar/links/:id",
+            get(handlers::calendar_links::link),
+        )
+        .route(
+            "/api/v1/calendar/links/:id/events",
+            get(handlers::calendar_links::events),
+        )
+        .route(
+            "/api/v1/calendar/links/:id/busy",
+            get(handlers::calendar_links::busy),
+        )
+        .route(
+            "/api/v1/calendar/links/:id/calendar.ics",
+            get(handlers::calendar_links::feed),
+        )
+        .route(
             "/api/v1/contacts/delete",
             post(handlers::contacts::delete_many),
         )
@@ -2678,11 +2764,33 @@ fn build_router(state: AppState) -> Router {
             state.clone(),
             middleware::api_response_policy,
         ))
-        .layer(TraceLayer::new_for_http())
+        // The request's span names its path, never a calendar feed's key
+        // (docs/plans/calendar-e3.md §3: a query link's secret is in it).
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |request: &axum::http::Request<axum::body::Body>| {
+                tracing::debug_span!(
+                    "request",
+                    method = %request.method(),
+                    uri = %redact_uri(request.uri()),
+                    version = ?request.version(),
+                )
+            },
+        ))
         .layer(cors)
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
         .layer(from_fn(tus_options_passthrough))
         .with_state(state)
+}
+
+/// A request's URI as logs may show it: a public calendar link's query
+/// (which may carry its key) left out, everything else as it came.
+fn redact_uri(uri: &axum::http::Uri) -> String {
+    let path = uri.path();
+    if path.starts_with("/api/v1/calendar/links/") && uri.query().is_some() {
+        format!("{path}?[redacted]")
+    } else {
+        uri.to_string()
+    }
 }
 
 /// Serves the tus discovery response for non-preflight `OPTIONS` on the upload endpoints,
@@ -2947,5 +3055,46 @@ mod command_tests {
         ] {
             assert!(!known_command(&args(refused)), "{refused:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::redact_uri;
+
+    #[test]
+    fn a_calendar_feeds_key_never_reaches_the_log() {
+        let uri: axum::http::Uri =
+            "/api/v1/calendar/links/0d5a1d3e-3b7f-4c1e-9d2a-1f2e3d4c5b6a/calendar.ics?key=c2VjcmV0"
+                .parse()
+                .unwrap();
+        let logged = redact_uri(&uri);
+        assert!(!logged.contains("c2VjcmV0"), "{logged}");
+        assert!(logged.ends_with("/calendar.ics?[redacted]"));
+        let other: axum::http::Uri = "/api/v1/drive/files?parent=x".parse().unwrap();
+        assert_eq!(redact_uri(&other), "/api/v1/drive/files?parent=x");
+    }
+
+    /// nginx logs the path of a calendar link without its query
+    /// (`log_format kutup`), every access log uses that format, and the
+    /// error log (which prints whole request lines) is off for those paths.
+    #[test]
+    fn nginx_logs_calendar_links_without_their_query() {
+        let conf = include_str!("../../../nginx/nginx.conf");
+        assert!(conf.contains("~^/api/v1/calendar/links/ $uri;"));
+        assert!(conf.contains("log_format kutup"));
+        assert!(conf.contains("access_log /var/log/nginx/access.log kutup;"));
+        assert!(
+            !conf.contains("$request "),
+            "the raw request line carries the query"
+        );
+        // The error log prints the request line: off for these paths.
+        let links = conf
+            .split("location ^~ /api/v1/calendar/links/ {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("a location of its own for calendar links");
+        assert!(links.contains("error_log /dev/null;"));
+        assert!(links.contains("limit_req_log_level info;"));
     }
 }

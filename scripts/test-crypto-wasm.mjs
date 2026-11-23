@@ -1404,7 +1404,7 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
 // the mail vectors' address key) open as the Rust vectors say; the refused
 // ones don't.
 if (build === 'crypto') {
-  for (const name of ['createCalendar', 'unlockCalendar', 'calendarTimeZones', 'calendarOccurrences', 'calendarRuleText']) {
+  for (const name of ['createCalendar', 'unlockCalendar', 'unlockSharedCalendar', 'rotateCalendar', 'createCalendarLink', 'openCalendarLink', 'calendarTimeZones', 'calendarOccurrences', 'calendarRuleText']) {
     assert.equal(crypto[name], undefined, `${name} is in the plain crypto build`)
   }
 } else {
@@ -1461,7 +1461,97 @@ if (build === 'crypto') {
   assert.equal(crypto.calendarUtcToLocal(v.startUtc, 'Europe/Istanbul'), '2026-10-29T09:30:00')
   assert.ok(crypto.calendarTimeZones().includes('Europe/Istanbul'))
   assert.throws(() => crypto.calendarLocalToUtc('2026-10-29T09:30:00', 'Nowhere/Else'))
+  // Which generation opens an event: the key its key packets name.
+  assert.equal(crypto.calendarEventKeyId(v.event), unlocked.keyId)
   unlocked.free()
+
+  // Sharing (E3a, docs/plans/calendar-e3.md): a member opens the owner's
+  // share of generation 2; refused shares don't open; a link opens the same
+  // key from its URL secret; the browser's rotations and links open alike.
+  const s = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/calendar-sharing-v1.json`, 'utf8'))
+  const sharer = { account: s.ownerAccount, incarnationId: s.ownerIncarnationId, signingPublicKey: s.ownerSigningPublicKey }
+  const member = { account: s.memberAccount, incarnationId: s.memberIncarnationId, xwingPublicKey: s.memberXwingPublicKey }
+  const asMember = (share, generation = s.keyGeneration, id = s.calendarId) =>
+    crypto.unlockSharedCalendar(s.memberIdentityRoot, s.memberAccount, sharer, id, generation, share, s.calendarLockedSecretKey)
+  const shared = asMember(s.memberShare)
+  assert.equal(shared.fingerprint, s.calendarFingerprint)
+  assert.equal(shared.keyId, s.calendarKeyId)
+  // A link's purpose: opens under its calendar and link, signed by the
+  // owner's address key; what the browser seals opens alike.
+  assert.deepEqual(shared.openLinkPurpose(s.linkPurpose, s.calendarId, s.linkId, [s.ownerAddressPublicKey]), { purpose: s.linkPurposeText, verified: true })
+  assert.throws(() => shared.openLinkPurpose(s.linkPurpose, s.calendarId, '2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e', [s.ownerAddressPublicKey]))
+  const purpose = shared.sealLinkPurpose(...owner, s.calendarId, s.linkId, 'Ev')
+  assert.deepEqual(shared.openLinkPurpose(purpose, s.calendarId, s.linkId, [v.ownerPublicKey]), { purpose: 'Ev', verified: true })
+  assert.throws(() => shared.sealLinkPurpose(...owner, s.calendarId, s.linkId, ' '))
+  shared.free()
+  for (const refused of s.refusedMemberShares) {
+    assert.throws(() => asMember(refused.sealed), undefined, refused.why)
+  }
+  assert.throws(() => asMember(s.memberShare, s.keyGeneration - 1))
+  // A member's share isn't the owner's own, nor the other way round.
+  assert.throws(() => crypto.unlockCalendar(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, s.keyGeneration, s.memberShare, s.calendarLockedSecretKey))
+  assert.throws(() => asMember(s.ownShare))
+  // The owner shares again: a new share the member opens.
+  const again = crypto.shareCalendarPassphrase(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, s.keyGeneration, s.ownShare, member)
+  asMember(again).free()
+
+  // Links: the URL secret opens the generation's key; anything else doesn't.
+  const viaLink = (secret, sealed, generation = s.keyGeneration, link = s.linkId) =>
+    crypto.openCalendarLink(secret, s.calendarId, link, generation, sealed, s.calendarLockedSecretKey)
+  const viewer = viaLink(s.linkUrlSecret, s.linkPassphrase)
+  assert.equal(viewer.fingerprint, s.calendarFingerprint)
+  viewer.free()
+  for (const refused of s.refusedLinkPassphrases) {
+    assert.throws(() => viaLink(s.linkUrlSecret, refused.sealed), undefined, refused.why)
+  }
+  assert.throws(() => viaLink(s.linkUrlSecret, s.linkPassphrase, s.keyGeneration + 1))
+  assert.throws(() => viaLink(Buffer.alloc(32, 1).toString('base64url'), s.linkPassphrase))
+  // The secret is the owner's alone: its own account key opens it, the
+  // member's (who holds the passphrase) doesn't.
+  assert.equal(crypto.calendarLinkUrlSecret(s.ownerIdentityRoot, s.ownerAccount, s.linkId, s.linkOwnerSecret), s.linkUrlSecret)
+  assert.throws(() => crypto.calendarLinkUrlSecret(s.memberIdentityRoot, s.memberAccount, s.linkId, s.linkOwnerSecret))
+  // The access proof is exact.
+  assert.equal(crypto.calendarLinkAccessProof(s.linkUrlSecret, s.linkId), s.linkAccessProof)
+  // A new link from the owner's share of each live generation.
+  const link2 = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f'
+  const made2 = crypto.createCalendarLink(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, link2, [{ keyGeneration: s.keyGeneration, share: s.ownShare }])
+  assert.equal(crypto.calendarLinkUrlSecret(s.ownerIdentityRoot, s.ownerAccount, link2, made2.secret), made2.urlSecret)
+  assert.equal(made2.accessProof, crypto.calendarLinkAccessProof(made2.urlSecret, link2))
+  assert.deepEqual(made2.passphrases.map((p) => p.keyGeneration), [s.keyGeneration])
+  viaLink(made2.urlSecret, made2.passphrases[0].sealed, s.keyGeneration, link2).free()
+  assert.throws(() => crypto.createCalendarLink(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, link2, []))
+
+  // A rotation: generation 3, the member's share and the link carried over;
+  // the old generation's link copy stays as it was, for older events.
+  const rotated = crypto.rotateCalendar(...owner, s.ownerIdentityRoot, s.ownerAccount, s.calendarId, s.keyGeneration, s.ownShare, {
+    members: [member],
+    names: { name: 'Ekip', description: '' },
+    links: [{ linkId: s.linkId, secret: s.linkOwnerSecret }],
+  }, 1790000000)
+  assert.equal(rotated.keyGeneration, s.keyGeneration + 1)
+  assert.notEqual(rotated.fingerprint, s.calendarFingerprint)
+  const next = crypto.unlockSharedCalendar(s.memberIdentityRoot, s.memberAccount, sharer, s.calendarId, rotated.keyGeneration, rotated.memberShares[0].share, rotated.lockedSecretKey)
+  assert.equal(next.fingerprint, rotated.fingerprint)
+  assert.equal(next.openMetadata(rotated.metadata, s.calendarId, [v.ownerPublicKey]).name, 'Ekip')
+  next.free()
+  assert.equal(rotated.memberShares[0].account, s.memberAccount)
+  const own3 = crypto.unlockCalendar(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, rotated.keyGeneration, rotated.ownShare, rotated.lockedSecretKey)
+  own3.free()
+  const linked3 = crypto.openCalendarLink(s.linkUrlSecret, s.calendarId, s.linkId, rotated.keyGeneration, rotated.links[0].passphrase, rotated.lockedSecretKey)
+  assert.equal(linked3.fingerprint, rotated.fingerprint)
+  linked3.free()
+  assert.equal(rotated.links[0].secret, undefined)
+  // Compaction: a key packet the older generation opens, sealed again to
+  // the newer one, names it and opens with it only.
+  const older2 = crypto.unlockCalendar(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, s.keyGeneration, s.ownShare, s.calendarLockedSecretKey)
+  const newer3 = crypto.unlockCalendar(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, rotated.keyGeneration, rotated.ownShare, rotated.lockedSecretKey)
+  const purposePacket = s.linkPurpose.keyPacket
+  assert.equal(crypto.calendarKeyPacketKeyId(purposePacket), older2.keyId)
+  const movedPacket = newer3.rewrapKeyPacket(older2, purposePacket)
+  assert.equal(crypto.calendarKeyPacketKeyId(movedPacket), newer3.keyId)
+  assert.throws(() => older2.rewrapKeyPacket(newer3, purposePacket))
+  older2.free()
+  newer3.free()
 
   // Recurrence (E2): every vector case expands in the browser as in Rust and
   // as python-dateutil does.

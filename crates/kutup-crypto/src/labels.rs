@@ -85,6 +85,16 @@ pub const ACCOUNT_SUCCESSION_BY_NEW_V1: &[u8] = b"kutup/account/succession/by-ne
 /// `kutup-crypto/src/named_share.rs` (`CALENDAR_HPKE_INFO`): a calendar's
 /// passphrase to a member's account key
 pub const CALENDAR_SHARE_HPKE_V1: &[u8] = b"kutup/calendar/share-hpke/v1\0";
+/// `kutup-crypto/src/calendar_link.rs`: HKDF family for the key, under a
+/// link's secret, that seals a key generation's passphrase for the link
+pub const CALENDAR_LINK_PASSPHRASE_V1: &[u8] = b"kutup/calendar/link-passphrase/v1\0";
+/// `kutup-crypto/src/named_share.rs` (`CALENDAR_LINK_HPKE_INFO`): a link's
+/// secret, sealed to its owner's own account key (never to the calendar's
+/// passphrase, which every member holds)
+pub const CALENDAR_LINK_SECRET_HPKE_V1: &[u8] = b"kutup/calendar/link-secret-hpke/v1\0";
+/// `kutup-crypto/src/calendar_link.rs`: HKDF family for a keyed link's
+/// access proof, which its page shows the server (the server keeps its hash)
+pub const CALENDAR_LINK_ACCESS_V1: &[u8] = b"kutup/calendar/link-access/v1\0";
 
 // --- calls -------------------------------------------------------------------
 
@@ -549,7 +559,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 170] = [
+pub const ALL: [&[u8]; 173] = [
     SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
@@ -659,6 +669,9 @@ pub const ALL: [&[u8]; 170] = [
     DRIVE_KEY_BINDING_V2,
     DRIVE_NAMED_SHARE_HPKE_V1,
     CALENDAR_SHARE_HPKE_V1,
+    CALENDAR_LINK_PASSPHRASE_V1,
+    CALENDAR_LINK_SECRET_HPKE_V1,
+    CALENDAR_LINK_ACCESS_V1,
     DRIVE_PROFILE_KEY_HPKE_V1,
     DRIVE_TOP_LEVEL_NAMES_V1,
     FAKE_ACCOUNT_V1,

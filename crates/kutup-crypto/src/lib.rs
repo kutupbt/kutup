@@ -54,6 +54,8 @@ pub mod calendar;
 #[cfg(feature = "calendar")]
 pub mod calendar_event;
 #[cfg(feature = "calendar")]
+pub mod calendar_link;
+#[cfg(feature = "calendar")]
 pub mod calendar_recurrence;
 pub mod calendar_settings;
 pub mod chat_attachment_ledger;

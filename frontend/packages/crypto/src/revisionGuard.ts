@@ -54,6 +54,8 @@ export class OlderThanSeenError extends Error {
 export interface RevisionStore {
   get(entry: string): Promise<string | undefined>
   put(entry: string, sealed: string): Promise<void>
+  /** Forgets an entry (a value the user chose to start over). */
+  remove(entry: string): Promise<void>
 }
 
 export function memoryRevisionStore(): RevisionStore {
@@ -62,6 +64,10 @@ export function memoryRevisionStore(): RevisionStore {
     get: (key) => Promise.resolve(seen.get(key)),
     put: (key, revision) => {
       seen.set(key, revision)
+      return Promise.resolve()
+    },
+    remove: (key) => {
+      seen.delete(key)
       return Promise.resolve()
     },
   }
@@ -116,6 +122,17 @@ export function indexedDbRevisionStore(): RevisionStore {
         transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB write aborted'))
       })
     },
+    async remove(key) {
+      const database = await db()
+      if (!database) return fallback.remove(key)
+      const transaction = database.transaction(STORE, 'readwrite')
+      transaction.objectStore(STORE).delete(key)
+      await new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => resolve()
+        transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB write failed'))
+        transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB write aborted'))
+      })
+    },
   }
 }
 
@@ -164,6 +181,16 @@ export class RevisionGuard {
       if (revision < seen) throw new OlderThanSeenError(scope, revision, seen)
       if (revision > seen) await this.store.put(entry, keys.sealSeen(entry, revision))
     })
+  }
+
+  /**
+   * Forgets what was seen of `scope`/`id`, for a value the user chose to
+   * start over (joining a calendar again after leaving it): the next accept
+   * takes any revision.
+   */
+  async reset(scope: string, id: string): Promise<void> {
+    const { entry } = await this.entry(scope, id)
+    await serialized(entry, () => this.store.remove(entry))
   }
 
   /** The revision to seal a new value of `scope`/`id` at, written on top of `base`. */

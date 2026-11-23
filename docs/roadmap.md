@@ -839,6 +839,12 @@ arrival, and direct sending. Phases, each with its own plan before code:
   feeds from a URL, Google import and Chat meetings. The view settings (zone,
   week start, clock) are kept per device until E2 moves them to the account.
   No CalDAV (as Proton). Replaces Chat meetings' `.ics` download (E5).
+  E3 (sharing, links, busy/free, [`plans/calendar-e3.md`](plans/calendar-e3.md))
+  is built on `post-wipe/calendar-e3`. Left out of it, on purpose: the
+  limited (busy-only) member's grid (no preset gives `AVAILABILITY` alone),
+  seeing other people's busy times beside an event's participants (E4,
+  Q-4), a default for "show others when I'm busy" on new calendars, and
+  calendars shared with accounts on other servers (after E5, Q-2).
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
   2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;

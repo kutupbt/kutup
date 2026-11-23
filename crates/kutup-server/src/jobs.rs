@@ -15,6 +15,7 @@ use crate::chat_hub::ChatHub;
 use crate::storage::StorageService;
 
 // --- intervals / retention policy (mirror the Go defaults) ---
+const CALENDAR_INVITATION_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const VERSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(3600);
 const QUOTA_RECONCILE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 const UPLOADS_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
@@ -49,6 +50,25 @@ pub fn spawn_all(
             tick.tick().await;
             version_retention_tick(&p1, &s1).await;
             beat(&p1, "drive.version_retention").await;
+        }
+    });
+    // Calendar invitations past their expiry, with the shares they held
+    // (docs/plans/calendar-e3.md §1).
+    let invitations = pool.clone();
+    register(
+        "calendar.invitation_sweep",
+        CALENDAR_INVITATION_SWEEP_INTERVAL,
+    );
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(CALENDAR_INVITATION_SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            if let Err(error) =
+                crate::handlers::calendar_sharing::sweep_invitations(&invitations).await
+            {
+                tracing::warn!(%error, "calendar: the invitation sweep failed");
+            }
+            beat(&invitations, "calendar.invitation_sweep").await;
         }
     });
     // Group request nonces past their window (docs/plans/pairwise-groups.md §3),
