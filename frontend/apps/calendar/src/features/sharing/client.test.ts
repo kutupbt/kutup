@@ -43,7 +43,7 @@ vi.mock('@kutup/session/client', () => ({
   },
 }))
 vi.mock('@kutup/session/apps', () => ({ loadServerSettings: () => Promise.resolve(server.settings) }))
-vi.mock('@kutup/session/apiBase', () => ({ resolveApiBase: () => Promise.resolve('/api') }))
+vi.mock('@kutup/session/apiBase', () => ({ resolveApiBase: () => Promise.resolve('/api/v1') }))
 vi.mock('@kutup/session/devices', () => ({ ownAccount: () => Promise.resolve('aci:00000000-0000-4000-8000-00000000000a@kutup.test') }))
 vi.mock('@kutup/crypto/accountRef', () => ({ accountKeyOf: (ref: { server: string; accountId: string }) => `aci:${ref.accountId}@${ref.server}` }))
 
@@ -154,7 +154,7 @@ const {
   IdentityNotConfirmed,
 } = await import('./client')
 
-const session = { sessionId: 's', userId: ME, roots: { identityRoot: 'root' } } as unknown as Session
+const session = { sessionId: 's', accountId: ME, roots: { identityRoot: 'root' } } as unknown as Session
 const me = { accountRef: { server: 'kutup.test', accountId: ME }, account: 'ada@kutup.test' } as unknown as DriveIdentity
 const account = { key: 'signer' } as unknown as MailAccount
 const calendar = { id: 'cal-1', name: 'Team', description: '', owned: true, metadataRest: { v: 1 } } as unknown as Calendar
@@ -164,7 +164,7 @@ const person = (accountId: string, address: string, server = 'kutup.test') => ({
   server,
   accountId,
   accountIncarnationId: `inc-${accountId}`,
-  driveHpkePublicKey: `hpke-${accountId}`,
+  driveXwingPublicKey: `xwing-${accountId}`,
   driveSigningPublicKey: `sig-${accountId}`,
   identitySuite: 2,
   username: address.split('@')[0],
@@ -206,7 +206,7 @@ describe('inviting', () => {
   it('seals every live generation to exactly the account looked up, and posts the invitation', async () => {
     await invite(session, me, calendar, ' bo@kutup.test ', 'view')
     expect(crypto.shared.map((s) => s.generation)).toEqual([1, 2])
-    expect(crypto.shared[0].member).toEqual({ account: `aci:${BO}@kutup.test`, incarnationId: `inc-${BO}`, hpkePublicKey: `hpke-${BO}` })
+    expect(crypto.shared[0].member).toEqual({ account: `aci:${BO}@kutup.test`, incarnationId: `inc-${BO}`, xwingPublicKey: `xwing-${BO}` })
     const post = server.calls.find((c) => c.method === 'post')!
     expect(post.url).toBe('/calendar/calendars/cal-1/invitations')
     expect(post.body).toEqual({
@@ -325,7 +325,7 @@ describe('links', () => {
   it('makes a busy link with no key, and a full one whose secret stays in the fragment', async () => {
     const busy = await createLink(session, account, calendar, 'busy')
     expect(server.calls.at(-1)!.body).toEqual({ id: busy.link.id, kind: 'busy', purpose: null })
-    expect(busy.urls.ics).toMatch(/\/api\/calendar\/links\/.+\/calendar\.ics$/)
+    expect(busy.urls.ics).toMatch(/\/api\/v1\/calendar\/links\/.+\/calendar\.ics$/)
     const full = await createLink(session, account, calendar, 'full')
     const body = server.calls.at(-1)!.body as Record<string, unknown>
     expect(body).toMatchObject({ kind: 'full', secret: { keyGeneration: 2, sealed: 'sealed-secret' }, passphrases: [{ keyGeneration: 1 }, { keyGeneration: 2 }] })

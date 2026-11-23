@@ -136,7 +136,7 @@ export interface CalendarLock {
 export interface CalendarMember {
   account: string
   incarnationId: string
-  hpkePublicKey: string
+  xwingPublicKey: string
 }
 
 /** A calendar's owner as a member checks their shares, verified: their account signing key (base64). */

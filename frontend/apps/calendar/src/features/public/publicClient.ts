@@ -20,7 +20,7 @@ export interface PublicKeyRow {
   passphrase: string
 }
 
-/** What `GET /api/calendar/links/{id}` answers: never the calendar's members or owner. */
+/** What `GET /api/v1/calendar/links/{id}` answers: never the calendar's members or owner. */
 export interface PublicLinkRow {
   calendarId: string
   kind: 'full' | 'query' | 'busy'

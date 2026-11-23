@@ -67,11 +67,11 @@ section says why; the open questions are **Q-n** at the end.
   - It then seals the passphrase of every live key generation (§2) with
     `calendar::seal_passphrase` to that account's verified HPKE key, signed
     with the owner's account signing key.
-  - `POST /api/calendar/calendars/{id}/invitations {account, incarnation,
+  - `POST /api/v1/calendar/calendars/{id}/invitations {account, incarnation,
     permissions, shares[]}`. The server checks every envelope's binding:
     calendar, generation, owner, member and incarnation.
 - **The invitee's side.**
-  - `GET /api/calendar/invitations` lists pending invitations, and the
+  - `GET /api/v1/calendar/invitations` lists pending invitations, and the
     Calendar app shows them in the sidebar ("Shared with you").
   - Accepting runs `open_passphrase`, which refuses a share the owner's key
     didn't sign. The owner's signing key is checked against the pins, as
@@ -151,12 +151,12 @@ makes or deletes links.
      unlock the calendar key holds that passphrase, so the access is the same
      with no second OpenPGP message. That lets the owner show the URL again
      and re-seal it on rotation.
-   - The page fetches `GET /api/calendar/links/{id}/events?start&end` (no
+   - The page fetches `GET /api/v1/calendar/links/{id}/events?start&end` (no
      account; rate limited per IP and per link) with the keys and sealed
      passphrases. It opens them in WASM and shows a read-only calendar.
    - The server never decrypts anything.
 2. **Full, key in the query (for other calendar apps).**
-   - Proton's kind: `…/api/calendar/links/{id}/calendar.ics?key=<secret>`.
+   - Proton's kind: `…/api/v1/calendar/links/{id}/calendar.ics?key=<secret>`.
    - The server opens the passphrase, decrypts while serving, and builds
      ICS (`kutup-crypto` on the server).
    - The UI warns: "The server reads this calendar each time it is fetched."
@@ -178,7 +178,7 @@ Busy-only links need nothing.
   member column (`share_busy`), because the server answers from it. A
   default for new calendars lives in the calendar settings record.
 - **Who may ask:** Q-3.
-- **API.** `GET /api/calendar/busy?address=&start&end`:
+- **API.** `GET /api/v1/calendar/busy?address=&start&end`:
   - the server resolves the address;
   - it unions the calendars that share busy times;
   - it expands recurrences with E2's rule engine;
@@ -208,7 +208,7 @@ Busy-only links need nothing.
     purpose 32).
 - **Everything else:**
   - every limit above is a site setting, keyed `calendar.<snake_case>` (W7
-    §7). The JSON that `/api/auth/settings` publishes keeps camelCase fields
+    §7). The JSON that `/api/v1/auth/settings` publishes keeps camelCase fields
     (`calendar.queryLinksAllowed`), which is what the app reads;
   - all strings are in en.json and tr.json;
   - all crypto is in Rust/WASM, with vectors for the link envelope and the
@@ -255,7 +255,7 @@ talks to the server through one module,
 stand-in server. These are the shapes E3b serves (post-W7 names); if E3b
 differs, only that module changes.
 
-- **Calendar rows** (`GET /api/calendar/calendars`) gain:
+- **Calendar rows** (`GET /api/v1/calendar/calendars`) gain:
   - `owner {accountId, address, incarnationId, signingPublicKey}` on a
     calendar someone else owns;
   - `keys [{keyGeneration, publicKey, fingerprint, lockedSecretKey,
@@ -283,7 +283,7 @@ differs, only that module changes.
     share of every live generation). An accept then hands the member every
     generation, including ones made while the invitation was pending.
   - It is refused (409) when `fromKeyGeneration` is not the newest.
-- `GET /api/calendar/invitations` → `{invitations: [{id, calendarId, owner,
+- `GET /api/v1/calendar/invitations` → `{invitations: [{id, calendarId, owner,
   permissions, metadata, keys, createdAt, expiresAt}]}`;
   `POST …/invitations/{id}/accept` and `…/decline`. The member files its
   `calendarSettings` record before the accept.
@@ -292,7 +292,7 @@ differs, only that module changes.
 - `POST …/calendars/{id}/links {id, kind, secret?, passphrases?:
   [{keyGeneration, sealed}]}` answers the row.
 - `DELETE …/calendars/{id}/links/{linkId}`.
-- **Site settings in `/api/auth/settings`:** `calendar {queryLinksAllowed,
+- **Site settings in `/api/v1/auth/settings`:** `calendar {queryLinksAllowed,
   membersPerCalendar, linksPerCalendar}`.
 - **A link's optional purpose:** `purpose` (a sealed triple, like the name)
   on `POST …/links` and on the link rows.
@@ -308,7 +308,7 @@ differs, only that module changes.
   with `fetch` and no credentials, never the session's client (no refresh,
   no sign-in redirect, no instance-id reconciliation that could clear
   anything on this origin). Routes:
-  - `GET /api/calendar/links/{id}` → `{calendarId, kind, metadata?, keys?:
+  - `GET /api/v1/calendar/links/{id}` → `{calendarId, kind, metadata?, keys?:
     [{keyGeneration, fingerprint, lockedSecretKey, passphrase}]}`. A full
     link carries the sealed name and each generation's link-sealed
     passphrase; a busy link carries neither; 404 or 410 means gone;
@@ -323,7 +323,7 @@ differs, only that module changes.
 - **Busy/free (E3e):**
   - `shareBusy` on the calendar row, set through the existing `PUT
     …/calendars/{id}` with the member's defaults;
-  - `GET /api/calendar/busy?address&start&end` → `{busy: [{startUtc,
+  - `GET /api/v1/calendar/busy?address&start&end` → `{busy: [{startUtc,
     endUtc, fullDay}]}` (camelCase UTC, as event rows), its window at most
     `calendar.busy_window_days` from the published settings;
   - the client merges overlaps;

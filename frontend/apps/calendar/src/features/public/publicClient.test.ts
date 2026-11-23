@@ -23,7 +23,7 @@ vi.mock('@kutup/crypto/calendar', () => ({
 vi.mock('@kutup/calendar-core/api', () => ({
   timesOf: () => Promise.resolve({ startUtc: '2026-11-20T09:00:00Z', endUtc: '2026-11-20T10:00:00Z', fullDay: false }),
 }))
-vi.mock('@kutup/session/apiBase', () => ({ resolveApiBase: () => Promise.resolve('/api') }))
+vi.mock('@kutup/session/apiBase', () => ({ resolveApiBase: () => Promise.resolve('/api/v1') }))
 
 const http = vi.hoisted(() => ({ routes: new Map<string, { status: number; body: unknown }[]>(), calls: [] as { url: string; init: RequestInit }[] }))
 vi.stubGlobal(
@@ -51,7 +51,7 @@ beforeEach(() => {
 
 describe('a full link', () => {
   it('asks the server with no credentials, and opens every generation from the URL’s secret', async () => {
-    http.routes.set('/api/calendar/links/l1', [{ status: 200, body: fullLink }])
+    http.routes.set('/api/v1/calendar/links/l1', [{ status: 200, body: fullLink }])
     const link = await loadPublicLink('l1')
     expect(http.calls[0].init.credentials).toBe('omit')
     const calendar = await openPublicCalendar('l1', link, 'SECRET')
@@ -72,13 +72,13 @@ describe('a full link', () => {
   })
 
   it('says a deleted link is gone', async () => {
-    http.routes.set('/api/calendar/links/gone', [{ status: 410, body: {} }])
+    http.routes.set('/api/v1/calendar/links/gone', [{ status: 410, body: {} }])
     await expect(loadPublicLink('gone')).rejects.toBeInstanceOf(LinkNotFound)
   })
 
   it('opens each event with its own generation, never as verified, and counts what it can’t open', async () => {
     const calendar = await openPublicCalendar('l1', fullLink, 'SECRET')
-    http.routes.set('/api/calendar/links/l1/events', [
+    http.routes.set('/api/v1/calendar/links/l1/events', [
       { status: 200, body: { events: [{ id: 'e1', event: { kid: 'kid-1', summary: 'Old' } }, { id: 'e2', event: { kid: 'kid-9', summary: 'X' } }], next: { afterStart: 'a', afterId: 'e2' } } },
       { status: 200, body: { events: [{ id: 'e3', event: { kid: 'kid-2', summary: 'New' } }], next: null } },
     ])
@@ -93,15 +93,15 @@ describe('a full link', () => {
 
   it('refuses a server that hands the same page again', async () => {
     const calendar = await openPublicCalendar('l1', fullLink, 'SECRET')
-    http.routes.set('/api/calendar/links/l1/events', [{ status: 200, body: { events: [], next: { afterStart: 'a', afterId: 'x' } } }])
+    http.routes.set('/api/v1/calendar/links/l1/events', [{ status: 200, body: { events: [], next: { afterStart: 'a', afterId: 'x' } } }])
     await expect(loadPublicEvents('l1', calendar, '2026-11-16T00:00:00Z', '2026-11-23T00:00:00Z')).rejects.toThrow('repeats a page')
   })
 })
 
 describe('a busy link', () => {
   it('answers times only', async () => {
-    http.routes.set('/api/calendar/links/b1/busy', [{ status: 200, body: { busy: [{ startUtc: 's', endUtc: 'e', fullDay: false }] } }])
+    http.routes.set('/api/v1/calendar/links/b1/busy', [{ status: 200, body: { busy: [{ startUtc: 's', endUtc: 'e', fullDay: false }] } }])
     expect(await loadBusyBlocks('b1', '2026-11-16T00:00:00Z', '2026-11-23T00:00:00Z')).toEqual([{ startUtc: 's', endUtc: 'e', fullDay: false }])
-    expect(http.calls[0].url).toBe('/api/calendar/links/b1/busy?start=2026-11-16T00%3A00%3A00Z&end=2026-11-23T00%3A00%3A00Z')
+    expect(http.calls[0].url).toBe('/api/v1/calendar/links/b1/busy?start=2026-11-16T00%3A00%3A00Z&end=2026-11-23T00%3A00%3A00Z')
   })
 })

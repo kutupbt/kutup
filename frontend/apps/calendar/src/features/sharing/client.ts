@@ -265,7 +265,7 @@ export async function invite(
   const member = {
     account: refString({ server: person.server, accountId: person.accountId }),
     incarnationId: person.accountIncarnationId,
-    hpkePublicKey: sealableDriveKey(typed, person.driveHpkePublicKey, person.identitySuite),
+    xwingPublicKey: sealableDriveKey(typed, person.driveXwingPublicKey, person.identitySuite),
   }
   const owner = await calendarAccount(session)
   const keys = await loadKeys(calendar.id)
@@ -327,7 +327,7 @@ export async function removeMember(
         member: {
           account: refString({ server: answer.server, accountId: answer.accountId }),
           incarnationId: answer.accountIncarnationId,
-          hpkePublicKey: sealableDriveKey(person.address, answer.driveHpkePublicKey, answer.identitySuite),
+          xwingPublicKey: sealableDriveKey(person.address, answer.driveXwingPublicKey, answer.identitySuite),
         },
       }
     }),

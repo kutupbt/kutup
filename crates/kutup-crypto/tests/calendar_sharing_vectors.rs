@@ -41,7 +41,7 @@ struct Vectors {
     member_account: String,
     member_identity_root: String,
     member_incarnation_id: String,
-    member_hpke_public_key: String,
+    member_xwing_public_key: String,
     key_generation: u32,
     passphrase: String,
     calendar_locked_secret_key: String,
@@ -95,7 +95,7 @@ fn share_to(
     member_keys: &AccountIdentityKeysV1,
 ) -> String {
     let incarnation = member_keys.incarnation_id();
-    let hpke = member_keys.drive_hpke_public_key();
+    let xwing = member_keys.drive_xwing_public_key();
     seal_passphrase(
         passphrase,
         calendar_id,
@@ -105,7 +105,7 @@ fn share_to(
         &CalendarMember {
             account: member,
             incarnation_id: &incarnation,
-            hpke_public_key: &hpke,
+            xwing_public_key: &xwing,
         },
     )
     .unwrap()
@@ -260,7 +260,7 @@ fn write_vectors() {
         member_account: MEMBER_ACCOUNT.into(),
         member_identity_root: STANDARD.encode(member_root),
         member_incarnation_id: member_keys.incarnation_id(),
-        member_hpke_public_key: STANDARD.encode(member_keys.drive_hpke_public_key()),
+        member_xwing_public_key: STANDARD.encode(member_keys.drive_xwing_public_key()),
         key_generation: generation,
         passphrase: passphrase.as_str().to_owned(),
         calendar_locked_secret_key: STANDARD.encode(&calendar.locked_secret_key),

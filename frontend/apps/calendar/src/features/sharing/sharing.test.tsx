@@ -66,7 +66,7 @@ beforeEach(() => {
 
 describe('the link dialog', () => {
   it('starts on busy times only, and warns before a link whose key goes to the server', async () => {
-    client.createLink.mockResolvedValue({ link: { id: 'l1', kind: 'query' }, urls: { ics: 'https://calendar.kutup.test/api/calendar/links/l1/calendar.ics?key=K' } })
+    client.createLink.mockResolvedValue({ link: { id: 'l1', kind: 'query' }, urls: { ics: 'https://calendar.kutup.test/api/v1/calendar/links/l1/calendar.ics?key=K' } })
     wrap(<LinksPanel calendar={calendar} />)
     await waitFor(() => expect(screen.getByTestId('link-create')).toBeEnabled())
     fireEvent.click(screen.getByTestId('link-create'))
@@ -76,7 +76,7 @@ describe('the link dialog', () => {
     expect(screen.getByText('The server reads this calendar')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('link-create-submit'))
     await waitFor(() => expect(client.createLink).toHaveBeenCalledWith(expect.anything(), expect.anything(), calendar, 'query', ''))
-    expect(await screen.findByTestId<HTMLInputElement>('link-url-ics')).toHaveValue('https://calendar.kutup.test/api/calendar/links/l1/calendar.ics?key=K')
+    expect(await screen.findByTestId<HTMLInputElement>('link-url-ics')).toHaveValue('https://calendar.kutup.test/api/v1/calendar/links/l1/calendar.ics?key=K')
   })
 
   it('offers no query link where the administrator disallows it', async () => {

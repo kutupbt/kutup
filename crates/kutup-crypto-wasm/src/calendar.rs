@@ -381,8 +381,8 @@ fn decode_b64(text: &str, what: &str) -> Result<Vec<u8>, JsValue> {
 struct MemberIn {
     account: String,
     incarnation_id: String,
-    /// Their account HPKE public key (base64).
-    hpke_public_key: String,
+    /// Their account X-Wing Drive public key (base64).
+    xwing_public_key: String,
 }
 
 /// The owner as a member checks their share, verified.
@@ -416,7 +416,7 @@ fn share_with(
     member: &MemberIn,
 ) -> Result<String, JsValue> {
     let account = account_of(&member.account)?;
-    let hpke = decode_b64(&member.hpke_public_key, "member key")?;
+    let xwing = decode_b64(&member.xwing_public_key, "member key")?;
     calendar::seal_passphrase(
         passphrase,
         calendar_id,
@@ -426,7 +426,7 @@ fn share_with(
         &calendar::CalendarMember {
             account: &account,
             incarnation_id: &member.incarnation_id,
-            hpke_public_key: &hpke,
+            xwing_public_key: &xwing,
         },
     )
     .and_then(|share| share.encode_b64())
@@ -435,7 +435,7 @@ fn share_with(
 
 /// The owner shares generation `key_generation`'s passphrase (opened from
 /// their own share) with `member` (`{ account, incarnationId,
-/// hpkePublicKey }`, checked against the member's verified key binding by the
+/// xwingPublicKey }`, checked against the member's verified key binding by the
 /// caller): the member's share, base64.
 #[wasm_bindgen(js_name = shareCalendarPassphrase)]
 pub fn share_calendar_passphrase(

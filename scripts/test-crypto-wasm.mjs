@@ -1470,7 +1470,7 @@ if (build === 'crypto') {
   // key from its URL secret; the browser's rotations and links open alike.
   const s = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/calendar-sharing-v1.json`, 'utf8'))
   const sharer = { account: s.ownerAccount, incarnationId: s.ownerIncarnationId, signingPublicKey: s.ownerSigningPublicKey }
-  const member = { account: s.memberAccount, incarnationId: s.memberIncarnationId, hpkePublicKey: s.memberHpkePublicKey }
+  const member = { account: s.memberAccount, incarnationId: s.memberIncarnationId, xwingPublicKey: s.memberXwingPublicKey }
   const asMember = (share, generation = s.keyGeneration, id = s.calendarId) =>
     crypto.unlockSharedCalendar(s.memberIdentityRoot, s.memberAccount, sharer, id, generation, share, s.calendarLockedSecretKey)
   const shared = asMember(s.memberShare)

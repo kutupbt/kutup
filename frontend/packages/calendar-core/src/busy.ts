@@ -14,7 +14,7 @@ export interface BusyBlock {
   fullDay: boolean
 }
 
-/** The window the server answers at most (admin setting `calendar.busyWindowDays`). */
+/** The window the server answers at most (admin setting `calendar.busy_window_days`, published as `calendar.busyWindowDays`). */
 export async function busyWindowDays(): Promise<number> {
   const data = await loadServerSettings<{ calendar?: { busyWindowDays?: number } }>()
   return data.calendar?.busyWindowDays ?? 31
