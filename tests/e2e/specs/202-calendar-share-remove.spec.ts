@@ -44,7 +44,7 @@ test('calendar sharing: removing a member makes a new key, the others keep readi
   await openWeek(ada.page)
   again = await openSharing(ada.page, 'Club')
   await again.getByRole('button', { name: `Remove ${bob.account.address}` }).click()
-  const recipients = ada.page.getByTestId('remove-recipients')
+  const recipients = ada.page.getByTestId('key-recipients')
   await expect(recipients).toContainText(cem.account.address, { timeout: 60_000 })
   await expect(recipients).not.toContainText(bob.account.address)
   await expect(ada.page.getByTestId('remove-links')).toContainText('All event details')
