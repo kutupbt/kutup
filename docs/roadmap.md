@@ -524,6 +524,17 @@ key, so a bounce of it matches nothing and is filed as ordinary mail.
 Matching it needs the bounce check to hash under the keys of the groups the
 account sends for as well.
 
+### Mail · Sieve run by the server
+
+Kutup's server runs filters as its own conditions (docs/plans/mail-filters.md),
+so the Sieve editor and import take only what those can hold
+(docs/plans/mail-sieve-editor.md): tests on the sender, recipients, subject and
+attachments; move, label, read and star. Proton runs the script itself, so
+any Sieve its server supports works there. Running Sieve on Kutup's server
+(Stalwart has an engine) would need a design for what a script may do with
+Kutup's own folders, labels and encryption. Sieve's `vacation` and `redirect`
+are already features of their own here (Auto-reply, Forwarding).
+
 ### Backup / restore CLI
 
 The database half exists: `scripts/backup-postgres.sh` and `scripts/backup-stalwart.sh` store age-encrypted backups (to an offline key) in a bucket of their own and restore them after checking them (`docs/self-hosting.md`, "Backups"). Deleted blobs stay in the store for `storageDeletedBlobRetentionSeconds` (two days at first), so a dump younger than that restores with every blob it names, and `GET /api/health/ready` reports the newest backup's age. Still open: the blob bucket's second copy is the provider's versioning or replica (not set up by Kutup), the restore drill ran before the wipe on staging (E1, 2026-11-20, "Restore, as last run") and runs again on production after it, a blob that a restored dump names but the store lacks is answered with a 500 (`storage::get_object` turns `NoSuchKey` into a storage error) and shown as "can't be opened … check your connection" instead of a "missing" state (a 404-class answer with its own message), the watcher that alerts on readiness (docs/plans/restore-drill-and-alerting.md, Part 2 B) is deferred, and `kutup backup` / `kutup restore` subcommands in the Rust CLI (`crates/kutup-cli`) to wrap both.

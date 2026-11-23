@@ -1386,6 +1386,26 @@
       "unsupported": "Kutup filtreleri bunu yapamaz:",
       "unknownPlace": "Bu adla bir klasör ya da etiket yok (önce oluşturun, sonra yeniden içe aktarın):",
       "noAction": "Bu filtre Kutup’un yapabileceği hiçbir şey yapmıyor:"
+    },
+    "editor": {
+      "add": "Sieve filtresi ekle",
+      "edit": "Sieve olarak düzenle",
+      "addTitle": "Sieve filtresi ekle",
+      "editTitle": "Filtreyi Sieve olarak düzenle",
+      "description": "Bir filtreyi Sieve ile yazın: gönderen, alıcı, konu ya da ekler üzerindeki koşulları ve ne yapacağı (taşı, etiketle, okundu işaretle, yıldızla). Kutup siz yazdıkça denetler.",
+      "templateHint": "Bir if bloğu yazın: bir koşul, ardından fileinto ya da addflag.",
+      "notKept": "Kutup bu metni değil filtreyi kaydeder: yorumlar ve biçim korunmaz.",
+      "noFilter": "Bu betikte henüz bir filtre yok.",
+      "oneFilter": "Bir Sieve filtresi tek bir filtre tutar: tek bir if bloğu. Birden çoğu için Sieve içe aktarmayı kullanın.",
+      "unknownPlace": "Bu adla bir klasör ya da etiket yok:",
+      "elsewhere": {
+        "autoReply": "Kutup filtreleri yanıt göndermez: Ayarlar → Otomatik yanıt’ı kullanın.",
+        "forwarding": "Kutup filtreleri iletmez: Ayarlar → Yönlendirme’yi kullanın."
+      },
+      "discardTitle": "Değişiklikler atılsın mı?",
+      "discardBody": "Filtre olduğu gibi kalır.",
+      "keepEditing": "Düzenlemeye devam et",
+      "discard": "At"
     }
   },
   "export": {
