@@ -34,7 +34,8 @@ import { useCalendarPrefs } from '../features/prefs'
 import { SettingsDialog } from '../features/SettingsDialog'
 import { ShareCalendarDialog } from '../features/sharing/ShareCalendarDialog'
 import { SharedWithYou } from '../features/sharing/SharedWithYou'
-import { useDueRotations } from '../features/sharing/useDueRotations'
+import { DueRotationDialog } from '../features/sharing/DueRotationDialog'
+import { useKeyUpkeep } from '../features/sharing/useDueRotations'
 import { useToday } from '../features/today'
 
 /**
@@ -57,13 +58,13 @@ function useFirstCalendar() {
   return make
 }
 
-function CalendarRow({ calendar, onEdit, onShare }: { calendar: Calendar; onEdit: () => void; onShare: () => void }) {
+function CalendarRow({ calendar, onEdit, onShare, onReview }: { calendar: Calendar; onEdit: () => void; onShare: () => void; onReview?: () => void }) {
   const { t } = useTranslation()
   const session = useRequiredSession()
   const account = useMailAccount()
   const toggle = useCalendarMutation((display: boolean) => updateCalendar(session, account.data!, calendar, { display }))
   return (
-    <li className="group flex items-center gap-2 rounded-md px-3 py-1.5 text-sm hover:bg-chrome-accent/60">
+    <li className="group flex flex-wrap items-center gap-2 rounded-md px-3 py-1.5 text-sm hover:bg-chrome-accent/60">
       <Checkbox
         id={`calendar-${calendar.id}`}
         checked={calendar.display}
@@ -94,6 +95,16 @@ function CalendarRow({ calendar, onEdit, onShare }: { calendar: Calendar; onEdit
       >
         <Pencil className="size-3.5" aria-hidden />
       </button>
+      {onReview ? (
+        <button
+          type="button"
+          onClick={onReview}
+          className="basis-full rounded-sm bg-status-warn/10 px-2 py-0.5 text-left text-xs text-status-warn hover:bg-status-warn/20"
+          data-testid="rotation-pending"
+        >
+          {t('sharing.due.banner')}
+        </button>
+      ) : null}
     </li>
   )
 }
@@ -104,7 +115,8 @@ export function CalendarShell() {
   useAccountZone()
   usePush()
   useEventLink()
-  useDueRotations()
+  const upkeep = useKeyUpkeep()
+  const [reviewing, setReviewing] = useState<Calendar | null>(null)
   const session = useRequiredSession()
   const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
@@ -164,7 +176,13 @@ export function CalendarShell() {
             </li>
           ) : null}
           {(calendars.data?.calendars ?? []).map((calendar) => (
-            <CalendarRow key={calendar.id} calendar={calendar} onEdit={() => setEditing(calendar)} onShare={() => setSharing(calendar)} />
+            <CalendarRow
+              key={calendar.id}
+              calendar={calendar}
+              onEdit={() => setEditing(calendar)}
+              onShare={() => setSharing(calendar)}
+              onReview={upkeep.pending.has(calendar.id) ? () => setReviewing(calendar) : undefined}
+            />
           ))}
           <li>
             <button
@@ -225,6 +243,16 @@ export function CalendarShell() {
       />
       <SettingsDialog open={settings} onOpenChange={setSettings} />
       {sharing ? <ShareCalendarDialog calendar={sharing} open onOpenChange={(open) => !open && setSharing(null)} /> : null}
+      {reviewing ? (
+        <DueRotationDialog
+          calendar={reviewing}
+          onClose={() => setReviewing(null)}
+          onDone={() => {
+            upkeep.settle(reviewing.id)
+            setReviewing(null)
+          }}
+        />
+      ) : null}
     </AppShell>
   )
 }

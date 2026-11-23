@@ -690,7 +690,9 @@
       "storage": "Storage used",
       "ofCapacity": "of {{total}} capacity",
       "files": "Files",
-      "folders": "Folders"
+      "folders": "Folders",
+      "calendarsNearKeyLimit_one": "{{count}} calendar is near the most key generations it may keep (Server settings → Calendar). Its owner's app tidies them up; one at the limit can't have anyone removed.",
+      "calendarsNearKeyLimit_other": "{{count}} calendars are near the most key generations they may keep (Server settings → Calendar). Their owners' apps tidy them up; one at the limit can't have anyone removed."
     },
     "quota": {
       "storage": "Storage quota (GiB)",

@@ -156,6 +156,8 @@ export interface Calendar {
   keyring: Map<string, UnlockedCalendar>
   /** The newest key generation (`unlocked`'s). */
   keyGeneration: number
+  /** How many key generations this member holds (the owner: all the calendar keeps). */
+  keyGenerations: number
   /** The account owns it (else it is shared with it, and `owner` says by whom). */
   owned: boolean
   owner?: CalendarOwnerRow
@@ -387,6 +389,7 @@ export async function loadCalendars(
         unlocked: keys.newest,
         keyring: keys.keyring,
         keyGeneration: keys.generation,
+        keyGenerations: keys.keyring.size,
         owned,
         owner: owned ? undefined : row.owner,
         metadataRest: metadata.rest,

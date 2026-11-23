@@ -690,7 +690,9 @@
       "storage": "Kullanılan alan",
       "ofCapacity": "{{total}} kapasiteden",
       "files": "Dosyalar",
-      "folders": "Klasörler"
+      "folders": "Klasörler",
+      "calendarsNearKeyLimit_one": "{{count}} takvim tutabileceği en çok anahtar kuşağına yaklaştı (Sunucu ayarları → Takvim). Sahibinin uygulaması eski anahtarları toplar; sınırdaki bir takvimden kimse çıkarılamaz.",
+      "calendarsNearKeyLimit_other": "{{count}} takvim tutabileceği en çok anahtar kuşağına yaklaştı (Sunucu ayarları → Takvim). Sahiplerinin uygulamaları eski anahtarları toplar; sınırdaki bir takvimden kimse çıkarılamaz."
     },
     "quota": {
       "storage": "Depolama kotası (GiB)",

@@ -79,6 +79,11 @@ export function UsersPage() {
         <Stat label={t('admin.overview.folders')} value={stats.data ? stats.data.totalCollections.toLocaleString(lang) : null} />
       </div>
       {stats.isError ? <Alert variant="error">{apiErrorMessage(stats.error, t('common.tryAgain'))}</Alert> : null}
+      {stats.data?.calendarsNearKeyLimit ? (
+        <Alert variant="warn" data-testid="admin-calendars-near-key-limit">
+          {t('admin.overview.calendarsNearKeyLimit', { count: stats.data.calendarsNearKeyLimit })}
+        </Alert>
+      ) : null}
 
       <Card className="p-0">
         <div className="border-b border-border p-3">

@@ -8,6 +8,8 @@
 // checked.
 
 import {
+  calendarEventKeyId,
+  calendarKeyPacketKeyId,
   calendarLinkUrlSecret,
   createCalendarLink,
   rotateCalendar,
@@ -19,6 +21,7 @@ import {
   type CalendarMember,
   type CalendarOwner,
   type GenerationShare,
+  type SealedEvent,
 } from '@kutup/crypto/calendar'
 import { accountKeyOf, type AccountRef } from '@kutup/crypto/accountRef'
 import type { SealedMetadata } from '@kutup/crypto/calendar'
@@ -38,6 +41,7 @@ import {
   acceptIdentity,
   checkIdentity,
   confirmRecipient,
+  pinnedVerdict,
   IdentityNotConfirmed,
   lookupAddress,
   sealableDriveKey,
@@ -326,13 +330,21 @@ export interface KeyRecipient {
   state: 'verified' | 'known' | 'new' | 'changed' | 'invalid' | 'someoneElse'
 }
 
-/** Who would get the calendar's next key if `removed` (an account id, or none) went now. */
+/**
+ * Who would get the calendar's next key if `removed` (an account id, or
+ * none) went now, as the pins see them. Someone this account never met is
+ * `new`, never `known`: the pins are asked without recording anyone, so a
+ * person the server added shows as such.
+ */
 export async function keyRecipients(me: DriveIdentity, calendarId: string, removed: string | null): Promise<KeyRecipient[]> {
   const sharing = await loadSharing(calendarId)
   return Promise.all(
-    stayers(sharing, removed).map(async (person) => {
+    stayers(sharing, removed).map(async (person): Promise<KeyRecipient> => {
       const answer = await lookupAddress(me, person.address)
-      if (!answer || answer.accountId !== person.accountId) return { ...person, state: 'someoneElse' as const }
+      if (!answer || answer.accountId !== person.accountId) return { ...person, state: 'someoneElse' }
+      const pinned = await pinnedVerdict(me, { server: answer.server, accountId: answer.accountId }, person.address, answer.accountAuthorityPublicKey)
+      if (pinned.kind === 'unknown') return { ...person, state: 'new' }
+      if (pinned.kind === 'changed' || pinned.kind === 'someoneElse') return { ...person, state: pinned.kind }
       const status = await checkIdentity(me, person.address, {
         driveXwingPublicKey: answer.driveXwingPublicKey,
         driveSigningPublicKey: answer.driveSigningPublicKey,
@@ -349,6 +361,33 @@ export async function keyRecipients(me: DriveIdentity, calendarId: string, remov
       return { ...person, state }
     }),
   )
+}
+
+/** Whether a recipient is one the owner already trusts (verified, or pinned before): a rotation may go to them unasked. */
+export function trusted(recipient: KeyRecipient): boolean {
+  return recipient.state === 'verified' || recipient.state === 'known'
+}
+
+/** A rotation's recipients the pins doubt, by account: what the owner confirms. */
+export function doubted(recipients: KeyRecipient[]): Set<string> {
+  return new Set(recipients.filter((r) => r.state === 'changed' || r.state === 'invalid' || r.state === 'someoneElse').map((r) => r.accountId))
+}
+
+/**
+ * A rotation that is due (someone who held the key left), made unasked only
+ * when everyone who gets the new key is someone the owner already trusts;
+ * otherwise `review`, with who they are, for the owner to confirm.
+ */
+export async function dueRotation(
+  session: Session,
+  me: DriveIdentity,
+  account: MailAccount,
+  calendar: Calendar,
+): Promise<{ kind: 'rotated' } | { kind: 'review'; recipients: KeyRecipient[] }> {
+  const recipients = await keyRecipients(me, calendar.id, null)
+  if (!recipients.every(trusted)) return { kind: 'review', recipients }
+  await rotateKey(session, me, account, calendar, null)
+  return { kind: 'rotated' }
 }
 
 /** A keyed link made again in a link's place (the remove dialog's "Also replace links"). */
@@ -402,9 +441,9 @@ export async function rotateKey(
     }),
   )
   const keyed = links.filter((link) => link.kind !== 'busy')
-  // Replaced: gone before the new key exists, so no old address opens it.
+  // Replaced: deleted by the rotation itself, in the same transaction as
+  // the new key (nothing is gone if it fails), and made again after.
   const replacing = options.replaceLinks ? keyed.map((link) => ({ kind: link.kind, label: linkPurpose(account, calendar, link) ?? '' })) : []
-  if (options.replaceLinks) for (const link of keyed) await deleteLink(calendar.id, link.id)
   const carried = options.replaceLinks ? [] : keyed
   const owner = await calendarAccount(session)
   const rotated = await rotateCalendar(
@@ -430,15 +469,36 @@ export async function rotateKey(
     memberShares: rotated.memberShares.map((share) => ({ accountId: byAccount.get(share.account)!, share: share.share })),
     metadata: rotated.metadata,
     links: rotated.links.map((link) => ({ id: link.linkId, passphrase: link.passphrase })),
+    removeLinks: options.replaceLinks ? keyed.map((link) => link.id) : [],
   })
   // Made again under the new key (its name sealed with it), each under a fresh secret.
   const fresh = { ...calendar, unlocked: await unlockNewest(session, calendar.id, owner) }
   const replaced: ReplacedLink[] = []
+  const missing: { kind: LinkKind; label: string }[] = []
   for (const link of replacing) {
-    const made = await createLink(session, account, fresh, link.kind, link.label)
-    replaced.push({ kind: link.kind, label: link.label, urls: made.urls })
+    try {
+      const made = await createLink(session, account, fresh, link.kind, link.label)
+      replaced.push({ kind: link.kind, label: link.label, urls: made.urls })
+    } catch {
+      missing.push(link)
+    }
   }
+  if (missing.length) throw new LinksNotRemade(missing, replaced)
   return replaced
+}
+
+/**
+ * The key changed and the old links went, but some couldn't be made again:
+ * which (the owner makes them again by hand), and the ones that were.
+ */
+export class LinksNotRemade extends Error {
+  constructor(
+    readonly missing: { kind: LinkKind; label: string }[],
+    readonly made: ReplacedLink[],
+  ) {
+    super('some links were removed and not made again')
+    this.name = 'LinksNotRemade'
+  }
 }
 
 /** The calendar's newest key, unlocked from the owner's own share (after a rotation). */
@@ -682,4 +742,84 @@ export function linkPurpose(account: MailAccount, calendar: Calendar, link: Link
 
 export async function deleteLink(calendarId: string, linkId: string): Promise<void> {
   await api.delete(calendarPath(calendarId, `/links/${encodeURIComponent(linkId)}`))
+}
+
+// ------------------------------------------------------------ compaction
+
+/** What the server lists of a calendar's events still under an older key generation. */
+interface StaleEvents {
+  keyGeneration: number
+  generations: number[]
+  events: { id: string; revision: number; event: SealedEvent }[]
+  more: boolean
+}
+
+/** The share of `calendar.key_generations` past which the owner's app compacts a calendar unasked. */
+export const COMPACT_AT = 0.9
+
+/** The site's cap on a calendar's key generations. */
+export async function keyGenerationCap(): Promise<number> {
+  const data = await loadServerSettings<{ calendar?: { keyGenerations?: number } }>()
+  return data.calendar?.keyGenerations ?? 1000
+}
+
+/** The calendar's events and labels can't all be moved: a key of theirs isn't on this device. */
+export class CompactionStuck extends Error {
+  constructor() {
+    super('some events are under a key this device does not hold')
+    this.name = 'CompactionStuck'
+  }
+}
+
+/**
+ * Moves the calendar to its newest key generation and drops the older ones
+ * (docs/plans/calendar-e3.md, "Compaction"): each event still under an older
+ * generation gets its key packets sealed again to the newest key (the same
+ * session keys, so its parts and signatures stay as they are), a batch at a
+ * time and each from the revision it was read at (an event changed meanwhile
+ * is read again); then each link label; then the server prunes the
+ * generations nothing names any more, checking that first. Owner only. A
+ * calendar whose newest key changed under it is `CalendarChangedError`.
+ * Answers how many generations went.
+ */
+export async function compactKeys(calendar: Calendar): Promise<number> {
+  if (!calendar.owned) throw new Error('only the owner compacts a calendar')
+  const newest = calendar.unlocked
+  let stuckRounds = 0
+  let generations: number[] = []
+  for (let round = 0; round < 10_000; round++) {
+    const { data } = await api.get<StaleEvents>(calendarPath(calendar.id, '/events/stale'))
+    if (data.keyGeneration !== calendar.keyGeneration) throw new CalendarChangedError()
+    generations = data.generations
+    if (!data.events.length) break
+    const events = []
+    for (const row of data.events) {
+      const older = calendar.keyring.get(await calendarEventKeyId(row.event))
+      if (!older) continue
+      events.push({
+        id: row.id,
+        baseRevision: row.revision,
+        sharedKeyPacket: newest.rewrapKeyPacket(older, row.event.sharedKeyPacket),
+        calendarKeyPacket: newest.rewrapKeyPacket(older, row.event.calendarKeyPacket),
+      })
+    }
+    if (!events.length) throw new CompactionStuck()
+    const { data: done } = await api.post<{ results: { status: number }[] }>(calendarPath(calendar.id, '/events/rewrap'), { keyGeneration: calendar.keyGeneration, events })
+    // Every one refused (changed meanwhile, again and again): give up for now.
+    stuckRounds = done.results.some((r) => r.status === 200) ? 0 : stuckRounds + 1
+    if (stuckRounds >= 3) throw new CompactionStuck()
+  }
+  const purposes = []
+  for (const link of await loadLinks(calendar.id)) {
+    if (!link.purpose) continue
+    const id = await calendarKeyPacketKeyId(link.purpose.keyPacket)
+    if (id === newest.keyId) continue
+    const older = calendar.keyring.get(id)
+    if (!older) throw new CompactionStuck()
+    purposes.push({ linkId: link.id, keyPacket: newest.rewrapKeyPacket(older, link.purpose.keyPacket) })
+  }
+  if (purposes.length) await api.post(calendarPath(calendar.id, '/events/rewrap'), { keyGeneration: calendar.keyGeneration, purposes })
+  const older = generations.filter((generation) => generation !== calendar.keyGeneration)
+  if (older.length) await api.post(calendarPath(calendar.id, '/keys/prune'), { generations: older })
+  return older.length
 }

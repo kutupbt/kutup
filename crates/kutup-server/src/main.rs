@@ -1359,6 +1359,18 @@ fn build_router(state: AppState) -> Router {
             post(handlers::calendar_sharing::rotate),
         )
         .route(
+            "/api/v1/calendar/calendars/:id/keys/prune",
+            post(handlers::calendar_sharing::prune),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/events/stale",
+            get(handlers::calendar_sharing::stale_events),
+        )
+        .route(
+            "/api/v1/calendar/calendars/:id/events/rewrap",
+            post(handlers::calendar_sharing::rewrap),
+        )
+        .route(
             "/api/v1/calendar/calendars/:id/members",
             get(handlers::calendar_sharing::members),
         )

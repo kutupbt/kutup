@@ -791,6 +791,10 @@ pub struct Rotation {
     pub metadata: SealedMetadataV1,
     /// Every full and query link, carried over.
     pub links: Vec<LinkCarried>,
+    /// Keyed links deleted in the same transaction instead of carried over
+    /// (the owner makes them again under fresh secrets once this succeeds).
+    #[serde(default)]
+    pub remove_links: Vec<Uuid>,
 }
 
 /// The largest owner's link-secret envelope taken, in base64 (the column
@@ -973,11 +977,16 @@ pub async fn rotate(
     .bind(id)
     .fetch_all(&mut *tx)
     .await?;
-    let mut carried: Vec<Uuid> = input.links.iter().map(|l| l.id).collect();
+    let mut carried: Vec<Uuid> = input
+        .links
+        .iter()
+        .map(|l| l.id)
+        .chain(input.remove_links.iter().copied())
+        .collect();
     carried.sort_unstable();
     if carried != keyed {
         return Err(coded(
-            AppError::bad_request("a rotation carries every keyed link over"),
+            AppError::bad_request("a rotation carries every keyed link over, or removes it"),
             "linksIncomplete",
         ));
     }
@@ -997,6 +1006,16 @@ pub async fn rotate(
     // ones are charged.
     if let Some(removed) = input.remove_account_id {
         remove_member(&mut tx, id, removed, "removed").await?;
+    }
+    // Links replaced: gone in the same commit as the new key.
+    for link in &input.remove_links {
+        let freed = link_bytes(&mut tx, id, *link).await?.unwrap_or(0);
+        sqlx::query("DELETE FROM calendar_links WHERE id = $1 AND calendar_id = $2")
+            .bind(link)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        charge(&mut tx, id, user_id, -freed).await?;
     }
     for account in &inactive {
         sqlx::query(
@@ -1744,6 +1763,28 @@ pub async fn create_link(
     Ok((StatusCode::CREATED, Json(link_view(row))).into_response())
 }
 
+/// The bytes a link holds (its secret, purpose and passphrase copies), or
+/// none for a link that isn't the calendar's.
+async fn link_bytes(
+    tx: &mut Transaction<'_, Postgres>,
+    calendar: Uuid,
+    link: Uuid,
+) -> AppResult<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT (COALESCE(octet_length(l.secret), 0)
+                 + COALESCE(octet_length(l.purpose_key_packet), 0)
+                 + COALESCE(octet_length(l.purpose_data_packet), 0)
+                 + COALESCE(octet_length(l.purpose_signature), 0)
+                 + COALESCE((SELECT SUM(octet_length(p.passphrase))
+                               FROM calendar_link_passphrases p WHERE p.link_id = l.id), 0))::bigint
+           FROM calendar_links l WHERE l.id = $1 AND l.calendar_id = $2",
+    )
+    .bind(link)
+    .bind(calendar)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
 /// `DELETE /api/v1/calendar/calendars/{id}/links/{linkId}` — the owner
 /// deletes a link: it opens nothing from then on.
 #[utoipa::path(
@@ -1763,19 +1804,7 @@ pub async fn delete_link(
     limited(user_id)?;
     let mut tx = state.pool.begin().await?;
     owned_calendar(&mut tx, user_id, id).await?;
-    let freed: Option<i64> = sqlx::query_scalar(
-        "SELECT (COALESCE(octet_length(l.secret), 0)
-                 + COALESCE(octet_length(l.purpose_key_packet), 0)
-                 + COALESCE(octet_length(l.purpose_data_packet), 0)
-                 + COALESCE(octet_length(l.purpose_signature), 0)
-                 + COALESCE((SELECT SUM(octet_length(p.passphrase))
-                               FROM calendar_link_passphrases p WHERE p.link_id = l.id), 0))::bigint
-           FROM calendar_links l WHERE l.id = $1 AND l.calendar_id = $2",
-    )
-    .bind(link)
-    .bind(id)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let freed = link_bytes(&mut tx, id, link).await?;
     let Some(freed) = freed else {
         return Err(AppError::not_found("not found"));
     };
@@ -1873,4 +1902,428 @@ pub async fn busy(
     let busy: Vec<BusyBlock> =
         crate::calendar_busy::blocks(&state.pool, &calendars, start, end).await?;
     Ok(Json(BusyList { busy }))
+}
+
+// ----- compaction -----
+//
+// Each removal (or due rotation) adds a key generation, up to
+// `calendar.key_generations`. The owner's app compacts a calendar before it
+// gets there (docs/plans/calendar-e3.md, "Compaction"): every event still
+// under an older generation has its two key packets sealed again to the
+// newest key (the same session keys, so its parts and their signatures stay
+// as they are), as does every link purpose; then the generations nothing
+// needs any more are pruned, with their shares and link copies, in one
+// transaction that checks first that nothing still names them.
+
+/// The most events one rewrap takes, and one stale listing answers.
+const COMPACTION_BATCH: usize = 100;
+
+/// The key ID each generation's key packets name.
+async fn generation_key_ids(
+    tx: &mut Transaction<'_, Postgres>,
+    calendar: Uuid,
+) -> AppResult<Vec<(i32, [u8; 8])>> {
+    let keys: Vec<(i32, Vec<u8>)> = sqlx::query_as(
+        "SELECT key_generation, public_key FROM calendar_keys WHERE calendar_id = $1
+          ORDER BY key_generation",
+    )
+    .bind(calendar)
+    .fetch_all(&mut **tx)
+    .await?;
+    keys.into_iter()
+        .map(|(generation, public_key)| {
+            cal::encryption_key_id(&public_key)
+                .map(|id| (generation, id))
+                .map_err(|_| AppError::internal("a stored calendar key does not parse"))
+        })
+        .collect()
+}
+
+/// The key ID a stored key packet names; none for one that doesn't parse.
+fn packet_key_id(packet: &[u8]) -> Option<[u8; 8]> {
+    cal::key_packet_key_id(packet).ok()
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StaleEvent {
+    pub id: Uuid,
+    /// The stored revision, which the rewrap names as its base.
+    pub revision: i64,
+    #[schema(value_type = Object)]
+    pub event: kutup_crypto::calendar::SealedEventV1,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StaleEvents {
+    /// The newest generation, which the rewrap seals to.
+    pub key_generation: i32,
+    /// Generations the calendar holds, oldest first.
+    pub generations: Vec<i32>,
+    /// Events still under an older generation (at most a batch).
+    pub events: Vec<StaleEvent>,
+    /// More remain after these.
+    pub more: bool,
+}
+
+/// `GET /api/v1/calendar/calendars/{id}/events/stale` — the owner's events
+/// still under an older key generation, a batch at a time.
+#[utoipa::path(
+    get,
+    path = "/api/v1/calendar/calendars/{id}/events/stale",
+    tag = "calendar",
+    security(("BearerAuth" = [])),
+    params(("id" = Uuid, Path)),
+    responses((status = 200, body = StaleEvents), (status = 403), (status = 404))
+)]
+pub async fn stale_events(
+    State(state): State<AppState>,
+    user: AuthAccount,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<StaleEvents>> {
+    let user_id = trusted_uuid(&user.account_id)?;
+    let mut tx = state.pool.begin().await?;
+    let (newest, generations) = owned_calendar(&mut tx, user_id, id).await?;
+    let ids = generation_key_ids(&mut tx, id).await?;
+    let newest_id = ids
+        .iter()
+        .find(|(generation, _)| *generation == newest)
+        .map(|(_, key)| *key)
+        .ok_or_else(|| AppError::internal("the newest key generation is missing"))?;
+    let packets: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
+        "SELECT id, shared_key_packet FROM calendar_events WHERE calendar_id = $1 ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let stale: Vec<Uuid> = packets
+        .into_iter()
+        .filter(|(_, packet)| packet_key_id(packet) != Some(newest_id))
+        .map(|(event, _)| event)
+        .collect();
+    let more = stale.len() > COMPACTION_BATCH;
+    let batch: Vec<Uuid> = stale.into_iter().take(COMPACTION_BATCH).collect();
+    let rows: Vec<crate::handlers::calendar::EventRow> = sqlx::query_as(&format!(
+        "{} WHERE e.calendar_id = $1 AND e.id = ANY($2) ORDER BY e.id",
+        crate::handlers::calendar::event_view_sql(3)
+    ))
+    .bind(id)
+    .bind(&batch)
+    .bind(Uuid::nil())
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(StaleEvents {
+        key_generation: newest,
+        generations,
+        events: rows
+            .into_iter()
+            .map(crate::handlers::calendar::event_view)
+            .map(|view| StaleEvent {
+                id: view.id,
+                revision: view.revision,
+                event: view.event,
+            })
+            .collect(),
+        more,
+    }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RewrappedEvent {
+    pub id: Uuid,
+    pub base_revision: i64,
+    pub shared_key_packet: String,
+    pub calendar_key_packet: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RewrappedPurpose {
+    pub link_id: Uuid,
+    pub key_packet: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Rewrap {
+    /// The newest generation the packets are sealed to: refused when
+    /// another came first.
+    pub key_generation: i32,
+    #[serde(default)]
+    pub events: Vec<RewrappedEvent>,
+    #[serde(default)]
+    pub purposes: Vec<RewrappedPurpose>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RewrapResult {
+    pub id: Uuid,
+    pub status: u16,
+    pub code: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RewrapResults {
+    pub results: Vec<RewrapResult>,
+}
+
+/// A rewrapped key packet: canonical base64, at most 1024 bytes, to the
+/// newest key.
+fn rewrapped(value: &str, newest: [u8; 8]) -> AppResult<Vec<u8>> {
+    if value.len() > 1024 / 3 * 4 + 4 {
+        return Err(AppError::bad_request("a key packet is too large"));
+    }
+    let packet = b64(value, "key packet")?;
+    if packet.is_empty() || packet_key_id(&packet) != Some(newest) {
+        return Err(coded(
+            AppError::bad_request("a key packet is not to the calendar's newest key"),
+            "notNewestKey",
+        ));
+    }
+    Ok(packet)
+}
+
+/// `POST /api/v1/calendar/calendars/{id}/events/rewrap` — the owner moves
+/// events (and link purposes) to the newest key generation: their key
+/// packets sealed again, nothing else changed. Each event names the
+/// revision it was read at, as an update does (`409 revisionConflict`
+/// otherwise), and its revision goes up by one.
+#[utoipa::path(
+    post,
+    path = "/api/v1/calendar/calendars/{id}/events/rewrap",
+    tag = "calendar",
+    security(("BearerAuth" = [])),
+    params(("id" = Uuid, Path)),
+    request_body = Rewrap,
+    responses(
+        (status = 200, body = RewrapResults),
+        (status = 400),
+        (status = 403),
+        (status = 409, description = "Another key generation came first"),
+    )
+)]
+pub async fn rewrap(
+    State(state): State<AppState>,
+    user: AuthAccount,
+    Path(id): Path<Uuid>,
+    Json(input): Json<Rewrap>,
+) -> AppResult<Json<RewrapResults>> {
+    let user_id = trusted_uuid(&user.account_id)?;
+    limited(user_id)?;
+    if input.events.len() > COMPACTION_BATCH || input.purposes.len() > COMPACTION_BATCH {
+        return Err(AppError::bad_request(format!(
+            "a rewrap takes at most {COMPACTION_BATCH} events and purposes"
+        )));
+    }
+    let mut tx = state.pool.begin().await?;
+    let (newest, _) = owned_calendar(&mut tx, user_id, id).await?;
+    if input.key_generation != newest {
+        return Err(coded(
+            AppError::conflict("the calendar's key changed; reload it"),
+            "keyRotated",
+        ));
+    }
+    let newest_id = generation_key_ids(&mut tx, id)
+        .await?
+        .into_iter()
+        .find(|(generation, _)| *generation == newest)
+        .map(|(_, key)| key)
+        .ok_or_else(|| AppError::internal("the newest key generation is missing"))?;
+    let mut results = Vec::new();
+    let mut event_bytes = 0i64;
+    for change in &input.events {
+        let packets = rewrapped(&change.shared_key_packet, newest_id)
+            .and_then(|shared| Ok((shared, rewrapped(&change.calendar_key_packet, newest_id)?)));
+        let (shared, own) = match packets {
+            Ok(packets) => packets,
+            Err(error) => {
+                results.push(RewrapResult {
+                    id: change.id,
+                    status: error.status.as_u16(),
+                    code: error
+                        .details
+                        .as_ref()
+                        .and_then(|d| d.get("code"))
+                        .and_then(|c| c.as_str())
+                        .map(str::to_owned),
+                });
+                continue;
+            }
+        };
+        let current: Option<(i64, i64)> = sqlx::query_as(
+            "SELECT revision, (octet_length(shared_key_packet) + octet_length(calendar_key_packet))::bigint
+               FROM calendar_events WHERE id = $1 AND calendar_id = $2 FOR UPDATE",
+        )
+        .bind(change.id)
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((revision, old)) = current else {
+            results.push(RewrapResult {
+                id: change.id,
+                status: 404,
+                code: None,
+            });
+            continue;
+        };
+        if revision != change.base_revision {
+            results.push(RewrapResult {
+                id: change.id,
+                status: 409,
+                code: Some("revisionConflict".into()),
+            });
+            continue;
+        }
+        let delta = (shared.len() + own.len()) as i64 - old;
+        sqlx::query(
+            "UPDATE calendar_events SET shared_key_packet = $2, calendar_key_packet = $3,
+                    revision = revision + 1, bytes = GREATEST(bytes + $4, 0), modified_at = now()
+              WHERE id = $1",
+        )
+        .bind(change.id)
+        .bind(&shared)
+        .bind(&own)
+        .bind(delta)
+        .execute(&mut *tx)
+        .await?;
+        event_bytes += delta;
+        results.push(RewrapResult {
+            id: change.id,
+            status: 200,
+            code: None,
+        });
+    }
+    // Events' bytes are the events' own (not the calendar row's).
+    if event_bytes > 0 {
+        crate::storage_pool::charge_within_quota(&mut tx, user_id, event_bytes).await?;
+    } else if event_bytes < 0 {
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::Account(user_id),
+            event_bytes,
+        )
+        .await?;
+    }
+    for purpose in &input.purposes {
+        let packet = rewrapped(&purpose.key_packet, newest_id)?;
+        let old: Option<i64> = sqlx::query_scalar(
+            "SELECT octet_length(purpose_key_packet)::bigint FROM calendar_links
+              WHERE id = $1 AND calendar_id = $2 AND purpose_key_packet IS NOT NULL FOR UPDATE",
+        )
+        .bind(purpose.link_id)
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(old) = old else {
+            return Err(AppError::not_found("no such link purpose"));
+        };
+        sqlx::query("UPDATE calendar_links SET purpose_key_packet = $2 WHERE id = $1")
+            .bind(purpose.link_id)
+            .bind(&packet)
+            .execute(&mut *tx)
+            .await?;
+        charge(&mut tx, id, user_id, packet.len() as i64 - old).await?;
+    }
+    tx.commit().await?;
+    Ok(Json(RewrapResults { results }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Prune {
+    /// Older generations to drop.
+    pub generations: Vec<i32>,
+}
+
+/// `POST /api/v1/calendar/calendars/{id}/keys/prune` — the owner drops key
+/// generations nothing needs any more: refused (`409 generationInUse`)
+/// while an event or a link purpose still names one; the newest is never
+/// pruned. Their shares and link copies go with them, in one transaction.
+#[utoipa::path(
+    post,
+    path = "/api/v1/calendar/calendars/{id}/keys/prune",
+    tag = "calendar",
+    security(("BearerAuth" = [])),
+    params(("id" = Uuid, Path)),
+    request_body = Prune,
+    responses((status = 204), (status = 400), (status = 403), (status = 409))
+)]
+pub async fn prune(
+    State(state): State<AppState>,
+    user: AuthAccount,
+    Path(id): Path<Uuid>,
+    Json(input): Json<Prune>,
+) -> AppResult<StatusCode> {
+    let user_id = trusted_uuid(&user.account_id)?;
+    limited(user_id)?;
+    let mut tx = state.pool.begin().await?;
+    let (newest, generations) = owned_calendar(&mut tx, user_id, id).await?;
+    if input.generations.is_empty()
+        || input
+            .generations
+            .iter()
+            .any(|g| *g >= newest || !generations.contains(g))
+    {
+        return Err(AppError::bad_request(
+            "only older generations the calendar holds are pruned",
+        ));
+    }
+    let doomed: Vec<[u8; 8]> = generation_key_ids(&mut tx, id)
+        .await?
+        .into_iter()
+        .filter(|(generation, _)| input.generations.contains(generation))
+        .map(|(_, key)| key)
+        .collect();
+    let packets: Vec<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT shared_key_packet, calendar_key_packet FROM calendar_events WHERE calendar_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let purposes: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT purpose_key_packet FROM calendar_links
+          WHERE calendar_id = $1 AND purpose_key_packet IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    // Anything that doesn't name a key the server can read counts as
+    // naming a doomed one: never pruned from under it.
+    let in_use = |packet: &[u8]| packet_key_id(packet).is_none_or(|key| doomed.contains(&key));
+    if packets
+        .iter()
+        .any(|(shared, own)| in_use(shared) || in_use(own))
+        || purposes.iter().any(|packet| in_use(packet))
+    {
+        return Err(coded(
+            AppError::conflict("an event or a link still uses an older key; compact it first"),
+            "generationInUse",
+        ));
+    }
+    let freed: i64 = sqlx::query_scalar(
+        "SELECT (COALESCE((SELECT SUM(octet_length(public_key) + octet_length(locked_secret_key))
+                             FROM calendar_keys WHERE calendar_id = $1 AND key_generation = ANY($2)), 0)
+               + COALESCE((SELECT SUM(octet_length(share)) FROM calendar_member_shares
+                            WHERE calendar_id = $1 AND key_generation = ANY($2)), 0)
+               + COALESCE((SELECT SUM(octet_length(passphrase)) FROM calendar_link_passphrases
+                            WHERE calendar_id = $1 AND key_generation = ANY($2)), 0))::bigint",
+    )
+    .bind(id)
+    .bind(&input.generations)
+    .fetch_one(&mut *tx)
+    .await?;
+    // The shares and the links' copies go with their generation (their
+    // foreign keys cascade).
+    sqlx::query("DELETE FROM calendar_keys WHERE calendar_id = $1 AND key_generation = ANY($2)")
+        .bind(id)
+        .bind(&input.generations)
+        .execute(&mut *tx)
+        .await?;
+    charge(&mut tx, id, user_id, -freed).await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }

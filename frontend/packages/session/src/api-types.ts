@@ -154,6 +154,8 @@ export interface IncomingShare {
 }
 
 export interface AdminStats {
+  /** Calendars at 90% or more of `calendar.key_generations` (their owners' apps compact them). */
+  calendarsNearKeyLimit?: number
   totalAccounts: number
   activeAccounts: number
   totalFiles: number

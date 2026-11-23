@@ -1325,3 +1325,180 @@ fn busy_times_and_their_switch() {
         StatusCode::NO_CONTENT
     );
 }
+
+#[test]
+fn compaction_moves_events_then_prunes() {
+    let Some(base) = live() else { return };
+    let c = client();
+    let ada = person(&c, &base);
+    let bob = person(&c, &base);
+    let made = make_calendar(&c, &base, &ada, "Eski");
+    let calendar = format!("/api/v1/calendar/calendars/{}", made.id);
+    let result = create_event(
+        &c,
+        &base,
+        &ada,
+        &made.id,
+        &made.key,
+        &event(
+            "old@kutup.test",
+            "2026-12-09T09:00:00Z",
+            "2026-12-09T10:00:00Z",
+            "Under generation 1",
+        ),
+    );
+    assert_eq!(result["status"], 200, "{result}");
+    let event_id = result["event"]["id"].as_str().unwrap().to_owned();
+    // Bob joins and is removed: generation 2.
+    assert_eq!(
+        invite(&c, &base, &ada, &made, &bob, VIEW).status(),
+        StatusCode::CREATED
+    );
+    let invitation = get(&c, &base, &bob.user, "/api/v1/calendar/invitations")["invitations"][0]
+        ["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        post(
+            &c,
+            &base,
+            &bob.user,
+            &format!("/api/v1/calendar/invitations/{invitation}/accept"),
+            json!({})
+        )
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    let (body, passphrase) = rotation_body(
+        &ada,
+        &made.id,
+        "Eski",
+        1,
+        Some(&bob.user.id),
+        json!([]),
+        json!([]),
+    );
+    let newest = cal::unlock_calendar_key(
+        &b64_decode(body["lockedSecretKey"].as_str().unwrap()),
+        &passphrase,
+    )
+    .unwrap();
+    let r = post(
+        &c,
+        &base,
+        &ada.user,
+        &format!("{calendar}/keys/rotate"),
+        body,
+    );
+    assert_eq!(
+        r.status(),
+        StatusCode::NO_CONTENT,
+        "{}",
+        r.text().unwrap_or_default()
+    );
+
+    // Generation 1 still holds the event: pruning it is refused, and the
+    // newest is never pruned.
+    let prune = |generations: Value| {
+        post(
+            &c,
+            &base,
+            &ada.user,
+            &format!("{calendar}/keys/prune"),
+            json!({ "generations": generations }),
+        )
+    };
+    assert_eq!(
+        code(prune(json!([1]))),
+        (StatusCode::CONFLICT, "generationInUse".into())
+    );
+    assert_eq!(prune(json!([2])).status(), StatusCode::BAD_REQUEST);
+    // Only the owner compacts.
+    assert_eq!(
+        bearer(
+            c.get(format!("{base}{calendar}/events/stale")),
+            &bob.user.token
+        )
+        .send()
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // The stale event, its key packets sealed again to generation 2.
+    let stale = get(&c, &base, &ada.user, &format!("{calendar}/events/stale"));
+    assert_eq!(stale["keyGeneration"], 2);
+    assert_eq!(stale["generations"], json!([1, 2]));
+    assert_eq!(stale["events"].as_array().unwrap().len(), 1);
+    let row = &stale["events"][0];
+    assert_eq!(row["id"], event_id.as_str());
+    let packet = |field: &str| b64_decode(row["event"][field].as_str().unwrap());
+    let moved = |field: &str| b64(&newest.rewrap_key_packet(&made.key, &packet(field)).unwrap());
+    let rewrap = |shared: String, own: String, revision: Value| {
+        let r = post(
+            &c,
+            &base,
+            &ada.user,
+            &format!("{calendar}/events/rewrap"),
+            json!({ "keyGeneration": 2, "events": [{ "id": event_id, "baseRevision": revision, "sharedKeyPacket": shared, "calendarKeyPacket": own }] }),
+        );
+        assert_eq!(r.status(), StatusCode::OK);
+        r.json::<Value>().unwrap()["results"][0].clone()
+    };
+    // Still to the old key, or from an old revision: refused.
+    let same = |field: &str| b64(&packet(field));
+    assert_eq!(
+        rewrap(
+            same("sharedKeyPacket"),
+            same("calendarKeyPacket"),
+            row["revision"].clone()
+        )["code"],
+        "notNewestKey"
+    );
+    assert_eq!(
+        rewrap(
+            moved("sharedKeyPacket"),
+            moved("calendarKeyPacket"),
+            json!(99)
+        )["code"],
+        "revisionConflict"
+    );
+    assert_eq!(
+        rewrap(
+            moved("sharedKeyPacket"),
+            moved("calendarKeyPacket"),
+            row["revision"].clone()
+        )["status"],
+        200
+    );
+    assert_eq!(
+        get(&c, &base, &ada.user, &format!("{calendar}/events/stale"))["events"],
+        json!([])
+    );
+
+    // Now generation 1 goes, its shares with it; the event opens with the
+    // newest key, its parts and signatures unchanged.
+    assert_eq!(prune(json!([1])).status(), StatusCode::NO_CONTENT);
+    let keys = get(&c, &base, &ada.user, &format!("{calendar}/keys"));
+    assert_eq!(keys["keys"].as_array().unwrap().len(), 1);
+    assert_eq!(keys["keys"][0]["keyGeneration"], 2);
+    let stored = get(
+        &c,
+        &base,
+        &ada.user,
+        &format!("{calendar}/events/{event_id}"),
+    );
+    assert_eq!(stored["revision"], 2);
+    let sealed: SealedEventV1 = serde_json::from_value(stored["event"].clone()).unwrap();
+    let opened = newest.open_event(&sealed.to_event().unwrap(), &[]).unwrap();
+    assert_eq!(
+        opened.parts.shared_encrypted.summary.as_deref(),
+        Some("Under generation 1")
+    );
+    assert_eq!(
+        delete(&c, &base, &ada.user, &calendar),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(storage(&c, &base, &ada.user), 0);
+}

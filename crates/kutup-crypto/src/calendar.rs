@@ -345,6 +345,20 @@ impl UnlockedCalendarKey {
         open_key_packet(key_packet, &self.secret)
     }
 
+    /// A key packet `older` (an older generation of this calendar) opens,
+    /// sealed again to this key: the same session key, so the parts it
+    /// opens (and their signatures) stay as they are. How a calendar's
+    /// events move to its newest generation before older ones are pruned
+    /// (docs/plans/calendar-e3.md, "Compaction").
+    pub fn rewrap_key_packet(
+        &self,
+        older: &UnlockedCalendarKey,
+        key_packet: &[u8],
+    ) -> Result<Vec<u8>> {
+        let session_key = older.open_key_packet(key_packet)?;
+        key_packet_to(&session_key, &self.public)
+    }
+
     /// The unlocked secret, for opening key packets in this crate's tests.
     #[cfg(test)]
     pub(crate) fn secret(&self) -> &[u8] {
@@ -1236,6 +1250,28 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_rewrapped_key_packet_opens_with_the_newer_key_only() {
+        let (old_pass, new_pass) = (Passphrase::generate(), Passphrase::generate());
+        let old = generate_calendar_key(&old_pass, 1_790_000_000)
+            .unwrap()
+            .unlocked;
+        let new = generate_calendar_key(&new_pass, 1_790_000_100)
+            .unwrap()
+            .unlocked;
+        let session = SessionKey::generate();
+        let packet = key_packet_to(&session, old.public_key()).unwrap();
+        let moved = new.rewrap_key_packet(&old, &packet).unwrap();
+        assert_eq!(key_packet_key_id(&moved).unwrap(), new.key_id().unwrap());
+        assert_eq!(
+            new.open_key_packet(&moved).unwrap().as_bytes(),
+            session.as_bytes()
+        );
+        assert!(old.open_key_packet(&moved).is_err());
+        // A packet the older key can't open is refused.
+        assert!(old.rewrap_key_packet(&new, &packet).is_err());
+    }
+
     use super::*;
     use crate::mail_key::generate_address_key;
 

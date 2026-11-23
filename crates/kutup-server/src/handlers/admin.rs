@@ -1111,6 +1111,9 @@ struct StatsResponse {
     storage_total_bytes: i64,
     /// The storage backend's real on-disk usage (from the probe); 0 when no probe is available.
     storage_backend_used_bytes: i64,
+    /// Calendars holding 90% or more of `calendar.key_generations` (their
+    /// owners' apps compact them; one at the cap can't remove anyone).
+    calendars_near_key_limit: i64,
 }
 
 /// `GET /api/v1/admin/stats` — mirrors `GetStats`.
@@ -1159,6 +1162,20 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminAccount) -> A
         total_collections: scalar("SELECT COUNT(*) FROM drive_collections").await,
         storage_total_bytes,
         storage_backend_used_bytes,
+        calendars_near_key_limit: {
+            let cap = crate::site_settings::CALENDAR_KEY_GENERATIONS
+                .load(&state.pool)
+                .await
+                .unwrap_or(crate::site_settings::CALENDAR_KEY_GENERATIONS.default);
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM (SELECT calendar_id FROM calendar_keys GROUP BY calendar_id
+                  HAVING COUNT(*) * 10 >= $1 * 9) near",
+            )
+            .bind(cap)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(0)
+        },
     };
     Ok(Json(stats).into_response())
 }

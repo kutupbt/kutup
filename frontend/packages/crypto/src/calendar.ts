@@ -107,6 +107,8 @@ export interface UnlockedCalendar {
   sealMetadata(...args: [...KeyArgs, calendarId: string, metadata: CalendarMetadata]): SealedMetadata
   /** The key ID (hex) key packets to this key name: which generation an event needs. */
   readonly keyId: string
+  /** A key packet `older` (an older generation's key) opens, sealed again to this key (compaction). */
+  rewrapKeyPacket(older: UnlockedCalendar, keyPacket: string): string
   /** A link's optional purpose, sealed to this calendar's key, bound to it and the link, signed by the owner's address key. */
   sealLinkPurpose(...args: [...KeyArgs, calendarId: string, linkId: string, purpose: string]): SealedMetadata
   /** Refused unless the purpose names `calendarId` and `linkId`. */
@@ -211,6 +213,7 @@ interface CalendarWasm {
     lockedSecretKey: string,
   ): UnlockedCalendar
   calendarEventKeyId(event: SealedEvent): string
+  calendarKeyPacketKeyId(keyPacket: string): string
   rotateCalendar(
     ...args: [...KeyArgs, identityRoot: IdentityRoot, ownerAccount: string, calendarId: string, keyGeneration: number, ownShare: string, rotation: RotationInput, createdAtSecs: number]
   ): RotatedCalendar
@@ -323,6 +326,11 @@ export async function unlockSharedCalendar(member: CalendarAccount, owner: Calen
     lock.passphraseShare,
     lock.lockedSecretKey,
   )
+}
+
+/** The key ID (hex) one key packet is to (a link purpose's, in compaction). */
+export async function calendarKeyPacketKeyId(keyPacket: string): Promise<string> {
+  return (await wasm()).calendarKeyPacketKeyId(keyPacket)
 }
 
 /** The key ID (hex) an event's key packets are to: which generation's key opens it. */

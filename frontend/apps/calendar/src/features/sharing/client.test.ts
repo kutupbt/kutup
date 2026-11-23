@@ -16,6 +16,8 @@ const server = vi.hoisted(() => ({
   settings: {},
   calls: [] as { method: string; url: string; body?: unknown }[],
   failAccept: false,
+  failLinks: false,
+  stale: [] as unknown[],
 }))
 vi.mock('@kutup/session/client', () => ({
   default: {
@@ -24,12 +26,14 @@ vi.mock('@kutup/session/client', () => ({
       if (url.endsWith('/members')) return Promise.resolve({ data: { members: server.members, invitations: server.invitations } })
       if (url.endsWith('/keys')) return Promise.resolve({ data: { keys: server.keys } })
       if (url.endsWith('/links')) return Promise.resolve({ data: { links: server.links } })
+      if (url.endsWith('/events/stale')) return Promise.resolve({ data: server.stale.shift() })
       return Promise.reject(new Error(`unexpected GET ${url}`))
     },
     post: (url: string, body?: unknown) => {
       server.calls.push({ method: 'post', url, body })
       if (url.endsWith('/accept') && server.failAccept) return Promise.reject(new Error('gone'))
-      if (url.endsWith('/links')) return Promise.resolve({ data: { ...(body as object), createdAt: 'now' } })
+      if (url.endsWith('/events/rewrap')) return Promise.resolve({ data: { results: [{ status: 200 }] } })
+      if (url.endsWith('/links')) return server.failLinks ? Promise.reject(new Error('refused')) : Promise.resolve({ data: { ...(body as object), createdAt: 'now' } })
       return Promise.resolve({ data: {} })
     },
     patch: (url: string, body: unknown) => {
@@ -84,6 +88,8 @@ vi.mock('@kutup/crypto/calendar', () => ({
       passphrases: shares.map((s) => ({ keyGeneration: s.keyGeneration, sealed: `pp-${s.keyGeneration}` })),
       accessProof: 'PROOF',
     }),
+  calendarEventKeyId: (event: { kid: string }) => Promise.resolve(event.kid),
+  calendarKeyPacketKeyId: (packet: string) => Promise.resolve(packet.split(':')[0]),
   calendarLinkUrlSecret: (_owner: unknown, _linkId: string, sealed: string) => (sealed === 'mine' ? Promise.resolve('URLSECRET') : Promise.reject(new Error('not the owner’s'))),
   unlockCalendar: () => Promise.resolve({ fingerprint: 'f3', free: () => undefined }),
   sealLinkPurpose: (_calendar: unknown, _signer: unknown, calendarId: string, linkId: string, purpose: string) => ({ keyPacket: 'k', dataPacket: `${calendarId}/${linkId}/${purpose}`, signature: 's' }),
@@ -93,6 +99,8 @@ const pins = vi.hoisted(() => ({
   people: new Map<string, unknown>(),
   doubtful: new Set<string>(),
   accepted: [] as string[],
+  /** Addresses this account met before (pinned); anyone else is first met. */
+  pinned: new Set<string>(),
 }))
 vi.mock('@kutup/drive-core/identityPins', () => {
   class IdentityNotConfirmed extends Error {
@@ -109,6 +117,8 @@ vi.mock('@kutup/drive-core/identityPins', () => {
     confirmRecipient: (_me: unknown, address: string, _person: unknown, confirmed: boolean) =>
       pins.doubtful.has(address) && !confirmed ? Promise.reject(new IdentityNotConfirmed(address, { kind: 'changed' })) : Promise.resolve({ kind: 'ok' }),
     checkIdentity: (_me: unknown, address: string) => Promise.resolve(pins.doubtful.has(address) ? { kind: 'changed' } : { kind: 'ok', verified: true }),
+    pinnedVerdict: (_me: unknown, _account: unknown, address: string) =>
+      Promise.resolve(pins.doubtful.has(address) ? { kind: 'changed' } : pins.pinned.has(address) ? { kind: 'pinned' } : { kind: 'unknown' }),
     sealableDriveKey: (_account: string, key: string) => key,
     acceptIdentity: (_me: unknown, address: string) => {
       pins.accepted.push(address)
@@ -149,7 +159,10 @@ const {
   presetOf,
   PRESET_PERMISSIONS,
   RecipientNotFound,
+  compactKeys,
+  dueRotation,
   keyRecipients,
+  LinksNotRemade,
   removeMember,
   rotateKey,
   SelfShare,
@@ -184,6 +197,7 @@ beforeEach(() => {
   server.settings = {}
   server.calls = []
   server.failAccept = false
+  server.failLinks = false
   crypto.shared = []
   crypto.rotations = []
   pins.people = new Map([
@@ -194,6 +208,7 @@ beforeEach(() => {
   ])
   pins.doubtful = new Set()
   pins.accepted = []
+  pins.pinned = new Set(['bo@kutup.test', 'cy@kutup.test'])
   records.filed = []
   records.forgotten = []
 })
@@ -290,7 +305,7 @@ describe('removing a member', () => {
 })
 
 describe('replacing links, and a rotation that is due', () => {
-  it('deletes the keyed links before the new key, carries none over, and makes them again under fresh secrets', async () => {
+  it('removes the keyed links in the rotation itself (nothing gone if it fails), and makes them again after under fresh secrets', async () => {
     server.members = [{ accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' }]
     server.links = [
       { id: 'full1', kind: 'full', secret: 'mine', createdAt: '' },
@@ -299,14 +314,37 @@ describe('replacing links, and a rotation that is due', () => {
     const replaced = await removeMember(session, me, account, { ...calendar, keyring: new Map() }, BO, new Set(), true)
     const order = server.calls.map((c) => `${c.method} ${c.url}`)
     const rotateAt = order.indexOf('post /calendar/calendars/cal-1/keys/rotate')
-    expect(order.indexOf('delete /calendar/calendars/cal-1/links/full1')).toBeLessThan(rotateAt)
-    expect((server.calls[rotateAt].body as { links: unknown[] }).links).toEqual([])
+    expect(order).not.toContain('delete /calendar/calendars/cal-1/links/full1')
+    expect(server.calls[rotateAt].body).toMatchObject({ links: [], removeLinks: ['full1'] })
     const made = server.calls.slice(rotateAt).find((c) => c.method === 'post' && c.url.endsWith('/links'))!
     expect(made.body).toMatchObject({ kind: 'full', secret: 'owner-sealed-secret', accessProof: 'PROOF' })
     expect(replaced).toHaveLength(1)
     expect(replaced[0].urls.page).toMatch(/#URLSECRET$/)
     // The busy link needs nothing: it holds no key.
     expect(order).not.toContain('delete /calendar/calendars/cal-1/links/busy1')
+  })
+
+  it('says which links went and were not made again when making them fails', async () => {
+    server.members = [{ accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' }]
+    server.links = [{ id: 'full1', kind: 'full', secret: 'mine', createdAt: '' }]
+    server.failLinks = true
+    const error = await removeMember(session, me, account, { ...calendar, keyring: new Map() }, BO, new Set(), true).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(LinksNotRemade)
+    expect((error as InstanceType<typeof LinksNotRemade>).missing).toEqual([{ kind: 'full', label: '' }])
+    // The key changed all the same.
+    expect(server.calls.some((c) => c.url.endsWith('/keys/rotate'))).toBe(true)
+  })
+
+  it('rotates a due key unasked only when everyone who gets it is already known', async () => {
+    server.members = [{ accountId: BO, address: 'bo@kutup.test', permissions: 96, addedAt: '' }]
+    expect(await dueRotation(session, me, account, calendar)).toEqual({ kind: 'rotated' })
+    // Someone the server added, never met before: shown for review, nothing sent.
+    server.calls = []
+    pins.people.set('eve@kutup.test', person('00000000-0000-4000-8000-0000000000e1', 'eve@kutup.test'))
+    server.members.push({ accountId: '00000000-0000-4000-8000-0000000000e1', address: 'eve@kutup.test', permissions: 96, addedAt: '' })
+    const outcome = await dueRotation(session, me, account, calendar)
+    expect(outcome).toMatchObject({ kind: 'review', recipients: [{ address: 'bo@kutup.test', state: 'verified' }, { address: 'eve@kutup.test', state: 'new' }] })
+    expect(server.calls.some((c) => c.url.endsWith('/keys/rotate'))).toBe(false)
   })
 
   it('rotates with nobody removed when one is due: everyone stays', async () => {
@@ -326,6 +364,26 @@ describe('replacing links, and a rotation that is due', () => {
     ]
     pins.doubtful.add('cy@kutup.test')
     expect(await keyRecipients(me, 'cal-1', BO)).toEqual([{ accountId: CY, address: 'cy@kutup.test', state: 'changed' }])
+  })
+})
+
+describe('compaction', () => {
+  it('seals old events’ and labels’ key packets to the newest key, then prunes the older generations', async () => {
+    const older = { keyId: 'k1' }
+    const newest = { keyId: 'k2', rewrapKeyPacket: (from: { keyId: string }, packet: string) => `k2:${from.keyId}:${packet}` }
+    const owned = { ...calendar, keyGeneration: 2, unlocked: newest, keyring: new Map([['k1', older], ['k2', newest]]) } as unknown as Calendar
+    server.stale = [
+      { keyGeneration: 2, generations: [1, 2], events: [{ id: 'e1', revision: 4, event: { kid: 'k1', sharedKeyPacket: 'k1:s', calendarKeyPacket: 'k1:c' } }], more: false },
+      { keyGeneration: 2, generations: [1, 2], events: [], more: false },
+    ]
+    server.links = [{ id: 'l1', kind: 'busy', secret: null, createdAt: '', purpose: { keyPacket: 'k1:p', dataPacket: 'd', signature: 's' } } as never]
+    expect(await compactKeys(owned)).toBe(1)
+    const posts = server.calls.filter((c) => c.method === 'post').map((c) => [c.url, c.body])
+    expect(posts).toEqual([
+      ['/calendar/calendars/cal-1/events/rewrap', { keyGeneration: 2, events: [{ id: 'e1', baseRevision: 4, sharedKeyPacket: 'k2:k1:k1:s', calendarKeyPacket: 'k2:k1:k1:c' }] }],
+      ['/calendar/calendars/cal-1/events/rewrap', { keyGeneration: 2, purposes: [{ linkId: 'l1', keyPacket: 'k2:k1:k1:p' }] }],
+      ['/calendar/calendars/cal-1/keys/prune', { generations: [1] }],
+    ])
   })
 })
 

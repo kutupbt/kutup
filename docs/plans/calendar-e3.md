@@ -368,7 +368,7 @@ tables are the W7 baseline's):
   backup gate), browser specs 201–206.
 
 **Review fixes** (2026-11-23, after an independent security review of
-`post-wipe/calendar-e3`; migration `20261202000000_calendar_link_proofs`):
+`post-wipe/calendar-e3`; migration `20261204000000_calendar_link_proofs`):
 
 1. **A link's secret is the owner's alone.** It was sealed under the
    newest generation's passphrase, which every member holds: with an old
@@ -395,9 +395,9 @@ tables are the W7 baseline's):
    `shareBusy` on a calendar someone else owns is `403 notOwner`, and the
    switch shows only to the owner.
 6. **Generations**: `calendar.key_generations` defaults to 1000; at the cap a
-   removal is `409 keyGenerationLimit` with a message saying so. Compacting
-   (re-encrypting under the newest generation and pruning) is on the
-   roadmap.
+   removal is `409 keyGenerationLimit` with a message saying so, and the
+   owner's app compacts a calendar before it gets there ("Compaction"
+   below).
 7. **Inactive accounts** are left out of a rotation (and of the member
    list); what they held of the calendar goes, with a pending invitation.
 8. **Busy blocks merge** (overlapping and touching), in answers and feeds.
@@ -412,17 +412,49 @@ Trade-offs decided (stricter than Proton):
 
 - **T1, rotation due.** Leaving, a revoked invitation its invitee had read,
   a declined one read first, and one that expired after it was read mark
-  the calendar `rotation_due`. The owner's app makes the rotation (the
-  removal's code, nobody removed) when it next loads the calendar; one it
-  can't make (a doubtful identity, another device first) waits for the
-  next load.
+  the calendar `rotation_due`. When the owner's app next loads the calendar
+  it asks the pins about everyone who would get the new key, without
+  recording anyone: only when every one is verified or was pinned before
+  does it rotate unasked (the removal's code, nobody removed). Otherwise
+  (someone first met, as a member the server slipped in would be; a
+  changed identity), or when the rotation fails, the calendar's row says
+  "Key change pending — review", which opens a dialog naming each
+  recipient with what the pins say before the owner confirms.
 - **T2, links on removal.** The remove dialog lists the keyed links with
-  "Also replace links" checked by default: they are deleted before the
-  rotation and made again after under fresh secrets, and the owner is
-  shown the new addresses.
+  "Also replace links" checked by default: the rotation request names them
+  (`removeLinks`), so they go in the same transaction as the new key and
+  nothing is lost if it fails; they are made again after under fresh
+  secrets, and the owner is shown the new addresses, or told which links
+  were removed and couldn't be made again.
 - **T3, recipients.** The remove dialog lists who gets the new key, each
   with what the pins say (verified, as before, first time, changed, not
   signed, someone else now), so an account the server slipped in shows.
+
+**Compaction.** Each removal or due rotation adds a key generation. The
+owner's app compacts a calendar when it holds 90% of
+`calendar.key_generations`, and the calendar dialog offers it by hand
+("Tidy up old keys") while there is more than one; Administration's
+overview counts calendars at 90% or more.
+
+1. `GET …/events/stale` lists, a batch at a time, the events whose key
+   packets aren't to the newest key.
+2. The owner's client opens each one's two key packets with the older
+   generation's key and seals the same session keys to the newest key
+   (`UnlockedCalendarKey::rewrap_key_packet`): the parts and their
+   signatures stay byte for byte, and no author has to sign again.
+3. `POST …/events/rewrap` takes them, each from the revision it was read
+   at (`409 revisionConflict` otherwise, read again next round), checks
+   that the packets are to the newest key (`notNewestKey`), and bumps the
+   revision; link labels sealed under older keys go the same way.
+4. `POST …/keys/prune` drops the older generations, with their member
+   shares and link copies, in one transaction, after checking that no
+   event and no link label names one (`409 generationInUse`; a packet that
+   doesn't parse counts as naming one). The newest is never pruned.
+
+The server can't check that a rewrapped packet carries the same session
+key: only the owner rewraps, and a wrong one breaks only that owner's own
+event. A removed member never held the newest key, so moving old events to
+it gives nothing away.
 
 Threat notes:
 

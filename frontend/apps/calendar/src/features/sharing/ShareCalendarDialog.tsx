@@ -31,11 +31,13 @@ import {
   setMemberPreset,
   type MemberRow,
   type Preset,
+  LinksNotRemade,
   type ReplacedLink,
   type SentInvitationRow,
 } from './client'
 import { inviteErrorText } from './errorText'
 import { LinksPanel, UrlFields } from './LinksPanel'
+import { RecipientList } from './RecipientList'
 
 function PresetSelect({ value, onChange, label, disabled }: { value: Preset; onChange: (preset: Preset) => void; label: string; disabled?: boolean }) {
   const { t } = useTranslation()
@@ -96,6 +98,8 @@ function PeoplePanel({ calendar }: { calendar: Calendar }) {
   // server slipped in shows), and the keyed links, replaced by default.
   const [replaceLinks, setReplaceLinks] = useState(true)
   const [replaced, setReplaced] = useState<ReplacedLink[] | null>(null)
+  // The key changed and the old links went, but these weren't made again.
+  const [notRemade, setNotRemade] = useState<LinksNotRemade | null>(null)
   const recipients = useQuery({
     queryKey: ['calendar', 'recipients', calendar.id, removing?.accountId],
     enabled: removing !== null && !!me.data,
@@ -124,6 +128,13 @@ function PeoplePanel({ calendar }: { calendar: Calendar }) {
           setReplaceLinks(true)
           if (made.length) setReplaced(made)
           toast.success(t('sharing.removed', { address: member.address }))
+        },
+        onError: (error) => {
+          if (!(error instanceof LinksNotRemade)) return
+          setRemoving(null)
+          setConfirmed(new Set())
+          setNotRemade(error)
+          setReplaced(error.made)
         },
       },
     )
@@ -271,33 +282,11 @@ function PeoplePanel({ calendar }: { calendar: Calendar }) {
         }
         submit={t('sharing.removeSubmit')}
         pending={remove.isPending}
-        error={doubtful ? undefined : remove.error}
+        error={doubtful || remove.error instanceof LinksNotRemade ? undefined : remove.error}
         errorFallback={t('sharing.errors.removeFailed')}
         onConfirm={() => removing && doRemove(removing, confirmed)}
       >
-        <section className="space-y-1.5" aria-labelledby="remove-recipients-title">
-          <h4 id="remove-recipients-title" className="text-sm font-medium">
-            {t('sharing.recipients.title')}
-          </h4>
-          {recipients.isPending ? (
-            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
-          ) : recipients.isError ? (
-            <Alert variant="error">{apiErrorMessage(recipients.error, t('sharing.errors.loadFailed'))}</Alert>
-          ) : recipients.data.length ? (
-            <ul className="divide-y divide-border rounded-md border border-border text-sm" data-testid="remove-recipients">
-              {recipients.data.map((person) => (
-                <li key={person.accountId} className="flex flex-wrap items-center gap-2 px-3 py-1.5">
-                  <span className="min-w-0 flex-1 truncate">{person.address}</span>
-                  <span className={person.state === 'verified' || person.state === 'known' ? 'text-xs text-muted-foreground' : 'text-xs text-destructive'}>
-                    {t(`sharing.recipients.state.${person.state}`)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted-foreground">{t('sharing.recipients.onlyYou')}</p>
-          )}
-        </section>
+        <RecipientList recipients={recipients.data} pending={recipients.isPending} error={recipients.error} />
         {keyedLinks.length ? (
           <section className="space-y-1.5">
             <p className="text-sm">{t('sharing.replaceLinks.intro', { count: keyedLinks.length })}</p>
@@ -317,12 +306,30 @@ function PeoplePanel({ calendar }: { calendar: Calendar }) {
         ) : null}
       </ConfirmDestructive>
 
-      <Dialog open={replaced !== null} onOpenChange={(o) => !o && setReplaced(null)}>
+      <Dialog
+        open={replaced !== null}
+        onOpenChange={(o) => {
+          if (!o) {
+            setReplaced(null)
+            setNotRemade(null)
+          }
+        }}
+      >
         <DialogContent data-testid="replaced-links">
           <DialogHeader>
             <DialogTitle>{t('sharing.replaceLinks.doneTitle')}</DialogTitle>
             <DialogDescription>{t('sharing.replaceLinks.doneDescription')}</DialogDescription>
           </DialogHeader>
+          {notRemade ? (
+            <Alert variant="error" data-testid="links-not-remade">
+              <p>{t('sharing.replaceLinks.notRemade')}</p>
+              <ul className="list-inside list-disc">
+                {notRemade.missing.map((link, index) => (
+                  <li key={index}>{link.label || t(`sharing.links.kind.${link.kind}.name`)}</li>
+                ))}
+              </ul>
+            </Alert>
+          ) : null}
           <div className="space-y-4">
             {(replaced ?? []).map((link, index) => (
               <div key={index} className="space-y-2">
@@ -331,7 +338,14 @@ function PeoplePanel({ calendar }: { calendar: Calendar }) {
               </div>
             ))}
           </div>
-          <Button onClick={() => setReplaced(null)}>{t('sharing.links.done')}</Button>
+          <Button
+            onClick={() => {
+              setReplaced(null)
+              setNotRemade(null)
+            }}
+          >
+            {t('sharing.links.done')}
+          </Button>
         </DialogContent>
       </Dialog>
     </div>

@@ -3036,6 +3036,17 @@ its pins). `PUT /calendars/{id}` takes `shareBusy` too.
   owner's: set when a member leaves, or an invitation its invitee had read
   is revoked, declined or expires). Accounts that aren't active are left out
   and lose what they held; `links` entries are `{ id, passphrase }`.
+- Compaction (the owner's): `GET …/calendars/{id}/events/stale` → `{
+  keyGeneration, generations, events: [{ id, revision, event }], more }`,
+  events still under an older generation, 100 at a time; `POST
+  …/events/rewrap { keyGeneration, events?: [{ id, baseRevision,
+  sharedKeyPacket, calendarKeyPacket }], purposes?: [{ linkId, keyPacket }]
+  }` → `{ results: [{ id, status, code? }] }` (key packets sealed again to
+  the newest key, `notNewestKey` otherwise; `409 revisionConflict`; `409
+  keyRotated` when another generation came first); `POST …/keys/prune {
+  generations }` drops older generations with their shares and link copies,
+  `409 generationInUse` while an event or link label names one. A rotation
+  may name `removeLinks`: keyed links deleted in its own transaction.
 - `GET /api/v1/calendar/invitations` → `{ invitations: [{ id, calendarId,
   owner, permissions, metadata, keys, createdAt, expiresAt }] }`, the
   caller's pending ones; `POST …/invitations/{id}/accept` (after the client

@@ -1541,6 +1541,17 @@ if (build === 'crypto') {
   assert.equal(linked3.fingerprint, rotated.fingerprint)
   linked3.free()
   assert.equal(rotated.links[0].secret, undefined)
+  // Compaction: a key packet the older generation opens, sealed again to
+  // the newer one, names it and opens with it only.
+  const older2 = crypto.unlockCalendar(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, s.keyGeneration, s.ownShare, s.calendarLockedSecretKey)
+  const newer3 = crypto.unlockCalendar(s.ownerIdentityRoot, s.ownerAccount, s.calendarId, rotated.keyGeneration, rotated.ownShare, rotated.lockedSecretKey)
+  const purposePacket = s.linkPurpose.keyPacket
+  assert.equal(crypto.calendarKeyPacketKeyId(purposePacket), older2.keyId)
+  const movedPacket = newer3.rewrapKeyPacket(older2, purposePacket)
+  assert.equal(crypto.calendarKeyPacketKeyId(movedPacket), newer3.keyId)
+  assert.throws(() => older2.rewrapKeyPacket(newer3, purposePacket))
+  older2.free()
+  newer3.free()
 
   // Recurrence (E2): every vector case expands in the browser as in Rust and
   // as python-dateutil does.

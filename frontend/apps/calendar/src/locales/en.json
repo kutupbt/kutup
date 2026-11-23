@@ -32,7 +32,18 @@
     "edit": "Edit {{name}}",
     "noMailKeys": "Your mail address has no key yet, and calendars need one. Open Mail once, then come back.",
     "none": "No calendars yet.",
-    "loadFailed": "Your calendars couldn't be loaded."
+    "loadFailed": "Your calendars couldn't be loaded.",
+    "keys": {
+      "count_one": "{{count}} key generation of {{cap}} this calendar may keep.",
+      "count_other": "{{count}} key generations of {{cap}} this calendar may keep.",
+      "countBare_one": "{{count}} key generation.",
+      "countBare_other": "{{count}} key generations.",
+      "nearCap": "This calendar is near the most key generations it may keep: tidy them up, or nobody can be removed from it.",
+      "compact": "Tidy up old keys",
+      "failed": "The old keys couldn't be tidied up. Try again.",
+      "done_one": "{{count}} old key generation removed",
+      "done_other": "{{count}} old key generations removed"
+    }
   },
   "events": {
     "new": "New event",
@@ -321,7 +332,17 @@
       "label": "Also replace links",
       "hint": "They are deleted and made again under new keys, so anyone the removed person gave them to loses access. You get the new addresses.",
       "doneTitle": "New links",
-      "doneDescription": "The old links no longer work. Give these to whoever should keep seeing the calendar."
+      "doneDescription": "The old links no longer work. Give these to whoever should keep seeing the calendar.",
+      "notRemade": "The key changed and the old links were removed, but these couldn't be made again. Make them again from Links:"
+    },
+    "due": {
+      "banner": "Key change pending — review",
+      "title": "Change the key of {{name}}",
+      "description": "Someone who had this calendar's key no longer has the calendar. A new key goes to everyone who still has it:",
+      "doubt": "Not everyone here is someone you already know. Check the list before you go on: the new key goes to exactly these people.",
+      "failed": "The key wasn't changed.",
+      "done": "The key of {{name}} was changed",
+      "confirm": "Change the key"
     }
   },
   "busy": {

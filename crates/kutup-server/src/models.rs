@@ -89,6 +89,9 @@ pub struct CalendarPublicSettings {
     pub links_per_calendar: i64,
     /// The widest window one busy-times question asks, in days.
     pub busy_window_days: i64,
+    /// The key generations one calendar keeps: the owner's app compacts a
+    /// calendar nearing it.
+    pub key_generations: i64,
 }
 
 /// What the feedback form offers besides sending to the administrators.

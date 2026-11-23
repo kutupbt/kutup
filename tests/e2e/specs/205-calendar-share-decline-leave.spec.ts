@@ -1,6 +1,7 @@
 import { expect, test } from '../fixtures/test'
-import { appUrl } from '../fixtures/apps'
-import { calendarAccount, invite, joinFrom, openSharing, openWeek } from '../fixtures/calendar'
+import { execSync } from 'node:child_process'
+import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
+import { calendarAccount, invite, istanbulContext, joinFrom, openSharing, openWeek } from '../fixtures/calendar'
 
 // The other ends of an invitation (docs/plans/calendar-e3.md §1): declined,
 // the owner sees it and deletes it; revoked, it leaves the invitee's list;
@@ -83,6 +84,58 @@ test('calendar sharing: declined, revoked, and a member who leaves', async ({ br
     )
     .toBe(true)
   await tab.close()
+  await ada.context.close()
+  await bob.context.close()
+})
+
+// A due key change to someone the owner never met (here a member the
+// database slipped in, as a server could) is never made unasked: the row
+// says a key change is pending, and the dialog names who would get the new
+// key, as the pins see them, before the owner confirms.
+test('calendar sharing: a due key change to someone never met waits for the owner to review it', async ({ browser }) => {
+  test.slow()
+  const psql = process.env.E2E_PSQL
+  test.skip(!psql, 'E2E_PSQL: a command that runs SQL from its stdin against the test stack database')
+  const ada = await calendarAccount(browser, 'calrevada', PASSWORD, 'Pond')
+  const bob = await calendarAccount(browser, 'calrevbob', PASSWORD)
+  const dan = newAccount('calrevdan', PASSWORD)
+  const danContext = await istanbulContext(browser)
+  await registerAccount(danContext, dan)
+  const sharing = await openSharing(ada.page, 'Pond')
+  await invite(ada.page, sharing, bob.account.address, 'See all event details')
+  await ada.page.keyboard.press('Escape')
+  await openWeek(bob.page)
+  await joinFrom(bob.page, ada.account, 'Pond')
+
+  // The database adds Dan as a member; then Bob leaves, so a key change is due.
+  execSync(psql!, {
+    input: `INSERT INTO calendar_members (calendar_id, account_id, permissions)
+              SELECT c.id, d.id, 96 FROM calendars c JOIN accounts a ON a.id = c.owner_account_id, accounts d
+               WHERE a.username = '${ada.account.username}' AND d.username = '${dan.username}';\n`,
+    encoding: 'utf8',
+  })
+  await bob.page.getByRole('button', { name: 'Edit Pond' }).click()
+  await bob.page.getByRole('dialog', { name: 'Calendar' }).getByTestId('calendar-leave').click()
+  await bob.page.getByRole('button', { name: 'Leave calendar' }).last().click()
+  await expect(bob.page.getByText('You left Pond').last()).toBeVisible({ timeout: 30_000 })
+
+  // Ada's app doesn't rotate on its own: it asks.
+  await openWeek(ada.page)
+  const pending = ada.page.getByTestId('rotation-pending')
+  await expect(pending).toHaveText('Key change pending — review', { timeout: 60_000 })
+  await pending.click()
+  const dialog = ada.page.getByTestId('due-rotation')
+  const dans = dialog.getByTestId('key-recipient').filter({ hasText: dan.address })
+  await expect(dans).toContainText('First time', { timeout: 60_000 })
+  await expect(dialog.getByTestId('key-recipients')).not.toContainText(bob.account.address)
+  await expect(dialog.getByText('Not everyone here is someone you already know.', { exact: false })).toBeVisible()
+  await dialog.getByTestId('due-rotation-confirm').click()
+  await expect(ada.page.getByText('The key of Pond was changed').last()).toBeVisible({ timeout: 60_000 })
+  await expect(pending).toHaveCount(0)
+  await openWeek(ada.page)
+  await expect(ada.page.getByTestId('calendar-list-item').filter({ hasText: 'Pond' })).toBeVisible()
+  await expect(ada.page.getByTestId('rotation-pending')).toHaveCount(0)
+  await danContext.close()
   await ada.context.close()
   await bob.context.close()
 })

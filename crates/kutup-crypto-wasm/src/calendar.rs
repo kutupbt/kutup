@@ -516,8 +516,32 @@ pub fn calendar_event_key_id(event: JsValue) -> Result<String, JsValue> {
     ))
 }
 
+/// The key ID (hex) one key packet (base64) is to.
+#[wasm_bindgen(js_name = calendarKeyPacketKeyId)]
+pub fn calendar_key_packet_key_id(key_packet_base64: &str) -> Result<String, JsValue> {
+    let packet = decode_b64(key_packet_base64, "key packet")?;
+    Ok(hex::encode(
+        calendar::key_packet_key_id(&packet).map_err(crypto_error)?,
+    ))
+}
+
 #[wasm_bindgen(js_class = UnlockedCalendar)]
 impl UnlockedCalendarJs {
+    /// A key packet (base64) `older` opens, sealed again to this key
+    /// (compaction: an event moves to the newest generation).
+    #[wasm_bindgen(js_name = rewrapKeyPacket)]
+    pub fn rewrap_key_packet(
+        &self,
+        older: &UnlockedCalendarJs,
+        key_packet_base64: &str,
+    ) -> Result<String, JsValue> {
+        let packet = decode_b64(key_packet_base64, "key packet")?;
+        self.key
+            .rewrap_key_packet(&older.key, &packet)
+            .map(|packet| STANDARD.encode(packet))
+            .map_err(crypto_error)
+    }
+
     /// The key ID (hex) key packets to this key name.
     #[wasm_bindgen(getter, js_name = keyId)]
     pub fn key_id(&self) -> Result<String, JsValue> {

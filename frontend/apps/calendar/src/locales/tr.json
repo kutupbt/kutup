@@ -32,7 +32,18 @@
     "edit": "{{name}} düzenle",
     "noMailKeys": "Posta adresinizin henüz anahtarı yok; takvimler için gerekir. Posta'yı bir kez açıp geri gelin.",
     "none": "Henüz takvim yok.",
-    "loadFailed": "Takvimleriniz yüklenemedi."
+    "loadFailed": "Takvimleriniz yüklenemedi.",
+    "keys": {
+      "count_one": "Bu takvimin tutabileceği {{cap}} anahtar kuşağından {{count}} tanesi.",
+      "count_other": "Bu takvimin tutabileceği {{cap}} anahtar kuşağından {{count}} tanesi.",
+      "countBare_one": "{{count}} anahtar kuşağı.",
+      "countBare_other": "{{count}} anahtar kuşağı.",
+      "nearCap": "Bu takvim tutabileceği en çok anahtar kuşağına yaklaştı: eski anahtarları toplayın, yoksa kimse çıkarılamaz.",
+      "compact": "Eski anahtarları topla",
+      "failed": "Eski anahtarlar toplanamadı. Yeniden deneyin.",
+      "done_one": "{{count}} eski anahtar kuşağı kaldırıldı",
+      "done_other": "{{count}} eski anahtar kuşağı kaldırıldı"
+    }
   },
   "events": {
     "new": "Yeni etkinlik",
@@ -321,7 +332,17 @@
       "label": "Bağlantıları da yenile",
       "hint": "Silinip yeni anahtarlarla yeniden oluşturulurlar; çıkarılan kişinin onları verdiği herkes erişimini kaybeder. Yeni adresleri siz alırsınız.",
       "doneTitle": "Yeni bağlantılar",
-      "doneDescription": "Eski bağlantılar artık çalışmıyor. Takvimi görmeye devam etmesi gerekenlere bunları verin."
+      "doneDescription": "Eski bağlantılar artık çalışmıyor. Takvimi görmeye devam etmesi gerekenlere bunları verin.",
+      "notRemade": "Anahtar değişti ve eski bağlantılar kaldırıldı, ancak bunlar yeniden oluşturulamadı. Bağlantılar bölümünden yeniden oluşturun:"
+    },
+    "due": {
+      "banner": "Anahtar değişikliği bekliyor — gözden geçirin",
+      "title": "{{name}} takviminin anahtarını değiştir",
+      "description": "Bu takvimin anahtarına sahip biri artık takvimde değil. Yeni anahtar takvimi hâlâ görenlerin hepsine gider:",
+      "doubt": "Buradaki herkes daha önce tanıdığınız biri değil. Devam etmeden listeyi kontrol edin: yeni anahtar tam olarak bu kişilere gider.",
+      "failed": "Anahtar değiştirilmedi.",
+      "done": "{{name}} takviminin anahtarı değiştirildi",
+      "confirm": "Anahtarı değiştir"
     }
   },
   "busy": {

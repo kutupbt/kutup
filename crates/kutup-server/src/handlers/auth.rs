@@ -728,6 +728,9 @@ async fn calendar_settings(
         members_per_calendar: members,
         links_per_calendar: links,
         busy_window_days: CALENDAR_BUSY_WINDOW_DAYS.load(pool).await?,
+        key_generations: crate::site_settings::CALENDAR_KEY_GENERATIONS
+            .load(pool)
+            .await?,
     })
 }
 
