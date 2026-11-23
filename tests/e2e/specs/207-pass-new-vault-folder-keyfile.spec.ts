@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { expect, test, type Page } from '../fixtures/test'
 import { newAccount, registerAccount } from '../fixtures/apps'
 import { expectSaved, openPass } from '../fixtures/pass'
@@ -63,7 +65,10 @@ test('pass: a new vault goes in a subfolder made from the picker, with a generat
   await expect(dialog.getByTestId('new-vault-problem')).toHaveText('Generate the key file, download it, and say you saved it.')
   const [download] = await Promise.all([page.waitForEvent('download'), dialog.getByTestId('new-vault-key-generate').click()])
   expect(download.suggestedFilename()).toBe('Derin.keyx')
-  const keyFile = test.info().outputPath('Derin.keyx')
+  // A key file is a secret: kept in a folder of its own, never with the test's
+  // artifacts, and removed at the end.
+  const keyDir = mkdtempSync(join(tmpdir(), 'kutup-e2e-keyfile-'))
+  const keyFile = join(keyDir, 'Derin.keyx')
   await download.saveAs(keyFile)
   const xml = readFileSync(keyFile, 'utf8')
   expect(xml).toContain('<Version>2.0</Version>')
@@ -93,4 +98,5 @@ test('pass: a new vault goes in a subfolder made from the picker, with a generat
   await openPass(page)
   await expect(vaultRow(page, 'Derin')).toContainText('In İç', { timeout: 30_000 })
   await context.close()
+  rmSync(keyDir, { recursive: true, force: true })
 })
