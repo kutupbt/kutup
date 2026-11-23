@@ -56,6 +56,8 @@ export function CreateVaultDialog({
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [folderId, setFolderId] = useState('')
+  // A folder just made here, chosen once Drive's folder list has it.
+  const [madeFolder, setMadeFolder] = useState<string | null>(null)
   const [mode, setMode] = useState<'random' | 'chosen'>('random')
   /** A generated key that could not be kept, and its vault: shown until kept or saved. */
   const [unkept, setUnkept] = useState<{ key: string; fileId: string; sealed: SealedKey | null } | null>(null)
@@ -85,6 +87,7 @@ export function CreateVaultDialog({
     setMode('random')
     setUnkept(null)
     setFolderId('')
+    setMadeFolder(null)
     setPassword('')
     setConfirm('')
     setKeyFileMode('none')
@@ -107,6 +110,13 @@ export function CreateVaultDialog({
         generatedSaved: generated.saved,
         chosen: keyFile !== null,
       })
+  useEffect(() => {
+    if (madeFolder && writable.some((c) => c.folder.id === madeFolder)) {
+      setFolderId(madeFolder)
+      setMadeFolder(null)
+    }
+  }, [madeFolder, writable])
+
   // Until one is chosen: the folder Drive asked for, else My files.
   const chosen = folderId || (wantedFolder && writable.some((c) => c.folder.id === wantedFolder) ? wantedFolder : (root?.id ?? ''))
   const choice = writable.find((c) => c.folder.id === chosen)
@@ -215,7 +225,7 @@ export function CreateVaultDialog({
           <Field label={t('vaults.folder')} description={t('vaults.folderDescription')}>
             {(field) => (
               <div className="flex items-center gap-2">
-                <Select value={chosen} onValueChange={setFolderId}>
+                <Select value={chosen} onValueChange={(id) => id && setFolderId(id)}>
                   <SelectTrigger id={field.id} aria-describedby={field['aria-describedby']} className="min-w-0 flex-1">
                     <SelectValue />
                   </SelectTrigger>
@@ -228,7 +238,7 @@ export function CreateVaultDialog({
                   </SelectContent>
                 </Select>
                 {canMakeSubfolder(folder) ? (
-                  <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setNaming(true)} disabled={pending}>
+                  <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setNaming(true)} disabled={pending || madeFolder !== null}>
                     <FolderPlus />
                     {t('vaults.newFolder')}
                   </Button>
@@ -313,7 +323,7 @@ export function CreateVaultDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
                 {t('common.cancel')}
               </Button>
-              <Button type="submit" loading={pending} disabled={!folder || !name.trim() || problem !== null}>
+              <Button type="submit" loading={pending} disabled={!folder || !name.trim() || problem !== null || madeFolder !== null}>
                 {t('vaults.create')}
               </Button>
             </DialogFooter>
@@ -340,7 +350,7 @@ export function CreateVaultDialog({
               {
                 onSuccess: (id) => {
                   setNaming(false)
-                  setFolderId(id)
+                  setMadeFolder(id)
                 },
               },
             )
